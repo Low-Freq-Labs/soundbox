@@ -416,12 +416,14 @@ class ArtCache:
         return (self.index.get(track_id) or {}).get("status")  # "ok" | "none" | None
 
     def status_kind(self, track_id: str) -> str:
-        """UI-facing art status: 'cover' | 'avatar' | 'miss' | '' (not fetched yet)."""
+        """UI status: 'cover' | 'avatar' | 'miss' | 'blocked' | '' (unfetched)."""
         e = self.index.get(track_id)
         if not e:
             return ""
         if e.get("status") == "none":
             return "miss"
+        if e.get("status") == "blocked":
+            return "blocked"
         return "avatar" if self._is_avatar(e) else "cover"
 
     def image_path(self, track_id: str) -> Path | None:
@@ -483,7 +485,8 @@ class ArtCache:
         self._save()
 
     def retry_misses(self) -> int:
-        """Clear all 'no art found' marks so they'll be re-attempted. Returns count."""
+        """Clear all 'no art found' marks so they'll be re-attempted. User-blocked
+        entries are NOT touched — a deliberate removal survives every re-scan."""
         misses = [tid for tid, e in self.index.items() if (e or {}).get("status") == "none"]
         for tid in misses:
             self.index.pop(tid, None)
@@ -519,6 +522,17 @@ class ArtCache:
         e = self.index.pop(track_id, None)
         if e and e.get("ext"):
             (self.root / f"{track_id}.{e['ext']}").unlink(missing_ok=True)
+        self._save()
+
+    def block(self, track_id: str):
+        """User removed this track's art ON PURPOSE: delete the image but keep a
+        'blocked' entry so the background fill NEVER re-fetches it. Only an
+        explicit per-track action (Fetch now / picker / URL) overrides — those
+        go through store_ok, which overwrites the block."""
+        e = self.index.get(track_id)
+        if e and e.get("ext"):
+            (self.root / f"{track_id}.{e['ext']}").unlink(missing_ok=True)
+        self.index[track_id] = {"status": "blocked"}
         self._save()
 
     def _save(self):

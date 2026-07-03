@@ -203,3 +203,37 @@ class SuggestArtist(unittest.TestCase):
     def test_vague_title_stays_silent(self):
         self.assertIsNone(self._with_results(
             [{"title": "x", "uploader": "A"}], title="x"))
+
+
+class BlockedArt(unittest.TestCase):
+    """Deleted art must STAY deleted (user decision) — only explicit refetch wins."""
+
+    def _cache(self, td):
+        from pathlib import Path
+        from soundbox.artfetch import ArtCache
+        return ArtCache(Path(td))
+
+    def test_block_survives_rescans_and_reads_as_blocked(self):
+        import tempfile
+        from soundbox.artfetch import ArtResult
+        with tempfile.TemporaryDirectory() as td:
+            c = self._cache(td)
+            c.store_ok("1", ArtResult(b"\xff\xd8x", "image/jpeg", 0.9,
+                                      "https://soundcloud.com/a/t", "t"))
+            c.block("1")
+            self.assertEqual(c.status_kind("1"), "blocked")
+            self.assertIsNone(c.image_path("1"))          # image gone
+            self.assertIsNotNone(c.status("1"))           # fill worker SKIPS it
+            c.retry_misses()
+            c.retry_weak()
+            self.assertEqual(c.status_kind("1"), "blocked")  # re-scans can't wake it
+
+    def test_explicit_store_overrides_block(self):
+        import tempfile
+        from soundbox.artfetch import ArtResult
+        with tempfile.TemporaryDirectory() as td:
+            c = self._cache(td)
+            c.block("1")
+            c.store_ok("1", ArtResult(b"\xff\xd8y", "image/jpeg", 1.0,
+                                      "https://soundcloud.com/a/t2", "t2"))
+            self.assertEqual(c.status_kind("1"), "cover")

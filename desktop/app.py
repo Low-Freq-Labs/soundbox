@@ -693,7 +693,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._populate_tree(engine.summary(self.lib))
         self._refresh_devices()
         self.stack.setCurrentIndex(0)
-        QTimer.singleShot(3000, self._start_art_fill)  # trickle cover art in bg
+        QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
 
     def _find_tree_item(self, path: str):
         """Locate a playlist tree item by its display path (PATH_ROLE)."""
@@ -785,7 +785,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
         self._flash_status("Updated ✓", 6)
-        QTimer.singleShot(3000, self._start_art_fill)  # trickle cover art in bg
+        QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
 
     def _on_refresh_fail(self, err):
         self._stop_pulse()
@@ -1415,7 +1415,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._after_track_edit(f"Restored {n} ✓")
 
     def _art_remove(self, tid):
-        self.art_cache.forget(tid)
+        # BLOCK, not forget: a deliberate removal must never be undone by the
+        # background fill on the next launch (it was — infuriating).
+        self.art_cache.block(tid)
         self.model.refresh_art(self.art_cache.status_kind)
 
     def _art_pick(self, tid):
@@ -1495,6 +1497,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             "SoundCloud URL (track = its cover, artist profile = avatar):")
         if ok and url.strip():
             self._run_oneshot(tid, lambda u=url.strip(): artfetch.fetch_by_url(u))
+
+    def _maybe_autostart_art_fill(self):
+        """Auto-fetch runs ONLY when the library gained tracks the cache has
+        never seen (new rekordbox adds) — and the fill worker's to-do list is
+        exactly those uncached tracks, so ONLY the new songs get searched.
+        Everything else (re-scans, per-track fetches) is user-triggered."""
+        if self.lib is None:
+            return
+        idx = self.art_cache.index
+        fresh = sum(1 for tid in self.lib.tracks_by_id if tid not in idx)
+        if fresh:
+            LOG.info("Art fill autostart: %d new track(s) without cache entries", fresh)
+            self._start_art_fill()
 
     def _start_art_fill(self, restart: bool = False):
         if self.lib is None:

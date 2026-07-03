@@ -571,3 +571,24 @@ class QtTrapAudit(unittest.TestCase):
             self.assertEqual(json.loads((Path(td) / "index.json").read_text()),
                              {"x": {"status": "none"}})
             self.assertFalse((Path(td) / "index.tmp").exists())
+
+
+class ArtAutostartPolicy(unittest.TestCase):
+    def test_autostart_only_when_uncached_tracks_exist(self):
+        calls = []
+        real = _win._start_art_fill
+        _win._start_art_fill = lambda *a, **k: calls.append(1)
+        try:
+            # every track known to the cache → NO autostart
+            for tid in _win.lib.tracks_by_id:
+                _win.art_cache.index[tid] = {"status": "none"}
+            _win._maybe_autostart_art_fill()
+            self.assertEqual(calls, [])
+            # one genuinely new track → autostart fires (and the worker's to-do
+            # list is exactly the uncached ones, so only new songs get searched)
+            _win.art_cache.index.pop(next(iter(_win.lib.tracks_by_id)))
+            _win._maybe_autostart_art_fill()
+            self.assertEqual(calls, [1])
+        finally:
+            _win._start_art_fill = real
+            _win.art_cache.index.clear()

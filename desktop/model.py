@@ -35,13 +35,15 @@ _EDITABLE = {"title", "artist"}
 # Art status ("art" row key) → glyph + tooltip. Status set by the app from the
 # art cache; sorting groups covers → avatars → misses → unfetched.
 ART_COL = next(i for i, c in enumerate(COLUMNS) if c[0] == "art")
-_ART_GLYPH = {"cover": "●", "avatar": "◐", "miss": "○", "": ""}
+_ART_GLYPH = {"cover": "●", "avatar": "◐", "miss": "○", "blocked": "⊘", "": ""}
 _ART_TIP = {"cover": "Cover art found",
             "avatar": "Artist avatar (no track cover found — improve the title/artist "
                       "and re-scan, or set art manually)",
             "miss": "No art found (improve the title/artist and re-scan, or set art manually)",
+            "blocked": "Art removed by you — auto-fetch skips this track "
+                       "(Choose/Fetch cover art overrides)",
             "": "Not fetched yet"}
-_ART_RANK = {"cover": 0, "avatar": 1, "miss": 2, "": 3}
+_ART_RANK = {"cover": 0, "avatar": 1, "miss": 2, "blocked": 3, "": 4}
 
 _CAMELOT = re.compile(r"^\s*(\d{1,2})\s*([ABab])\s*$")
 _DURATION = re.compile(r"^\s*(\d+):(\d{2})\s*$")
@@ -52,7 +54,7 @@ def _sort_value(key: str, row: dict):
     the wheel (2A < 10A), art by usefulness; empties always group together."""
     v = row.get(key) or ""
     if key == "art":
-        return (0, _ART_RANK.get(v, 3))
+        return (0, _ART_RANK.get(v, 4))
     s = str(v).strip()
     if not s:
         return (1, 0)  # empties group at the end of ascending
