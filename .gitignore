@@ -1,0 +1,14 @@
+# secrets
+.sc_creds.json
+# python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.hypothesis/
+# build artifacts
+build/
+dist/
+*.spec
+# macOS
+.DS_Store

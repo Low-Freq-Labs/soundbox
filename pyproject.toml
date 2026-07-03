@@ -1,0 +1,13 @@
+[project]
+name = "soundbox"
+version = "0.1.0"
+description = "Safe, read-only-first bridge from rekordbox XML to Rockbox/iPod."
+requires-python = ">=3.10"
+dependencies = []  # stdlib only by design
+
+[project.scripts]
+soundbox = "soundbox.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"

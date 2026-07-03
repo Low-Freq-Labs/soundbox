@@ -1,0 +1,95 @@
+import unittest
+from pathlib import Path
+
+from soundbox.paths import decode_location, device_music_path, is_within, sanitize_component
+
+
+class TestDecode(unittest.TestCase):
+    def test_localhost_percent_decoded(self):
+        loc = "file://localhost/Users/me/Music/Some%20Track%20%26%20VIP.flac"
+        self.assertEqual(decode_location(loc), Path("/Users/me/Music/Some Track & VIP.flac"))
+
+    def test_braces_and_colons(self):
+        loc = "file://localhost/Users/me/Desktop/%7bSUB%7d/USB%20Prep/3%3A7/x.wav"
+        self.assertEqual(decode_location(loc), Path("/Users/me/Desktop/{SUB}/USB Prep/3:7/x.wav"))
+
+
+class TestSanitize(unittest.TestCase):
+    def test_illegal_chars_replaced(self):
+        self.assertEqual(sanitize_component('a:b/c*d?"e'), "a-b-c-d--e")
+
+    def test_trailing_dot_space_trimmed(self):
+        self.assertEqual(sanitize_component("name. "), "name")
+
+    def test_unicode_preserved(self):
+        self.assertEqual(sanitize_component("Café Tröll"), "Café Tröll")
+
+    def test_slashes_become_dashes(self):
+        self.assertEqual(sanitize_component("///"), "---")
+
+    def test_never_empty(self):
+        self.assertEqual(sanitize_component(""), "_")
+        self.assertEqual(sanitize_component("   "), "_")
+
+
+class TestDevicePath(unittest.TestCase):
+    def test_basic(self):
+        self.assertEqual(
+            device_music_path(Path("/x/Track.flac"), "Artist"),
+            "/Music/Artist/Track/Track.flac",  # per-track folder for cover.jpg
+        )
+
+    def test_blank_artist(self):
+        self.assertEqual(
+            device_music_path(Path("/x/y.mp3"), "  "),
+            "/Music/Unknown Artist/y/y.mp3",
+        )
+
+    def test_illegal_in_filename(self):
+        self.assertEqual(
+            device_music_path(Path("/x/3:7 final.wav"), "DJ"),
+            "/Music/DJ/3-7 final/3-7 final.wav",
+        )
+
+
+class TestIsWithin(unittest.TestCase):
+    def test_nested(self):
+        self.assertTrue(is_within(Path("/a/b/c"), Path("/a")))
+
+    def test_same(self):
+        self.assertTrue(is_within(Path("/a"), Path("/a")))
+
+    def test_sibling(self):
+        self.assertFalse(is_within(Path("/a/b"), Path("/a/c")))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class PathLengthBudget(unittest.TestCase):
+    """FAT32 caps components at 255; Rockbox MAX_PATH is 260 total. Unbounded
+    titles must never produce an on-device path the iPod chokes on."""
+
+    def test_component_clamped(self):
+        from soundbox.paths import sanitize_component
+        out = sanitize_component("X" * 300)
+        self.assertLessEqual(len(out), 120)
+        self.assertEqual(sanitize_component("Y" * 300, max_len=80),
+                         "Y" * 80)
+
+    def test_full_device_path_under_rockbox_max(self):
+        from pathlib import Path
+        from soundbox.paths import device_music_path
+        p = device_music_path(Path("/tmp/" + "T" * 300 + ".flac"),
+                              "A" * 300)
+        self.assertLess(len(p), 245)  # comfortable margin under 260
+        for comp in p.strip("/").split("/"):
+            self.assertLessEqual(len(comp), 90)
+
+    def test_short_names_untouched(self):
+        from pathlib import Path
+        from soundbox.paths import device_music_path
+        self.assertEqual(
+            device_music_path(Path("/x/Enter The Dragon.wav"), "Zero"),
+            "/Music/Zero/Enter The Dragon/Enter The Dragon.wav")
