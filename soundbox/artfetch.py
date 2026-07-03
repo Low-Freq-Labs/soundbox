@@ -385,8 +385,11 @@ def fetch_thumb(thumb_url: str, source_url: str = "", matched_title: str = "") -
 
 
 def fetch_by_url(url: str) -> ArtResult | None:
-    """Grab art from a specific SoundCloud track URL (manual paste-link). Tries
-    the track page's og:image first (cover art, no 403), then the full extract."""
+    """Grab art from a pasted SoundCloud URL. A TRACK page's og:image is its
+    cover; an ARTIST PROFILE page's og:image is the avatar — so pasting a
+    profile URL deliberately assigns the artist's face (the clean escape hatch
+    when an uploader's exclusive carries junk cover art). Falls back to the
+    full yt-dlp extract for URLs whose page has no og:image."""
     img = _page_og_image(url)
     if img:
         got = _download(img)

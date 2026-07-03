@@ -90,7 +90,10 @@ class ArtPickerDialog(QDialog):
         # Escape hatches: a pasted SoundCloud URL, or any local image file.
         row = QHBoxLayout()
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("Paste a SoundCloud track URL…")
+        # A TRACK url yields its cover; an ARTIST PROFILE url yields the avatar —
+        # the escape hatch when an uploader's exclusive carries junk cover art.
+        self.url_edit.setPlaceholderText(
+            "Paste a SoundCloud URL — track = its cover, artist profile = avatar…")
         self.url_edit.returnPressed.connect(self._use_url)
         row.addWidget(self.url_edit, 1)
         use = QPushButton("Use URL")

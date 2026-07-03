@@ -1490,7 +1490,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._run_oneshot(tid, lambda: artfetch.fetch_best(artist, title))
 
     def _art_from_url(self, tid):
-        url, ok = QInputDialog.getText(self, "Cover art", "SoundCloud track URL:")
+        url, ok = QInputDialog.getText(
+            self, "Cover art",
+            "SoundCloud URL (track = its cover, artist profile = avatar):")
         if ok and url.strip():
             self._run_oneshot(tid, lambda u=url.strip(): artfetch.fetch_by_url(u))
 
