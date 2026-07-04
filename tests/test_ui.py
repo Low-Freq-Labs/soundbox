@@ -666,3 +666,24 @@ class ArtistCatalog(unittest.TestCase):
         self.assertEqual(_win.aliases.get("zedd"), "ZED")
         _win.aliases.clear()
         _win._build_artist_registry()
+
+
+class SearchSelection(unittest.TestCase):
+    def test_selection_survives_search_and_clear(self):
+        _win.tree.setCurrentItem(_win._find_tree_item("CRATES / SET ONE"))
+        _app.processEvents()
+        # narrow to Bravo, click it
+        _win.search.setText("brav")
+        _win.table.setCurrentIndex(_win.model.index(0, 0))
+        picked = _win.model._rows[0]["id"]
+        # clear the search — the same track must still be selected (not oblivion)
+        _win.search.setText("")
+        idx = _win.table.currentIndex()
+        self.assertTrue(idx.isValid())
+        self.assertEqual(_win.model._rows[idx.row()]["id"], picked)
+        # narrowing to something that EXCLUDES it: selection can't show; but
+        # bringing it back re-seats it again
+        _win.search.setText("charl")
+        _win.search.setText("")
+        idx = _win.table.currentIndex()
+        self.assertTrue(idx.isValid())

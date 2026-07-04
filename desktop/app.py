@@ -374,6 +374,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return w is None or w in (self.table, self.tree, self.sb_tree,
                                   self.device_tree)
 
+    def _on_search(self, text: str):
+        """Filter the table — and KEEP the selected track selected. Clearing a
+        search used to dump the selection into oblivion (the model reset wipes
+        the view's selection); now the same track is re-seated and scrolled to
+        whenever the filter lets it show."""
+        idx = self.table.currentIndex()
+        keep = (self.model._rows[idx.row()].get("id")
+                if idx.isValid() and idx.row() < len(self.model._rows) else None)
+        col = idx.column() if idx.isValid() else 0
+        self.model.set_filter(text)
+        if keep:
+            for r, row in enumerate(self.model._rows):
+                if row.get("id") == keep:
+                    self.table.setCurrentIndex(self.model.index(r, col))
+                    self.table.scrollTo(self.model.index(r, 0))
+                    break
+
     def _selected_track(self):
         idx = self.table.currentIndex()
         if not idx.isValid() or idx.row() >= len(self.model._rows):
@@ -494,7 +511,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.search.setPlaceholderText("Search titles…")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(165)  # slimmer → more room for the waveform
-        self.search.textChanged.connect(lambda t: self.model.set_filter(t))
+        self.search.textChanged.connect(self._on_search)
         h.addWidget(self.search, 0, Qt.AlignVCenter)
         h.addSpacing(4)  # tight: search↔gear
         gear = QPushButton("⚙")  # opposite end from the ASCII wordmark
