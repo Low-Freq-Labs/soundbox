@@ -4,9 +4,10 @@ actual picture shown — so the auto-picks are never a black box. Fixing an
 artist applies to ALL of that artist's avatar tracks at once; real covers are
 never touched.
 
-The dialog only CHOOSES (like the cover-art picker); the caller fetches/stores.
-`choice` after exec():  {"kind": "url"|"file"|"refetch", "artist": str,
-                          "tids": [track_id, ...], ...}   |   None
+The dialog STAYS OPEN across changes (close it yourself when done). Each action
+is handed to the app via `on_action(choice, done)`; the app applies it (fetches
+off-thread where needed) and calls `done(ok, new_image_path)` back on the main
+thread so the row updates in place.
 """
 
 from __future__ import annotations
@@ -22,27 +23,31 @@ _ROLE = Qt.UserRole + 31  # (artist, [tids])
 
 
 class ArtistCatalogDialog(QDialog):
-    def __init__(self, groups, parent=None):
-        """`groups` = [(artist, [track_ids], image_path_or_None), ...]"""
+    def __init__(self, groups, on_action=None, parent=None):
+        """`groups` = [(artist, [track_ids], image_path_or_None), ...]
+        `on_action(choice_dict, done_cb)` applies a change; done_cb(ok, img)."""
         super().__init__(parent)
         self.setWindowTitle("Artist pictures")
-        self.resize(640, 560)
-        self.choice: dict | None = None
+        self.resize(680, 620)
+        self._on_action = on_action
 
         v = QVBoxLayout(self)
         head = QLabel(f"{len(groups)} artist(s) are using an auto-selected "
-                      "profile picture as cover art. Pick one to change it — "
-                      "the fix applies to all of that artist's avatar tracks. "
-                      "Real track covers are never touched.")
+                      "profile picture as cover art. Fix as many as you like — "
+                      "each change applies to all of that artist's avatar "
+                      "tracks. Real track covers are never touched.")
         head.setWordWrap(True)
         v.addWidget(head)
+
+        self.status = QLabel("")
+        v.addWidget(self.status)
 
         self.list = QTreeWidget()
         self.list.setHeaderLabels(["Artist", "Tracks using it"])
         self.list.setRootIsDecorated(False)
         self.list.setAlternatingRowColors(True)
         self.list.setIconSize(QSize(96, 96))  # big enough to actually judge
-        self.list.header().resizeSection(0, 420)
+        self.list.header().resizeSection(0, 440)
         for artist, tids, img in groups:
             it = QTreeWidgetItem([artist, str(len(tids))])
             it.setData(0, _ROLE, (artist, tids))
@@ -74,20 +79,48 @@ class ArtistCatalogDialog(QDialog):
         self.refetch_btn.clicked.connect(self._refetch)
         row.addWidget(self.refetch_btn)
         close = QPushButton("Close")
-        close.clicked.connect(self.reject)
+        close.clicked.connect(self.accept)
         row.addWidget(close)
         v.addLayout(row)
         self._sync_buttons()
 
+    # ---- selection / plumbing ----
     def _current(self):
         it = self.list.currentItem()
         return it.data(0, _ROLE) if it else None
 
-    def _sync_buttons(self):
-        on = self._current() is not None
+    def _sync_buttons(self, busy: bool = False):
+        on = self._current() is not None and not busy
         for b in (self.url_btn, self.file_btn, self.refetch_btn, self.rename_btn):
             b.setEnabled(on)
 
+    def _dispatch(self, choice: dict):
+        """Hand one change to the app; update the row in place when it lands.
+        The dialog stays open — fix the whole catalog in one sitting."""
+        if self._on_action is None:
+            return
+        item = self.list.currentItem()
+        self.status.setText(f"Applying to {choice['artist']}…")
+        self._sync_buttons(busy=True)
+
+        def done(ok: bool, img=None):
+            self._sync_buttons(busy=False)
+            if not ok:
+                self.status.setText(f"No picture found for {choice['artist']}.")
+                return
+            self.status.setText(f"{choice['artist']} updated ✓")
+            if item is not None:
+                if choice["kind"] == "rename":
+                    item.setText(0, choice["new"])
+                    item.setData(0, _ROLE, (choice["new"], choice["tids"]))
+                elif img is not None:
+                    pm = QPixmap(str(img))
+                    if not pm.isNull():
+                        item.setIcon(0, QIcon(pm))
+
+        self._on_action(choice, done)
+
+    # ---- actions ----
     def _rename(self):
         cur = self._current()
         if not cur:
@@ -95,14 +128,12 @@ class ArtistCatalogDialog(QDialog):
         artist, tids = cur
         new_name, ok = QInputDialog.getText(
             self, "Rename artist",
-            f"Rename “{artist}” everywhere in SoundBox
-"
+            f"Rename “{artist}” everywhere in SoundBox "
             "(rekordbox is never touched):", text=artist)
         new_name = (new_name or "").strip()
         if ok and new_name and new_name != artist:
-            self.choice = {"kind": "rename", "artist": artist, "tids": tids,
-                           "new": new_name}
-            self.accept()
+            self._dispatch({"kind": "rename", "artist": artist, "tids": tids,
+                            "new": new_name})
 
     def _use_url(self):
         cur = self._current()
@@ -111,12 +142,11 @@ class ArtistCatalogDialog(QDialog):
         artist, tids = cur
         url, ok = QInputDialog.getText(
             self, "Artist picture",
-            f"SoundCloud URL for {artist}\n(artist profile = avatar, "
-            "track = its cover):")
+            f"SoundCloud URL for {artist} "
+            "(artist profile = avatar, track = its cover):")
         if ok and url.strip():
-            self.choice = {"kind": "url", "artist": artist, "tids": tids,
-                           "url": url.strip()}
-            self.accept()
+            self._dispatch({"kind": "url", "artist": artist, "tids": tids,
+                            "url": url.strip()})
 
     def _use_file(self):
         cur = self._current()
@@ -127,14 +157,12 @@ class ArtistCatalogDialog(QDialog):
             self, f"Choose picture for {artist}", "",
             "Images (*.jpg *.jpeg *.png *.webp *.bmp)")
         if path:
-            self.choice = {"kind": "file", "artist": artist, "tids": tids,
-                           "path": path}
-            self.accept()
+            self._dispatch({"kind": "file", "artist": artist, "tids": tids,
+                            "path": path})
 
     def _refetch(self):
         cur = self._current()
         if not cur:
             return
         artist, tids = cur
-        self.choice = {"kind": "refetch", "artist": artist, "tids": tids}
-        self.accept()
+        self._dispatch({"kind": "refetch", "artist": artist, "tids": tids})

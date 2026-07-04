@@ -618,18 +618,28 @@ class ArtistCatalog(unittest.TestCase):
         self.assertEqual(_win.art_cache.status_kind("1"), "avatar")
         self.assertEqual(_win.art_cache.status_kind("3"), "avatar")
 
-    def test_dialog_choice_shapes(self):
+    def test_dialog_stays_open_and_updates_row(self):
         from desktop.artistcatalog import ArtistCatalogDialog
-        dlg = ArtistCatalogDialog([("Zed", ["1", "9"], None)])
+        seen = []
+
+        def on_action(choice, done):
+            seen.append(choice["kind"])
+            done(True, None)
+
+        dlg = ArtistCatalogDialog([("Zed", ["1", "9"], None)], on_action)
         dlg.list.setCurrentItem(dlg.list.topLevelItem(0))
         dlg._refetch()
-        self.assertEqual(dlg.choice,
-                         {"kind": "refetch", "artist": "Zed", "tids": ["1", "9"]})
+        self.assertEqual(seen, ["refetch"])
+        self.assertEqual(dlg.result(), 0)   # NOT auto-closed — stays open
+        self.assertIn("updated", dlg.status.text())
 
     def test_rename_flows_through_alias_plane(self):
         from PySide6.QtWidgets import QInputDialog
         from desktop.artistcatalog import ArtistCatalogDialog
-        dlg = ArtistCatalogDialog([("zedd", ["1"], None)])
+        applied = []
+        dlg = ArtistCatalogDialog(
+            [("zedd", ["1"], None)],
+            lambda c, done: (applied.append(c), done(True, None)))
         dlg.list.setCurrentItem(dlg.list.topLevelItem(0))
         real = QInputDialog.getText
         QInputDialog.getText = staticmethod(lambda *a, **k: ("ZED", True))
@@ -637,10 +647,13 @@ class ArtistCatalog(unittest.TestCase):
             dlg._rename()   # the ⌘R slot
         finally:
             QInputDialog.getText = real
-        self.assertEqual(dlg.choice["kind"], "rename")
-        self.assertEqual((dlg.choice["artist"], dlg.choice["new"]), ("zedd", "ZED"))
-        # app applies it as an alias (merge machinery, already tested end-to-end)
-        _win._apply_merges([(dlg.choice["artist"], dlg.choice["new"])], [])
+        self.assertEqual(applied[0]["kind"], "rename")
+        self.assertEqual(dlg.list.topLevelItem(0).text(0), "ZED")  # row renamed in place
+        self.assertEqual(dlg.result(), 0)   # dialog persists for the next fix
+        # app side: rename applies via the alias/merge machinery
+        _win._on_catalog_action(
+            {"kind": "rename", "artist": "zedd", "new": "ZED", "tids": ["1"]},
+            lambda ok, img: None)
         self.assertEqual(_win.aliases.get("zedd"), "ZED")
         _win.aliases.clear()
         _win._build_artist_registry()

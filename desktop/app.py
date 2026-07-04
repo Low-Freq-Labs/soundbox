@@ -1447,42 +1447,52 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not groups:
             self._flash_status("No avatar art ✓", 6)
             return
-        dlg = ArtistCatalogDialog(groups, self)
-        if dlg.exec() != ArtistCatalogDialog.Accepted or not dlg.choice:
-            return
-        c = dlg.choice
+        dlg = ArtistCatalogDialog(groups, on_action=self._on_catalog_action,
+                                  parent=self)
+        dlg.exec()  # persistent: user fixes any number of artists, then closes
+
+    def _on_catalog_action(self, c: dict, done):
+        """Apply one catalog change and call done(ok, image_path) on the main
+        thread so the (still-open) dialog updates its row in place."""
+        tids = c["tids"]
         if c["kind"] == "rename":
             # Same plane as a merge: alias old → new, canonical everywhere.
             self._apply_merges([(c["artist"], c["new"])], [])
+            done(True, None)
             return
         if c["kind"] == "file":
             try:
                 data = Path(c["path"]).read_bytes()
             except OSError as exc:
                 QMessageBox.warning(self, "Couldn't read image", str(exc))
+                done(False, None)
                 return
             mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            self._apply_artist_picture(c["tids"], artfetch.ArtResult(
+            self._apply_artist_picture(tids, artfetch.ArtResult(
                 data=data, mime=mime, confidence=1.0,
                 source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]))
-        else:
-            from .workers import OneShotTask
-            if _running(getattr(self, "_scan_worker", None)):
-                return
-            fn = ((lambda u=c["url"]: artfetch.fetch_by_url(u)) if c["kind"] == "url"
-                  else (lambda a=c["artist"]: artfetch.fetch_artist_avatar(a)))
-            w = OneShotTask(fn)
-            self._scan_worker = w
-            w.done.connect(lambda res, tids=c["tids"]: self._on_artist_pic(tids, res))
-            w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
-            self.status_label.setText("Fetching…")
-            w.start()
-
-    def _on_artist_pic(self, tids, res):
-        if isinstance(res, Exception) or res is None:
-            self._flash_status("No picture found", 6)
+            done(True, self.art_cache.image_path(tids[0]))
             return
-        self._apply_artist_picture(tids, res)
+        # url / refetch hit the network — off the UI thread, dialog stays live
+        from .workers import OneShotTask
+        if _running(getattr(self, "_scan_worker", None)):
+            done(False, None)
+            return
+        fn = ((lambda u=c["url"]: artfetch.fetch_by_url(u)) if c["kind"] == "url"
+              else (lambda a=c["artist"]: artfetch.fetch_artist_avatar(a)))
+        w = OneShotTask(fn)
+        self._scan_worker = w
+
+        def landed(res, tids=tids, done=done):
+            if isinstance(res, Exception) or res is None:
+                done(False, None)
+                return
+            self._apply_artist_picture(tids, res)
+            done(True, self.art_cache.image_path(tids[0]))
+
+        w.done.connect(landed)
+        w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
+        w.start()
 
     def _apply_artist_picture(self, tids, res):
         """One picture → every avatar track of that artist (store_ok normalizes
