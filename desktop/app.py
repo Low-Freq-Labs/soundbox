@@ -380,8 +380,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         the view's selection); now the same track is re-seated and scrolled to
         whenever the filter lets it show."""
         idx = self.table.currentIndex()
-        keep = (self.model._rows[idx.row()].get("id")
-                if idx.isValid() and idx.row() < len(self.model._rows) else None)
+        if idx.isValid() and idx.row() < len(self.model._rows):
+            # sticky: survives intermediate filters that HIDE the track, so
+            # clearing the search still brings the selection home
+            self._search_keep = self.model._rows[idx.row()].get("id")
+        keep = getattr(self, "_search_keep", None)
         col = idx.column() if idx.isValid() else 0
         self.model.set_filter(text)
         if keep:
