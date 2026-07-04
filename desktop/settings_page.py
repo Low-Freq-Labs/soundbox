@@ -19,7 +19,11 @@ from PySide6.QtWidgets import (
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
 
+import logging
+
 from soundbox import engine, metadata
+
+LOG = logging.getLogger("soundbox")
 
 
 class SettingsPageMixin:
@@ -274,14 +278,19 @@ class SettingsPageMixin:
         from soundbox import backup
         from .workers import OneShotTask, _running
 
+        LOG.info("Back Up clicked (worker running: %s)",
+                 _running(self._backup_worker))
         if _running(self._backup_worker):
+            self._flash_status("Backup already running…", 5)
             return
         self._save_state()  # the zip should contain the very latest state
+        self.raise_(); self.activateWindow()  # the save SHEET attaches to us
         dest, _ = QFileDialog.getSaveFileName(
             self, "Back up SoundBox library",
             str(Path.home() / "Desktop" /
                 f"soundbox-backup-{_time.strftime('%Y-%m-%d')}.zip"),
             "SoundBox backup (*.zip)")
+        LOG.info("Back Up dest: %r", dest)
         if not dest:
             return
         data_dir = self._data_file.parent

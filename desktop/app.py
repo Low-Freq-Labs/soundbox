@@ -65,6 +65,14 @@ def setup_logging() -> Path | None:
         faulthandler.enable(open(d / "crash-stacks.log", "a"))
     except OSError:
         pass
+    # PACKAGED app (Finder launch): stderr goes NOWHERE, and PySide prints
+    # swallowed slot exceptions to stderr — so a broken button clicks silently.
+    # Route stderr into the log so every field failure leaves a trace.
+    if getattr(sys, "frozen", False):
+        try:
+            sys.stderr = sys.stdout = open(d / "soundbox.log", "a", buffering=1)
+        except OSError:
+            pass
     return logpath
 
 from PySide6.QtCore import QEvent, QProcess, Qt, QTimer
