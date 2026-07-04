@@ -195,6 +195,16 @@ class SettingsPageMixin:
             "Pick a backup .zip — or the library.json inside an unzipped backup "
             "folder. Your current library is snapshotted first."))
 
+        # --- ARTIST PICTURES -------------------------------------------------
+        bl.addWidget(self._settings_section("ARTIST PICTURES"))
+        cat = QPushButton("Open catalog…"); cat.setCursor(Qt.PointingHandCursor)
+        cat.clicked.connect(self._open_artist_catalog)
+        bl.addWidget(self._settings_row(
+            "Auto-selected artist pictures", cat,
+            "See which profile picture each avatar-fallback artist got, and "
+            "swap it (URL / file / re-fetch) — applies to all their avatar "
+            "tracks. Real covers are never touched."))
+
         self._sync_settings_controls()
         self._refresh_graveyard()
         scroll.setWidget(host)

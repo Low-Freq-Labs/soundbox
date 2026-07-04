@@ -592,3 +592,36 @@ class ArtAutostartPolicy(unittest.TestCase):
         finally:
             _win._start_art_fill = real
             _win.art_cache.index.clear()
+
+
+class ArtistCatalog(unittest.TestCase):
+    def tearDown(self):
+        _win.art_cache.index.clear()
+
+    def test_groups_only_avatar_tracks_by_artist(self):
+        # track 1+3 wear avatars, 2 has a real cover → catalog shows avatars only
+        _win.art_cache.index.update({
+            "1": {"status": "ok", "src": "https://soundcloud.com/zed", "ext": "jpg"},
+            "2": {"status": "ok", "src": "https://soundcloud.com/zed/track", "ext": "jpg"},
+            "3": {"status": "ok", "src": "https://soundcloud.com/mia", "ext": "jpg"},
+        })
+        groups = _win._artist_avatar_groups()
+        artists = {a: tids for a, tids, _img in groups}
+        self.assertIn("1", artists.get("Zed", []))
+        self.assertIn("3", artists.get("Mia", []))
+        self.assertNotIn("2", sum((t for _a, t, _i in groups), []))
+
+    def test_apply_sets_art_on_all_tracks(self):
+        from soundbox.artfetch import ArtResult
+        _win._apply_artist_picture(["1", "3"], ArtResult(
+            b"\xff\xd8z", "image/jpeg", 1.0, "https://soundcloud.com/zed", "Zed"))
+        self.assertEqual(_win.art_cache.status_kind("1"), "avatar")
+        self.assertEqual(_win.art_cache.status_kind("3"), "avatar")
+
+    def test_dialog_choice_shapes(self):
+        from desktop.artistcatalog import ArtistCatalogDialog
+        dlg = ArtistCatalogDialog([("Zed", ["1", "9"], None)])
+        dlg.list.setCurrentItem(dlg.list.topLevelItem(0))
+        dlg._refetch()
+        self.assertEqual(dlg.choice,
+                         {"kind": "refetch", "artist": "Zed", "tids": ["1", "9"]})
