@@ -1451,6 +1451,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if dlg.exec() != ArtistCatalogDialog.Accepted or not dlg.choice:
             return
         c = dlg.choice
+        if c["kind"] == "rename":
+            # Same plane as a merge: alias old → new, canonical everywhere.
+            self._apply_merges([(c["artist"], c["new"])], [])
+            return
         if c["kind"] == "file":
             try:
                 data = Path(c["path"]).read_bytes()

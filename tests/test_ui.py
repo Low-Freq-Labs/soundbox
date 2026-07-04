@@ -625,3 +625,22 @@ class ArtistCatalog(unittest.TestCase):
         dlg._refetch()
         self.assertEqual(dlg.choice,
                          {"kind": "refetch", "artist": "Zed", "tids": ["1", "9"]})
+
+    def test_rename_flows_through_alias_plane(self):
+        from PySide6.QtWidgets import QInputDialog
+        from desktop.artistcatalog import ArtistCatalogDialog
+        dlg = ArtistCatalogDialog([("zedd", ["1"], None)])
+        dlg.list.setCurrentItem(dlg.list.topLevelItem(0))
+        real = QInputDialog.getText
+        QInputDialog.getText = staticmethod(lambda *a, **k: ("ZED", True))
+        try:
+            dlg._rename()   # the ⌘R slot
+        finally:
+            QInputDialog.getText = real
+        self.assertEqual(dlg.choice["kind"], "rename")
+        self.assertEqual((dlg.choice["artist"], dlg.choice["new"]), ("zedd", "ZED"))
+        # app applies it as an alias (merge machinery, already tested end-to-end)
+        _win._apply_merges([(dlg.choice["artist"], dlg.choice["new"])], [])
+        self.assertEqual(_win.aliases.get("zedd"), "ZED")
+        _win.aliases.clear()
+        _win._build_artist_registry()

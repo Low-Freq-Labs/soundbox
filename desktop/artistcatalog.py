@@ -12,7 +12,7 @@ The dialog only CHOOSES (like the cover-art picker); the caller fetches/stores.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout,
@@ -41,11 +41,12 @@ class ArtistCatalogDialog(QDialog):
         self.list.setHeaderLabels(["Artist", "Tracks using it"])
         self.list.setRootIsDecorated(False)
         self.list.setAlternatingRowColors(True)
-        self.list.setIconSize(QSize(44, 44))
+        self.list.setIconSize(QSize(96, 96))  # big enough to actually judge
         self.list.header().resizeSection(0, 420)
         for artist, tids, img in groups:
             it = QTreeWidgetItem([artist, str(len(tids))])
             it.setData(0, _ROLE, (artist, tids))
+            it.setSizeHint(0, QSize(0, 104))  # tall rows for the 96px art
             if img is not None:
                 pm = QPixmap(str(img))
                 if not pm.isNull():
@@ -54,8 +55,15 @@ class ArtistCatalogDialog(QDialog):
         self.list.itemSelectionChanged.connect(self._sync_buttons)
         v.addWidget(self.list, 1)
 
+        # ⌘R renames the selected artist (SoundBox-side alias — rekordbox
+        # untouched; applies everywhere: display, folders, future exports).
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._rename)
+
         row = QHBoxLayout()
         row.addStretch(1)
+        self.rename_btn = QPushButton("Rename…  (⌘R)")
+        self.rename_btn.clicked.connect(self._rename)
+        row.addWidget(self.rename_btn)
         self.url_btn = QPushButton("Set from URL…")
         self.url_btn.clicked.connect(self._use_url)
         row.addWidget(self.url_btn)
@@ -77,8 +85,24 @@ class ArtistCatalogDialog(QDialog):
 
     def _sync_buttons(self):
         on = self._current() is not None
-        for b in (self.url_btn, self.file_btn, self.refetch_btn):
+        for b in (self.url_btn, self.file_btn, self.refetch_btn, self.rename_btn):
             b.setEnabled(on)
+
+    def _rename(self):
+        cur = self._current()
+        if not cur:
+            return
+        artist, tids = cur
+        new_name, ok = QInputDialog.getText(
+            self, "Rename artist",
+            f"Rename “{artist}” everywhere in SoundBox
+"
+            "(rekordbox is never touched):", text=artist)
+        new_name = (new_name or "").strip()
+        if ok and new_name and new_name != artist:
+            self.choice = {"kind": "rename", "artist": artist, "tids": tids,
+                           "new": new_name}
+            self.accept()
 
     def _use_url(self):
         cur = self._current()
