@@ -1365,6 +1365,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
         self._refresh_devices()
+        self._refresh_graveyard()  # ALWAYS current — not just on gear-open
         self._flash_status(msg, 6)
 
     def _merge_artist(self, src: str):

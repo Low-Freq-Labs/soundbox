@@ -687,3 +687,21 @@ class SearchSelection(unittest.TestCase):
         _win.search.setText("")
         idx = _win.table.currentIndex()
         self.assertTrue(idx.isValid())
+
+
+class GraveyardFreshness(unittest.TestCase):
+    def test_delete_shows_in_graveyard_immediately(self):
+        from PySide6.QtWidgets import QMessageBox
+        real = QMessageBox.question
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        try:
+            _win._delete_tracks(["2"])  # no settings-open needed
+        finally:
+            QMessageBox.question = real
+        names = [_win._grave.topLevelItem(i).text(0)
+                 for i in range(_win._grave.topLevelItemCount())]
+        self.assertTrue(any("alpha" in n for n in names))
+        _win.hidden.clear()
+        _win.hidden_dates.clear()
+        _win._apply_settings_to_lib()
+        _win._refresh_graveyard()
