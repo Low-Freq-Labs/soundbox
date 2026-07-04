@@ -707,3 +707,25 @@ class GraveyardFreshness(unittest.TestCase):
         _win.hidden_dates.clear()
         _win._apply_settings_to_lib()
         _win._refresh_graveyard()
+
+
+class ArtistsView(unittest.TestCase):
+    def test_pinned_under_collection_with_distinct_count(self):
+        _win._refresh_custom()
+        it = _win.sb_tree.topLevelItem(1)
+        self.assertIn("Artists", it.text(0))
+        self.assertIn("(3)", it.text(0))  # Zed, Ann, Mia = 3 distinct
+
+    def test_grouped_by_artist_unknowns_last(self):
+        _win.lib.tracks_by_id["3"].artist = ""   # Charlie → Unknown Artist
+        try:
+            _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
+            _app.processEvents()
+            artists = [r["artist"] for r in _win.model._rows]
+            self.assertEqual(artists, sorted(
+                [a for a in artists if a != "Unknown Artist"], key=str.casefold)
+                + ["Unknown Artist"] * artists.count("Unknown Artist"))
+            self.assertEqual(artists[-1], "Unknown Artist")
+        finally:
+            _win.lib.tracks_by_id["3"].artist = "Mia"
+            _win._build_artist_registry()

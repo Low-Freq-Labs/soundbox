@@ -19,6 +19,7 @@ PATH_ROLE = Qt.UserRole + 1     # rekordbox playlist display_path
 DEVPATH_ROLE = Qt.UserRole + 2  # device mount path
 CUSTOM_ROLE = Qt.UserRole + 3   # custom (SoundBox) playlist name
 COLLECTION_ROLE = Qt.UserRole + 6  # the built-in "Collection" all-tracks view
+ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" grouped-by-artist view
 
 
 class CellEditDelegate(QStyledItemDelegate):

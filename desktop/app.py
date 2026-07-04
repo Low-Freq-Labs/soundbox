@@ -97,7 +97,7 @@ from .device_browser import DeviceBrowserMixin
 from .devices import device_fs, human
 from .settings_page import SettingsPageMixin
 from .trees import (
-    COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
+    ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
     CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
 from .workers import (
@@ -342,6 +342,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         cur = self.sb_tree.currentItem()
         if cur is not None and cur.data(0, COLLECTION_ROLE):
             self._show_collection()
+            return
+        if cur is not None and cur.data(0, ARTISTS_ROLE):
+            self._show_artists()
             return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
             rows = []
@@ -997,6 +1000,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # _populate_tree) so a library refresh doesn't dump the user's view.
         cur = self.sb_tree.currentItem()
         keep_coll = bool(cur and cur.data(0, COLLECTION_ROLE))
+        keep_artists = bool(cur and cur.data(0, ARTISTS_ROLE))
         keep_name = cur.data(0, CUSTOM_ROLE) if cur else None
         self.sb_tree.blockSignals(True)
         try:
@@ -1004,11 +1008,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # Built-in "Collection" pinned first: every track in one view (browse/
             # curate only — no CUSTOM_ROLE, so it can't be dragged to a device,
             # dropped on, renamed, or deleted).
-            coll = QTreeWidgetItem([f"⌂  Collection  ({len(self._collection_tracks())})"])
+            tracks = self._collection_tracks()
+            coll = QTreeWidgetItem([f"⌂  Collection  ({len(tracks)})"])
             coll.setData(0, COLLECTION_ROLE, True)
             self.sb_tree.addTopLevelItem(coll)
             if keep_coll:
                 self.sb_tree.setCurrentItem(coll)
+            # Built-in "Artists": same pool grouped A→Z by effective artist —
+            # count shows DISTINCT artists. Browse/curate only, like Collection.
+            n_artists = len({r["artist"] for r in self._artist_rows(tracks)}) if tracks else 0
+            arts = QTreeWidgetItem([f"♪  Artists  ({n_artists})"])
+            arts.setData(0, ARTISTS_ROLE, True)
+            self.sb_tree.addTopLevelItem(arts)
+            if keep_artists:
+                self.sb_tree.setCurrentItem(arts)
             for name, ids in self.custom.items():
                 it = QTreeWidgetItem([f"★  {name}  ({len(ids)})"])
                 it.setData(0, CUSTOM_ROLE, name)
@@ -1063,9 +1076,27 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if cur.data(0, COLLECTION_ROLE):
             self._show_collection()
             return
+        if cur.data(0, ARTISTS_ROLE):
+            self._show_artists()
+            return
         name = cur.data(0, CUSTOM_ROLE)
         if name:
             self._show_custom(name)
+
+    def _artist_rows(self, tracks) -> list:
+        """Track rows grouped A→Z by effective artist (titles A→Z within each);
+        Unknown Artist sinks to the bottom."""
+        reg = self.lib.artist_registry if self.lib else None
+        rows = [engine.track_row(t, self.overrides, self.titles, registry=reg,
+                                 junk=self._title_junk()) for t in tracks]
+        rows.sort(key=lambda r: (r["artist"] == "Unknown Artist",
+                                 r["artist"].casefold(), r["title"].casefold()))
+        return rows
+
+    def _show_artists(self):
+        rows = self._artist_rows(self._collection_tracks())
+        self.model.set_rows(self._annotate_art(rows))
+        self.stack.setCurrentIndex(0)
 
     def _show_collection(self):
         reg = self.lib.artist_registry if self.lib else None
