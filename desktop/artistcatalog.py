@@ -75,9 +75,9 @@ class ArtistCatalogDialog(QDialog):
         self.file_btn = QPushButton("Choose image file…")
         self.file_btn.clicked.connect(self._use_file)
         row.addWidget(self.file_btn)
-        self.refetch_btn = QPushButton("Re-fetch avatar")
-        self.refetch_btn.clicked.connect(self._refetch)
-        row.addWidget(self.refetch_btn)
+        self.delete_btn = QPushButton("Delete avatar")
+        self.delete_btn.clicked.connect(self._delete)
+        row.addWidget(self.delete_btn)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         row.addWidget(close)
@@ -91,7 +91,7 @@ class ArtistCatalogDialog(QDialog):
 
     def _sync_buttons(self, busy: bool = False):
         on = self._current() is not None and not busy
-        for b in (self.url_btn, self.file_btn, self.refetch_btn, self.rename_btn):
+        for b in (self.url_btn, self.file_btn, self.delete_btn, self.rename_btn):
             b.setEnabled(on)
 
     def _dispatch(self, choice: dict):
@@ -107,6 +107,15 @@ class ArtistCatalogDialog(QDialog):
             self._sync_buttons(busy=False)
             if not ok:
                 self.status.setText(f"No picture found for {choice['artist']}.")
+                return
+            if choice["kind"] == "delete":
+                # No avatar left to show — the row leaves the catalog. The art
+                # is BLOCKED (⊘): it will never be auto-refetched.
+                self.status.setText(f"{choice['artist']} avatar deleted "
+                                    "(blocked — won't come back) ✓")
+                if item is not None:
+                    self.list.takeTopLevelItem(
+                        self.list.indexOfTopLevelItem(item))
                 return
             self.status.setText(f"{choice['artist']} updated ✓")
             if item is not None:
@@ -160,9 +169,9 @@ class ArtistCatalogDialog(QDialog):
             self._dispatch({"kind": "file", "artist": artist, "tids": tids,
                             "path": path})
 
-    def _refetch(self):
+    def _delete(self):
         cur = self._current()
         if not cur:
             return
         artist, tids = cur
-        self._dispatch({"kind": "refetch", "artist": artist, "tids": tids})
+        self._dispatch({"kind": "delete", "artist": artist, "tids": tids})

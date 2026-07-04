@@ -1460,6 +1460,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._apply_merges([(c["artist"], c["new"])], [])
             done(True, None)
             return
+        if c["kind"] == "delete":
+            # Block, not forget: these avatars are unwanted AND unfindable —
+            # they must never crawl back on a relaunch or re-scan.
+            for tid in tids:
+                self.art_cache.block(tid)
+            self.model.refresh_art(self.art_cache.status_kind)
+            done(True, None)
+            return
         if c["kind"] == "file":
             try:
                 data = Path(c["path"]).read_bytes()
@@ -1473,14 +1481,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]))
             done(True, self.art_cache.image_path(tids[0]))
             return
-        # url / refetch hit the network — off the UI thread, dialog stays live
+        # url fetch hits the network — off the UI thread, dialog stays live
         from .workers import OneShotTask
         if _running(getattr(self, "_scan_worker", None)):
             done(False, None)
             return
-        fn = ((lambda u=c["url"]: artfetch.fetch_by_url(u)) if c["kind"] == "url"
-              else (lambda a=c["artist"]: artfetch.fetch_artist_avatar(a)))
-        w = OneShotTask(fn)
+        w = OneShotTask(lambda u=c["url"]: artfetch.fetch_by_url(u))
         self._scan_worker = w
 
         def landed(res, tids=tids, done=done):

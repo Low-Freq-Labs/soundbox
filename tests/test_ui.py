@@ -628,10 +628,19 @@ class ArtistCatalog(unittest.TestCase):
 
         dlg = ArtistCatalogDialog([("Zed", ["1", "9"], None)], on_action)
         dlg.list.setCurrentItem(dlg.list.topLevelItem(0))
-        dlg._refetch()
-        self.assertEqual(seen, ["refetch"])
+        dlg._delete()
+        self.assertEqual(seen, ["delete"])
         self.assertEqual(dlg.result(), 0)   # NOT auto-closed — stays open
-        self.assertIn("updated", dlg.status.text())
+        self.assertEqual(dlg.list.topLevelItemCount(), 0)  # row gone
+        self.assertIn("blocked", dlg.status.text())
+
+    def test_delete_blocks_all_artist_tracks(self):
+        _win._on_catalog_action(
+            {"kind": "delete", "artist": "Zed", "tids": ["1", "3"]},
+            lambda ok, img: None)
+        self.assertEqual(_win.art_cache.status_kind("1"), "blocked")
+        self.assertEqual(_win.art_cache.status_kind("3"), "blocked")
+        _win.art_cache.index.clear()
 
     def test_rename_flows_through_alias_plane(self):
         from PySide6.QtWidgets import QInputDialog
