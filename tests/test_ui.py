@@ -355,7 +355,9 @@ class Graveyard(unittest.TestCase):
             _win._delete_tracks(["2"])
         finally:
             QMessageBox.question = real
-        self.assertEqual(_win.hidden_dates.get("2"), _t.strftime("%Y-%m-%d"))
+        stamp = _win.hidden_dates.get("2")
+        self.assertTrue(stamp.startswith(_t.strftime("%Y-%m-%d ")))
+        self.assertRegex(stamp, r"\d{2}:\d{2}$")  # minute precision
 
 
 class TitleJunkSetting(unittest.TestCase):

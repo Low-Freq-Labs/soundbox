@@ -1343,7 +1343,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                                     "(XML playlists have no stable identity).")
             return
         bag = dict(self.removals.get(pl.pid, {}))
-        stamp = time.strftime("%Y-%m-%d")
+        stamp = time.strftime("%Y-%m-%d %H:%M")  # minute precision — same-day deletes sort truthfully
         for i in ids:
             bag.setdefault(i, stamp)
         self.removals[pl.pid] = bag
@@ -1430,7 +1430,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "stops showing and exporting them. Restore anytime in Settings."
         ) != QMessageBox.Yes:
             return
-        stamp = time.strftime("%Y-%m-%d")
+        stamp = time.strftime("%Y-%m-%d %H:%M")  # minute precision — same-day deletes sort truthfully
         self.hidden.update(ids)
         for i in ids:
             self.hidden_dates.setdefault(i, stamp)
