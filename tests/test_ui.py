@@ -441,6 +441,7 @@ class ColumnPersistence(unittest.TestCase):
 class ArtistMerges(unittest.TestCase):
     def tearDown(self):
         _win.aliases.clear()
+        _win.lib.tracks_by_id["1"].artist = "Zed"   # undo test mutation
         _win._build_artist_registry()
 
     def test_alias_applies_and_unmerges(self):
