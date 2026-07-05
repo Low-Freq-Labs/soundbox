@@ -123,11 +123,11 @@ class SoundBoxTree(QTreeWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDropIndicatorShown(False)
-        # The built-in Artists folder expands into per-artist rows, so branch
-        # decoration is on; indentation kept slim so drop-hover rows still read
-        # nearly full-width.
-        self.setRootIsDecorated(True)
-        self.setIndentation(12)
+        # Flat list — no expand arrows. Removing the reserved indent makes the row
+        # (and its purple drop-hover) fill the FULL width from the left edge, instead
+        # of the highlight starting inset past a phantom branch column.
+        self.setRootIsDecorated(False)
+        self.setIndentation(0)
         self._hover = None
 
     def mimeData(self, items):  # type: ignore[override]

@@ -710,30 +710,34 @@ class GraveyardFreshness(unittest.TestCase):
 
 
 class ArtistsView(unittest.TestCase):
-    def test_folder_has_artist_children_with_counts(self):
+    def test_click_opens_browser_folder_page(self):
         _win._refresh_custom()
         it = _win.sb_tree.topLevelItem(1)
         self.assertIn("Artists", it.text(0))
         self.assertIn("(3)", it.text(0))          # 3 distinct artists
-        kids = [it.child(i).text(0) for i in range(it.childCount())]
-        self.assertEqual(kids, ["Ann  (1)", "Mia  (1)", "Zed  (1)"])  # A→Z
-
-    def test_click_artist_child_shows_their_songs(self):
-        from desktop.trees import ARTIST_ROLE
-        _win._refresh_custom()
-        arts = _win.sb_tree.topLevelItem(1)
-        arts.setExpanded(True)
-        child = next(arts.child(i) for i in range(arts.childCount())
-                     if arts.child(i).data(0, ARTIST_ROLE) == "Zed")
-        _win.sb_tree.setCurrentItem(child)
+        _win.sb_tree.setCurrentItem(it)
         _app.processEvents()
-        self.assertEqual([r["artist"] for r in _win.model._rows], ["Zed"])
+        self.assertEqual(_win.stack.currentIndex(), 2)   # the Artists browser
+        names = [_win.artists_view.topLevelItem(i).text(0)
+                 for i in range(_win.artists_view.topLevelItemCount())]
+        self.assertEqual(names, ["Ann  (1)", "Mia  (1)", "Zed  (1)"])
+        # names only — no songs until you drop an artist down
+        self.assertEqual(_win.artists_view.topLevelItem(0).childCount(), 0)
 
-    def test_parent_click_shows_grouped_all(self):
+    def test_expand_reveals_songs_lazily(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
         _app.processEvents()
-        artists = [r["artist"] for r in _win.model._rows]
-        self.assertEqual(artists, sorted(artists, key=str.casefold))
+        zed = next(_win.artists_view.topLevelItem(i)
+                   for i in range(_win.artists_view.topLevelItemCount())
+                   if _win.artists_view.topLevelItem(i).text(0).startswith("Zed"))
+        zed.setExpanded(True)   # fires _fill_artist
+        _app.processEvents()
+        self.assertEqual(zed.childCount(), 1)
+        self.assertEqual(zed.child(0).text(0), "Bravo")
+        # collection view still works after (back to the table page)
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        self.assertEqual(_win.stack.currentIndex(), 0)
 
 
 class DefaultView(unittest.TestCase):
@@ -765,42 +769,3 @@ class SortSelection(unittest.TestCase):
         _win.table.sortByColumn(-1, Qt.AscendingOrder)
         _win.search.setText("")
 
-
-class GraveyardFreshness(unittest.TestCase):
-    def test_delete_shows_in_graveyard_immediately(self):
-        from PySide6.QtWidgets import QMessageBox
-        real = QMessageBox.question
-        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
-        try:
-            _win._delete_tracks(["2"])  # no settings-open needed
-        finally:
-            QMessageBox.question = real
-        names = [_win._grave.topLevelItem(i).text(0)
-                 for i in range(_win._grave.topLevelItemCount())]
-        self.assertTrue(any("alpha" in n for n in names))
-        _win.hidden.clear()
-        _win.hidden_dates.clear()
-        _win._apply_settings_to_lib()
-        _win._refresh_graveyard()
-
-
-class ArtistsView(unittest.TestCase):
-    def test_pinned_under_collection_with_distinct_count(self):
-        _win._refresh_custom()
-        it = _win.sb_tree.topLevelItem(1)
-        self.assertIn("Artists", it.text(0))
-        self.assertIn("(3)", it.text(0))  # Zed, Ann, Mia = 3 distinct
-
-    def test_grouped_by_artist_unknowns_last(self):
-        _win.lib.tracks_by_id["3"].artist = ""   # Charlie → Unknown Artist
-        try:
-            _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
-            _app.processEvents()
-            artists = [r["artist"] for r in _win.model._rows]
-            self.assertEqual(artists, sorted(
-                [a for a in artists if a != "Unknown Artist"], key=str.casefold)
-                + ["Unknown Artist"] * artists.count("Unknown Artist"))
-            self.assertEqual(artists[-1], "Unknown Artist")
-        finally:
-            _win.lib.tracks_by_id["3"].artist = "Mia"
-            _win._build_artist_registry()

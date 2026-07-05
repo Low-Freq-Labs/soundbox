@@ -82,7 +82,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QFileSystemModel, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
     QProgressBar, QPushButton, QSizePolicy, QStackedWidget,
-    QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QTableView, QTreeView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 
@@ -100,6 +100,8 @@ from .trees import (
     ARTIST_ROLE, ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
     CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
+ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser
+
 from .workers import (
     ArtFillWorker, DeleteWorker, DeviceScanWorker, ExportWorker,
     RefreshWorker, ResyncWorker, _OneShotArt, _running,
@@ -354,9 +356,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if cur is not None and cur.data(0, ARTISTS_ROLE):
             self._show_artists()
             return
-        if cur is not None and cur.data(0, ARTIST_ROLE):
-            self._show_artist(cur.data(0, ARTIST_ROLE))
-            return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
             rows = []
             for i in self.custom.get(cur.data(0, CUSTOM_ROLE), []):
@@ -386,7 +385,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         """Focus policy for the Space shortcut (kept separate so it's directly
         testable — offscreen focus doesn't propagate reliably)."""
         return w is None or w in (self.table, self.tree, self.sb_tree,
-                                  self.device_tree)
+                                  self.device_tree, self.artists_view)
 
     def _remember_current(self, idx, _prev=None):
         """Sticky memory of the selected track id — survives filters/sorts that
@@ -690,6 +689,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.fs_view.setColumnWidth(3, 150)
         dl.addWidget(self.fs_view)
         self.stack.addWidget(dpage)
+
+        # page 2: Artists browser — folder rows per artist, songs on expand
+        self.artists_view = QTreeWidget()
+        self.artists_view.setObjectName("ArtistsBrowser")
+        self.artists_view.setHeaderLabels(["Artist / Track", "BPM", "Key", "Time"])
+        self.artists_view.setAlternatingRowColors(True)
+        self.artists_view.setUniformRowHeights(True)
+        self.artists_view.header().resizeSection(0, 480)
+        self.artists_view.setIndentation(16)
+        self.artists_view.itemExpanded.connect(self._fill_artist)
+        self.artists_view.itemDoubleClicked.connect(self._artists_double)
+        self.stack.addWidget(self.artists_view)
 
         self._apply_default_columns()
         return self.stack
@@ -1026,7 +1037,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         cur = self.sb_tree.currentItem()
         keep_coll = bool(cur and cur.data(0, COLLECTION_ROLE))
         keep_artists = bool(cur and cur.data(0, ARTISTS_ROLE))
-        keep_artist_name = cur.data(0, ARTIST_ROLE) if cur else None
         keep_name = cur.data(0, CUSTOM_ROLE) if cur else None
         self.sb_tree.blockSignals(True)
         try:
@@ -1040,29 +1050,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.sb_tree.addTopLevelItem(coll)
             if keep_coll:
                 self.sb_tree.setCurrentItem(coll)
-            # Built-in "Artists" FOLDER: expand it for one row per artist
-            # (A→Z, Unknown last, with track counts); click an artist to see
-            # their songs. Children are filled lazily on first expand.
+            # Built-in "Artists": opens the BROWSER-side folder view (artist
+            # names only; drop one down to see their songs). Count = distinct.
             counts = {}
             for r in self._artist_rows(tracks):
                 counts[r["artist"]] = counts.get(r["artist"], 0) + 1
             arts = QTreeWidgetItem([f"♪  Artists  ({len(counts)})"])
             arts.setData(0, ARTISTS_ROLE, True)
-            names = sorted(counts, key=lambda a: (a == "Unknown Artist",
-                                                  a.casefold()))
-            for name in names:
-                child = QTreeWidgetItem([f"{name}  ({counts[name]})"])
-                child.setData(0, ARTIST_ROLE, name)
-                arts.addChild(child)
             self.sb_tree.addTopLevelItem(arts)
             if keep_artists:
                 self.sb_tree.setCurrentItem(arts)
-            elif keep_artist_name:
-                for i in range(arts.childCount()):
-                    if arts.child(i).data(0, ARTIST_ROLE) == keep_artist_name:
-                        arts.setExpanded(True)
-                        self.sb_tree.setCurrentItem(arts.child(i))
-                        break
             for name, ids in self.custom.items():
                 it = QTreeWidgetItem([f"★  {name}  ({len(ids)})"])
                 it.setData(0, CUSTOM_ROLE, name)
@@ -1120,10 +1117,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if cur.data(0, ARTISTS_ROLE):
             self._show_artists()
             return
-        one = cur.data(0, ARTIST_ROLE)
-        if one:
-            self._show_artist(one)
-            return
         name = cur.data(0, CUSTOM_ROLE)
         if name:
             self._show_custom(name)
@@ -1139,16 +1132,39 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return rows
 
     def _show_artists(self):
+        """The Artists BROWSER page: artist names only, each expandable in place
+        to reveal that artist's songs (lazy-filled on first expand)."""
         rows = self._artist_rows(self._collection_tracks())
-        self.model.set_rows(self._annotate_art(rows))
-        self.stack.setCurrentIndex(0)
+        by_artist: dict[str, list] = {}
+        for r in rows:
+            by_artist.setdefault(r["artist"], []).append(r)
+        self.artists_view.clear()
+        self._artist_children = by_artist
+        for name in by_artist:
+            it = QTreeWidgetItem([f"{name}  ({len(by_artist[name])})",
+                                  "", "", ""])
+            it.setData(0, ARTIST_ROLE, name)
+            it.setChildIndicatorPolicy(
+                QTreeWidgetItem.ShowIndicator)  # expandable before children exist
+            self.artists_view.addTopLevelItem(it)
+        self.stack.setCurrentIndex(2)
 
-    def _show_artist(self, name: str):
-        """One artist's songs (the drop-down folder click)."""
-        rows = [r for r in self._artist_rows(self._collection_tracks())
-                if r["artist"] == name]
-        self.model.set_rows(self._annotate_art(rows))
-        self.stack.setCurrentIndex(0)
+    def _fill_artist(self, item):
+        """Lazy: first expand of an artist row fills in their songs."""
+        name = item.data(0, ARTIST_ROLE)
+        if not name or item.childCount():
+            return
+        for r in getattr(self, "_artist_children", {}).get(name, []):
+            c = QTreeWidgetItem([r["title"], r.get("bpm", ""),
+                                 r.get("key", ""), r.get("time", "")])
+            c.setData(0, ARTIST_TRACK_ROLE, r["id"])
+            item.addChild(c)
+
+    def _artists_double(self, item, _col):
+        tid = item.data(0, ARTIST_TRACK_ROLE)
+        t = self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
+        if t is not None:
+            self._play_track(t)
 
     def _show_collection(self):
         reg = self.lib.artist_registry if self.lib else None
