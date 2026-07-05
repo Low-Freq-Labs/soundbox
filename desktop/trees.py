@@ -19,7 +19,8 @@ PATH_ROLE = Qt.UserRole + 1     # rekordbox playlist display_path
 DEVPATH_ROLE = Qt.UserRole + 2  # device mount path
 CUSTOM_ROLE = Qt.UserRole + 3   # custom (SoundBox) playlist name
 COLLECTION_ROLE = Qt.UserRole + 6  # the built-in "Collection" all-tracks view
-ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" grouped-by-artist view
+ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" folder (expandable)
+ARTIST_ROLE = Qt.UserRole + 8      # one artist entry under the Artists folder
 
 
 class CellEditDelegate(QStyledItemDelegate):
@@ -122,11 +123,11 @@ class SoundBoxTree(QTreeWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDropIndicatorShown(False)
-        # Flat list — no expand arrows. Removing the reserved indent makes the row
-        # (and its purple drop-hover) fill the FULL width from the left edge, instead
-        # of the highlight starting inset past a phantom branch column.
-        self.setRootIsDecorated(False)
-        self.setIndentation(0)
+        # The built-in Artists folder expands into per-artist rows, so branch
+        # decoration is on; indentation kept slim so drop-hover rows still read
+        # nearly full-width.
+        self.setRootIsDecorated(True)
+        self.setIndentation(12)
         self._hover = None
 
     def mimeData(self, items):  # type: ignore[override]

@@ -97,7 +97,7 @@ from .device_browser import DeviceBrowserMixin
 from .devices import device_fs, human
 from .settings_page import SettingsPageMixin
 from .trees import (
-    ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
+    ARTIST_ROLE, ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
     CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
 from .workers import (
@@ -320,6 +320,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                    + [v for v in self.overrides.values() if v.strip()])
         self.lib.artist_registry = metadata.build_registry(bases, trusted, self.aliases)
 
+    def _default_to_collection(self):
+        """On open (or any load with nothing selected), land on the Collection
+        view instead of an empty table."""
+        if (self.tree.currentItem() is None
+                and self.sb_tree.currentItem() is None
+                and self.sb_tree.topLevelItemCount()):
+            self.sb_tree.setCurrentItem(self.sb_tree.topLevelItem(0))
+
     def _annotate_art(self, rows: list[dict]) -> list[dict]:
         """Stamp each row with its art-cache status ('cover'/'avatar'/'miss'/'')
         for the Art column."""
@@ -345,6 +353,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if cur is not None and cur.data(0, ARTISTS_ROLE):
             self._show_artists()
+            return
+        if cur is not None and cur.data(0, ARTIST_ROLE):
+            self._show_artist(cur.data(0, ARTIST_ROLE))
             return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
             rows = []
@@ -377,25 +388,32 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return w is None or w in (self.table, self.tree, self.sb_tree,
                                   self.device_tree)
 
-    def _on_search(self, text: str):
-        """Filter the table — and KEEP the selected track selected. Clearing a
-        search used to dump the selection into oblivion (the model reset wipes
-        the view's selection); now the same track is re-seated and scrolled to
-        whenever the filter lets it show."""
-        idx = self.table.currentIndex()
+    def _remember_current(self, idx, _prev=None):
+        """Sticky memory of the selected track id — survives filters/sorts that
+        temporarily hide or reshuffle it."""
         if idx.isValid() and idx.row() < len(self.model._rows):
-            # sticky: survives intermediate filters that HIDE the track, so
-            # clearing the search still brings the selection home
-            self._search_keep = self.model._rows[idx.row()].get("id")
-        keep = getattr(self, "_search_keep", None)
-        col = idx.column() if idx.isValid() else 0
+            tid = self.model._rows[idx.row()].get("id")
+            if tid:
+                self._keep_tid = tid
+
+    def _reseat_selection(self):
+        """Put the remembered track back under the cursor after the model
+        reshuffled (sort toggled, search changed) — no more selection oblivion."""
+        keep = getattr(self, "_keep_tid", None)
+        if not keep:
+            return
+        for r, row in enumerate(self.model._rows):
+            if row.get("id") == keep:
+                cur = self.table.currentIndex()
+                col = cur.column() if cur.isValid() else 0
+                self.table.setCurrentIndex(self.model.index(r, col))
+                self.table.scrollTo(self.model.index(r, 0))
+                return
+
+    def _on_search(self, text: str):
+        """Filter the table — selection survives (see _reseat_selection)."""
         self.model.set_filter(text)
-        if keep:
-            for r, row in enumerate(self.model._rows):
-                if row.get("id") == keep:
-                    self.table.setCurrentIndex(self.model.index(r, col))
-                    self.table.scrollTo(self.model.index(r, 0))
-                    break
+        self._reseat_selection()
 
     def _selected_track(self):
         idx = self.table.currentIndex()
@@ -630,6 +648,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table.setSortingEnabled(True)
         hh.setSortIndicatorClearable(True)
         hh.setSortIndicator(-1, Qt.AscendingOrder)
+        # Selection must survive re-sorting (and search — same disease): remember
+        # the selected track id, re-seat it after the model reshuffles.
+        self.table.selectionModel().currentChanged.connect(self._remember_current)
+        hh.sortIndicatorChanged.connect(
+            lambda *_: QTimer.singleShot(0, self._reseat_selection))
         pl.addWidget(self.table)
         self.stack.addWidget(page)
 
@@ -722,6 +745,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
+        self._default_to_collection()
         self._refresh_devices()
         self.stack.setCurrentIndex(0)
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
@@ -812,6 +836,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(lib))
+        self._default_to_collection()
         self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
@@ -1001,6 +1026,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         cur = self.sb_tree.currentItem()
         keep_coll = bool(cur and cur.data(0, COLLECTION_ROLE))
         keep_artists = bool(cur and cur.data(0, ARTISTS_ROLE))
+        keep_artist_name = cur.data(0, ARTIST_ROLE) if cur else None
         keep_name = cur.data(0, CUSTOM_ROLE) if cur else None
         self.sb_tree.blockSignals(True)
         try:
@@ -1014,14 +1040,29 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.sb_tree.addTopLevelItem(coll)
             if keep_coll:
                 self.sb_tree.setCurrentItem(coll)
-            # Built-in "Artists": same pool grouped A→Z by effective artist —
-            # count shows DISTINCT artists. Browse/curate only, like Collection.
-            n_artists = len({r["artist"] for r in self._artist_rows(tracks)}) if tracks else 0
-            arts = QTreeWidgetItem([f"♪  Artists  ({n_artists})"])
+            # Built-in "Artists" FOLDER: expand it for one row per artist
+            # (A→Z, Unknown last, with track counts); click an artist to see
+            # their songs. Children are filled lazily on first expand.
+            counts = {}
+            for r in self._artist_rows(tracks):
+                counts[r["artist"]] = counts.get(r["artist"], 0) + 1
+            arts = QTreeWidgetItem([f"♪  Artists  ({len(counts)})"])
             arts.setData(0, ARTISTS_ROLE, True)
+            names = sorted(counts, key=lambda a: (a == "Unknown Artist",
+                                                  a.casefold()))
+            for name in names:
+                child = QTreeWidgetItem([f"{name}  ({counts[name]})"])
+                child.setData(0, ARTIST_ROLE, name)
+                arts.addChild(child)
             self.sb_tree.addTopLevelItem(arts)
             if keep_artists:
                 self.sb_tree.setCurrentItem(arts)
+            elif keep_artist_name:
+                for i in range(arts.childCount()):
+                    if arts.child(i).data(0, ARTIST_ROLE) == keep_artist_name:
+                        arts.setExpanded(True)
+                        self.sb_tree.setCurrentItem(arts.child(i))
+                        break
             for name, ids in self.custom.items():
                 it = QTreeWidgetItem([f"★  {name}  ({len(ids)})"])
                 it.setData(0, CUSTOM_ROLE, name)
@@ -1079,6 +1120,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if cur.data(0, ARTISTS_ROLE):
             self._show_artists()
             return
+        one = cur.data(0, ARTIST_ROLE)
+        if one:
+            self._show_artist(one)
+            return
         name = cur.data(0, CUSTOM_ROLE)
         if name:
             self._show_custom(name)
@@ -1095,6 +1140,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _show_artists(self):
         rows = self._artist_rows(self._collection_tracks())
+        self.model.set_rows(self._annotate_art(rows))
+        self.stack.setCurrentIndex(0)
+
+    def _show_artist(self, name: str):
+        """One artist's songs (the drop-down folder click)."""
+        rows = [r for r in self._artist_rows(self._collection_tracks())
+                if r["artist"] == name]
         self.model.set_rows(self._annotate_art(rows))
         self.stack.setCurrentIndex(0)
 

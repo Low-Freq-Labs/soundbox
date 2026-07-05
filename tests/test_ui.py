@@ -710,6 +710,81 @@ class GraveyardFreshness(unittest.TestCase):
 
 
 class ArtistsView(unittest.TestCase):
+    def test_folder_has_artist_children_with_counts(self):
+        _win._refresh_custom()
+        it = _win.sb_tree.topLevelItem(1)
+        self.assertIn("Artists", it.text(0))
+        self.assertIn("(3)", it.text(0))          # 3 distinct artists
+        kids = [it.child(i).text(0) for i in range(it.childCount())]
+        self.assertEqual(kids, ["Ann  (1)", "Mia  (1)", "Zed  (1)"])  # A→Z
+
+    def test_click_artist_child_shows_their_songs(self):
+        from desktop.trees import ARTIST_ROLE
+        _win._refresh_custom()
+        arts = _win.sb_tree.topLevelItem(1)
+        arts.setExpanded(True)
+        child = next(arts.child(i) for i in range(arts.childCount())
+                     if arts.child(i).data(0, ARTIST_ROLE) == "Zed")
+        _win.sb_tree.setCurrentItem(child)
+        _app.processEvents()
+        self.assertEqual([r["artist"] for r in _win.model._rows], ["Zed"])
+
+    def test_parent_click_shows_grouped_all(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
+        _app.processEvents()
+        artists = [r["artist"] for r in _win.model._rows]
+        self.assertEqual(artists, sorted(artists, key=str.casefold))
+
+
+class DefaultView(unittest.TestCase):
+    def test_lands_on_collection_when_nothing_selected(self):
+        _win._select_only(None)  # clear all three sidebars
+        _win.sb_tree.setCurrentItem(None)
+        _win.tree.setCurrentItem(None)
+        _win._default_to_collection()
+        cur = _win.sb_tree.currentItem()
+        self.assertIsNotNone(cur)
+        self.assertIn("Collection", cur.text(0))
+
+
+class SortSelection(unittest.TestCase):
+    def test_selection_survives_sort_toggle_after_search(self):
+        _win.tree.setCurrentItem(_win._find_tree_item("CRATES / SET ONE"))
+        _app.processEvents()
+        _win.search.setText("brav")
+        _win.table.setCurrentIndex(_win.model.index(0, 0))
+        picked = _win.model._rows[0]["id"]
+        _win.search.setText("")
+        _win.table.sortByColumn(0, Qt.AscendingOrder)   # A→Z
+        _app.processEvents()
+        _win.table.sortByColumn(0, Qt.DescendingOrder)  # Z→A
+        _app.processEvents()
+        idx = _win.table.currentIndex()
+        self.assertTrue(idx.isValid())
+        self.assertEqual(_win.model._rows[idx.row()]["id"], picked)
+        _win.table.sortByColumn(-1, Qt.AscendingOrder)
+        _win.search.setText("")
+
+
+class GraveyardFreshness(unittest.TestCase):
+    def test_delete_shows_in_graveyard_immediately(self):
+        from PySide6.QtWidgets import QMessageBox
+        real = QMessageBox.question
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        try:
+            _win._delete_tracks(["2"])  # no settings-open needed
+        finally:
+            QMessageBox.question = real
+        names = [_win._grave.topLevelItem(i).text(0)
+                 for i in range(_win._grave.topLevelItemCount())]
+        self.assertTrue(any("alpha" in n for n in names))
+        _win.hidden.clear()
+        _win.hidden_dates.clear()
+        _win._apply_settings_to_lib()
+        _win._refresh_graveyard()
+
+
+class ArtistsView(unittest.TestCase):
     def test_pinned_under_collection_with_distinct_count(self):
         _win._refresh_custom()
         it = _win.sb_tree.topLevelItem(1)
