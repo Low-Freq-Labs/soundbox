@@ -427,14 +427,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
 
     def _play_selected(self):
-        """Space: pause if playing, else play the selected track (or resume)."""
-        if self.player_bar.is_playing():
-            self.player_bar.toggle()
-            return
+        """Space: if the highlighted track IS the loaded one, toggle
+        pause/play. If a DIFFERENT track is highlighted, load it instead —
+        curation flow is select → fix the name → Space, and that must play
+        the track under the cursor, not pause whatever was on. Highlighting
+        happens on load (in _play_track), never as a side effect of edits."""
         t = self._selected_track()
-        if t is not None:
+        if t is not None and t.track_id != self.player_bar.current_track():
             self._play_track(t)
-        elif self.player_bar.current_track():
+            return
+        if self.player_bar.current_track():
             self.player_bar.toggle()
 
     def _play_row(self, index):

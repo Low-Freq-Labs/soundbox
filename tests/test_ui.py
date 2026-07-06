@@ -881,3 +881,46 @@ class NowPlayingHighlight(unittest.TestCase):
         before = _win.table.currentIndex().row()
         _win._highlight_now_playing("no-such-track")
         self.assertEqual(_win.table.currentIndex().row(), before)
+
+
+class SpaceSemantics(unittest.TestCase):
+    """Space plays the HIGHLIGHTED track when it isn't the loaded one —
+    pausing is only for when cursor and loaded track agree."""
+
+    def setUp(self):
+        self._played = []
+        self._toggled = []
+        self._orig_play, self._orig_toggle = _win._play_track, _win.player_bar.toggle
+        _win._play_track = lambda t: self._played.append(t.track_id)
+        _win.player_bar.toggle = lambda: self._toggled.append(1)
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))  # Collection
+        _app.processEvents()
+
+    def tearDown(self):
+        _win._play_track, _win.player_bar.toggle = self._orig_play, self._orig_toggle
+        _win.player_bar._track_id = None
+
+    def _select(self, tid):
+        row = next(i for i, r in enumerate(_win.model._rows) if r["id"] == tid)
+        _win.table.setCurrentIndex(_win.model.index(row, 0))
+
+    def test_different_track_highlighted_loads_it(self):
+        _win.player_bar._track_id = "1"       # something else is loaded
+        self._select("2")
+        _win._play_selected()
+        self.assertEqual(self._played, ["2"])  # loads, never just pauses
+        self.assertEqual(self._toggled, [])
+
+    def test_same_track_highlighted_toggles(self):
+        _win.player_bar._track_id = "2"
+        self._select("2")
+        _win._play_selected()
+        self.assertEqual(self._played, [])
+        self.assertEqual(self._toggled, [1])
+
+    def test_no_selection_toggles_loaded(self):
+        _win.player_bar._track_id = "1"
+        _win.table.setCurrentIndex(_win.model.index(-1, -1))
+        _win._play_selected()
+        self.assertEqual(self._played, [])
+        self.assertEqual(self._toggled, [1])
