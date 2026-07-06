@@ -25,8 +25,104 @@ def _fmt(ms: int) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def qt_peaks(path: str, buckets: int | None = None) -> list[float]:
+    """Waveform peaks via QAudioDecoder — the SAME ffmpeg backend that plays
+    the file, so anything audible gets a waveform (ALAC/AAC .m4a included,
+    which libsndfile can't decode). Output is normalized exactly like
+    soundbox.waveform.peaks, so the bar looks identical either way.
+
+    Must run OFF the UI thread (spins a local event loop). [] on failure."""
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
+    import numpy as np
+    from soundbox.waveform import DEFAULT_BUCKETS
+    buckets = buckets or DEFAULT_BUCKETS
+
+    dec = QAudioDecoder()
+    fmt = QAudioFormat()
+    fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
+    fmt.setChannelCount(1)
+    fmt.setSampleRate(8000)  # peaks only — small, fast, plenty for 700 buckets
+    dec.setAudioFormat(fmt)
+    dec.setSource(QUrl.fromLocalFile(str(path)))
+
+    loop = QEventLoop()
+    minis: list[float] = []  # abs-max per 256-sample mini-block
+    tail = np.zeros(0, dtype=np.float32)
+    failed: list[str] = []
+
+    def drain():
+        nonlocal tail
+        if QThread.currentThread().isInterruptionRequested():
+            finish()  # app is shutting down — abandon the decode NOW
+            return
+        while dec.bufferAvailable():
+            buf = dec.read()
+            f = buf.format()
+            n = buf.byteCount()
+            try:
+                raw = bytes(buf.constData())[:n]
+            except AttributeError:
+                raw = bytes(buf.data())[:n]
+            sf = f.sampleFormat()
+            if sf == QAudioFormat.SampleFormat.Float:
+                a = np.frombuffer(raw, dtype=np.float32)
+            elif sf == QAudioFormat.SampleFormat.Int16:
+                a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            elif sf == QAudioFormat.SampleFormat.Int32:
+                a = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+            else:  # UInt8 / unknown — decode as unsigned bytes
+                a = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128) / 128.0
+            ch = max(1, f.channelCount())
+            a = np.abs(a.reshape(-1, ch)).max(axis=1) if ch > 1 else np.abs(a)
+            a = np.concatenate([tail, a])
+            keep = len(a) - (len(a) % 256)
+            if keep:
+                minis.extend(a[:keep].reshape(-1, 256).max(axis=1).tolist())
+            tail = a[keep:]
+
+    done: list[int] = []
+
+    def finish():
+        done.append(1)
+        loop.quit()
+
+    dec.bufferReady.connect(drain)
+    dec.finished.connect(finish)
+    dec.error.connect(lambda *_: (failed.append(dec.errorString()), finish()))
+    QTimer.singleShot(20000, finish)  # never hang the worker on a bad file
+    dec.start()
+    # An unreadable/undecodable file reports its error SYNCHRONOUSLY inside
+    # start() — before the loop runs. Exec'ing then would wait on a quit that
+    # already happened and strand this thread until process exit, where Qt
+    # aborts ("QThread: Destroyed while thread is still running").
+    if not done and dec.error() == QAudioDecoder.Error.NoError:
+        loop.exec()
+    # stop() is asynchronous — destroying the decoder while its internal
+    # ffmpeg thread winds down is the same exit abort. Wait it out (bounded).
+    dec.stop()
+    from PySide6.QtCore import QCoreApplication, QElapsedTimer
+    et = QElapsedTimer()
+    et.start()
+    while dec.isDecoding() and et.elapsed() < 2000:
+        QCoreApplication.processEvents()
+        QThread.msleep(5)
+    drain()  # buffers that landed between the last bufferReady and finished
+    if tail.size:
+        minis.append(float(np.abs(tail).max()))
+    if failed or not minis:
+        return []
+    m = np.asarray(minis, dtype=np.float32)
+    edges = np.linspace(0, len(m), buckets + 1).astype(int)
+    out = [float(m[a:b].max()) if b > a else 0.0 for a, b in zip(edges[:-1], edges[1:])]
+    hi = max(out) or 1.0
+    return [min(1.0, v / hi) for v in out]
+
+
 class WaveformWorker(QThread):
-    """Decode a file's waveform peaks off the UI thread."""
+    """Decode a file's waveform peaks off the UI thread. libsndfile first
+    (WAV/AIFF/MP3/FLAC — cheap), then the Qt/ffmpeg decoder for everything
+    else (ALAC/AAC/…): if it plays, it draws."""
     ready = Signal(str, list)  # path, peaks
 
     def __init__(self, path: str):
@@ -36,7 +132,7 @@ class WaveformWorker(QThread):
     def run(self):
         from soundbox.waveform import peaks
         try:
-            pk = peaks(self.path)
+            pk = peaks(self.path) or qt_peaks(self.path)
         except Exception:  # noqa: BLE001
             pk = []
         self.ready.emit(self.path, pk)
@@ -94,7 +190,7 @@ class WaveformBar(QWidget):
         w, h = self.width(), self.height()
         mid = h / 2
         px = int(self._pos * w)
-        if not self._peaks:  # flat line fallback (e.g. ALAC/.m4a)
+        if not self._peaks:  # flat line fallback (undecodable/corrupt file)
             p.setPen(_REST); p.drawLine(0, int(mid), w, int(mid))
             p.setPen(_PLAYED); p.drawLine(0, int(mid), px, int(mid))
         else:

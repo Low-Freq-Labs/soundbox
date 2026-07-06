@@ -2044,7 +2044,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if pb is not None:
             pb.stop()
             if _running(getattr(pb, "_wf", None)):
-                pb._wf.wait(3000)
+                pb._wf.requestInterruption()  # breaks a mid-flight qt_peaks decode
+                pb._wf.wait(5000)
         p = getattr(self, "_eject_proc", None)
         if p is not None and p.state() != QProcess.NotRunning:
             p.waitForFinished(3000)

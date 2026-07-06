@@ -924,3 +924,51 @@ class SpaceSemantics(unittest.TestCase):
         _win._play_selected()
         self.assertEqual(self._played, [])
         self.assertEqual(self._toggled, [1])
+
+
+class QtWaveformFallback(unittest.TestCase):
+    """ALAC/AAC (.m4a) get a REAL waveform via the Qt/ffmpeg decoder — same
+    normalization as the libsndfile path, so the bar looks identical."""
+
+    @classmethod
+    def setUpClass(cls):
+        import math, shutil, struct, subprocess, tempfile, wave
+        if not shutil.which("afconvert"):
+            raise unittest.SkipTest("afconvert not available")
+        cls.dir = tempfile.mkdtemp(prefix="sb-wave-")
+        wav = f"{cls.dir}/probe.wav"
+        sr = 44100
+        with wave.open(wav, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+            w.writeframes(b"".join(
+                struct.pack("<h", int(0.8 * 32767 * math.sin(2 * math.pi * 440 * i / sr))
+                            if i < sr else 0)
+                for i in range(sr * 2)))          # 1s tone + 1s silence
+        for name, codec in (("alac.m4a", ["-d", "alac"]),
+                            ("aac.m4a", ["-d", "aac", "-b", "128000"])):
+            subprocess.run(["afconvert", "-f", "m4af", *codec, wav,
+                            f"{cls.dir}/{name}"], check=True, capture_output=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def _check(self, name):
+        from desktop.player import qt_peaks
+        from soundbox.waveform import DEFAULT_BUCKETS, peaks
+        path = f"{self.dir}/{name}"
+        self.assertEqual(peaks(path), [], "libsndfile grew m4a support — "
+                         "fallback untested; revisit")
+        pk = qt_peaks(path)
+        self.assertEqual(len(pk), DEFAULT_BUCKETS)
+        self.assertEqual(max(pk), 1.0)            # normalized to fill the bar
+        half = DEFAULT_BUCKETS // 2
+        self.assertGreater(max(pk[:half - 10]), 0.9)   # tone half is loud
+        self.assertLess(max(pk[half + 10:]), 0.1)      # silent half is quiet
+
+    def test_alac_waveform(self):
+        self._check("alac.m4a")
+
+    def test_aac_waveform(self):
+        self._check("aac.m4a")
