@@ -972,3 +972,45 @@ class QtWaveformFallback(unittest.TestCase):
 
     def test_aac_waveform(self):
         self._check("aac.m4a")
+
+
+class DuplicateAdds(unittest.TestCase):
+    """Dropping a track that's already in a SoundBox playlist asks Add
+    Anyway/Skip — duplicates happen on purpose or not at all."""
+
+    def setUp(self):
+        _win.custom["DupTest"] = ["1"]
+        self._asked = []
+
+    def tearDown(self):
+        _win.custom.pop("DupTest", None)
+        _win._refresh_custom()
+        _win._save_state()
+
+    def _stub(self, answer):
+        def fake(name, dupes):
+            self._asked.append((name, list(dupes)))
+            return answer
+        _win._confirm_duplicate_add = fake
+        self.addCleanup(lambda: delattr(_win, "_confirm_duplicate_add"))
+
+    def test_fresh_tracks_add_without_asking(self):
+        self._stub(answer=False)
+        _win._on_tracks_dropped("DupTest", ["2", "3"])
+        self.assertEqual(_win.custom["DupTest"], ["1", "2", "3"])
+        self.assertEqual(self._asked, [])          # no dialog for clean drops
+
+    def test_skip_keeps_playlist_unchanged(self):
+        self._stub(answer=False)
+        _win._on_tracks_dropped("DupTest", ["1", "2"])
+        self.assertEqual(_win.custom["DupTest"], ["1", "2"])  # dupe skipped
+        self.assertEqual(self._asked, [("DupTest", ["1"])])
+
+    def test_add_anyway_duplicates_on_purpose(self):
+        self._stub(answer=True)
+        _win._on_tracks_dropped("DupTest", ["1"])
+        self.assertEqual(_win.custom["DupTest"], ["1", "1"])
+
+    def test_track_label_uses_effective_title(self):
+        self.assertEqual(_win._track_label("1"), "Bravo")
+        self.assertEqual(_win._track_label("no-such"), "no-such")

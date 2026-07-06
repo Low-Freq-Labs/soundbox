@@ -1170,14 +1170,51 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_tracks_dropped(self, name: str, ids: list[str]):
         bag = self.custom.setdefault(name, [])
+        dupes = [i for i in ids if i in bag]
+        # Adding the same song TWICE must be a choice, never an accident:
+        # ask once per drop (rekordbox allows duplicates, so we do too — but
+        # only on purpose).
+        allow_dupes = bool(dupes) and self._confirm_duplicate_add(name, dupes)
         for i in ids:
-            if i not in bag:
-                bag.append(i)
+            if i in bag and not allow_dupes:
+                continue
+            bag.append(i)
         self._refresh_custom()
         self._save_state()
         cur = self.sb_tree.currentItem()
         if cur and cur.data(0, CUSTOM_ROLE) == name:
             self._show_custom(name)
+
+    def _track_label(self, tid: str) -> str:
+        """The track's effective SoundBox title (for dialogs/messages)."""
+        t = self.lib.tracks_by_id.get(tid) if self.lib else None
+        if t is None:
+            return tid
+        src = self.titles.get(tid) or t.name
+        artist = metadata.effective_artist(
+            tid, src, t.artist, self.overrides, True,
+            self.lib.artist_registry, stem=t.path.stem)
+        return metadata.effective_title(tid, t.name, artist, self.titles,
+                                        self._title_junk())
+
+    def _confirm_duplicate_add(self, name: str, dupes: list[str]) -> bool:
+        """Ok/Skip prompt when a drop contains tracks already in the playlist.
+        Default is Skip — Enter must never sneak a duplicate in."""
+        titles = [self._track_label(i) for i in dupes[:6]]
+        if len(dupes) > 6:
+            titles.append(f"…and {len(dupes) - 6} more")
+        listing = "\n".join(f"  •  {t}" for t in titles)
+        one = len(dupes) == 1
+        box = QMessageBox(self)
+        box.setWindowTitle("Already in playlist")
+        box.setText(f"{'This track is' if one else 'These tracks are'} "
+                    f"already in “{name}”:\n\n{listing}\n\n"
+                    f"Add {'it' if one else 'them'} again anyway?")
+        add = box.addButton("Add Anyway", QMessageBox.AcceptRole)
+        skip = box.addButton("Skip", QMessageBox.RejectRole)
+        box.setDefaultButton(skip)
+        box.exec()
+        return box.clickedButton() is add
 
     def _sb_menu(self, pos):
         item = self.sb_tree.itemAt(pos)
