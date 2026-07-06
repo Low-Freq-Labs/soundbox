@@ -702,8 +702,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             ["Artist / Track", "Artist", "BPM", "Key", "Time"])
         self.artists_view.setAlternatingRowColors(True)
         self.artists_view.setUniformRowHeights(True)
-        self.artists_view.header().resizeSection(0, 380)
-        self.artists_view.header().resizeSection(1, 170)
+        ah = self.artists_view.header()
+        ah.setSectionResizeMode(QHeaderView.Interactive)
+        ah.setStretchLastSection(False)
+        ah.setMinimumSectionSize(46)
+        # Same first-class layout as Collection: Artist/Track (col 0) absorbs
+        # all extra width; Artist/BPM/Key/Time keep their size.
+        ah.setSectionResizeMode(0, QHeaderView.Stretch)
+        ah.resizeSection(1, 170)
+        for c, w in ((2, 70), (3, 60), (4, 60)):
+            ah.resizeSection(c, w)
         self.artists_view.setIndentation(16)
         # Editing works like Collection: no stray double-click editing — the
         # right-click menu / ⌘R open the editor (pre-filled, cursor at end).
