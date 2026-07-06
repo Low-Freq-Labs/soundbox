@@ -1014,3 +1014,68 @@ class DuplicateAdds(unittest.TestCase):
     def test_track_label_uses_effective_title(self):
         self.assertEqual(_win._track_label("1"), "Bravo")
         self.assertEqual(_win._track_label("no-such"), "no-such")
+
+
+class SearchFocusPolicy(unittest.TestCase):
+    """The search box must never grab keyboard focus at launch — the app opens
+    on Collection ready to browse (Space-play, arrows), not typing into search."""
+
+    def test_search_is_click_to_focus_only(self):
+        self.assertEqual(_win.search.focusPolicy(), Qt.ClickFocus)
+
+
+class PlaylistReorder(unittest.TestCase):
+    """Drag-to-reorder SoundBox playlists: _move_custom rebuilds the dict in the
+    new order; the tree clamps drops below the pinned Collection/Artists rows."""
+
+    def setUp(self):
+        self._saved = dict(_win.custom)
+        _win.custom = {"A": ["1"], "B": ["2"], "C": ["3"]}
+        _win._refresh_custom()
+
+    def tearDown(self):
+        _win.custom = self._saved
+        _win._refresh_custom()
+        _win._save_state()
+
+    def test_move_to_front(self):
+        _win._move_custom("C", 0)
+        self.assertEqual(list(_win.custom), ["C", "A", "B"])
+        self.assertEqual(_win.custom["C"], ["3"])  # tracks ride along
+
+    def test_move_down_adjusts_for_own_row(self):
+        # Insert line below B = raw index 2; A's own row above it must not
+        # double-count, so A lands between B and C.
+        _win._move_custom("A", 2)
+        self.assertEqual(list(_win.custom), ["B", "A", "C"])
+
+    def test_move_to_end(self):
+        _win._move_custom("A", 3)
+        self.assertEqual(list(_win.custom), ["B", "C", "A"])
+
+    def test_noop_and_unknown_are_safe(self):
+        _win._move_custom("A", 0)
+        self.assertEqual(list(_win.custom), ["A", "B", "C"])
+        _win._move_custom("nope", 1)
+        self.assertEqual(list(_win.custom), ["A", "B", "C"])
+
+    def test_tree_rows_follow_new_order(self):
+        from desktop.trees import CUSTOM_ROLE
+        _win._move_custom("B", 0)
+        first = _win.sb_tree._first_custom_row()
+        names = [_win.sb_tree.topLevelItem(i).data(0, CUSTOM_ROLE)
+                 for i in range(first, _win.sb_tree.topLevelItemCount())]
+        self.assertEqual(names, ["B", "A", "C"])
+
+    def test_drop_row_clamps_below_pinned(self):
+        from PySide6.QtCore import QPoint
+        tree = _win.sb_tree
+        first = tree._first_custom_row()
+        self.assertEqual(first, 2)  # Collection + Artists pinned on top
+        # A drop at the very top (over the pinned Collection row) clamps to the
+        # first custom row instead of landing above the built-ins.
+        top = tree.visualItemRect(tree.topLevelItem(0)).top() + 1
+        self.assertEqual(tree._drop_row(QPoint(5, top)), first)
+        # Below the last row → end of the list.
+        self.assertEqual(tree._drop_row(QPoint(5, 10_000)),
+                         tree.topLevelItemCount())

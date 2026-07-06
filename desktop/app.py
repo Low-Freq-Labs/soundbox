@@ -192,6 +192,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._dev_timer.timeout.connect(self._refresh_devices)
         self._dev_timer.start(3000)
         self._load_state()  # restore custom playlists + last-opened XML
+        self.table.setFocus()  # open browsing (Space-play, arrows), not typing
 
     # ---------- persistence ----------
     def _load_state(self):
@@ -578,6 +579,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.search.setPlaceholderText("Search titles…")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(165)  # slimmer → more room for the waveform
+        # Click-to-focus only: as the first focusable widget it grabbed keyboard
+        # focus at launch, so the app opened "typing into search" instead of
+        # ready to browse (Space-play, arrows). Startup focus goes to the table.
+        self.search.setFocusPolicy(Qt.ClickFocus)
         self.search.textChanged.connect(self._on_search)
         h.addWidget(self.search, 0, Qt.AlignVCenter)
         h.addSpacing(4)  # tight: search↔gear
@@ -631,6 +636,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.sb_tree.setHeaderHidden(True)
         self.sb_tree.currentItemChanged.connect(self._on_custom_select)
         self.sb_tree.tracks_dropped.connect(self._on_tracks_dropped)
+        self.sb_tree.playlist_moved.connect(self._move_custom)
         self.sb_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sb_tree.customContextMenuRequested.connect(self._sb_menu)
         v.addWidget(self.sb_tree, 2)
@@ -1225,6 +1231,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu.addAction("Rename…", lambda: self._rename_custom(name))
         menu.addAction("Delete", lambda: self._delete_custom(name))
         menu.exec(self.sb_tree.mapToGlobal(pos))
+
+    def _move_custom(self, name: str, idx: int):
+        """Drag-to-reorder: move a SoundBox playlist to position `idx` in the
+        custom order (dicts keep insertion order — rebuild in the new one)."""
+        order = list(self.custom)
+        if name not in order:
+            return
+        old = order.index(name)
+        order.remove(name)
+        if idx > old:
+            idx -= 1  # the dragged row itself sat above the insert line
+        idx = max(0, min(idx, len(order)))
+        order.insert(idx, name)
+        if order == list(self.custom):
+            return
+        self.custom = {n: self.custom[n] for n in order}
+        self._refresh_custom()
+        self._save_state()
 
     def _rename_custom(self, name: str):
         new, ok = QInputDialog.getText(self, "Rename playlist", "New name:", text=name)

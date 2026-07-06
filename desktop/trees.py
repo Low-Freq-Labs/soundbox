@@ -129,8 +129,10 @@ class PlaylistTree(NoTypeAhead, QTreeWidget):
 
 
 class SoundBoxTree(NoTypeAhead, QTreeWidget):
-    """Custom playlists — drag source (cust) and drop target for tracks (trk)."""
+    """Custom playlists — drag source (cust), drop target for tracks (trk), and
+    drag-to-reorder within itself (cust dropped back on the list)."""
     tracks_dropped = Signal(str, list)  # custom name, [track_ids]
+    playlist_moved = Signal(str, int)   # custom name, target index in the custom order
 
     def __init__(self):
         super().__init__()
@@ -144,6 +146,7 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         self.setRootIsDecorated(False)
         self.setIndentation(0)
         self._hover = None
+        self._insert_row: int | None = None  # reorder line position (top-level row)
 
     def mimeData(self, items):  # type: ignore[override]
         md = QMimeData()
@@ -167,37 +170,96 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         if item is not None:
             item.setBackground(0, QColor(theme.PURPLE))  # glow the playlist target
 
+    def _first_custom_row(self) -> int:
+        """Row of the first custom playlist — the pinned Collection/Artists rows
+        above it are not reorderable, so drops clamp below them."""
+        for i in range(self.topLevelItemCount()):
+            if self.topLevelItem(i).data(0, CUSTOM_ROLE):
+                return i
+        return self.topLevelItemCount()
+
+    def _drop_row(self, pos) -> int:
+        """Top-level row the dragged playlist would be inserted at (above/below
+        the hovered row by cursor half), clamped below the pinned rows."""
+        item = self.itemAt(pos)
+        if item is None:
+            row = self.topLevelItemCount()
+        else:
+            row = self.indexOfTopLevelItem(item)
+            if pos.y() > self.visualItemRect(item).center().y():
+                row += 1
+        return max(row, self._first_custom_row())
+
+    def _set_insert(self, row: int | None):
+        if row != self._insert_row:
+            self._insert_row = row
+            self.viewport().update()
+
     def dragEnterEvent(self, e):
         e.acceptProposedAction() if e.mimeData().hasText() else e.ignore()
 
     def dragMoveEvent(self, e):
-        # Only tracks can be dropped onto a SoundBox playlist; glow the target.
-        if "trk\t" not in e.mimeData().text():
+        # Tracks drop ONTO a playlist (glow it); a playlist dragged over its own
+        # list reorders (purple insert line). Anything else is ignored.
+        text = e.mimeData().text()
+        if "trk\t" in text:
+            item = self.itemAt(e.position().toPoint())
+            self._set_hover(item if item and item.data(0, CUSTOM_ROLE) else None)
+            self._set_insert(None)
+            e.acceptProposedAction()
+        elif "cust\t" in text and e.source() is self:
             self._set_hover(None)
+            self._set_insert(self._drop_row(e.position().toPoint()))
+            e.acceptProposedAction()
+        else:
+            self._set_hover(None)
+            self._set_insert(None)
             e.ignore()
-            return
-        item = self.itemAt(e.position().toPoint())
-        self._set_hover(item if item and item.data(0, CUSTOM_ROLE) else None)
-        e.acceptProposedAction()
 
     def dragLeaveEvent(self, e):
         self._set_hover(None)
+        self._set_insert(None)
         super().dragLeaveEvent(e)
 
     def dropEvent(self, e):
         item = self.itemAt(e.position().toPoint())
         name = item.data(0, CUSTOM_ROLE) if item else None
         self._set_hover(None)
+        self._set_insert(None)
         ids: list[str] = []
+        custs: list[str] = []
         for line in e.mimeData().text().split("\n"):
             kind, _, val = line.partition("\t")
             if kind == "trk":
                 ids += [i for i in val.split(",") if i]
+            elif kind == "cust" and val:
+                custs.append(val)
         if name and ids:
             self.tracks_dropped.emit(name, ids)
             e.acceptProposedAction()
+        elif custs and e.source() is self:
+            # Reorder: index within the custom order = rows above the insert
+            # line that are custom playlists.
+            row = self._drop_row(e.position().toPoint())
+            self.playlist_moved.emit(custs[0], row - self._first_custom_row())
+            e.acceptProposedAction()
         else:
             e.ignore()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self._insert_row is None or not self.topLevelItemCount():
+            return
+        if self._insert_row < self.topLevelItemCount():
+            y = self.visualItemRect(self.topLevelItem(self._insert_row)).top()
+        else:
+            y = self.visualItemRect(
+                self.topLevelItem(self.topLevelItemCount() - 1)).bottom()
+        y = max(1, min(y, self.viewport().height() - 1))
+        p = QPainter(self.viewport())
+        p.setPen(QPen(QColor(theme.PURPLE_LIGHT), 2))
+        p.drawLine(0, y, self.viewport().width(), y)
+        p.end()
 
 
 class DeviceTree(NoTypeAhead, QTreeWidget):
