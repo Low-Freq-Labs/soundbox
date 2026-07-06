@@ -735,6 +735,49 @@ class ArtistsView(unittest.TestCase):
         _app.processEvents()
         self.assertEqual(zed.childCount(), 1)
         self.assertEqual(zed.child(0).text(0), "Bravo")
+        self.assertEqual(zed.child(0).text(1), "Zed")   # artist column visible
+
+    def test_selected_track_reads_artists_page(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
+        _app.processEvents()
+        zed = next(_win.artists_view.topLevelItem(i)
+                   for i in range(_win.artists_view.topLevelItemCount())
+                   if _win.artists_view.topLevelItem(i).text(0).startswith("Zed"))
+        zed.setExpanded(True)
+        _app.processEvents()
+        _win.artists_view.setCurrentItem(zed.child(0))
+        t = _win._selected_track()      # Space-play source of truth
+        self.assertIsNotNone(t)
+        self.assertEqual(t.track_id, "1")
+        _win.artists_view.setCurrentItem(zed)   # artist row = nothing to play
+        self.assertIsNone(_win._selected_track())
+
+    def test_inline_edit_routes_to_overrides(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
+        _app.processEvents()
+        zed = next(_win.artists_view.topLevelItem(i)
+                   for i in range(_win.artists_view.topLevelItemCount())
+                   if _win.artists_view.topLevelItem(i).text(0).startswith("Zed"))
+        zed.setExpanded(True)
+        _app.processEvents()
+        child = zed.child(0)
+        fetch = _win._art_fetch_one
+        _win._art_fetch_one = lambda tid: None  # no worker threads in tests
+        try:
+            child.setText(0, "Bravo Deluxe")       # fires _on_artist_item_edited
+            self.assertEqual(_win.titles.get("1"), "Bravo Deluxe")
+            child.setText(1, "ZEDD")               # artist edit → override
+            self.assertEqual(_win.overrides.get("1"), "ZEDD")
+            long = "X" * 500                        # clamp like Collection
+            child.setText(0, long)
+            from soundbox.paths import TITLE_MAX
+            self.assertEqual(len(_win.titles["1"]), TITLE_MAX)
+        finally:
+            _win._art_fetch_one = fetch
+            _win.titles.pop("1", None)
+            _win.overrides.pop("1", None)
+            _win._save_state()
+            _win._build_artist_registry()
         # collection view still works after (back to the table page)
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
         _app.processEvents()

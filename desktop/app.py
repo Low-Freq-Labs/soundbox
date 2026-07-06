@@ -415,6 +415,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._reseat_selection()
 
     def _selected_track(self):
+        # Artists page showing? — the highlighted song there is the selection.
+        if self.stack.currentWidget() is self.artists_view:
+            it = self.artists_view.currentItem()
+            tid = it.data(0, ARTIST_TRACK_ROLE) if it is not None else None
+            return self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
         idx = self.table.currentIndex()
         if not idx.isValid() or idx.row() >= len(self.model._rows):
             return None
@@ -693,13 +698,22 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # page 2: Artists browser — folder rows per artist, songs on expand
         self.artists_view = QTreeWidget()
         self.artists_view.setObjectName("ArtistsBrowser")
-        self.artists_view.setHeaderLabels(["Artist / Track", "BPM", "Key", "Time"])
+        self.artists_view.setHeaderLabels(
+            ["Artist / Track", "Artist", "BPM", "Key", "Time"])
         self.artists_view.setAlternatingRowColors(True)
         self.artists_view.setUniformRowHeights(True)
-        self.artists_view.header().resizeSection(0, 480)
+        self.artists_view.header().resizeSection(0, 380)
+        self.artists_view.header().resizeSection(1, 170)
         self.artists_view.setIndentation(16)
+        # Editing works like Collection: no stray double-click editing — the
+        # right-click menu / ⌘R open the editor (pre-filled, cursor at end).
+        self.artists_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.artists_view.setItemDelegate(CellEditDelegate(self.artists_view))
+        self.artists_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.artists_view.customContextMenuRequested.connect(self._artists_menu)
         self.artists_view.itemExpanded.connect(self._fill_artist)
         self.artists_view.itemDoubleClicked.connect(self._artists_double)
+        self.artists_view.itemChanged.connect(self._on_artist_item_edited)
         self.stack.addWidget(self.artists_view)
 
         self._apply_default_columns()
@@ -1154,11 +1168,48 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         name = item.data(0, ARTIST_ROLE)
         if not name or item.childCount():
             return
-        for r in getattr(self, "_artist_children", {}).get(name, []):
-            c = QTreeWidgetItem([r["title"], r.get("bpm", ""),
-                                 r.get("key", ""), r.get("time", "")])
-            c.setData(0, ARTIST_TRACK_ROLE, r["id"])
-            item.addChild(c)
+        self._artists_filling = True
+        try:
+            for r in getattr(self, "_artist_children", {}).get(name, []):
+                c = QTreeWidgetItem([r["title"], r["artist"], r.get("bpm", ""),
+                                     r.get("key", ""), r.get("time", "")])
+                c.setData(0, ARTIST_TRACK_ROLE, r["id"])
+                c.setFlags(c.flags() | Qt.ItemIsEditable)  # title/artist editable
+                item.addChild(c)
+        finally:
+            self._artists_filling = False
+
+    def _artists_menu(self, pos):
+        it = self.artists_view.itemAt(pos)
+        if it is None or not it.data(0, ARTIST_TRACK_ROLE):
+            return
+        col = self.artists_view.columnAt(pos.x())
+        menu = QMenu(self)
+        if col in (0, 1):
+            menu.addAction("Edit", lambda: (self.artists_view.setCurrentItem(it, col),
+                                            self.artists_view.editItem(it, col)))
+        menu.addAction("Copy File Name",
+                       lambda: self._copy_filenames([it.data(0, ARTIST_TRACK_ROLE)]))
+        menu.exec(self.artists_view.viewport().mapToGlobal(pos))
+
+    def _on_artist_item_edited(self, item, col):
+        """Inline title/artist edits in the Artists browser — same override
+        machinery as Collection (_on_cell_edited: clamp, save, registry, art
+        retry). Regrouping under a renamed artist happens on the next visit."""
+        if getattr(self, "_artists_filling", False):
+            return
+        tid = item.data(0, ARTIST_TRACK_ROLE)
+        if not tid or col not in (0, 1):
+            return
+        from soundbox.paths import ARTIST_MAX, TITLE_MAX
+        field = "title" if col == 0 else "artist"
+        v = item.text(col).strip()[:TITLE_MAX if col == 0 else ARTIST_MAX].rstrip()
+        self._artists_filling = True
+        try:
+            item.setText(col, v)
+        finally:
+            self._artists_filling = False
+        self._on_cell_edited(field, tid, v)
 
     def _artists_double(self, item, _col):
         tid = item.data(0, ARTIST_TRACK_ROLE)
@@ -1501,8 +1552,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table.edit(idx)
 
     def _rename_current(self):
-        """⌘R — inline-rename the highlighted CELL: the Artist if that's what's
-        selected, otherwise the Title."""
+        """⌘R — inline-rename the highlighted CELL (Artist cell → artist,
+        else Title) in whichever browser has focus: table or Artists page."""
+        if QApplication.focusWidget() is self.artists_view:
+            it = self.artists_view.currentItem()
+            if it is not None and it.data(0, ARTIST_TRACK_ROLE):
+                col = self.artists_view.currentColumn()
+                self.artists_view.editItem(it, col if col in (0, 1) else 0)
+            return
         idx = self.table.currentIndex()
         if not idx.isValid():
             return
