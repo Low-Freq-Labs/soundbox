@@ -829,3 +829,24 @@ class SortSelection(unittest.TestCase):
         _win.table.sortByColumn(-1, Qt.AscendingOrder)
         _win.search.setText("")
 
+
+
+class ViewPlaceMemory(unittest.TestCase):
+    """Leaving a view and coming back re-seats where you were — never back
+    at the top like you were never there."""
+
+    def _click(self, item):
+        _win.sb_tree.setCurrentItem(item)
+        _app.processEvents()
+
+    def test_collection_place_survives_round_trip(self):
+        self._click(_win.sb_tree.topLevelItem(0))       # Collection
+        self.assertGreater(len(_win.model._rows), 1)
+        row = len(_win.model._rows) - 1                 # park on the LAST track
+        picked = _win.model._rows[row]["id"]
+        _win.table.setCurrentIndex(_win.model.index(row, 0))
+        self._click(_win.sb_tree.topLevelItem(1))       # off to Artists…
+        self._click(_win.sb_tree.topLevelItem(0))       # …and back
+        idx = _win.table.currentIndex()
+        self.assertTrue(idx.isValid())
+        self.assertEqual(_win.model._rows[idx.row()]["id"], picked)

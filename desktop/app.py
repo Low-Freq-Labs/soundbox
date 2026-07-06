@@ -1013,6 +1013,42 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 tw.setCurrentItem(None)
                 tw.blockSignals(False)
 
+    # ---------- per-view place memory ----------
+    def _stash_view(self):
+        """Remember where you are in the CURRENT table view (selected track +
+        scroll offset) before switching away — coming back to a playlist or
+        Collection must never dump you at the top."""
+        key = getattr(self, "_view_key", None)
+        if not key:
+            return
+        idx = self.table.currentIndex()
+        tid = None
+        if idx.isValid() and idx.row() < len(self.model._rows):
+            tid = self.model._rows[idx.row()].get("id")
+        if not hasattr(self, "_view_memory"):
+            self._view_memory: dict = {}
+        self._view_memory[key] = (tid, self.table.verticalScrollBar().value())
+
+    def _restore_view(self, key: str):
+        """Right after the table is repopulated for `key`: if this is a real
+        switch (not an in-place refresh), re-seat the remembered track
+        (centered) or at least the old scroll offset."""
+        switching = key != getattr(self, "_view_key", None)
+        self._view_key = key
+        if not switching:
+            return
+        tid, scroll = getattr(self, "_view_memory", {}).get(key, (None, 0))
+        if tid:
+            for i, r in enumerate(self.model._rows):
+                if r.get("id") == tid:
+                    idx = self.model.index(i, 0)
+                    self.table.setCurrentIndex(idx)
+                    self.table.scrollTo(idx, QAbstractItemView.PositionAtCenter)
+                    return
+        if scroll:
+            bar = self.table.verticalScrollBar()
+            QTimer.singleShot(0, lambda: bar.setValue(min(scroll, bar.maximum())))
+
     def _on_rb_select(self, cur, _prev):
         if cur is None:
             return
@@ -1022,9 +1058,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         path = cur.data(0, PATH_ROLE)
         if not path:
             return
+        self._stash_view()
         rows = engine.playlist_rows(self.lib, path, self.overrides, self.titles)
         self.model.set_rows(self._annotate_art(rows))
         self.stack.setCurrentIndex(0)
+        self._restore_view(f"rb:{path}")
 
     # ---------- custom (SoundBox) playlists ----------
     def _new_custom(self):
@@ -1133,15 +1171,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if cur is None:
             return
         self._select_only(self.sb_tree)
+        self._stash_view()
         if cur.data(0, COLLECTION_ROLE):
             self._show_collection()
+            self._restore_view("sb:Collection")
             return
         if cur.data(0, ARTISTS_ROLE):
             self._show_artists()
+            # Table untouched behind the Artists page; park the key so later
+            # stashes can't clobber the view we just left.
+            self._view_key = "sb:Artists"
             return
         name = cur.data(0, CUSTOM_ROLE)
         if name:
             self._show_custom(name)
+            self._restore_view(f"sb:{name}")
 
     def _artist_rows(self, tracks) -> list:
         """Track rows grouped A→Z by effective artist (titles A→Z within each);
