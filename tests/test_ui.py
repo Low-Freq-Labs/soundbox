@@ -1079,3 +1079,75 @@ class PlaylistReorder(unittest.TestCase):
         # Below the last row → end of the list.
         self.assertEqual(tree._drop_row(QPoint(5, 10_000)),
                          tree.topLevelItemCount())
+
+
+class ImportedFiles(unittest.TestCase):
+    """Livesets imported straight into SoundBox: they join the pool (so
+    Collection shows them automatically), can land in a SoundBox playlist on
+    drop, dedup by path, and persist in library.json's 'imported' section."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self._td = tempfile.TemporaryDirectory()
+        self.f1 = Path(self._td.name) / "Rezz Live @ Red Rocks 2026.mp3"
+        self.f2 = Path(self._td.name) / "Subtronics EDC Set.wav"
+        self.f1.write_bytes(b"x")  # existence + extension is what import checks
+        self.f2.write_bytes(b"x")
+        self._saved_imported = dict(_win.imported)
+        self._saved_custom = dict(_win.custom)
+        _win.imported = {}
+
+    def tearDown(self):
+        for tid in list(_win.imported):
+            _win.lib.tracks_by_id.pop(tid, None)
+        _win.imported = self._saved_imported
+        _win.custom = self._saved_custom
+        _win._refresh_custom()
+        _win._reload_current_view()  # later classes must not see imported rows
+        _win._save_state()
+        self._td.cleanup()
+
+    def test_import_joins_collection(self):
+        _win._import_files([str(self.f1), str(self.f2)])
+        self.assertEqual(len(_win.imported), 2)
+        names = [t.name for t in _win._collection_tracks()]
+        self.assertIn("Rezz Live @ Red Rocks 2026", names)
+        self.assertIn("Subtronics EDC Set", names)
+        for tid in _win.imported:
+            self.assertTrue(tid.startswith("sb-"))
+            self.assertIn(tid, _win.lib.tracks_by_id)
+
+    def test_reimport_reuses_id(self):
+        _win._import_files([str(self.f1)])
+        first = set(_win.imported)
+        _win._import_files([str(self.f1)])
+        self.assertEqual(set(_win.imported), first)  # same path → same id
+
+    def test_import_into_playlist_also_hits_collection(self):
+        _win.custom["LIVESETS"] = []
+        _win._import_files([str(self.f1)], "LIVESETS")
+        (tid,) = _win.imported
+        self.assertEqual(_win.custom["LIVESETS"], [tid])
+        self.assertIn(tid, [t.track_id for t in _win._collection_tracks()])
+
+    def test_non_audio_skipped_audio_kept(self):
+        from pathlib import Path
+        junk = Path(self._td.name) / "cover.txt"
+        junk.write_text("not audio")
+        _win._import_files([str(junk), str(self.f1)])
+        self.assertEqual(len(_win.imported), 1)  # only the mp3 made it
+
+    def test_survives_a_library_reload(self):
+        from soundbox import imports
+        _win._import_files([str(self.f1)])
+        fresh = _make_lib()  # what a rekordbox refresh hands back
+        imports.inject(fresh, _win.imported)
+        for tid in _win.imported:
+            self.assertIn(tid, fresh.tracks_by_id)
+
+    def test_persisted_in_library_json(self):
+        import json
+        _win._import_files([str(self.f1)])
+        data = json.loads(_win._data_file.read_text(encoding="utf-8"))
+        self.assertEqual(data["imported"], _win.imported)

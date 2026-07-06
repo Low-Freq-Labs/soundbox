@@ -64,6 +64,11 @@ class Track:
     bitrate: str = ""
     rating: str = ""
     year: str = ""
+    # True for files imported directly into SoundBox (livesets etc. — see
+    # soundbox.imports). They have no rekordbox analysis (no BPM/key), which is
+    # exactly what is_untracked keys on, so the flag exempts them: a track the
+    # user deliberately added must never be swept as a "cue marker".
+    imported: bool = False
 
     @property
     def path(self) -> Path:
@@ -99,7 +104,11 @@ class Track:
         / '*** Intro ***') OR (`short` and length < `short_secs` — INCLUDING 0:00:
         a keyed no-BPM divider like '*** SINGLES ***' at 0 seconds slipped the old
         '0 <' guard). With both sub-rules off, nothing is hidden. Real tracks are
-        never affected and rekordbox is never touched (pure display/export filter)."""
+        never affected and rekordbox is never touched (pure display/export filter).
+        Imported (non-rekordbox) tracks are always kept — no analysis, but chosen
+        on purpose."""
+        if self.imported:
+            return False
         bpm = (self.bpm or "").strip()
         try:
             has_bpm = float(bpm) > 0        # "0.00"/"0" (XML) count as untracked

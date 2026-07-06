@@ -128,11 +128,23 @@ class PlaylistTree(NoTypeAhead, QTreeWidget):
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
 
+def _audio_paths(md) -> list[str]:
+    """Local audio files in a Finder drag (empty for anything else)."""
+    from pathlib import Path
+    from soundbox.imports import is_audio
+    if not md.hasUrls():
+        return []
+    return [u.toLocalFile() for u in md.urls()
+            if u.isLocalFile() and is_audio(Path(u.toLocalFile()))]
+
+
 class SoundBoxTree(NoTypeAhead, QTreeWidget):
-    """Custom playlists — drag source (cust), drop target for tracks (trk), and
-    drag-to-reorder within itself (cust dropped back on the list)."""
+    """Custom playlists — drag source (cust), drop target for tracks (trk) and
+    Finder audio files (import), and drag-to-reorder within itself (cust
+    dropped back on the list)."""
     tracks_dropped = Signal(str, list)  # custom name, [track_ids]
     playlist_moved = Signal(str, int)   # custom name, target index in the custom order
+    files_dropped = Signal(str, list)   # custom name ("" = Collection), [file paths]
 
     def __init__(self):
         super().__init__()
@@ -196,11 +208,24 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
             self.viewport().update()
 
     def dragEnterEvent(self, e):
-        e.acceptProposedAction() if e.mimeData().hasText() else e.ignore()
+        md = e.mimeData()
+        if md.hasText() or _audio_paths(md):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
 
     def dragMoveEvent(self, e):
         # Tracks drop ONTO a playlist (glow it); a playlist dragged over its own
-        # list reorders (purple insert line). Anything else is ignored.
+        # list reorders (purple insert line); Finder audio files drop onto a
+        # playlist OR Collection (import). Anything else is ignored.
+        if _audio_paths(e.mimeData()):
+            item = self.itemAt(e.position().toPoint())
+            ok = item is not None and (item.data(0, CUSTOM_ROLE)
+                                       or item.data(0, COLLECTION_ROLE))
+            self._set_hover(item if ok else None)
+            self._set_insert(None)
+            e.acceptProposedAction() if ok else e.ignore()
+            return
         text = e.mimeData().text()
         if "trk\t" in text:
             item = self.itemAt(e.position().toPoint())
@@ -226,6 +251,17 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         name = item.data(0, CUSTOM_ROLE) if item else None
         self._set_hover(None)
         self._set_insert(None)
+        files = _audio_paths(e.mimeData())
+        if files:
+            if name:
+                self.files_dropped.emit(name, files)          # import + add
+                e.acceptProposedAction()
+            elif item is not None and item.data(0, COLLECTION_ROLE):
+                self.files_dropped.emit("", files)            # import only
+                e.acceptProposedAction()
+            else:
+                e.ignore()
+            return
         ids: list[str] = []
         custs: list[str] = []
         for line in e.mimeData().text().split("\n"):

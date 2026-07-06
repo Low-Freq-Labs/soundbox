@@ -86,7 +86,7 @@ from PySide6.QtWidgets import (
 )
 
 
-from soundbox import artfetch, engine, metadata, rekordbox_db
+from soundbox import artfetch, engine, imports, metadata, rekordbox_db
 from soundbox.rekordbox_xml import Playlist
 from . import theme
 from .artpicker import ArtPickerDialog
@@ -135,6 +135,7 @@ _DEFAULT_SETTINGS = {
     "hide_short_secs": 5,      # the "shorter than" threshold (seconds)
     "title_rules_off": [],     # ids of built-in title-cleanup rules turned OFF
     "title_words": [],         # user's custom drop-words (safe end/bracket semantics)
+    "import_dir": "",          # last folder used by Import Audio Files…
 }
 
 
@@ -160,6 +161,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._last_xml = ""
         self.lib = None
         self.custom: dict[str, list[str]] = {}  # name -> ordered track ids
+        self.imported: dict[str, dict] = {}  # sb-… id -> imported-file record
         self.overrides: dict[str, str] = {}  # track_id -> manual artist override
         self.titles: dict[str, str] = {}     # track_id -> manual title override
         self.hidden: set[str] = set()        # deleted-from-SoundBox track ids
@@ -203,6 +205,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             except (ValueError, OSError):
                 data = self._recover_state()
         self.custom = data.get("custom") or {}
+        self.imported = data.get("imported") or {}  # sb-… id -> file record
         self.overrides = data.get("artist_overrides") or {}
         self.titles = data.get("title_overrides") or {}
         raw_hidden = data.get("hidden_tracks") or {}
@@ -295,6 +298,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             tmp = self._data_file.with_suffix(".tmp")
             tmp.write_text(json.dumps({
                 "custom": self.custom,
+                "imported": self.imported,
                 "artist_overrides": self.overrides,
                 "title_overrides": self.titles,
                 "hidden_tracks": {i: self.hidden_dates.get(i, "") for i in sorted(self.hidden)},
@@ -637,6 +641,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.sb_tree.currentItemChanged.connect(self._on_custom_select)
         self.sb_tree.tracks_dropped.connect(self._on_tracks_dropped)
         self.sb_tree.playlist_moved.connect(self._move_custom)
+        self.sb_tree.files_dropped.connect(
+            lambda name, paths: self._import_files(paths, name or None))
         self.sb_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sb_tree.customContextMenuRequested.connect(self._sb_menu)
         v.addWidget(self.sb_tree, 2)
@@ -820,6 +826,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                  Path(path).name, self.lib.track_count, len(self.lib.playlists))
         self._last_xml = path  # remember for next launch
         self._save_state()
+        imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
@@ -911,6 +918,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_refresh_done(self, lib):
         self._stop_pulse()
         self.lib = lib
+        imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(lib))
@@ -1225,12 +1233,76 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _sb_menu(self, pos):
         item = self.sb_tree.itemAt(pos)
         name = item.data(0, CUSTOM_ROLE) if item else None
-        if not name:
-            return
         menu = QMenu(self)
-        menu.addAction("Rename…", lambda: self._rename_custom(name))
-        menu.addAction("Delete", lambda: self._delete_custom(name))
+        if name:
+            menu.addAction("Import Audio Files…", lambda: self._import_dialog(name))
+            menu.addSeparator()
+            menu.addAction("Rename…", lambda: self._rename_custom(name))
+            menu.addAction("Delete", lambda: self._delete_custom(name))
+        elif item is not None and item.data(0, COLLECTION_ROLE):
+            menu.addAction("Import Audio Files…", lambda: self._import_dialog(None))
+        else:
+            return
         menu.exec(self.sb_tree.mapToGlobal(pos))
+
+    # ---------- imported (non-rekordbox) audio ----------
+    def _import_dialog(self, playlist: str | None):
+        """File picker → import livesets etc. into SoundBox (and optionally
+        straight into a SoundBox playlist)."""
+        if self.lib is None:
+            QMessageBox.information(self, "Open a library first",
+                                   "Load your rekordbox library first (↻ on the REKORDBOX header).")
+            return
+        start = self.settings.get("import_dir") or str(Path.home() / "Downloads")
+        exts = " ".join(f"*{e}" for e in sorted(imports.AUDIO_EXTS))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import Audio Files", start, f"Audio files ({exts})")
+        if not paths:
+            return
+        self.settings["import_dir"] = str(Path(paths[0]).parent)
+        self._import_files(paths, playlist)
+
+    def _import_files(self, paths: list[str], playlist: str | None = None):
+        """Add non-rekordbox audio files to SoundBox. Referenced in place —
+        never copied, moved or re-tagged. They join the track pool, so they
+        appear in Collection automatically; `playlist` also adds them to that
+        SoundBox playlist. Re-importing a file reuses its existing id (so
+        overrides/art/playlist entries stick)."""
+        if self.lib is None:
+            return
+        by_path = {rec.get("path"): tid for tid, rec in self.imported.items()}
+        ids: list[str] = []
+        skipped: list[str] = []
+        for raw in paths:
+            p = Path(raw).expanduser()
+            if not imports.is_audio(p) or not p.is_file():
+                skipped.append(p.name)
+                continue
+            tid = by_path.get(str(p))
+            if tid is None:
+                tid = imports.new_id()
+                self.imported[tid] = imports.probe(p)
+                by_path[str(p)] = tid
+            ids.append(tid)
+        if ids:
+            imports.inject(self.lib, self.imported)
+            self._build_artist_registry()  # imported names join the deriver
+            self._refresh_custom()         # Collection count includes them now
+            self._save_state()
+            LOG.info("Imported %d audio files (%d skipped)", len(ids), len(skipped))
+            self._flash_status(f"Imported {len(ids)} ✓", 15)
+            if playlist:
+                self._on_tracks_dropped(playlist, ids)  # dupe-guarded add
+            else:
+                self._reload_current_view()  # Collection view picks them up live
+            QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        elif skipped:
+            QMessageBox.warning(
+                self, "Nothing imported",
+                "None of the dropped files could be imported (not an audio "
+                "file, or the file doesn't exist):\n\n"
+                + "\n".join(f"  •  {n}" for n in skipped[:8])
+                + (f"\n  …and {len(skipped) - 8} more" if len(skipped) > 8 else ""))
 
     def _move_custom(self, name: str, idx: int):
         """Drag-to-reorder: move a SoundBox playlist to position `idx` in the
