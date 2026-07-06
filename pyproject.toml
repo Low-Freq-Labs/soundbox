@@ -1,9 +1,10 @@
 [project]
 name = "soundbox"
-version = "0.1.0"
-description = "Safe, read-only-first bridge from rekordbox XML to Rockbox/iPod."
-requires-python = ">=3.10"
-dependencies = []  # stdlib only by design
+version = "1.0.0"
+description = "Native PySide6 bridge from the live rekordbox DB to Rockbox/iPod — curation, cover art, honest sync."
+requires-python = ">=3.14"
+# Real dependency set lives in requirements.txt (venv at .venv/);
+# the soundbox/ engine package itself stays Qt-free.
 
 [project.scripts]
 soundbox = "soundbox.cli:main"
