@@ -120,19 +120,24 @@ def qt_peaks(path: str, buckets: int | None = None) -> list[float]:
 
 
 class WaveformWorker(QThread):
-    """Decode a file's waveform peaks off the UI thread. libsndfile first
-    (WAV/AIFF/MP3/FLAC — cheap), then the Qt/ffmpeg decoder for everything
-    else (ALAC/AAC/…): if it plays, it draws."""
+    """Decode a file's waveform peaks off the UI thread. Cache first (repeat
+    plays are instant), then libsndfile (WAV/AIFF/MP3/FLAC — cheap), then the
+    Qt/ffmpeg decoder for everything else (ALAC/AAC/…): if it plays, it draws."""
     ready = Signal(str, list)  # path, peaks
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, cache_dir=None):
         super().__init__()
         self.path = path
+        self.cache_dir = cache_dir
 
     def run(self):
-        from soundbox.waveform import peaks
+        from soundbox.waveform import cache_load, cache_store, peaks
         try:
-            pk = peaks(self.path) or qt_peaks(self.path)
+            pk = cache_load(self.cache_dir, self.path) if self.cache_dir else None
+            if pk is None:
+                pk = peaks(self.path) or qt_peaks(self.path)
+                if self.cache_dir:
+                    cache_store(self.cache_dir, self.path, pk)
         except Exception:  # noqa: BLE001
             pk = []
         self.ready.emit(self.path, pk)
@@ -222,6 +227,7 @@ class PlayerBar(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.wave_cache_dir = None  # app points this at <data>/waveforms
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
@@ -328,7 +334,7 @@ class PlayerBar(QWidget):
         self.play_btn.setText("❚❚" if self.is_playing() else "▶")
 
     def _start_waveform(self, path: str):
-        w = WaveformWorker(path)
+        w = WaveformWorker(path, cache_dir=self.wave_cache_dir)
         self._wf = w
         w.ready.connect(self._on_waveform)
         # Drop our ref only on `finished` (after run() returns) so the QThread is

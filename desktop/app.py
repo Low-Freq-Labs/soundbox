@@ -566,6 +566,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         h.addWidget(box, 0, Qt.AlignVCenter)
         h.addSpacing(14)
         self.player_bar = PlayerBar()  # waveform scrubber lives where the subtitle was
+        self.player_bar.wave_cache_dir = (
+            Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
+            / "waveforms")  # repeat plays draw instantly
         self.player_bar.playback_error.connect(self._on_playback_error)
         self.player_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         h.addWidget(self.player_bar, 1)
