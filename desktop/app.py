@@ -466,6 +466,40 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                                          self._title_junk())
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
         self.player_bar.play_track(t.track_id, t.path, title=label)
+        self._highlight_now_playing(t.track_id)
+
+    def _highlight_now_playing(self, tid: str):
+        """Loading a track ALWAYS highlights it in the visible browser — a
+        playing track with no visible cursor is disorienting. No-op when the
+        track isn't in the current view (e.g. a different playlist)."""
+        if self.stack.currentWidget() is self.artists_view:
+            cur = self.artists_view.currentItem()
+            if cur is not None and cur.data(0, ARTIST_TRACK_ROLE) == tid:
+                return
+            name = next((a for a, rows in getattr(self, "_artist_children", {}).items()
+                         if any(r["id"] == tid for r in rows)), None)
+            for i in range(self.artists_view.topLevelItemCount()):
+                top = self.artists_view.topLevelItem(i)
+                if top.data(0, ARTIST_ROLE) != name:
+                    continue
+                top.setExpanded(True)  # lazy-fills the songs if needed
+                for c in range(top.childCount()):
+                    child = top.child(c)
+                    if child.data(0, ARTIST_TRACK_ROLE) == tid:
+                        self.artists_view.setCurrentItem(child)
+                        self.artists_view.scrollToItem(child)
+                        return
+            return
+        if self.stack.currentIndex() != 0:
+            return  # device browser etc. — nothing to highlight
+        for i, r in enumerate(self.model._rows):
+            if r.get("id") == tid:
+                cur = self.table.currentIndex()
+                if not (cur.isValid() and cur.row() == i):
+                    col = cur.column() if cur.isValid() else 0
+                    self.table.setCurrentIndex(self.model.index(i, col))
+                self.table.scrollTo(self.model.index(i, 0))
+                return
 
     def _on_cell_edited(self, field: str, track_id: str, value: str):
         if not track_id:

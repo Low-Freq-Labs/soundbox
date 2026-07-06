@@ -850,3 +850,34 @@ class ViewPlaceMemory(unittest.TestCase):
         idx = _win.table.currentIndex()
         self.assertTrue(idx.isValid())
         self.assertEqual(_win.model._rows[idx.row()]["id"], picked)
+
+
+class NowPlayingHighlight(unittest.TestCase):
+    """Loading a track always puts the cursor on it in the visible browser."""
+
+    def test_table_highlights_loaded_track(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))  # Collection
+        _app.processEvents()
+        _win.table.clearSelection()
+        _win.table.setCurrentIndex(_win.model.index(-1, -1))       # nothing current
+        _win._highlight_now_playing("2")
+        idx = _win.table.currentIndex()
+        self.assertTrue(idx.isValid())
+        self.assertEqual(_win.model._rows[idx.row()]["id"], "2")
+
+    def test_artists_page_expands_and_highlights(self):
+        from desktop.app import ARTIST_TRACK_ROLE
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))  # Artists
+        _app.processEvents()
+        _win._highlight_now_playing("1")                           # Zed — Bravo
+        it = _win.artists_view.currentItem()
+        self.assertIsNotNone(it)
+        self.assertEqual(it.data(0, ARTIST_TRACK_ROLE), "1")
+        self.assertTrue(it.parent().isExpanded())
+
+    def test_track_not_in_view_is_a_noop(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        before = _win.table.currentIndex().row()
+        _win._highlight_now_playing("no-such-track")
+        self.assertEqual(_win.table.currentIndex().row(), before)
