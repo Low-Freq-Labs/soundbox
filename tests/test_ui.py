@@ -752,6 +752,22 @@ class ArtistsView(unittest.TestCase):
         _win.artists_view.setCurrentItem(zed)   # artist row = nothing to play
         self.assertIsNone(_win._selected_track())
 
+    def test_stray_letter_never_moves_selection(self):
+        """Qt type-ahead is OFF in every browser: pressing a letter while a
+        view has focus must not teleport the selection (search box filters)."""
+        from PySide6.QtTest import QTest
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
+        _app.processEvents()
+        zed = next(_win.artists_view.topLevelItem(i)
+                   for i in range(_win.artists_view.topLevelItemCount())
+                   if _win.artists_view.topLevelItem(i).text(0).startswith("Zed"))
+        _win.artists_view.setCurrentItem(zed)
+        for w in (_win.artists_view, _win.sb_tree, _win.tree, _win.device_tree,
+                  _win.table):
+            self.assertIsNone(w.keyboardSearch("c"), type(w).__name__)
+        QTest.keyClick(_win.artists_view, Qt.Key_A)   # 'a' would jump w/o fix
+        self.assertIs(_win.artists_view.currentItem(), zed)
+
     def test_inline_edit_routes_to_overrides(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
         _app.processEvents()

@@ -95,7 +95,22 @@ def _start_chip_drag(view, md, label: str, actions) -> None:
     drag.exec(actions)
 
 
-class PlaylistTree(QTreeWidget):
+class NoTypeAhead:
+    """Typing a letter must NEVER teleport the selection (Qt's built-in
+    type-ahead) — filtering is the search box's job, and a stray keypress
+    losing your place in a 1000-track list is infuriating. Mixed into every
+    browser view. Shortcuts (Space, ⌘R…) are unaffected: they resolve before
+    the key ever reaches the view."""
+
+    def keyboardSearch(self, _search: str) -> None:
+        pass
+
+
+class ArtistsTree(NoTypeAhead, QTreeWidget):
+    """The Artists browser page (artist folders → song rows)."""
+
+
+class PlaylistTree(NoTypeAhead, QTreeWidget):
     """Rekordbox playlist tree — drag source (rb)."""
     def mimeData(self, items):  # type: ignore[override]
         paths: list[str] = []
@@ -113,7 +128,7 @@ class PlaylistTree(QTreeWidget):
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
 
-class SoundBoxTree(QTreeWidget):
+class SoundBoxTree(NoTypeAhead, QTreeWidget):
     """Custom playlists — drag source (cust) and drop target for tracks (trk)."""
     tracks_dropped = Signal(str, list)  # custom name, [track_ids]
 
@@ -185,7 +200,7 @@ class SoundBoxTree(QTreeWidget):
             e.ignore()
 
 
-class DeviceTree(QTreeWidget):
+class DeviceTree(NoTypeAhead, QTreeWidget):
     """External devices — drop target (rb/cust). Dropping starts an export."""
     dropped = Signal(str, list)  # device_path, [(kind, value)]
 
@@ -244,7 +259,7 @@ class DeviceTree(QTreeWidget):
             e.ignore()
 
 
-class TrackTable(QTableView):
+class TrackTable(NoTypeAhead, QTableView):
     """Track table — drag source (trk). Uses the chip drag ghost (the track title on
     a bordered box) instead of Qt's default transparent floating text."""
     def startDrag(self, actions):  # type: ignore[override]

@@ -82,7 +82,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QFileSystemModel, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
     QProgressBar, QPushButton, QSizePolicy, QStackedWidget,
-    QTableView, QTreeView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 
@@ -98,7 +98,7 @@ from .devices import device_fs, human
 from .settings_page import SettingsPageMixin
 from .trees import (
     ARTIST_ROLE, ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
-    CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
+    ArtistsTree, CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
 ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser
 
@@ -696,7 +696,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.stack.addWidget(dpage)
 
         # page 2: Artists browser — folder rows per artist, songs on expand
-        self.artists_view = QTreeWidget()
+        self.artists_view = ArtistsTree()
         self.artists_view.setObjectName("ArtistsBrowser")
         self.artists_view.setHeaderLabels(
             ["Artist / Track", "Artist", "BPM", "Key", "Time"])
