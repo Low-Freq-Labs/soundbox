@@ -3,7 +3,10 @@
 A native macOS (PySide6) bridge from **rekordbox** to **Rockbox iPods / USB
 players**: browse the live rekordbox library, curate titles/artists/cover art,
 and drag playlists onto a device — exact order, per-track cover art, honest
-sync semantics.
+sync semantics. Built-in player with real waveforms for every format the app
+can play (libsndfile + a Qt/ffmpeg fallback for ALAC/AAC, cached per track);
+an Artists browser with the same inline editing as the Collection; per-view
+place memory so switching playlists never loses your spot.
 
 ## The safety contract (non-negotiable)
 
@@ -21,7 +24,7 @@ sync semantics.
                 derivation, cover-art fetch/encode, backup — mypy-clean.
     desktop/    PySide6 app: MainWindow + mixins (settings, device browser),
                 workers (all QThreads), trees, player, art picker, suggesters.
-    tests/      244 tests: engine behavior, property-based (hypothesis),
+    tests/      279 tests: engine behavior, property-based (hypothesis),
                 mocked live-DB reader, hermetic offscreen UI.
 
 ## Development
@@ -34,3 +37,5 @@ Python 3.14, deps in `requirements.txt` (venv at `.venv/`). The app stores its
 portable library (overrides, playlists, settings) at
 `~/Library/Application Support/LowFreqLabs/Soundbox/library.json` — atomic
 saves, rotating backups, full-cache .zip backup/restore from Settings.
+Waveform peaks are cached beside it in `waveforms/` (pure accelerator —
+safe to delete any time).
