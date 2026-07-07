@@ -89,5 +89,86 @@ class Inject(unittest.TestCase):
         self.assertEqual([t.track_id for t in lib.resolve(pl)], ["sb-a", "1"])
 
 
+
+class FixLinks(unittest.TestCase):
+    """find_moved: relocate imported files the user moved — subfolder moves,
+    renames (size rescue), duplicates, and honest refusal when ambiguous."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _rec(self, path: Path, size: int = 0) -> dict:
+        return {"path": str(path), "size": size}
+
+    def test_missing_detects_gone_files(self):
+        live = self.root / "here.mp3"
+        live.write_bytes(b"x")
+        imp = {"a": self._rec(live), "b": self._rec(self.root / "gone.mp3")}
+        self.assertEqual(set(imports.missing(imp)), {"b"})
+
+    def test_moved_into_subfolder(self):
+        new = self.root / "pt.1" / "AHEE Lost Lands 2024.m4a"
+        new.parent.mkdir()
+        new.write_bytes(b"abc")
+        lost = {"a": self._rec(self.root / "AHEE Lost Lands 2024.m4a", 3)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+
+    def test_case_insensitive_name_match(self):
+        new = self.root / "sub" / "SET ONE.MP3"
+        new.parent.mkdir()
+        new.write_bytes(b"abcd")
+        lost = {"a": self._rec(self.root / "Set One.mp3", 4)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+
+    def test_renamed_file_rescued_by_unique_size(self):
+        new = self.root / "renamed completely.m4a"
+        new.write_bytes(b"12345678")
+        lost = {"a": self._rec(self.root / "original name.m4a", 8)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+
+    def test_same_name_wrong_size_still_matches_by_name(self):
+        # Exact filename is a strong signal even if bytes changed (re-tag etc.)
+        new = self.root / "sub" / "set.m4a"
+        new.parent.mkdir()
+        new.write_bytes(b"different-size")
+        lost = {"a": self._rec(self.root / "set.m4a", 3)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": new})
+
+    def test_ambiguous_same_name_no_size_is_skipped(self):
+        (self.root / "d1").mkdir(); (self.root / "d2").mkdir()
+        (self.root / "d1" / "set.m4a").write_bytes(b"one")
+        (self.root / "d2" / "set.m4a").write_bytes(b"twoo")
+        lost = {"a": self._rec(self.root / "set.m4a", 0)}  # size unknown
+        self.assertEqual(imports.find_moved(lost, [self.root]), {})
+
+    def test_duplicate_copies_pick_shallowest(self):
+        (self.root / "deep" / "er").mkdir(parents=True)
+        top = self.root / "set.m4a"
+        top.write_bytes(b"same")
+        (self.root / "deep" / "er" / "set.m4a").write_bytes(b"same")
+        lost = {"a": self._rec(self.root / "old" / "set.m4a", 4)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {"a": top})
+
+    def test_hidden_dirs_and_non_audio_ignored(self):
+        (self.root / ".Trash").mkdir()
+        (self.root / ".Trash" / "set.m4a").write_bytes(b"xx")
+        (self.root / "set.txt").write_bytes(b"xx")
+        lost = {"a": self._rec(self.root / "set.m4a", 2)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {})
+
+    def test_search_roots_nearest_existing_ancestor(self):
+        gone = self.root / "Sets" / "x.m4a"  # Sets/ was renamed away
+        keep = self.root / "Other" / "y.m4a"
+        keep.parent.mkdir()
+        keep.write_bytes(b"x")
+        imp = {"a": self._rec(gone), "b": self._rec(keep)}
+        roots = imports.search_roots(imp)
+        self.assertIn(self.root, roots)          # nearest survivor for x.m4a
+        self.assertNotIn(keep.parent, roots)     # contained in root — deduped
+
 if __name__ == "__main__":
     unittest.main()

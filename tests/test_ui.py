@@ -1151,3 +1151,46 @@ class ImportedFiles(unittest.TestCase):
         _win._import_files([str(self.f1)])
         data = json.loads(_win._data_file.read_text(encoding="utf-8"))
         self.assertEqual(data["imported"], _win.imported)
+
+
+class FixLinksUI(unittest.TestCase):
+    """_apply_relinks re-points moved imported files and refreshes the pool."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self._td = tempfile.TemporaryDirectory()
+        self.old = Path(self._td.name) / "Mersiv Sound Haven 2021.m4a"
+        self.old.write_bytes(b"x")
+        self._saved = dict(_win.imported)
+        _win.imported = {}
+        _win._import_files([str(self.old)])
+        (self.tid,) = _win.imported
+        self.new = Path(self._td.name) / "pt.1" / self.old.name
+        self.new.parent.mkdir()
+        self.old.rename(self.new)  # the user's "move everything into a folder"
+
+    def tearDown(self):
+        for tid in list(_win.imported):
+            _win.lib.tracks_by_id.pop(tid, None)
+        _win.imported = self._saved
+        _win._refresh_custom()
+        _win._reload_current_view()
+        _win._save_state()
+        self._td.cleanup()
+
+    def test_missing_then_relink_heals_library(self):
+        from soundbox import imports
+        self.assertEqual(set(imports.missing(_win.imported)), {self.tid})
+        found = imports.find_moved(imports.missing(_win.imported),
+                                   imports.search_roots(_win.imported))
+        self.assertEqual(found, {self.tid: self.new})
+        _win._apply_relinks(found)
+        self.assertEqual(imports.missing(_win.imported), {})
+        self.assertEqual(_win.lib.tracks_by_id[self.tid].path, self.new)
+
+    def test_fix_links_noop_when_nothing_missing(self):
+        _win._apply_relinks(imports_found := {})
+        _win.imported[self.tid]["path"] = str(self.new)  # already healthy
+        _win._fix_links()  # must not start a worker or pop a dialog
+        self.assertEqual(len(getattr(_win, "_oneshots", [])), 0)

@@ -1304,6 +1304,59 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 + "\n".join(f"  •  {n}" for n in skipped[:8])
                 + (f"\n  …and {len(skipped) - 8} more" if len(skipped) > 8 else ""))
 
+    def _fix_links(self, roots: list | None = None):
+        """Find imported files the user moved on disk and re-point their
+        records (filename+size matching — see imports.find_moved). Scans the
+        old locations' nearest surviving folders; anything still missing gets
+        an offer to search a folder the user picks."""
+        lost = imports.missing(self.imported)
+        if not lost:
+            self._flash_status("Links OK ✓", 5)
+            return
+        search = roots or imports.search_roots(self.imported)
+        self._start_pulse("Searching")
+        from .workers import OneShotTask
+        w = OneShotTask(lambda: imports.find_moved(lost, search))
+        self._oneshots = getattr(self, "_oneshots", [])
+        self._oneshots.append(w)
+        w.done.connect(self._on_links_found)
+        w.finished.connect(lambda ww=w: self._finish_oneshot(ww))
+        w.start()
+
+    def _on_links_found(self, result):
+        self._stop_pulse()
+        if isinstance(result, Exception):
+            QMessageBox.warning(self, "Fix Links failed", str(result))
+            return
+        self._apply_relinks(result)
+        left = imports.missing(self.imported)
+        if not left:
+            self._flash_status(f"Relinked {len(result)} ✓", 15)
+            return
+        names = [Path(str(r.get("path", ""))).name for r in left.values()][:6]
+        listing = "\n".join(f"  •  {n}" for n in names) + (
+            f"\n  …and {len(left) - 6} more" if len(left) > 6 else "")
+        if QMessageBox.question(
+                self, "Some files still missing",
+                f"Relinked {len(result)}. {len(left)} still missing:\n\n{listing}\n\n"
+                "Search a folder for them?") == QMessageBox.Yes:
+            folder = QFileDialog.getExistingDirectory(self, "Search folder")
+            if folder:
+                self._fix_links([Path(folder)])
+
+    def _apply_relinks(self, found: dict):
+        """Point the imported records at their new paths and refresh."""
+        for tid, p in found.items():
+            rec = self.imported.get(tid)
+            if rec is not None:
+                rec["path"] = str(p)
+        if found:
+            if self.lib is not None:
+                imports.inject(self.lib, self.imported)
+                self._refresh_custom()
+                self._reload_current_view()
+            self._save_state()
+
     def _move_custom(self, name: str, idx: int):
         """Drag-to-reorder: move a SoundBox playlist to position `idx` in the
         custom order (dicts keep insertion order — rebuild in the new one)."""
@@ -1675,6 +1728,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         n = len(ids)
         menu.addAction("Copy File Name" if n == 1 else f"Copy {n} File Names",
                        lambda: self._copy_filenames(ids))
+        # Imported files the user moved on disk: offer to find them again.
+        # Shown from any imported row — a move usually breaks a batch at once,
+        # so the action heals ALL missing links, not just the clicked row.
+        if any(i in self.imported for i in ids):
+            lost = imports.missing(self.imported)
+            if lost:
+                menu.addAction(f"Fix Missing Links… ({len(lost)})",
+                               self._fix_links)
         menu.addSeparator()
         menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
         menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))

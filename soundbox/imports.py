@@ -69,3 +69,84 @@ def inject(lib: Library, imported: dict) -> None:
     to call after every rekordbox refresh."""
     for tid, rec in imported.items():
         lib.tracks_by_id[tid] = make_track(tid, rec)
+
+
+# ---- Fix Links: relocate imported files the user moved on disk ----
+
+def missing(imported: dict) -> dict:
+    """The imported records whose file is gone from its recorded path."""
+    return {tid: rec for tid, rec in imported.items()
+            if not Path(str(rec.get("path", ""))).is_file()}
+
+
+def search_roots(imported: dict) -> list[Path]:
+    """Where to look for moved files: the nearest still-existing ancestor of
+    each imported file's old location (a move into a subfolder or sibling
+    folder lands under it). Deduped; roots inside another root are dropped."""
+    nearest: set[Path] = set()
+    for rec in imported.values():
+        for anc in Path(str(rec.get("path", ""))).parents:
+            if anc.is_dir():
+                nearest.add(anc)
+                break
+    out: list[Path] = []
+    for r in sorted(nearest, key=lambda p: len(p.parts)):
+        if not any(o == r or o in r.parents for o in out):
+            out.append(r)
+    return out
+
+
+def _index(roots: list[Path], cap: int = 200_000):
+    """One walk per root: audio files by lowercase name and by (size, ext).
+    Hidden dirs skipped; `cap` bounds pathological trees."""
+    by_name: dict[str, list[Path]] = {}
+    by_size: dict[tuple[int, str], list[Path]] = {}
+    seen = 0
+    for root in roots:
+        for p in root.rglob("*"):
+            if seen >= cap:
+                return by_name, by_size
+            try:
+                rel_parts = p.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+            if not is_audio(p) or not p.is_file():
+                continue
+            seen += 1
+            by_name.setdefault(p.name.lower(), []).append(p)
+            try:
+                by_size.setdefault((p.stat().st_size, p.suffix.lower()), []).append(p)
+            except OSError:
+                pass
+    return by_name, by_size
+
+
+def find_moved(lost: dict, roots: list[Path]) -> dict[str, Path]:
+    """tid -> new location for files the user moved. Matching, strictest first:
+    exact filename (case-insensitive), disambiguated by recorded byte size;
+    then a unique size+extension match (catches a renamed file). Same name AND
+    same size in several places = duplicate copies — take the shallowest.
+    Truly ambiguous stays missing: never guess a wrong file onto the iPod."""
+    by_name, by_size = _index([Path(r) for r in roots])
+    found: dict[str, Path] = {}
+    for tid, rec in lost.items():
+        old = Path(str(rec.get("path", "")))
+        size = int(rec.get("size", 0) or 0)
+        cands = list(by_name.get(old.name.lower(), []))
+        if size and cands:
+            sized = [c for c in cands if c.stat().st_size == size]
+            if sized:
+                cands = sized
+            elif len(cands) > 1:
+                cands = []  # several same-name files, none the right size
+        if not cands and size:
+            cands = list(by_size.get((size, old.suffix.lower()), []))
+            if len(cands) != 1:
+                cands = []  # rename rescue only when it's unambiguous
+        if len(cands) == 1:
+            found[tid] = cands[0]
+        elif len(cands) > 1 and size:
+            found[tid] = min(cands, key=lambda p: (len(p.parts), str(p)))
+    return found
