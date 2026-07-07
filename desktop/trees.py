@@ -160,14 +160,26 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         self._hover = None
         self._insert_row: int | None = None  # reorder line position (top-level row)
 
+    @staticmethod
+    def _drag_line(it) -> str:
+        """Mime line for a draggable row: custom playlists by name, the pinned
+        Collection/Artists views as synthetic 'sbview' playlists (drag one onto
+        a device = export the whole pool in that view's order)."""
+        if it.data(0, CUSTOM_ROLE):
+            return f"cust\t{it.data(0, CUSTOM_ROLE)}"
+        if it.data(0, COLLECTION_ROLE):
+            return "sbview\tcollection"
+        if it.data(0, ARTISTS_ROLE):
+            return "sbview\tartists"
+        return ""
+
     def mimeData(self, items):  # type: ignore[override]
         md = QMimeData()
-        names = [it.data(0, CUSTOM_ROLE) for it in items if it.data(0, CUSTOM_ROLE)]
-        md.setText("\n".join(f"cust\t{n}" for n in names))
+        md.setText("\n".join(line for it in items if (line := self._drag_line(it))))
         return md
 
     def startDrag(self, actions):  # type: ignore[override]
-        items = [it for it in self.selectedItems() if it.data(0, CUSTOM_ROLE)]
+        items = [it for it in self.selectedItems() if self._drag_line(it)]
         if not items:
             return
         label = items[0].text(0) + (f"   +{len(items) - 1}" if len(items) > 1 else "")
@@ -299,7 +311,7 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
 
 
 class DeviceTree(NoTypeAhead, QTreeWidget):
-    """External devices — drop target (rb/cust). Dropping starts an export."""
+    """External devices — drop target (rb/cust/sbview). Dropping starts an export."""
     dropped = Signal(str, list)  # device_path, [(kind, value)]
 
     def __init__(self):
@@ -348,7 +360,7 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
         items = []
         for line in e.mimeData().text().split("\n"):
             kind, _, val = line.partition("\t")
-            if kind in ("rb", "cust") and val:
+            if kind in ("rb", "cust", "sbview") and val:
                 items.append((kind, val))
         if dev and items:
             self.dropped.emit(dev, items)

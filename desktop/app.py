@@ -1125,10 +1125,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         name, ok = QInputDialog.getText(self, "New SoundBox Playlist", "Name:")
         name = name.strip()
-        if ok and name and name not in self.custom:
-            self.custom[name] = []
-            self._refresh_custom()
-            self._save_state()
+        if not ok or not name:
+            return
+        if self._custom_name_taken(name):
+            QMessageBox.information(self, "Name taken",
+                                    f"“{name}” is already used (Collection and "
+                                    "Artists are reserved).")
+            return
+        self.custom[name] = []
+        self._refresh_custom()
+        self._save_state()
+
+    def _custom_name_taken(self, name: str) -> bool:
+        """Custom names must not collide with each other OR the two exportable
+        views — on a device they're all identified by playlist name."""
+        return name in self.custom or name.casefold() in ("collection", "artists")
 
     def _collection_tracks(self) -> list:
         """Every loaded track (all playlists pooled), honoring the hide-untracked
@@ -1154,9 +1165,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.sb_tree.blockSignals(True)
         try:
             self.sb_tree.clear()
-            # Built-in "Collection" pinned first: every track in one view (browse/
-            # curate only — no CUSTOM_ROLE, so it can't be dragged to a device,
-            # dropped on, renamed, or deleted).
+            # Built-in "Collection" pinned first: every track in one view. No
+            # CUSTOM_ROLE (can't be renamed/deleted/reordered), but draggable
+            # onto a device as a whole-pool playlist (sbview mime).
             tracks = self._collection_tracks()
             coll = QTreeWidgetItem([f"⌂  Collection  ({len(tracks)})"])
             coll.setData(0, COLLECTION_ROLE, True)
@@ -1378,7 +1389,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _rename_custom(self, name: str):
         new, ok = QInputDialog.getText(self, "Rename playlist", "New name:", text=name)
         new = new.strip()
-        if ok and new and new != name and new not in self.custom:
+        if ok and new and new != name and not self._custom_name_taken(new):
             self.custom = {new if k == name else k: v for k, v in self.custom.items()}
             self._refresh_custom()
             self._save_state()
@@ -1523,6 +1534,29 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return [Playlist(name=n, folder_path=[], keys=list(ids), key_type="0")
                 for n, ids in custom.items() if ids]
 
+    def _view_playlist(self, view: str):
+        """Collection/Artists as exportable synthetic playlists: the whole
+        pool, in that view's order (Collection = newest first, Artists = A→Z
+        by artist). Drag one onto a device = the entire library goes over."""
+        if self.lib is None:
+            return None
+        if view == "collection":
+            keys = [t.track_id for t in self._collection_tracks()]
+            name = "Collection"
+        elif view == "artists":
+            keys = [r["id"] for r in self._artist_rows(self._collection_tracks())]
+            name = "Artists"
+        else:
+            return None
+        return Playlist(name=name, folder_path=[], keys=keys, key_type="0") if keys else None
+
+    def _sync_playlists(self) -> list:
+        """Every SoundBox-side playlist a device could hold: customs + the two
+        exportable views. Drift/resync must know them ALL by identity, or a
+        synced Collection would read as stale files and get pruned."""
+        views = [self._view_playlist(v) for v in ("collection", "artists")]
+        return self._custom_playlists() + [p for p in views if p is not None]
+
     def _device_label(self, name: str, free, drift: int, fs: str = "") -> str:
         # When a device is out of sync, HIDE the "GB free" so the full
         # "⚠ N playlist(s) out of date" fits (it was getting truncated). Free space
@@ -1549,7 +1583,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if _running(getattr(self, "_dev_scan_worker", None)):
             return
-        w = DeviceScanWorker(self.lib, self._custom_playlists())
+        w = DeviceScanWorker(self.lib, self._sync_playlists())
         self._dev_scan_worker = w
         w.done.connect(self._on_devices_scanned)
         w.finished.connect(lambda ww=w: self._finish_worker("_dev_scan_worker", ww))
@@ -1664,7 +1698,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         LOG.info("Sync device: %s", dev)
         w = ResyncWorker(self.lib, dev, self.overrides, self.titles, self.art_cache,
-                         self._custom_playlists())
+                         self._sync_playlists())
         self._resync_worker = w
         w.done.connect(self._on_resync_done)
         w.finished.connect(lambda ww=w: self._finish_worker("_resync_worker", ww))
@@ -2156,6 +2190,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     # Top level of /Playlists (no SoundBox subfolder).
                     pls.append(Playlist(name=val, folder_path=[],
                                         keys=list(ids), key_type="0"))
+            elif kind == "sbview":
+                pl = self._view_playlist(val)
+                if pl is not None:
+                    pls.append(pl)
         return pls
 
     def _on_device_drop(self, dev: str, items: list[tuple[str, str]]):

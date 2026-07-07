@@ -1194,3 +1194,37 @@ class FixLinksUI(unittest.TestCase):
         _win.imported[self.tid]["path"] = str(self.new)  # already healthy
         _win._fix_links()  # must not start a worker or pop a dialog
         self.assertEqual(len(getattr(_win, "_oneshots", [])), 0)
+
+
+class ExportableViews(unittest.TestCase):
+    """Collection and Artists are draggable playlists: whole pool, view order."""
+
+    def test_collection_view_playlist_newest_first(self):
+        pl = _win._view_playlist("collection")
+        self.assertEqual(pl.name, "Collection")
+        self.assertEqual(pl.keys, ["2", "3", "1"])  # date_added desc
+
+    def test_artists_view_playlist_artist_order(self):
+        pl = _win._view_playlist("artists")
+        self.assertEqual(pl.name, "Artists")
+        self.assertEqual(pl.keys, ["2", "3", "1"])  # Ann, Mia, Zed A→Z
+
+    def test_resolve_jobs_handles_sbview(self):
+        pls = _win._resolve_jobs([("sbview", "collection"), ("sbview", "artists"),
+                                  ("sbview", "nope")])
+        self.assertEqual([p.name for p in pls], ["Collection", "Artists"])
+
+    def test_sync_playlists_includes_views(self):
+        names = [p.name for p in _win._sync_playlists()]
+        self.assertIn("Collection", names)
+        self.assertIn("Artists", names)
+
+    def test_tree_drag_emits_sbview_lines(self):
+        md = _win.sb_tree.mimeData([_win.sb_tree.topLevelItem(0),
+                                    _win.sb_tree.topLevelItem(1)])
+        self.assertEqual(md.text(), "sbview\tcollection\nsbview\tartists")
+
+    def test_reserved_names_guard(self):
+        self.assertTrue(_win._custom_name_taken("Collection"))
+        self.assertTrue(_win._custom_name_taken("artists"))
+        self.assertFalse(_win._custom_name_taken("LIVESETS"))
