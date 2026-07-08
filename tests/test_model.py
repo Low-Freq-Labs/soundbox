@@ -135,3 +135,59 @@ class EditClamp(unittest.TestCase):
                               name_override="Some Beautifully Long Descriptive Title")
         self.assertIn("Some Beautifully Long Descriptive Title", p)
         self.assertNotIn("sb2", p)
+
+
+class Search(unittest.TestCase):
+    """Multi-field, multi-term search — the whole point is finding by ARTIST,
+    genre, key, bpm or format, not just title."""
+
+    def _rows(self):
+        return [
+            {"id": "1", "title": "Live @ EDC 2026", "artist": "Rezz",
+             "genre": "Riddim", "key": "2A", "bpm": "140.00", "format": "WAV"},
+            {"id": "2", "title": "Sunset Set", "artist": "Of The Trees",
+             "genre": "Downtempo", "key": "9B", "bpm": "85.00", "format": "MP3"},
+            {"id": "3", "title": "EDC Mainstage", "artist": "Subtronics",
+             "genre": "Dubstep", "key": "2A", "bpm": "150.00", "format": "FLAC"},
+        ]
+
+    def _ids(self, m):
+        return [m._rows[i]["id"] for i in range(m.rowCount())]
+
+    def test_finds_by_artist_not_in_title(self):
+        m = TrackModel(self._rows())
+        m.set_filter("rezz")            # artist only — the busted case
+        self.assertEqual(self._ids(m), ["1"])
+
+    def test_finds_by_genre_and_key_and_format(self):
+        m = TrackModel(self._rows())
+        m.set_filter("dubstep"); self.assertEqual(self._ids(m), ["3"])
+        m.set_filter("9b");      self.assertEqual(self._ids(m), ["2"])
+        m.set_filter("flac");    self.assertEqual(self._ids(m), ["3"])
+
+    def test_bare_bpm_number_matches(self):
+        m = TrackModel(self._rows())
+        m.set_filter("140")             # not "140.00"
+        self.assertEqual(self._ids(m), ["1"])
+
+    def test_multi_term_is_and_across_fields(self):
+        m = TrackModel(self._rows())
+        m.set_filter("edc rezz")        # title has EDC, artist has Rezz → row 1 only
+        self.assertEqual(self._ids(m), ["1"])
+        m.set_filter("edc subtronics")  # row 3
+        self.assertEqual(self._ids(m), ["3"])
+        m.set_filter("edc downtempo")   # no single row has both
+        self.assertEqual(self._ids(m), [])
+
+    def test_case_insensitive_and_blank_shows_all(self):
+        m = TrackModel(self._rows())
+        m.set_filter("REZZ"); self.assertEqual(self._ids(m), ["1"])
+        m.set_filter("");     self.assertEqual(len(self._ids(m)), 3)
+
+    def test_edit_then_search_reindexes(self):
+        m = TrackModel(self._rows())
+        m.set_filter("rezz"); self.assertEqual(self._ids(m), ["1"])
+        rows = self._rows(); rows[0]["artist"] = "Renamed"
+        m.set_rows(rows)                # _hay must rebuild, old term gone
+        m.set_filter("rezz");    self.assertEqual(self._ids(m), [])
+        m.set_filter("renamed"); self.assertEqual(self._ids(m), ["1"])

@@ -582,7 +582,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         h.addSpacing(4)  # tight: time↔search (padding lives inside the player instead)
         self.search = QLineEdit()
         self.search.setObjectName("Search")
-        self.search.setPlaceholderText("Search titles…")
+        self.search.setPlaceholderText("Search title, artist, genre…")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(165)  # slimmer → more room for the waveform
         # Click-to-focus only: as the first focusable widget it grabbed keyboard

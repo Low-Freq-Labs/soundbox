@@ -32,6 +32,27 @@ _RIGHT = {"bpm", "time", "bitrate"}
 
 _EDITABLE = {"title", "artist"}
 
+# Fields the search bar looks in — the whole musically-meaningful row, not just
+# the title. Matching an artist, genre, key, BPM or format is the whole point
+# (searching "rezz" must find Rezz's sets even when her name isn't in the title).
+_SEARCH_FIELDS = ("title", "artist", "genre", "key", "bpm", "format")
+
+
+def _haystack(r: dict) -> str:
+    """One lowercase blob of a row's searchable fields, cached on the row so a
+    fast typist doesn't rebuild it per keystroke (rebuilt whenever rows are set).
+    BPM is also stored bare ('140' as well as '140.00') so a plain-number search
+    hits."""
+    hay = r.get("_hay")
+    if hay is None:
+        parts = [str(r.get(f) or "") for f in _SEARCH_FIELDS]
+        bpm = str(r.get("bpm") or "")
+        if "." in bpm:
+            parts.append(bpm.split(".", 1)[0])  # "140.00" also searchable as "140"
+        hay = " ".join(parts).lower()
+        r["_hay"] = hay
+    return hay
+
 # Art status ("art" row key) → glyph + tooltip. Status set by the app from the
 # art cache; sorting groups covers → avatars → misses → unfetched.
 ART_COL = next(i for i, c in enumerate(COLUMNS) if c[0] == "art")
@@ -86,10 +107,15 @@ class TrackModel(QAbstractTableModel):
 
     def set_rows(self, rows: list[dict]) -> None:
         self._all_rows = list(rows)
+        for r in self._all_rows:
+            r.pop("_hay", None)  # force a fresh search index (title/artist may have changed)
         self._apply_filter()
 
     def set_filter(self, text: str) -> None:
-        """Live-filter the visible rows by track title (case-insensitive substring)."""
+        """Live-filter the visible rows. Multi-field (title/artist/genre/key/bpm/
+        format) and multi-term: each whitespace-separated word must match SOME
+        field, so 'rezz edc' finds a Rezz set titled '… @ EDC'. Case-insensitive
+        substring per term."""
         self._filter = (text or "").strip().lower()
         self._apply_filter()
 
@@ -102,8 +128,9 @@ class TrackModel(QAbstractTableModel):
     def _apply_filter(self) -> None:
         self.beginResetModel()
         if self._filter:
-            f = self._filter
-            self._rows = [r for r in self._all_rows if f in (r.get("title") or "").lower()]
+            terms = self._filter.split()
+            self._rows = [r for r in self._all_rows
+                          if all(t in _haystack(r) for t in terms)]
         else:
             self._rows = list(self._all_rows)
         if self._sort:
