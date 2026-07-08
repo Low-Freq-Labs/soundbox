@@ -43,3 +43,36 @@ class WaveCache(unittest.TestCase):
     def test_missing_everything_is_quietly_none(self):
         self.assertIsNone(cache_load(self.cache / "nope", self.dir / "ghost.wav"))
         cache_store(self.cache, self.dir / "ghost.wav", [1.0])  # must not raise
+
+
+class IsCached(unittest.TestCase):
+    """is_cached: cheap existence check for the background-fill to-do list."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="sb-iscached-"))
+        self.audio = self.dir / "track.wav"
+        self.audio.write_bytes(b"fake-audio")
+        self.cache = self.dir / "waveforms"
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_false_before_store_true_after(self):
+        from soundbox.waveform import is_cached
+        self.assertFalse(is_cached(self.cache, self.audio))
+        cache_store(self.cache, self.audio, [0.5, 1.0])
+        self.assertTrue(is_cached(self.cache, self.audio))
+
+    def test_edited_file_reads_uncached(self):
+        from soundbox.waveform import is_cached
+        import os
+        cache_store(self.cache, self.audio, [1.0])
+        st = self.audio.stat()
+        self.audio.write_bytes(b"changed!!")
+        os.utime(self.audio, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        self.assertFalse(is_cached(self.cache, self.audio))  # new key → re-decode
+
+    def test_missing_file_is_false_not_error(self):
+        from soundbox.waveform import is_cached
+        self.assertFalse(is_cached(self.cache, self.dir / "ghost.wav"))

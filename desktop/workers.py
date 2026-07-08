@@ -278,6 +278,58 @@ class ArtFillWorker(QThread):
         LOG.info("Art fill ended: %d fetched, %d failed", ok, err)
 
 
+class WaveformFillWorker(QThread):
+    """Background trickle: pre-decode + cache the waveform for every track whose
+    peaks aren't cached yet, so the scrubber is instant when you load one — no
+    waiting on a live decode. Local decode only (no network): libsndfile for
+    WAV/AIFF/MP3/FLAC, the Qt/ffmpeg path for ALAC/AAC. Cached + resumable; the
+    cache key includes mtime+size, so an edited file re-decodes.
+
+    Runs OFF the UI thread and honors requestInterruption() — qt_peaks spins a
+    local event loop and polls interruption mid-decode, so shutdown breaks a
+    long .m4a cleanly (see soundbox-gotchas: the 3 QAudioDecoder traps)."""
+    progress = Signal(int, int)  # done, total
+
+    DELAY = 0.05  # tiny yield between files — gentle on CPU, never a UI beachball
+
+    def __init__(self, lib, cache_dir):
+        super().__init__()
+        self.lib = lib
+        self.cache_dir = cache_dir
+
+    def run(self):
+        import time
+        from soundbox.waveform import cache_store, is_cached, peaks
+        from .player import qt_peaks
+        todo = []
+        hidden = getattr(self.lib, "hidden_ids", set())
+        for t in self.lib.tracks_by_id.values():
+            if t.track_id in hidden:
+                continue
+            try:
+                if not t.path.is_file() or is_cached(self.cache_dir, t.path):
+                    continue
+            except OSError:
+                continue
+            todo.append(str(t.path))
+        total = len(todo)
+        LOG.info("Waveform fill: %d track(s) need peaks", total)
+        done = 0
+        for i, path in enumerate(todo, 1):
+            if self.isInterruptionRequested():
+                break
+            try:
+                pk = peaks(path) or qt_peaks(path)  # cheap path first, ffmpeg fallback
+                if pk:
+                    cache_store(self.cache_dir, path, pk)  # cache_store ignores []
+                    done += 1
+            except Exception as exc:  # noqa: BLE001 — one bad file never stops the fill
+                LOG.debug("Waveform fill: decode failed for %s: %r", path, exc)
+            self.progress.emit(i, total)
+            time.sleep(self.DELAY)
+        LOG.info("Waveform fill ended: %d cached", done)
+
+
 class OneShotTask(QThread):
     """Run one callable off the UI thread; emits its result — or the exception
     (callers type-check). Used for backup zip/restore (193MB of art shouldn't

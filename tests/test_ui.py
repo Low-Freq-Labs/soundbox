@@ -1294,3 +1294,89 @@ class ArtFetchHonesty(unittest.TestCase):
             self.assertIn("No art found", _win.status_label.text())
         finally:
             _win.art_cache = real
+
+
+class WaveformFill(unittest.TestCase):
+    """Background pre-cache: decode+store peaks for every uncached track, skip
+    cached / hidden / missing-file ones. Runs .run() synchronously (logic, not
+    the thread)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import math, struct, tempfile, wave
+        cls.dir = tempfile.mkdtemp(prefix="sb-wffill-")
+        cls.paths = []
+        sr = 8000
+        for i in range(3):
+            p = f"{cls.dir}/set{i}.wav"
+            with wave.open(p, "wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+                w.writeframes(b"".join(
+                    struct.pack("<h", int(0.6 * 32767 * math.sin(2*math.pi*220*t/sr)))
+                    for t in range(sr)))  # 1s tone
+            cls.paths.append(p)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from soundbox.rekordbox_xml import Library, Track
+        self.cache = tempfile.mkdtemp(prefix="sb-wfcache-")
+        tracks = {str(i): Track(str(i), f"Set {i}", "A",
+                                Path(p).as_uri(), bpm="140.00")
+                  for i, p in enumerate(self.paths)}
+        tracks["ghost"] = Track("ghost", "Gone", "A",
+                                Path(f"{self.dir}/nope.wav").as_uri())
+        self.lib = Library(tracks_by_id=tracks, playlists=[], source_xml="x")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.cache, ignore_errors=True)
+
+    def _todo_count(self):
+        from soundbox.waveform import is_cached
+        return sum(1 for t in self.lib.tracks_by_id.values()
+                   if t.path.is_file() and not is_cached(self.cache, t.path))
+
+    def test_fills_all_uncached_then_nothing_left(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox.waveform import cache_load
+        self.assertEqual(self._todo_count(), 3)          # ghost file excluded
+        WaveformFillWorker(self.lib, self.cache).run()
+        self.assertEqual(self._todo_count(), 0)          # all cached now
+        for p in self.paths:
+            self.assertIsNotNone(cache_load(self.cache, p))
+
+    def test_resume_only_decodes_new(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox.waveform import cache_store
+        cache_store(self.cache, self.paths[0], [0.5])    # pretend set0 already done
+        self.assertEqual(self._todo_count(), 2)
+        WaveformFillWorker(self.lib, self.cache).run()
+        self.assertEqual(self._todo_count(), 0)
+
+    def test_hidden_tracks_skipped(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox.waveform import is_cached
+        self.lib.hidden_ids = {"1"}
+        WaveformFillWorker(self.lib, self.cache).run()
+        self.assertFalse(is_cached(self.cache, self.paths[1]))  # hidden → not filled
+        self.assertTrue(is_cached(self.cache, self.paths[0]))
+
+    def test_autostart_wiring_starts_a_worker(self):
+        real_dir = _win.player_bar.wave_cache_dir
+        _win.player_bar.wave_cache_dir = self.cache
+        saved_lib = _win.lib
+        _win.lib = self.lib
+        try:
+            _win._maybe_fill_waveforms()
+            self.assertIsNotNone(_win._wf_fill_worker)
+            _win._wf_fill_worker.requestInterruption()
+            _win._wf_fill_worker.wait(8000)
+        finally:
+            _win.player_bar.wave_cache_dir = real_dir
+            _win.lib = saved_lib

@@ -104,7 +104,7 @@ ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser
 
 from .workers import (
     ArtFillWorker, DeleteWorker, DeviceScanWorker, ExportWorker,
-    RefreshWorker, ResyncWorker, _OneShotArt, _running,
+    RefreshWorker, ResyncWorker, WaveformFillWorker, _OneShotArt, _running,
 )
 
 
@@ -158,6 +158,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             LOG.info("art cache sweep: %d checked, %d re-encoded to baseline JPEG", checked, fixed)
         self._art_worker: ArtFillWorker | None = None
         self._art_restart = False  # set by re-scan to restart the fill after it stops
+        self._wf_fill_worker: WaveformFillWorker | None = None
         self._last_xml = ""
         self.lib = None
         self.custom: dict[str, list[str]] = {}  # name -> ordered track ids
@@ -858,6 +859,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._refresh_devices()
         self.stack.setCurrentIndex(0)
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
 
     def _find_tree_item(self, path: str):
         """Locate a playlist tree item by its display path (PATH_ROLE)."""
@@ -952,6 +954,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                  lib.track_count, len(lib.playlists))
         self._flash_status("Updated ✓", 6)
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
 
     def _on_refresh_fail(self, err):
         self._stop_pulse()
@@ -1331,6 +1334,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             else:
                 self._reload_current_view()  # Collection view picks them up live
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+            QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
         elif skipped:
             QMessageBox.warning(
                 self, "Nothing imported",
@@ -2157,6 +2161,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._art_restart = False
             self._start_art_fill()
 
+    def _maybe_fill_waveforms(self):
+        """Background-cache every uncached waveform so the scrubber is instant,
+        never a live decode. Kicks whenever the library (re)loads or files are
+        imported; the worker skips anything already cached, so re-runs are cheap
+        and it only decodes the genuinely-new files."""
+        if self.lib is None or self.player_bar.wave_cache_dir is None:
+            return
+        if _running(self._wf_fill_worker):
+            return  # a pass is already grinding through; it re-scans its own todo
+        w = WaveformFillWorker(self.lib, self.player_bar.wave_cache_dir)
+        self._wf_fill_worker = w
+        w.finished.connect(lambda ww=w: self._finish_worker("_wf_fill_worker", ww))
+        w.start()
+
     def _stop_art_fill(self):
         if self._art_worker is not None and self._art_worker.isRunning():
             self._art_worker.stop()
@@ -2306,6 +2324,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._delete_worker.cancel(); self._delete_worker.wait(10000)
         if _running(self._art_worker):
             self._art_worker.stop(); self._art_worker.wait(6000)
+        if _running(getattr(self, "_wf_fill_worker", None)):
+            # qt_peaks polls interruption mid-decode (breaks a long .m4a cleanly);
+            # the between-files loop check catches libsndfile tracks.
+            self._wf_fill_worker.requestInterruption(); self._wf_fill_worker.wait(8000)
         if _running(getattr(self, "_scan_worker", None)):
             self._scan_worker.wait(15000)  # pure CPU scan; let it finish
         if _running(getattr(self, "_backup_worker", None)):

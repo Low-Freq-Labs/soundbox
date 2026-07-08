@@ -53,6 +53,16 @@ def cache_key(path: str | Path) -> str:
     return hashlib.sha1(raw).hexdigest()
 
 
+def is_cached(cache_dir: str | Path, path: str | Path) -> bool:
+    """Cheap 'do we already have peaks for this file' check — just a stat +
+    existence test (no JSON parse), for building the background-fill to-do list.
+    Keyed by path+mtime+size, so an edited file reads as uncached (re-decodes)."""
+    try:
+        return (Path(cache_dir) / f"{cache_key(path)}.json").is_file()
+    except OSError:
+        return False
+
+
 def cache_load(cache_dir: str | Path, path: str | Path) -> list[float] | None:
     """Cached peaks for path, or None. Any problem (missing, corrupt, file
     changed since caching) reads as a miss — never an error."""
