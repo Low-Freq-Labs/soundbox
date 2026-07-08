@@ -86,11 +86,11 @@ from PySide6.QtWidgets import (
 )
 
 
-from soundbox import artfetch, engine, imports, metadata, paths, rekordbox_db
+from soundbox import artfetch, engine, imports, libcache, metadata, paths, rekordbox_db
 from soundbox.rekordbox_xml import Playlist
 from . import theme
 from .artpicker import ArtPickerDialog
-from .model import COLUMNS, TrackModel
+from .model import COLUMNS, TrackModel, row_matches as _row_matches
 from .player import PlayerBar
 
 from .device_browser import DeviceBrowserMixin
@@ -148,6 +148,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.resize(1240, 800)
         data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
         self._data_file = data_dir / "library.json"  # portable SoundBox library
+        self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
         self.art_cache = artfetch.ArtCache(data_dir / "art")  # cover-art cache
         # One-time Rockbox-safety sweep: any cached art that isn't baseline JPEG
         # (progressive/PNG shows BLANK on the iPod) is re-encoded. Flag-filed —
@@ -225,7 +226,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._sync_settings_controls()  # reflect saved values in the Settings page
         self._restore_columns()         # saved column widths/visibility
         self._refresh_custom()
-        # Auto-load on launch: live rekordbox DB first, else the last XML fallback.
+        # Instant paint: render last session's library snapshot NOW so the app
+        # isn't blank while the live read runs. The refresh below replaces it
+        # with current data (adds/edits/deletes apply) and re-snapshots.
+        cached = libcache.load(self._libcache_path)
+        if cached is not None:
+            self.lib = cached
+            self._apply_loaded_library()
+            self.stack.setCurrentIndex(0)
+            LOG.info("Instant paint from snapshot: %d tracks", self.lib.track_count)
+        # Auto-load on launch: live rekordbox DB first, else the last XML
+        # fallback. This runs REGARDLESS of the snapshot paint above — the
+        # snapshot is a stand-in until the authoritative source loads over it.
         if rekordbox_db.db_available():
             self._refresh_rekordbox()
         elif self._last_xml and Path(self._last_xml).is_file():
@@ -417,9 +429,38 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 return
 
     def _on_search(self, text: str):
-        """Filter the table — selection survives (see _reseat_selection)."""
+        """Filter EVERY track browser at once — the table (Collection/playlist
+        views) and the Artists tree — by the same multi-field query."""
         self.model.set_filter(text)
         self._reseat_selection()
+        self._filter_artists()
+
+    def _search_terms(self) -> list[str]:
+        return self.search.text().strip().lower().split()
+
+    def _filter_artists(self) -> None:
+        """Show an artist in the Artists browser when the query matches the
+        artist OR any of their tracks (same _haystack the table search uses, so
+        artist/genre/key/bpm/format all count). Expanded rows also hide their
+        non-matching tracks."""
+        terms = self._search_terms()
+        children = getattr(self, "_artist_children", {})
+        for i in range(self.artists_view.topLevelItemCount()):
+            it = self.artists_view.topLevelItem(i)
+            rows = children.get(it.data(0, ARTIST_ROLE), [])
+            has = (not terms) or any(_row_matches(r, terms) for r in rows)
+            it.setHidden(not has)
+            if it.childCount():
+                self._apply_artist_child_filter(it)
+
+    def _apply_artist_child_filter(self, item) -> None:
+        terms = self._search_terms()
+        rows = {r["id"]: r for r in
+                getattr(self, "_artist_children", {}).get(item.data(0, ARTIST_ROLE), [])}
+        for j in range(item.childCount()):
+            c = item.child(j)
+            r = rows.get(c.data(0, ARTIST_TRACK_ROLE))
+            c.setHidden(bool(terms) and r is not None and not _row_matches(r, terms))
 
     def _selected_track(self):
         # Artists page showing? — the highlighted song there is the selection.
@@ -857,15 +898,37 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                  Path(path).name, self.lib.track_count, len(self.lib.playlists))
         self._last_xml = path  # remember for next launch
         self._save_state()
+        self._apply_loaded_library()
+        self._refresh_devices()
+        self.stack.setCurrentIndex(0)
+        self._cache_library()  # snapshot for the next instant paint
+        QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
+
+    def _apply_loaded_library(self):
+        """Shared post-load wiring: fold in imported tracks, (re)build the artist
+        registry, apply hide settings, repopulate the sidebar + land on
+        Collection. Used by open_library, the live-refresh completion, AND the
+        instant paint from the on-disk snapshot."""
         imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
         self._default_to_collection()
-        self._refresh_devices()
-        self.stack.setCurrentIndex(0)
-        QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-        QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
+
+    def _cache_library(self):
+        """Snapshot the current library to disk OFF the UI thread, so the next
+        open paints instantly. Deliberately NOT a close-time action — closing
+        stays instant; the snapshot is always taken right after a fresh load."""
+        if self.lib is None:
+            return
+        from .workers import OneShotTask
+        lib, path = self.lib, self._libcache_path
+        w = OneShotTask(lambda: libcache.dump(lib, path))
+        self._oneshots = getattr(self, "_oneshots", [])
+        self._oneshots.append(w)
+        w.finished.connect(lambda ww=w: self._finish_oneshot(ww))
+        w.start()
 
     def _find_tree_item(self, path: str):
         """Locate a playlist tree item by its display path (PATH_ROLE)."""
@@ -950,15 +1013,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_refresh_done(self, lib):
         self._stop_pulse()
         self.lib = lib
-        imports.inject(self.lib, self.imported)  # livesets rejoin the pool
-        self._build_artist_registry()
-        self._apply_settings_to_lib()
-        self._populate_tree(engine.summary(lib))
-        self._default_to_collection()
+        self._apply_loaded_library()
         self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
         self._flash_status("Updated ✓", 6)
+        self._cache_library()  # refresh the snapshot for the next instant paint
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
 
@@ -1501,6 +1561,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             it.setChildIndicatorPolicy(
                 QTreeWidgetItem.ShowIndicator)  # expandable before children exist
             self.artists_view.addTopLevelItem(it)
+        self._filter_artists()  # apply any active search to the fresh list
         self.stack.setCurrentIndex(2)
 
     def _fill_artist(self, item):
@@ -1518,6 +1579,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 item.addChild(c)
         finally:
             self._artists_filling = False
+        self._apply_artist_child_filter(item)  # honor an active search on expand
 
     def _artists_menu(self, pos):
         it = self.artists_view.itemAt(pos)

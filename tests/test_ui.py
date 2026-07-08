@@ -1461,3 +1461,62 @@ class ArtistsDrag(unittest.TestCase):
         finally:
             _win.custom.pop("ARTDROP", None)
             _win._refresh_custom()
+
+
+class ArtistsSearch(unittest.TestCase):
+    """The search bar filters the Artists browser too, by the same multi-field
+    query (artist name, or any of the artist's tracks)."""
+
+    def setUp(self):
+        _win.search.setText("")
+        _win.sb_tree.setCurrentItem(None)
+        _win._show_artists()
+        _app.processEvents()
+
+    def tearDown(self):
+        _win.search.setText("")
+
+    def _visible_artists(self):
+        from desktop.trees import ARTIST_ROLE as ARTIST_ROLE_
+        v = _win.artists_view
+        return [v.topLevelItem(i).data(0, ARTIST_ROLE_)
+                for i in range(v.topLevelItemCount()) if not v.topLevelItem(i).isHidden()]
+
+    def test_filter_by_artist_name(self):
+        _win.search.setText("ann")     # the synthetic lib has artist "Ann"
+        _app.processEvents()
+        vis = self._visible_artists()
+        self.assertIn("Ann", vis)
+        self.assertNotIn("Zed", vis)
+
+    def test_blank_shows_all_artists(self):
+        _win.search.setText("ann"); _app.processEvents()
+        _win.search.setText("");    _app.processEvents()
+        self.assertEqual(set(self._visible_artists()), {"Ann", "Mia", "Zed"})
+
+    def test_switching_to_tab_applies_active_search(self):
+        _win.search.setText("mia")
+        _win._show_artists()           # re-enter the tab with a live query
+        _app.processEvents()
+        self.assertEqual(self._visible_artists(), ["Mia"])
+
+
+class LibraryInstantPaint(unittest.TestCase):
+    """The library snapshot round-trips through the app so open isn't blank."""
+
+    def test_cache_library_then_load_restores_pool(self):
+        import tempfile
+        from pathlib import Path
+        from soundbox import libcache
+        with tempfile.TemporaryDirectory() as td:
+            saved = _win._libcache_path
+            _win._libcache_path = Path(td) / "libcache.json"
+            try:
+                _win._cache_library()
+                for w in list(getattr(_win, "_oneshots", [])):
+                    w.wait(4000)
+                got = libcache.load(_win._libcache_path)
+                self.assertIsNotNone(got)
+                self.assertEqual(set(got.tracks_by_id), set(_win.lib.tracks_by_id))
+            finally:
+                _win._libcache_path = saved

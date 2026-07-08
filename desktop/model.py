@@ -38,6 +38,14 @@ _EDITABLE = {"title", "artist"}
 _SEARCH_FIELDS = ("title", "artist", "genre", "key", "bpm", "format")
 
 
+def row_matches(r: dict, terms: list[str]) -> bool:
+    """True when every search term hits some searchable field of the row.
+    Shared by the table filter and the Artists-tree filter so both browsers
+    search identically."""
+    hay = _haystack(r)
+    return all(t in hay for t in terms)
+
+
 def _haystack(r: dict) -> str:
     """One lowercase blob of a row's searchable fields, cached on the row so a
     fast typist doesn't rebuild it per keystroke (rebuilt whenever rows are set).
@@ -129,8 +137,7 @@ class TrackModel(QAbstractTableModel):
         self.beginResetModel()
         if self._filter:
             terms = self._filter.split()
-            self._rows = [r for r in self._all_rows
-                          if all(t in _haystack(r) for t in terms)]
+            self._rows = [r for r in self._all_rows if row_matches(r, terms)]
         else:
             self._rows = list(self._all_rows)
         if self._sort:
