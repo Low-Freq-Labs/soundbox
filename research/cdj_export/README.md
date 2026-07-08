@@ -19,10 +19,11 @@ Full plan, status, and next steps: **`../../docs/cdj-usb-export.md`**.
 
 ## Running it
 
-Needs `pyrekordbox` (reads the ANLZ/settings files). The R&D venv used during
-development is external:
+Needs `pyrekordbox` — it's already a SoundBox dependency, so just use the app's
+venv (no separate env needed):
 
-    ~/soundbox-cdj-ref/rbxenv/bin/python
+    ../../.venv/bin/python devicesql.py     # from research/cdj_export/
+    # i.e. ~/Projects/soundbox/.venv/bin/python
 
 The **reference USB snapshots** (real rekordbox exports + staged test sticks)
 are large audio binaries and deliberately live OUTSIDE this repo at

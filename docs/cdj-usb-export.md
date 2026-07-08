@@ -87,7 +87,9 @@ result → adjust. Best done with the decks nearby.
 - `ref-usb-empty/` — a blank rekordbox scaffold (just from plugging a stick in).
 - `ref-usb-full/` — 3 tracks + playlist "Test" + memory/RGB hot cues.
 - `stage-A-clone/` (byte-identical control) + `stage-B-scratch/` (from-scratch).
-- `rbxenv/` — the R&D venv with `pyrekordbox`.
+
+Run the prototype under the app's own venv (`pyrekordbox` is already a dep):
+`~/Projects/soundbox/.venv/bin/python`.
 
 Spec source: Deep-Symmetry `crate-digger` (`rekordbox_pdb.ksy` /
 `rekordbox_anlz.ksy`) — note the org slug is hyphenated (`Deep-Symmetry`).
