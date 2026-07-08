@@ -68,11 +68,14 @@ class CollectionView(unittest.TestCase):
         self.assertIn("Collection", it.text(0))
         self.assertIn("(3)", it.text(0))
 
-    def test_shows_all_tracks_newest_first(self):
+    def test_orders_by_file_landing_then_name(self):
+        # Synthetic tracks point at non-existent files → landing time 0.0 for all,
+        # so the sort falls back to title A→Z (real birthtime order is covered by
+        # CollectionLandedOrder with real files).
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
         _app.processEvents()
         self.assertEqual([r["title"] for r in _win.model._rows],
-                         ["alpha", "Charlie", "Bravo"])  # date_added desc
+                         ["alpha", "Bravo", "Charlie"])  # name fallback
 
     def test_not_a_custom_playlist(self):
         from desktop.trees import CUSTOM_ROLE
@@ -1199,10 +1202,10 @@ class FixLinksUI(unittest.TestCase):
 class ExportableViews(unittest.TestCase):
     """Collection and Artists are draggable playlists: whole pool, view order."""
 
-    def test_collection_view_playlist_newest_first(self):
+    def test_collection_view_playlist_in_collection_order(self):
         pl = _win._view_playlist("collection")
         self.assertEqual(pl.name, "Collection")
-        self.assertEqual(pl.keys, ["2", "3", "1"])  # date_added desc
+        self.assertEqual(pl.keys, ["2", "1", "3"])  # no files → title A→Z fallback
 
     def test_artists_view_playlist_artist_order(self):
         pl = _win._view_playlist("artists")
@@ -1380,3 +1383,81 @@ class WaveformFill(unittest.TestCase):
         finally:
             _win.player_bar.wave_cache_dir = real_dir
             _win.lib = saved_lib
+
+
+class CollectionLandedOrder(unittest.TestCase):
+    """Collection default order = when the FILE landed on the computer (newest
+    first), unified across rekordbox + imported. Real files, staggered creation."""
+
+    def setUp(self):
+        import tempfile, time
+        from pathlib import Path
+        from soundbox.rekordbox_xml import Library, Track
+        self._td = tempfile.TemporaryDirectory()
+        d = Path(self._td.name)
+        self.paths = []
+        for nm in ("old", "mid", "new"):
+            p = d / f"{nm}.wav"
+            p.write_bytes(b"x")
+            self.paths.append(p)
+            time.sleep(0.05)  # ensure distinct birth times
+        tracks = {
+            "1": Track("1", "Zzz Old", "A", self.paths[0].as_uri()),
+            "2": Track("2", "Aaa Mid", "A", self.paths[1].as_uri()),
+            "3": Track("3", "Mmm New", "A", self.paths[2].as_uri()),
+        }
+        self._saved_lib, self._saved_cache = _win.lib, _win._landed_cache
+        _win._landed_cache = {}
+        _win.lib = Library(tracks_by_id=tracks, playlists=[], source_xml="x")
+
+    def tearDown(self):
+        _win.lib, _win._landed_cache = self._saved_lib, self._saved_cache
+        self._td.cleanup()
+
+    def test_newest_file_first_regardless_of_title(self):
+        order = [t.track_id for t in _win._collection_tracks()]
+        self.assertEqual(order, ["3", "2", "1"])  # new, mid, old — not title order
+
+    def test_landed_time_is_cached(self):
+        _win._collection_tracks()
+        self.assertIn(str(self.paths[0]), _win._landed_cache)
+
+
+class ArtistsDrag(unittest.TestCase):
+    """Artists tab is a drag source: a track row carries its id; an artist row
+    carries all its tracks — as `trk` mime a SoundBox playlist already accepts."""
+
+    def setUp(self):
+        _win.sb_tree.setCurrentItem(None)
+        _win._show_artists()
+        _app.processEvents()
+
+    def test_artist_header_drags_all_its_tracks(self):
+        from desktop.trees import ARTIST_ROLE
+        top = _win.artists_view.topLevelItem(0)
+        md = _win.artists_view.mimeData([top])
+        self.assertTrue(md.text().startswith("trk\t"))
+        ids = md.text().split("\t", 1)[1].split(",")
+        self.assertEqual(sorted(ids), sorted(r["id"] for r in
+                                             _win._artist_children[top.data(0, ARTIST_ROLE)]))
+
+    def test_track_row_drags_its_own_id(self):
+        from desktop.trees import ARTIST_TRACK_ROLE
+        top = _win.artists_view.topLevelItem(0)
+        top.setExpanded(True)  # lazy-fills children
+        _app.processEvents()
+        child = top.child(0)
+        md = _win.artists_view.mimeData([child])
+        self.assertEqual(md.text(), "trk\t" + child.data(0, ARTIST_TRACK_ROLE))
+
+    def test_drop_onto_playlist_adds(self):
+        from desktop.trees import ARTIST_IDS_ROLE
+        _win.custom["ARTDROP"] = []
+        try:
+            top = _win.artists_view.topLevelItem(0)
+            ids = list(top.data(0, ARTIST_IDS_ROLE))
+            _win._on_tracks_dropped("ARTDROP", ids)
+            self.assertEqual(_win.custom["ARTDROP"], ids)
+        finally:
+            _win.custom.pop("ARTDROP", None)
+            _win._refresh_custom()

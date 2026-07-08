@@ -93,3 +93,22 @@ class PathLengthBudget(unittest.TestCase):
         self.assertEqual(
             device_music_path(Path("/x/Enter The Dragon.wav"), "Zero"),
             "/Music/Zero/Enter The Dragon/Enter The Dragon.wav")
+
+
+class FileLandedTime(unittest.TestCase):
+    """file_landed_time: filesystem birth/creation time, missing → 0.0."""
+
+    def test_missing_file_is_zero(self):
+        from soundbox.paths import file_landed_time
+        self.assertEqual(file_landed_time("/no/such/file.wav"), 0.0)
+
+    def test_newer_file_has_greater_time(self):
+        import tempfile, time
+        from pathlib import Path
+        from soundbox.paths import file_landed_time
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / "a.wav"; a.write_bytes(b"a")
+            time.sleep(0.05)
+            b = Path(td) / "b.wav"; b.write_bytes(b"b")
+            self.assertGreater(file_landed_time(b), 0.0)
+            self.assertGreaterEqual(file_landed_time(b), file_landed_time(a))

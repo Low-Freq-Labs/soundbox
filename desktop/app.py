@@ -86,7 +86,7 @@ from PySide6.QtWidgets import (
 )
 
 
-from soundbox import artfetch, engine, imports, metadata, rekordbox_db
+from soundbox import artfetch, engine, imports, metadata, paths, rekordbox_db
 from soundbox.rekordbox_xml import Playlist
 from . import theme
 from .artpicker import ArtPickerDialog
@@ -97,10 +97,10 @@ from .device_browser import DeviceBrowserMixin
 from .devices import device_fs, human
 from .settings_page import SettingsPageMixin
 from .trees import (
-    ARTIST_ROLE, ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
+    ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
+    CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
     ArtistsTree, CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
-ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser
 
 from .workers import (
     ArtFillWorker, DeleteWorker, DeviceScanWorker, ExportWorker,
@@ -159,6 +159,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._art_worker: ArtFillWorker | None = None
         self._art_restart = False  # set by re-scan to restart the fill after it stops
         self._wf_fill_worker: WaveformFillWorker | None = None
+        self._landed_cache: dict[str, float] = {}  # path -> file-landing time
         self._last_xml = ""
         self.lib = None
         self.custom: dict[str, list[str]] = {}  # name -> ordered track ids
@@ -793,6 +794,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # right-click menu / ⌘R open the editor (pre-filled, cursor at end).
         self.artists_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.artists_view.setItemDelegate(CellEditDelegate(self.artists_view))
+        # Drag tracks (or a whole artist) out to a SoundBox playlist — same as
+        # the Collection table; the playlist accepts the `trk` mime already.
+        self.artists_view.setDragEnabled(True)
+        self.artists_view.setDragDropMode(QAbstractItemView.DragOnly)
+        self.artists_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.artists_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.artists_view.customContextMenuRequested.connect(self._artists_menu)
         self.artists_view.itemExpanded.connect(self._fill_artist)
@@ -1168,9 +1174,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         views — on a device they're all identified by playlist name."""
         return name in self.custom or name.casefold() in ("collection", "artists")
 
+    def _landed_time(self, t) -> float:
+        """Cached file-landing time for a track (see paths.file_landed_time).
+        Cached per path for the session — birthtimes are immutable, and the pool
+        re-sorts on every Collection render, so we stat each file only once."""
+        cache = self._landed_cache
+        key = str(t.path)
+        v = cache.get(key)
+        if v is None:
+            v = paths.file_landed_time(key)
+            cache[key] = v
+        return v
+
     def _collection_tracks(self) -> list:
         """Every loaded track (all playlists pooled), honoring the hide-untracked
-        settings, newest first — the curation workbench."""
+        settings. Default order = when the FILE landed on this computer (newest
+        first) — the one date that means the same thing for rekordbox and
+        imported tracks alike (filesystem birth time, not rekordbox's catalog
+        date or an import stamp). Missing files sort last."""
         if self.lib is None:
             return []
         lib = self.lib
@@ -1180,7 +1201,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             tracks = [t for t in tracks
                       if not t.is_untracked(nokey=lib.hide_nokey, short=lib.hide_short,
                                             short_secs=lib.hide_short_secs)]
-        return sorted(tracks, key=lambda t: (t.date_added or "", t.name), reverse=True)
+        return sorted(tracks, key=lambda t: (-self._landed_time(t), t.name.lower()))
 
     def _refresh_custom(self):
         # Preserve the current selection across the rebuild (same pattern as
@@ -1474,6 +1495,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             it = QTreeWidgetItem([f"{name}  ({len(by_artist[name])})",
                                   "", "", ""])
             it.setData(0, ARTIST_ROLE, name)
+            # Stash the id list so the whole artist can be dragged to a playlist
+            # even while collapsed (children are lazy-filled only on expand).
+            it.setData(0, ARTIST_IDS_ROLE, [r["id"] for r in by_artist[name]])
             it.setChildIndicatorPolicy(
                 QTreeWidgetItem.ShowIndicator)  # expandable before children exist
             self.artists_view.addTopLevelItem(it)
@@ -1497,15 +1521,25 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _artists_menu(self, pos):
         it = self.artists_view.itemAt(pos)
-        if it is None or not it.data(0, ARTIST_TRACK_ROLE):
+        if it is None:
+            return
+        tid = it.data(0, ARTIST_TRACK_ROLE)
+        # Selection to act on: the track row (or every track of a header row).
+        ids = ArtistsTree._ids(self.artists_view.selectedItems() or [it])
+        if not ids:
             return
         col = self.artists_view.columnAt(pos.x())
         menu = QMenu(self)
-        if col in (0, 1):
+        if tid and col in (0, 1):
             menu.addAction("Edit", lambda: (self.artists_view.setCurrentItem(it, col),
                                             self.artists_view.editItem(it, col)))
-        menu.addAction("Copy File Name",
-                       lambda: self._copy_filenames([it.data(0, ARTIST_TRACK_ROLE)]))
+        if self.custom:  # add to an existing SoundBox playlist (drag also works)
+            sub = menu.addMenu(f"Add {len(ids)} to Playlist" if len(ids) > 1
+                               else "Add to Playlist")
+            for name in self.custom:
+                sub.addAction(name, lambda n=name, i=list(ids): self._on_tracks_dropped(n, i))
+        menu.addAction("Copy File Name" if len(ids) == 1 else f"Copy {len(ids)} File Names",
+                       lambda: self._copy_filenames(ids))
         menu.exec(self.artists_view.viewport().mapToGlobal(pos))
 
     def _on_artist_item_edited(self, item, col):

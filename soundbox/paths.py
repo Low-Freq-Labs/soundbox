@@ -6,8 +6,27 @@ part to unit-test, which is why they live on their own.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+
+def file_landed_time(path: str | Path) -> float:
+    """When this file first landed on THIS computer, as a POSIX timestamp.
+
+    Uses the filesystem BIRTH time (`st_birthtime` on macOS/APFS — the true
+    creation date, set when the file was written here, regardless of the audio's
+    original release or when rekordbox catalogued it). Falls back to `st_ctime`
+    where birthtime is unavailable (Linux ext4), then `st_mtime`. Returns 0.0
+    for a missing/unreadable file so it sorts oldest. Read-only stat; the file
+    is never touched. This is the one true "date added to the computer" that
+    works identically for rekordbox tracks and imported (non-rekordbox) files."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 0.0
+    bt = getattr(st, "st_birthtime", 0.0) or 0.0
+    return float(bt) or float(st.st_ctime or st.st_mtime or 0.0)
 
 # rekordbox encodes track locations as URIs like:
 #   file://localhost/Users/me/Music/Some%20Track%20(VIP).flac

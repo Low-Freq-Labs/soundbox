@@ -21,6 +21,8 @@ CUSTOM_ROLE = Qt.UserRole + 3   # custom (SoundBox) playlist name
 COLLECTION_ROLE = Qt.UserRole + 6  # the built-in "Collection" all-tracks view
 ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" folder (expandable)
 ARTIST_ROLE = Qt.UserRole + 8      # one artist entry under the Artists folder
+ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser (its id)
+ARTIST_IDS_ROLE = Qt.UserRole + 10   # an artist row's full track-id list (for drag)
 
 
 class CellEditDelegate(QStyledItemDelegate):
@@ -107,7 +109,36 @@ class NoTypeAhead:
 
 
 class ArtistsTree(NoTypeAhead, QTreeWidget):
-    """The Artists browser page (artist folders → song rows)."""
+    """The Artists browser page (artist folders → song rows). Drag source: a
+    track row carries its own id; an artist row carries ALL its tracks — drop
+    either onto a SoundBox playlist to add them (same `trk` mime the track table
+    uses, so the existing SoundBoxTree drop handling works unchanged)."""
+
+    @staticmethod
+    def _ids(items) -> list[str]:
+        ids: list[str] = []
+        for it in items:
+            tid = it.data(0, ARTIST_TRACK_ROLE)
+            if tid:
+                ids.append(tid)
+            else:  # an artist header row → all of that artist's tracks
+                ids += it.data(0, ARTIST_IDS_ROLE) or []
+        return list(dict.fromkeys(ids))  # de-dupe, preserve order
+
+    def mimeData(self, items):  # type: ignore[override]
+        md = QMimeData()
+        ids = self._ids(items)
+        if ids:
+            md.setText("trk\t" + ",".join(ids))
+        return md
+
+    def startDrag(self, actions):  # type: ignore[override]
+        items = self.selectedItems()
+        ids = self._ids(items)
+        if not ids:
+            return
+        label = items[0].text(0) + (f"   +{len(ids) - 1}" if len(ids) > 1 else "")
+        _start_chip_drag(self, self.mimeData(items), label, actions)
 
 
 class PlaylistTree(NoTypeAhead, QTreeWidget):
