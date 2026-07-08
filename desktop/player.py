@@ -119,6 +119,14 @@ def qt_peaks(path: str, buckets: int | None = None) -> list[float]:
     return [min(1.0, v / hi) for v in out]
 
 
+def _thread_running(w) -> bool:
+    """Safe isRunning() — False even if the C++ QThread was already deleted."""
+    try:
+        return w is not None and w.isRunning()
+    except RuntimeError:
+        return False
+
+
 class WaveformWorker(QThread):
     """Decode a file's waveform peaks off the UI thread. Cache first (repeat
     plays are instant), then libsndfile (WAV/AIFF/MP3/FLAC — cheap), then the
@@ -244,6 +252,10 @@ class PlayerBar(QWidget):
         self._src_path: str | None = None
         self._dur = 0
         self._wf: WaveformWorker | None = None
+        # Strong refs to EVERY in-flight decode worker until it finishes — a
+        # rapid track change starts a new one before the old returns, and
+        # dropping the old Python ref mid-run GC's a running QThread → SIGABRT.
+        self._wf_pending: list[WaveformWorker] = []
 
         self.play_btn = QPushButton("▶")
         self.play_btn.setObjectName("PlayBtn")
@@ -334,11 +346,25 @@ class PlayerBar(QWidget):
         self.play_btn.setText("❚❚" if self.is_playing() else "▶")
 
     def _start_waveform(self, path: str):
+        # Interrupt the previous decode FIRST — rapid track changes must not pile
+        # up multi-second qt_peaks (.m4a) threads. It polls interruption and
+        # abandons; its stale result is ignored by _on_waveform's path guard.
+        if self._wf is not None and _thread_running(self._wf):
+            self._wf.requestInterruption()
+        # Cache hit → paint on the UI thread, no worker at all. With the
+        # background fill pre-caching everything, rapid-fire loads stay smooth
+        # (a small JSON read, ~sub-ms) and spawn zero decode threads.
+        if self.wave_cache_dir:
+            from soundbox.waveform import cache_load
+            pk = cache_load(self.wave_cache_dir, path)
+            if pk is not None:
+                self._wf = None
+                self.wave.set_peaks(pk)
+                return
         w = WaveformWorker(path, cache_dir=self.wave_cache_dir)
         self._wf = w
+        self._wf_pending.append(w)  # strong ref until finished (never GC mid-run)
         w.ready.connect(self._on_waveform)
-        # Drop our ref only on `finished` (after run() returns) so the QThread is
-        # never GC'd on its own thread, and we never touch a deleted C++ object.
         w.finished.connect(lambda ww=w: self._wf_done(ww))
         w.start()
 
@@ -346,9 +372,23 @@ class PlayerBar(QWidget):
         if self._wf is w:
             self._wf = None
         try:
+            self._wf_pending.remove(w)
+        except ValueError:
+            pass
+        try:
             w.deleteLater()
         except RuntimeError:
             pass
+
+    def shutdown_waveforms(self):
+        """Interrupt + wait every in-flight decode before teardown (no 'QThread
+        destroyed while running')."""
+        for w in list(self._wf_pending):
+            try:
+                if _thread_running(w):
+                    w.requestInterruption(); w.wait(5000)
+            except RuntimeError:
+                pass
 
     def _on_waveform(self, path: str, peaks: list):
         if path == self._src_path:  # ignore stale results from a track we've left

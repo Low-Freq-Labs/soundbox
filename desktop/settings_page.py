@@ -39,6 +39,7 @@ class SettingsPageMixin:
             self.lib.removed_by_playlist = {k: set(v)
                                             for k, v in self.removals.items() if v}
             self.lib.title_junk = self._title_junk()
+            self._invalidate_rows()  # title-junk feeds effective_title
 
     def _settings_section(self, text: str) -> QWidget:
         """A section header (small caps + divider). First thing above a group of rows."""

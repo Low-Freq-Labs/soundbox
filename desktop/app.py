@@ -179,6 +179,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._dev_scan_worker: DeviceScanWorker | None = None
         self._delete_worker: DeleteWorker | None = None
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
+        # Computed-row cache: track_id -> row dict (effective title/artist +
+        # metadata). effective_title is ~0.17ms/track, so recomputing a 2500-
+        # track playlist on every click cost ~440ms — this makes clicks instant.
+        # Warmed in the background on open; invalidated (with a gen counter to
+        # discard stale warms) whenever overrides/aliases/registry/junk change.
+        self._row_cache: dict[str, dict] = {}
+        self._cache_gen = 0
+        self._warm_worker = None
         self._exporting = False
         self._deleting = False
         self._accordion_guard = False
@@ -191,6 +199,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._pulse_word: str | None = None
         self._pulse_dots = 0
         self._cancelling = False
+        # Debounce row-cache warming: many invalidations in one action (load →
+        # build registry → apply settings) collapse into ONE background rebuild.
+        self._warm_timer = QTimer(self)
+        self._warm_timer.setSingleShot(True)
+        self._warm_timer.setInterval(120)
+        self._warm_timer.timeout.connect(self._do_warm)
         # Devices are recognized on launch and as they're plugged in — no XML needed.
         self._refresh_devices()
         self._dev_timer = QTimer(self)
@@ -340,6 +354,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         trusted = ([t.artist for t in self.lib.tracks_by_id.values() if t.artist]
                    + [v for v in self.overrides.values() if v.strip()])
         self.lib.artist_registry = metadata.build_registry(bases, trusted, self.aliases)
+        self._invalidate_rows()  # canonical spellings may have changed
 
     def _default_to_collection(self):
         """On open (or any load with nothing selected), land on the Collection
@@ -356,6 +371,69 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             r["art"] = self.art_cache.status_kind(r.get("id", ""))
         return rows
 
+    # ---------- computed-row cache (fast playlist clicks) ----------
+    def _row_for(self, t) -> dict:
+        """Cached computed row for a track, recomputed only when its inputs
+        change (see _invalidate_rows). Returns a COPY so the caller can stamp
+        art / build a search haystack without poisoning the cache."""
+        r = self._row_cache.get(t.track_id)
+        if r is None:
+            r = engine.track_row(t, self.overrides, self.titles,
+                                 registry=self.lib.artist_registry if self.lib else None,
+                                 junk=self._title_junk())
+            self._row_cache[t.track_id] = r
+        return dict(r)
+
+    def _rows_for(self, tracks) -> list[dict]:
+        return [self._row_for(t) for t in tracks]
+
+    def _playlist_rows(self, display_path: str) -> list[dict]:
+        """Rows for a rekordbox playlist, in sacred order — via the row cache."""
+        pl = next((p for p in self.lib.playlists if p.display_path == display_path),
+                  None) if self.lib else None
+        return self._rows_for(self.lib.resolve(pl)) if pl is not None else []
+
+    def _invalidate_rows(self) -> None:
+        """Something that feeds track_row changed (an override, alias, the
+        registry, or title-junk) — drop the cache, bump the generation so any
+        in-flight warm is discarded, and schedule a fresh background warm."""
+        self._row_cache.clear()
+        self._cache_gen += 1
+        if self.lib is not None:
+            self._warm_timer.start()  # debounced → one rebuild per burst
+
+    def _do_warm(self) -> None:
+        """Precompute EVERY track's row off the UI thread so the first click on
+        any playlist is already instant — no waiting. Single-flight; a stale
+        result (generation moved on) is discarded and re-warmed."""
+        if self.lib is None or _running(self._warm_worker):
+            return
+        from .workers import OneShotTask
+        gen = self._cache_gen
+        lib, ov, ti, junk = self.lib, dict(self.overrides), dict(self.titles), self._title_junk()
+        reg = lib.artist_registry
+        tracks = list(lib.tracks_by_id.values())
+
+        def build():
+            return {t.track_id: engine.track_row(t, ov, ti, registry=reg, junk=junk)
+                    for t in tracks}
+
+        w = OneShotTask(build)
+        self._warm_worker = w
+        w.done.connect(lambda res, g=gen: self._on_rows_warmed(res, g))
+        w.finished.connect(lambda ww=w: self._finish_worker("_warm_worker", ww))
+        w.start()
+
+    def _on_rows_warmed(self, res, gen: int) -> None:
+        if isinstance(res, Exception):
+            LOG.warning("Row-cache warm failed: %s", res)
+            return
+        if gen != self._cache_gen:
+            self._warm_timer.start()  # inputs changed mid-warm — rebuild
+            return
+        self._row_cache = res
+        LOG.info("Row cache warmed: %d rows", len(res))
+
     def _reload_current_view(self):
         """Re-render whatever playlist is showing so a settings change takes
         effect immediately. Updates the table rows only — does NOT switch the
@@ -364,9 +442,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         cur = self.tree.currentItem()
         if cur is not None and cur.data(0, PATH_ROLE):
-            rows = engine.playlist_rows(self.lib, cur.data(0, PATH_ROLE),
-                                        self.overrides, self.titles)
-            self.model.set_rows(self._annotate_art(rows))
+            self.model.set_rows(self._annotate_art(
+                self._playlist_rows(cur.data(0, PATH_ROLE))))
             return
         cur = self.sb_tree.currentItem()
         if cur is not None and cur.data(0, COLLECTION_ROLE):
@@ -376,15 +453,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._show_artists()
             return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
-            rows = []
-            for i in self.custom.get(cur.data(0, CUSTOM_ROLE), []):
-                t = self.lib.tracks_by_id.get(i)
-                if t and i not in self.hidden:
-                    rows.append(engine.track_row(
-                        t, self.overrides, self.titles,
-                        registry=self.lib.artist_registry,
-                        junk=self._title_junk()))
-            self.model.set_rows(self._annotate_art(rows))
+            tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
+                      if i not in self.hidden
+                      and (t := self.lib.tracks_by_id.get(i))]
+            self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
 
     # ---------- player ----------
     def eventFilter(self, obj, ev):
@@ -563,6 +635,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._save_state()
         if field == "artist" and self.lib is not None:
             self._build_artist_registry()  # new override immediately feeds trust/canon
+        else:
+            self._invalidate_rows()  # title override changed this row's computed title
         # Fixing the name should re-hunt for art unless a REAL cover is already
         # confirmed — a miss OR an avatar both deserve a retry with the fix.
         if self.lib and track_id in self.lib.tracks_by_id \
@@ -1205,8 +1279,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not path:
             return
         self._stash_view()
-        rows = engine.playlist_rows(self.lib, path, self.overrides, self.titles)
-        self.model.set_rows(self._annotate_art(rows))
+        self.model.set_rows(self._annotate_art(self._playlist_rows(path)))
         self.stack.setCurrentIndex(0)
         self._restore_view(f"rb:{path}")
 
@@ -1535,9 +1608,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _artist_rows(self, tracks) -> list:
         """Track rows grouped A→Z by effective artist (titles A→Z within each);
         Unknown Artist sinks to the bottom."""
-        reg = self.lib.artist_registry if self.lib else None
-        rows = [engine.track_row(t, self.overrides, self.titles, registry=reg,
-                                 junk=self._title_junk()) for t in tracks]
+        rows = self._rows_for(tracks)
         rows.sort(key=lambda r: (r["artist"] == "Unknown Artist",
                                  r["artist"].casefold(), r["title"].casefold()))
         return rows
@@ -1630,23 +1701,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._play_track(t)
 
     def _show_collection(self):
-        reg = self.lib.artist_registry if self.lib else None
-        rows = [engine.track_row(t, self.overrides, self.titles, registry=reg,
-                                 junk=self._title_junk())
-                for t in self._collection_tracks()]
-        self.model.set_rows(self._annotate_art(rows))
+        self.model.set_rows(self._annotate_art(
+            self._rows_for(self._collection_tracks())))
         self.stack.setCurrentIndex(0)
 
     def _show_custom(self, name: str):
-        rows = []
-        for i in self.custom.get(name, []):
-            t = self.lib.tracks_by_id.get(i) if self.lib else None
-            if t and i not in self.hidden:
-                rows.append(engine.track_row(
-                    t, self.overrides, self.titles,
-                    registry=self.lib.artist_registry,
-                    junk=self._title_junk()))
-        self.model.set_rows(self._annotate_art(rows))
+        tracks = [t for i in self.custom.get(name, [])
+                  if i not in self.hidden
+                  and (t := self.lib.tracks_by_id.get(i) if self.lib else None)]
+        self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
         self.stack.setCurrentIndex(0)
 
     # ---------- devices ----------
@@ -2398,7 +2461,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def shutdown(self):
         """Stop background work BEFORE Qt tears down — prevents the crash where
         the app quits while a worker thread is still running."""
-        for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None)):
+        for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
+                  getattr(self, "_warm_timer", None)):
             if t is not None:
                 t.stop()
         try:
@@ -2426,6 +2490,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._wf_fill_worker.requestInterruption(); self._wf_fill_worker.wait(8000)
         if _running(getattr(self, "_scan_worker", None)):
             self._scan_worker.wait(15000)  # pure CPU scan; let it finish
+        if _running(getattr(self, "_warm_worker", None)):
+            self._warm_worker.wait(8000)  # row-cache warm; pure CPU, let it finish
         if _running(getattr(self, "_backup_worker", None)):
             self._backup_worker.wait(30000)  # finish the zip/restore, don't corrupt it
         for w in list(getattr(self, "_oneshots", [])):
@@ -2434,9 +2500,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         pb = getattr(self, "player_bar", None)
         if pb is not None:
             pb.stop()
-            if _running(getattr(pb, "_wf", None)):
-                pb._wf.requestInterruption()  # breaks a mid-flight qt_peaks decode
-                pb._wf.wait(5000)
+            pb.shutdown_waveforms()  # interrupt + wait ALL in-flight decodes
         p = getattr(self, "_eject_proc", None)
         if p is not None and p.state() != QProcess.NotRunning:
             p.waitForFinished(3000)

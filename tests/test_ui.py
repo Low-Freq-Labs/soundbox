@@ -1520,3 +1520,116 @@ class LibraryInstantPaint(unittest.TestCase):
                 self.assertEqual(set(got.tracks_by_id), set(_win.lib.tracks_by_id))
             finally:
                 _win._libcache_path = saved
+
+
+class WaveformRapidLoad(unittest.TestCase):
+    """Rapid track changes must NOT pile up decode threads or GC a running one.
+    Cache hits paint on the UI thread with zero workers."""
+
+    @classmethod
+    def setUpClass(cls):
+        import math, struct, tempfile, wave
+        from pathlib import Path
+        cls.dir = tempfile.mkdtemp(prefix="sb-wfrapid-")
+        cls.paths = []
+        sr = 8000
+        for i in range(6):
+            p = Path(cls.dir) / f"t{i}.wav"
+            with wave.open(str(p), "wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+                w.writeframes(b"".join(
+                    struct.pack("<h", int(0.5 * 32767 * math.sin(2*math.pi*200*t/sr)))
+                    for t in range(sr)))
+            cls.paths.append(str(p))
+        cls.cache = tempfile.mkdtemp(prefix="sb-wfrapid-cache-")
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.dir, ignore_errors=True)
+        shutil.rmtree(cls.cache, ignore_errors=True)
+
+    def setUp(self):
+        from desktop.player import PlayerBar
+        self.pb = PlayerBar()
+        self.pb.wave_cache_dir = self.cache
+
+    def tearDown(self):
+        self.pb.shutdown_waveforms()
+
+    def test_cache_hit_paints_without_a_worker(self):
+        from soundbox.waveform import cache_store
+        cache_store(self.cache, self.paths[0], [0.2, 0.9, 1.0])
+        self.pb._src_path = self.paths[0]
+        self.pb._start_waveform(self.paths[0])
+        self.assertIsNone(self.pb._wf)              # no thread spun
+        self.assertEqual(self.pb.wave._peaks, [0.2, 0.9, 1.0])
+
+    def test_rapid_switch_interrupts_previous(self):
+        # Fire uncached decodes back to back; each new start interrupts the last.
+        prev = None
+        for p in self.paths:
+            self.pb._src_path = p
+            self.pb._start_waveform(p)
+            if prev is not None and prev is not self.pb._wf:
+                self.assertTrue(prev.isInterruptionRequested() or not _thread_alive(prev))
+            prev = self.pb._wf
+        self.pb.shutdown_waveforms()
+        # every worker ref is cleaned up (no leaks, no running threads)
+        _app.processEvents()
+        self.assertTrue(all(not _thread_alive(w) for w in self.pb._wf_pending))
+
+
+def _thread_alive(w):
+    try:
+        return w is not None and w.isRunning()
+    except RuntimeError:
+        return False
+
+
+class RowCache(unittest.TestCase):
+    """Computed rows are cached (instant playlist clicks), warmed off-thread,
+    and invalidated when overrides/registry/junk change."""
+
+    def setUp(self):
+        _win._warm_timer.stop()
+        _win._invalidate_rows()
+        _win._warm_timer.stop()  # don't let the debounce fire during the test
+
+    def test_row_for_populates_and_reuses_cache(self):
+        _win._row_cache.clear()
+        t = _win.lib.tracks_by_id["1"]
+        r1 = _win._row_for(t)
+        self.assertIn("1", _win._row_cache)          # cached after first compute
+        self.assertIsNot(r1, _win._row_cache["1"])   # returns a COPY (safe to mutate)
+        r1["title"] = "MUT"
+        self.assertNotEqual(_win._row_cache["1"]["title"], "MUT")  # cache untouched
+
+    def test_invalidate_clears_and_bumps_generation(self):
+        _win._row_for(_win.lib.tracks_by_id["1"])
+        g = _win._cache_gen
+        _win._invalidate_rows()
+        self.assertEqual(_win._row_cache, {})
+        self.assertEqual(_win._cache_gen, g + 1)
+        _win._warm_timer.stop()
+
+    def test_warm_fills_every_track(self):
+        _win._row_cache.clear()
+        built = {tid: {"id": tid, "title": "x"} for tid in _win.lib.tracks_by_id}
+        _win._on_rows_warmed(built, _win._cache_gen)   # gen matches → applied
+        self.assertEqual(set(_win._row_cache), set(_win.lib.tracks_by_id))
+
+    def test_stale_warm_is_discarded(self):
+        _win._row_cache.clear()
+        stale_gen = _win._cache_gen - 1
+        _win._on_rows_warmed({"1": {"id": "1"}}, stale_gen)
+        self.assertEqual(_win._row_cache, {})          # discarded, not applied
+        _win._warm_timer.stop()
+
+    def test_title_edit_invalidates(self):
+        _win._row_for(_win.lib.tracks_by_id["1"])
+        _win._on_cell_edited("title", "1", "New Title")
+        self.assertEqual(_win._row_cache, {})          # cache dropped on edit
+        _win.titles.pop("1", None)
+        _win._save_state()
+        _win._warm_timer.stop()
