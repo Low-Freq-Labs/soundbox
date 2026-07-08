@@ -1263,3 +1263,34 @@ class SidebarSplit(unittest.TestCase):
     def test_devices_no_longer_fixed_height(self):
         self.assertGreater(_win.device_tree.maximumHeight(), 96)
         self.assertGreaterEqual(_win.device_tree.minimumHeight(), 48)
+
+
+class ArtFetchHonesty(unittest.TestCase):
+    """A broken fetch must say 'failed', never masquerade as 'no art found'."""
+
+    def test_oneshot_passes_exception_through(self):
+        from desktop.workers import _OneShotArt
+        got = []
+        def boom():
+            raise RuntimeError("net down")
+        w = _OneShotArt("1", boom)
+        w.done.connect(lambda tid, res: got.append((tid, res)))
+        w.run()  # call synchronously — we're testing the logic, not the thread
+        self.assertEqual(got[0][0], "1")
+        self.assertIsInstance(got[0][1], RuntimeError)
+
+    def test_on_oneshot_distinguishes_failure_from_no_art(self):
+        stored = []
+        real = _win.art_cache
+        class Cache(_FakeArt):
+            def store_ok(self, tid, res):
+                stored.append(tid)
+        _win.art_cache = Cache({})
+        try:
+            _win._on_oneshot("1", RuntimeError("boom"))  # failure → no store, honest flash
+            self.assertEqual(stored, [])
+            self.assertIn("failed", _win.status_label.text().lower())
+            _win._on_oneshot("1", None)                  # genuine miss keeps old message
+            self.assertIn("No art found", _win.status_label.text())
+        finally:
+            _win.art_cache = real

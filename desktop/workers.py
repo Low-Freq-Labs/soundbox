@@ -297,7 +297,7 @@ class OneShotTask(QThread):
 
 class _OneShotArt(QThread):
     """A single art fetch (manual 'fetch now' / paste-URL), off the UI thread."""
-    done = Signal(str, object)  # track_id, ArtResult|None
+    done = Signal(str, object)  # track_id, ArtResult | None | Exception
 
     def __init__(self, tid, fn):
         super().__init__()
@@ -307,8 +307,11 @@ class _OneShotArt(QThread):
     def run(self):
         try:
             res = self.fn()
-        except Exception:  # noqa: BLE001
-            res = None
+        except Exception as exc:  # noqa: BLE001 — surfaced to the UI + log
+            # NEVER collapse a failure into "no art found": a network error and
+            # a genuinely artless page are different answers (a swallowed
+            # exception here once made a working URL look art-less).
+            res = exc
         self.done.emit(self.tid, res)
 
 

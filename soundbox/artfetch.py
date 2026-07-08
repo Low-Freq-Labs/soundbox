@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import difflib
 import json
+import logging
 import os
 import re
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+LOG = logging.getLogger("soundbox.artfetch")
 
 MIN_CONFIDENCE = 0.60      # title-match floor
 _UPLOADER_MATCH = 0.7      # uploader name ~ artist => it really is them (avatar path)
@@ -183,9 +186,12 @@ def _page_og_image(url: str) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             html = r.read(400_000).decode("utf-8", "replace")
-    except OSError:
+    except OSError as exc:
+        LOG.warning("art: page fetch failed (%s): %s", exc, url)
         return None
     m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+    if not m:
+        LOG.warning("art: page has no og:image (blocked/challenge or not public?): %s", url)
     return m.group(1) if m else None
 
 
@@ -396,6 +402,8 @@ def fetch_by_url(url: str) -> ArtResult | None:
         if got:
             return ArtResult(data=got[0], mime=got[1], confidence=1.0,
                              source_url=url, matched_title="")
+        LOG.warning("art: og:image found but image download failed: %s", img)
+    LOG.info("art: falling back to full extract for %s", url)
     return _fetch_from_entry(url, 1.0)
 
 

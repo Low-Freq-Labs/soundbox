@@ -2089,7 +2089,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         w.deleteLater()
 
     def _on_oneshot(self, tid, res):
-        if res:
+        if isinstance(res, Exception):
+            # Honest failure: the fetch BROKE (network, block, bug) — that is
+            # not "no art found". Log the whole story; keep the flash short
+            # (the status label is narrow).
+            LOG.warning("Art fetch failed for %s: %s", tid, res, exc_info=res)
+            self._flash_status("Fetch failed ✕", 8)
+        elif res:
             self.art_cache.store_ok(tid, res)
             self._flash_status("Art set ✓", 5)
         else:
