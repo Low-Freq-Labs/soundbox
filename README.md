@@ -5,6 +5,14 @@ iPods / USB players** — browse the live rekordbox library, curate it without
 ever touching it, and drag playlists onto a device: exact order, per-track
 cover art, honest sync semantics.
 
+## Docs & roadmap
+
+- **[`CLAUDE.md`](CLAUDE.md)** — orientation + the sacred safety contract (start here).
+- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — status, scorecard, phases, product decisions.
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — engine/desktop layout, data model, build.
+- **[`docs/GOTCHAS.md`](docs/GOTCHAS.md)** — Qt/rekordbox/Rockbox traps (read before touching workers/sync).
+- **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ USB export R&D (prototype in `research/cdj_export/`).
+
 ## What it does
 
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
