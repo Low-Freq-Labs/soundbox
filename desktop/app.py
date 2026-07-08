@@ -81,7 +81,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit,
     QFileDialog, QFileSystemModel, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QSizePolicy, QStackedWidget,
+    QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget,
     QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -620,24 +620,32 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         panel.setAttribute(Qt.WA_StyledBackground, True)  # paint the right divider
         v = QVBoxLayout(panel); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
 
+        # The SOUNDBOX and DEVICES header bars ARE the resize grips: each one is
+        # mounted inside a vertical-splitter handle, so grabbing the bar and
+        # dragging it up/down trades space with the section above. The REKORDBOX
+        # header stays fixed at the top. Sizes persist via settings
+        # ("sidebar_split", saved with the column layout at quit).
+        rb_pane = QWidget()
+        pv = QVBoxLayout(rb_pane); pv.setContentsMargins(0, 0, 0, 0); pv.setSpacing(0)
         rb_header = self._section_header("REKORDBOX PLAYLISTS", "↻", self._refresh_rekordbox)
         rb_header.setContextMenuPolicy(Qt.CustomContextMenu)
         rb_header.customContextMenuRequested.connect(
             lambda pos, w=rb_header: self._rb_header_menu(w, pos))
-        v.addWidget(rb_header)
+        pv.addWidget(rb_header)
         self.tree = PlaylistTree()
         self.tree.setHeaderHidden(True)
         self.tree.setDragEnabled(True)
         self.tree.setDragDropMode(QAbstractItemView.DragOnly)
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
+        self.tree.setMinimumHeight(72)
         self.tree.currentItemChanged.connect(self._on_rb_select)
         self.tree.itemExpanded.connect(self._collapse_siblings)
-        v.addWidget(self.tree, 3)
+        pv.addWidget(self.tree)
 
-        v.addWidget(self._section_header("SOUNDBOX PLAYLISTS", "+", self._new_custom, top=True))
         self.sb_tree = SoundBoxTree()
         self.sb_tree.setHeaderHidden(True)
+        self.sb_tree.setMinimumHeight(48)
         self.sb_tree.currentItemChanged.connect(self._on_custom_select)
         self.sb_tree.tracks_dropped.connect(self._on_tracks_dropped)
         self.sb_tree.playlist_moved.connect(self._move_custom)
@@ -645,17 +653,33 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             lambda name, paths: self._import_files(paths, name or None))
         self.sb_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sb_tree.customContextMenuRequested.connect(self._sb_menu)
-        v.addWidget(self.sb_tree, 2)
 
-        v.addWidget(self._section_header("DEVICES", top=True))
         self.device_tree = DeviceTree()
         self.device_tree.setHeaderHidden(True)
-        self.device_tree.setFixedHeight(96)
+        self.device_tree.setMinimumHeight(48)  # was fixed 96 — now user-sized
         self.device_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.device_tree.customContextMenuRequested.connect(self._device_menu)
         self.device_tree.itemClicked.connect(self._on_device_click)
         self.device_tree.dropped.connect(self._on_device_drop)
-        v.addWidget(self.device_tree)
+
+        split = QSplitter(Qt.Vertical)
+        split.setObjectName("SidebarSplit")
+        split.setChildrenCollapsible(False)
+        split.addWidget(rb_pane)
+        split.addWidget(self.sb_tree)
+        split.addWidget(self.device_tree)
+        split.setHandleWidth(26)  # exactly one section-header bar tall
+        for i, header in ((1, self._section_header("SOUNDBOX PLAYLISTS", "+",
+                                                   self._new_custom, top=True)),
+                          (2, self._section_header("DEVICES", top=True))):
+            h = split.handle(i)
+            hl = QVBoxLayout(h); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(0)
+            hl.addWidget(header)  # the bar fills (and paints over) the handle
+        split.setStretchFactor(0, 3)  # window resizes go mostly to rekordbox…
+        split.setStretchFactor(1, 2)  # …then SoundBox; devices keep their size
+        split.setStretchFactor(2, 0)
+        self._sidebar_split = split
+        v.addWidget(split)
         return panel
 
     def _main_stack(self) -> QWidget:
@@ -2157,15 +2181,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._save_columns()  # visibility toggles persist immediately
 
     def _save_columns(self):
-        """Persist the table layout (column widths + hidden columns)."""
+        """Persist the table layout (column widths + hidden columns) and the
+        sidebar section heights (the draggable SOUNDBOX/DEVICES bars)."""
         hh = self.table.horizontalHeader()
         self.settings["columns_state"] = bytes(hh.saveState().toBase64()).decode("ascii")
+        self.settings["sidebar_split"] = list(self._sidebar_split.sizes())
         self._save_state()
 
     def _restore_columns(self):
-        """Bring back the user's saved column layout (after settings load).
-        Sort is deliberately NOT restored — a playlist opening pre-sorted would
-        read as the wrong (non-rekordbox) order."""
+        """Bring back the user's saved column layout + sidebar section heights
+        (after settings load). Sort is deliberately NOT restored — a playlist
+        opening pre-sorted would read as the wrong (non-rekordbox) order."""
+        sizes = self.settings.get("sidebar_split")
+        if (isinstance(sizes, list) and len(sizes) == 3
+                and all(isinstance(x, int) and x >= 0 for x in sizes) and sum(sizes)):
+            self._sidebar_split.setSizes(sizes)
+        else:
+            self._sidebar_split.setSizes([600, 400, 96])  # classic proportions
         state = self.settings.get("columns_state")
         if not state:
             return

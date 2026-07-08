@@ -1228,3 +1228,38 @@ class ExportableViews(unittest.TestCase):
         self.assertTrue(_win._custom_name_taken("Collection"))
         self.assertTrue(_win._custom_name_taken("artists"))
         self.assertFalse(_win._custom_name_taken("LIVESETS"))
+
+
+class SidebarSplit(unittest.TestCase):
+    """SOUNDBOX/DEVICES header bars are splitter handles: drag to resize, sizes
+    persist with the column layout."""
+
+    def test_three_panes_and_header_bars_in_handles(self):
+        from PySide6.QtWidgets import QLabel
+        s = _win._sidebar_split
+        self.assertEqual(s.count(), 3)
+        h1 = " ".join(x.text() for x in s.handle(1).findChildren(QLabel))
+        h2 = " ".join(x.text() for x in s.handle(2).findChildren(QLabel))
+        self.assertIn("SOUNDBOX PLAYLISTS", h1)
+        self.assertIn("DEVICES", h2)
+
+    def test_sizes_persist_roundtrip(self):
+        _win.resize(1100, 800)
+        _app.processEvents()
+        s = _win._sidebar_split
+        s.setSizes([300, 200, 120])
+        _win._save_columns()
+        saved = list(_win.settings["sidebar_split"])
+        self.assertEqual(len(saved), 3)
+        s.setSizes([saved[0] + 80, max(48, saved[1] - 80), saved[2]])
+        _win._restore_columns()
+        self.assertEqual(s.sizes(), saved)
+
+    def test_bad_saved_value_falls_back(self):
+        _win.settings["sidebar_split"] = "garbage"
+        _win._restore_columns()  # must not raise; classic proportions apply
+        _win.settings.pop("sidebar_split", None)
+
+    def test_devices_no_longer_fixed_height(self):
+        self.assertGreater(_win.device_tree.maximumHeight(), 96)
+        self.assertGreaterEqual(_win.device_tree.minimumHeight(), 48)
