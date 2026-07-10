@@ -12,9 +12,9 @@ def _lib() -> Library:
     tracks = {
         "1": Track("1", "Bravo", "Zed", "file://localhost/tmp/b.wav",
                    bpm="140.00", key="10A", total_time=185, date_added="2026-01-02",
-                   genre="Riddim", size=123, bitrate="1411"),
+                   added_ts=1_767_000_000.0, genre="Riddim", size=123, bitrate="1411"),
         "sb-x": Track("sb-x", "Liveset", "", "file://localhost/tmp/set.m4a",
-                      total_time=5400, imported=True),
+                      total_time=5400, added_ts=1_768_000_000.5, imported=True),
     }
     pls = [Playlist("SET ONE", ["CRATES"], keys=["1", "sb-x"], pid="99")]
     return Library(tracks_by_id=tracks, playlists=pls, source_xml="/x/lib.xml")
@@ -31,6 +31,10 @@ class RoundTrip(unittest.TestCase):
             t = got.tracks_by_id["1"]
             self.assertEqual((t.name, t.artist, t.bpm, t.genre), ("Bravo", "Zed", "140.00", "Riddim"))
             self.assertTrue(got.tracks_by_id["sb-x"].imported)  # imported flag survives
+            # added_ts MUST survive — the Collection newest-added sort depends on
+            # it; when it was dropped here, instant-paint fell back to birthtime.
+            self.assertEqual(got.tracks_by_id["1"].added_ts, 1_767_000_000.0)
+            self.assertEqual(got.tracks_by_id["sb-x"].added_ts, 1_768_000_000.5)
             self.assertEqual(got.playlists[0].keys, ["1", "sb-x"])
             self.assertEqual(got.playlists[0].pid, "99")
 

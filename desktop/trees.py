@@ -402,7 +402,19 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
 
 class TrackTable(NoTypeAhead, QTableView):
     """Track table — drag source (trk). Uses the chip drag ghost (the track title on
-    a bordered box) instead of Qt's default transparent floating text."""
+    a bordered box) instead of Qt's default transparent floating text.
+
+    Also a drop target when a WRITABLE SoundBox view is on screen, mirroring the
+    sidebar: existing tracks (trk) add to the current custom playlist, Finder
+    audio files import (+add). The app decides the target via `resolve_drop`,
+    which returns ("playlist", name) | ("collection", "") | None — Artists and
+    read-only rekordbox views resolve to None so nothing writes to them."""
+    tracks_dropped = Signal(str, list)  # custom playlist name, [track_ids]
+    files_dropped = Signal(str, list)   # name ("" = Collection, import only), [paths]
+
+    #: set by the app to () -> ("playlist", name) | ("collection", "") | None
+    resolve_drop = None
+
     def startDrag(self, actions):  # type: ignore[override]
         m = self.model()
         sm = self.selectionModel()
@@ -413,4 +425,52 @@ class TrackTable(NoTypeAhead, QTableView):
         if len(sel) > 1:
             label += f"   +{len(sel) - 1}"
         _start_chip_drag(self, m.mimeData(sel), label, actions)
+
+    def _drop_target(self):
+        fn = self.resolve_drop
+        return fn() if callable(fn) else None
+
+    def dragEnterEvent(self, e):
+        md = e.mimeData()
+        if self._drop_target() is not None and (_audio_paths(md) or "trk\t" in md.text()):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        tgt = self._drop_target()
+        if tgt is None:
+            e.ignore()
+            return
+        kind, _name = tgt
+        md = e.mimeData()
+        if _audio_paths(md):
+            e.acceptProposedAction()  # Finder files import into any writable view
+        elif "trk\t" in md.text() and kind == "playlist" and e.source() is not self:
+            e.acceptProposedAction()  # existing tracks add only to a real playlist
+        else:
+            e.ignore()               # (never re-drop the table's own rows onto itself)
+
+    def dropEvent(self, e):
+        tgt = self._drop_target()
+        if tgt is None:
+            e.ignore()
+            return
+        kind, name = tgt
+        files = _audio_paths(e.mimeData())
+        if files:
+            self.files_dropped.emit(name if kind == "playlist" else "", files)
+            e.acceptProposedAction()
+            return
+        if kind == "playlist" and e.source() is not self:
+            ids: list[str] = []
+            for line in e.mimeData().text().split("\n"):
+                k, _, val = line.partition("\t")
+                if k == "trk":
+                    ids += [i for i in val.split(",") if i]
+            if ids:
+                self.tracks_dropped.emit(name, ids)
+                e.acceptProposedAction()
+                return
+        e.ignore()
 

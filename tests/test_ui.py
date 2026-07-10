@@ -112,6 +112,38 @@ class PlaylistSelection(unittest.TestCase):
         self.assertIsNone(_win.sb_tree.currentItem())
 
 
+class BrowserDropTarget(unittest.TestCase):
+    """Dropping onto the main browser adds to the playlist it shows — but only
+    for writable SoundBox views. Artists (tag-derived) and rekordbox (rb:, the
+    sacred read-only source) must reject every drop."""
+
+    def _resolve(self, view_key):
+        _win._view_key = view_key
+        return _win._resolve_table_drop()
+
+    def test_custom_playlist_takes_tracks_and_files(self):
+        _win.custom["DROP TEST"] = ["1"]
+        try:
+            self.assertEqual(self._resolve("sb:DROP TEST"), ("playlist", "DROP TEST"))
+        finally:
+            _win.custom.pop("DROP TEST", None)
+
+    def test_collection_is_file_import_only(self):
+        self.assertEqual(self._resolve("sb:Collection"), ("collection", ""))
+
+    def test_artists_view_rejects(self):
+        self.assertIsNone(self._resolve("sb:Artists"))
+
+    def test_rekordbox_view_never_written(self):
+        self.assertIsNone(self._resolve("rb:CRATES / SET ONE"))
+
+    def test_unknown_custom_name_rejects(self):
+        self.assertIsNone(self._resolve("sb:No Such Playlist"))
+
+    def test_no_view_rejects(self):
+        self.assertIsNone(self._resolve(None))
+
+
 class ArtColumn(unittest.TestCase):
     def test_rows_annotated_from_cache(self):
         real = _win.art_cache
@@ -1421,6 +1453,36 @@ class CollectionLandedOrder(unittest.TestCase):
     def test_landed_time_is_cached(self):
         _win._collection_tracks()
         self.assertIn(str(self.paths[0]), _win._landed_cache)
+
+    def test_sorts_by_add_time_not_birthtime(self):
+        # Sonny's case + the unified timeline: add-time (added_ts) drives the
+        # order across BOTH sources, with time-of-day precision. An import with an
+        # OLD file but a later add-time must sort above a rekordbox track with a
+        # NEWER file but an earlier add-time.
+        from soundbox.rekordbox_xml import Track
+        _win._landed_cache = {}
+        _win.lib.tracks_by_id = {
+            # oldest file (paths[0]) but newest add-time -> FIRST (a set imported now)
+            "late_set": Track("late_set", "Set Imported Now", "Sonny",
+                              self.paths[0].as_uri(),
+                              added_ts=2_000.0, imported=True),
+            # newest file (paths[2]) but earlier add-time -> LAST (a rekordbox track)
+            "early_rb": Track("early_rb", "Rekordbox Track Earlier", "Sonny",
+                             self.paths[2].as_uri(), added_ts=1_000.0),
+        }
+        order = [t.track_id for t in _win._collection_tracks()]
+        self.assertEqual(order, ["late_set", "early_rb"])  # by add-time, not file age
+
+    def test_missing_add_time_falls_back_to_birthtime(self):
+        # No added_ts (e.g. an XML-loaded library) -> file birthtime still orders.
+        from soundbox.rekordbox_xml import Track
+        _win._landed_cache = {}
+        _win.lib.tracks_by_id = {
+            "1": Track("1", "Zzz Old", "A", self.paths[0].as_uri()),
+            "3": Track("3", "Mmm New", "A", self.paths[2].as_uri()),
+        }
+        order = [t.track_id for t in _win._collection_tracks()]
+        self.assertEqual(order, ["3", "1"])  # newer file first
 
 
 class ArtistsDrag(unittest.TestCase):

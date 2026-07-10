@@ -57,7 +57,12 @@ class Track:
     bpm: str = ""           # AverageBpm, e.g. "145.00"
     key: str = ""           # Tonality, e.g. "2A" (Camelot)
     total_time: int = 0     # seconds
-    date_added: str = ""    # "YYYY-MM-DD"
+    date_added: str = ""    # "YYYY-MM-DD" (display); when the track was catalogued
+    # When the track was ADDED to the collection, as a POSIX timestamp, for the
+    # Collection newest-first sort: rekordbox tracks use the DB row's real
+    # created_at (has time-of-day precision), imported tracks their SoundBox
+    # import time. 0.0 = unknown → the sort falls back to file birthtime.
+    added_ts: float = 0.0
     genre: str = ""
     kind: str = ""          # e.g. "MP3 File"
     size: int = 0           # bytes

@@ -830,6 +830,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setDragEnabled(True)
         self.table.setDragDropMode(QAbstractItemView.DragOnly)
+        # Drop onto the browser adds to the playlist it's showing — same as the
+        # sidebar. resolve_drop tells the table whether the current view is
+        # writable (custom playlist / Collection) or off-limits (Artists, rb:).
+        self.table.setAcceptDrops(True)
+        self.table.resolve_drop = self._resolve_table_drop
+        self.table.tracks_dropped.connect(self._on_tracks_dropped)
+        self.table.files_dropped.connect(
+            lambda name, paths: self._import_files(paths, name or None))
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.Interactive)  # all columns drag-resizable
         hh.setStretchLastSection(False)
@@ -984,6 +992,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         registry, apply hide settings, repopulate the sidebar + land on
         Collection. Used by open_library, the live-refresh completion, AND the
         instant paint from the on-disk snapshot."""
+        # A fresh library can have different add-times than the one it replaces
+        # (the instant-paint snapshot vs the live rekordbox read), so the per-path
+        # landed-time cache MUST be dropped — otherwise a birthtime computed off
+        # the snapshot sticks and defeats the newest-added sort.
+        self._landed_cache.clear()
         imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         self._build_artist_registry()
         self._apply_settings_to_lib()
@@ -1308,23 +1321,28 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return name in self.custom or name.casefold() in ("collection", "artists")
 
     def _landed_time(self, t) -> float:
-        """Cached file-landing time for a track (see paths.file_landed_time).
-        Cached per path for the session — birthtimes are immutable, and the pool
-        re-sorts on every Collection render, so we stat each file only once."""
+        """When a track "landed" in the collection, for the newest-first sort.
+
+        One unified timeline across both sources: the track's add-time — rekordbox
+        tracks by their DB created_at, imports by their SoundBox import time (both
+        carried in Track.added_ts, with time-of-day precision so a set added right
+        after a track sorts above it). Falls back to the file's birthtime only
+        when the add-time is unknown (e.g. XML-loaded libraries). Cached per path
+        for the session — the pool re-sorts on every Collection render."""
         cache = self._landed_cache
         key = str(t.path)
         v = cache.get(key)
         if v is None:
-            v = paths.file_landed_time(key)
+            v = getattr(t, "added_ts", 0.0) or paths.file_landed_time(key)
             cache[key] = v
         return v
 
     def _collection_tracks(self) -> list:
         """Every loaded track (all playlists pooled), honoring the hide-untracked
-        settings. Default order = when the FILE landed on this computer (newest
-        first) — the one date that means the same thing for rekordbox and
-        imported tracks alike (filesystem birth time, not rekordbox's catalog
-        date or an import stamp). Missing files sort last."""
+        settings. Default order = newest-first by when the track was ADDED to the
+        collection (see _landed_time) — one timeline across rekordbox adds and
+        SoundBox imports alike. Ties break by title A→Z; tracks with no known
+        add-time and a missing file (0) sort last."""
         if self.lib is None:
             return []
         lib = self.lib
@@ -1373,6 +1391,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     self.sb_tree.setCurrentItem(it)
         finally:
             self.sb_tree.blockSignals(False)
+
+    def _resolve_table_drop(self):
+        """What a drop on the main browser targets, or None to reject it.
+        Mirrors the sidebar: a custom SoundBox playlist takes tracks + files;
+        Collection imports files only (no "add", it's every track already);
+        Artists (derived from tags) and read-only rekordbox (rb:) views reject —
+        the sacred rule means rekordbox is never written to."""
+        key = getattr(self, "_view_key", None)
+        if not key:
+            return None
+        if key == "sb:Collection":
+            return ("collection", "")
+        if key.startswith("sb:"):
+            name = key[3:]
+            if name in getattr(self, "custom", {}):
+                return ("playlist", name)
+        return None  # sb:Artists, rb:<path>, or anything unrecognized
 
     def _on_tracks_dropped(self, name: str, ids: list[str]):
         bag = self.custom.setdefault(name, [])

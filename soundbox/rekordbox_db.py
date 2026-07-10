@@ -93,6 +93,14 @@ def _read_tracks(db) -> dict[str, Track]:
             bpm = f"{(c.BPM or 0) / 100:.2f}" if c.BPM else ""
         except (TypeError, ValueError):
             bpm = ""
+        # created_at = when this row was written = when the track was added to
+        # rekordbox (real time-of-day precision). DateCreated is a stale tag date
+        # that can predate the add by weeks, so it's display-only; created_at
+        # drives the "recently added" sort.
+        try:
+            added_ts = c.created_at.timestamp() if c.created_at else 0.0
+        except (AttributeError, ValueError, OSError):
+            added_ts = 0.0
         out[str(c.ID)] = Track(
             track_id=str(c.ID),
             name=c.Title or "",
@@ -102,6 +110,7 @@ def _read_tracks(db) -> dict[str, Track]:
             key=_camelot(c.Key.ScaleName if c.Key else ""),
             total_time=int(c.Length or 0),
             date_added=str(c.DateCreated or "")[:10],
+            added_ts=added_ts,
             genre=(c.Genre.Name if c.Genre else ""),
             size=int(c.FileSize or 0),
             bitrate=str(c.BitRate or ""),

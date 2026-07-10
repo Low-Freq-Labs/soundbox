@@ -11,8 +11,9 @@ machinery (keyed by the stable id) takes it from there.
 
 from __future__ import annotations
 
+import time
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -49,6 +50,7 @@ def probe(path: Path) -> dict:
     except OSError:
         size = 0
     return {"path": str(path), "added": date.today().isoformat(),
+            "added_ts": time.time(),  # full timestamp: newest-added sorts to the top
             "time": secs, "size": size}
 
 
@@ -57,9 +59,19 @@ def make_track(tid: str, rec: dict) -> Track:
     analyzed it) — the `imported` flag exempts it from the hide-untracked
     sweep, which keys on exactly that absence."""
     p = Path(str(rec.get("path", "")))
+    added = str(rec.get("added", ""))
+    # Prefer the full import timestamp; older records (date only) fall back to
+    # that date at midnight so they still sort by day.
+    ts = float(rec.get("added_ts", 0) or 0)
+    if not ts and added:
+        try:
+            ts = datetime.strptime(added[:10], "%Y-%m-%d").timestamp()
+        except ValueError:
+            ts = 0.0
     return Track(tid, p.stem, "", "file://localhost" + quote(str(p)),
                  total_time=int(rec.get("time", 0) or 0),
-                 date_added=str(rec.get("added", "")),
+                 date_added=added,
+                 added_ts=ts,
                  size=int(rec.get("size", 0) or 0),
                  imported=True)
 

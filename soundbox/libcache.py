@@ -17,13 +17,16 @@ from pathlib import Path
 
 from .rekordbox_xml import Library, Playlist, Track
 
-SCHEMA = 1
+SCHEMA = 2  # bumped when _TRACK_FIELDS changes so a stale cache is rejected, not misread
 
 # The Track fields worth persisting (everything the browser/export needs).
 # `path`/`duration_str`/`file_type` are computed properties, not stored.
+# added_ts MUST be here — it drives the Collection newest-added sort; without it
+# the instant-paint snapshot loses it and every track falls back to birthtime.
 _TRACK_FIELDS = (
     "track_id", "name", "artist", "location_uri", "bpm", "key", "total_time",
-    "date_added", "genre", "kind", "size", "bitrate", "rating", "year", "imported",
+    "date_added", "added_ts", "genre", "kind", "size", "bitrate", "rating", "year",
+    "imported",
 )
 _PLAYLIST_FIELDS = ("name", "folder_path", "keys", "key_type", "pid")
 
