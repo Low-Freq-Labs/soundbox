@@ -50,6 +50,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   in background (debounced, generation-guarded), invalidated on
   override/alias/registry/title-junk change. `_row_for` returns a COPY. If you
   add anything that changes effective title/artist, call `_invalidate_rows()`.
+- **A new per-track `Track` field that affects a view MUST survive two caches or
+  it silently reverts on the instant paint.** (1) Add it to `libcache._TRACK_FIELDS`
+  and bump `SCHEMA` — else the on-disk snapshot drops it and every track loads with
+  the default. (2) `_landed_cache` (path → landed time) is cleared in
+  `_apply_loaded_library` — else a value computed off the instant-paint snapshot
+  sticks after the live rekordbox read replaces it. This is exactly how `added_ts`
+  (Collection newest-added sort) got defeated twice before it worked.
 - **Worker convention:** `OneShotTask` and `_OneShotArt` emit result-OR-Exception
   — done-handlers MUST isinstance-check. Never map an exception to a "nothing
   there" answer (a working art URL once flashed "No art found" with no log trace).
@@ -145,6 +152,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - Collection has ~5244 tracks but only ~2940 are in playlists; load only
   playlist-referenced tracks.
 - **`DjmdPlaylist.ID` is STABLE across rename + move** → the device-sync identity.
+- **"Date added" = `content.created_at` (the DB row's real timestamp, time-of-day
+  precision), NOT `DateCreated`.** `DateCreated` is a stale tag/metadata date that
+  can predate the actual add by weeks (e.g. a track bounced 6/29, added 7/10 reads
+  `DateCreated=6/29`, `created_at=7/10 16:43`). Collection's newest-added sort keys
+  on `created_at` → `Track.added_ts`. `DateCreated[:10]` stays as display `date_added`.
 - rekordbox reorders → manifest sig is order-sensitive → reorder = drift = resync.
 - rekordbox auto-writes a `PIONEER/` folder onto any USB it touches (not us —
   leave it alone).

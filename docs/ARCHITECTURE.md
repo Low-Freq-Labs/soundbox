@@ -48,6 +48,14 @@ snapshot).
   a genuinely new playlist = new pid = fresh export.
 - **Device filenames = SoundBox effective titles**, always (sanitized +
   length-budgeted; source files never renamed).
+- **Collection order = newest-ADDED first**, one timeline across both planes:
+  `Track.added_ts` = rekordbox `created_at` for mirror tracks, SoundBox import
+  time for imported audio (falls back to file birthtime when unknown). See the
+  GOTCHAS caching note — the field must ride through `libcache` + `_landed_cache`.
+- **Drag-to-add works on the sidebar AND the main browser.** Dropping tracks or
+  Finder audio onto the open view adds to the playlist it shows; Collection
+  imports files only; Artists (tag-derived) and read-only rekordbox views reject
+  every drop (`TrackTable.resolve_drop` gates it — rekordbox is never written).
 
 ## Persistence
 
