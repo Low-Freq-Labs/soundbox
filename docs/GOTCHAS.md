@@ -57,6 +57,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `_apply_loaded_library` — else a value computed off the instant-paint snapshot
   sticks after the live rekordbox read replaces it. This is exactly how `added_ts`
   (Collection newest-added sort) got defeated twice before it worked.
+- **Restoring a tree selection with signals BLOCKED re-renders NOTHING.** The
+  two sidebars are asymmetric: `_populate_tree` re-selects an rb playlist with
+  signals LIVE (fires `_on_rb_select` → fresh rows), but `_refresh_custom`
+  re-seats Collection/Artists/custom inside `blockSignals(True)` — the table
+  keeps its old rows. So any path that swaps `self.lib` under a live SoundBox
+  view (refresh-done, instant paint) must re-render by hand;
+  `_apply_loaded_library` does. (Real bug: new rekordbox adds stayed invisible
+  in Collection until you clicked away and back.)
+- **`_restore_view` re-seats ONLY on a view SWITCH** (same `_view_key` → early
+  return), and `model.set_rows` is a full model reset (selection + scroll
+  gone). In-place reload with fresh rows = `_stash_view()` → reload → null
+  `_view_key` → `_restore_view(key)`, or the user gets dumped at the top.
 - **Worker convention:** `OneShotTask` and `_OneShotArt` emit result-OR-Exception
   — done-handlers MUST isinstance-check. Never map an exception to a "nothing
   there" answer (a working art URL once flashed "No art found" with no log trace).
@@ -110,6 +122,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   test COUNT went up.
 - unittest runs classes alphabetically; UI tests that mutate lib/view state must
   fully restore (incl. `_reload_current_view()`) or later classes see stale rows.
+- **`setCurrentItem` on the ALREADY-current item fires NO signal** → the slot
+  never runs and the test silently operates on whatever rows an earlier class
+  left in the table. This masked RowCache's fake warm rows (`{"id","title":"x"}`
+  left in `_row_cache`) for the WHOLE suite — SearchSelection "selected" SET ONE
+  as a no-op and filtered old real rows — until a new class cleared the tree
+  selection, the re-select genuinely fired, and 'brav' matched nothing. Rules:
+  (1) fake `_row_cache` rows are view state — clear them in tearDown; (2) adding
+  a class that moves selection can change which later `setCurrentItem`s actually
+  fire, surfacing latent poison in classes you didn't touch — bisect predecessor
+  classes, not the failing test.
 
 ## Metadata / veto plumbing
 - Title pipeline order: effective ARTIST is computed from the RAW/overridden name

@@ -1658,6 +1658,14 @@ class RowCache(unittest.TestCase):
         _win._invalidate_rows()
         _win._warm_timer.stop()  # don't let the debounce fire during the test
 
+    def tearDown(self):
+        # test_warm_fills_every_track plants FAKE rows ({"id", "title": "x"}) in
+        # the cache — a later class that renders a view from the cache would show
+        # them (this latently broke SearchSelection once). Drop them.
+        _win._row_cache.clear()
+        _win._cache_gen += 1  # orphan any in-flight warm from this test
+        _win._warm_timer.stop()
+
     def test_row_for_populates_and_reuses_cache(self):
         _win._row_cache.clear()
         t = _win.lib.tracks_by_id["1"]
@@ -1695,3 +1703,54 @@ class RowCache(unittest.TestCase):
         _win.titles.pop("1", None)
         _win._save_state()
         _win._warm_timer.stop()
+
+
+class RefreshWhileViewingCollection(unittest.TestCase):
+    """A live rekordbox refresh landing while Collection is on screen must
+    re-render the visible rows in place — _refresh_custom restores the sidebar
+    selection with signals BLOCKED, so without the explicit re-render in
+    _apply_loaded_library a new rekordbox add stayed invisible until you
+    clicked away and back (the real-world 'new songs missing' bug)."""
+
+    def tearDown(self):
+        # Full restore for later classes: fresh 3-track lib, tree rebuilt,
+        # visible view re-rendered (see soundbox-gotchas on UI test hygiene).
+        _win.lib = _make_lib()
+        _win._build_artist_registry()
+        _win._apply_settings_to_lib()
+        _win._populate_tree(engine.summary(_win.lib))
+        _win._reload_current_view()
+
+    def _refresh_lands(self, fresh):
+        """What _on_refresh_done does with a freshly read library (direct call —
+        Qt slots swallow exceptions)."""
+        _win.lib = fresh
+        _win._apply_loaded_library()
+
+    def test_new_track_appears_without_switching_views(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        self.assertEqual(len(_win.model._rows), 3)  # showing Collection
+        fresh = _make_lib()
+        fresh.tracks_by_id["4"] = Track("4", "Delta", "New",
+                                        "file://localhost/tmp/d.wav",
+                                        bpm="150.00", key="4A", total_time=200,
+                                        date_added="2026-07-19")
+        self._refresh_lands(fresh)
+        _app.processEvents()
+        self.assertIn("Delta", [r["title"] for r in _win.model._rows])
+        self.assertIn("(4)", _win.sb_tree.topLevelItem(0).text(0))
+        # Still parked on Collection — the refresh must not steal the view.
+        from desktop.trees import COLLECTION_ROLE
+        self.assertTrue(_win.sb_tree.currentItem().data(0, COLLECTION_ROLE))
+
+    def test_selected_track_keeps_its_seat(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        row = next(i for i, r in enumerate(_win.model._rows) if r["id"] == "3")
+        _win.table.setCurrentIndex(_win.model.index(row, 0))
+        self._refresh_lands(_make_lib())
+        _app.processEvents()
+        idx = _win.table.currentIndex()
+        self.assertTrue(idx.isValid())
+        self.assertEqual(_win.model._rows[idx.row()]["id"], "3")

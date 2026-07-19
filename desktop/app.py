@@ -997,11 +997,30 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # landed-time cache MUST be dropped — otherwise a birthtime computed off
         # the snapshot sticks and defeats the newest-added sort.
         self._landed_cache.clear()
+        sb_cur = self.sb_tree.currentItem()  # selection BEFORE the rebuild
         imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
         self._default_to_collection()
+        # _refresh_custom restores the sidebar selection with signals BLOCKED
+        # (unlike the rekordbox tree, whose re-select fires _on_rb_select), so
+        # when a refresh lands while Collection / Artists / a custom playlist
+        # is showing, the visible rows must be re-rendered by hand — otherwise
+        # new rekordbox adds stay invisible until you click away and back.
+        # sb_cur guards the first load: _default_to_collection just selected
+        # Collection with signals live, so it already rendered.
+        cur = self.sb_tree.currentItem()
+        if sb_cur is not None and cur is not None:
+            if cur.data(0, ARTISTS_ROLE):
+                self._show_artists()
+            else:
+                self._stash_view()  # keep the seat across the fresh rows
+                key = getattr(self, "_view_key", None)
+                self._reload_current_view()
+                if key:
+                    self._view_key = None  # same view, new rows — force re-seat
+                    self._restore_view(key)
 
     def _cache_library(self):
         """Snapshot the current library to disk OFF the UI thread, so the next
