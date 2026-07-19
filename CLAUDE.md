@@ -24,6 +24,7 @@ art, honest sync semantics. Built by Sonny (Low Freq Labs) + Claude.
 | `docs/ARCHITECTURE.md` | Engine/desktop layout, key modules, data model, two-plane model, persistence, build/install |
 | `docs/GOTCHAS.md` | Hard-won Qt/QThread/rekordbox/Rockbox traps. **READ before touching workers, playlists, sync, or the iPod path** |
 | `docs/cdj-usb-export.md` | CDJ USB export R&D — reverse-engineering rekordbox's `export.pdb`; prototype in `research/cdj_export/` |
+| `docs/storage-audit-2026-07.md` | RESOLVED storage audit — full backups are a deliberate choice (don't "fix"); retention/build-prune done manually 2026-07-19 |
 | `README.md` | User/dev product tour |
 
 ## Dev
