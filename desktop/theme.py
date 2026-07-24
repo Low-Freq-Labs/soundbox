@@ -38,9 +38,35 @@ QLabel {{ background: transparent; }}
                font-family: Menlo, Monaco, monospace; font-size: 9px; }}
 #AsciiBox {{ color: {PURPLE_LIGHT}; background: transparent;
              font-family: Menlo, Monaco, monospace; font-size: 9px; }}
+#NowPlayingFrame {{
+    background: {BG}; border: 1px solid {BORDER}; border-radius: 5px;
+}}
 #NowPlaying {{
-    color: {TEXT_HI}; background: {BG}; border: 1px solid {BORDER};
-    border-radius: 5px; padding: 0 12px; font-size: 14px; font-weight: 600;
+    color: {TEXT_HI}; background: transparent; border: none;
+    padding: 0 12px; font-size: 14px; font-weight: 600;
+}}
+#AutoplayStack {{ background: transparent; border: none; }}
+QPushButton#AutoplayUp, QPushButton#AutoplayRandom, QPushButton#AutoplayDown {{
+    background: transparent; border: none; border-right: 1px solid {BORDER};
+    color: {TEXT_HI}; padding: 0; margin: 0; font-size: 8px; font-weight: 800;
+}}
+QPushButton#AutoplayUp {{
+    border-bottom: 1px solid {BORDER}; border-top-left-radius: 4px;
+}}
+QPushButton#AutoplayRandom {{
+    border-bottom: 1px solid {BORDER};
+}}
+QPushButton#AutoplayDown {{ border-bottom-left-radius: 4px; }}
+QPushButton#AutoplayUp:hover, QPushButton#AutoplayRandom:hover,
+QPushButton#AutoplayDown:hover {{ background: {PANEL}; }}
+QPushButton#AutoplayUp[active="true"] {{
+    background: #168fc0; color: white;
+}}
+QPushButton#AutoplayRandom[active="true"] {{
+    background: #c83445; color: white;
+}}
+QPushButton#AutoplayDown[active="true"] {{
+    background: #279957; color: white;
 }}
 #Subtitle, #Hint {{ color: {TEXT_DIM}; }}
 #Sidebar {{ background: {PANEL}; }}

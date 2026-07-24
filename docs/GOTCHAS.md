@@ -70,7 +70,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   color positions are integer sample anchors + local float phase; never
   collapse either into one absolute float.
 - **Do not recompute the scrolling surface under moving screen pixels.** The
-  source shader prints a bounded tile on an integer global song-pixel lattice;
+  source shader prints a bounded tile on an integer global song-texel lattice
+  at four horizontal samples per physical pixel while retaining the original
+  physical-pixel LOD;
   steady frames only translate that fixed result. Refreshes copy the unchanged
   overlap to the alternate texture and render the newly exposed strip. An
   arbitrary frame-centered tile changes sample/LOD phase at every refresh and
@@ -112,11 +114,17 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   grid exists. A missing/invalid imported grid uses the SoundBox fallback with
   beat 1 at `0:00`; neither path writes to Rekordbox.
 - The scrolling detail waveform claims transport on mouse-down by design:
-  freeze Metal at the held timestamp and begin the clean pause immediately.
+  use the native atomic hold to freeze Metal at its continuously rendered frame,
+  re-anchor Qt drag math to the returned timestamp, and begin the clean pause
+  immediately. A coarse Python position poll visibly jerks toward the click.
   Keep the three-pixel threshold only for relative movement. Release must send
   one exact authoritative seek—even without movement—and resume only when the
   deck was playing before the grab. Never seek the decoder on move events. The
   whole-track overview deliberately retains absolute click/drag navigation.
+- Overview and ultra waveform buffers are one visible surface. Prepared loads
+  must group both native uploads while presentation is suspended and commit
+  them together. Painting the overview while a long ultra section is still
+  decompressing/building makes the waveform visibly change size on promotion.
 - No manual SoundBox grid editor is shipped. V4 has a storage-only ownership
   boundary for later work, but current precedence is simple: a valid read-only
   Rekordbox grid wins exactly; otherwise use the zero-anchored fallback. Never

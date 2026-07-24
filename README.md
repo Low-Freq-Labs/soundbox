@@ -68,6 +68,9 @@ exported as `cover.jpg` per track folder.
 
 **Player.** The default native deck uses CoreAudio sample-clock playback while
 Metal scrolls the RGB waveform/grid at display refresh (120 Hz on ProMotion).
+Three compact header toggles provide playlist-relative autoplay: up, a
+no-repeat shuffle bag, or down. The source playlist is frozen when a track is
+deliberately started, so browsing elsewhere does not redirect playback.
 It includes a whole-song overview, thirteen detail zoom levels from 24–1536
 px/s, bar/beat
 counting, previous/next, selectable beat/bar jumps, momentary CUE, clean
@@ -75,6 +78,9 @@ play/pause/seek ramps, and precise pause-preview-resume scrubbing. Double-click
 is the only browser load gesture and loads paused; Space only toggles the
 loaded deck, and C is momentary CUE. Grabbing the playing waveform pauses it
 immediately; releasing without moving resumes from the exact held timestamp.
+A native atomic hold uses the frame actually visible under the fixed playhead,
+not a lagging UI poll. Prepared overview and ultra buffers become visible
+together, so long sets never inflate when detail finishes loading.
 A newly loaded track starts on its first analyzed beat. SoundBox V4 owns the
 prepared grid/cues, RGB/24-band
 analysis, export eligibility, and single-silhouette ultra waveform. Valid
@@ -101,7 +107,11 @@ edits/reorders/deletes show as **⚠ N playlists out of date**; **Sync** resolve
 the diff, atomically repairs owned corruption, and prunes only explicitly owned
 paths. **Cancel is honest** —
 partial m3u8s are playable and flagged so the next Sync resumes. Right-click
-a device: Sync, **Verify export…**, **Deep Verify managed files…**, Eject.
+a device: Sync, **Verify export…**, **Deep Verify managed files…**,
+**Erase all files from device…**, Eject. Whole-device erase names the exact
+volume in a destructive confirmation, removes the SoundBox manifest last, and
+normally ejects only after a complete result; stock/iTunes iPods remain
+read-only.
 Normal eject flushes and verifies references; force-unmount always asks first.
 The device browser can copy selected audio/M3U8 entries in order into
 `~/Music/SoundBox Media/Unknown Artist/` without changing the device. Click one

@@ -44,11 +44,18 @@ For the live test count, trust `./check.sh` output—not any number written here
   Scrub math consumes the native-applied scale, detail promotion no longer
   re-uploads color, render encoding does not hold the analysis mutex, and
   display cadence follows the active screen through resize/screen changes.
-  The moving lane is now printed onto an integer song-pixel-anchored,
-  coverage-premultiplied Metal surface: normal frames translate fixed pixels,
+  The moving lane is now printed onto an integer song-texel-anchored,
+  four-sample-per-physical-pixel coverage-premultiplied Metal surface: normal
+  frames translate fixed subpixels,
   while ping-pong refreshes retain the overlap and render only the newly
-  exposed strip. A playing waveform grab pauses on mouse-down and a stationary
-  release resumes from exactly the held timestamp.
+  exposed strip. Overview and ultra buffers make one atomic first-visible
+  commit, so long sets do not inflate during detail promotion. A playing
+  waveform grab captures the exact native frame and pauses on mouse-down; a
+  stationary release resumes from exactly that held timestamp.
+- **PLAYLIST AUTOPLAY SHIPPED.** Header up/down modes walk the playlist snapshot
+  that deliberately started the track; random uses a no-repeat shuffle bag.
+  Browsing is independent, a new deliberate source replaces the snapshot, and
+  only a true native end-of-media edge advances.
 - **LOADED-TRACK QUALITY PREEMPTS BULK WORK.** A loaded cache miss keeps its
   UI responsive and immediately runs the exact canonical RGB/ultra analysis in
   a persistent foreground lane. Battery,
@@ -75,8 +82,10 @@ For the live test count, trust `./check.sh` output—not any number written here
   normalized path ownership, hashes, playlist membership, artwork, and
   completed generations make corruption repair and prune honest. Deep Verify,
   verified eject, FAT collision handling, and ordered device import into
-  SoundBox Media are included. Unknown content and stock databases remain
-  read-only.
+  SoundBox Media are included. Normal Sync never prunes unknown content. An
+  explicitly confirmed whole-device erase removes all children and the
+  manifest last, then verifies and normally ejects; stock/dual-boot iTunes
+  volumes remain read-only.
 
 ## Scorecard (~9.4/10, honest, not curved)
 

@@ -1826,6 +1826,59 @@ class PlayerHardening(unittest.TestCase):
             pb.player = real
             pb.shutdown_waveforms()
 
+    def test_stationary_grab_uses_exact_native_hold_not_coarse_python_tick(self):
+        from desktop.player import PlayerBar
+
+        class FakeNative:
+            def __init__(self):
+                self.positions = []
+                self.visual = []
+
+            def begin_visual_hold(self):
+                return 10_037
+
+            def set_visual_position(self, ms, preview):
+                self.visual.append((ms, preview))
+
+            def setPosition(self, ms):
+                self.positions.append(ms)
+
+            def playbackState(self):
+                return PlaybackState.PAUSED
+
+            def playbackRate(self):
+                return 1.0
+
+            def position(self):
+                return 10_000
+
+        pb = PlayerBar()
+        real = pb.player
+        try:
+            fake = FakeNative()
+            pb.player = fake
+            pb._dur = 30_000
+            pb._pos = 10_000
+            pb.wave._duration_ms = 30_000
+            pb.wave._drag_origin_ms = 10_000
+            pb.wave._drag_preview_ms = 10_000
+
+            pb._on_wave_drag_started()
+
+            self.assertEqual(pb._pos, 10_037)
+            self.assertEqual(pb.wave._drag_origin_ms, 10_037)
+            self.assertEqual(pb.wave._drag_preview_ms, 10_037)
+            # Atomic native capture owns the initial freeze; there is no second
+            # setPreview call at the stale 10,000 ms Python poll.
+            self.assertEqual(fake.visual, [])
+
+            pb._deck_drag_target = 10_037
+            pb._on_wave_drag_finished()
+            self.assertEqual(fake.positions, [10_037])
+        finally:
+            pb.player = real
+            pb.shutdown_waveforms()
+
     def test_track_arrows_follow_visible_row_order(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))  # Collection
         _win.model.set_filter("")
@@ -1976,6 +2029,15 @@ class QtTrapAudit(unittest.TestCase):
             self.assertEqual(json.loads((Path(td) / "index.json").read_text()),
                              {"x": {"status": "none"}})
             self.assertFalse((Path(td) / "index.tmp").exists())
+
+    def test_device_destructive_guards_watch_the_real_export_worker(self):
+        from pathlib import Path
+
+        source = (
+            Path(__file__).parents[1] / "desktop" / "device_browser.py"
+        ).read_text()
+        self.assertIn('"export_worker", "_resync_worker"', source)
+        self.assertNotIn('"_export_worker"', source)
 
 
 class ArtAutostartPolicy(unittest.TestCase):
@@ -2363,6 +2425,151 @@ class NowPlayingHighlight(unittest.TestCase):
             self.assertEqual(_win.model._rows[idx.row()]["id"], "1")
         finally:
             _win.player_bar._track_id = None
+
+
+class AutoplaySemantics(unittest.TestCase):
+    def setUp(self):
+        self._saved = (
+            _win._autoplay_mode,
+            list(_win._autoplay_order),
+            _win._autoplay_index,
+            set(_win._autoplay_random_seen),
+            list(_win._autoplay_random_queue),
+        )
+        self._real_save = _win._save_state
+        _win._save_state = lambda: None
+        _win._set_autoplay_mode("", save=False)
+
+    def tearDown(self):
+        _win._save_state = self._real_save
+        (mode, order, index, seen, queue) = self._saved
+        _win._set_autoplay_mode(mode, save=False)
+        _win._autoplay_order = order
+        _win._autoplay_index = index
+        _win._autoplay_random_seen = seen
+        _win._autoplay_random_queue = queue
+
+    def test_three_header_modes_are_mutually_exclusive_and_toggle_off(self):
+        for mode, button in _win._autoplay_buttons.items():
+            button.click()
+            self.assertEqual(_win._autoplay_mode, mode)
+            self.assertTrue(button.property("active"))
+            self.assertEqual(
+                sum(bool(b.property("active"))
+                    for b in _win._autoplay_buttons.values()),
+                1,
+            )
+            button.click()
+            self.assertEqual(_win._autoplay_mode, "")
+            self.assertFalse(button.property("active"))
+
+    def test_up_and_down_keep_the_playlist_that_started_the_track(self):
+        playlist = _win._find_tree_item("CRATES / SET ONE")
+        _win.tree.setCurrentItem(playlist)
+        _app.processEvents()
+        _win._capture_autoplay_context("3")
+        self.assertEqual(_win._autoplay_order, ["3", "1"])
+
+        # Browse elsewhere after playback starts; the frozen origin remains.
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        real_playable = _win._autoplay_playable
+        _win._autoplay_playable = lambda _index: True
+        try:
+            _win._set_autoplay_mode("down", save=False)
+            self.assertEqual(_win._next_autoplay_index(), 1)
+            _win._autoplay_index = 1
+            _win._set_autoplay_mode("up", save=False)
+            self.assertEqual(_win._next_autoplay_index(), 0)
+        finally:
+            _win._autoplay_playable = real_playable
+
+    def test_random_is_a_shuffle_bag_without_repeats(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        order = [row["id"] for row in _win.model._rows]
+        _win._capture_autoplay_context(order[0])
+        _win._set_autoplay_mode("random", save=False)
+        _win._autoplay_rng.seed(7)
+        real_playable = _win._autoplay_playable
+        _win._autoplay_playable = lambda _index: True
+        played = [order[0]]
+        try:
+            for _ in range(len(order) - 1):
+                index = _win._next_autoplay_index()
+                self.assertIsNotNone(index)
+                _win._autoplay_index = index
+                track_id = order[index]
+                _win._autoplay_random_seen.add(track_id)
+                played.append(track_id)
+            self.assertEqual(len(set(played)), len(order))
+            # A fresh cycle cannot immediately repeat the just-finished song.
+            next_index = _win._next_autoplay_index()
+            self.assertIsNotNone(next_index)
+            self.assertNotEqual(order[next_index], played[-1])
+        finally:
+            _win._autoplay_playable = real_playable
+
+    def test_terminal_advance_keeps_context_and_rejects_a_stale_end(self):
+        _win._autoplay_order = ["3", "1"]
+        _win._autoplay_index = 0
+        _win._set_autoplay_mode("down", save=False)
+        real_playable = _win._autoplay_playable
+        real_open = _win._open_track
+        current = _win.player_bar._track_id
+        opened = []
+        _win._autoplay_playable = lambda _index: True
+        _win._open_track = lambda track, autoplay, capture_autoplay: (
+            opened.append(
+                (track.track_id, autoplay, capture_autoplay)) or True)
+        _win.player_bar._track_id = "3"
+        try:
+            _win._advance_autoplay("old-track")
+            self.assertEqual(opened, [])
+            _win._advance_autoplay("3")
+            self.assertEqual(opened, [("1", True, False)])
+            self.assertEqual(_win._autoplay_order, ["3", "1"])
+            self.assertEqual(_win._autoplay_index, 1)
+        finally:
+            _win._autoplay_playable = real_playable
+            _win._open_track = real_open
+            _win.player_bar._track_id = current
+
+    def test_only_ordinary_transport_end_requests_advance(self):
+        pb = _win.player_bar
+        hits = []
+        on_end = hits.append
+        pb.track_ended.connect(on_end)
+        saved = (
+            pb._track_id,
+            pb._transport_play_active,
+            pb._cue_preview_active,
+            pb._cue_preview_latched,
+            pb._pause_pending,
+        )
+        try:
+            pb._transport_play_active = True
+            pb._track_id = "ended-track"
+            pb._cue_preview_active = False
+            pb._cue_preview_latched = False
+            pb._pause_pending = False
+            pb._on_end_of_media()
+            _app.processEvents()
+            self.assertEqual(hits, ["ended-track"])
+
+            pb._transport_play_active = False
+            pb._on_end_of_media()
+            _app.processEvents()
+            self.assertEqual(hits, ["ended-track"])
+        finally:
+            (
+                pb._track_id,
+                pb._transport_play_active,
+                pb._cue_preview_active,
+                pb._cue_preview_latched,
+                pb._pause_pending,
+            ) = saved
+            pb.track_ended.disconnect(on_end)
 
 
 class SpaceSemantics(unittest.TestCase):

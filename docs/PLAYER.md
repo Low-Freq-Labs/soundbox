@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-07-23. This is the player handoff: shipped behavior,
+Current as of 2026-07-24. This is the player handoff: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -9,7 +9,8 @@ changing the deck.
 
 The player occupies two compact lanes:
 
-- Header: compact SoundBox wordmark, centered artist/title, search, Settings.
+- Header: compact SoundBox wordmark, centered artist/title with three stacked
+  autoplay controls, search, Settings.
 - Deck: centered transport stack on the left, waveform in the middle, and the
   two-page cue panel on the right.
 
@@ -54,6 +55,13 @@ Transport controls:
 - Play/pause and all transport/source changes use short gain ramps so starts,
   stops, seeks, and track replacement do not click.
 - CUE and play/pause are equal-size circular controls.
+- Header autoplay is mutually exclusive: blue up follows the frozen source
+  playlist upward, green down follows it downward, and red `R` uses a shuffle
+  bag so every playable track is visited before a new cycle and the cycle
+  boundary cannot immediately repeat the current track. Browsing elsewhere
+  does not change that source snapshot. Deliberately starting a track from
+  another playlist replaces it. Manual pause/resume preserves the mode; only
+  the native terminal playback edge advances.
 
 Cue panel:
 
@@ -121,8 +129,10 @@ never disagree about a silently clamped value.
 
 Main-waveform scrubbing is relative and precise:
 
-- Mouse-down claims the playhead immediately, freezes the visual preview, and
-  fades playing audio to pause.
+- Mouse-down atomically captures Metal's continuous rendered frame, makes that
+  exact timestamp the relative-drag origin, freezes the visual preview, and
+  fades playing audio to pause. It never falls back to the older coarse Python
+  poll, so clicking either side of the fixed playhead cannot create a jerk.
 - Press/release without horizontal movement performs one authoritative seek to
   the exact held timestamp, then resumes only if playback was active before
   the grab. A paused deck remains paused.
@@ -262,8 +272,12 @@ The background `WaveformFillWorker`:
 
 A prepared canonical cache hit is staged off the UI thread: the small manifest
 positions transport first, the packed RGB overview is decompressed and uploaded
-once as the permanent color/overview pyramid, and ultra geometry is promoted
-last. The detail stage never re-uploads the color payload. Native decode starts
+once as the permanent color/overview pyramid, and ultra geometry is prepared
+last. Overview and ultra buffers are committed inside one native presentation
+transaction: the display link skips incomplete grouped uploads, so a long set's
+first visible waveform is already its final silhouette rather than a smaller
+overview that visibly inflates. The detail stage never re-uploads the color
+payload. Native decode starts
 before those reads. Every stage carries a monotonic track generation;
 `begin_track(generation)` atomically clears the previous waveform, grid, cues,
 session marker, and detail before the replacement source appears. Late stages
@@ -304,10 +318,13 @@ The following renderer rules are measured invariants, not style preferences:
 - Derive one continuous LOD from source samples per physical pixel and blend
   the adjacent peak levels. The overview and main lane call the same sampler;
   ultra detail replaces geometry quality only, never timing or color.
-- Rasterize the scrolling lane onto a bounded Metal surface whose center is an
-  integer global song pixel. Normal display frames translate and linearly
-  sample those already-decided pixels instead of reevaluating LOD, RGB, and
-  silhouette coverage under each moving screen column.
+- Rasterize the scrolling lane at four horizontal samples per physical display
+  pixel onto a bounded Metal surface whose center is an integer global song
+  texel. The physical-pixel LOD remains unchanged. Normal display frames
+  translate and linearly sample this already-decided subpixel surface instead
+  of reevaluating LOD, RGB, and silhouette coverage under each moving screen
+  column. This removes the last contour/color pulse without altering maximum-
+  zoom detail.
 - When playback approaches the surface margin, blit the unchanged overlap into
   the alternate tile and rasterize only the newly exposed song strip. Zoom,
   Retina scale, analysis promotion, and resize deliberately trigger a complete
@@ -371,17 +388,18 @@ Automated coverage:
 - `tests/test_native_deck.py`: real native load/play/seek/ramp/rapid replacement,
   cache/cue upload, same-turn host/view/Retina resize geometry, active display
   cadence, static display-link sleep, adaptive polling, continuous visual
-  clock, and source immutability.
+  clock, atomic mouse holds/complete-surface commits, and source immutability.
 - `tests/test_native_shader.py`: shader/source contracts for one continuous
   geometry/color LOD, amplitude-weighted RGB mips, coverage filtering, vivid
-  thin-contour color, song-lattice tile translation/incremental strip updates,
+  thin-contour color, four-sample song-lattice tile translation/incremental
+  strip updates,
   cue coordinate modes, integer/local-phase addressing, PLL correction, and
   future presentation timestamps.
 - `tests/test_ui.py`: transport-only Space, double-click loading, keyboard CUE,
   cue-panel/overview/detail marker identity, activation resynchronization,
   stale-completion rejection, beat/bar jumps,
-  scrubbing, overview, zoom persistence, rapid loading, preparation, and window
-  state.
+  exact native-anchored scrubbing, autoplay transition/shuffle semantics,
+  overview, zoom persistence, rapid loading, preparation, and window state.
 
 Dated validation on 2026-07-23:
 
@@ -422,6 +440,20 @@ Dated song-tile stability validation on 2026-07-24:
 - The signed installed app activated the native deck, loaded 3,265 tracks /
   83 playlists, and reported zero preparation tasks. Curated state, 3,247 V4
   records, and 3,124 art files remained intact.
+
+Dated cohesive-surface/autoplay validation on 2026-07-24:
+
+- The bare gate passed with 494 tests and one expected platform skip; the
+  offscreen render also passed with the three-state autoplay control active.
+- The real prepared `OF THE TREES (LIVE SET) @ DEF: UNDERGROUND` cache made its
+  small manifest available in 37 ms and atomically presented its colored
+  overview plus 26,570,650-sample ultra envelope in 240 ms warm. No intermediate
+  coarse silhouette was presented and no analysis recook was required.
+- Native integration tests held display cadence at both zoom extremes after
+  grouped buffer commit and pinned the exact continuous-frame mouse hold.
+- The signed installed app activated the native deck, loaded 3,265 tracks /
+  83 playlists, retained 3,247 V4 records and 3,124 art files, and left the
+  pre-install `library.json` semantically identical.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain

@@ -49,6 +49,9 @@ uint64_t sb_deck_ramp_gain(SBDeckRef deck, float gain, double duration_ms);
 
 void sb_deck_set_preview_frame(
     SBDeckRef deck, uint64_t source_frame, int preview_active);
+uint64_t sb_deck_begin_preview_hold(SBDeckRef deck);
+void sb_deck_begin_waveform_update(SBDeckRef deck);
+void sb_deck_end_waveform_update(SBDeckRef deck);
 float sb_deck_set_zoom(SBDeckRef deck, float pixels_per_second);
 void sb_deck_request_display(SBDeckRef deck);
 void sb_deck_sync_view_geometry(SBDeckRef deck);
@@ -116,6 +119,7 @@ int sb_deck_set_cues(
 int sb_deck_set_session_cue(
     SBDeckRef deck, uint32_t position_millis, int active);
 int sb_deck_snapshot(SBDeckRef deck, SBDeckSnapshot *out_snapshot);
+int sb_deck_has_ended(SBDeckRef deck);
 uint64_t sb_deck_visual_frame(SBDeckRef deck);
 uint64_t sb_deck_analysis_sample_count(SBDeckRef deck);
 double sb_deck_analysis_sample_rate(SBDeckRef deck);

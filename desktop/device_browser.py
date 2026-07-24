@@ -16,7 +16,7 @@ from pathlib import Path
 from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
-from soundbox import engine, imports as import_mod
+from soundbox import engine, imports as import_mod, sync as sync_mod
 from soundbox.paths import sanitize_component
 
 from .devices import _external_volume_of, _on_external_device
@@ -26,6 +26,78 @@ LOG = logging.getLogger("soundbox")
 
 
 class DeviceBrowserMixin:
+    def _erase_device(self, dev: str):
+        """Explicitly erase every child of one selected writable volume."""
+        volume = _external_volume_of(dev)
+        if volume is None or volume != Path(dev).resolve():
+            QMessageBox.critical(
+                self, "Refused", "Will only erase a mounted external volume.")
+            return
+        profile = getattr(self, "_device_profiles", {}).get(dev)
+        if profile is not None and getattr(profile, "has_stock_ipod", False):
+            QMessageBox.warning(
+                self, "Stock iPod is read-only",
+                "SoundBox will not erase an iTunes/stock-iPod volume.")
+            return
+        if any(_running(getattr(self, name, None)) for name in (
+                "export_worker", "_resync_worker", "_delete_worker",
+                "_eject_verify_worker")):
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        name = volume.name
+        answer = QMessageBox.question(
+            self, "Erase entire device?",
+            f"Permanently erase every file and folder on:\n\n"
+            f"{name}\n{volume}\n\n"
+            "This includes music, playlists, unknown files, and Rockbox "
+            "firmware if present. This cannot be undone.\n\n"
+            "SoundBox's source library will not be changed.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        sources = [
+            track.path for track in (
+                getattr(getattr(self, "lib", None), "tracks_by_id", {}) or {}
+            ).values()
+        ]
+        self._deleting = True
+        self.progress.setVisible(False)
+        self._start_pulse("ERASING")
+        worker = OneShotTask(
+            lambda: sync_mod.erase_device_contents(volume, sources))
+        self._delete_worker = worker
+        worker.done.connect(
+            lambda result, d=str(volume): self._on_erase_device_done(d, result))
+        worker.finished.connect(
+            lambda w=worker, d=str(volume):
+            self._finish_erase_device_worker(w, d))
+        worker.start()
+
+    def _on_erase_device_done(self, dev: str, result):
+        self._deleting = False
+        self._stop_pulse()
+        self.progress.setVisible(False)
+        if isinstance(result, Exception):
+            self._erase_eject_pending = None
+            QMessageBox.critical(self, "Erase failed", str(result))
+            self._refresh_devices()
+            return
+        self._erase_eject_pending = dev
+        self._flash_status("Device erased ✓")
+
+    def _finish_erase_device_worker(self, worker, dev: str):
+        self._finish_worker("_delete_worker", worker)
+        if getattr(self, "_erase_eject_pending", None) == dev:
+            self._erase_eject_pending = None
+            # Start only after QThread has fully returned and our busy guard no
+            # longer sees it. Eject performs its own flush + empty verification.
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda d=dev: self._eject(d))
+
     def _eject_current(self):
         idx = self.fs_view.rootIndex()
         path = self.fs_model.filePath(idx)
@@ -36,7 +108,7 @@ class DeviceBrowserMixin:
         # Never race a live writer. Verification and flush are also threaded:
         # removable I/O on the UI thread can block for seconds under fskit.
         if any(_running(getattr(self, name, None)) for name in (
-                "_export_worker", "_resync_worker", "_delete_worker")):
+                "export_worker", "_resync_worker", "_delete_worker")):
             QMessageBox.warning(
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")

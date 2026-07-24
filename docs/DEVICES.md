@@ -74,7 +74,13 @@ separately validated `iTunesDB` implementation.
 - Existing unknown target files are conflicts and never claimed. A differing
   manifest-owned file is required repair work and is atomically replaced.
 - Copies land as `.sbpart` and atomically rename only after completion.
-- Device cleanup is limited to SoundBox's `/Music` and `/Playlists` trees.
+- Normal Sync cleanup is limited to manifest-owned SoundBox paths. A separate
+  **Erase all files from device…** command is the only exception: it requires
+  explicit confirmation naming the exact mounted volume, removes every child
+  beneath that volume (including unknown content and the stale manifest), and
+  then performs verified normal eject. The manifest is removed last, so a
+  partial erase remains visibly invalid and cannot masquerade as success.
+  Stock and dual-boot iTunes/iPod volumes never expose this command.
 - Normal Verify checks managed sizes/references; Deep Verify rehashes every
   managed track, cover, and playlist.
 - Eject flushes and rereads managed references after writers finish, requests

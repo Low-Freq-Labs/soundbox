@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import quote
 
-from soundbox import rekordbox_xml, sync as sync_mod
+from soundbox import manifest, rekordbox_xml, sync as sync_mod
 
 
 def loc(p: Path) -> str:
@@ -197,6 +197,53 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.target.mkdir()
         with self.assertRaises(RuntimeError):
             session.revalidate()
+
+    def test_explicit_whole_device_erase_removes_manifest_and_unknown_content(self):
+        self.target.mkdir()
+        (self.target / "Music").mkdir()
+        (self.target / "Music" / "track.flac").write_bytes(b"audio")
+        (self.target / "unknown-folder").mkdir()
+        (self.target / "unknown-folder" / "notes.txt").write_text("mine")
+        manifest.record_export(self.target, [], managed_files={
+            "/Music/track.flac": {
+                "size": 5, "sha256": "unused", "playlists": [],
+            },
+        })
+
+        removed = sync_mod.erase_device_contents(
+            self.target, [self.src / "good1.flac"])
+
+        self.assertGreaterEqual(removed, 3)
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual(sync_mod.verify_managed(self.target), [])
+
+    def test_partial_whole_device_erase_preserves_manifest(self):
+        from unittest import mock
+
+        self.target.mkdir()
+        blocked = self.target / "blocked"
+        blocked.mkdir()
+        (blocked / "keep.txt").write_text("keep")
+        manifest.record_export(self.target, [], managed_files={
+            "/blocked/keep.txt": {
+                "size": 4, "sha256": "unused", "playlists": [],
+            },
+        })
+        real_rmtree = sync_mod.shutil.rmtree
+        blocked_resolved = blocked.resolve()
+
+        def refuse(path, *args, **kwargs):
+            if Path(path).resolve() == blocked_resolved:
+                raise OSError("injected erase failure")
+            return real_rmtree(path, *args, **kwargs)
+
+        with mock.patch.object(sync_mod.shutil, "rmtree", side_effect=refuse):
+            with self.assertRaisesRegex(RuntimeError, "partially erased"):
+                sync_mod.erase_device_contents(
+                    self.target, [self.src / "good1.flac"])
+
+        self.assertTrue(manifest.manifest_path(self.target).is_file())
+        self.assertTrue(blocked.is_dir())
 
     def test_fat_case_and_unicode_collisions_are_disambiguated(self):
         files: dict[str, sync_mod.PlannedFile] = {}

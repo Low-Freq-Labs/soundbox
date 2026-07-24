@@ -55,6 +55,7 @@ def main() -> None:
     pb._dur = 150_000
     pb._cue_ms = 32_000
     pb.wave.set_active(True)
+    win._set_autoplay_mode("random", save=False)
     cues = [
         {"kind": "hot", "slot": 0, "position_ms": 5_000, "end_ms": -1,
          "type": "single", "label": "Intro", "color": [255, 55, 111]},

@@ -33,6 +33,7 @@ constexpr float kPixelsPerSecond = 92.0f;
 constexpr float kOverviewHeight = 28.0f;
 constexpr float kRulerTop = 31.0f;
 constexpr float kZoomTop = 49.0f;
+constexpr float kWaveTileHorizontalSamples = 4.0f;
 constexpr size_t kWaveMipLevels = 32;
 
 struct WaveSample {
@@ -91,8 +92,9 @@ struct Uniforms {
     uint32_t audioDetailMipOffsets[kWaveMipLevels];
     uint32_t audioDetailMipCounts[kWaveMipLevels];
     uint32_t tileWidthPixels;
-    float tileCurrentOffsetPixels;
+    float tileCurrentOffsetTexels;
     uint32_t tileValid;
+    float tileSupersample;
 };
 
 struct AudioRing {
@@ -307,6 +309,32 @@ public:
         requestDisplay();
     }
 
+    uint64_t beginPreviewHold() {
+        // Capture the same continuous clock the renderer is following and
+        // publish that frame before enabling preview. Mouse-down therefore
+        // freezes the waveform where it is visibly drawn, rather than at the
+        // last coarse position polled by Python.
+        const uint64_t frame = visualFrameNow();
+        previewFrame_.store(frame, std::memory_order_release);
+        previewActive_.store(true, std::memory_order_release);
+        requestDisplay();
+        return frame;
+    }
+
+    void beginWaveformUpdate() {
+        waveformUpdateDepth_.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void endWaveformUpdate() {
+        uint32_t depth =
+            waveformUpdateDepth_.load(std::memory_order_acquire);
+        while (depth > 0
+                && !waveformUpdateDepth_.compare_exchange_weak(
+                    depth, depth - 1, std::memory_order_acq_rel)) {
+        }
+        requestDisplay();
+    }
+
     float setZoom(float pixelsPerSecond) {
         const float applied =
             std::clamp(pixelsPerSecond, 24.0f, 1536.0f);
@@ -393,6 +421,10 @@ public:
 
     double pixelsPerSecond() const {
         return zoomPixelsPerSecond_.load(std::memory_order_acquire);
+    }
+
+    bool hasEnded() const {
+        return ended_.load(std::memory_order_acquire);
     }
 
     int snapshot(SBDeckSnapshot *out) {
@@ -1176,6 +1208,13 @@ public:
         if (!pipeline_ || !displayPipeline_ || !update.drawable) {
             return;
         }
+        // Overview and ultra buffers are prepared independently but become
+        // one visible waveform. Skip presentation while a grouped upload is
+        // in flight so a long set cannot briefly paint the coarse silhouette
+        // and then visibly change size when ultra geometry arrives.
+        if (waveformUpdateDepth_.load(std::memory_order_acquire) > 0) {
+            return;
+        }
         const bool continuous =
             playRequested_.load(std::memory_order_acquire)
             || previewActive_.load(std::memory_order_acquire);
@@ -1305,7 +1344,12 @@ public:
                 std::ceil(49.0 * drawableScale)));
         const NSUInteger tileWidth = std::min<NSUInteger>(
             16384,
-            std::max<NSUInteger>(4096, drawableWidth * 2));
+            std::max<NSUInteger>(
+                8192,
+                drawableWidth
+                    * static_cast<NSUInteger>(
+                        kWaveTileHorizontalSamples) * 2));
+        uniforms.tileSupersample = kWaveTileHorizontalSamples;
         if (waveBuffer
                 && (!waveTile_
                     || !waveTileScratch_
@@ -1326,17 +1370,18 @@ public:
             waveTileRevision_ = 0;
         }
 
-        const double pixelsPerFrame =
+        const double texelsPerFrame =
             static_cast<double>(uniforms.pixelsPerSecond)
-            * drawableScale / rate;
-        const double currentSongPixel = exactFrame * pixelsPerFrame;
-        const double pixelDelta =
-            currentSongPixel
-            - static_cast<double>(waveTileCenterSongPixel_);
+            * drawableScale * kWaveTileHorizontalSamples / rate;
+        const double currentSongTexel = exactFrame * texelsPerFrame;
+        const double texelDelta =
+            currentSongTexel
+            - static_cast<double>(waveTileCenterSongTexel_);
         const double travelCapacity = std::max(
             0.0,
             (static_cast<double>(tileWidth)
-             - static_cast<double>(drawableWidth)) * 0.5);
+             - static_cast<double>(drawableWidth)
+                * kWaveTileHorizontalSamples) * 0.5);
         const bool tileNeedsPrint =
             waveBuffer
             && uniforms.sampleCount
@@ -1346,15 +1391,15 @@ public:
             && (waveTileRevision_ != renderRevision
                 || std::abs(waveTileZoom_ - uniforms.pixelsPerSecond) > 0.01f
                 || std::abs(waveTileScale_ - drawableScale) > 0.01f
-                || std::abs(pixelDelta) > travelCapacity * 0.70);
+                || std::abs(texelDelta) > travelCapacity * 0.70);
         if (tileNeedsPrint) {
-            // Tile raster centers always live on the same integer song-pixel
+            // Tile raster centers always live on the same integer song-texel
             // lattice. Reprinting a neighboring strip therefore cannot change
             // the phase, hue, or apparent height of an existing feature.
-            const int64_t nextCenterSongPixel = static_cast<int64_t>(
-                std::llround(currentSongPixel));
+            const int64_t nextCenterSongTexel = static_cast<int64_t>(
+                std::llround(currentSongTexel));
             const int64_t centerShift =
-                nextCenterSongPixel - waveTileCenterSongPixel_;
+                nextCenterSongTexel - waveTileCenterSongTexel_;
             const bool sameRasterSurface =
                 waveTileRevision_ == renderRevision
                 && std::abs(
@@ -1394,15 +1439,16 @@ public:
                 [blit endEncoding];
             }
 
-            waveTileCenterSongPixel_ = nextCenterSongPixel;
+            waveTileCenterSongTexel_ = nextCenterSongTexel;
             const double tileCenterFrame =
-                pixelsPerFrame > 0.0
-                ? static_cast<double>(waveTileCenterSongPixel_)
-                    / pixelsPerFrame
+                texelsPerFrame > 0.0
+                ? static_cast<double>(waveTileCenterSongTexel_)
+                    / texelsPerFrame
                 : exactFrame;
             Uniforms tileUniforms = uniforms;
             tileUniforms.widthPoints =
-                static_cast<float>(tileWidth) / drawableScale;
+                static_cast<float>(tileWidth)
+                / (drawableScale * kWaveTileHorizontalSamples);
             tileUniforms.drawableWidthPixels =
                 static_cast<uint32_t>(tileWidth);
             tileUniforms.tileWidthPixels =
@@ -1452,9 +1498,9 @@ public:
         uniforms.tileWidthPixels = waveTile_
             ? static_cast<uint32_t>(waveTile_.width)
             : 0;
-        uniforms.tileCurrentOffsetPixels = static_cast<float>(
-            currentSongPixel
-            - static_cast<double>(waveTileCenterSongPixel_));
+        uniforms.tileCurrentOffsetTexels = static_cast<float>(
+            currentSongTexel
+            - static_cast<double>(waveTileCenterSongTexel_));
         uniforms.tileValid =
             waveTile_
             && waveTileRevision_ == renderRevision
@@ -1887,8 +1933,9 @@ struct Uniforms { float currentSeconds;
                   uint audioDetailMipOffsets[32];
                   uint audioDetailMipCounts[32];
                   uint tileWidthPixels;
-                  float tileCurrentOffsetPixels;
-                  uint tileValid; };
+                  float tileCurrentOffsetTexels;
+                  uint tileValid;
+                  float tileSupersample; };
 struct Out { float4 position [[position]]; float4 color; };
 struct WavePair {
     float heightA;
@@ -2089,7 +2136,9 @@ fragment float4 wave_source_fragment(
         constant Uniforms &u [[buffer(1)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]]) {
     const float scale = max(1.0, u.drawableScale);
-    const float xPoints = in.position.x / scale;
+    const float horizontalScale =
+        scale * (u.tileValid != 0 ? max(1.0, u.tileSupersample) : 1.0);
+    const float xPoints = in.position.x / horizontalScale;
     const float yPoints = in.position.y / scale;
     const float3 background = float3(
         13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0);
@@ -2220,7 +2269,8 @@ fragment float4 wave_display_fragment(
     const float tileX =
         float(u.tileWidthPixels) * 0.5
         + (in.position.x - float(u.drawableWidthPixels) * 0.5)
-        + u.tileCurrentOffsetPixels;
+            * u.tileSupersample
+        + u.tileCurrentOffsetTexels;
     if (tileX < 0.0 || tileX >= float(u.tileWidthPixels)) {
         discard_fragment();
     }
@@ -2756,7 +2806,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     // a song-anchored strip occasionally; normal frames translate that fixed
     // image instead of recomputing RGB/envelope bins under every screen pixel.
     uint64_t waveTileRevision_ = 0;
-    int64_t waveTileCenterSongPixel_ = 0;
+    int64_t waveTileCenterSongTexel_ = 0;
     float waveTileZoom_ = 0.0f;
     float waveTileScale_ = 0.0f;
     SBDisplayDelegate *displayDelegate_ = nil;
@@ -2817,6 +2867,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     std::atomic<uint64_t> rampCompleted_{0};
 
     std::atomic<bool> previewActive_{false};
+    std::atomic<uint32_t> waveformUpdateDepth_{0};
     std::atomic<uint64_t> previewFrame_{0};
 
     std::mutex errorMutex_;
@@ -2904,6 +2955,24 @@ void sb_deck_set_preview_frame(
     SBDeckRef deck, uint64_t frame, int preview_active) {
     if (deck) {
         static_cast<SBDeck *>(deck)->setPreview(frame, preview_active != 0);
+    }
+}
+
+uint64_t sb_deck_begin_preview_hold(SBDeckRef deck) {
+    return deck
+        ? static_cast<SBDeck *>(deck)->beginPreviewHold()
+        : 0;
+}
+
+void sb_deck_begin_waveform_update(SBDeckRef deck) {
+    if (deck) {
+        static_cast<SBDeck *>(deck)->beginWaveformUpdate();
+    }
+}
+
+void sb_deck_end_waveform_update(SBDeckRef deck) {
+    if (deck) {
+        static_cast<SBDeck *>(deck)->endWaveformUpdate();
     }
 }
 
@@ -3072,6 +3141,10 @@ int sb_deck_snapshot(SBDeckRef deck, SBDeckSnapshot *out_snapshot) {
     return deck
         ? static_cast<SBDeck *>(deck)->snapshot(out_snapshot)
         : 0;
+}
+
+int sb_deck_has_ended(SBDeckRef deck) {
+    return deck && static_cast<SBDeck *>(deck)->hasEnded();
 }
 
 uint64_t sb_deck_visual_frame(SBDeckRef deck) {

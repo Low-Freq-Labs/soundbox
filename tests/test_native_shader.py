@@ -169,7 +169,8 @@ class NativeWaveformShader(unittest.TestCase):
         main = display.split(
             "if (yPoints < 49.0 || u.tileValid == 0)", 1
         )[1]
-        self.assertIn("u.tileCurrentOffsetPixels", main)
+        self.assertIn("u.tileCurrentOffsetTexels", main)
+        self.assertIn("* u.tileSupersample", main)
         self.assertIn("waveTile.sample(", main)
         self.assertNotIn("filtered_envelope_coverage(", main)
         self.assertNotIn("filtered_wave_surface(", main)
@@ -181,9 +182,9 @@ class NativeWaveformShader(unittest.TestCase):
             "private:", 1)[0]
         self.assertIn("const bool tileNeedsPrint", draw)
         self.assertIn("waveTileRevision_ != renderRevision", draw)
-        self.assertIn("std::abs(pixelDelta) > travelCapacity * 0.70", draw)
-        self.assertIn("std::llround(currentSongPixel)", draw)
-        self.assertIn("waveTileCenterSongPixel_", draw)
+        self.assertIn("std::abs(texelDelta) > travelCapacity * 0.70", draw)
+        self.assertIn("std::llround(currentSongTexel)", draw)
+        self.assertIn("waveTileCenterSongTexel_", draw)
         self.assertIn("const bool incrementalPrint", draw)
         self.assertIn("[commands blitCommandEncoder]", draw)
         self.assertIn("exposedWidth = shift", draw)
@@ -192,6 +193,38 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "[encoder setRenderPipelineState:displayPipeline_]", draw)
         self.assertNotIn("displayPipeline_ : pipeline_", draw)
+
+    def test_song_tile_is_horizontally_supersampled_without_changing_lod(self):
+        source = self.shader.split(
+            "fragment float4 wave_source_fragment", 1
+        )[1].split(
+            "fragment float4 wave_display_fragment", 1
+        )[0]
+        self.assertIn(
+            "scale * (u.tileValid != 0 ? "
+            "max(1.0, u.tileSupersample) : 1.0)",
+            source,
+        )
+        self.assertIn("in.position.x / horizontalScale", source)
+        # Supersampling adds fixed song positions between output pixels. It
+        # deliberately retains the established physical-pixel LOD footprint.
+        self.assertGreaterEqual(
+            source.count("u.pixelsPerSecond * scale"), 2)
+        self.assertNotIn(
+            "u.pixelsPerSecond * horizontalScale", source)
+
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        self.assertIn(
+            "constexpr float kWaveTileHorizontalSamples = 4.0f", native)
+        self.assertIn(
+            "* drawableScale * kWaveTileHorizontalSamples / rate", native)
+        self.assertIn(
+            "drawableWidth)\n"
+            "                * kWaveTileHorizontalSamples",
+            native,
+        )
 
     def test_tile_translation_preserves_premultiplied_hue(self):
         source = self.shader.split(
@@ -257,6 +290,21 @@ class NativeWaveformShader(unittest.TestCase):
         ).read_text()
         self.assertIn(
             "predictedFrame(update.targetPresentationTimestamp)", native)
+
+    def test_staged_waveform_buffers_have_one_atomic_visible_commit(self):
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        header = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.h"
+        ).read_text()
+        self.assertIn("sb_deck_begin_waveform_update", header)
+        self.assertIn("sb_deck_end_waveform_update", header)
+        self.assertIn(
+            "waveformUpdateDepth_.load(std::memory_order_acquire) > 0",
+            native)
+        self.assertIn(
+            "waveformUpdateDepth_.fetch_add(1", native)
 
 
 if __name__ == "__main__":

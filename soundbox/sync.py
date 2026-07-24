@@ -52,12 +52,16 @@ def _destination_key(path: str) -> str:
 class DeviceSession:
     """Pinned, revalidated authority for one mounted export target."""
 
-    def __init__(self, target: Path, sources: list[Path]):
+    def __init__(
+            self, target: Path, sources: list[Path], *, create: bool = True):
         requested = target.expanduser()
         assert_target_safe(requested, sources)
         # A generic explicit export folder may not exist yet. Creating exactly
         # that target is the session's first and only pre-identity write.
-        requested.mkdir(parents=True, exist_ok=True)
+        if create:
+            requested.mkdir(parents=True, exist_ok=True)
+        elif not requested.is_dir():
+            raise RuntimeError(f"Device target is no longer mounted: {requested}")
         self.target = requested.resolve(strict=True)
         assert_target_safe(self.target, sources)
         stat = self.target.stat()
@@ -191,6 +195,59 @@ def clean_applefiles(target: Path, dirs=None) -> int:
                         removed += 1
                 except OSError:
                     pass
+    return removed
+
+
+def erase_device_contents(target: Path, sources: list[Path]) -> int:
+    """Permanently empty one explicitly selected mounted device.
+
+    This is intentionally separate from ownership-based Sync pruning. It may
+    remove unknown content, but only after the UI's explicit whole-device
+    confirmation. The mount root itself is never removed. The SoundBox manifest
+    is deleted last, so a partial erase retains its repair/eject warning rather
+    than publishing an empty successful state.
+    """
+    session = DeviceSession(Path(target), sources, create=False)
+    session.revalidate()
+    entries = list(session.target.iterdir())
+    ownership = manifest.manifest_path(session.target).parent
+    entries.sort(key=lambda path: path == ownership)
+    removed = 0
+    errors: list[str] = []
+
+    for path in entries:
+        if path == ownership and errors:
+            break
+        try:
+            session.revalidate()
+            guarded = session.guard(path)
+            if guarded.is_symlink():
+                guarded.unlink()
+            elif guarded.is_dir():
+                shutil.rmtree(guarded)
+            else:
+                guarded.unlink()
+            removed += 1
+        except OSError as exc:
+            errors.append(f"{path.name}: {exc}")
+
+    session.revalidate()
+    if errors:
+        raise RuntimeError(
+            "Device was only partially erased; its SoundBox sync record was "
+            "preserved:\n" + "\n".join(errors[:10]))
+
+    # macOS can recreate these volume-index folders while a mounted device is
+    # being observed. They contain no user media and do not constitute a
+    # partial SoundBox erase.
+    volatile = {".fseventsd", ".Spotlight-V100", ".Trashes"}
+    remaining = [
+        path.name for path in session.target.iterdir()
+        if path.name not in volatile
+    ]
+    if remaining:
+        raise RuntimeError(
+            "Device was not empty after erase: " + ", ".join(remaining[:10]))
     return removed
 
 

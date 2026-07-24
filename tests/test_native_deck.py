@@ -109,6 +109,24 @@ class NativeDeckContract(unittest.TestCase):
         self.assertEqual(
             self.deck.playbackState(), PlaybackState.PAUSED)
 
+    def test_terminal_edge_is_distinct_from_manual_pause(self):
+        ended = []
+        self.deck.endOfMedia.connect(lambda: ended.append(True))
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.play()
+        self._wait_until(
+            lambda: self.deck.playbackState() == PlaybackState.PLAYING)
+        self.deck.pause()
+        QTest.qWait(180)
+        self.assertEqual(ended, [])
+
+        self.deck.setPosition(1900)
+        self.deck.play()
+        self._wait_until(lambda: ended, timeout_ms=1000)
+        self.assertEqual(len(ended), 1)
+        self.assertEqual(self.deck.playbackState(), PlaybackState.PAUSED)
+
     def test_rapid_source_replacement_stays_live(self):
         """Source replacement may race an in-flight CoreAudio callback."""
         errors = []
@@ -150,6 +168,19 @@ class NativeDeckContract(unittest.TestCase):
         self.deck.set_visual_position(750, True)
         QTest.qWait(30)
         self.deck.set_visual_position(750, False)
+
+    def test_mouse_hold_atomically_captures_the_continuous_visual_clock(self):
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() >= 100)
+        before = self.deck.diagnostic_visual_frame()
+        held_ms = self.deck.begin_visual_hold()
+        after = self.deck.diagnostic_visual_frame()
+        held_frame = round(held_ms * 44_100 / 1000)
+
+        self.assertGreaterEqual(held_frame, before - 45)
+        self.assertLessEqual(held_frame, after + 45)
+        self.deck.set_visual_position(held_ms, False)
 
     def test_new_analysis_clears_previous_cue_markers(self):
         self.deck.set_analysis({
@@ -231,6 +262,27 @@ class NativeDeckContract(unittest.TestCase):
                 256.0, 384.0, 576.0, 864.0, 1152.0, 1536.0):
             self.assertEqual(self.deck.set_zoom(zoom), zoom)
             self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 4)
+
+    def test_complete_analysis_commits_overview_and_ultra_as_one_surface(self):
+        overview = {
+            "_overview_heights": bytes([20, 80, 160, 220]),
+            "_overview_rgb": bytes(
+                [14, 0, 0, 12, 2, 0, 2, 7, 1, 0, 2, 7]),
+            "sample_rate": 150.0,
+            "beats": [[1, 0, 120.0]],
+        }
+        detail = {
+            "rate": 6144.0,
+            "heights": bytes([10, 40, 90, 180, 255, 100]),
+        }
+
+        overview_ok, detail_ok = self.deck.set_complete_analysis(
+            overview, detail)
+
+        self.assertTrue(overview_ok)
+        self.assertTrue(detail_ok)
+        self.assertEqual(self.deck.diagnostic_analysis_shape(), (4, 150.0))
+        self.assertEqual(self.deck.diagnostic_detail_shape(), (6, 6144.0))
 
     def test_native_zoom_returns_the_applied_renderer_scale(self):
         self.assertEqual(self.deck.set_zoom(-100.0), 24.0)

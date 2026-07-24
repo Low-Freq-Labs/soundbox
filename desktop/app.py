@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -75,8 +76,11 @@ def setup_logging() -> Path | None:
             pass
     return logpath
 
-from PySide6.QtCore import QEvent, QProcess, QRect, Qt, QTimer
-from PySide6.QtGui import QFontDatabase, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QPointF, QProcess, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QColor, QFontDatabase, QIcon, QKeySequence, QPainter, QPixmap, QPolygonF,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit,
     QFileDialog, QFileSystemModel, QHBoxLayout,
@@ -141,7 +145,29 @@ _DEFAULT_SETTINGS = {
     "import_dir": "",          # last folder used by Import Audio Files…
     "beat_jump_mode": "16 BEATS",
     "waveform_zoom": 92.0,
+    "autoplay_mode": "",
 }
+
+_AUTOPLAY_MODES = {"up", "random", "down"}
+
+
+def _autoplay_arrow_icon(direction: int) -> QIcon:
+    """Small Retina-sharp triangle matching the deck's Play glyph."""
+    pixmap = QPixmap(24, 16)
+    pixmap.setDevicePixelRatio(2.0)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#f5f6fa"))
+    points = (
+        [QPointF(2.0, 6.0), QPointF(6.0, 2.0), QPointF(10.0, 6.0)]
+        if direction < 0
+        else [QPointF(2.0, 2.0), QPointF(10.0, 2.0), QPointF(6.0, 6.0)]
+    )
+    painter.drawPolygon(QPolygonF(points))
+    painter.end()
+    return QIcon(pixmap)
 
 class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self):
@@ -188,6 +214,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
         self._device_profiles: dict[str, object] = {}
         self._sync_playlists_cache: list[Playlist] | None = None
+        # Autoplay owns a frozen snapshot of the view that supplied the
+        # deliberately started track. Browsing elsewhere never mutates it.
+        self._autoplay_mode = ""
+        self._autoplay_order: list[str] = []
+        self._autoplay_index: int | None = None
+        self._autoplay_random_seen: set[str] = set()
+        self._autoplay_random_queue: list[int] = []
+        self._autoplay_rng = random.Random()
         # Computed-row cache: track_id -> row dict (effective title/artist +
         # metadata). effective_title is ~0.17ms/track, so recomputing a 2500-
         # track playlist on every click cost ~440ms — this makes clicks instant.
@@ -255,6 +289,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             str(self.settings.get("beat_jump_mode", "16 BEATS")), emit=False)
         self.player_bar.set_waveform_zoom(
             float(self.settings.get("waveform_zoom", 92.0)), emit=False)
+        self._set_autoplay_mode(
+            str(self.settings.get("autoplay_mode", "")), save=False)
         self._sync_settings_controls()  # reflect saved values in the Settings page
         self._restore_columns()         # saved column widths/visibility
         self._refresh_custom()
@@ -698,20 +734,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _load_track(self, t):
         """Load a track paused at its first grid beat."""
-        self._open_track(t, autoplay=False)
+        self._open_track(t, autoplay=False, capture_autoplay=True)
 
     def _play_track(self, t):
         """Load a track and start it at its first grid beat."""
-        self._open_track(t, autoplay=True)
+        self._open_track(t, autoplay=True, capture_autoplay=True)
 
-    def _open_track(self, t, autoplay: bool):
+    def _open_track(
+            self, t, autoplay: bool,
+            capture_autoplay: bool = True) -> bool:
         try:
             ok = t.path.is_file()
         except OSError:
             ok = False
         if not ok:
             self._flash_status("File not on disk", 5)
-            return
+            return False
+        if capture_autoplay:
+            self._capture_autoplay_context(t.track_id)
         src = self.titles.get(t.track_id) or t.name
         artist = metadata.effective_artist(t.track_id, src, t.artist, self.overrides,
                                            True, self.lib.artist_registry if self.lib else None,
@@ -726,6 +766,100 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             cues=getattr(t, "rekordbox_cues", None))
         self._highlight_now_playing(t.track_id)
         self._update_player_navigation()
+        return True
+
+    def _capture_autoplay_context(self, track_id: str):
+        """Freeze the supplying playlist/view while the user browses elsewhere."""
+        order = self._player_order()
+        try:
+            index = order.index(track_id)
+        except ValueError:
+            order = [track_id]
+            index = 0
+        self._autoplay_order = list(order)
+        self._autoplay_index = index
+        self._autoplay_random_seen = {track_id}
+        self._autoplay_random_queue = []
+
+    def _autoplay_playable(self, index: int) -> bool:
+        if self.lib is None or not 0 <= index < len(self._autoplay_order):
+            return False
+        track = self.lib.tracks_by_id.get(self._autoplay_order[index])
+        if track is None:
+            return False
+        try:
+            return track.path.is_file()
+        except OSError:
+            return False
+
+    def _next_autoplay_index(self) -> int | None:
+        """Return one valid next index, with shuffle-bag random semantics."""
+        if self._autoplay_index is None or not self._autoplay_order:
+            return None
+        if self._autoplay_mode in {"up", "down"}:
+            step = -1 if self._autoplay_mode == "up" else 1
+            index = self._autoplay_index + step
+            while 0 <= index < len(self._autoplay_order):
+                if self._autoplay_playable(index):
+                    return index
+                index += step
+            return None
+        if self._autoplay_mode != "random":
+            return None
+
+        while True:
+            while self._autoplay_random_queue:
+                index = self._autoplay_random_queue.pop()
+                track_id = self._autoplay_order[index]
+                if (track_id not in self._autoplay_random_seen
+                        and self._autoplay_playable(index)):
+                    return index
+
+            # One shuffled cycle contains every playable song exactly once.
+            # A new cycle excludes the current song, preventing an immediate
+            # repeat at the boundary as well.
+            unique: dict[str, int] = {}
+            for index, track_id in enumerate(self._autoplay_order):
+                if (track_id not in unique
+                        and self._autoplay_playable(index)):
+                    unique[track_id] = index
+            candidates = [
+                index for track_id, index in unique.items()
+                if track_id not in self._autoplay_random_seen
+            ]
+            if not candidates:
+                current = self._autoplay_order[self._autoplay_index]
+                self._autoplay_random_seen = {current}
+                candidates = [
+                    index for track_id, index in unique.items()
+                    if track_id != current
+                ]
+            if not candidates:
+                return None
+            self._autoplay_rng.shuffle(candidates)
+            self._autoplay_random_queue = candidates
+
+    def _advance_autoplay(self, ended_track_id: str):
+        """Advance only after an ordinary playing transport reaches its end."""
+        if (not self._autoplay_mode
+                or self.lib is None
+                or self.player_bar.current_track() != ended_track_id
+                or self._autoplay_index is None
+                or not 0 <= self._autoplay_index < len(self._autoplay_order)
+                or self._autoplay_order[self._autoplay_index]
+                    != ended_track_id):
+            return
+        index = self._next_autoplay_index()
+        if index is None:
+            return
+        track_id = self._autoplay_order[index]
+        track = self.lib.tracks_by_id.get(track_id)
+        if track is None:
+            return
+        self._autoplay_index = index
+        self._autoplay_random_seen.add(track_id)
+        self._open_track(
+            track, autoplay=True, capture_autoplay=False)
 
     def _highlight_now_playing(self, tid: str) -> bool:
         """Loading a track ALWAYS highlights it in the visible browser — a
@@ -863,16 +997,64 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         h.addWidget(sound, 0, Qt.AlignVCenter)
         h.addWidget(box, 0, Qt.AlignVCenter)
         h.addSpacing(28)
+        self.now_playing_frame = QWidget()
+        self.now_playing_frame.setObjectName("NowPlayingFrame")
+        self.now_playing_frame.setFixedHeight(44)
+        self.now_playing_frame.setMinimumWidth(80)
+        self.now_playing_frame.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        now_layout = QHBoxLayout(self.now_playing_frame)
+        now_layout.setContentsMargins(0, 0, 0, 0)
+        now_layout.setSpacing(0)
+
+        autoplay_stack = QWidget()
+        autoplay_stack.setObjectName("AutoplayStack")
+        autoplay_stack.setFixedWidth(32)
+        autoplay_layout = QVBoxLayout(autoplay_stack)
+        autoplay_layout.setContentsMargins(0, 0, 0, 0)
+        autoplay_layout.setSpacing(0)
+        self.autoplay_up_btn = QPushButton("")
+        self.autoplay_up_btn.setObjectName("AutoplayUp")
+        self.autoplay_up_btn.setIcon(_autoplay_arrow_icon(-1))
+        self.autoplay_up_btn.setIconSize(QSize(12, 8))
+        self.autoplay_random_btn = QPushButton("R")
+        self.autoplay_random_btn.setObjectName("AutoplayRandom")
+        self.autoplay_down_btn = QPushButton("")
+        self.autoplay_down_btn.setObjectName("AutoplayDown")
+        self.autoplay_down_btn.setIcon(_autoplay_arrow_icon(1))
+        self.autoplay_down_btn.setIconSize(QSize(12, 8))
+        self._autoplay_buttons = {
+            "up": self.autoplay_up_btn,
+            "random": self.autoplay_random_btn,
+            "down": self.autoplay_down_btn,
+        }
+        tooltips = {
+            "up": "Autoplay upward through the playlist",
+            "random": "Autoplay every playlist track once in random order",
+            "down": "Autoplay downward through the playlist",
+        }
+        for mode, button in self._autoplay_buttons.items():
+            button.setFixedSize(32, 14 if mode != "random" else 16)
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(tooltips[mode])
+            button.setProperty("active", False)
+            button.clicked.connect(
+                lambda _checked=False, value=mode:
+                self._toggle_autoplay_mode(value))
+            autoplay_layout.addWidget(button)
+        now_layout.addWidget(autoplay_stack)
+
         self.now_playing = QLabel("SELECT A TRACK")
         self.now_playing.setObjectName("NowPlaying")
         self.now_playing.setAlignment(Qt.AlignCenter)
         # Long metadata must never squeeze the fixed search/settings controls.
-        self.now_playing.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.now_playing.setMinimumWidth(80)
-        self.now_playing.setFixedHeight(44)
+        self.now_playing.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.now_playing.setCursor(Qt.PointingHandCursor)
         self.now_playing.setToolTip("")
-        h.addWidget(self.now_playing, 1, Qt.AlignVCenter)
+        now_layout.addWidget(self.now_playing, 1)
+        h.addWidget(self.now_playing_frame, 1, Qt.AlignVCenter)
         h.addSpacing(28)
         self.search = QLineEdit()
         self.search.setObjectName("Search")
@@ -911,6 +1093,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._on_waveform_zoom_changed)
         self.player_bar.previous_requested.connect(lambda: self._play_relative(-1))
         self.player_bar.next_requested.connect(lambda: self._play_relative(1))
+        self.player_bar.track_ended.connect(self._advance_autoplay)
         self.player_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         outer.addWidget(self.player_bar, 1)
         return bar
@@ -930,6 +1113,35 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_waveform_zoom_changed(self, pixels_per_second: float):
         self.settings["waveform_zoom"] = pixels_per_second
         self._save_state()
+
+    def _toggle_autoplay_mode(self, mode: str):
+        self._set_autoplay_mode("" if self._autoplay_mode == mode else mode)
+
+    def _set_autoplay_mode(self, mode: str, save: bool = True):
+        """Select at most one playlist-relative end-of-track policy."""
+        mode = mode if mode in _AUTOPLAY_MODES else ""
+        changed = mode != self._autoplay_mode
+        self._autoplay_mode = mode
+        if mode == "random" and changed:
+            current = (
+                self._autoplay_order[self._autoplay_index]
+                if self._autoplay_index is not None
+                and 0 <= self._autoplay_index < len(self._autoplay_order)
+                else self.player_bar.current_track()
+            )
+            self._autoplay_random_seen = {current} if current else set()
+            self._autoplay_random_queue = []
+        for value, button in getattr(
+                self, "_autoplay_buttons", {}).items():
+            active = value == mode
+            if button.property("active") != active:
+                button.setProperty("active", active)
+                button.style().unpolish(button)
+                button.style().polish(button)
+                button.update()
+        self.settings["autoplay_mode"] = mode
+        if save and changed:
+            self._save_state()
 
     def _on_playback_active(self, active: bool):
         """Reserve CPU/UI time for the deck while audio is running."""
@@ -2159,6 +2371,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu.addAction(
             "Deep Verify managed files…",
             lambda: self._verify_device(dev, deep=True))
+        if profile is not None and not profile.has_stock_ipod:
+            menu.addSeparator()
+            menu.addAction(
+                "Erase all files from device…",
+                lambda: self._erase_device(dev))
         n = self._drift_cache.get(dev, 0)  # ≤3s-fresh from the background scan
         if n:
             word = "playlist" if n == 1 else "playlists"

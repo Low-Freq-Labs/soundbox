@@ -341,19 +341,34 @@ class WaveformWorker(QThread):
             return True, False, False
         overview = load_overview(
             self.track_analysis_dir, self.track_id, self.path)
-        if overview is not None:
-            combined = {**manifest, **overview}
-            if self.native_backend is not None:
-                self.native_backend.set_overview(combined, self.generation)
-                overview["_native_uploaded"] = True
-            self.overview_ready.emit(
-                self.path, self.generation, overview)
         if self.isInterruptionRequested():
             return True, overview is not None, False
         detail = load_detail(
             self.track_analysis_dir, self.track_id, self.path)
+        if overview is not None and self.native_backend is not None:
+            combined = {**manifest, **overview}
+            audio_detail = (
+                detail.get("_audio_detail")
+                if detail is not None else None)
+            if (audio_detail is not None
+                    and hasattr(
+                        self.native_backend, "set_complete_analysis")):
+                overview_ok, detail_ok = (
+                    self.native_backend.set_complete_analysis(
+                        combined, audio_detail, self.generation))
+                if overview_ok:
+                    overview["_native_uploaded"] = True
+                if detail_ok:
+                    detail["_native_uploaded"] = True
+            elif self.native_backend.set_overview(
+                    combined, self.generation):
+                overview["_native_uploaded"] = True
+        if overview is not None:
+            self.overview_ready.emit(
+                self.path, self.generation, overview)
         if detail is not None:
-            if self.native_backend is not None:
+            if (self.native_backend is not None
+                    and not detail.get("_native_uploaded")):
                 self.native_backend.set_audio_detail(
                     detail.get("_audio_detail"), self.generation)
                 detail["_native_uploaded"] = True
@@ -665,6 +680,15 @@ class WaveformBar(QWidget):
         self._drag_preview_ms = target
         self.set_timing(target, self._duration_ms)
         self.previewed.emit(target)
+
+    def reanchor_drag(self, position_ms: int):
+        """Replace the coarse Qt mouse-down time with Metal's exact hold."""
+        if self._drag_origin_ms is None:
+            return
+        position = self._bounded_ms(int(position_ms))
+        self._drag_origin_ms = position
+        self._drag_preview_ms = position
+        self.set_timing(position, self._duration_ms)
 
     def _seek_to_ms(self, target: int, snap: bool = True):
         if not self._duration_ms:
@@ -1271,6 +1295,7 @@ class PlayerBar(QWidget):
     playback_error = Signal(str)  # surfaced by the app's status bar
     previous_requested = Signal()  # MainWindow owns the visible track order
     next_requested = Signal()
+    track_ended = Signal(str)
     now_playing_changed = Signal(str)
     playback_active_changed = Signal(bool)
     source_changed = Signal(str)
@@ -1440,6 +1465,7 @@ class PlayerBar(QWidget):
         self.player.positionChanged.connect(self._on_backend_pos)
         self.player.durationChanged.connect(self._on_dur)
         self.player.playbackStateChanged.connect(self._on_state)
+        self.player.endOfMedia.connect(self._on_end_of_media)
         self._update_transport()
         self.set_track_navigation(False, False)
         if self._native_error:
@@ -1933,10 +1959,15 @@ class PlayerBar(QWidget):
         self._deck_drag_active = True
         self._deck_drag_target = None
         self._deck_drag_resume = self.is_playing() and not self._pause_pending
-        # Freeze Metal under the hand immediately. Subsequent mouse moves
-        # update this preview directly; the decoder still receives only
-        # the one authoritative seek on release.
-        if hasattr(self.player, "set_visual_position"):
+        # Freeze Metal under the hand at its own continuous render clock, then
+        # make that exact frame the waveform's relative-drag origin. The older
+        # Python poll can lag between frames and caused a small click-side jerk.
+        if hasattr(self.player, "begin_visual_hold"):
+            exact = int(self.player.begin_visual_hold())
+            self._pos = max(0, min(exact, self._dur) if self._dur else exact)
+            self._anchor_transport(self._pos, self._deck_drag_resume)
+            self.wave.reanchor_drag(self._pos)
+        elif hasattr(self.player, "set_visual_position"):
             self.player.set_visual_position(self._pos, True)
         if self._deck_drag_resume:
             self._pause_clean(self._after_drag_paused)
@@ -2045,6 +2076,18 @@ class PlayerBar(QWidget):
                 stopped = backend if abs(backend - estimate) > 120 else estimate
                 self._anchor_transport(stopped, False)
                 self._paint_position(stopped)
+
+    def _on_end_of_media(self):
+        """Forward only a genuine ordinary-playback terminal edge."""
+        ordinary_transport = (
+            self._transport_play_active
+            and not self._cue_preview_active
+            and not self._cue_preview_latched
+            and not self._pause_pending)
+        track_id = self._track_id
+        if ordinary_transport and track_id:
+            QTimer.singleShot(
+                0, lambda ended=track_id: self.track_ended.emit(ended))
 
     def _try_pending_autoplay(self):
         """Set a newly selected track on its first grid beat, then maybe play."""

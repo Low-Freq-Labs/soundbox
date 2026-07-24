@@ -122,6 +122,10 @@ def _bind(path: Path):
     lib.sb_deck_set_preview_frame.argtypes = [
         handle, ctypes.c_uint64, ctypes.c_int,
     ]
+    lib.sb_deck_begin_preview_hold.argtypes = [handle]
+    lib.sb_deck_begin_preview_hold.restype = ctypes.c_uint64
+    lib.sb_deck_begin_waveform_update.argtypes = [handle]
+    lib.sb_deck_end_waveform_update.argtypes = [handle]
     lib.sb_deck_set_zoom.argtypes = [handle, ctypes.c_float]
     lib.sb_deck_set_zoom.restype = ctypes.c_float
     lib.sb_deck_request_display.argtypes = [handle]
@@ -211,6 +215,8 @@ def _bind(path: Path):
     lib.sb_deck_set_session_cue.restype = ctypes.c_int
     lib.sb_deck_snapshot.argtypes = [handle, ctypes.POINTER(_Snapshot)]
     lib.sb_deck_snapshot.restype = ctypes.c_int
+    lib.sb_deck_has_ended.argtypes = [handle]
+    lib.sb_deck_has_ended.restype = ctypes.c_int
     lib.sb_deck_visual_frame.argtypes = [handle]
     lib.sb_deck_visual_frame.restype = ctypes.c_uint64
     lib.sb_deck_analysis_sample_count.argtypes = [handle]
@@ -270,6 +276,7 @@ class UnavailableDeckBackend(QObject):
     positionChanged = Signal(int)
     durationChanged = Signal(int)
     playbackStateChanged = Signal(object)
+    endOfMedia = Signal()
     errorOccurred = Signal(object, str)
     is_native = False
 
@@ -321,6 +328,9 @@ class UnavailableDeckBackend(QObject):
     def set_visual_position(self, _ms: int, _preview: bool):
         pass
 
+    def begin_visual_hold(self) -> int:
+        return self._position
+
     def set_zoom(self, pixels_per_second: float):
         return float(pixels_per_second)
 
@@ -332,6 +342,12 @@ class UnavailableDeckBackend(QObject):
 
     def set_overview(self, _analysis, _generation: int = 0):
         pass
+
+    def set_complete_analysis(
+            self, overview, detail, _generation: int = 0):
+        self.set_overview(overview, _generation)
+        self.set_audio_detail(detail, _generation)
+        return (True, True)
 
     def set_cues(self, _cues):
         pass
@@ -355,6 +371,7 @@ class NativeDeckBackend(QObject):
     positionChanged = Signal(int)
     durationChanged = Signal(int)
     playbackStateChanged = Signal(object)
+    endOfMedia = Signal()
     errorOccurred = Signal(object, str)
     is_native = True
 
@@ -385,6 +402,7 @@ class NativeDeckBackend(QObject):
         self._last_error: tuple[int, int] = (0, 0)
         self._ramp_token = 0
         self._analysis_generation = 0
+        self._end_emitted = False
         self._ramp_completion = None
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(125)
@@ -397,6 +415,7 @@ class NativeDeckBackend(QObject):
 
     def setSource(self, source: QUrl):
         path = source.toLocalFile()
+        self._end_emitted = False
         self._loading = bool(path)
         self._set_poll_interval(8)
         self.set_cues([])
@@ -553,6 +572,13 @@ class NativeDeckBackend(QObject):
         self._lib.sb_deck_set_preview_frame(
             self._handle, frame, int(bool(preview)))
 
+    def begin_visual_hold(self) -> int:
+        """Atomically freeze Metal at its continuous rendered playhead."""
+        frame = int(self._lib.sb_deck_begin_preview_hold(self._handle))
+        position = round(frame / max(1.0, self._sample_rate) * 1000)
+        self._position_ms = max(0, position)
+        return self._position_ms
+
     def set_zoom(self, pixels_per_second: float):
         return float(self._lib.sb_deck_set_zoom(
             self._handle, float(pixels_per_second)))
@@ -681,6 +707,22 @@ class NativeDeckBackend(QObject):
             float(data.get("sample_rate") or 150.0),
             seconds, beat_in_bar, beat_count))
 
+    def set_complete_analysis(
+            self, overview: dict, detail: dict, generation: int = 0
+    ) -> tuple[bool, bool]:
+        """Commit color and ultra geometry as one first visible surface."""
+        self._lib.sb_deck_begin_waveform_update(self._handle)
+        overview_ok = detail_ok = False
+        try:
+            overview_ok = bool(self.set_overview(overview, generation))
+            if overview_ok:
+                before = self.diagnostic_detail_shape()
+                self._set_audio_detail(detail, generation)
+                detail_ok = self.diagnostic_detail_shape() != before
+        finally:
+            self._lib.sb_deck_end_waveform_update(self._handle)
+        return overview_ok, detail_ok
+
     @staticmethod
     def _cue_rgb(cue: dict, slot: int) -> tuple[int, int, int]:
         if cue.get("kind") == "memory":
@@ -771,6 +813,7 @@ class NativeDeckBackend(QObject):
             2: PlaybackState.PAUSED,
         }
         state = states.get(int(snap.playback_state), PlaybackState.STOPPED)
+        ended = bool(self._lib.sb_deck_has_ended(self._handle))
         if duration != self._duration_ms:
             self._duration_ms = duration
             self.durationChanged.emit(duration)
@@ -782,6 +825,14 @@ class NativeDeckBackend(QObject):
             if force_emit or now - self._last_position_emit >= 0.05:
                 self._last_position_emit = now
                 self.positionChanged.emit(position)
+        # Publish the terminal edge while PlayerBar still retains ordinary
+        # playback intent. Its slot defers playlist advancement by one event
+        # turn, allowing the PAUSED snapshot below to land before source swap.
+        if ended and not self._end_emitted:
+            self._end_emitted = True
+            self.endOfMedia.emit()
+        elif not ended:
+            self._end_emitted = False
         if state != self._state:
             self._set_state(state)
         if self._ramp_token and snap.ramp_completed >= self._ramp_token:
