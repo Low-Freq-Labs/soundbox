@@ -1778,18 +1778,19 @@ class PlayerHardening(unittest.TestCase):
         w.previewed.connect(previews.append)
         w.mousePressEvent(Ev(200))
         w.mouseMoveEvent(Ev(290, Qt.LeftButton))
-        self.assertEqual(w._position_ms, 9_022)
+        self.assertAlmostEqual(w._position_ms, 9_021.739, places=3)
         self.assertEqual(hits, [])  # no decoder seek while the hand is moving
         w.mouseMoveEvent(Ev(380, Qt.LeftButton))
         # Still calculated from the original 10s mouse-down position. The old
         # compounding implementation would have run away to roughly 7 seconds.
-        self.assertEqual(w._position_ms, 8_044)
+        self.assertAlmostEqual(w._position_ms, 8_043.478, places=3)
         self.assertEqual(hits, [])
-        self.assertEqual(previews, [9_022, 8_044])
+        self.assertAlmostEqual(previews[0], 9_021.739, places=3)
+        self.assertAlmostEqual(previews[1], 8_043.478, places=3)
         w.mouseReleaseEvent(Ev(380))
         # One exact decoder seek at the timestamp under the hand. There is no
         # release-time magnet that can make the waveform slip several pixels.
-        self.assertEqual([round(x * 30_000) for x in hits], [8_044])
+        self.assertAlmostEqual(hits[0] * 30_000, 8_043.478, places=3)
 
     def test_native_drag_preview_is_forwarded_before_release(self):
         from desktop.player import PlayerBar
@@ -1835,7 +1836,7 @@ class PlayerHardening(unittest.TestCase):
                 self.visual = []
 
             def begin_visual_hold(self):
-                return 10_037
+                return 10_037.25
 
             def set_visual_position(self, ms, preview):
                 self.visual.append((ms, preview))
@@ -1865,16 +1866,16 @@ class PlayerHardening(unittest.TestCase):
 
             pb._on_wave_drag_started()
 
-            self.assertEqual(pb._pos, 10_037)
-            self.assertEqual(pb.wave._drag_origin_ms, 10_037)
-            self.assertEqual(pb.wave._drag_preview_ms, 10_037)
+            self.assertEqual(pb._pos, 10_037.25)
+            self.assertEqual(pb.wave._drag_origin_ms, 10_037.25)
+            self.assertEqual(pb.wave._drag_preview_ms, 10_037.25)
             # Atomic native capture owns the initial freeze; there is no second
             # setPreview call at the stale 10,000 ms Python poll.
             self.assertEqual(fake.visual, [])
 
-            pb._deck_drag_target = 10_037
+            pb._deck_drag_target = 10_037.25
             pb._on_wave_drag_finished()
-            self.assertEqual(fake.positions, [10_037])
+            self.assertEqual(fake.positions, [10_037.25])
         finally:
             pb.player = real
             pb.shutdown_waveforms()

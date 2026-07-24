@@ -311,6 +311,11 @@ class NativeDeckContract(unittest.TestCase):
             self.deck.diagnostic_audio_detail_buffer_bytes(), 0)
 
     def test_populated_audio_detail_holds_cadence_at_both_zoom_extremes(self):
+        # Exercise a full-width deck, not only the compact integration host.
+        # The direct final-pixel shader must remain inside the display budget
+        # without relying on a translated intermediate texture.
+        self.host.resize(1800, 190)
+        self.app.processEvents()
         rate = 1536
         heights = bytes(
             255 if i % 384 in range(80, 96)

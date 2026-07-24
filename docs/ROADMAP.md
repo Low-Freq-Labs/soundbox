@@ -44,21 +44,16 @@ For the live test count, trust `./check.sh` output—not any number written here
   Scrub math consumes the native-applied scale, detail promotion no longer
   re-uploads color, render encoding does not hold the analysis mutex, and
   display cadence follows the active screen through resize/screen changes.
-  The moving lane is now printed onto an integer song-texel-anchored,
-  four-sample-per-physical-pixel coverage-premultiplied Metal surface: normal
-  frames translate fixed subpixels,
-  while ping-pong refreshes retain the overlap and render only the newly
-  exposed strip. Overview and ultra buffers make one atomic first-visible
-  commit, so long sets do not inflate during detail promotion. A playing
-  waveform grab captures the exact native frame and pauses on mouse-down; a
-  stationary release resumes from exactly that held timestamp.
-- **MOTION-STABILITY PASS SHIPPED.** The four-sample song tile now selects one
-  already-prefiltered texel per physical pixel instead of linearly filtering
-  antialiased coverage and premultiplied hue a second time. Ordinary Qt
-  position publication no longer wakes the Metal run loop through an already
-  inactive preview channel. The isolated deck and full application therefore
-  share the same presentation path without sacrificing ultra detail, zoom
-  continuity, scrubbing, or resize behavior.
+  The moving lane now rasterizes each final Retina pixel directly from one
+  continuous song coordinate; there is no translated intermediate surface,
+  second coverage/color filter, or texel-step cadence. Overview and ultra
+  buffers make one atomic first-visible commit, so long sets do not inflate
+  during detail promotion. A playing waveform grab captures the last drawable
+  already presented, preserves its exact source frame through
+  fractional-millisecond drag math, and pauses on mouse-down; a stationary
+  release resumes from exactly that held frame. Ordinary Qt position
+  publication remains idempotent and cannot wake the Metal run loop through an
+  inactive preview.
 - **PLAYLIST AUTOPLAY SHIPPED.** Header up/down modes walk the playlist snapshot
   that deliberately started the track; random uses a no-repeat shuffle bag.
   Browsing is independent, a new deliberate source replaces the snapshot, and

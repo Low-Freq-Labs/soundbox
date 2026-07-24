@@ -91,18 +91,14 @@ already-uploaded compact ~150 Hz RGB pyramid remains the time/color authority.
 The normalized 24-band master remains stored for long-term analysis but never
 participates in renderer color. Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
-precision. The scrolling lane is rasterized into a bounded, integer
-song-texel-anchored Metal tile at four horizontal samples per physical pixel.
-Display frames translate that fixed surface;
-margin refreshes ping-pong the textures, blit their unchanged overlap, and
-render only the newly exposed strip. Full reprints occur only when render data,
-zoom, Retina scale, or drawable geometry changes. Tile RGB is coverage
-premultiplied in half-float RGBA. The display pass selects one already-filtered
-song texel rather than linearly filtering antialiased coverage again, then
-restores hue before final display conversion. Redundant inactive-preview
-updates are absorbed without waking the Metal run loop. Render buffers are
-snapshotted under a short mutex and command
-encoding happens after that mutex is released.
+precision. The scrolling lane maps its integer anchor plus local phase
+directly into each final Retina drawable pixel. One fragment
+pass selects the continuous LOD, samples geometry and RGB, filters silhouette
+coverage, and composites the final color. There is no translated intermediate
+texture or second coverage/color filter, so motion retains its true fractional
+distance at every zoom. Redundant inactive-preview updates are absorbed without
+waking the Metal run loop. Render buffers are snapshotted under a short mutex
+and command encoding happens after that mutex is released.
 Prepared overview and ultra buffers are built off the UI thread and become
 visible in one grouped native commit; the display link skips the incomplete
 transaction so resolution promotion cannot alter a waveform already on screen.

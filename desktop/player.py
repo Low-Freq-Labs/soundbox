@@ -419,7 +419,7 @@ class SessionCueState(str, Enum):
 class WaveformBar(QWidget):
     """Zoomed scrolling waveform with rekordbox RGB detail and beat grid."""
     seeked = Signal(float)  # 0..1
-    previewed = Signal(int)  # live drag timestamp; decoder still seeks once
+    previewed = Signal(float)  # live drag timestamp; decoder still seeks once
     drag_started = Signal()
     drag_finished = Signal()
     zoom_changed = Signal(float)
@@ -450,8 +450,8 @@ class WaveformBar(QWidget):
         self._overview_drag = False
         self._zoom_level = _ZOOM_LEVELS.index(_PIXELS_PER_SECOND)
         self._drag_origin_x = 0.0
-        self._drag_origin_ms: int | None = None
-        self._drag_preview_ms: int | None = None
+        self._drag_origin_ms: float | None = None
+        self._drag_preview_ms: float | None = None
         self._drag_moved = False
         # paintEvent fills every pixel. Declaring that explicitly prevents the
         # previous translucent waveform frame from surviving in the backing
@@ -652,7 +652,7 @@ class WaveformBar(QWidget):
             self._position_ms = int(self._pos * self._duration_ms)
         self.update()
 
-    def set_timing(self, position_ms: int, duration_ms: int):
+    def set_timing(self, position_ms: int | float, duration_ms: int):
         self._position_ms = max(0, position_ms)
         self._duration_ms = max(0, duration_ms)
         self._pos = (self._position_ms / self._duration_ms
@@ -671,31 +671,31 @@ class WaveformBar(QWidget):
         threshold_ms = round(7 / self.PIXELS_PER_SECOND * 1000)
         return closest if abs(closest - target_ms) <= threshold_ms else target_ms
 
-    def _bounded_ms(self, target: int) -> int:
+    def _bounded_ms(self, target: int | float) -> float:
         return min(self._duration_ms, max(0, target))
 
-    def _preview_to_ms(self, target: int):
+    def _preview_to_ms(self, target: int | float):
         """Move only the display while dragging; decoding stays untouched."""
         target = self._bounded_ms(target)
         self._drag_preview_ms = target
         self.set_timing(target, self._duration_ms)
         self.previewed.emit(target)
 
-    def reanchor_drag(self, position_ms: int):
+    def reanchor_drag(self, position_ms: int | float):
         """Replace the coarse Qt mouse-down time with Metal's exact hold."""
         if self._drag_origin_ms is None:
             return
-        position = self._bounded_ms(int(position_ms))
+        position = self._bounded_ms(position_ms)
         self._drag_origin_ms = position
         self._drag_preview_ms = position
         self.set_timing(position, self._duration_ms)
 
-    def _seek_to_ms(self, target: int, snap: bool = True):
+    def _seek_to_ms(self, target: int | float, snap: bool = True):
         if not self._duration_ms:
             return
         target = self._bounded_ms(target)
         if snap:
-            target = self._snap_to_beat(target)
+            target = self._snap_to_beat(round(target))
         self.set_timing(target, self._duration_ms)
         self.seeked.emit(target / self._duration_ms)
 
@@ -737,7 +737,7 @@ class WaveformBar(QWidget):
             ev.accept()
             return
         delta_x = ev.position().x() - self._drag_origin_x
-        if abs(delta_x) >= 3:
+        if delta_x != 0:
             self._drag_moved = True
         if self._drag_moved:
             # Grab semantics: drag the waveform right to reveal earlier audio,
@@ -745,8 +745,9 @@ class WaveformBar(QWidget):
             # repeated move events never compound or accelerate. This is a
             # VISUAL preview only: asking the decoder to seek on every mouse
             # event made the hand interaction stutter and queued stale seeks.
-            target = self._drag_origin_ms - int(
-                delta_x / self.PIXELS_PER_SECOND * 1000)
+            target = (
+                self._drag_origin_ms
+                - delta_x / self.PIXELS_PER_SECOND * 1000.0)
             self._preview_to_ms(target)
         ev.accept()
 
@@ -1317,7 +1318,7 @@ class PlayerBar(QWidget):
         self._pause_floor_ms = 0
         self._deck_drag_active = False
         self._deck_drag_resume = False
-        self._deck_drag_target: int | None = None
+        self._deck_drag_target: float | None = None
         self._track_id: str | None = None
         self._src_path: str | None = None
         self._analysis_path = ""
@@ -1926,17 +1927,17 @@ class PlayerBar(QWidget):
 
     def _seek(self, frac: float):
         if self._dur > 0:
-            target = int(frac * self._dur)
+            target = frac * self._dur
             if self._deck_drag_active:
                 self._deck_drag_target = target
             else:
                 self._move_clean(target)
 
-    def _set_position(self, target: int):
+    def _set_position(self, target: int | float):
         self.player.setPosition(target)
         self._on_pos(target)
 
-    def _move_clean(self, target: int):
+    def _move_clean(self, target: int | float):
         """Move once at silence, resuming only if the deck was playing."""
         if self.is_playing() and not self._pause_pending:
             def finish():
@@ -1963,7 +1964,7 @@ class PlayerBar(QWidget):
         # make that exact frame the waveform's relative-drag origin. The older
         # Python poll can lag between frames and caused a small click-side jerk.
         if hasattr(self.player, "begin_visual_hold"):
-            exact = int(self.player.begin_visual_hold())
+            exact = float(self.player.begin_visual_hold())
             self._pos = max(0, min(exact, self._dur) if self._dur else exact)
             self._anchor_transport(self._pos, self._deck_drag_resume)
             self.wave.reanchor_drag(self._pos)
@@ -1972,7 +1973,7 @@ class PlayerBar(QWidget):
         if self._deck_drag_resume:
             self._pause_clean(self._after_drag_paused)
 
-    def _on_wave_preview(self, target: int):
+    def _on_wave_preview(self, target: float):
         if (self._deck_drag_active
                 and hasattr(self.player, "set_visual_position")):
             self.player.set_visual_position(target, True)

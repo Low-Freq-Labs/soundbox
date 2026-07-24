@@ -19,9 +19,9 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("if (u.pixelsPerSecond >", self.shader)
         self.assertNotIn("if (u.pixelsPerSecond <", self.shader)
         self.assertEqual(
-            self.shader.count("fragment float4 wave_source_fragment"), 1)
-        self.assertEqual(
-            self.shader.count("fragment float4 wave_display_fragment"), 1)
+            self.shader.count("fragment float4 wave_surface_fragment"), 1)
+        self.assertNotIn("wave_source_fragment", self.shader)
+        self.assertNotIn("wave_display_fragment", self.shader)
 
     def test_geometry_and_color_share_continuous_lod(self):
         helper = self.shader.split(
@@ -54,7 +54,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_composite_is_opaque_without_an_outer_ghost(self):
         fragment = self.shader.split(
-            "fragment float4 wave_display_fragment", 1
+            "fragment float4 wave_surface_fragment", 1
         )[1].split(
             "vertex Out grid_vertex", 1
         )[0]
@@ -69,7 +69,9 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "vertex Out wave_surface_vertex", 1
         )[0]
-        self.assertIn("max(coverage, 0.72)", helper)
+        self.assertIn("saturate(coverage)", helper)
+        self.assertIn("1.0 - inverse * inverse * inverse", helper)
+        self.assertNotIn("max(coverage", helper)
         self.assertNotIn(".height", helper)
         self.assertGreaterEqual(
             self.shader.count("vivid_wave_coverage("), 3)
@@ -153,113 +155,49 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("uint waveCurrentIndex;", self.shader)
         self.assertIn("float waveCurrentPhase;", self.shader)
         fragment = self.shader.split(
-            "fragment float4 wave_source_fragment", 1
+            "fragment float4 wave_surface_fragment", 1
         )[1].split(
             "if (u.audioDetailSampleCount > 0", 1
         )[0]
         self.assertIn("u.waveCurrentIndex", fragment)
         self.assertIn("u.waveCurrentPhase", fragment)
 
-    def test_scrolling_lane_translates_a_preprinted_song_tile(self):
-        display = self.shader.split(
-            "fragment float4 wave_display_fragment", 1
+    def test_scrolling_lane_is_rasterized_once_at_the_final_pixel(self):
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
         )[1].split(
             "vertex Out grid_vertex", 1
         )[0]
-        main = display.split(
-            "if (yPoints < 49.0 || u.tileValid == 0)", 1
-        )[1]
-        self.assertIn("u.tileCurrentOffsetTexels", main)
-        self.assertIn("* u.tileSupersample", main)
-        self.assertIn("waveTile.sample(", main)
-        self.assertIn("filter::nearest", main)
-        self.assertNotIn("filter::linear", main)
-        self.assertNotIn("filtered_envelope_coverage(", main)
-        self.assertNotIn("filtered_wave_surface(", main)
-
+        self.assertIn("filtered_wave_surface(", fragment)
+        self.assertIn("filtered_envelope_coverage(", fragment)
+        self.assertNotIn("texture2d<", fragment)
+        self.assertNotIn(".sample(", fragment)
         native = (
             Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
         ).read_text()
         draw = native.split("void draw(CAMetalDisplayLinkUpdate", 1)[1].split(
             "private:", 1)[0]
-        self.assertIn("const bool tileNeedsPrint", draw)
-        self.assertIn("waveTileRevision_ != renderRevision", draw)
-        self.assertIn("std::abs(texelDelta) > travelCapacity * 0.70", draw)
-        self.assertIn("std::llround(currentSongTexel)", draw)
-        self.assertIn("waveTileCenterSongTexel_", draw)
-        self.assertIn("const bool incrementalPrint", draw)
-        self.assertIn("[commands blitCommandEncoder]", draw)
-        self.assertIn("exposedWidth = shift", draw)
-        self.assertIn("[tileEncoder setScissorRect:", draw)
-        self.assertIn("waveTileScratch_ = waveTile_", draw)
         self.assertIn(
-            "[encoder setRenderPipelineState:displayPipeline_]", draw)
-        self.assertNotIn("displayPipeline_ : pipeline_", draw)
-
-    def test_song_tile_is_horizontally_supersampled_without_changing_lod(self):
-        source = self.shader.split(
-            "fragment float4 wave_source_fragment", 1
-        )[1].split(
-            "fragment float4 wave_display_fragment", 1
-        )[0]
+            "[encoder setRenderPipelineState:pipeline_]", draw)
+        self.assertNotIn("waveTile", native)
+        self.assertNotIn("displayPipeline_", native)
+        self.assertNotIn("blitCommandEncoder", draw)
         self.assertIn(
-            "scale * (u.tileValid != 0 ? "
-            "max(1.0, u.tileSupersample) : 1.0)",
-            source,
-        )
-        self.assertIn("in.position.x / horizontalScale", source)
-        # Supersampling adds fixed song positions between output pixels. It
-        # deliberately retains the established physical-pixel LOD footprint.
-        self.assertGreaterEqual(
-            source.count("u.pixelsPerSecond * scale"), 2)
-        self.assertNotIn(
-            "u.pixelsPerSecond * horizontalScale", source)
-
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
-        self.assertIn(
-            "constexpr float kWaveTileHorizontalSamples = 4.0f", native)
-        self.assertIn(
-            "* drawableScale * kWaveTileHorizontalSamples / rate", native)
-        self.assertIn(
-            "drawableWidth)\n"
-            "                * kWaveTileHorizontalSamples",
+            "wave.colorAttachments[0].pixelFormat = metalLayer_.pixelFormat",
             native,
         )
 
-    def test_tile_translation_uses_one_prefiltered_song_texel(self):
-        source = self.shader.split(
-            "fragment float4 wave_source_fragment", 1
-        )[1].split(
-            "fragment float4 wave_display_fragment", 1
-        )[0]
-        display = self.shader.split(
-            "fragment float4 wave_display_fragment", 1
+    def test_direct_motion_uses_continuous_physical_pixel_coordinates(self):
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
         )[1].split(
             "vertex Out grid_vertex", 1
         )[0]
-        self.assertIn("if (u.tileValid != 0)", source)
-        self.assertIn(
-            "return float4(colorSurface.color * coverage, coverage)", source)
-        self.assertIn(
-            "tileSample.rgb / max(tileSample.a, 1.0 / 255.0)", display)
-        self.assertIn("vivid_wave_coverage(tileSample.a)", display)
-        self.assertIn("filter::nearest", display)
-        self.assertNotIn("filter::linear", display)
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
-        self.assertIn(
-            "texture2DDescriptorWithPixelFormat:\n"
-            "                        MTLPixelFormatRGBA16Float",
-            native,
-        )
-        self.assertIn(
-            "wave.colorAttachments[0].pixelFormat = "
-            "MTLPixelFormatRGBA16Float",
-            native,
-        )
+        self.assertIn("in.position.x / scale", fragment)
+        self.assertGreaterEqual(
+            fragment.count("u.pixelsPerSecond * scale"), 2)
+        self.assertNotIn("horizontalScale", fragment)
+        self.assertNotIn("tileCurrentOffsetTexels", self.shader)
 
     def test_grid_uses_integer_milliseconds_plus_local_phase(self):
         self.assertIn(
@@ -294,6 +232,19 @@ class NativeWaveformShader(unittest.TestCase):
         ).read_text()
         self.assertIn(
             "predictedFrame(update.targetPresentationTimestamp)", native)
+
+    def test_mouse_hold_uses_the_drawable_already_presented(self):
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        hold = native.split("uint64_t beginPreviewHold()", 1)[1].split(
+            "void beginWaveformUpdate", 1
+        )[0]
+        self.assertIn("displayLatestTarget_ <= now", hold)
+        self.assertIn("displayPreviousTarget_ <= now", hold)
+        self.assertIn("kFreshPresentationWindow", hold)
+        self.assertIn("frame = displayLatestFrame_", hold)
+        self.assertIn("frame = visualFrameNow()", hold)
 
     def test_staged_waveform_buffers_have_one_atomic_visible_commit(self):
         native = (

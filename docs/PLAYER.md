@@ -129,15 +129,16 @@ never disagree about a silently clamped value.
 
 Main-waveform scrubbing is relative and precise:
 
-- Mouse-down atomically captures Metal's continuous rendered frame, makes that
-  exact timestamp the relative-drag origin, freezes the visual preview, and
-  fades playing audio to pause. It never falls back to the older coarse Python
-  poll, so clicking either side of the fixed playhead cannot create a jerk.
+- Mouse-down atomically captures the last Metal drawable whose presentation
+  time has actually occurred, makes that exact source frame the relative-drag
+  origin, freezes the visual preview, and fades playing audio to pause. It
+  never substitutes a newly predicted between-refresh position or the older
+  coarse Python poll.
 - Press/release without horizontal movement performs one authoritative seek to
   the exact held timestamp, then resumes only if playback was active before
   the grab. A paused deck remains paused.
-- Crossing the three-pixel drag threshold begins relative waveform movement;
-  sub-threshold hand jitter never changes the held timestamp.
+- Relative movement begins continuously with the pointer. There is no
+  three-pixel dead zone whose first update can appear as a small jump.
 - Dragging gives live visual position feedback without repeatedly seeking the
   decoder.
 - Release performs one authoritative seek and resumes only if playback was
@@ -320,30 +321,18 @@ The following renderer rules are measured invariants, not style preferences:
 - Derive one continuous LOD from source samples per physical pixel and blend
   the adjacent peak levels. The overview and main lane call the same sampler;
   ultra detail replaces geometry quality only, never timing or color.
-- Rasterize the scrolling lane at four horizontal samples per physical display
-  pixel onto a bounded Metal surface whose center is an integer global song
-  texel. The physical-pixel LOD remains unchanged. Normal display frames
-  translate this already-decided subpixel surface and choose one of its four
-  prefiltered song samples per physical pixel instead of filtering coverage a
-  second time or reevaluating LOD, RGB, and silhouette under each moving screen
-  column. This preserves maximum-zoom detail while preventing adjacent
-  antialiased contours and hues from breathing into each other.
-- When playback approaches the surface margin, blit the unchanged overlap into
-  the alternate tile and rasterize only the newly exposed song strip. Zoom,
-  Retina scale, analysis promotion, and resize deliberately trigger a complete
-  reprint; ordinary scrolling never does.
-- Store tile RGB premultiplied by raw silhouette coverage in half-float RGBA.
-  The display pass restores the hue from the selected prefiltered texel, then
-  applies the visibility floor and converts once to the display format.
-  Subpixel motion therefore cannot make adjacent colors dim or compete,
-  including at very low edge coverage.
+- Rasterize each final Retina pixel directly from its continuous song
+  coordinate in one Metal pass. There is no moving intermediate texture,
+  discrete texel selection, coverage resampling, or refresh seam. This retains
+  the same physical-pixel LOD and maximum-zoom detail while allowing every
+  display frame to advance by its true fractional distance.
 - Filter final silhouette coverage—not raw peak height. Coverage from each
   adjacent level is blended after sampling, preventing the contour from
   acquiring a separate translucent edge.
-- Once a fragment belongs to that silhouette, apply a small chromatic
-  visibility floor before compositing. This keeps one-physical-pixel quiet
-  passages vivid against the dark deck without increasing their amplitude or
-  adding a second envelope.
+- Composite coverage through a continuous cubic ease-out. This keeps
+  one-physical-pixel quiet passages vivid against the dark deck without
+  increasing their amplitude or adding a second envelope, while avoiding the
+  former nonzero visibility floor that made entering/leaving edge pixels flash.
 - Address audio detail and compact color with integer sample anchors plus local
   float phase. Never multiply a large absolute float time back into a sample
   index.
@@ -395,10 +384,9 @@ Automated coverage:
   holds/complete-surface commits, and source immutability.
 - `tests/test_native_shader.py`: shader/source contracts for one continuous
   geometry/color LOD, amplitude-weighted RGB mips, coverage filtering, vivid
-  thin-contour color, four-sample song-lattice tile translation/incremental
-  strip updates and single-prefiltered-texel display sampling,
-  cue coordinate modes, integer/local-phase addressing, PLL correction, and
-  future presentation timestamps.
+  thin-contour color, one-pass final-pixel rasterization, cue coordinate modes,
+  integer/local-phase addressing, PLL correction, future presentation
+  timestamps, and exact already-presented-frame holds.
 - `tests/test_ui.py`: transport-only Space, double-click loading, keyboard CUE,
   cue-panel/overview/detail marker identity, activation resynchronization,
   stale-completion rejection, beat/bar jumps,
@@ -431,7 +419,11 @@ Dated unified-renderer validation on 2026-07-24:
   semantically identical apart from runtime settings; 3,247 V4 caches and
   3,122 artwork files remained present.
 
-Dated song-tile stability validation on 2026-07-24:
+Historical song-tile experiment on 2026-07-24 (superseded):
+
+The bounded tile held callback cadence but was later removed because its
+presentation stage could either refilter coverage/hue or quantize translation.
+These numbers describe that retired renderer, not the shipped invariant.
 
 - The bare and offscreen-render gates passed with 483 tests and one expected
   platform skip.
@@ -459,7 +451,10 @@ Dated cohesive-surface/autoplay validation on 2026-07-24:
   83 playlists, retained 3,247 V4 records and 3,124 art files, and left the
   pre-install `library.json` semantically identical.
 
-Dated motion-stability validation on 2026-07-24:
+Historical nearest-tile experiment on 2026-07-24 (superseded):
+
+Nearest sampling improved a capture residual but exposed discrete quarter-pixel
+velocity steps to the eye. The direct final-pixel renderer replaced it.
 
 - The bare gate passed with 494 tests and one expected platform skip.
 - Consecutive real Metal screen captures used the prepared 26,570,650-sample
@@ -476,6 +471,25 @@ Dated motion-stability validation on 2026-07-24:
   tracks / 83 playlists, reported zero preparation tasks, retained 3,247 V4
   records and 3,124 art files, and left `library.json` byte-identical. No cache
   recook was required.
+
+Dated direct-renderer validation on 2026-07-24:
+
+- The bare gate and offscreen-render gate passed with 494 tests and one expected
+  platform skip.
+- A populated 1800×190-point Retina native deck sustained the negotiated
+  display cadence at both 24 and 1536 px/s with ultra detail active. The test
+  renders each final drawable pixel directly and contains no translated
+  intermediate waveform texture.
+- Native mouse-hold coverage verifies already-presented-frame selection with a
+  freshness fallback, fractional-millisecond drag/release preservation, one
+  decoder seek, and no dead-zone jump.
+- Same-turn Qt/AppKit/Retina resize coverage still passes, so direct
+  rasterization does not reintroduce stretched or one-frame-small waveforms.
+- The signed installed app loaded the real 26,570,650-sample `OF THE TREES`
+  set, played through the direct renderer, paused on a stationary off-center
+  grab, and resumed from that held position. Startup reported 3,265 tracks /
+  83 playlists and zero preparation tasks; 3,247 V4 records, 3,124 artwork
+  files, and every curated `library.json` key remained intact.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain

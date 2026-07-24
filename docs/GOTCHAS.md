@@ -69,19 +69,19 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   for a successfully analyzed SoundBox color record. Current audio-detail and
   color positions are integer sample anchors + local float phase; never
   collapse either into one absolute float.
-- **Do not recompute the scrolling surface under moving screen pixels.** The
-  source shader prints a bounded tile on an integer global song-texel lattice
-  at four horizontal samples per physical pixel while retaining the original
-  physical-pixel LOD;
-  steady frames only translate that fixed result. Refreshes copy the unchanged
-  overlap to the alternate texture and render the newly exposed strip. An
-  arbitrary frame-centered tile changes sample/LOD phase at every refresh and
-  recreates periodic pulsing. Tile RGB is premultiplied by raw silhouette
-  coverage in half-float RGBA; restore hue before applying the vivid-coverage
-  floor. The display pass must select one of the four already-prefiltered song
-  texels per physical pixel; linearly filtering that antialiased coverage a
-  second time makes contours and adjacent hues breathe. An 8-bit premultiplied
-  intermediate quantizes hue precisely where edge coverage is lowest.
+- **Antialias coverage must remain continuous through final compositing.** A
+  hard minimum vividness for every nonzero fragment turns a contour crossing a
+  pixel into an on/off color flash, even when the song coordinate itself is
+  perfectly smooth. Use the shared cubic ease-out: it preserves full interior
+  color and thin-line visibility without changing height, hue, LOD, or timing.
+- **Do not insert a translated waveform texture between song data and the
+  drawable.** Linear translation filters already-antialiased coverage and hue
+  a second time, which makes contours and adjacent colors breathe. Nearest
+  translation avoids that blend but quantizes true motion into alternating
+  quarter/half-physical-pixel steps. The scrolling fragment must instead
+  evaluate its continuous song coordinate, physical-pixel LOD, RGB, and final
+  coverage once at the drawable pixel. This direct path is fast enough at both
+  zoom extremes and has no refresh boundary or second sampling phase.
 - **Inactive preview is an idempotent native transition.** PlayerBar publishes
   coarse transport text positions during ordinary playback. Those
   `preview_active=false` calls must do nothing once native preview is already
@@ -123,13 +123,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   grid exists. A missing/invalid imported grid uses the SoundBox fallback with
   beat 1 at `0:00`; neither path writes to Rekordbox.
 - The scrolling detail waveform claims transport on mouse-down by design:
-  use the native atomic hold to freeze Metal at its continuously rendered frame,
-  re-anchor Qt drag math to the returned timestamp, and begin the clean pause
-  immediately. A coarse Python position poll visibly jerks toward the click.
-  Keep the three-pixel threshold only for relative movement. Release must send
-  one exact authoritative seek—even without movement—and resume only when the
-  deck was playing before the grab. Never seek the decoder on move events. The
-  whole-track overview deliberately retains absolute click/drag navigation.
+  use the native atomic hold to freeze the last drawable already presented,
+  re-anchor Qt drag math to its fractional-millisecond timestamp, and begin the
+  clean pause immediately. Predicting a fresh frame or rounding to whole
+  milliseconds visibly jerks at high zoom. Relative movement follows the
+  pointer continuously; do not add a dead zone that releases its accumulated
+  delta as one jump. Release sends one exact authoritative seek—even without
+  movement—and resumes only when the deck was playing before the grab. Never
+  seek the decoder on move events. The whole-track overview deliberately
+  retains absolute click/drag navigation.
 - Overview and ultra waveform buffers are one visible surface. Prepared loads
   must group both native uploads while presentation is suspended and commit
   them together. Painting the overview while a long ultra section is still

@@ -451,10 +451,11 @@ class NativeDeckBackend(QObject):
     def stop(self):
         self._lib.sb_deck_stop(self._handle)
 
-    def setPosition(self, ms: int):
-        frame = round(max(0, int(ms)) * self._sample_rate / 1000)
+    def setPosition(self, ms: int | float):
+        precise_ms = max(0.0, float(ms))
+        frame = round(precise_ms * self._sample_rate / 1000)
         self._lib.sb_deck_seek_frames(self._handle, frame)
-        self._position_ms = max(0, int(ms))
+        self._position_ms = round(precise_ms)
         self.positionChanged.emit(self._position_ms)
 
     def request_display(self):
@@ -567,17 +568,17 @@ class NativeDeckBackend(QObject):
         self._ramp_token = self._lib.sb_deck_ramp_gain(
             self._handle, float(gain), float(duration_ms))
 
-    def set_visual_position(self, ms: int, preview: bool):
-        frame = round(max(0, int(ms)) * self._sample_rate / 1000)
+    def set_visual_position(self, ms: int | float, preview: bool):
+        frame = round(max(0.0, float(ms)) * self._sample_rate / 1000)
         self._lib.sb_deck_set_preview_frame(
             self._handle, frame, int(bool(preview)))
 
-    def begin_visual_hold(self) -> int:
-        """Atomically freeze Metal at its continuous rendered playhead."""
+    def begin_visual_hold(self) -> float:
+        """Atomically freeze Metal at the exact frame already on screen."""
         frame = int(self._lib.sb_deck_begin_preview_hold(self._handle))
-        position = round(frame / max(1.0, self._sample_rate) * 1000)
-        self._position_ms = max(0, position)
-        return self._position_ms
+        precise_ms = frame / max(1.0, self._sample_rate) * 1000.0
+        self._position_ms = round(max(0.0, precise_ms))
+        return max(0.0, precise_ms)
 
     def set_zoom(self, pixels_per_second: float):
         return float(self._lib.sb_deck_set_zoom(

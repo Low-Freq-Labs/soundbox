@@ -33,7 +33,6 @@ constexpr float kPixelsPerSecond = 92.0f;
 constexpr float kOverviewHeight = 28.0f;
 constexpr float kRulerTop = 31.0f;
 constexpr float kZoomTop = 49.0f;
-constexpr float kWaveTileHorizontalSamples = 4.0f;
 constexpr size_t kWaveMipLevels = 32;
 
 struct WaveSample {
@@ -91,10 +90,6 @@ struct Uniforms {
     uint32_t audioDetailMipCount;
     uint32_t audioDetailMipOffsets[kWaveMipLevels];
     uint32_t audioDetailMipCounts[kWaveMipLevels];
-    uint32_t tileWidthPixels;
-    float tileCurrentOffsetTexels;
-    uint32_t tileValid;
-    float tileSupersample;
 };
 
 struct AudioRing {
@@ -213,6 +208,13 @@ public:
     bool beginTrack(uint64_t generation) {
         renderGeneration_.store(generation, std::memory_order_release);
         previewActive_.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(displayFrameMutex_);
+            displayPreviousTarget_ = 0.0;
+            displayLatestTarget_ = 0.0;
+            displayPreviousFrame_ = 0;
+            displayLatestFrame_ = 0;
+        }
         std::lock_guard<std::mutex> lock(renderMutex_);
         waveBuffer_ = nil;
         detailBuffer_ = nil;
@@ -237,7 +239,6 @@ public:
         audioDetailMipOffsets_.fill(0);
         audioDetailMipCounts_.fill(0);
         beatPositions_.clear();
-        ++renderRevision_;
         return true;
     }
 
@@ -320,11 +321,29 @@ public:
     }
 
     uint64_t beginPreviewHold() {
-        // Capture the same continuous clock the renderer is following and
-        // publish that frame before enabling preview. Mouse-down therefore
-        // freezes the waveform where it is visibly drawn, rather than at the
-        // last coarse position polled by Python.
-        const uint64_t frame = visualFrameNow();
+        // Freeze the drawable that is actually on screen, not a newly
+        // predicted point between display refreshes. At high zoom, even the
+        // sub-refresh difference is visible as a mouse-down jerk.
+        uint64_t frame = 0;
+        const CFTimeInterval now = CACurrentMediaTime();
+        constexpr CFTimeInterval kFreshPresentationWindow = 1.0 / 30.0;
+        {
+            std::lock_guard<std::mutex> lock(displayFrameMutex_);
+            if (displayLatestTarget_ > 0.0
+                    && displayLatestTarget_ <= now
+                    && now - displayLatestTarget_
+                        <= kFreshPresentationWindow) {
+                frame = displayLatestFrame_;
+            } else if (displayPreviousTarget_ > 0.0
+                    && displayPreviousTarget_ <= now
+                    && now - displayPreviousTarget_
+                        <= kFreshPresentationWindow) {
+                frame = displayPreviousFrame_;
+            }
+        }
+        if (frame == 0) {
+            frame = visualFrameNow();
+        }
         previewFrame_.store(frame, std::memory_order_release);
         previewActive_.store(true, std::memory_order_release);
         requestDisplay();
@@ -598,7 +617,6 @@ public:
             cueVertexCount_ = 0;
             cueMarkerCount_ = 0;
             beatPositions_.clear();
-            ++renderRevision_;
             return false;
         }
         std::vector<WaveSample> wave;
@@ -787,7 +805,6 @@ public:
         cueVertexCount_ = 0;
         cueMarkerCount_ = 0;
         beatPositions_ = std::move(beatPositions);
-        ++renderRevision_;
         return true;
     }
 
@@ -899,7 +916,6 @@ public:
         gridBuffer_ = gridBuffer;
         gridVertexCount_ = grid.size();
         beatPositions_ = std::move(beatPositions);
-        ++renderRevision_;
         return true;
     }
 
@@ -1064,7 +1080,6 @@ public:
         detailBuffer_ = buffer;
         detailSampleCount_ = detail.size();
         detailSamplesPerSecond_ = static_cast<float>(samplesPerSecond);
-        ++renderRevision_;
         return true;
     }
 
@@ -1173,7 +1188,6 @@ public:
         audioDetailMipCount_ = mipCount;
         audioDetailMipOffsets_ = mipOffsets;
         audioDetailMipCounts_ = mipCounts;
-        ++renderRevision_;
         return true;
     }
 
@@ -1215,7 +1229,7 @@ public:
     }
 
     void draw(CAMetalDisplayLinkUpdate *update) {
-        if (!pipeline_ || !displayPipeline_ || !update.drawable) {
+        if (!pipeline_ || !update.drawable) {
             return;
         }
         // Overview and ultra buffers are prepared independently but become
@@ -1260,6 +1274,14 @@ public:
             ? static_cast<double>(
                 previewFrame_.load(std::memory_order_acquire))
             : predictedFrame(update.targetPresentationTimestamp);
+        {
+            std::lock_guard<std::mutex> lock(displayFrameMutex_);
+            displayPreviousTarget_ = displayLatestTarget_;
+            displayPreviousFrame_ = displayLatestFrame_;
+            displayLatestTarget_ = update.targetPresentationTimestamp;
+            displayLatestFrame_ = static_cast<uint64_t>(
+                std::llround(std::max(0.0, exactFrame)));
+        }
         const double rate = std::max(1.0, sampleRate_.load(std::memory_order_acquire));
         const float drawableScale = static_cast<float>(
             update.drawable.texture.width / std::max(1.0, size.width));
@@ -1282,7 +1304,6 @@ public:
         NSUInteger gridVertexCount = 0;
         NSUInteger sessionCueVertexCount = 0;
         NSUInteger cueVertexCount = 0;
-        uint64_t renderRevision = 0;
         {
             std::lock_guard<std::mutex> lock(renderMutex_);
             uniforms.samplesPerSecond = waveSamplesPerSecond_;
@@ -1331,7 +1352,6 @@ public:
             gridVertexCount = gridVertexCount_;
             sessionCueVertexCount = sessionCueVertexCount_;
             cueVertexCount = cueVertexCount_;
-            renderRevision = renderRevision_;
             auto beat = std::upper_bound(
                 beatPositions_.begin(), beatPositions_.end(),
                 currentSeconds,
@@ -1346,178 +1366,6 @@ public:
         }
         setUniformPosition(uniforms, exactFrame, rate);
 
-        const NSUInteger drawableWidth = update.drawable.texture.width;
-        const NSUInteger drawableHeight = update.drawable.texture.height;
-        const NSUInteger mainY = std::min<NSUInteger>(
-            drawableHeight,
-            static_cast<NSUInteger>(
-                std::ceil(49.0 * drawableScale)));
-        const NSUInteger tileWidth = std::min<NSUInteger>(
-            16384,
-            std::max<NSUInteger>(
-                8192,
-                drawableWidth
-                    * static_cast<NSUInteger>(
-                        kWaveTileHorizontalSamples) * 2));
-        uniforms.tileSupersample = kWaveTileHorizontalSamples;
-        if (waveBuffer
-                && (!waveTile_
-                    || !waveTileScratch_
-                    || waveTile_.width != tileWidth
-                    || waveTile_.height != drawableHeight)) {
-            MTLTextureDescriptor *descriptor =
-                [MTLTextureDescriptor
-                    texture2DDescriptorWithPixelFormat:
-                        MTLPixelFormatRGBA16Float
-                    width:tileWidth
-                    height:drawableHeight
-                    mipmapped:NO];
-            descriptor.storageMode = MTLStorageModePrivate;
-            descriptor.usage =
-                MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-            waveTile_ = [device_ newTextureWithDescriptor:descriptor];
-            waveTileScratch_ = [device_ newTextureWithDescriptor:descriptor];
-            waveTileRevision_ = 0;
-        }
-
-        const double texelsPerFrame =
-            static_cast<double>(uniforms.pixelsPerSecond)
-            * drawableScale * kWaveTileHorizontalSamples / rate;
-        const double currentSongTexel = exactFrame * texelsPerFrame;
-        const double texelDelta =
-            currentSongTexel
-            - static_cast<double>(waveTileCenterSongTexel_);
-        const double travelCapacity = std::max(
-            0.0,
-            (static_cast<double>(tileWidth)
-             - static_cast<double>(drawableWidth)
-                * kWaveTileHorizontalSamples) * 0.5);
-        const bool tileNeedsPrint =
-            waveBuffer
-            && uniforms.sampleCount
-            && waveTile_
-            && waveTileScratch_
-            && mainY < drawableHeight
-            && (waveTileRevision_ != renderRevision
-                || std::abs(waveTileZoom_ - uniforms.pixelsPerSecond) > 0.01f
-                || std::abs(waveTileScale_ - drawableScale) > 0.01f
-                || std::abs(texelDelta) > travelCapacity * 0.70);
-        if (tileNeedsPrint) {
-            // Tile raster centers always live on the same integer song-texel
-            // lattice. Reprinting a neighboring strip therefore cannot change
-            // the phase, hue, or apparent height of an existing feature.
-            const int64_t nextCenterSongTexel = static_cast<int64_t>(
-                std::llround(currentSongTexel));
-            const int64_t centerShift =
-                nextCenterSongTexel - waveTileCenterSongTexel_;
-            const bool sameRasterSurface =
-                waveTileRevision_ == renderRevision
-                && std::abs(
-                    waveTileZoom_ - uniforms.pixelsPerSecond) <= 0.01f
-                && std::abs(waveTileScale_ - drawableScale) <= 0.01f;
-            const bool incrementalPrint =
-                sameRasterSurface
-                && centerShift != 0
-                && std::abs(centerShift)
-                    < static_cast<int64_t>(tileWidth);
-
-            NSUInteger exposedX = 0;
-            NSUInteger exposedWidth = tileWidth;
-            if (incrementalPrint) {
-                const NSUInteger shift = static_cast<NSUInteger>(
-                    std::abs(centerShift));
-                const NSUInteger overlap = tileWidth - shift;
-                const NSUInteger sourceX = centerShift > 0 ? shift : 0;
-                const NSUInteger destinationX =
-                    centerShift > 0 ? 0 : shift;
-                exposedX = centerShift > 0 ? overlap : 0;
-                exposedWidth = shift;
-
-                id<MTLBlitCommandEncoder> blit =
-                    [commands blitCommandEncoder];
-                [blit copyFromTexture:waveTile_
-                          sourceSlice:0
-                          sourceLevel:0
-                         sourceOrigin:MTLOriginMake(sourceX, 0, 0)
-                           sourceSize:MTLSizeMake(
-                               overlap, drawableHeight, 1)
-                            toTexture:waveTileScratch_
-                     destinationSlice:0
-                     destinationLevel:0
-                    destinationOrigin:MTLOriginMake(
-                        destinationX, 0, 0)];
-                [blit endEncoding];
-            }
-
-            waveTileCenterSongTexel_ = nextCenterSongTexel;
-            const double tileCenterFrame =
-                texelsPerFrame > 0.0
-                ? static_cast<double>(waveTileCenterSongTexel_)
-                    / texelsPerFrame
-                : exactFrame;
-            Uniforms tileUniforms = uniforms;
-            tileUniforms.widthPoints =
-                static_cast<float>(tileWidth)
-                / (drawableScale * kWaveTileHorizontalSamples);
-            tileUniforms.drawableWidthPixels =
-                static_cast<uint32_t>(tileWidth);
-            tileUniforms.tileWidthPixels =
-                static_cast<uint32_t>(tileWidth);
-            tileUniforms.tileValid = 1u;
-            setUniformPosition(
-                tileUniforms, tileCenterFrame, rate);
-
-            MTLRenderPassDescriptor *tilePass =
-                [MTLRenderPassDescriptor renderPassDescriptor];
-            tilePass.colorAttachments[0].texture = waveTileScratch_;
-            tilePass.colorAttachments[0].loadAction =
-                incrementalPrint
-                ? MTLLoadActionLoad
-                : MTLLoadActionClear;
-            tilePass.colorAttachments[0].storeAction =
-                MTLStoreActionStore;
-            tilePass.colorAttachments[0].clearColor =
-                MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
-            id<MTLRenderCommandEncoder> tileEncoder =
-                [commands renderCommandEncoderWithDescriptor:tilePass];
-            [tileEncoder setRenderPipelineState:pipeline_];
-            [tileEncoder setScissorRect:MTLScissorRect{
-                exposedX,
-                mainY,
-                exposedWidth,
-                drawableHeight - mainY,
-            }];
-            [tileEncoder setFragmentBuffer:waveBuffer offset:0 atIndex:0];
-            [tileEncoder setFragmentBuffer:
-                (audioDetailBuffer ? audioDetailBuffer : waveBuffer)
-                offset:0 atIndex:4];
-            [tileEncoder setFragmentBytes:&tileUniforms
-                                   length:sizeof(tileUniforms)
-                                  atIndex:1];
-            [tileEncoder drawPrimitives:MTLPrimitiveTypeTriangle
-                            vertexStart:0 vertexCount:3];
-            [tileEncoder endEncoding];
-            id<MTLTexture> completedTile = waveTileScratch_;
-            waveTileScratch_ = waveTile_;
-            waveTile_ = completedTile;
-            waveTileRevision_ = renderRevision;
-            waveTileZoom_ = uniforms.pixelsPerSecond;
-            waveTileScale_ = drawableScale;
-        }
-
-        uniforms.tileWidthPixels = waveTile_
-            ? static_cast<uint32_t>(waveTile_.width)
-            : 0;
-        uniforms.tileCurrentOffsetTexels = static_cast<float>(
-            currentSongTexel
-            - static_cast<double>(waveTileCenterSongTexel_));
-        uniforms.tileValid =
-            waveTile_
-            && waveTileRevision_ == renderRevision
-            && waveBuffer
-            && uniforms.sampleCount
-            ? 1u : 0u;
-
         MTLRenderPassDescriptor *pass =
             [MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture = update.drawable.texture;
@@ -1527,13 +1375,12 @@ public:
             13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0, 1.0);
         id<MTLRenderCommandEncoder> encoder =
             [commands renderCommandEncoderWithDescriptor:pass];
-        if (waveBuffer && uniforms.sampleCount && waveTile_) {
-            [encoder setRenderPipelineState:displayPipeline_];
+        if (waveBuffer && uniforms.sampleCount) {
+            [encoder setRenderPipelineState:pipeline_];
             [encoder setFragmentBuffer:waveBuffer offset:0 atIndex:0];
             [encoder setFragmentBuffer:
                 (audioDetailBuffer ? audioDetailBuffer : waveBuffer)
                 offset:0 atIndex:4];
-            [encoder setFragmentTexture:waveTile_ atIndex:0];
             [encoder setFragmentBytes:&uniforms
                                length:sizeof(uniforms)
                               atIndex:1];
@@ -1941,11 +1788,7 @@ struct Uniforms { float currentSeconds;
                   float audioDetailCurrentPhase;
                   uint audioDetailMipCount;
                   uint audioDetailMipOffsets[32];
-                  uint audioDetailMipCounts[32];
-                  uint tileWidthPixels;
-                  float tileCurrentOffsetTexels;
-                  uint tileValid;
-                  float tileSupersample; };
+                  uint audioDetailMipCounts[32]; };
 struct Out { float4 position [[position]]; float4 color; };
 struct WavePair {
     float heightA;
@@ -1966,7 +1809,15 @@ struct WaveSurface {
     float valid;
 };
 inline float vivid_wave_coverage(float coverage) {
-    return coverage > 0.0 ? max(coverage, 0.72) : 0.0;
+    // Keep thin contours bright without a nonzero visibility floor. A hard
+    // floor makes a subpixel edge jump from background straight to vivid
+    // color as it crosses a pixel, which reads as shimmer and shaking during
+    // otherwise continuous motion. This cubic ease-out is continuous at both
+    // ends, preserves full interior color, and changes only compositing—not
+    // waveform height, timing, LOD, or hue.
+    const float value = saturate(coverage);
+    const float inverse = 1.0 - value;
+    return 1.0 - inverse * inverse * inverse;
 }
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     const float2 positions[3] = {
@@ -2140,15 +1991,13 @@ inline float filtered_envelope_coverage(
     return mix(lowCoverage, highCoverage, lodMix);
 }
 
-fragment float4 wave_source_fragment(
+fragment float4 wave_surface_fragment(
         Out in [[stage_in]],
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]]) {
     const float scale = max(1.0, u.drawableScale);
-    const float horizontalScale =
-        scale * (u.tileValid != 0 ? max(1.0, u.tileSupersample) : 1.0);
-    const float xPoints = in.position.x / horizontalScale;
+    const float xPoints = in.position.x / scale;
     const float yPoints = in.position.y / scale;
     const float3 background = float3(
         13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0);
@@ -2199,9 +2048,6 @@ fragment float4 wave_source_fragment(
         u.waveCurrentIndex, waveLocal, waveFootprint,
         distance, heightScale, antialias);
     if (colorSurface.valid == 0.0) {
-        if (u.tileValid != 0) {
-            return float4(0.0);
-        }
         discard_fragment();
     }
     float coverage = colorSurface.coverage;
@@ -2219,82 +2065,11 @@ fragment float4 wave_source_fragment(
             distance, heightScale, antialias);
     }
     if (coverage <= 0.0) {
-        if (u.tileValid != 0) {
-            return float4(0.0);
-        }
         discard_fragment();
-    }
-    // Main-lane tiles store premultiplied hue + raw silhouette coverage.
-    // The display pass chooses one prefiltered song-space texel per physical
-    // pixel, avoiding a second filter that can make edges and hues breathe.
-    if (u.tileValid != 0) {
-        return float4(colorSurface.color * coverage, coverage);
     }
     return float4(mix(
         background, colorSurface.color,
         vivid_wave_coverage(coverage)), 1.0);
-}
-
-fragment float4 wave_display_fragment(
-        Out in [[stage_in]],
-        const device WaveSample *samples [[buffer(0)]],
-        constant Uniforms &u [[buffer(1)]],
-        texture2d<float> waveTile [[texture(0)]]) {
-    const float scale = max(1.0, u.drawableScale);
-    const float xPoints = in.position.x / scale;
-    const float yPoints = in.position.y / scale;
-    const float3 background = float3(
-        13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0);
-    const float antialias = 0.5 / scale;
-    if (yPoints < 28.0) {
-        if (u.sampleCount == 0 || u.waveMipCount == 0) {
-            discard_fragment();
-        }
-        const float position =
-            clamp(
-                xPoints / max(1.0, u.widthPoints),
-                0.0, 0.999999)
-            * float(u.sampleCount);
-        const uint anchor = min(
-            uint(floor(position)), u.sampleCount - 1);
-        const float footprint =
-            float(u.sampleCount)
-            / max(1.0, float(u.drawableWidthPixels));
-        const float distance = abs(yPoints - 14.0);
-        const WaveSurface surface = filtered_wave_surface(
-            samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
-            anchor, position - floor(position), footprint,
-            distance, 11.0, antialias);
-        if (surface.valid == 0.0 || surface.coverage <= 0.0) {
-            discard_fragment();
-        }
-        return float4(mix(
-            background, surface.color,
-            vivid_wave_coverage(surface.coverage)), 1.0);
-    }
-    if (yPoints < 49.0 || u.tileValid == 0) {
-        discard_fragment();
-    }
-    const float tileX =
-        float(u.tileWidthPixels) * 0.5
-        + (in.position.x - float(u.drawableWidthPixels) * 0.5)
-            * u.tileSupersample
-        + u.tileCurrentOffsetTexels;
-    if (tileX < 0.0 || tileX >= float(u.tileWidthPixels)) {
-        discard_fragment();
-    }
-    constexpr sampler tileSampler(
-        coord::pixel, address::clamp_to_edge, filter::nearest);
-    const float4 tileSample = waveTile.sample(
-        tileSampler, float2(tileX, in.position.y));
-    if (tileSample.a <= 0.0) {
-        discard_fragment();
-    }
-    const float3 color =
-        tileSample.rgb / max(tileSample.a, 1.0 / 255.0);
-    return float4(mix(
-        background, color,
-        vivid_wave_coverage(tileSample.a)), 1.0);
 }
 vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
                        constant Uniforms &u [[buffer(1)]],
@@ -2333,19 +2108,12 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
         wave.vertexFunction =
             [library newFunctionWithName:@"wave_surface_vertex"];
         wave.fragmentFunction =
-            [library newFunctionWithName:@"wave_source_fragment"];
-        wave.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+            [library newFunctionWithName:@"wave_surface_fragment"];
+        wave.colorAttachments[0].pixelFormat = metalLayer_.pixelFormat;
         wave.colorAttachments[0].blendingEnabled = NO;
         pipeline_ = [device_ newRenderPipelineStateWithDescriptor:wave error:&error];
 
-        MTLRenderPipelineDescriptor *display = [wave copy];
-        display.fragmentFunction =
-            [library newFunctionWithName:@"wave_display_fragment"];
-        display.colorAttachments[0].pixelFormat = metalLayer_.pixelFormat;
-        displayPipeline_ = [device_
-            newRenderPipelineStateWithDescriptor:display error:&error];
-
-        MTLRenderPipelineDescriptor *grid = [display copy];
+        MTLRenderPipelineDescriptor *grid = [wave copy];
         grid.vertexFunction = [library newFunctionWithName:@"grid_vertex"];
         grid.fragmentFunction = [library newFunctionWithName:@"deck_fragment"];
         grid.colorAttachments[0].blendingEnabled = YES;
@@ -2354,7 +2122,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
         grid.colorAttachments[0].destinationRGBBlendFactor =
             MTLBlendFactorOneMinusSourceAlpha;
         gridPipeline_ = [device_ newRenderPipelineStateWithDescriptor:grid error:&error];
-        if (!pipeline_ || !displayPipeline_ || !gridPipeline_) {
+        if (!pipeline_ || !gridPipeline_) {
             const char *message = error.localizedDescription.UTF8String;
             setError(-42, message ? message : "Metal pipeline failed");
         }
@@ -2779,10 +2547,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     id<MTLDevice> device_ = nil;
     id<MTLCommandQueue> commandQueue_ = nil;
     id<MTLRenderPipelineState> pipeline_ = nil;
-    id<MTLRenderPipelineState> displayPipeline_ = nil;
     id<MTLRenderPipelineState> gridPipeline_ = nil;
-    id<MTLTexture> waveTile_ = nil;
-    id<MTLTexture> waveTileScratch_ = nil;
     id<MTLBuffer> waveBuffer_ = nil;
     id<MTLBuffer> detailBuffer_ = nil;
     id<MTLBuffer> audioDetailBuffer_ = nil;
@@ -2810,14 +2575,6 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     // allocates on the playback frame path after the first frame.
     std::vector<GridVertex> overlayScratch_;
     std::mutex renderMutex_;
-    uint64_t renderRevision_ = 1;
-    // Display-thread-only tile metadata. The expensive source sampler prints
-    // a song-anchored strip occasionally; normal frames translate that fixed
-    // image instead of recomputing RGB/envelope bins under every screen pixel.
-    uint64_t waveTileRevision_ = 0;
-    int64_t waveTileCenterSongTexel_ = 0;
-    float waveTileZoom_ = 0.0f;
-    float waveTileScale_ = 0.0f;
     SBDisplayDelegate *displayDelegate_ = nil;
     CAMetalDisplayLink *displayLink_ = nil;
     std::thread displayThread_;
@@ -2829,6 +2586,13 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     std::atomic<uint64_t> displayFirstTargetNs_{0};
     std::atomic<uint64_t> displayLastTargetNs_{0};
     std::atomic<uint64_t> displayMaxGapNs_{0};
+    // Two scheduled presentation samples let mouse-down select the frame
+    // already visible at that instant instead of predicting between refreshes.
+    std::mutex displayFrameMutex_;
+    CFTimeInterval displayPreviousTarget_ = 0.0;
+    CFTimeInterval displayLatestTarget_ = 0.0;
+    uint64_t displayPreviousFrame_ = 0;
+    uint64_t displayLatestFrame_ = 0;
     std::atomic<float> zoomPixelsPerSecond_{kPixelsPerSecond};
 
     AudioUnit audioUnit_ = nullptr;
