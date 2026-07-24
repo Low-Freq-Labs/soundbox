@@ -489,7 +489,7 @@ class WaveformBar(QWidget):
 
     def is_dragging(self) -> bool:
         """True while the user owns the visual playhead with the mouse."""
-        return self._overview_drag or self._drag_moved
+        return self._drag_origin_ms is not None
 
     def set_peaks(self, peaks: list[float]):
         self._peaks = peaks or []
@@ -696,6 +696,11 @@ class WaveformBar(QWidget):
             # Its first preview therefore owns transport immediately.
             self.drag_started.emit()
             self._preview_to_ms(self._overview_time_at_x(point.x()))
+        else:
+            # A playing detail waveform freezes and begins its clean pause as
+            # soon as the hand closes. Release always lands/resumes at the held
+            # timestamp, even when the pointer never crosses the drag threshold.
+            self.drag_started.emit()
         ev.accept()
 
     def mouseMoveEvent(self, ev):
@@ -709,10 +714,6 @@ class WaveformBar(QWidget):
             return
         delta_x = ev.position().x() - self._drag_origin_x
         if abs(delta_x) >= 3:
-            if not self._drag_moved:
-                # A detail-lane press is inert until it becomes a deliberate
-                # drag. Stationary holds must not freeze or pause playback.
-                self.drag_started.emit()
             self._drag_moved = True
         if self._drag_moved:
             # Grab semantics: drag the waveform right to reveal earlier audio,
@@ -729,23 +730,20 @@ class WaveformBar(QWidget):
         if self._drag_origin_ms is None:
             return
         overview = self._overview_drag
-        moved = self._drag_moved
         if overview:
             target = self._overview_time_at_x(ev.position().x())
-        elif moved:
+        else:
             target = (self._drag_preview_ms
                       if self._drag_preview_ms is not None
-                      else self._position_ms)
-        else:
-            target = None
+                      else self._drag_origin_ms)
         self._drag_origin_ms = None
         self._drag_preview_ms = None
         self._drag_moved = False
         self._overview_drag = False
         self.setCursor(Qt.OpenHandCursor if self._active else Qt.ArrowCursor)
         if target is not None:
-            # Deliberate navigation lands on the exact timestamp under the
-            # hand. A detail-lane click without motion is intentionally inert.
+            # Every completed grab lands on the exact held timestamp. A
+            # playing deck resumes only after its one authoritative seek.
             self._seek_to_ms(target, snap=False)
             self.drag_finished.emit()
         ev.accept()

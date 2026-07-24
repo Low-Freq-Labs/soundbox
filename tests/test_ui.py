@@ -931,7 +931,7 @@ class PlayerHardening(unittest.TestCase):
         w.set_timing(10_000, 30_000)
         hits = []
         w.seeked.connect(hits.append)
-        # Main-wave navigation begins only after a deliberate drag threshold.
+        # Main-wave navigation begins only after the deck is armed.
         class Ev:
             def __init__(self, x=200.0, buttons=Qt.NoButton):
                 self.x = x
@@ -952,12 +952,12 @@ class PlayerHardening(unittest.TestCase):
         w.set_active(True)
         w.mousePressEvent(Ev())
         self.assertEqual(hits, [])        # no jump on mouse-down
-        w.mouseReleaseEvent(Ev())        # stationary click → inert
-        self.assertEqual(hits, [])
+        w.mouseReleaseEvent(Ev())        # stationary grab lands where held
+        self.assertEqual(hits, [10_000 / 30_000])
         w.mousePressEvent(Ev())
         w.mouseMoveEvent(Ev(108.0, Qt.LeftButton))
         w.mouseReleaseEvent(Ev(108.0))
-        self.assertEqual(len(hits), 1)
+        self.assertEqual(len(hits), 2)
 
     def test_play_track_arms_wave_and_rebinding_is_safe(self):
         pb = _win.player_bar
@@ -1006,6 +1006,7 @@ class PlayerHardening(unittest.TestCase):
         pb = PlayerBar()
         try:
             pb._src_path = "/tmp/loaded.wav"
+            pb._playback_available = True
             pb._dur = 60_000
             # Deliberately uneven grid: proves this is timestamps, not headline BPM.
             pb._beat_grid = [i * 500 + (40 if i >= 10 else 0) for i in range(40)]
@@ -1165,22 +1166,37 @@ class PlayerHardening(unittest.TestCase):
         finally:
             pb.shutdown_waveforms()
 
-    def test_stationary_main_wave_hold_does_not_pause_or_seek(self):
+    def test_stationary_playing_wave_grab_pauses_and_resumes_exactly(self):
         from desktop.player import PlayerBar
 
         class FakePlayer:
             def __init__(self):
+                self.state = PlaybackState.PLAYING
+                self.pos = 20_000
                 self.positions = []
+                self.plays = 0
                 self.pauses = 0
 
             def playbackState(self):
-                return PlaybackState.PLAYING
+                return self.state
 
             def setPosition(self, ms):
+                self.pos = ms
                 self.positions.append(ms)
+
+            def position(self):
+                return self.pos
+
+            def playbackRate(self):
+                return 1.0
 
             def pause(self):
                 self.pauses += 1
+                self.state = PlaybackState.PAUSED
+
+            def play(self):
+                self.plays += 1
+                self.state = PlaybackState.PLAYING
 
         class Ev:
             def position(self):
@@ -1201,15 +1217,21 @@ class PlayerHardening(unittest.TestCase):
                 lambda _end, _duration, completion=None:
                 setattr(pb, "_gain_completion", completion))
             pb._src_path = "/tmp/loaded.wav"
+            pb._playback_available = True
             pb._dur = 60_000
             pb.wave.resize(600, 132)
             pb.wave.set_active(True)
             pb.wave.set_timing(20_000, 60_000)
             pb.wave.mousePressEvent(Ev())
-            self.assertFalse(pb.wave.is_dragging())
+            self.assertTrue(pb.wave.is_dragging())
+            self.assertTrue(pb._deck_drag_active)
+            self.assertTrue(pb._pause_pending)
             pb.wave.mouseReleaseEvent(Ev())
-            self.assertEqual(fake.positions, [])
-            self.assertEqual(fake.pauses, 0)
+            self.assertEqual(fake.positions, [])  # fade must finish first
+            pb._on_gain_finished()
+            self.assertEqual(fake.positions[-1], 20_000)
+            self.assertEqual(fake.pauses, 1)
+            self.assertEqual(fake.plays, 1)
             self.assertFalse(pb._deck_drag_active)
             self.assertEqual(pb.wave._position_ms, 20_000)
         finally:

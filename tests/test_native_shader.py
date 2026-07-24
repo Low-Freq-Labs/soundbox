@@ -19,7 +19,9 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("if (u.pixelsPerSecond >", self.shader)
         self.assertNotIn("if (u.pixelsPerSecond <", self.shader)
         self.assertEqual(
-            self.shader.count("fragment float4 wave_surface_fragment"), 1)
+            self.shader.count("fragment float4 wave_source_fragment"), 1)
+        self.assertEqual(
+            self.shader.count("fragment float4 wave_display_fragment"), 1)
 
     def test_geometry_and_color_share_continuous_lod(self):
         helper = self.shader.split(
@@ -52,14 +54,14 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_composite_is_opaque_without_an_outer_ghost(self):
         fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
+            "fragment float4 wave_display_fragment", 1
         )[1].split(
             "vertex Out grid_vertex", 1
         )[0]
         self.assertGreaterEqual(fragment.count(", 1.0);"), 2)
-        self.assertNotIn("bodyCoverage", fragment)
-        self.assertNotIn("outerAlpha", fragment)
-        self.assertNotIn("0.42", fragment)
+        self.assertNotIn("bodyCoverage", self.shader)
+        self.assertNotIn("outerAlpha", self.shader)
+        self.assertNotIn("0.42", self.shader)
 
     def test_thin_waveform_color_is_vivid_without_expanding_height(self):
         helper = self.shader.split(
@@ -151,12 +153,76 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("uint waveCurrentIndex;", self.shader)
         self.assertIn("float waveCurrentPhase;", self.shader)
         fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
+            "fragment float4 wave_source_fragment", 1
         )[1].split(
             "if (u.audioDetailSampleCount > 0", 1
         )[0]
         self.assertIn("u.waveCurrentIndex", fragment)
         self.assertIn("u.waveCurrentPhase", fragment)
+
+    def test_scrolling_lane_translates_a_preprinted_song_tile(self):
+        display = self.shader.split(
+            "fragment float4 wave_display_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        main = display.split(
+            "if (yPoints < 49.0 || u.tileValid == 0)", 1
+        )[1]
+        self.assertIn("u.tileCurrentOffsetPixels", main)
+        self.assertIn("waveTile.sample(", main)
+        self.assertNotIn("filtered_envelope_coverage(", main)
+        self.assertNotIn("filtered_wave_surface(", main)
+
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        draw = native.split("void draw(CAMetalDisplayLinkUpdate", 1)[1].split(
+            "private:", 1)[0]
+        self.assertIn("const bool tileNeedsPrint", draw)
+        self.assertIn("waveTileRevision_ != renderRevision", draw)
+        self.assertIn("std::abs(pixelDelta) > travelCapacity * 0.70", draw)
+        self.assertIn("std::llround(currentSongPixel)", draw)
+        self.assertIn("waveTileCenterSongPixel_", draw)
+        self.assertIn("const bool incrementalPrint", draw)
+        self.assertIn("[commands blitCommandEncoder]", draw)
+        self.assertIn("exposedWidth = shift", draw)
+        self.assertIn("[tileEncoder setScissorRect:", draw)
+        self.assertIn("waveTileScratch_ = waveTile_", draw)
+        self.assertIn(
+            "[encoder setRenderPipelineState:displayPipeline_]", draw)
+        self.assertNotIn("displayPipeline_ : pipeline_", draw)
+
+    def test_tile_translation_preserves_premultiplied_hue(self):
+        source = self.shader.split(
+            "fragment float4 wave_source_fragment", 1
+        )[1].split(
+            "fragment float4 wave_display_fragment", 1
+        )[0]
+        display = self.shader.split(
+            "fragment float4 wave_display_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn("if (u.tileValid != 0)", source)
+        self.assertIn(
+            "return float4(colorSurface.color * coverage, coverage)", source)
+        self.assertIn(
+            "tileSample.rgb / max(tileSample.a, 1.0 / 255.0)", display)
+        self.assertIn("vivid_wave_coverage(tileSample.a)", display)
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        self.assertIn(
+            "texture2DDescriptorWithPixelFormat:\n"
+            "                        MTLPixelFormatRGBA16Float",
+            native,
+        )
+        self.assertIn(
+            "wave.colorAttachments[0].pixelFormat = "
+            "MTLPixelFormatRGBA16Float",
+            native,
+        )
 
     def test_grid_uses_integer_milliseconds_plus_local_phase(self):
         self.assertIn(

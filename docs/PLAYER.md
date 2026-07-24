@@ -121,15 +121,19 @@ never disagree about a silently clamped value.
 
 Main-waveform scrubbing is relative and precise:
 
-- Press/release without horizontal movement is inert, even during playback.
-- Crossing the three-pixel drag threshold claims the playhead, freezes the
-  visual preview, and fades playing audio to pause.
+- Mouse-down claims the playhead immediately, freezes the visual preview, and
+  fades playing audio to pause.
+- Press/release without horizontal movement performs one authoritative seek to
+  the exact held timestamp, then resumes only if playback was active before
+  the grab. A paused deck remains paused.
+- Crossing the three-pixel drag threshold begins relative waveform movement;
+  sub-threshold hand jitter never changes the held timestamp.
 - Dragging gives live visual position feedback without repeatedly seeking the
   decoder.
 - Release performs one authoritative seek and resumes only if playback was
   active before the drag.
-- The main lane never walks or snaps on a click; only a deliberate drag moves
-  it. The whole-track overview remains an absolute click/drag navigation lane.
+- The main lane never walks or beat-snaps from a stationary grab. The
+  whole-track overview remains an absolute click/drag navigation lane.
 
 ## Native playback boundary
 
@@ -300,6 +304,19 @@ The following renderer rules are measured invariants, not style preferences:
 - Derive one continuous LOD from source samples per physical pixel and blend
   the adjacent peak levels. The overview and main lane call the same sampler;
   ultra detail replaces geometry quality only, never timing or color.
+- Rasterize the scrolling lane onto a bounded Metal surface whose center is an
+  integer global song pixel. Normal display frames translate and linearly
+  sample those already-decided pixels instead of reevaluating LOD, RGB, and
+  silhouette coverage under each moving screen column.
+- When playback approaches the surface margin, blit the unchanged overlap into
+  the alternate tile and rasterize only the newly exposed song strip. Zoom,
+  Retina scale, analysis promotion, and resize deliberately trigger a complete
+  reprint; ordinary scrolling never does.
+- Store tile RGB premultiplied by raw silhouette coverage in half-float RGBA.
+  The display pass restores the hue after translation filtering, then applies
+  the visibility floor and converts once to the display format. Subpixel
+  motion therefore cannot make adjacent colors dim or compete, including at
+  very low edge coverage.
 - Filter final silhouette coverage—not raw peak height. Coverage from each
   adjacent level is blended after sampling, preventing the contour from
   acquiring a separate translucent edge.
@@ -357,8 +374,9 @@ Automated coverage:
   clock, and source immutability.
 - `tests/test_native_shader.py`: shader/source contracts for one continuous
   geometry/color LOD, amplitude-weighted RGB mips, coverage filtering, vivid
-  thin-contour color, cue coordinate modes, integer/local-phase addressing,
-  PLL correction, and future presentation timestamps.
+  thin-contour color, song-lattice tile translation/incremental strip updates,
+  cue coordinate modes, integer/local-phase addressing, PLL correction, and
+  future presentation timestamps.
 - `tests/test_ui.py`: transport-only Space, double-click loading, keyboard CUE,
   cue-panel/overview/detail marker identity, activation resynchronization,
   stale-completion rejection, beat/bar jumps,
@@ -390,6 +408,20 @@ Dated unified-renderer validation on 2026-07-24:
   83 playlists, and reported zero preparation work. Curated state remained
   semantically identical apart from runtime settings; 3,247 V4 caches and
   3,122 artwork files remained present.
+
+Dated song-tile stability validation on 2026-07-24:
+
+- The bare and offscreen-render gates passed with 483 tests and one expected
+  platform skip.
+- A populated 900×148 foreground native deck, including repeated incremental
+  strip refreshes over five seconds, held 119.800 FPS at 24 px/s and 119.599
+  FPS at 1536 px/s. The largest presentation-target gap was 16.667 ms at both
+  scales on the built-in ProMotion display.
+- Live 517→1183→640→901 point resizes kept the Qt host, AppKit child, and
+  2× drawable widths synchronized on every sampled size.
+- The signed installed app activated the native deck, loaded 3,265 tracks /
+  83 playlists, and reported zero preparation tasks. Curated state, 3,247 V4
+  records, and 3,124 art files remained intact.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain

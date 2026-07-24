@@ -91,7 +91,14 @@ already-uploaded compact ~150 Hz RGB pyramid remains the time/color authority.
 The normalized 24-band master remains stored for long-term analysis but never
 participates in renderer color. Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
-precision. Render buffers are snapshotted under a short mutex and command
+precision. The scrolling lane is rasterized into a bounded, integer
+song-pixel-anchored Metal tile. Display frames translate that fixed surface;
+margin refreshes ping-pong the textures, blit their unchanged overlap, and
+render only the newly exposed strip. Full reprints occur only when render data,
+zoom, Retina scale, or drawable geometry changes. Tile RGB is coverage
+premultiplied in half-float RGBA so translation filtering preserves hue and
+silhouette as one surface before final display conversion. Render buffers are
+snapshotted under a short mutex and command
 encoding happens after that mutex is released.
 Library preparation builds V4 incrementally, pauses during
 playback, pauses audio cooking below 5 GiB free until 7 GiB is available, and

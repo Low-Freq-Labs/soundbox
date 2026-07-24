@@ -73,8 +73,10 @@ px/s, bar/beat
 counting, previous/next, selectable beat/bar jumps, momentary CUE, clean
 play/pause/seek ramps, and precise pause-preview-resume scrubbing. Double-click
 is the only browser load gesture and loads paused; Space only toggles the
-loaded deck, and C is momentary CUE. A newly loaded track starts on
-its first analyzed beat. SoundBox V4 owns the prepared grid/cues, RGB/24-band
+loaded deck, and C is momentary CUE. Grabbing the playing waveform pauses it
+immediately; releasing without moving resumes from the exact held timestamp.
+A newly loaded track starts on its first analyzed beat. SoundBox V4 owns the
+prepared grid/cues, RGB/24-band
 analysis, export eligibility, and single-silhouette ultra waveform. Valid
 Rekordbox analysis seeds missing data, while cues refresh by fingerprint from
 a read-only live-DB snapshot until SoundBox user data claims ownership.

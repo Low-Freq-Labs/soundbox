@@ -69,6 +69,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   for a successfully analyzed SoundBox color record. Current audio-detail and
   color positions are integer sample anchors + local float phase; never
   collapse either into one absolute float.
+- **Do not recompute the scrolling surface under moving screen pixels.** The
+  source shader prints a bounded tile on an integer global song-pixel lattice;
+  steady frames only translate that fixed result. Refreshes copy the unchanged
+  overlap to the alternate texture and render the newly exposed strip. An
+  arbitrary frame-centered tile changes sample/LOD phase at every refresh and
+  recreates periodic pulsing. Tile RGB is premultiplied by raw silhouette
+  coverage in half-float RGBA; restore hue before applying the vivid-coverage
+  floor after linear translation filtering. An 8-bit premultiplied
+  intermediate quantizes hue precisely where edge coverage is lowest.
 - **Do not pin `CAMetalDisplayLink` to 120 Hz.** Let Core Animation negotiate
   the active screen cadence so fixed-60 Hz, ProMotion, power throttling, and
   moving the window between displays remain evenly paced. Snapshot render
@@ -102,11 +111,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   seek on drag release, and first-Rekordbox-beat loading when a valid imported
   grid exists. A missing/invalid imported grid uses the SoundBox fallback with
   beat 1 at `0:00`; neither path writes to Rekordbox.
-- The scrolling detail waveform must not claim transport on mouse-down. Wait
-  for the three-pixel horizontal threshold before emitting drag-start; otherwise
-  a stationary hold pauses playback and its release can jump to stale preview
-  state. Plain detail clicks are inert. The whole-track overview deliberately
-  retains absolute click/drag navigation.
+- The scrolling detail waveform claims transport on mouse-down by design:
+  freeze Metal at the held timestamp and begin the clean pause immediately.
+  Keep the three-pixel threshold only for relative movement. Release must send
+  one exact authoritative seek—even without movement—and resume only when the
+  deck was playing before the grab. Never seek the decoder on move events. The
+  whole-track overview deliberately retains absolute click/drag navigation.
 - No manual SoundBox grid editor is shipped. V4 has a storage-only ownership
   boundary for later work, but current precedence is simple: a valid read-only
   Rekordbox grid wins exactly; otherwise use the zero-anchored fallback. Never

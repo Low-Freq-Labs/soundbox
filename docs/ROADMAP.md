@@ -44,6 +44,11 @@ For the live test count, trust `./check.sh` output—not any number written here
   Scrub math consumes the native-applied scale, detail promotion no longer
   re-uploads color, render encoding does not hold the analysis mutex, and
   display cadence follows the active screen through resize/screen changes.
+  The moving lane is now printed onto an integer song-pixel-anchored,
+  coverage-premultiplied Metal surface: normal frames translate fixed pixels,
+  while ping-pong refreshes retain the overlap and render only the newly
+  exposed strip. A playing waveform grab pauses on mouse-down and a stationary
+  release resumes from exactly the held timestamp.
 - **LOADED-TRACK QUALITY PREEMPTS BULK WORK.** A loaded cache miss keeps its
   UI responsive and immediately runs the exact canonical RGB/ultra analysis in
   a persistent foreground lane. Battery,
