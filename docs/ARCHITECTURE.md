@@ -83,16 +83,16 @@ reserved for audits. `begin_track()` clears every renderer buffer atomically,
 so rapid A→B→C replacement cannot display a late A/B result.
 
 The main scrolling waveform uses V4's ultra envelope at every zoom. On load,
-Metal creates a compact peak-preserving mip pyramid and selects the finest
-level no meaningfully denser than a physical output pixel. The shader filters
-one final silhouette in coverage space—not raw height—so it translates without
-growing, shrinking, or acquiring a translucent outer ghost. Four midpoint
-samples cover one mip across the physical pixel. A dedicated overlapping
-time-domain filterbank supplies a separate compact ~150 Hz RGB buffer, avoiding
-per-ultra-sample color duplication. The normalized 24-band master remains
-stored for long-term analysis but never participates in renderer color.
-Metal receives an integer sample anchor plus a small local phase, retaining
-long-track subpixel precision.
+Metal creates peak-preserving geometry mips and amplitude-weighted RGB mips.
+Overview and scrolling lanes derive one continuous LOD from source samples per
+physical pixel and blend coverage/color from the adjacent levels; there is no
+wide/close zoom branch. Ultra detail promotes only geometry quality, while the
+already-uploaded compact ~150 Hz RGB pyramid remains the time/color authority.
+The normalized 24-band master remains stored for long-term analysis but never
+participates in renderer color. Metal receives integer sample anchors plus
+small local phases for both geometry and color, retaining long-track subpixel
+precision. Render buffers are snapshotted under a short mutex and command
+encoding happens after that mutex is released.
 Library preparation builds V4 incrementally, pauses during
 playback, pauses audio cooking below 5 GiB free until 7 GiB is available, and
 can hot-swap finished analysis or cue metadata onto the current track.

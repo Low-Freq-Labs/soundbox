@@ -12,64 +12,78 @@ class NativeWaveformShader(unittest.TestCase):
         ).read_text()
         cls.shader = source.split('@R"METAL(', 1)[1].split(")METAL\"", 1)[0]
 
-    def test_audio_mips_render_one_peak_preserving_silhouette(self):
-        block = self.shader.split(
-            "if (u.audioDetailSampleCount > 0", 1
-        )[1].split(
-            "if (u.pixelsPerSecond > 110.0", 1
-        )[0]
-        self.assertIn("filter_envelope_pixel(", block)
-        self.assertIn("composite_envelope(", block)
-        self.assertNotIn(".height = mix(", block)
-        self.assertIn("songSeconds * u.detailSamplesPerSecond", block)
-
-    def test_every_scrolling_waveform_path_shares_coverage_filter(self):
-        # Definition + audio-detail mip + PWV fallback + stable raster.
-        self.assertGreaterEqual(self.shader.count("filter_wave_pair("), 4)
-
-    def test_minified_audio_chooses_one_output_safe_mip(self):
-        audio = self.shader.split(
-            "if (u.audioDetailSampleCount > 0", 1
-        )[1].split(
-            "if (u.pixelsPerSecond > 110.0", 1
-        )[0]
+    def test_every_zoom_uses_one_continuous_waveform_path(self):
+        self.assertIn("inline WaveSurface filtered_wave_surface", self.shader)
         self.assertIn(
-            "ceil(log2(max(1.0, sampleFootprint / 1.1)))", audio)
-        self.assertNotIn("for (uint pass = 0; pass < 2;", audio)
-        self.assertIn("filter_envelope_pixel(", audio)
+            "inline float filtered_envelope_coverage", self.shader)
+        self.assertNotIn("if (u.pixelsPerSecond >", self.shader)
+        self.assertNotIn("if (u.pixelsPerSecond <", self.shader)
+        self.assertEqual(
+            self.shader.count("fragment float4 wave_surface_fragment"), 1)
 
-    def test_selected_mip_is_filtered_across_one_physical_pixel(self):
+    def test_geometry_and_color_share_continuous_lod(self):
         helper = self.shader.split(
-            "inline FilteredEnvelope filter_envelope_pixel", 1
+            "inline WaveSurface filtered_wave_surface", 1
         )[1].split(
-            "inline float4 composite_envelope", 1
+            "inline float filtered_envelope_coverage", 1
         )[0]
-        self.assertIn(
-            "const float offsets[4] = {-0.375, -0.125, 0.125, 0.375};",
-            helper)
-        self.assertIn("offsets[tap] * footprint", helper)
+        self.assertIn("log2(max(1.0, sampleFootprint))", helper)
+        self.assertIn("const uint lowLevel", helper)
+        self.assertIn("const uint highLevel", helper)
+        self.assertIn("const float lodMix", helper)
+        self.assertIn("result.coverage = mix(", helper)
+        self.assertIn("result.color = mix(", helper)
 
-    def test_composite_has_no_translucent_outer_ghost(self):
+    def test_audio_detail_uses_the_same_continuous_lod_rule(self):
         helper = self.shader.split(
-            "inline float4 composite_envelope", 1
+            "inline float filtered_envelope_coverage", 1
         )[1].split(
             "fragment float4 wave_surface_fragment", 1
         )[0]
-        self.assertIn("vivid_wave_coverage(filtered.coverage)", helper)
-        self.assertNotIn("bodyCoverage", helper)
-        self.assertNotIn("outerAlpha", helper)
-        self.assertNotIn("0.42", helper)
+        self.assertIn("log2(max(1.0, sampleFootprint))", helper)
+        self.assertIn("const uint lowLevel", helper)
+        self.assertIn("const uint highLevel", helper)
+        self.assertIn("return mix(lowCoverage, highCoverage, lodMix)", helper)
+
+    def test_all_silhouettes_filter_final_coverage(self):
+        self.assertEqual(self.shader.count("inline float pair_coverage"), 1)
+        self.assertGreaterEqual(self.shader.count("pair_coverage("), 5)
+        self.assertNotIn(".height = mix(", self.shader)
+
+    def test_composite_is_opaque_without_an_outer_ghost(self):
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertGreaterEqual(fragment.count(", 1.0);"), 2)
+        self.assertNotIn("bodyCoverage", fragment)
+        self.assertNotIn("outerAlpha", fragment)
+        self.assertNotIn("0.42", fragment)
 
     def test_thin_waveform_color_is_vivid_without_expanding_height(self):
         helper = self.shader.split(
             "inline float vivid_wave_coverage", 1
         )[1].split(
-            "inline FilteredWave filter_wave_pair", 1
+            "vertex Out wave_surface_vertex", 1
         )[0]
         self.assertIn("max(coverage, 0.72)", helper)
         self.assertNotIn(".height", helper)
         self.assertGreaterEqual(
-            self.shader.count("vivid_wave_coverage("), 5)
+            self.shader.count("vivid_wave_coverage("), 3)
+
+    def test_color_pyramid_is_amplitude_weighted(self):
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        pyramid = native.split(
+            "static std::vector<WaveSample> buildWavePyramid", 1
+        )[1].split(
+            "static WaveSample packedWaveSample", 1
+        )[0]
+        self.assertIn("a.r * aEnergy + b.r * bEnergy", pyramid)
+        self.assertIn("nextEnergy.push_back(energy)", pyramid)
+        self.assertIn("std::max(a.height, b.height)", pyramid)
 
     def test_cue_shader_supports_absolute_overview_and_bottom_arrows(self):
         grid = self.shader.split("vertex Out grid_vertex", 1)[1]
@@ -119,15 +133,30 @@ class NativeWaveformShader(unittest.TestCase):
     def test_audio_detail_uses_integer_anchor_plus_local_phase(self):
         self.assertIn("uint audioDetailCurrentIndex;", self.shader)
         self.assertIn("float audioDetailCurrentPhase;", self.shader)
+        helper = self.shader.split(
+            "inline EnvelopePair envelope_pair", 1
+        )[1].split(
+            "inline float pair_coverage", 1
+        )[0]
+        self.assertIn("const uint anchor = baseAnchor / divisor", helper)
         audio = self.shader.split(
             "if (u.audioDetailSampleCount > 0", 1
-        )[1].split(
-            "if (u.pixelsPerSecond > 110.0", 1
-        )[0]
-        self.assertIn("u.audioDetailCurrentIndex / divisor", audio)
+        )[1].split("if (coverage <= 0.0)", 1)[0]
         self.assertIn("u.audioDetailCurrentPhase", audio)
+        self.assertIn("u.audioDetailCurrentIndex", audio)
         self.assertNotIn(
             "songSeconds * u.audioDetailSamplesPerSecond", audio)
+
+    def test_color_uses_integer_anchor_plus_local_phase(self):
+        self.assertIn("uint waveCurrentIndex;", self.shader)
+        self.assertIn("float waveCurrentPhase;", self.shader)
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "if (u.audioDetailSampleCount > 0", 1
+        )[0]
+        self.assertIn("u.waveCurrentIndex", fragment)
+        self.assertIn("u.waveCurrentPhase", fragment)
 
     def test_grid_uses_integer_milliseconds_plus_local_phase(self):
         self.assertIn(

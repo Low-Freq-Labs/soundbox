@@ -33,8 +33,7 @@ constexpr float kPixelsPerSecond = 92.0f;
 constexpr float kOverviewHeight = 28.0f;
 constexpr float kRulerTop = 31.0f;
 constexpr float kZoomTop = 49.0f;
-constexpr size_t kOverviewColumns = 4096;
-constexpr size_t kAudioDetailMipLevels = 8;
+constexpr size_t kWaveMipLevels = 32;
 
 struct WaveSample {
     float height;
@@ -74,9 +73,14 @@ struct Uniforms {
     float heightPoints;
     float samplesPerSecond;
     uint32_t sampleCount;
+    uint32_t waveCurrentIndex;
+    float waveCurrentPhase;
+    uint32_t waveMipCount;
+    uint32_t waveMipOffsets[kWaveMipLevels];
+    uint32_t waveMipCounts[kWaveMipLevels];
     float drawableScale;
+    uint32_t drawableWidthPixels;
     float durationSeconds;
-    uint32_t overviewSampleCount;
     float detailSamplesPerSecond;
     uint32_t detailSampleCount;
     float audioDetailSamplesPerSecond;
@@ -84,8 +88,8 @@ struct Uniforms {
     uint32_t audioDetailCurrentIndex;
     float audioDetailCurrentPhase;
     uint32_t audioDetailMipCount;
-    uint32_t audioDetailMipOffsets[kAudioDetailMipLevels];
-    uint32_t audioDetailMipCounts[kAudioDetailMipLevels];
+    uint32_t audioDetailMipOffsets[kWaveMipLevels];
+    uint32_t audioDetailMipCounts[kWaveMipLevels];
 };
 
 struct AudioRing {
@@ -208,19 +212,20 @@ public:
         waveBuffer_ = nil;
         detailBuffer_ = nil;
         audioDetailBuffer_ = nil;
-        overviewBuffer_ = nil;
         gridBuffer_ = nil;
         cueBuffer_ = nil;
         sessionCueBuffer_ = nil;
         waveSampleCount_ = 0;
         detailSampleCount_ = 0;
         audioDetailSampleCount_ = 0;
-        overviewSampleCount_ = 0;
         gridVertexCount_ = 0;
         cueVertexCount_ = 0;
         sessionCueVertexCount_ = 0;
         cueMarkerCount_ = 0;
         waveSamplesPerSecond_ = 0;
+        waveMipCount_ = 0;
+        waveMipOffsets_.fill(0);
+        waveMipCounts_.fill(0);
         detailSamplesPerSecond_ = 0;
         audioDetailSamplesPerSecond_ = 0;
         audioDetailMipCount_ = 0;
@@ -298,11 +303,13 @@ public:
         requestDisplay();
     }
 
-    void setZoom(float pixelsPerSecond) {
+    float setZoom(float pixelsPerSecond) {
+        const float applied =
+            std::clamp(pixelsPerSecond, 24.0f, 1536.0f);
         zoomPixelsPerSecond_.store(
-            std::clamp(pixelsPerSecond, 64.0f, 1536.0f),
-            std::memory_order_release);
+            applied, std::memory_order_release);
         requestDisplay();
+        return applied;
     }
 
     void requestDisplay() {
@@ -527,12 +534,13 @@ public:
             waveBuffer_ = nil;
             detailBuffer_ = nil;
             audioDetailBuffer_ = nil;
-            overviewBuffer_ = nil;
             waveSampleCount_ = 0;
             detailSampleCount_ = 0;
             audioDetailSampleCount_ = 0;
-            overviewSampleCount_ = 0;
             waveSamplesPerSecond_ = 0;
+            waveMipCount_ = 0;
+            waveMipOffsets_.fill(0);
+            waveMipCounts_.fill(0);
             detailSamplesPerSecond_ = 0;
             audioDetailSamplesPerSecond_ = 0;
             audioDetailMipCount_ = 0;
@@ -560,6 +568,92 @@ public:
             beatCount, expectedGeneration);
     }
 
+    static std::vector<WaveSample> buildWavePyramid(
+            const std::vector<WaveSample> &base,
+            std::array<uint32_t, kWaveMipLevels> &offsets,
+            std::array<uint32_t, kWaveMipLevels> &counts,
+            size_t &mipCount) {
+        offsets.fill(0);
+        counts.fill(0);
+        mipCount = 0;
+        if (base.empty()) {
+            return {};
+        }
+        std::vector<WaveSample> pyramid = base;
+        std::vector<WaveSample> level = base;
+        std::vector<float> levelEnergy;
+        levelEnergy.reserve(base.size());
+        for (const WaveSample &sample : base) {
+            levelEnergy.push_back(sample.height);
+        }
+        counts[0] = static_cast<uint32_t>(level.size());
+        mipCount = 1;
+        while (mipCount < kWaveMipLevels && level.size() > 1) {
+            std::vector<WaveSample> next;
+            std::vector<float> nextEnergy;
+            next.reserve((level.size() + 1) / 2);
+            nextEnergy.reserve((level.size() + 1) / 2);
+            for (size_t i = 0; i < level.size(); i += 2) {
+                const WaveSample &a = level[i];
+                const WaveSample &b =
+                    i + 1 < level.size() ? level[i + 1] : a;
+                const float aEnergy = levelEnergy[i];
+                const float bEnergy = i + 1 < levelEnergy.size()
+                    ? levelEnergy[i + 1] : 0.0f;
+                const float energy = aEnergy + bEnergy;
+                const float r = energy > 0.0001f
+                    ? (a.r * aEnergy + b.r * bEnergy) / energy
+                    : (a.r + b.r) * 0.5f;
+                const float g = energy > 0.0001f
+                    ? (a.g * aEnergy + b.g * bEnergy) / energy
+                    : (a.g + b.g) * 0.5f;
+                const float blue = energy > 0.0001f
+                    ? (a.b * aEnergy + b.b * bEnergy) / energy
+                    : (a.b + b.b) * 0.5f;
+                // Peak geometry and integrated color are deliberately
+                // different reductions of the same time bin. Peaks retain
+                // transients; amplitude-weighted RGB energy prevents adjacent
+                // bands from fighting as a minified pixel moves.
+                next.push_back({
+                    std::max(a.height, b.height),
+                    r, g, blue,
+                });
+                nextEnergy.push_back(energy);
+            }
+            offsets[mipCount] =
+                static_cast<uint32_t>(pyramid.size());
+            counts[mipCount] = static_cast<uint32_t>(next.size());
+            pyramid.insert(pyramid.end(), next.begin(), next.end());
+            level = std::move(next);
+            levelEnergy = std::move(nextEnergy);
+            ++mipCount;
+        }
+        return pyramid;
+    }
+
+    static WaveSample packedWaveSample(
+            uint8_t height, const uint8_t *rgb) {
+        int values[3] = {
+            std::min(255, static_cast<int>(rgb[0]) * 18),
+            std::min(255, static_cast<int>(rgb[1]) * 36),
+            std::min(255, static_cast<int>(rgb[2]) * 36),
+        };
+        const int brightest = std::max({values[0], values[1], values[2]});
+        if (brightest > 0 && brightest < 155) {
+            const double boost = 155.0 / brightest;
+            for (int channel = 0; channel < 3; ++channel) {
+                values[channel] = std::min(
+                    255, static_cast<int>(values[channel] * boost));
+            }
+        }
+        return {
+            height / 255.0f,
+            values[0] / 255.0f,
+            values[1] / 255.0f,
+            values[2] / 255.0f,
+        };
+    }
+
     bool installAnalysis(
         std::vector<WaveSample> wave,
         double columnsPerSecond,
@@ -567,22 +661,6 @@ public:
         const uint8_t *beatInBar,
         size_t beatCount,
         uint64_t expectedGeneration) {
-        const size_t count = wave.size();
-        std::vector<WaveSample> overview;
-        const size_t overviewCount = std::min(count, kOverviewColumns);
-        overview.reserve(overviewCount);
-        for (size_t column = 0; column < overviewCount; ++column) {
-            const size_t start = column * count / overviewCount;
-            const size_t end = std::min(
-                count, std::max(start + 1, (column + 1) * count / overviewCount));
-            const auto peak = std::max_element(
-                wave.begin() + start, wave.begin() + end,
-                [](const WaveSample &a, const WaveSample &b) {
-                    return a.height < b.height;
-                });
-            overview.push_back(*peak);
-        }
-
         std::vector<GridVertex> grid;
         grid.reserve(beatCount * 6);
         std::vector<BeatPosition> beatPositions;
@@ -618,18 +696,20 @@ public:
                         0.5f, 4096.0f, r, g, b, a);
         }
 
-        id<MTLBuffer> waveBuffer = [device_ newBufferWithBytes:wave.data()
-            length:wave.size() * sizeof(WaveSample)
+        std::array<uint32_t, kWaveMipLevels> waveMipOffsets{};
+        std::array<uint32_t, kWaveMipLevels> waveMipCounts{};
+        size_t waveMipCount = 0;
+        std::vector<WaveSample> wavePyramid = buildWavePyramid(
+            wave, waveMipOffsets, waveMipCounts, waveMipCount);
+        id<MTLBuffer> waveBuffer = [device_
+            newBufferWithBytes:wavePyramid.data()
+            length:wavePyramid.size() * sizeof(WaveSample)
             options:MTLResourceStorageModeShared];
-        id<MTLBuffer> overviewBuffer =
-            [device_ newBufferWithBytes:overview.data()
-                length:overview.size() * sizeof(WaveSample)
-                options:MTLResourceStorageModeShared];
         id<MTLBuffer> gridBuffer = grid.empty() ? nil
             : [device_ newBufferWithBytes:grid.data()
                 length:grid.size() * sizeof(GridVertex)
                 options:MTLResourceStorageModeShared];
-        if (!waveBuffer || !overviewBuffer) {
+        if (!waveBuffer) {
             setError(-40, "Metal waveform buffer allocation failed");
             return false;
         }
@@ -642,11 +722,12 @@ public:
         waveBuffer_ = waveBuffer;
         detailBuffer_ = waveBuffer;
         audioDetailBuffer_ = nil;
-        overviewBuffer_ = overviewBuffer;
         waveSampleCount_ = wave.size();
+        waveMipOffsets_ = waveMipOffsets;
+        waveMipCounts_ = waveMipCounts;
+        waveMipCount_ = waveMipCount;
         detailSampleCount_ = wave.size();
         audioDetailSampleCount_ = 0;
-        overviewSampleCount_ = overview.size();
         waveSamplesPerSecond_ = static_cast<float>(columnsPerSecond);
         detailSamplesPerSecond_ = static_cast<float>(columnsPerSecond);
         audioDetailSamplesPerSecond_ = 0.0f;
@@ -682,25 +763,7 @@ public:
         std::vector<WaveSample> wave;
         wave.reserve(count);
         for (size_t i = 0; i < count; ++i) {
-            int values[3] = {
-                std::min(255, static_cast<int>(rgb[i * 3]) * 18),
-                std::min(255, static_cast<int>(rgb[i * 3 + 1]) * 36),
-                std::min(255, static_cast<int>(rgb[i * 3 + 2]) * 36),
-            };
-            const int brightest = std::max({values[0], values[1], values[2]});
-            if (brightest > 0 && brightest < 155) {
-                const double boost = 155.0 / brightest;
-                for (int channel = 0; channel < 3; ++channel) {
-                    values[channel] = std::min(
-                        255, static_cast<int>(values[channel] * boost));
-                }
-            }
-            wave.push_back({
-                heights[i] / 255.0f,
-                values[0] / 255.0f,
-                values[1] / 255.0f,
-                values[2] / 255.0f,
-            });
+            wave.push_back(packedWaveSample(heights[i], rgb + i * 3));
         }
         return installAnalysis(
             std::move(wave), columnsPerSecond, beatSeconds, beatInBar,
@@ -712,46 +775,27 @@ public:
         const uint8_t *heights,
         const uint8_t *rgb,
         size_t count,
+        double columnsPerSecond,
         const double *beatSeconds,
         const uint8_t *beatInBar,
         size_t beatCount) {
-        if (!heights || !rgb || !count
+        if (!heights || !rgb || !count || columnsPerSecond <= 0
                 || (expectedGeneration
                     && renderGeneration_.load(std::memory_order_acquire)
                         != expectedGeneration)) {
             return false;
         }
-        const size_t overviewCount = std::min(count, kOverviewColumns);
-        std::vector<WaveSample> overview;
-        overview.reserve(overviewCount);
-        for (size_t column = 0; column < overviewCount; ++column) {
-            const size_t start = column * count / overviewCount;
-            const size_t end = std::min(
-                count, std::max(start + 1, (column + 1) * count / overviewCount));
-            size_t peak = start;
-            for (size_t i = start + 1; i < end; ++i) {
-                if (heights[i] > heights[peak]) peak = i;
-            }
-            int values[3] = {
-                std::min(255, static_cast<int>(rgb[peak * 3]) * 18),
-                std::min(255, static_cast<int>(rgb[peak * 3 + 1]) * 36),
-                std::min(255, static_cast<int>(rgb[peak * 3 + 2]) * 36),
-            };
-            const int brightest = std::max({values[0], values[1], values[2]});
-            if (brightest > 0 && brightest < 155) {
-                const double boost = 155.0 / brightest;
-                for (int channel = 0; channel < 3; ++channel) {
-                    values[channel] = std::min(
-                        255, static_cast<int>(values[channel] * boost));
-                }
-            }
-            overview.push_back({
-                heights[peak] / 255.0f,
-                values[0] / 255.0f,
-                values[1] / 255.0f,
-                values[2] / 255.0f,
-            });
+        std::vector<WaveSample> wave;
+        wave.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            wave.push_back(packedWaveSample(heights[i], rgb + i * 3));
         }
+        std::array<uint32_t, kWaveMipLevels> waveMipOffsets{};
+        std::array<uint32_t, kWaveMipLevels> waveMipCounts{};
+        size_t waveMipCount = 0;
+        std::vector<WaveSample> wavePyramid = buildWavePyramid(
+            wave, waveMipOffsets, waveMipCounts, waveMipCount);
+
         std::vector<GridVertex> grid;
         std::vector<BeatPosition> beatPositions;
         grid.reserve(beatCount * 6);
@@ -777,16 +821,16 @@ public:
                 downbeat ? 0.34f : 0.62f,
                 downbeat ? 0.82f : 0.32f);
         }
-        id<MTLBuffer> overviewBuffer =
-            [device_ newBufferWithBytes:overview.data()
-                length:overview.size() * sizeof(WaveSample)
+        id<MTLBuffer> waveBuffer =
+            [device_ newBufferWithBytes:wavePyramid.data()
+                length:wavePyramid.size() * sizeof(WaveSample)
                 options:MTLResourceStorageModeShared];
         id<MTLBuffer> gridBuffer = grid.empty() ? nil
             : [device_ newBufferWithBytes:grid.data()
                 length:grid.size() * sizeof(GridVertex)
                 options:MTLResourceStorageModeShared];
-        if (!overviewBuffer) {
-            setError(-40, "Metal overview buffer allocation failed");
+        if (!waveBuffer) {
+            setError(-40, "Metal waveform buffer allocation failed");
             return false;
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
@@ -795,8 +839,15 @@ public:
                     != expectedGeneration) {
             return false;
         }
-        overviewBuffer_ = overviewBuffer;
-        overviewSampleCount_ = overview.size();
+        waveBuffer_ = waveBuffer;
+        detailBuffer_ = waveBuffer;
+        waveSampleCount_ = wave.size();
+        detailSampleCount_ = wave.size();
+        waveSamplesPerSecond_ = static_cast<float>(columnsPerSecond);
+        detailSamplesPerSecond_ = static_cast<float>(columnsPerSecond);
+        waveMipOffsets_ = waveMipOffsets;
+        waveMipCounts_ = waveMipCounts;
+        waveMipCount_ = waveMipCount;
         gridBuffer_ = gridBuffer;
         gridVertexCount_ = grid.size();
         beatPositions_ = std::move(beatPositions);
@@ -942,14 +993,25 @@ public:
                 rgb[i * 3 + 2] / 255.0f,
             });
         }
-        id<MTLBuffer> buffer = [device_ newBufferWithBytes:detail.data()
-            length:detail.size() * sizeof(WaveSample)
+        std::array<uint32_t, kWaveMipLevels> mipOffsets{};
+        std::array<uint32_t, kWaveMipLevels> mipCounts{};
+        size_t mipCount = 0;
+        std::vector<WaveSample> pyramid = buildWavePyramid(
+            detail, mipOffsets, mipCounts, mipCount);
+        id<MTLBuffer> buffer = [device_ newBufferWithBytes:pyramid.data()
+            length:pyramid.size() * sizeof(WaveSample)
             options:MTLResourceStorageModeShared];
         if (!buffer) {
             setError(-41, "Metal detail waveform buffer allocation failed");
             return false;
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
+        waveBuffer_ = buffer;
+        waveSampleCount_ = detail.size();
+        waveSamplesPerSecond_ = static_cast<float>(samplesPerSecond);
+        waveMipOffsets_ = mipOffsets;
+        waveMipCounts_ = mipCounts;
+        waveMipCount_ = mipCount;
         detailBuffer_ = buffer;
         detailSampleCount_ = detail.size();
         detailSamplesPerSecond_ = static_cast<float>(samplesPerSecond);
@@ -1021,13 +1083,13 @@ public:
         // A single peak-preserving silhouette keeps the old SoundBox/Rekordbox
         // visual language while the V4 ultra stream supplies close-zoom detail.
         // Mips are derived at load time, so this renderer change needs no recook.
-        std::array<uint32_t, kAudioDetailMipLevels> mipOffsets{};
-        std::array<uint32_t, kAudioDetailMipLevels> mipCounts{};
+        std::array<uint32_t, kWaveMipLevels> mipOffsets{};
+        std::array<uint32_t, kWaveMipLevels> mipCounts{};
         std::vector<AudioEnvelopeSample> pyramid = detail;
         mipCounts[0] = static_cast<uint32_t>(detail.size());
         size_t mipCount = 1;
         std::vector<AudioEnvelopeSample> level = std::move(detail);
-        while (mipCount < kAudioDetailMipLevels && level.size() > 1) {
+        while (mipCount < kWaveMipLevels && level.size() > 1) {
             std::vector<AudioEnvelopeSample> next;
             next.reserve((level.size() + 1) / 2);
             for (size_t i = 0; i < level.size(); i += 2) {
@@ -1134,15 +1196,45 @@ public:
             durationFrames_.load(std::memory_order_acquire) / rate);
         BeatPosition currentBeat{};
         bool hasCurrentBeat = false;
+        id<MTLBuffer> waveBuffer = nil;
+        id<MTLBuffer> audioDetailBuffer = nil;
+        id<MTLBuffer> gridBuffer = nil;
+        id<MTLBuffer> sessionCueBuffer = nil;
+        id<MTLBuffer> cueBuffer = nil;
+        NSUInteger gridVertexCount = 0;
+        NSUInteger sessionCueVertexCount = 0;
+        NSUInteger cueVertexCount = 0;
         {
             std::lock_guard<std::mutex> lock(renderMutex_);
             uniforms.samplesPerSecond = waveSamplesPerSecond_;
             uniforms.sampleCount = static_cast<uint32_t>(
                 std::min<NSUInteger>(
                     waveSampleCount_, std::numeric_limits<uint32_t>::max()));
-            uniforms.overviewSampleCount = static_cast<uint32_t>(
+            const double wavePosition =
+                exactFrame
+                * static_cast<double>(waveSamplesPerSecond_)
+                / rate;
+            const double waveWhole = std::floor(
+                std::max(0.0, wavePosition));
+            uniforms.waveCurrentIndex = static_cast<uint32_t>(
+                std::min(
+                    waveWhole,
+                    static_cast<double>(
+                        std::numeric_limits<uint32_t>::max())));
+            uniforms.waveCurrentPhase = static_cast<float>(
+                wavePosition - waveWhole);
+            uniforms.waveMipCount = static_cast<uint32_t>(waveMipCount_);
+            std::copy(
+                waveMipOffsets_.begin(),
+                waveMipOffsets_.end(),
+                uniforms.waveMipOffsets);
+            std::copy(
+                waveMipCounts_.begin(),
+                waveMipCounts_.end(),
+                uniforms.waveMipCounts);
+            uniforms.drawableWidthPixels = static_cast<uint32_t>(
                 std::min<NSUInteger>(
-                    overviewSampleCount_,
+                    update.drawable.texture.width,
                     std::numeric_limits<uint32_t>::max()));
             uniforms.detailSamplesPerSecond = detailSamplesPerSecond_;
             uniforms.detailSampleCount = static_cast<uint32_t>(
@@ -1178,48 +1270,14 @@ public:
                 audioDetailMipCounts_.begin(),
                 audioDetailMipCounts_.end(),
                 uniforms.audioDetailMipCounts);
-            if (waveBuffer_ && waveSampleCount_) {
-                [encoder setRenderPipelineState:pipeline_];
-                [encoder setFragmentBuffer:waveBuffer_ offset:0 atIndex:0];
-                [encoder setFragmentBuffer:overviewBuffer_ offset:0 atIndex:2];
-                [encoder setFragmentBuffer:detailBuffer_ offset:0 atIndex:3];
-                [encoder setFragmentBuffer:
-                    (audioDetailBuffer_ ? audioDetailBuffer_ : detailBuffer_)
-                    offset:0 atIndex:4];
-                [encoder setFragmentBytes:&uniforms
-                                   length:sizeof(uniforms)
-                                  atIndex:1];
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                            vertexStart:0 vertexCount:3];
-            }
-            if (gridBuffer_ && gridVertexCount_) {
-                [encoder setRenderPipelineState:gridPipeline_];
-                [encoder setVertexBuffer:gridBuffer_ offset:0 atIndex:0];
-                [encoder setVertexBytes:&uniforms
-                                 length:sizeof(uniforms)
-                                atIndex:1];
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                            vertexStart:0 vertexCount:gridVertexCount_];
-            }
-            if (sessionCueBuffer_ && sessionCueVertexCount_) {
-                [encoder setRenderPipelineState:gridPipeline_];
-                [encoder setVertexBuffer:sessionCueBuffer_ offset:0 atIndex:0];
-                [encoder setVertexBytes:&uniforms
-                                 length:sizeof(uniforms)
-                                atIndex:1];
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                            vertexStart:0
-                            vertexCount:sessionCueVertexCount_];
-            }
-            if (cueBuffer_ && cueVertexCount_) {
-                [encoder setRenderPipelineState:gridPipeline_];
-                [encoder setVertexBuffer:cueBuffer_ offset:0 atIndex:0];
-                [encoder setVertexBytes:&uniforms
-                                 length:sizeof(uniforms)
-                                atIndex:1];
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                            vertexStart:0 vertexCount:cueVertexCount_];
-            }
+            waveBuffer = waveBuffer_;
+            audioDetailBuffer = audioDetailBuffer_;
+            gridBuffer = gridBuffer_;
+            sessionCueBuffer = sessionCueBuffer_;
+            cueBuffer = cueBuffer_;
+            gridVertexCount = gridVertexCount_;
+            sessionCueVertexCount = sessionCueVertexCount_;
+            cueVertexCount = cueVertexCount_;
             auto beat = std::upper_bound(
                 beatPositions_.begin(), beatPositions_.end(),
                 currentSeconds,
@@ -1231,6 +1289,46 @@ public:
                 currentBeat = *beat;
                 hasCurrentBeat = true;
             }
+        }
+        if (waveBuffer && uniforms.sampleCount) {
+            [encoder setRenderPipelineState:pipeline_];
+            [encoder setFragmentBuffer:waveBuffer offset:0 atIndex:0];
+            [encoder setFragmentBuffer:
+                (audioDetailBuffer ? audioDetailBuffer : waveBuffer)
+                offset:0 atIndex:4];
+            [encoder setFragmentBytes:&uniforms
+                               length:sizeof(uniforms)
+                              atIndex:1];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                        vertexStart:0 vertexCount:3];
+        }
+        if (gridBuffer && gridVertexCount) {
+            [encoder setRenderPipelineState:gridPipeline_];
+            [encoder setVertexBuffer:gridBuffer offset:0 atIndex:0];
+            [encoder setVertexBytes:&uniforms
+                             length:sizeof(uniforms)
+                            atIndex:1];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                        vertexStart:0 vertexCount:gridVertexCount];
+        }
+        if (sessionCueBuffer && sessionCueVertexCount) {
+            [encoder setRenderPipelineState:gridPipeline_];
+            [encoder setVertexBuffer:sessionCueBuffer offset:0 atIndex:0];
+            [encoder setVertexBytes:&uniforms
+                             length:sizeof(uniforms)
+                            atIndex:1];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                        vertexStart:0
+                        vertexCount:sessionCueVertexCount];
+        }
+        if (cueBuffer && cueVertexCount) {
+            [encoder setRenderPipelineState:gridPipeline_];
+            [encoder setVertexBuffer:cueBuffer offset:0 atIndex:0];
+            [encoder setVertexBytes:&uniforms
+                             length:sizeof(uniforms)
+                            atIndex:1];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                        vertexStart:0 vertexCount:cueVertexCount];
         }
         [encoder setVertexBytes:&uniforms
                          length:sizeof(uniforms)
@@ -1347,8 +1445,11 @@ private:
         const BeatPosition *beat) {
         const uint32_t tMillis = uniforms.currentMillis;
         const float tPhase = uniforms.currentMillisPhase;
-        std::vector<GridVertex> v;
-        v.reserve(48);
+        std::vector<GridVertex> &v = overlayScratch_;
+        v.clear();
+        if (v.capacity() < 512) {
+            v.reserve(512);
+        }
         // Quiet dividers keep overview, ruler, and detail visually separate.
         addGridRect(
             v, tMillis, tPhase,
@@ -1415,7 +1516,7 @@ private:
                             .82f, .84f, .88f, dim);
             }
         };
-        addButton(0.0f, false, uniforms.pixelsPerSecond > 64.1f);
+        addButton(0.0f, false, uniforms.pixelsPerSecond > 24.1f);
         addButton(30.0f, true, uniforms.pixelsPerSecond < 1535.9f);
         [encoder setRenderPipelineState:gridPipeline_];
         [encoder setVertexBytes:v.data() length:v.size() * sizeof(GridVertex) atIndex:0];
@@ -1589,23 +1690,40 @@ struct Uniforms { float currentSeconds;
                   float pixelsPerSecond;
                   float widthPoints; float heightPoints;
                   float samplesPerSecond; uint sampleCount;
-                  float drawableScale; float durationSeconds;
-                  uint overviewSampleCount;
+                  uint waveCurrentIndex; float waveCurrentPhase;
+                  uint waveMipCount;
+                  uint waveMipOffsets[32];
+                  uint waveMipCounts[32];
+                  float drawableScale; uint drawableWidthPixels;
+                  float durationSeconds;
                   float detailSamplesPerSecond; uint detailSampleCount;
                   float audioDetailSamplesPerSecond;
                   uint audioDetailSampleCount;
                   uint audioDetailCurrentIndex;
                   float audioDetailCurrentPhase;
                   uint audioDetailMipCount;
-                  uint audioDetailMipOffsets[8];
-                  uint audioDetailMipCounts[8]; };
+                  uint audioDetailMipOffsets[32];
+                  uint audioDetailMipCounts[32]; };
 struct Out { float4 position [[position]]; float4 color; };
-struct FilteredWave { float coverage; float3 premultiplied; };
-struct FilteredEnvelope { float coverage; };
+struct WavePair {
+    float heightA;
+    float heightB;
+    float phase;
+    float3 color;
+    float valid;
+};
+struct EnvelopePair {
+    float heightA;
+    float heightB;
+    float phase;
+    float valid;
+};
+struct WaveSurface {
+    float coverage;
+    float3 color;
+    float valid;
+};
 inline float vivid_wave_coverage(float coverage) {
-    // Preserve the exact silhouette mask while preventing a one-physical-pixel
-    // quiet passage from becoming a muddy blend with the dark deck background.
-    // This changes chromatic visibility only; no sample height is expanded.
     return coverage > 0.0 ? max(coverage, 0.72) : 0.0;
 }
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
@@ -1617,119 +1735,173 @@ vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     o.color = float4(0.0);
     return o;
 }
-inline FilteredWave filter_wave_pair(
-        WaveSample a, WaveSample b, float phase,
-        float distance, float heightScale, float antialias) {
-    const float coverageA = 1.0 - smoothstep(
-        a.height * heightScale - antialias,
-        a.height * heightScale + antialias, distance);
-    const float coverageB = 1.0 - smoothstep(
-        b.height * heightScale - antialias,
-        b.height * heightScale + antialias, distance);
-    FilteredWave result;
-    result.coverage = mix(coverageA, coverageB, phase);
-    result.premultiplied = mix(
-        float3(a.r, a.g, a.b) * coverageA,
-        float3(b.r, b.g, b.b) * coverageB,
-        phase);
-    return result;
+
+inline uint mip_divisor(uint level) {
+    return 1u << min(level, 30u);
 }
-inline FilteredWave filter_wave_pixel(
+
+inline WavePair wave_pair(
         const device WaveSample *samples,
         uint levelOffset, uint levelCount,
-        int centerIndex, float centerPhase, float footprint,
-        float distance, float heightScale, float antialias) {
-    FilteredWave result;
-    result.coverage = 0.0;
-    result.premultiplied = float3(0.0);
-    // Four midpoint taps integrate the one selected mip across the physical
-    // output pixel. This removes residual horizontal phase sparkle without
-    // paying the fullscreen-fragment cost of evaluating a second LOD.
-    const float offsets[4] = {-0.375, -0.125, 0.125, 0.375};
-    for (uint tap = 0; tap < 4; ++tap) {
-        const float local =
-            centerPhase + offsets[tap] * footprint;
-        const int whole = int(floor(local));
-        const int left = centerIndex + whole;
-        if (left < 0 || left >= int(levelCount)) {
-            continue;
-        }
-        const uint aIndex = levelOffset + uint(left);
-        const uint bIndex = levelOffset + uint(min(
-            left + 1, int(levelCount) - 1));
-        const FilteredWave sample = filter_wave_pair(
-            samples[aIndex], samples[bIndex],
-            local - float(whole),
-            distance, heightScale, antialias);
-        result.coverage += sample.coverage * 0.25;
-        result.premultiplied += sample.premultiplied * 0.25;
+        uint baseAnchor, float baseLocal, uint level) {
+    WavePair result{
+        0.0, 0.0, 0.0, float3(0.0), 0.0
+    };
+    if (levelCount == 0) {
+        return result;
     }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int whole = int(floor(local));
+    const int left = int(anchor) + whole;
+    if (left < 0 || left >= int(levelCount)) {
+        return result;
+    }
+    const uint leftIndex = levelOffset + uint(left);
+    const uint rightIndex = levelOffset + uint(min(
+        left + 1, int(levelCount) - 1));
+    const WaveSample a = samples[leftIndex];
+    const WaveSample b = samples[rightIndex];
+    result.heightA = a.height;
+    result.heightB = b.height;
+    result.phase = local - float(whole);
+    result.color = mix(
+        float3(a.r, a.g, a.b),
+        float3(b.r, b.g, b.b),
+        result.phase);
+    result.valid = 1.0;
     return result;
 }
-inline float4 composite_wave(
-        float3 background, FilteredWave filtered) {
-    if (filtered.coverage <= 0.0) {
-        discard_fragment();
-    }
-    const float3 color =
-        filtered.premultiplied / max(filtered.coverage, 0.0001);
-    const float visible = vivid_wave_coverage(filtered.coverage);
-    return float4(
-        mix(background, color, visible), 1.0);
-}
-inline FilteredEnvelope filter_envelope_pair(
-        AudioEnvelopeSample a, AudioEnvelopeSample b, float phase,
-        float distance, float heightScale, float antialias) {
-    const float aPeak = float(a.height) / 255.0;
-    const float bPeak = float(b.height) / 255.0;
-    const float peakA = 1.0 - smoothstep(
-        aPeak * heightScale - antialias,
-        aPeak * heightScale + antialias, distance);
-    const float peakB = 1.0 - smoothstep(
-        bPeak * heightScale - antialias,
-        bPeak * heightScale + antialias, distance);
-    return {mix(peakA, peakB, phase)};
-}
-inline FilteredEnvelope filter_envelope_pixel(
+
+inline EnvelopePair envelope_pair(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
-        int centerIndex, float centerPhase, float footprint,
-        float distance, float heightScale, float antialias) {
-    FilteredEnvelope result{0.0};
-    const float offsets[4] = {-0.375, -0.125, 0.125, 0.375};
-    for (uint tap = 0; tap < 4; ++tap) {
-        const float local = centerPhase + offsets[tap] * footprint;
-        const int whole = int(floor(local));
-        const int left = centerIndex + whole;
-        if (left < 0 || left >= int(levelCount)) {
-            continue;
-        }
-        const uint aIndex = levelOffset + uint(left);
-        const uint bIndex = levelOffset + uint(min(
-            left + 1, int(levelCount) - 1));
-        const FilteredEnvelope sample = filter_envelope_pair(
-            samples[aIndex], samples[bIndex], local - float(whole),
-            distance, heightScale, antialias);
-        result.coverage += sample.coverage * 0.25;
+        uint baseAnchor, float baseLocal, uint level) {
+    EnvelopePair result{0.0, 0.0, 0.0, 0.0};
+    if (levelCount == 0) {
+        return result;
     }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int whole = int(floor(local));
+    const int left = int(anchor) + whole;
+    if (left < 0 || left >= int(levelCount)) {
+        return result;
+    }
+    result.heightA =
+        float(samples[levelOffset + uint(left)].height) / 255.0;
+    result.heightB = float(samples[
+        levelOffset + uint(min(left + 1, int(levelCount) - 1))
+    ].height) / 255.0;
+    result.phase = local - float(whole);
+    result.valid = 1.0;
     return result;
 }
-inline float4 composite_envelope(
-        float3 background, float3 color, FilteredEnvelope filtered) {
-    if (filtered.coverage <= 0.0) {
-        discard_fragment();
-    }
-    const float visible = vivid_wave_coverage(filtered.coverage);
-    return float4(
-        mix(background, color, visible),
-        1.0);
+
+inline float pair_coverage(
+        float heightA, float heightB, float phase,
+        float distance, float heightScale, float antialias) {
+    const float coverageA = 1.0 - smoothstep(
+        heightA * heightScale - antialias,
+        heightA * heightScale + antialias, distance);
+    const float coverageB = 1.0 - smoothstep(
+        heightB * heightScale - antialias,
+        heightB * heightScale + antialias, distance);
+    return mix(coverageA, coverageB, phase);
 }
+
+inline WaveSurface filtered_wave_surface(
+        const device WaveSample *samples,
+        constant uint *offsets, constant uint *counts, uint mipCount,
+        uint baseAnchor, float baseLocal, float sampleFootprint,
+        float distance, float heightScale, float antialias) {
+    WaveSurface result{0.0, float3(0.0), 0.0};
+    if (mipCount == 0) {
+        return result;
+    }
+    // Both geometry and RGB use the same continuous song-anchored LOD.
+    // Peak mips retain transients; energy-integrated RGB mips stop adjacent
+    // colors from alternating as a minified physical pixel moves.
+    const float lod = clamp(
+        log2(max(1.0, sampleFootprint)),
+        0.0, float(mipCount - 1));
+    const uint lowLevel = uint(floor(lod));
+    const uint highLevel = min(lowLevel + 1, mipCount - 1);
+    const float lodMix = lod - float(lowLevel);
+    const WavePair low = wave_pair(
+        samples, offsets[lowLevel], counts[lowLevel],
+        baseAnchor, baseLocal, lowLevel);
+    const WavePair high = wave_pair(
+        samples, offsets[highLevel], counts[highLevel],
+        baseAnchor, baseLocal, highLevel);
+    if (low.valid == 0.0 && high.valid == 0.0) {
+        return result;
+    }
+    const float lowCoverage = low.valid > 0.0
+        ? pair_coverage(
+            low.heightA, low.heightB, low.phase,
+            distance, heightScale, antialias)
+        : 0.0;
+    const float highCoverage = high.valid > 0.0
+        ? pair_coverage(
+            high.heightA, high.heightB, high.phase,
+            distance, heightScale, antialias)
+        : lowCoverage;
+    result.coverage = mix(lowCoverage, highCoverage, lodMix);
+    result.color = mix(
+        low.valid > 0.0 ? low.color : high.color,
+        high.valid > 0.0 ? high.color : low.color,
+        lodMix);
+    result.valid = 1.0;
+    return result;
+}
+
+inline float filtered_envelope_coverage(
+        const device AudioEnvelopeSample *samples,
+        constant uint *offsets, constant uint *counts, uint mipCount,
+        uint baseAnchor, float baseLocal, float sampleFootprint,
+        float distance, float heightScale, float antialias) {
+    if (mipCount == 0) {
+        return 0.0;
+    }
+    const float lod = clamp(
+        log2(max(1.0, sampleFootprint)),
+        0.0, float(mipCount - 1));
+    const uint lowLevel = uint(floor(lod));
+    const uint highLevel = min(lowLevel + 1, mipCount - 1);
+    const float lodMix = lod - float(lowLevel);
+    const EnvelopePair low = envelope_pair(
+        samples, offsets[lowLevel], counts[lowLevel],
+        baseAnchor, baseLocal, lowLevel);
+    const EnvelopePair high = envelope_pair(
+        samples, offsets[highLevel], counts[highLevel],
+        baseAnchor, baseLocal, highLevel);
+    if (low.valid == 0.0 && high.valid == 0.0) {
+        return 0.0;
+    }
+    const float lowCoverage = low.valid > 0.0
+        ? pair_coverage(
+            low.heightA, low.heightB, low.phase,
+            distance, heightScale, antialias)
+        : 0.0;
+    const float highCoverage = high.valid > 0.0
+        ? pair_coverage(
+            high.heightA, high.heightB, high.phase,
+            distance, heightScale, antialias)
+        : lowCoverage;
+    return mix(lowCoverage, highCoverage, lodMix);
+}
+
 fragment float4 wave_surface_fragment(
         Out in [[stage_in]],
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
-        const device WaveSample *overviewSamples [[buffer(2)]],
-        const device WaveSample *detailSamples [[buffer(3)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]]) {
     const float scale = max(1.0, u.drawableScale);
     const float xPoints = in.position.x / scale;
@@ -1738,166 +1910,73 @@ fragment float4 wave_surface_fragment(
         13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0);
     const float antialias = 0.5 / scale;
     if (yPoints < 28.0) {
-        if (u.overviewSampleCount == 0) {
+        if (u.sampleCount == 0 || u.waveMipCount == 0) {
             discard_fragment();
         }
-        const uint index = min(
-            uint(clamp(xPoints / max(1.0, u.widthPoints), 0.0, 0.999999)
-                 * float(u.overviewSampleCount)),
-            u.overviewSampleCount - 1);
-        const WaveSample sample = overviewSamples[index];
+        const float position =
+            clamp(
+                xPoints / max(1.0, u.widthPoints),
+                0.0, 0.999999)
+            * float(u.sampleCount);
+        const uint anchor = min(
+            uint(floor(position)), u.sampleCount - 1);
+        const float footprint =
+            float(u.sampleCount)
+            / max(1.0, float(u.drawableWidthPixels));
         const float distance = abs(yPoints - 14.0);
-        const float coverage = 1.0 - smoothstep(
-            sample.height * 11.0 - antialias,
-            sample.height * 11.0 + antialias, distance);
-        if (coverage <= 0.0) {
+        const WaveSurface surface = filtered_wave_surface(
+            samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
+            anchor, position - floor(position), footprint,
+            distance, 11.0, antialias);
+        if (surface.valid == 0.0 || surface.coverage <= 0.0) {
             discard_fragment();
-        }
-        float3 color = float3(sample.r, sample.g, sample.b);
-        if (u.detailSampleCount > 0) {
-            const uint colorIndex = min(
-                uint(clamp(
-                    xPoints / max(1.0, u.widthPoints), 0.0, 0.999999)
-                    * float(u.detailSampleCount)),
-                u.detailSampleCount - 1);
-            const WaveSample colorSample = detailSamples[colorIndex];
-            color = float3(
-                colorSample.r, colorSample.g, colorSample.b);
         }
         return float4(mix(
-            background, color, vivid_wave_coverage(coverage)), 1.0);
+            background, surface.color,
+            vivid_wave_coverage(surface.coverage)), 1.0);
     }
     if (yPoints < 49.0) {
         discard_fragment();
     }
-    const float songSeconds = u.currentSeconds
-        + (xPoints - u.widthPoints * 0.5) / u.pixelsPerSecond;
     const float waveCenter = 49.0 + (u.heightPoints - 49.0) * 0.5;
     const float distance = abs(yPoints - waveCenter);
     const float heightScale =
         max(4.0, (u.heightPoints - 49.0) * 0.5 - 7.0);
+    const float secondOffset =
+        (xPoints - u.widthPoints * 0.5)
+        / max(1.0, u.pixelsPerSecond);
+    const float waveLocal =
+        u.waveCurrentPhase + secondOffset * u.samplesPerSecond;
+    const float waveFootprint =
+        u.samplesPerSecond
+        / max(1.0, u.pixelsPerSecond * scale);
+    const WaveSurface colorSurface = filtered_wave_surface(
+        samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
+        u.waveCurrentIndex, waveLocal, waveFootprint,
+        distance, heightScale, antialias);
+    if (colorSurface.valid == 0.0) {
+        discard_fragment();
+    }
+    float coverage = colorSurface.coverage;
     if (u.audioDetailSampleCount > 0 && u.audioDetailMipCount > 0) {
-        const float detailOffsetSamples =
-            (xPoints - u.widthPoints * 0.5)
-            / u.pixelsPerSecond
-            * u.audioDetailSamplesPerSecond;
-        const float baseLocal =
-            u.audioDetailCurrentPhase + detailOffsetSamples;
-        const int baseIndex =
-            int(u.audioDetailCurrentIndex) + int(floor(baseLocal));
-        if (baseIndex < 0
-                || baseIndex >= int(u.audioDetailSampleCount)) {
-            discard_fragment();
-        }
-        // One peak-preserving pyramid is the source at every main-waveform
-        // zoom. Select the finest song-anchored level that is no more than
-        // ~1.1 samples per physical output pixel. Staying on the magnification
-        // side of the minification boundary removes temporal aliasing and is
-        // dramatically cheaper than evaluating two LODs for every y fragment.
-        // Filtering remains in final silhouette coverage space: raw heights
-        // never grow/shrink as a peak translates across fractional pixels.
-        const float sampleFootprint = u.audioDetailSamplesPerSecond
+        const float audioLocal =
+            u.audioDetailCurrentPhase
+            + secondOffset * u.audioDetailSamplesPerSecond;
+        const float audioFootprint = u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
-        const uint level = min(
-            uint(ceil(log2(max(1.0, sampleFootprint / 1.1)))),
-            u.audioDetailMipCount - 1);
-        const uint levelCount = u.audioDetailMipCounts[level];
-        const uint levelOffset = u.audioDetailMipOffsets[level];
-        const uint divisor = 1u << level;
-        const uint anchorIndex =
-            u.audioDetailCurrentIndex / divisor;
-        const uint anchorRemainder =
-            u.audioDetailCurrentIndex % divisor;
-        const float levelLocal =
-            (float(anchorRemainder)
-             + u.audioDetailCurrentPhase
-             + detailOffsetSamples)
-            / float(divisor);
-        const int levelWhole = int(floor(levelLocal));
-        const int levelCenterIndex =
-            int(anchorIndex) + levelWhole;
-        if (levelCenterIndex < 0
-                || levelCenterIndex >= int(levelCount)) {
-            discard_fragment();
-        }
-        const float levelFootprint =
-            sampleFootprint / float(divisor);
-        float3 color = float3(0.36, 0.72, 1.0);
-        const float colorPosition =
-            songSeconds * u.detailSamplesPerSecond;
-        if (u.detailSampleCount > 0
-                && colorPosition >= 0.0
-                && colorPosition < float(u.detailSampleCount)) {
-            const uint colorLeft = min(
-                uint(floor(colorPosition)), u.detailSampleCount - 1);
-            const WaveSample colorA = detailSamples[colorLeft];
-            const WaveSample colorB = detailSamples[
-                min(colorLeft + 1, u.detailSampleCount - 1)];
-            color = mix(
-                float3(colorA.r, colorA.g, colorA.b),
-                float3(colorB.r, colorB.g, colorB.b),
-                fract(colorPosition));
-        }
-        return composite_envelope(
-            background, color,
-            filter_envelope_pixel(
-                audioDetailSamples,
-                levelOffset, levelCount,
-                levelCenterIndex,
-                levelLocal - float(levelWhole),
-                levelFootprint,
-                distance, heightScale, antialias));
+        coverage = filtered_envelope_coverage(
+            audioDetailSamples,
+            u.audioDetailMipOffsets, u.audioDetailMipCounts,
+            u.audioDetailMipCount,
+            u.audioDetailCurrentIndex, audioLocal, audioFootprint,
+            distance, heightScale, antialias);
     }
-    if (u.pixelsPerSecond > 110.0 && u.detailSampleCount > 0) {
-        const float position = songSeconds * u.detailSamplesPerSecond;
-        if (position < 0.0 || position >= float(u.detailSampleCount)) {
-            discard_fragment();
-        }
-        const uint left = min(
-            uint(floor(position)), u.detailSampleCount - 1);
-        const WaveSample a = detailSamples[left];
-        const WaveSample b =
-            detailSamples[min(left + 1, u.detailSampleCount - 1)];
-        return composite_wave(
-            background,
-            filter_wave_pair(
-                a, b, fract(position),
-                distance, heightScale, antialias));
-    }
-    const float centerSample = songSeconds * u.samplesPerSecond;
-    const float sampleFootprint =
-        u.samplesPerSecond / (u.pixelsPerSecond * scale);
-    const float offsets[4] = {-0.375, -0.125, 0.125, 0.375};
-    float3 premultiplied = float3(0.0);
-    float coverage = 0.0;
-    for (uint tap = 0; tap < 4; ++tap) {
-        const float position =
-            centerSample + offsets[tap] * sampleFootprint;
-        if (position < 0.0 || position >= float(u.sampleCount)) {
-            continue;
-        }
-        const uint left = min(uint(floor(position)), u.sampleCount - 1);
-        const uint right = min(left + 1, u.sampleCount - 1);
-        const float phase = fract(position);
-        const WaveSample a = samples[left];
-        const WaveSample b = samples[right];
-        // Filter fixed raster coverage, not height. Interpolating heights made
-        // every fine peak grow/shrink vertically as its horizontal phase moved.
-        const FilteredWave filteredTap = filter_wave_pair(
-            a, b, phase, distance, heightScale, antialias);
-        premultiplied += filteredTap.premultiplied;
-        coverage += filteredTap.coverage;
-    }
-    coverage *= 0.25;
     if (coverage <= 0.0) {
         discard_fragment();
     }
-    premultiplied *= 0.25;
-    const float3 color = premultiplied / max(coverage, 0.0001);
-    // Composite once in the shader and write an opaque result. This removes a
-    // second blend/raster rounding step from the high-contrast moving contour.
     return float4(mix(
-        background, color, vivid_wave_coverage(coverage)), 1.0);
+        background, colorSurface.color,
+        vivid_wave_coverage(coverage)), 1.0);
 }
 vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
                        constant Uniforms &u [[buffer(1)]],
@@ -1972,13 +2051,13 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
                     CFRetain(displayRunLoop_);
                 }
                 link.delegate = displayDelegate_;
-                // Windowed macOS composition may need more than one refresh to
-                // finish GPU work. A two-frame budget keeps delivery even while
-                // targetPresentationTimestamp still places motion on the exact
-                // future display time supplied by Core Animation.
+                // Follow the active display's negotiated cadence (including
+                // ProMotion and a move between screens). Core Animation owns
+                // that policy; pinning 120 Hz produced uneven delivery on
+                // fixed-60 Hz and dynamically throttled displays.
                 link.preferredFrameLatency = 2.0f;
                 link.preferredFrameRateRange =
-                    CAFrameRateRangeMake(120.0, 120.0, 120.0);
+                    CAFrameRateRangeMake(60.0, 120.0, 120.0);
                 NSRunLoop *runLoop = NSRunLoop.currentRunLoop;
                 [link addToRunLoop:runLoop forMode:NSRunLoopCommonModes];
                 while (!displayStop_.load(std::memory_order_acquire)) {
@@ -2379,7 +2458,6 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     id<MTLBuffer> waveBuffer_ = nil;
     id<MTLBuffer> detailBuffer_ = nil;
     id<MTLBuffer> audioDetailBuffer_ = nil;
-    id<MTLBuffer> overviewBuffer_ = nil;
     id<MTLBuffer> gridBuffer_ = nil;
     id<MTLBuffer> cueBuffer_ = nil;
     id<MTLBuffer> sessionCueBuffer_ = nil;
@@ -2387,9 +2465,11 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     NSUInteger detailSampleCount_ = 0;
     NSUInteger audioDetailSampleCount_ = 0;
     NSUInteger audioDetailMipCount_ = 0;
-    std::array<uint32_t, kAudioDetailMipLevels> audioDetailMipOffsets_{};
-    std::array<uint32_t, kAudioDetailMipLevels> audioDetailMipCounts_{};
-    NSUInteger overviewSampleCount_ = 0;
+    std::array<uint32_t, kWaveMipLevels> waveMipOffsets_{};
+    std::array<uint32_t, kWaveMipLevels> waveMipCounts_{};
+    size_t waveMipCount_ = 0;
+    std::array<uint32_t, kWaveMipLevels> audioDetailMipOffsets_{};
+    std::array<uint32_t, kWaveMipLevels> audioDetailMipCounts_{};
     float waveSamplesPerSecond_ = 0.0f;
     float detailSamplesPerSecond_ = 0.0f;
     float audioDetailSamplesPerSecond_ = 0.0f;
@@ -2398,6 +2478,9 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     NSUInteger sessionCueVertexCount_ = 0;
     NSUInteger cueMarkerCount_ = 0;
     std::vector<BeatPosition> beatPositions_;
+    // Display-thread-only storage: rebuilding the small dynamic overlay never
+    // allocates on the playback frame path after the first frame.
+    std::vector<GridVertex> overlayScratch_;
     std::mutex renderMutex_;
     SBDisplayDelegate *displayDelegate_ = nil;
     CAMetalDisplayLink *displayLink_ = nil;
@@ -2547,10 +2630,12 @@ void sb_deck_set_preview_frame(
     }
 }
 
-void sb_deck_set_zoom(SBDeckRef deck, float pixels_per_second) {
+float sb_deck_set_zoom(SBDeckRef deck, float pixels_per_second) {
     if (deck) {
-        static_cast<SBDeck *>(deck)->setZoom(pixels_per_second);
+        auto *instance = static_cast<SBDeck *>(deck);
+        return instance->setZoom(pixels_per_second);
     }
+    return 0.0f;
 }
 
 void sb_deck_request_display(SBDeckRef deck) {
@@ -2608,13 +2693,14 @@ int sb_deck_set_packed_overview_for_generation(
     const uint8_t *heights,
     const uint8_t *rgb,
     size_t column_count,
+    double columns_per_second,
     const double *beat_seconds,
     const uint8_t *beat_in_bar,
     size_t beat_count) {
     if (!deck) return 0;
     auto *instance = static_cast<SBDeck *>(deck);
     const int result = instance->setPackedOverview(
-        generation, heights, rgb, column_count,
+        generation, heights, rgb, column_count, columns_per_second,
         beat_seconds, beat_in_bar, beat_count);
     if (result) instance->requestDisplay();
     return result;

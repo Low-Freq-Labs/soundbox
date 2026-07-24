@@ -68,7 +68,8 @@ exported as `cover.jpg` per track folder.
 
 **Player.** The default native deck uses CoreAudio sample-clock playback while
 Metal scrolls the RGB waveform/grid at display refresh (120 Hz on ProMotion).
-It includes a whole-song overview, twelve detail zoom levels, bar/beat
+It includes a whole-song overview, thirteen detail zoom levels from 24–1536
+px/s, bar/beat
 counting, previous/next, selectable beat/bar jumps, momentary CUE, clean
 play/pause/seek ramps, and precise pause-preview-resume scrubbing. Double-click
 is the only browser load gesture and loads paused; Space only toggles the

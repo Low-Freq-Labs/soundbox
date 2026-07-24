@@ -24,6 +24,16 @@ _HOT_CUE_FALLBACKS = (
     (48, 210, 110), (224, 100, 27), (48, 90, 255), (195, 175, 4),
 )
 _MEMORY_CUE_RGB = (255, 52, 52)
+_NATIVE_GEOMETRY_EVENTS = tuple(
+    event_type
+    for event_type in (
+        QEvent.Resize,
+        QEvent.Show,
+        getattr(QEvent.Type, "DevicePixelRatioChange", None),
+        getattr(QEvent.Type, "ScreenChangeInternal", None),
+    )
+    if event_type is not None
+)
 
 
 class PlaybackState(IntEnum):
@@ -83,7 +93,7 @@ def native_available() -> bool:
         lib = ctypes.CDLL(str(path))
         lib.sb_deck_abi_version.restype = ctypes.c_uint32
         lib.sb_deck_is_supported.restype = ctypes.c_int
-        return lib.sb_deck_abi_version() == 1 and bool(lib.sb_deck_is_supported())
+        return lib.sb_deck_abi_version() == 2 and bool(lib.sb_deck_is_supported())
     except (OSError, AttributeError):
         return False
 
@@ -113,6 +123,7 @@ def _bind(path: Path):
         handle, ctypes.c_uint64, ctypes.c_int,
     ]
     lib.sb_deck_set_zoom.argtypes = [handle, ctypes.c_float]
+    lib.sb_deck_set_zoom.restype = ctypes.c_float
     lib.sb_deck_request_display.argtypes = [handle]
     lib.sb_deck_sync_view_geometry.argtypes = [handle]
     lib.sb_deck_set_analysis.argtypes = [
@@ -144,6 +155,7 @@ def _bind(path: Path):
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.c_size_t,
+        ctypes.c_double,
         ctypes.POINTER(ctypes.c_double),
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.c_size_t,
@@ -309,8 +321,8 @@ class UnavailableDeckBackend(QObject):
     def set_visual_position(self, _ms: int, _preview: bool):
         pass
 
-    def set_zoom(self, _pixels_per_second: float):
-        pass
+    def set_zoom(self, pixels_per_second: float):
+        return float(pixels_per_second)
 
     def set_analysis(self, _analysis, _generation: int = 0):
         pass
@@ -354,7 +366,7 @@ class NativeDeckBackend(QObject):
         if path is None:
             raise RuntimeError("Native Soundbox deck library is unavailable")
         self._lib = _bind(path)
-        if self._lib.sb_deck_abi_version() != 1:
+        if self._lib.sb_deck_abi_version() != 2:
             raise RuntimeError("Native Soundbox deck ABI mismatch")
         self._handle = self._lib.sb_deck_create(
             ctypes.c_void_p(int(host_widget.winId())))
@@ -437,7 +449,7 @@ class NativeDeckBackend(QObject):
 
     def eventFilter(self, watched, event):
         if (watched is self._host_widget
-                and event.type() in (QEvent.Resize, QEvent.Show)):
+                and event.type() in _NATIVE_GEOMETRY_EVENTS):
             self.sync_view_geometry()
         return super().eventFilter(watched, event)
 
@@ -542,8 +554,8 @@ class NativeDeckBackend(QObject):
             self._handle, frame, int(bool(preview)))
 
     def set_zoom(self, pixels_per_second: float):
-        self._lib.sb_deck_set_zoom(
-            self._handle, float(pixels_per_second))
+        return float(self._lib.sb_deck_set_zoom(
+            self._handle, float(pixels_per_second)))
 
     @staticmethod
     def _screen_rgb(raw) -> tuple[int, int, int]:
@@ -640,7 +652,7 @@ class NativeDeckBackend(QObject):
         self.set_cues(data.get("cues") or [])
 
     def set_overview(self, data: dict, generation: int = 0):
-        """Paint only the whole-track surface; full RGB joins detail later."""
+        """Upload the permanent compact RGB pyramid; ultra geometry joins later."""
         heights = data.get("_overview_heights")
         rgb = data.get("_overview_rgb")
         if not isinstance(heights, bytes) or not isinstance(rgb, bytes):
@@ -666,6 +678,7 @@ class NativeDeckBackend(QObject):
         expected = int(generation or self._analysis_generation)
         return bool(self._lib.sb_deck_set_packed_overview_for_generation(
             self._handle, expected, packed_heights, packed_rgb, count,
+            float(data.get("sample_rate") or 150.0),
             seconds, beat_in_bar, beat_count))
 
     @staticmethod

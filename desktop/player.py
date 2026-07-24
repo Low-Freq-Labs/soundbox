@@ -44,10 +44,9 @@ _ZOOM_TOP = 49
 # three beats across its full width. These are renderer scales, not rebuilt
 # caches, so switching levels remains instant.
 _ZOOM_LEVELS = (
-    64.0, 92.0, 128.0, 184.0, 256.0,
-    384.0, 576.0, 864.0, 1152.0, 1536.0, 2048.0, 3072.0,
+    24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0, 256.0,
+    384.0, 576.0, 864.0, 1152.0, 1536.0,
 )
-_DETAIL_ZOOM_THRESHOLD = 110.0
 _HOT_CUE_FALLBACKS = (
     "#ff376f", "#45acdb", "#7dc13d", "#aa72ff",
     "#30d26e", "#e0641b", "#305aff", "#c3af04",
@@ -355,9 +354,6 @@ class WaveformWorker(QThread):
             self.track_analysis_dir, self.track_id, self.path)
         if detail is not None:
             if self.native_backend is not None:
-                if overview is not None:
-                    self.native_backend.set_analysis(
-                        {**manifest, **overview}, self.generation)
                 self.native_backend.set_audio_detail(
                     detail.get("_audio_detail"), self.generation)
                 detail["_native_uploaded"] = True
@@ -437,7 +433,7 @@ class WaveformBar(QWidget):
         self._overview_columns: list[tuple[float, QColor]] = []
         self._active = False  # no track loaded yet → scrubbing disabled
         self._overview_drag = False
-        self._zoom_level = 1
+        self._zoom_level = _ZOOM_LEVELS.index(_PIXELS_PER_SECOND)
         self._drag_origin_x = 0.0
         self._drag_origin_ms: int | None = None
         self._drag_preview_ms: int | None = None
@@ -830,19 +826,15 @@ class WaveformBar(QWidget):
             if self._audio_detail_rate > 0
             else b""
         )
-        detail = (
-            self._rgb_detail
-            if self.PIXELS_PER_SECOND > _DETAIL_ZOOM_THRESHOLD
-            and self._rgb_detail
-            else self._rgb_columns
+        color_detail = self._rgb_detail or self._rgb_columns
+        color_rate = (
+            self._rgb_rate if self._rgb_detail else _PIXELS_PER_SECOND
         )
-        n = len(audio_detail) if audio_detail else len(detail)
+        n = len(audio_detail) if audio_detail else len(color_detail)
         if not n:
             return
         samples_per_second = (
-            self._audio_detail_rate if audio_detail
-            else self._rgb_rate if detail is self._rgb_detail
-            else _PIXELS_PER_SECOND
+            self._audio_detail_rate if audio_detail else color_rate
         )
         half = max(4.0, (self.height() - _ZOOM_TOP) / 2 - 7)
         for x in range(self.width()):
@@ -851,32 +843,64 @@ class WaveformBar(QWidget):
             column = floor(position)
             if not 0 <= column < n:
                 continue
-            if audio_detail:
-                # Compatibility renderer: reduce the high-resolution envelope
-                # over roughly one logical pixel instead of undersampling it
-                # at wider zooms. Native Metal uses a continuously blended
-                # peak-preserving mip pyramid for the same purpose.
-                footprint = max(
-                    1.0, self._audio_detail_rate / self.PIXELS_PER_SECOND)
-                start = max(0, floor(position - footprint * 0.5))
-                end = min(n, max(start + 1, ceil(
-                    position + footprint * 0.5)))
-                window = audio_detail[start:end]
-                height = max(window) / 255
-                color_column = min(
-                    len(self._rgb_detail) - 1,
-                    max(0, floor(seconds * self._rgb_rate)))
-                color = (
-                    self._rgb_detail[color_column][1]
-                    if self._rgb_detail else _REST
+            footprint = max(
+                1.0, samples_per_second / self.PIXELS_PER_SECOND)
+            start = max(0, floor(position - footprint * 0.5))
+            end = min(n, max(start + 1, ceil(
+                position + footprint * 0.5)))
+            if footprint <= 1.0:
+                phase = position - column
+                if audio_detail:
+                    a_height = audio_detail[column] / 255
+                    b_height = audio_detail[min(column + 1, n - 1)] / 255
+                else:
+                    a_height = color_detail[column][0]
+                    b_height = color_detail[min(column + 1, n - 1)][0]
+                height = a_height + (b_height - a_height) * phase
+            elif audio_detail:
+                height = max(audio_detail[start:end]) / 255
+            else:
+                height = max(
+                    row[0] for row in color_detail[start:end])
+            color_position = seconds * color_rate
+            color_column = floor(color_position)
+            if not 0 <= color_column < len(color_detail):
+                continue
+            color_footprint = max(
+                1.0, color_rate / self.PIXELS_PER_SECOND)
+            color_start = max(
+                0, floor(color_position - color_footprint * 0.5))
+            color_end = min(
+                len(color_detail),
+                max(color_start + 1, ceil(
+                    color_position + color_footprint * 0.5)))
+            color_window = color_detail[color_start:color_end]
+            energy = sum(max(0.0, row[0]) for row in color_window)
+            if energy > 0:
+                color = QColor(
+                    round(sum(
+                        row[1].red() * max(0.0, row[0])
+                        for row in color_window) / energy),
+                    round(sum(
+                        row[1].green() * max(0.0, row[0])
+                        for row in color_window) / energy),
+                    round(sum(
+                        row[1].blue() * max(0.0, row[0])
+                        for row in color_window) / energy),
                 )
             else:
-                height, color = detail[column]
-            if (not audio_detail
-                    and self.PIXELS_PER_SECOND >= 384.0
-                    and column + 1 < n):
-                phase = position - column
-                height = height + (detail[column + 1][0] - height) * phase
+                color = color_detail[color_column][1]
+            if color_footprint <= 1.0 and color_column + 1 < len(color_detail):
+                phase = color_position - color_column
+                next_color = color_detail[color_column + 1][1]
+                color = QColor(
+                    round(color.red() + (
+                        next_color.red() - color.red()) * phase),
+                    round(color.green() + (
+                        next_color.green() - color.green()) * phase),
+                    round(color.blue() + (
+                        next_color.blue() - color.blue()) * phase),
+                )
             amp = max(1.0, height * half)
             p.setPen(color)
             p.drawLine(QPointF(x, mid - amp), QPointF(x, mid + amp))
@@ -1407,7 +1431,8 @@ class PlayerBar(QWidget):
         self.audio.setVolume(self._deck_volume)
         self.player.errorOccurred.connect(self._on_error)
         self.wave.set_native_rendering(self._playback_available)
-        self.player.set_zoom(self.wave.PIXELS_PER_SECOND)
+        applied_zoom = self.player.set_zoom(self.wave.PIXELS_PER_SECOND)
+        self.wave.set_zoom(applied_zoom, emit=False)
 
         self.wave.seeked.connect(self._seek)
         self.wave.previewed.connect(self._on_wave_preview)
@@ -1478,14 +1503,20 @@ class PlayerBar(QWidget):
             self.jump_mode_changed.emit(mode)
 
     def set_waveform_zoom(self, pixels_per_second: float, emit: bool = True):
-        self.wave.set_zoom(pixels_per_second, emit=emit)
+        previous = self.wave.PIXELS_PER_SECOND
+        self.wave.set_zoom(pixels_per_second, emit=False)
         if hasattr(self.player, "set_zoom"):
-            self.player.set_zoom(self.wave.PIXELS_PER_SECOND)
+            applied = self.player.set_zoom(self.wave.PIXELS_PER_SECOND)
+            self.wave.set_zoom(applied, emit=False)
+        if emit and self.wave.PIXELS_PER_SECOND != previous:
+            self.waveform_zoom_changed.emit(
+                float(self.wave.PIXELS_PER_SECOND))
 
     def _on_wave_zoom_changed(self, pixels_per_second: float):
         if hasattr(self.player, "set_zoom"):
-            self.player.set_zoom(pixels_per_second)
-        self.waveform_zoom_changed.emit(pixels_per_second)
+            pixels_per_second = self.player.set_zoom(pixels_per_second)
+            self.wave.set_zoom(pixels_per_second, emit=False)
+        self.waveform_zoom_changed.emit(float(pixels_per_second))
 
     def is_playing(self) -> bool:
         return self.player.playbackState() == PlaybackState.PLAYING

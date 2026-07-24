@@ -54,23 +54,26 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `drawableSize` before requesting a frame. Returning to generic resize wakes
   causes both a request storm and a one-frame small/stretched waveform.
 - **Scrolling waveform filtering happens in COVERAGE space, never envelope
-  height
-  space.** Interpolating neighboring/mip peak heights makes the contour grow
-  and shrink as its fractional x phase changes (wide zoom looks like static).
-  Keep the song-anchored peak pyramid, filter its one final silhouette into
-  coverage, and select one mip no meaningfully denser than physical output
-  pixels. Do not add a separate translucent/RMS envelope: it reads as a ghost
-  waveform. Color comes separately from the compact SoundBox RGB filterbank
-  stream: overlapping LP 100 Hz, HP 300 + LP 3000 Hz, and HP 1500 Hz paths,
-  with 25/3/1 ms peak holds and per-column energy transfer. The persisted
-  normalized 24-band master is independent analysis and must never be remixed
-  by a renderer or override the dedicated RGB rows. Rekordbox PWV5 is a
-  read-only fallback/reference, never the source for a successfully analyzed
-  SoundBox color record.
-  Four coverage taps are the measured quality/performance sweet spot. Do not
-  add multi-LOD/per-fragment loops: the populated 120 Hz cadence test catches
-  that GPU regression. Current audio-detail position is an integer sample
-  anchor + local float phase; never collapse it into one absolute float.
+  height space.** Keep one song-anchored peak pyramid and continuously blend
+  coverage from the two levels around the physical-pixel footprint. Overview,
+  compact fallback geometry, and ultra geometry use this one rule; adding a
+  zoom threshold recreates wide/close disagreement. Do not add a separate
+  translucent/RMS envelope: it reads as a ghost waveform. Color comes from the
+  compact SoundBox RGB filterbank stream: overlapping LP 100 Hz, HP 300 + LP
+  3000 Hz, and HP 1500 Hz paths, with 25/3/1 ms peak holds and per-column
+  energy transfer. Its pyramid must amplitude-weight RGB and use the same
+  continuous LOD/song anchor as geometry, otherwise far-zoom colors alternate
+  as pixels move. The persisted normalized 24-band master is independent
+  analysis and must never be remixed by a renderer or override the dedicated
+  RGB rows. Rekordbox PWV5 is a read-only fallback/reference, never the source
+  for a successfully analyzed SoundBox color record. Current audio-detail and
+  color positions are integer sample anchors + local float phase; never
+  collapse either into one absolute float.
+- **Do not pin `CAMetalDisplayLink` to 120 Hz.** Let Core Animation negotiate
+  the active screen cadence so fixed-60 Hz, ProMotion, power throttling, and
+  moving the window between displays remain evenly paced. Snapshot render
+  buffers under the renderer mutex, then release it before command encoding;
+  the display thread also reuses its overlay vertex storage.
 - **The visual clock is a continuous PLL, not a corrected counter.** Never
   `fetch_add` a phase correction onto the visual frame at an Audio Unit callback
   boundary: the former 0.15 ms cap became almost half a Retina pixel at 1536

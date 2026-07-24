@@ -109,12 +109,15 @@ The fixed cyan playhead sits over three waveform lanes:
 3. A zoomed, scrolling RGB detail waveform with Rekordbox beat/downbeat lines.
 
 The `−` and `+` controls change only the detail lane. The overview never zooms.
-There are twelve persistent scales:
+There are thirteen persistent scales governed by one UI/native zoom contract:
 
-`64, 92, 128, 184, 256, 384, 576, 864, 1152, 1536, 2048, 3072 px/s`.
+`24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1536 px/s`.
 
-At maximum zoom, a typical 140–175 BPM track shows roughly three beats across
-the deck.
+The 24 px/s stop shows about 38 seconds in a 900-point lane. The 1536 px/s
+maximum retains the established close-up appearance (roughly three beats
+across the deck for a typical 140–175 BPM track). The native ABI returns its
+applied scale, so persisted zoom, paint, grid translation, and scrub math can
+never disagree about a silently clamped value.
 
 Main-waveform scrubbing is relative and precise:
 
@@ -148,9 +151,11 @@ Playback pipeline:
 - The Audio Unit render callback is the authoritative sample clock. It never
   decodes, allocates, performs file I/O, enters Python, or takes a blocking
   mutex.
-- `CAMetalDisplayLink` presents moving/interactive surfaces at the display
-  cadence (120 Hz on the built-in ProMotion panel). A paused/static deck draws
-  one dirty frame and then pauses the display link until state or size changes.
+- `CAMetalDisplayLink` presents moving/interactive surfaces at the active
+  display's negotiated cadence (120 Hz on the built-in ProMotion panel).
+  SoundBox does not force 120 Hz onto a fixed-60 Hz or throttled display. A
+  paused/static deck draws one dirty frame and then pauses the display link
+  until state or size changes.
 - The Qt waveform host synchronously commits its new point size to the embedded
   AppKit view and Retina drawable on each host resize. Generic child-widget
   resizes only defer background preparation; they do not wake Metal. Maximize,
@@ -253,12 +258,13 @@ The background `WaveformFillWorker`:
 
 A prepared canonical cache hit is staged off the UI thread: the small manifest
 positions transport first, the packed RGB overview is decompressed and uploaded
-next, and ultra detail plus its native peak pyramid is promoted last. Native
-decode starts before those reads. Every stage carries a monotonic track
-generation; `begin_track(generation)` atomically clears the previous waveform,
-grid, cues, session marker, and detail before the replacement source appears.
-Late stages from an older track are rejected in both Python and native code.
-No phase expands packed cache rows into nested Python lists.
+once as the permanent color/overview pyramid, and ultra geometry is promoted
+last. The detail stage never re-uploads the color payload. Native decode starts
+before those reads. Every stage carries a monotonic track generation;
+`begin_track(generation)` atomically clears the previous waveform, grid, cues,
+session marker, and detail before the replacement source appears. Late stages
+from an older track are rejected in both Python and native code. No phase
+expands packed cache rows into nested Python lists.
 
 Legacy V4 records with an audible height and zero RGB are repaired at load by
 borrowing the nearest valid hue. New analysis clamps filterbank group-delay
@@ -273,32 +279,37 @@ The following renderer rules are measured invariants, not style preferences:
 - The main waveform always uses the SoundBox audio-detail envelope pyramid when
   available; there is no zoom-level crossover back to PWV7.
 - Pyramid levels are song-anchored maxima that retain transient detail as one
-  solid silhouette. A second RMS/translucent envelope was rejected because it
-  reads as a ghost waveform rather than additional useful detail.
+  solid silhouette. Both overview and scrolling geometry continuously blend
+  the two adjacent levels around the physical-pixel footprint; there is no
+  zoom threshold or alternate wide/close shader. A second RMS/translucent
+  envelope was rejected because it reads as a ghost waveform rather than
+  additional useful detail.
 - The scrolling lane's color comes only from SoundBox's dedicated overlapping
   RGB filterbank; color remains a compact ~150 Hz buffer rather than being
-  duplicated into millions of ultra samples. Per-column normalization retains
-  the real low/mid/high relationship instead of making weak independently
-  normalized FFT bands falsely competitive. The 24-band master is stored
-  independently and neither Metal nor Qt may remix it into display color.
+  duplicated into millions of ultra samples. Its mip pyramid averages RGB
+  using waveform amplitude as energy weight, then uses the same continuous LOD
+  and song anchor as geometry. Adjacent colors therefore converge instead of
+  alternating at far zoom. Per-column normalization retains the real
+  low/mid/high relationship instead of making weak independently normalized
+  FFT bands falsely competitive. The 24-band master is stored independently
+  and neither Metal nor Qt may remix it into display color.
 - `color_model` versions the persisted RGB analysis without changing the V4
   container schema. Old records remain playable while the background worker
   atomically replaces one track at a time; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
-- Select one level no more than roughly 1.1 source samples per physical output
-  pixel. A two-level/per-fragment footprint loop dropped a populated render to
-  roughly 13 FPS and was rejected.
-- Filter final silhouette coverage and premultiplied RGB—not raw peak height.
-  Interpolating peak height makes the top/bottom contour grow and shrink as it
-  crosses fractional pixels, perceived as static.
+- Derive one continuous LOD from source samples per physical pixel and blend
+  the adjacent peak levels. The overview and main lane call the same sampler;
+  ultra detail replaces geometry quality only, never timing or color.
+- Filter final silhouette coverage—not raw peak height. Coverage from each
+  adjacent level is blended after sampling, preventing the contour from
+  acquiring a separate translucent edge.
 - Once a fragment belongs to that silhouette, apply a small chromatic
   visibility floor before compositing. This keeps one-physical-pixel quiet
   passages vivid against the dark deck without increasing their amplitude or
   adding a second envelope.
-- Four midpoint coverage taps across one physical pixel are the current
-  quality/performance sweet spot.
-- Address audio detail with an integer sample anchor plus local float phase.
-  Never multiply a large absolute float time back into a sample index.
+- Address audio detail and compact color with integer sample anchors plus local
+  float phase. Never multiply a large absolute float time back into a sample
+  index.
 - Address beat-grid vertices with integer milliseconds plus local phase.
   Absolute float-second subtraction loses precision late in a track.
 - The PLL may change slope, never phase-step the visible frame. The removed
@@ -344,10 +355,10 @@ Automated coverage:
   cache/cue upload, same-turn host/view/Retina resize geometry, active display
   cadence, static display-link sleep, adaptive polling, continuous visual
   clock, and source immutability.
-- `tests/test_native_shader.py`: shader/source contracts for coverage filtering,
-  vivid thin-contour color, cue coordinate modes, one output-safe mip, four
-  physical-pixel taps, integer/local-phase addressing, PLL correction, and
-  future presentation timestamps.
+- `tests/test_native_shader.py`: shader/source contracts for one continuous
+  geometry/color LOD, amplitude-weighted RGB mips, coverage filtering, vivid
+  thin-contour color, cue coordinate modes, integer/local-phase addressing,
+  PLL correction, and future presentation timestamps.
 - `tests/test_ui.py`: transport-only Space, double-click loading, keyboard CUE,
   cue-panel/overview/detail marker identity, activation resynchronization,
   stale-completion rejection, beat/bar jumps,
@@ -367,6 +378,18 @@ Dated validation on 2026-07-23:
   zero underruns.
 - `HUZE - THE FLOORS HAVE TEETH (V2)` at 240 seconds, 1536 px/s: same result.
 - Both source files remained byte-identical. Rekordbox data was read-only.
+
+Dated unified-renderer validation on 2026-07-24:
+
+- The bare and offscreen-render gates passed with 481 tests and one expected
+  platform skip.
+- A populated 900×148 native deck held 118.992 FPS at 24 px/s (16.667 ms
+  maximum gap) and 120.000 FPS at 1536 px/s (8.333 ms maximum gap) on the
+  built-in ProMotion display.
+- The signed installed app activated the native deck, loaded 3,265 tracks /
+  83 playlists, and reported zero preparation work. Curated state remained
+  semantically identical apart from runtime settings; 3,247 V4 caches and
+  3,122 artwork files remained present.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain

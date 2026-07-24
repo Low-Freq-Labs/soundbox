@@ -1703,11 +1703,27 @@ class PlayerHardening(unittest.TestCase):
         w.mousePressEvent(Ev(20, 40))  # minus
         self.assertEqual(w.PIXELS_PER_SECOND, 92.0)
         w.set_zoom(2000.0)
-        self.assertEqual(w.PIXELS_PER_SECOND, 2048.0)
+        self.assertEqual(w.PIXELS_PER_SECOND, 1536.0)
         self.assertEqual(w._overview_time_at_x(300), overview_target)
-        self.assertAlmostEqual(w._time_at_x(2248, 200), 11.0)
-        self.assertEqual(changes, [128.0, 92.0, 2048.0])
+        self.assertAlmostEqual(w._time_at_x(1736, 200), 11.0)
+        self.assertEqual(changes, [128.0, 92.0, 1536.0])
         self.assertEqual(seeks, [])
+
+    def test_zoom_scale_is_one_bounded_canonical_sequence(self):
+        from desktop.player import WaveformBar, _ZOOM_LEVELS
+
+        w = WaveformBar()
+        changes = []
+        w.zoom_changed.connect(changes.append)
+        for scale in _ZOOM_LEVELS:
+            w.set_zoom(scale)
+            self.assertEqual(w.PIXELS_PER_SECOND, scale)
+        self.assertEqual(_ZOOM_LEVELS[0], 24.0)
+        self.assertEqual(_ZOOM_LEVELS[-1], 1536.0)
+        w.set_zoom(-100)
+        self.assertEqual(w.PIXELS_PER_SECOND, 24.0)
+        w.set_zoom(50_000)
+        self.assertEqual(w.PIXELS_PER_SECOND, 1536.0)
 
     def test_waveform_drag_is_anchored_and_releases_exactly(self):
         from desktop.player import WaveformBar

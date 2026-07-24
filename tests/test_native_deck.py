@@ -195,14 +195,14 @@ class NativeDeckContract(unittest.TestCase):
         self.assertEqual(self.deck.diagnostic_analysis_shape(), (0, 0.0))
         self.assertTrue(self.deck.set_analysis(packed, 42))
 
-    def test_fresh_analysis_prefers_stable_display_columns(self):
+    def test_fresh_analysis_promotes_one_full_resolution_surface(self):
         self.deck.set_analysis({
             "heights": [0.1, 0.2, 0.3],
             "colors": [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
             "sample_rate": 150.0,
             "columns": [[0.3, [7, 8, 9]], [0.2, [4, 5, 6]]],
         })
-        self.assertEqual(self.deck.diagnostic_analysis_shape(), (2, 92.0))
+        self.assertEqual(self.deck.diagnostic_analysis_shape(), (3, 150.0))
         self.assertEqual(self.deck.diagnostic_detail_shape(), (3, 150.0))
 
     def test_audio_detail_upgrades_resolution_without_replacing_rgb_surface(self):
@@ -216,7 +216,7 @@ class NativeDeckContract(unittest.TestCase):
                 "heights": bytes([10, 80, 160, 255, 120, 20]),
             },
         })
-        self.assertEqual(self.deck.diagnostic_analysis_shape(), (2, 92.0))
+        self.assertEqual(self.deck.diagnostic_analysis_shape(), (3, 150.0))
         self.assertEqual(self.deck.diagnostic_detail_shape(), (6, 1536.0))
         self.assertAlmostEqual(self.deck.diagnostic_detail_peak(), 1.0)
         # The scrolling waveform uses this peak-preserving pyramid at every
@@ -226,9 +226,17 @@ class NativeDeckContract(unittest.TestCase):
         # WaveSample pyramid consumed 16 bytes/sample and duplicated RGB.
         self.assertLessEqual(
             self.deck.diagnostic_audio_detail_buffer_bytes(), 12)
-        for zoom in (64.0, 92.0, 384.0, 864.0, 1536.0):
-            self.deck.set_zoom(zoom)
+        for zoom in (
+                24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0,
+                256.0, 384.0, 576.0, 864.0, 1152.0, 1536.0):
+            self.assertEqual(self.deck.set_zoom(zoom), zoom)
             self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 4)
+
+    def test_native_zoom_returns_the_applied_renderer_scale(self):
+        self.assertEqual(self.deck.set_zoom(-100.0), 24.0)
+        self.assertEqual(self.deck.diagnostic_zoom(), 24.0)
+        self.assertEqual(self.deck.set_zoom(50_000.0), 1536.0)
+        self.assertEqual(self.deck.diagnostic_zoom(), 1536.0)
 
     def test_24_band_master_does_not_override_dedicated_rgb(self):
         spectral = bytes(
@@ -270,7 +278,7 @@ class NativeDeckContract(unittest.TestCase):
         self.deck.set_visual_position(15_000, True)
         screen_rate = float(self.host.screen().refreshRate() or 60.0)
         expected = min(120.0, max(60.0, screen_rate))
-        for zoom in (64.0, 1536.0):
+        for zoom in (24.0, 1536.0):
             self.deck.set_zoom(zoom)
             QTest.qWait(150)
             self.deck.diagnostic_reset_display_stats()

@@ -37,6 +37,13 @@ For the live test count, trust `./check.sh` output—not any number written here
   Retina drawable resize in the same UI turn without generic child-resize wake
   storms; focus return re-synchronizes transport from the native snapshot. No
   cache schema or analysis-quality change was required.
+- **UNIFIED ZOOM/SCROLL RENDERER SHIPPED.** Thirteen truthful scales now span
+  24–1536 px/s. Overview, scrolling geometry, and RGB use one continuous,
+  song-anchored LOD path; amplitude-weighted color mips remove far-zoom chroma
+  fighting while the established maximum-zoom appearance remains intact.
+  Scrub math consumes the native-applied scale, detail promotion no longer
+  re-uploads color, render encoding does not hold the analysis mutex, and
+  display cadence follows the active screen through resize/screen changes.
 - **LOADED-TRACK QUALITY PREEMPTS BULK WORK.** A loaded cache miss keeps its
   UI responsive and immediately runs the exact canonical RGB/ultra analysis in
   a persistent foreground lane. Battery,
@@ -108,8 +115,8 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
 - [x] Two-row layout: metadata/search/settings above a full-width player.
 - [x] Previous/next track, selectable beat/bar jumps, momentary CUE, play/pause.
 - [x] Read-only Rekordbox PQTZ beat grid and PWV5/PWV7 RGB analysis.
-- [x] Unzoomed whole-track overview plus twelve detail zoom levels up to
-      3072 px/s; persistent zoom and jump selection.
+- [x] Unzoomed whole-track overview plus thirteen truthful detail zoom levels
+      from 24 through 1536 px/s; persistent zoom and jump selection.
 - [x] Authoritative Rekordbox first-grid-beat loading, zero-anchored fallback
       when no valid grid exists, beat-aware jumps, and thresholded drag-only
       main-wave seeking with pause/live preview/resume semantics.

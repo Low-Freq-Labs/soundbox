@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SB_DECK_ABI_VERSION 1u
+#define SB_DECK_ABI_VERSION 2u
 
 typedef void *SBDeckRef;
 
@@ -49,7 +49,7 @@ uint64_t sb_deck_ramp_gain(SBDeckRef deck, float gain, double duration_ms);
 
 void sb_deck_set_preview_frame(
     SBDeckRef deck, uint64_t source_frame, int preview_active);
-void sb_deck_set_zoom(SBDeckRef deck, float pixels_per_second);
+float sb_deck_set_zoom(SBDeckRef deck, float pixels_per_second);
 void sb_deck_request_display(SBDeckRef deck);
 void sb_deck_sync_view_geometry(SBDeckRef deck);
 int sb_deck_set_analysis(
@@ -77,6 +77,7 @@ int sb_deck_set_packed_overview_for_generation(
     const uint8_t *heights,
     const uint8_t *rgb,
     size_t column_count,
+    double columns_per_second,
     const double *beat_seconds,
     const uint8_t *beat_in_bar,
     size_t beat_count);
