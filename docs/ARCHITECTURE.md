@@ -97,8 +97,10 @@ Display frames translate that fixed surface;
 margin refreshes ping-pong the textures, blit their unchanged overlap, and
 render only the newly exposed strip. Full reprints occur only when render data,
 zoom, Retina scale, or drawable geometry changes. Tile RGB is coverage
-premultiplied in half-float RGBA so translation filtering preserves hue and
-silhouette as one surface before final display conversion. Render buffers are
+premultiplied in half-float RGBA. The display pass selects one already-filtered
+song texel rather than linearly filtering antialiased coverage again, then
+restores hue before final display conversion. Redundant inactive-preview
+updates are absorbed without waking the Metal run loop. Render buffers are
 snapshotted under a short mutex and command
 encoding happens after that mutex is released.
 Prepared overview and ultra buffers are built off the UI thread and become

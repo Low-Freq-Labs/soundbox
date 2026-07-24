@@ -364,6 +364,17 @@ class NativeDeckContract(unittest.TestCase):
         callbacks, _fps, _max_gap_ms = self.deck.diagnostic_display_stats()
         self.assertLessEqual(callbacks, 1)
 
+    def test_redundant_inactive_preview_updates_do_not_wake_metal(self):
+        """Coarse UI transport polling cannot interfere with display pacing."""
+        self.deck.request_display()
+        QTest.qWait(100)
+        self.deck.diagnostic_reset_display_stats()
+        for position in range(0, 1000, 5):
+            self.deck.set_visual_position(position, False)
+        QTest.qWait(150)
+        callbacks, _fps, _max_gap_ms = self.deck.diagnostic_display_stats()
+        self.assertLessEqual(callbacks, 1)
+
     def test_host_resize_commits_view_and_drawable_in_the_same_turn(self):
         """Qt host, AppKit child, and Retina drawable never trail by a frame."""
         for width, height in ((517, 137), (1183, 164), (640, 132)):

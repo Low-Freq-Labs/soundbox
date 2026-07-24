@@ -304,9 +304,19 @@ public:
     }
 
     void setPreview(uint64_t frame, bool active) {
-        previewFrame_.store(frame, std::memory_order_release);
-        previewActive_.store(active, std::memory_order_release);
-        requestDisplay();
+        if (active) {
+            previewFrame_.store(frame, std::memory_order_release);
+            previewActive_.store(true, std::memory_order_release);
+            requestDisplay();
+            return;
+        }
+        // PlayerBar republishes its coarse transport text position while
+        // ordinary playback is running. Once preview is already off, those
+        // updates must not wake or enqueue work on the Metal display run loop:
+        // CAMetalDisplayLink and the CoreAudio presentation clock own motion.
+        if (previewActive_.exchange(false, std::memory_order_acq_rel)) {
+            requestDisplay();
+        }
     }
 
     uint64_t beginPreviewHold() {
@@ -2215,9 +2225,8 @@ fragment float4 wave_source_fragment(
         discard_fragment();
     }
     // Main-lane tiles store premultiplied hue + raw silhouette coverage.
-    // Translation filters this already-rasterized surface; the display pass
-    // restores hue before applying the visibility floor, so a thin colored
-    // feature cannot darken merely because it sits between two screen pixels.
+    // The display pass chooses one prefiltered song-space texel per physical
+    // pixel, avoiding a second filter that can make edges and hues breathe.
     if (u.tileValid != 0) {
         return float4(colorSurface.color * coverage, coverage);
     }
@@ -2275,7 +2284,7 @@ fragment float4 wave_display_fragment(
         discard_fragment();
     }
     constexpr sampler tileSampler(
-        coord::pixel, address::clamp_to_edge, filter::linear);
+        coord::pixel, address::clamp_to_edge, filter::nearest);
     const float4 tileSample = waveTile.sample(
         tileSampler, float2(tileX, in.position.y));
     if (tileSample.a <= 0.0) {

@@ -172,6 +172,8 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("u.tileCurrentOffsetTexels", main)
         self.assertIn("* u.tileSupersample", main)
         self.assertIn("waveTile.sample(", main)
+        self.assertIn("filter::nearest", main)
+        self.assertNotIn("filter::linear", main)
         self.assertNotIn("filtered_envelope_coverage(", main)
         self.assertNotIn("filtered_wave_surface(", main)
 
@@ -226,7 +228,7 @@ class NativeWaveformShader(unittest.TestCase):
             native,
         )
 
-    def test_tile_translation_preserves_premultiplied_hue(self):
+    def test_tile_translation_uses_one_prefiltered_song_texel(self):
         source = self.shader.split(
             "fragment float4 wave_source_fragment", 1
         )[1].split(
@@ -243,6 +245,8 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "tileSample.rgb / max(tileSample.a, 1.0 / 255.0)", display)
         self.assertIn("vivid_wave_coverage(tileSample.a)", display)
+        self.assertIn("filter::nearest", display)
+        self.assertNotIn("filter::linear", display)
         native = (
             Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
         ).read_text()

@@ -52,6 +52,13 @@ For the live test count, trust `./check.sh` output—not any number written here
   commit, so long sets do not inflate during detail promotion. A playing
   waveform grab captures the exact native frame and pauses on mouse-down; a
   stationary release resumes from exactly that held timestamp.
+- **MOTION-STABILITY PASS SHIPPED.** The four-sample song tile now selects one
+  already-prefiltered texel per physical pixel instead of linearly filtering
+  antialiased coverage and premultiplied hue a second time. Ordinary Qt
+  position publication no longer wakes the Metal run loop through an already
+  inactive preview channel. The isolated deck and full application therefore
+  share the same presentation path without sacrificing ultra detail, zoom
+  continuity, scrubbing, or resize behavior.
 - **PLAYLIST AUTOPLAY SHIPPED.** Header up/down modes walk the playlist snapshot
   that deliberately started the track; random uses a no-repeat shuffle bag.
   Browsing is independent, a new deliberate source replaces the snapshot, and

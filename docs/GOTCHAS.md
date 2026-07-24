@@ -78,8 +78,17 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   arbitrary frame-centered tile changes sample/LOD phase at every refresh and
   recreates periodic pulsing. Tile RGB is premultiplied by raw silhouette
   coverage in half-float RGBA; restore hue before applying the vivid-coverage
-  floor after linear translation filtering. An 8-bit premultiplied
+  floor. The display pass must select one of the four already-prefiltered song
+  texels per physical pixel; linearly filtering that antialiased coverage a
+  second time makes contours and adjacent hues breathe. An 8-bit premultiplied
   intermediate quantizes hue precisely where edge coverage is lowest.
+- **Inactive preview is an idempotent native transition.** PlayerBar publishes
+  coarse transport text positions during ordinary playback. Those
+  `preview_active=false` calls must do nothing once native preview is already
+  off; waking `CAMetalDisplayLink` or posting a run-loop block for each poll
+  introduces full-app pacing noise that an isolated deck harness will not
+  reproduce. Active drag preview still republishes every position and wakes
+  one frame.
 - **Do not pin `CAMetalDisplayLink` to 120 Hz.** Let Core Animation negotiate
   the active screen cadence so fixed-60 Hz, ProMotion, power throttling, and
   moving the window between displays remain evenly paced. Snapshot render

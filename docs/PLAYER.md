@@ -177,7 +177,9 @@ Playback pipeline:
   turn instead of briefly stretching a smaller drawable.
 - Python polls state at 8 ms only while playing, loading, or gain-ramping and
   drops to 125 ms while paused. Commands and app activation request an immediate
-  authoritative snapshot; Python never repaints the native waveform.
+  authoritative snapshot; Python never repaints the native waveform. Ordinary
+  coarse position publication cannot wake Metal through the preview API once
+  preview is already inactive.
 
 The CoreAudio presentation timestamps feed a continuous visual PLL. Device
 clock drift changes visual velocity by a microscopic bounded amount; it never
@@ -321,19 +323,20 @@ The following renderer rules are measured invariants, not style preferences:
 - Rasterize the scrolling lane at four horizontal samples per physical display
   pixel onto a bounded Metal surface whose center is an integer global song
   texel. The physical-pixel LOD remains unchanged. Normal display frames
-  translate and linearly sample this already-decided subpixel surface instead
-  of reevaluating LOD, RGB, and silhouette coverage under each moving screen
-  column. This removes the last contour/color pulse without altering maximum-
-  zoom detail.
+  translate this already-decided subpixel surface and choose one of its four
+  prefiltered song samples per physical pixel instead of filtering coverage a
+  second time or reevaluating LOD, RGB, and silhouette under each moving screen
+  column. This preserves maximum-zoom detail while preventing adjacent
+  antialiased contours and hues from breathing into each other.
 - When playback approaches the surface margin, blit the unchanged overlap into
   the alternate tile and rasterize only the newly exposed song strip. Zoom,
   Retina scale, analysis promotion, and resize deliberately trigger a complete
   reprint; ordinary scrolling never does.
 - Store tile RGB premultiplied by raw silhouette coverage in half-float RGBA.
-  The display pass restores the hue after translation filtering, then applies
-  the visibility floor and converts once to the display format. Subpixel
-  motion therefore cannot make adjacent colors dim or compete, including at
-  very low edge coverage.
+  The display pass restores the hue from the selected prefiltered texel, then
+  applies the visibility floor and converts once to the display format.
+  Subpixel motion therefore cannot make adjacent colors dim or compete,
+  including at very low edge coverage.
 - Filter final silhouette coverage—not raw peak height. Coverage from each
   adjacent level is blended after sampling, preventing the contour from
   acquiring a separate translucent edge.
@@ -387,12 +390,13 @@ Automated coverage:
   user-data-preserving upgrades.
 - `tests/test_native_deck.py`: real native load/play/seek/ramp/rapid replacement,
   cache/cue upload, same-turn host/view/Retina resize geometry, active display
-  cadence, static display-link sleep, adaptive polling, continuous visual
-  clock, atomic mouse holds/complete-surface commits, and source immutability.
+  cadence, static display-link sleep, inactive-preview wake suppression,
+  adaptive polling, continuous visual clock, atomic mouse
+  holds/complete-surface commits, and source immutability.
 - `tests/test_native_shader.py`: shader/source contracts for one continuous
   geometry/color LOD, amplitude-weighted RGB mips, coverage filtering, vivid
   thin-contour color, four-sample song-lattice tile translation/incremental
-  strip updates,
+  strip updates and single-prefiltered-texel display sampling,
   cue coordinate modes, integer/local-phase addressing, PLL correction, and
   future presentation timestamps.
 - `tests/test_ui.py`: transport-only Space, double-click loading, keyboard CUE,
@@ -454,6 +458,24 @@ Dated cohesive-surface/autoplay validation on 2026-07-24:
 - The signed installed app activated the native deck, loaded 3,265 tracks /
   83 playlists, retained 3,247 V4 records and 3,124 art files, and left the
   pre-install `library.json` semantically identical.
+
+Dated motion-stability validation on 2026-07-24:
+
+- The bare gate passed with 494 tests and one expected platform skip.
+- Consecutive real Metal screen captures used the prepared 26,570,650-sample
+  `OF THE TREES` ultra envelope. At 92 px/s, removing the second linear tile
+  filter reduced the median translation-aligned silhouette residual from
+  7.45% to 5.84% while retaining the established coverage waveform.
+- In the complete application, suppressing redundant inactive-preview wakes
+  reduced the same capture residual from 8.79% to 7.16%. Estimated
+  frame-to-frame travel tightened around the correct 184 physical px/s target
+  from a 128–249 px/s 5th–95th-percentile range to 141–230 px/s. Screen
+  recording is deliberately a visual-compositor test, not the display-link
+  cadence test.
+- The signed installed app activated the packaged native deck, loaded 3,265
+  tracks / 83 playlists, reported zero preparation tasks, retained 3,247 V4
+  records and 3,124 art files, and left `library.json` byte-identical. No cache
+  recook was required.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain
