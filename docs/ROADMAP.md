@@ -56,7 +56,13 @@ For the live test count, trust `./check.sh` output—not any number written here
   physical pixel, closing the center-sample aliasing regression without
   reintroducing zoom branches. Ordinary Qt position
   publication remains idempotent and cannot wake the Metal run loop through an
-  inactive preview.
+  inactive preview. Close-zoom playback extends that same sampler over a
+  half-presentation temporal footprint while retaining physical-pixel LOD, so
+  fast sharp contours no longer strobe as discrete refresh steps. Cadence is
+  measured from actual drawable presentations, not display-link submissions.
+  A latency-one grab freezes the newest presented/committed source frame and
+  preserves its moving footprint through the first held redraw, eliminating
+  both the backwards mouse-down jump and the apparent thinning pulse.
 - **PLAYLIST AUTOPLAY SHIPPED.** Header up/down modes walk the playlist snapshot
   that deliberately started the track; random uses a no-repeat shuffle bag.
   Browsing is independent, a new deliberate source replaces the snapshot, and

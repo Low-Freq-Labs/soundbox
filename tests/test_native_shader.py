@@ -29,7 +29,7 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "inline float filtered_envelope_coverage", 1
         )[0]
-        self.assertIn("log2(max(1.0, sampleFootprint))", helper)
+        self.assertIn("log2(max(1.0, lodFootprint))", helper)
         self.assertIn("const uint lowLevel", helper)
         self.assertIn("const uint highLevel", helper)
         self.assertIn("const float lodMix", helper)
@@ -43,7 +43,7 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "fragment float4 wave_surface_fragment", 1
         )[0]
-        self.assertIn("log2(max(1.0, sampleFootprint))", helper)
+        self.assertIn("log2(max(1.0, lodFootprint))", helper)
         self.assertIn("const uint lowLevel", helper)
         self.assertIn("const uint highLevel", helper)
         self.assertIn("return mix(lowCoverage, highCoverage, lodMix)", helper)
@@ -245,6 +245,28 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("horizontalScale", fragment)
         self.assertNotIn("tileCurrentOffsetTexels", self.shader)
 
+    def test_high_velocity_motion_extends_the_same_pixel_footprint(self):
+        self.assertIn("float motionIntegrationSeconds;", self.shader)
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn(
+            "u.samplesPerSecond * u.motionIntegrationSeconds", fragment)
+        self.assertIn(
+            "u.audioDetailSamplesPerSecond * "
+            "u.motionIntegrationSeconds", fragment)
+        self.assertIn(
+            "max(waveSpatialFootprint, waveMotionFootprint)", fragment)
+        self.assertIn(
+            "max(audioSpatialFootprint, audioMotionFootprint)", fragment)
+        self.assertIn(
+            "waveSpatialFootprint, waveIntegrationFootprint", fragment)
+        self.assertIn(
+            "audioSpatialFootprint, audioIntegrationFootprint", fragment)
+        self.assertNotIn("if (u.pixelsPerSecond >", fragment)
+
     def test_grid_uses_integer_milliseconds_plus_local_phase(self):
         self.assertIn(
             "struct GridVertex { uint songMillis; float songMillisPhase;",
@@ -286,11 +308,27 @@ class NativeWaveformShader(unittest.TestCase):
         hold = native.split("uint64_t beginPreviewHold()", 1)[1].split(
             "void beginWaveformUpdate", 1
         )[0]
-        self.assertIn("displayLatestTarget_ <= now", hold)
-        self.assertIn("displayPreviousTarget_ <= now", hold)
+        self.assertIn("presentedFrames_->latestTime <= now", hold)
         self.assertIn("kFreshPresentationWindow", hold)
-        self.assertIn("frame = displayLatestFrame_", hold)
+        self.assertIn("frame = presentedFrames_->latestFrame", hold)
+        self.assertIn(
+            "presentedFrames_->scheduledFrame", hold)
+        self.assertIn(
+            "presentedFrames_->scheduledMotionIntegration", hold)
+        self.assertIn(
+            "previewMotionIntegration_.store", hold)
         self.assertIn("frame = visualFrameNow()", hold)
+        draw = native.split(
+            "void draw(CAMetalDisplayLinkUpdate", 1
+        )[1].split(
+            "private:", 1
+        )[0]
+        self.assertIn("addPresentedHandler", draw)
+        self.assertIn("drawable.presentedTime", draw)
+        self.assertIn("actualTime <= 0.0", draw)
+        self.assertIn(
+            "presented->latestMotionIntegration", draw)
+        self.assertIn("preferredFrameLatency = 1.0f", native)
 
     def test_staged_waveform_buffers_have_one_atomic_visible_commit(self):
         native = (

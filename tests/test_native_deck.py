@@ -173,13 +173,16 @@ class NativeDeckContract(unittest.TestCase):
         self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
         self.deck.play()
         self._wait_until(lambda: self.deck.position() >= 100)
-        before = self.deck.diagnostic_visual_frame()
+        self._wait_until(
+            lambda: self.deck.diagnostic_presented_frame() > 0)
+        presented = self.deck.diagnostic_presented_frame()
         held_ms = self.deck.begin_visual_hold()
-        after = self.deck.diagnostic_visual_frame()
         held_frame = round(held_ms * 44_100 / 1000)
 
-        self.assertGreaterEqual(held_frame, before - 45)
-        self.assertLessEqual(held_frame, after + 45)
+        self.assertGreaterEqual(held_frame, presented)
+        QTest.qWait(30)
+        self.assertLessEqual(
+            abs(held_frame - self.deck.diagnostic_scheduled_frame()), 1)
         self.deck.set_visual_position(held_ms, False)
 
     def test_new_analysis_clears_previous_cue_markers(self):
@@ -340,8 +343,10 @@ class NativeDeckContract(unittest.TestCase):
             QTest.qWait(150)
             self.deck.diagnostic_reset_display_stats()
             QTest.qWait(700)
-            callbacks, fps, max_gap_ms = self.deck.diagnostic_display_stats()
-            self.assertGreaterEqual(callbacks, round(expected * 0.7 * 0.85))
+            presentations, fps, max_gap_ms = (
+                self.deck.diagnostic_display_stats())
+            self.assertGreaterEqual(
+                presentations, round(expected * 0.7 * 0.85))
             self.assertGreaterEqual(fps, expected * 0.9)
             self.assertLessEqual(max_gap_ms, 2.2 * 1000 / expected)
 
@@ -366,8 +371,9 @@ class NativeDeckContract(unittest.TestCase):
         QTest.qWait(100)
         self.deck.diagnostic_reset_display_stats()
         QTest.qWait(500)
-        callbacks, _fps, _max_gap_ms = self.deck.diagnostic_display_stats()
-        self.assertLessEqual(callbacks, 1)
+        presentations, _fps, _max_gap_ms = (
+            self.deck.diagnostic_display_stats())
+        self.assertLessEqual(presentations, 1)
 
     def test_redundant_inactive_preview_updates_do_not_wake_metal(self):
         """Coarse UI transport polling cannot interfere with display pacing."""
@@ -377,8 +383,9 @@ class NativeDeckContract(unittest.TestCase):
         for position in range(0, 1000, 5):
             self.deck.set_visual_position(position, False)
         QTest.qWait(150)
-        callbacks, _fps, _max_gap_ms = self.deck.diagnostic_display_stats()
-        self.assertLessEqual(callbacks, 1)
+        presentations, _fps, _max_gap_ms = (
+            self.deck.diagnostic_display_stats())
+        self.assertLessEqual(presentations, 1)
 
     def test_host_resize_commits_view_and_drawable_in_the_same_turn(self):
         """Qt host, AppKit child, and Retina drawable never trail by a frame."""
@@ -398,9 +405,10 @@ class NativeDeckContract(unittest.TestCase):
         self.host.resize(901, 148)
         self.app.processEvents()
         QTest.qWait(120)
-        callbacks, _fps, _max_gap_ms = self.deck.diagnostic_display_stats()
-        self.assertGreaterEqual(callbacks, 1)
-        self.assertLessEqual(callbacks, 2)
+        presentations, _fps, _max_gap_ms = (
+            self.deck.diagnostic_display_stats())
+        self.assertGreaterEqual(presentations, 1)
+        self.assertLessEqual(presentations, 2)
 
     def test_native_snapshot_polling_is_adaptive(self):
         self.assertEqual(self.deck._poll_timer.interval(), 125)
@@ -426,10 +434,11 @@ class NativeDeckContract(unittest.TestCase):
         QTest.qWait(250)
         self.deck.diagnostic_reset_display_stats()
         QTest.qWait(1000)
-        callbacks, fps, max_gap_ms = self.deck.diagnostic_display_stats()
+        presentations, fps, max_gap_ms = (
+            self.deck.diagnostic_display_stats())
         screen_rate = float(self.host.screen().refreshRate() or 60.0)
         expected = min(120.0, max(60.0, screen_rate))
-        self.assertGreaterEqual(callbacks, round(expected * 0.9))
+        self.assertGreaterEqual(presentations, round(expected * 0.9))
         self.assertGreaterEqual(fps, expected * 0.95)
         self.assertLessEqual(max_gap_ms, 2.1 * 1000 / expected)
         self.deck.pause()
@@ -440,8 +449,9 @@ class NativeDeckContract(unittest.TestCase):
         QTest.qWait(100)
         self.deck.diagnostic_reset_display_stats()
         QTest.qWait(500)
-        callbacks, _fps, _max_gap_ms = self.deck.diagnostic_display_stats()
-        self.assertLessEqual(callbacks, 1)
+        presentations, _fps, _max_gap_ms = (
+            self.deck.diagnostic_display_stats())
+        self.assertLessEqual(presentations, 1)
 
     def test_rekordbox_rgb_expansion_matches_player_palette(self):
         self.assertEqual(NativeDeckBackend._screen_rgb([14, 0, 0]),

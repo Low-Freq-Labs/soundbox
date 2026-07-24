@@ -101,6 +101,21 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   moving the window between displays remain evenly paced. Snapshot render
   buffers under the renderer mutex, then release it before command encoding;
   the display thread also reuses its overlay vertex storage.
+- **A display-link submission is not an onscreen frame.** Target timestamps
+  can run ahead of the drawable the hand actually sees. Count cadence from
+  `MTLDrawable.presentedTime`, ignore its documented zero value for a dropped
+  drawable, and keep presentation latency at one. On mouse-down, retain the
+  newest fresh presented/irreversibly scheduled frame and its temporal filter
+  footprint. Freezing an older submitted frame produces a visible rewind;
+  dropping the moving footprint on the held redraw makes the same source frame
+  visibly thin or change hue.
+- **Close-zoom travel needs temporal reconstruction, not a second renderer.**
+  At 1536 px/s a correct ProMotion frame still advances more than twenty Retina
+  pixels. Extend the existing four-tap integration footprint over half the
+  measured presentation interval only while moving. Keep LOD selection tied
+  to one physical pixel: using the temporal footprint for LOD makes the
+  maximum-zoom waveform blocky, while disabling reconstruction makes sharp
+  contours strobe like a low-frame-rate animation.
 - **The visual clock is a continuous PLL, not a corrected counter.** Never
   `fetch_add` a phase correction onto the visual frame at an Audio Unit callback
   boundary: the former 0.15 ms cap became almost half a Retina pixel at 1536
@@ -130,7 +145,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   grid exists. A missing/invalid imported grid uses the SoundBox fallback with
   beat 1 at `0:00`; neither path writes to Rekordbox.
 - The scrolling detail waveform claims transport on mouse-down by design:
-  use the native atomic hold to freeze the last drawable already presented,
+  use the native atomic hold to freeze the newest drawable already presented
+  or committed at latency one,
   re-anchor Qt drag math to its fractional-millisecond timestamp, cancel any
   pending gain ramp, hard-mute, and pause synchronously. The ordinary pause
   envelope advances to its fade endpoint and must not own a waveform grab.

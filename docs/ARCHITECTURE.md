@@ -99,9 +99,16 @@ directly into each final Retina drawable pixel. One fragment
 pass selects the continuous LOD, samples geometry and RGB, filters silhouette
 coverage, and composites the final color. There is no translated intermediate
 texture or second coverage/color filter, so motion retains its true fractional
-distance at every zoom. Redundant inactive-preview updates are absorbed without
-waking the Metal run loop. Render buffers are snapshotted under a short mutex
-and command encoding happens after that mutex is released.
+distance at every zoom. At high visual velocity, the same sampler integrates
+half of the measured presentation interval while leaving physical-pixel LOD
+selection unchanged; paused frames remain fully sharp. Actual
+`MTLDrawable.presentedTime` callbacks, rather than display-link submissions,
+drive cadence diagnostics and the grab handoff. Presentation latency is one
+frame, and the newest committed frame plus its moving integration footprint is
+held atomically so mouse-down cannot rewind or change waveform thickness.
+Redundant inactive-preview updates are absorbed without waking the Metal run
+loop. Render buffers are snapshotted under a short mutex and command encoding
+happens after that mutex is released.
 Prepared overview and ultra buffers are built off the UI thread and become
 visible in one grouped native commit; the display link skips the incomplete
 transaction so resolution promotion cannot alter a waveform already on screen.

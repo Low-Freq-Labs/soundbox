@@ -121,6 +121,8 @@ int sb_deck_set_session_cue(
 int sb_deck_snapshot(SBDeckRef deck, SBDeckSnapshot *out_snapshot);
 int sb_deck_has_ended(SBDeckRef deck);
 uint64_t sb_deck_visual_frame(SBDeckRef deck);
+uint64_t sb_deck_presented_frame(SBDeckRef deck);
+uint64_t sb_deck_scheduled_frame(SBDeckRef deck);
 uint64_t sb_deck_analysis_sample_count(SBDeckRef deck);
 double sb_deck_analysis_sample_rate(SBDeckRef deck);
 uint64_t sb_deck_detail_sample_count(SBDeckRef deck);

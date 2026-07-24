@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -64,6 +65,21 @@ struct BeatPosition {
     uint8_t beat;
 };
 
+struct PresentedFrameState {
+    std::mutex mutex;
+    uint64_t generation = 0;
+    CFTimeInterval latestTime = 0.0;
+    uint64_t latestFrame = 0;
+    float latestMotionIntegration = 0.0f;
+    CFTimeInterval scheduledTarget = 0.0;
+    uint64_t scheduledFrame = 0;
+    float scheduledMotionIntegration = 0.0f;
+    std::atomic<uint64_t> count{0};
+    std::atomic<uint64_t> firstTimeNs{0};
+    std::atomic<uint64_t> lastTimeNs{0};
+    std::atomic<uint64_t> maxGapNs{0};
+};
+
 struct Uniforms {
     float currentSeconds;
     uint32_t currentMillis;
@@ -90,6 +106,7 @@ struct Uniforms {
     uint32_t audioDetailMipCount;
     uint32_t audioDetailMipOffsets[kWaveMipLevels];
     uint32_t audioDetailMipCounts[kWaveMipLevels];
+    float motionIntegrationSeconds;
 };
 
 struct AudioRing {
@@ -208,12 +225,16 @@ public:
     bool beginTrack(uint64_t generation) {
         renderGeneration_.store(generation, std::memory_order_release);
         previewActive_.store(false, std::memory_order_release);
+        previewMotionIntegration_.store(0.0f, std::memory_order_release);
         {
-            std::lock_guard<std::mutex> lock(displayFrameMutex_);
-            displayPreviousTarget_ = 0.0;
-            displayLatestTarget_ = 0.0;
-            displayPreviousFrame_ = 0;
-            displayLatestFrame_ = 0;
+            std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
+            presentedFrames_->generation = generation;
+            presentedFrames_->latestTime = 0.0;
+            presentedFrames_->latestFrame = 0;
+            presentedFrames_->latestMotionIntegration = 0.0f;
+            presentedFrames_->scheduledTarget = 0.0;
+            presentedFrames_->scheduledFrame = 0;
+            presentedFrames_->scheduledMotionIntegration = 0.0f;
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
         waveBuffer_ = nil;
@@ -316,35 +337,51 @@ public:
         // updates must not wake or enqueue work on the Metal display run loop:
         // CAMetalDisplayLink and the CoreAudio presentation clock own motion.
         if (previewActive_.exchange(false, std::memory_order_acq_rel)) {
+            previewMotionIntegration_.store(
+                0.0f, std::memory_order_release);
             requestDisplay();
         }
     }
 
     uint64_t beginPreviewHold() {
-        // Freeze the drawable that is actually on screen, not a newly
-        // predicted point between display refreshes. At high zoom, even the
-        // sub-refresh difference is visible as a mouse-down jerk.
+        // Never rewind behind a drawable Metal already committed. The latest
+        // confirmed presentation is what the hand saw, but one latency-one
+        // drawable may already be irreversible. Freezing that newest scheduled
+        // source frame lets the final normal step land once and then hold;
+        // selecting the older visible frame would present the queued frame and
+        // visibly snap backward afterward.
         uint64_t frame = 0;
+        float motionIntegration = 0.0f;
         const CFTimeInterval now = CACurrentMediaTime();
-        constexpr CFTimeInterval kFreshPresentationWindow = 1.0 / 30.0;
+        constexpr CFTimeInterval kFreshPresentationWindow = 1.0 / 15.0;
         {
-            std::lock_guard<std::mutex> lock(displayFrameMutex_);
-            if (displayLatestTarget_ > 0.0
-                    && displayLatestTarget_ <= now
-                    && now - displayLatestTarget_
+            std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
+            if (presentedFrames_->latestTime > 0.0
+                    && presentedFrames_->latestTime <= now
+                    && now - presentedFrames_->latestTime
                         <= kFreshPresentationWindow) {
-                frame = displayLatestFrame_;
-            } else if (displayPreviousTarget_ > 0.0
-                    && displayPreviousTarget_ <= now
-                    && now - displayPreviousTarget_
+                frame = presentedFrames_->latestFrame;
+                motionIntegration =
+                    presentedFrames_->latestMotionIntegration;
+            }
+            if (presentedFrames_->scheduledTarget > 0.0
+                    && presentedFrames_->scheduledTarget
+                        <= now + kFreshPresentationWindow
+                    && now - presentedFrames_->scheduledTarget
                         <= kFreshPresentationWindow) {
-                frame = displayPreviousFrame_;
+                if (presentedFrames_->scheduledFrame >= frame) {
+                    frame = presentedFrames_->scheduledFrame;
+                    motionIntegration =
+                        presentedFrames_->scheduledMotionIntegration;
+                }
             }
         }
         if (frame == 0) {
             frame = visualFrameNow();
         }
         previewFrame_.store(frame, std::memory_order_release);
+        previewMotionIntegration_.store(
+            motionIntegration, std::memory_order_release);
         previewActive_.store(true, std::memory_order_release);
         requestDisplay();
         return frame;
@@ -490,6 +527,16 @@ public:
             std::max(0.0, predictedFrame(CACurrentMediaTime())));
     }
 
+    uint64_t latestPresentedFrame() {
+        std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
+        return presentedFrames_->latestFrame;
+    }
+
+    uint64_t latestScheduledFrame() {
+        std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
+        return presentedFrames_->scheduledFrame;
+    }
+
     uint64_t analysisSampleCount() {
         std::lock_guard<std::mutex> lock(renderMutex_);
         return waveSampleCount_;
@@ -554,30 +601,31 @@ public:
     }
 
     uint64_t displayCallbackCount() const {
-        return displayCallbackCount_.load(std::memory_order_acquire);
+        return presentedFrames_->count.load(std::memory_order_acquire);
     }
 
     double displayAverageFps() const {
         const uint64_t count =
-            displayCallbackCount_.load(std::memory_order_acquire);
+            presentedFrames_->count.load(std::memory_order_acquire);
         const uint64_t first =
-            displayFirstTargetNs_.load(std::memory_order_acquire);
+            presentedFrames_->firstTimeNs.load(std::memory_order_acquire);
         const uint64_t last =
-            displayLastTargetNs_.load(std::memory_order_acquire);
+            presentedFrames_->lastTimeNs.load(std::memory_order_acquire);
         return count > 1 && last > first
             ? (count - 1) * 1e9 / static_cast<double>(last - first)
             : 0.0;
     }
 
     double displayMaxGapMs() const {
-        return displayMaxGapNs_.load(std::memory_order_acquire) / 1e6;
+        return presentedFrames_->maxGapNs.load(
+            std::memory_order_acquire) / 1e6;
     }
 
     void resetDisplayStats() {
-        displayCallbackCount_.store(0, std::memory_order_release);
-        displayFirstTargetNs_.store(0, std::memory_order_release);
-        displayLastTargetNs_.store(0, std::memory_order_release);
-        displayMaxGapNs_.store(0, std::memory_order_release);
+        presentedFrames_->count.store(0, std::memory_order_release);
+        presentedFrames_->firstTimeNs.store(0, std::memory_order_release);
+        presentedFrames_->lastTimeNs.store(0, std::memory_order_release);
+        presentedFrames_->maxGapNs.store(0, std::memory_order_release);
     }
 
     bool setAnalysis(
@@ -1247,41 +1295,29 @@ public:
             displayLink_.paused = YES;
             return;
         }
-        const uint64_t targetNs = static_cast<uint64_t>(
-            std::llround(update.targetPresentationTimestamp * 1e9));
-        uint64_t expectedFirst = 0;
-        displayFirstTargetNs_.compare_exchange_strong(
-            expectedFirst, targetNs, std::memory_order_acq_rel);
-        const uint64_t previous = displayLastTargetNs_.exchange(
-            targetNs, std::memory_order_acq_rel);
-        if (previous && targetNs > previous) {
-            const uint64_t gap = targetNs - previous;
-            uint64_t current = displayMaxGapNs_.load(
-                std::memory_order_acquire);
-            while (gap > current
-                    && !displayMaxGapNs_.compare_exchange_weak(
-                        current, gap, std::memory_order_acq_rel)) {
-            }
-        }
-        displayCallbackCount_.fetch_add(1, std::memory_order_acq_rel);
         const CGSize size = metalLayer_.bounds.size;
         if (size.width <= 1 || size.height <= 1) {
             return;
         }
         id<MTLCommandBuffer> commands = [commandQueue_ commandBuffer];
 
-        const double exactFrame = previewActive_.load(std::memory_order_acquire)
+        const bool previewActive =
+            previewActive_.load(std::memory_order_acquire);
+        const double exactFrame = previewActive
             ? static_cast<double>(
                 previewFrame_.load(std::memory_order_acquire))
             : predictedFrame(update.targetPresentationTimestamp);
-        {
-            std::lock_guard<std::mutex> lock(displayFrameMutex_);
-            displayPreviousTarget_ = displayLatestTarget_;
-            displayPreviousFrame_ = displayLatestFrame_;
-            displayLatestTarget_ = update.targetPresentationTimestamp;
-            displayLatestFrame_ = static_cast<uint64_t>(
-                std::llround(std::max(0.0, exactFrame)));
+        double presentationInterval =
+            update.targetPresentationTimestamp - lastTargetPresentation_;
+        lastTargetPresentation_ = update.targetPresentationTimestamp;
+        if (presentationInterval <= 0.0
+                || presentationInterval > 1.0 / 30.0) {
+            presentationInterval = 1.0 / 120.0;
         }
+        const uint64_t submittedFrame = static_cast<uint64_t>(
+            std::llround(std::max(0.0, exactFrame)));
+        const uint64_t submittedGeneration =
+            renderGeneration_.load(std::memory_order_acquire);
         const double rate = std::max(1.0, sampleRate_.load(std::memory_order_acquire));
         const float drawableScale = static_cast<float>(
             update.drawable.texture.width / std::max(1.0, size.width));
@@ -1292,6 +1328,28 @@ public:
         uniforms.widthPoints = static_cast<float>(size.width);
         uniforms.heightPoints = static_cast<float>(size.height);
         uniforms.drawableScale = drawableScale;
+        // A stationary high-zoom raster can move more than twenty physical
+        // pixels between two perfectly timed 120 Hz presentations. Integrate
+        // a 180-degree shutter only while transport is moving; the same
+        // four-tap song sampler then reconstructs temporal coverage instead
+        // of strobing sharp contours at each discrete display instant.
+        uniforms.motionIntegrationSeconds = previewActive
+            ? previewMotionIntegration_.load(std::memory_order_acquire)
+            : (playRequested_.load(std::memory_order_acquire)
+                ? static_cast<float>(presentationInterval * 0.5)
+                : 0.0f);
+        const float submittedMotionIntegration =
+            uniforms.motionIntegrationSeconds;
+        {
+            std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
+            if (presentedFrames_->generation == submittedGeneration) {
+                presentedFrames_->scheduledTarget =
+                    update.targetPresentationTimestamp;
+                presentedFrames_->scheduledFrame = submittedFrame;
+                presentedFrames_->scheduledMotionIntegration =
+                    submittedMotionIntegration;
+            }
+        }
         uniforms.durationSeconds = static_cast<float>(
             durationFrames_.load(std::memory_order_acquire) / rate);
         BeatPosition currentBeat{};
@@ -1423,6 +1481,44 @@ public:
         [encoder endEncoding];
         // CAMetalDisplayLink already owns the presentation schedule for this
         // drawable; an explicit presentAtTime is invalid in this mode.
+        const std::shared_ptr<PresentedFrameState> presented =
+            presentedFrames_;
+        [update.drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
+            const CFTimeInterval actualTime = drawable.presentedTime;
+            if (actualTime <= 0.0) {
+                return;  // Metal documents zero for a dropped drawable.
+            }
+            {
+                std::lock_guard<std::mutex> lock(presented->mutex);
+                if (presented->generation != submittedGeneration) {
+                    return;
+                }
+                if (actualTime < presented->latestTime) {
+                    return;
+                }
+                presented->latestTime = actualTime;
+                presented->latestFrame = submittedFrame;
+                presented->latestMotionIntegration =
+                    submittedMotionIntegration;
+            }
+            const uint64_t actualNs = static_cast<uint64_t>(
+                std::llround(actualTime * 1e9));
+            uint64_t expectedFirst = 0;
+            presented->firstTimeNs.compare_exchange_strong(
+                expectedFirst, actualNs, std::memory_order_acq_rel);
+            const uint64_t previous = presented->lastTimeNs.exchange(
+                actualNs, std::memory_order_acq_rel);
+            if (previous && actualNs > previous) {
+                const uint64_t gap = actualNs - previous;
+                uint64_t current = presented->maxGapNs.load(
+                    std::memory_order_acquire);
+                while (gap > current
+                        && !presented->maxGapNs.compare_exchange_weak(
+                            current, gap, std::memory_order_acq_rel)) {
+                }
+            }
+            presented->count.fetch_add(1, std::memory_order_acq_rel);
+        }];
         [commands presentDrawable:update.drawable];
         [commands commit];
         if (!continuous
@@ -1788,7 +1884,8 @@ struct Uniforms { float currentSeconds;
                   float audioDetailCurrentPhase;
                   uint audioDetailMipCount;
                   uint audioDetailMipOffsets[32];
-                  uint audioDetailMipCounts[32]; };
+                  uint audioDetailMipCounts[32];
+                  float motionIntegrationSeconds; };
 struct Out { float4 position [[position]]; float4 color; };
 struct WavePair {
     float heightA;
@@ -1970,7 +2067,8 @@ inline float integrated_envelope_level(
 inline WaveSurface filtered_wave_surface(
         const device WaveSample *samples,
         constant uint *offsets, constant uint *counts, uint mipCount,
-        uint baseAnchor, float baseLocal, float sampleFootprint,
+        uint baseAnchor, float baseLocal,
+        float lodFootprint, float integrationFootprint,
         float distance, float heightScale, float antialias) {
     WaveSurface result{0.0, float3(0.0), 0.0, 0.0};
     if (mipCount == 0) {
@@ -1980,18 +2078,18 @@ inline WaveSurface filtered_wave_surface(
     // Peak mips retain transients; energy-integrated RGB mips stop adjacent
     // colors from alternating as a minified physical pixel moves.
     const float lod = clamp(
-        log2(max(1.0, sampleFootprint)),
+        log2(max(1.0, lodFootprint)),
         0.0, float(mipCount - 1));
     const uint lowLevel = uint(floor(lod));
     const uint highLevel = min(lowLevel + 1, mipCount - 1);
     const float lodMix = lod - float(lowLevel);
     const WaveSurface low = integrated_wave_level(
         samples, offsets[lowLevel], counts[lowLevel], lowLevel,
-        baseAnchor, baseLocal, sampleFootprint,
+        baseAnchor, baseLocal, integrationFootprint,
         distance, heightScale, antialias);
     const WaveSurface high = integrated_wave_level(
         samples, offsets[highLevel], counts[highLevel], highLevel,
-        baseAnchor, baseLocal, sampleFootprint,
+        baseAnchor, baseLocal, integrationFootprint,
         distance, heightScale, antialias);
     if (low.valid == 0.0 && high.valid == 0.0) {
         return result;
@@ -2016,24 +2114,25 @@ inline WaveSurface filtered_wave_surface(
 inline float filtered_envelope_coverage(
         const device AudioEnvelopeSample *samples,
         constant uint *offsets, constant uint *counts, uint mipCount,
-        uint baseAnchor, float baseLocal, float sampleFootprint,
+        uint baseAnchor, float baseLocal,
+        float lodFootprint, float integrationFootprint,
         float distance, float heightScale, float antialias) {
     if (mipCount == 0) {
         return 0.0;
     }
     const float lod = clamp(
-        log2(max(1.0, sampleFootprint)),
+        log2(max(1.0, lodFootprint)),
         0.0, float(mipCount - 1));
     const uint lowLevel = uint(floor(lod));
     const uint highLevel = min(lowLevel + 1, mipCount - 1);
     const float lodMix = lod - float(lowLevel);
     const float lowCoverage = integrated_envelope_level(
         samples, offsets[lowLevel], counts[lowLevel], lowLevel,
-        baseAnchor, baseLocal, sampleFootprint,
+        baseAnchor, baseLocal, integrationFootprint,
         distance, heightScale, antialias);
     const float highCoverage = integrated_envelope_level(
         samples, offsets[highLevel], counts[highLevel], highLevel,
-        baseAnchor, baseLocal, sampleFootprint,
+        baseAnchor, baseLocal, integrationFootprint,
         distance, heightScale, antialias);
     return mix(lowCoverage, highCoverage, lodMix);
 }
@@ -2066,7 +2165,7 @@ fragment float4 wave_surface_fragment(
         const float distance = abs(yPoints - 14.0);
         const WaveSurface surface = filtered_wave_surface(
             samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
-            anchor, position - floor(position), footprint,
+            anchor, position - floor(position), footprint, footprint,
             distance, 11.0, antialias);
         if (surface.valid == 0.0 || surface.coverage <= 0.0) {
             discard_fragment();
@@ -2089,12 +2188,17 @@ fragment float4 wave_surface_fragment(
         / max(1.0, u.pixelsPerSecond);
     const float waveLocal =
         u.waveCurrentPhase + secondOffset * u.samplesPerSecond;
-    const float waveFootprint =
+    const float waveSpatialFootprint =
         u.samplesPerSecond
         / max(1.0, u.pixelsPerSecond * scale);
+    const float waveMotionFootprint =
+        u.samplesPerSecond * u.motionIntegrationSeconds;
+    const float waveIntegrationFootprint =
+        max(waveSpatialFootprint, waveMotionFootprint);
     const WaveSurface colorSurface = filtered_wave_surface(
         samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
-        u.waveCurrentIndex, waveLocal, waveFootprint,
+        u.waveCurrentIndex, waveLocal,
+        waveSpatialFootprint, waveIntegrationFootprint,
         distance, heightScale, antialias);
     if (colorSurface.valid == 0.0) {
         discard_fragment();
@@ -2106,13 +2210,18 @@ fragment float4 wave_surface_fragment(
         const float audioLocal =
             u.audioDetailCurrentPhase
             + secondOffset * u.audioDetailSamplesPerSecond;
-        const float audioFootprint = u.audioDetailSamplesPerSecond
+        const float audioSpatialFootprint = u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
+        const float audioMotionFootprint =
+            u.audioDetailSamplesPerSecond * u.motionIntegrationSeconds;
+        const float audioIntegrationFootprint =
+            max(audioSpatialFootprint, audioMotionFootprint);
         coverage = filtered_envelope_coverage(
             audioDetailSamples,
             u.audioDetailMipOffsets, u.audioDetailMipCounts,
             u.audioDetailMipCount,
-            u.audioDetailCurrentIndex, audioLocal, audioFootprint,
+            u.audioDetailCurrentIndex, audioLocal,
+            audioSpatialFootprint, audioIntegrationFootprint,
             distance, heightScale, antialias);
     }
     if (coverage <= 0.0) {
@@ -2199,7 +2308,10 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
                 // ProMotion and a move between screens). Core Animation owns
                 // that policy; pinning 120 Hz produced uneven delivery on
                 // fixed-60 Hz and dynamically throttled displays.
-                link.preferredFrameLatency = 2.0f;
+                // Latency one bounds an interactive grab to at most the one
+                // drawable already committed. Latency two allowed a visible
+                // multi-frame run-on before a hold could take ownership.
+                link.preferredFrameLatency = 1.0f;
                 link.preferredFrameRateRange =
                     CAFrameRateRangeMake(60.0, 120.0, 120.0);
                 NSRunLoop *runLoop = NSRunLoop.currentRunLoop;
@@ -2633,17 +2745,12 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     std::atomic<bool> displayDirty_{true};
     std::mutex displayRunLoopMutex_;
     CFRunLoopRef displayRunLoop_ = nullptr;
-    std::atomic<uint64_t> displayCallbackCount_{0};
-    std::atomic<uint64_t> displayFirstTargetNs_{0};
-    std::atomic<uint64_t> displayLastTargetNs_{0};
-    std::atomic<uint64_t> displayMaxGapNs_{0};
-    // Two scheduled presentation samples let mouse-down select the frame
-    // already visible at that instant instead of predicting between refreshes.
-    std::mutex displayFrameMutex_;
-    CFTimeInterval displayPreviousTarget_ = 0.0;
-    CFTimeInterval displayLatestTarget_ = 0.0;
-    uint64_t displayPreviousFrame_ = 0;
-    uint64_t displayLatestFrame_ = 0;
+    // Presentation callbacks, unlike display-link submissions, identify
+    // drawables the display really showed. Shared ownership keeps callback
+    // state valid if an in-flight presentation finishes during deck teardown.
+    std::shared_ptr<PresentedFrameState> presentedFrames_ =
+        std::make_shared<PresentedFrameState>();
+    CFTimeInterval lastTargetPresentation_ = 0.0;
     std::atomic<float> zoomPixelsPerSecond_{kPixelsPerSecond};
 
     AudioUnit audioUnit_ = nullptr;
@@ -2693,6 +2800,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     std::atomic<bool> previewActive_{false};
     std::atomic<uint32_t> waveformUpdateDepth_{0};
     std::atomic<uint64_t> previewFrame_{0};
+    std::atomic<float> previewMotionIntegration_{0.0f};
 
     std::mutex errorMutex_;
     int errorCode_ = 0;
@@ -2974,6 +3082,18 @@ int sb_deck_has_ended(SBDeckRef deck) {
 uint64_t sb_deck_visual_frame(SBDeckRef deck) {
     return deck
         ? static_cast<SBDeck *>(deck)->visualFrameNow()
+        : 0;
+}
+
+uint64_t sb_deck_presented_frame(SBDeckRef deck) {
+    return deck
+        ? static_cast<SBDeck *>(deck)->latestPresentedFrame()
+        : 0;
+}
+
+uint64_t sb_deck_scheduled_frame(SBDeckRef deck) {
+    return deck
+        ? static_cast<SBDeck *>(deck)->latestScheduledFrame()
         : 0;
 }
 

@@ -333,6 +333,13 @@ The following renderer rules are measured invariants, not style preferences:
   discrete texel selection, coverage resampling, or refresh seam. This retains
   the same physical-pixel LOD and maximum-zoom detail while allowing every
   display frame to advance by its true fractional distance.
+- At close zoom, one 120 Hz refresh can move a sharp contour by more than
+  twenty Retina pixels even when the clock and presentation cadence are
+  perfect. While playback is moving, the four-tap sampler therefore extends
+  its integration footprint across half of the measured presentation interval.
+  The LOD footprint remains the physical output pixel, so this temporal
+  reconstruction reduces strobing without selecting a coarser waveform or
+  changing the paused maximum-zoom surface.
 - Filter final silhouette coverage—not raw peak height. Coverage from each
   adjacent level is blended after sampling, preventing the contour from
   acquiring a separate translucent edge.
@@ -350,6 +357,13 @@ The following renderer rules are measured invariants, not style preferences:
   maximum zoom.
 - Keep the Metal child view opaque and let it own waveform pixels. Reblending
   previous translucent frames recreates the original shimmer.
+- A display-link target is a submission deadline, not proof that its drawable
+  reached the screen. Presentation diagnostics and waveform grabs use
+  `MTLDrawable.presentedTime`; zero-time dropped drawables are ignored.
+  Latency is one frame, and a grab holds the newest fresh presented or already
+  committed source frame so an in-flight drawable cannot land and then rewind.
+  The moving frame's temporal footprint is retained through the first held
+  redraw, preventing a no-motion grab from changing thickness or color.
 
 Cue markers share one native-renderer contract:
 
@@ -518,6 +532,24 @@ Dated physical-pixel integration validation on 2026-07-24:
   tracks / 83 playlists with zero preparation work, retained 3,247 V4 records
   and 3,124 artwork files, and passed the same stationary playing-waveform grab
   on the DJ Snake track. The pre-install `library.json` stayed byte-identical.
+
+Dated actual-presentation/close-zoom validation on 2026-07-24:
+
+- The bare and offscreen-render gates passed with 497 tests and one expected
+  platform skip. Cadence assertions now count drawable presentations and their
+  real gaps rather than display-link submissions.
+- A real-app recording of the prior grab path showed a mouse-down rewind of
+  more than 90 physical pixels. On the signed installed build, the prepared
+  `DJ Snake - Middle (Twopercent Flip)` waveform at 1536 px/s traveled 51–77
+  physical pixels between screen-recorder samples immediately before contact,
+  then changed by zero pixels at mouse-down. The first held-frame mean image
+  difference was 0.010/255, confirming that the moving temporal footprint was
+  preserved rather than redrawn as a thinner stationary waveform.
+- The installed app activated its packaged native deck, loaded 3,265 tracks /
+  83 playlists, and reported zero preparation work. The 3,247 V4 records and
+  3,124 artwork files were unchanged; the protected pre-install
+  `library.json` was restored byte-for-byte after interaction testing. No
+  waveform cache recook was required.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain

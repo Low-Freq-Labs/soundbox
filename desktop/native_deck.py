@@ -219,6 +219,10 @@ def _bind(path: Path):
     lib.sb_deck_has_ended.restype = ctypes.c_int
     lib.sb_deck_visual_frame.argtypes = [handle]
     lib.sb_deck_visual_frame.restype = ctypes.c_uint64
+    lib.sb_deck_presented_frame.argtypes = [handle]
+    lib.sb_deck_presented_frame.restype = ctypes.c_uint64
+    lib.sb_deck_scheduled_frame.argtypes = [handle]
+    lib.sb_deck_scheduled_frame.restype = ctypes.c_uint64
     lib.sb_deck_analysis_sample_count.argtypes = [handle]
     lib.sb_deck_analysis_sample_count.restype = ctypes.c_uint64
     lib.sb_deck_analysis_sample_rate.argtypes = [handle]
@@ -503,6 +507,14 @@ class NativeDeckBackend(QObject):
         """Current continuous Metal clock position, for regression tests."""
         return int(self._lib.sb_deck_visual_frame(self._handle))
 
+    def diagnostic_presented_frame(self) -> int:
+        """Source frame Metal confirms was most recently shown onscreen."""
+        return int(self._lib.sb_deck_presented_frame(self._handle))
+
+    def diagnostic_scheduled_frame(self) -> int:
+        """Newest source frame already committed for presentation."""
+        return int(self._lib.sb_deck_scheduled_frame(self._handle))
+
     def diagnostic_analysis_shape(self) -> tuple[int, float]:
         """Uploaded sample count/rate, for native cache regressions."""
         return (
@@ -534,7 +546,7 @@ class NativeDeckBackend(QObject):
         return float(self._lib.sb_deck_pixels_per_second(self._handle))
 
     def diagnostic_display_stats(self) -> tuple[int, float, float]:
-        """Display-link callbacks, mean FPS, and largest target-time gap."""
+        """Actual drawable presentations, mean FPS, and largest real gap."""
         return (
             int(self._lib.sb_deck_display_callback_count(self._handle)),
             float(self._lib.sb_deck_display_average_fps(self._handle)),
