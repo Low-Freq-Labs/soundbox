@@ -131,7 +131,9 @@ Main-waveform scrubbing is relative and precise:
 
 - Mouse-down atomically captures the last Metal drawable whose presentation
   time has actually occurred, makes that exact source frame the relative-drag
-  origin, freezes the visual preview, and fades playing audio to pause. It
+  origin, freezes the visual preview, hard-mutes, and pauses native playback
+  synchronously. The ordinary pause envelope is deliberately bypassed because
+  it advances to its fade endpoint after the hand already owns the waveform. It
   never substitutes a newly predicted between-refresh position or the older
   coarse Python poll.
 - Press/release without horizontal movement performs one authoritative seek to
@@ -321,6 +323,11 @@ The following renderer rules are measured invariants, not style preferences:
 - Derive one continuous LOD from source samples per physical pixel and blend
   the adjacent peak levels. The overview and main lane call the same sampler;
   ultra detail replaces geometry quality only, never timing or color.
+- Integrate four song-anchored midpoint taps across that physical-pixel
+  footprint at both adjacent LOD levels before blending them. A single
+  center-of-pixel sample aliases dense transient edges and neighboring RGB rows
+  as playback phase advances. Color uses amplitude-weighted integration over
+  the identical taps, so hue and silhouette never choose different phases.
 - Rasterize each final Retina pixel directly from its continuous song
   coordinate in one Metal pass. There is no moving intermediate texture,
   discrete texel selection, coverage resampling, or refresh seam. This retains
@@ -490,6 +497,27 @@ Dated direct-renderer validation on 2026-07-24:
   grab, and resumed from that held position. Startup reported 3,265 tracks /
   83 playlists and zero preparation tasks; 3,247 V4 records, 3,124 artwork
   files, and every curated `library.json` key remained intact.
+
+Dated physical-pixel integration validation on 2026-07-24:
+
+- The bare and offscreen-render gates passed with 496 tests and one expected
+  platform skip.
+- Source comparison identified a concrete regression from the earlier stable
+  renderer: the unified continuous-LOD rewrite had retained one center sample
+  per output pixel but dropped its four horizontal midpoint taps. The repaired
+  path integrates both adjacent LODs and amplitude-weighted RGB across those
+  taps without restoring a wide/close branch or translated texture.
+- A populated 1800×190-point Retina deck with ultra detail retained negotiated
+  display cadence at both 24 and 1536 px/s. Same-turn Qt/AppKit/Retina resize
+  coverage remained green.
+- The prepared `DJ Snake - Middle (Twopercent Flip)` V4 record was exercised in
+  the complete source application at multiple zooms. Waveform mouse-down now
+  hard-mutes and pauses synchronously; release performs the only decoder seek
+  and restores ordinary playback through its short click-safe fade.
+- The signed installed app activated the packaged native deck, loaded 3,265
+  tracks / 83 playlists with zero preparation work, retained 3,247 V4 records
+  and 3,124 artwork files, and passed the same stationary playing-waveform grab
+  on the DJ Snake track. The pre-install `library.json` stayed byte-identical.
 
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain

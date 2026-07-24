@@ -1966,12 +1966,22 @@ class PlayerBar(QWidget):
         if hasattr(self.player, "begin_visual_hold"):
             exact = float(self.player.begin_visual_hold())
             self._pos = max(0, min(exact, self._dur) if self._dur else exact)
-            self._anchor_transport(self._pos, self._deck_drag_resume)
             self.wave.reanchor_drag(self._pos)
         elif hasattr(self.player, "set_visual_position"):
             self.player.set_visual_position(self._pos, True)
         if self._deck_drag_resume:
-            self._pause_clean(self._after_drag_paused)
+            # A hand taking the moving waveform owns transport immediately.
+            # The ordinary pause envelope intentionally advances to its fade
+            # endpoint; using it here lets audio keep travelling after Metal
+            # has frozen. Cancel any older ramp, hard-mute, and stop the native
+            # clock synchronously at mouse-down. Release still performs the
+            # sole decoder seek and uses the normal click-free fade-in.
+            self._gain_completion = None
+            self._pause_pending = False
+            self._pause_clock.invalidate()
+            self.audio.setVolume(0.0)
+            self.player.pause()
+        self._anchor_transport(self._pos, False)
 
     def _on_wave_preview(self, target: float):
         if (self._deck_drag_active
@@ -1996,8 +2006,11 @@ class PlayerBar(QWidget):
             return
         self._set_position(target)
         if resume:
+            self._transport_play_active = True
             self._play_clean()
+            self._sync_deck_button_states()
         else:
+            self.audio.setVolume(self._deck_volume)
             self._arm_session_cue_relocation()
 
     def _on_pos(self, ms: int):
@@ -2061,6 +2074,7 @@ class PlayerBar(QWidget):
     def _on_state(self, st):
         if (st != PlaybackState.PLAYING
                 and not self._pause_pending
+                and not self._deck_drag_active
                 and not self._cue_preview_active
                 and not self._cue_preview_latched):
             self._transport_play_active = False

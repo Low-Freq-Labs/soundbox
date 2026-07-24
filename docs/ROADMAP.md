@@ -50,8 +50,11 @@ For the live test count, trust `./check.sh` output—not any number written here
   buffers make one atomic first-visible commit, so long sets do not inflate
   during detail promotion. A playing waveform grab captures the last drawable
   already presented, preserves its exact source frame through
-  fractional-millisecond drag math, and pauses on mouse-down; a stationary
-  release resumes from exactly that held frame. Ordinary Qt position
+  fractional-millisecond drag math, and hard-mutes/pauses synchronously on
+  mouse-down; a stationary release resumes from exactly that held frame.
+  Four midpoint taps now integrate both continuous-LOD levels across every
+  physical pixel, closing the center-sample aliasing regression without
+  reintroducing zoom branches. Ordinary Qt position
   publication remains idempotent and cannot wake the Metal run loop through an
   inactive preview.
 - **PLAYLIST AUTOPLAY SHIPPED.** Header up/down modes walk the playlist snapshot

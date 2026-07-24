@@ -86,7 +86,10 @@ The main scrolling waveform uses V4's ultra envelope at every zoom. On load,
 Metal creates peak-preserving geometry mips and amplitude-weighted RGB mips.
 Overview and scrolling lanes derive one continuous LOD from source samples per
 physical pixel and blend coverage/color from the adjacent levels; there is no
-wide/close zoom branch. Ultra detail promotes only geometry quality, while the
+wide/close zoom branch. Each adjacent level is integrated with four
+song-anchored midpoint taps across the physical output pixel before blending;
+RGB is amplitude-weighted across those same taps so contour and hue share one
+sampling phase. Ultra detail promotes only geometry quality, while the
 already-uploaded compact ~150 Hz RGB pyramid remains the time/color authority.
 The normalized 24-band master remains stored for long-term analysis but never
 participates in renderer color. Metal receives integer sample anchors plus

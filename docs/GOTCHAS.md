@@ -69,6 +69,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   for a successfully analyzed SoundBox color record. Current audio-detail and
   color positions are integer sample anchors + local float phase; never
   collapse either into one absolute float.
+- **Continuous LOD still needs physical-pixel integration.** At each of the two
+  adjacent levels, retain the four song-anchored midpoint taps across the
+  output pixel before blending levels. One center sample makes dense transient
+  edges sparkle and adjacent hues pulse as fractional playback phase changes.
+  Amplitude-weight RGB over the same taps as geometry. Losing these taps during
+  a renderer cleanup was the concrete regression behind the 2026-07-24
+  full-app shimmer even though cadence and clock tests remained green.
 - **Antialias coverage must remain continuous through final compositing.** A
   hard minimum vividness for every nonzero fragment turns a contour crossing a
   pixel into an on/off color flash, even when the song coordinate itself is
@@ -124,14 +131,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   beat 1 at `0:00`; neither path writes to Rekordbox.
 - The scrolling detail waveform claims transport on mouse-down by design:
   use the native atomic hold to freeze the last drawable already presented,
-  re-anchor Qt drag math to its fractional-millisecond timestamp, and begin the
-  clean pause immediately. Predicting a fresh frame or rounding to whole
-  milliseconds visibly jerks at high zoom. Relative movement follows the
-  pointer continuously; do not add a dead zone that releases its accumulated
-  delta as one jump. Release sends one exact authoritative seek—even without
-  movement—and resumes only when the deck was playing before the grab. Never
-  seek the decoder on move events. The whole-track overview deliberately
-  retains absolute click/drag navigation.
+  re-anchor Qt drag math to its fractional-millisecond timestamp, cancel any
+  pending gain ramp, hard-mute, and pause synchronously. The ordinary pause
+  envelope advances to its fade endpoint and must not own a waveform grab.
+  Predicting a fresh frame or rounding to whole milliseconds visibly jerks at
+  high zoom. Relative movement follows the pointer continuously; do not add a
+  dead zone that releases its accumulated delta as one jump. Release sends one
+  exact authoritative seek—even without movement—and resumes only when the
+  deck was playing before the grab. Never seek the decoder on move events. The
+  whole-track overview deliberately retains absolute click/drag navigation.
 - Overview and ultra waveform buffers are one visible surface. Prepared loads
   must group both native uploads while presentation is suspended and commit
   them together. Painting the overview while a long ultra section is still

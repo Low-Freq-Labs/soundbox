@@ -34,7 +34,8 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("const uint highLevel", helper)
         self.assertIn("const float lodMix", helper)
         self.assertIn("result.coverage = mix(", helper)
-        self.assertIn("result.color = mix(", helper)
+        self.assertIn("result.weightedColor = mix(", helper)
+        self.assertIn("result.colorWeight = mix(", helper)
 
     def test_audio_detail_uses_the_same_continuous_lod_rule(self):
         helper = self.shader.split(
@@ -47,9 +48,54 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("const uint highLevel", helper)
         self.assertIn("return mix(lowCoverage, highCoverage, lodMix)", helper)
 
+    def test_every_lod_integrates_the_physical_pixel_before_blending(self):
+        wave = self.shader.split(
+            "inline WaveSurface integrated_wave_level", 1
+        )[1].split(
+            "inline float integrated_envelope_level", 1
+        )[0]
+        envelope = self.shader.split(
+            "inline float integrated_envelope_level", 1
+        )[1].split(
+            "inline WaveSurface filtered_wave_surface", 1
+        )[0]
+        for helper in (wave, envelope):
+            self.assertIn(
+                "const float tapOffsets[4] = "
+                "{-0.375, -0.125, 0.125, 0.375}", helper)
+            self.assertIn("for (uint tap = 0; tap < 4; ++tap)", helper)
+            self.assertIn(
+                "baseLocal + tapOffsets[tap] * sampleFootprint", helper)
+            self.assertIn("* 0.25", helper)
+        filtered = self.shader.split(
+            "inline WaveSurface filtered_wave_surface", 1
+        )[1].split(
+            "fragment float4 wave_surface_fragment", 1
+        )[0]
+        self.assertGreaterEqual(
+            filtered.count("integrated_wave_level("), 2)
+        self.assertGreaterEqual(
+            filtered.count("integrated_envelope_level("), 2)
+
+    def test_subpixel_color_is_amplitude_weighted_before_compositing(self):
+        wave = self.shader.split(
+            "inline WaveSurface integrated_wave_level", 1
+        )[1].split(
+            "inline float integrated_envelope_level", 1
+        )[0]
+        self.assertIn("pair.colorA * pair.heightA", wave)
+        self.assertIn("pair.colorB * pair.heightB", wave)
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertGreaterEqual(
+            fragment.count("/ max("), 2)
+
     def test_all_silhouettes_filter_final_coverage(self):
         self.assertEqual(self.shader.count("inline float pair_coverage"), 1)
-        self.assertGreaterEqual(self.shader.count("pair_coverage("), 5)
+        self.assertGreaterEqual(self.shader.count("pair_coverage("), 3)
         self.assertNotIn(".height = mix(", self.shader)
 
     def test_composite_is_opaque_without_an_outer_ghost(self):

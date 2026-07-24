@@ -1213,9 +1213,10 @@ class PlayerHardening(unittest.TestCase):
         try:
             fake = FakePlayer()
             pb.player = fake
+            ramps = []
             pb._animate_gain = (
-                lambda _end, _duration, completion=None:
-                setattr(pb, "_gain_completion", completion))
+                lambda end, duration, completion=None:
+                ramps.append((end, duration, completion)))
             pb._src_path = "/tmp/loaded.wav"
             pb._playback_available = True
             pb._dur = 60_000
@@ -1225,13 +1226,17 @@ class PlayerHardening(unittest.TestCase):
             pb.wave.mousePressEvent(Ev())
             self.assertTrue(pb.wave.is_dragging())
             self.assertTrue(pb._deck_drag_active)
-            self.assertTrue(pb._pause_pending)
+            self.assertFalse(pb._pause_pending)
+            self.assertEqual(fake.pauses, 1)
+            self.assertEqual(fake.positions, [])
             pb.wave.mouseReleaseEvent(Ev())
-            self.assertEqual(fake.positions, [])  # fade must finish first
-            pb._on_gain_finished()
             self.assertEqual(fake.positions[-1], 20_000)
             self.assertEqual(fake.pauses, 1)
             self.assertEqual(fake.plays, 1)
+            self.assertEqual(
+                [(end, duration) for end, duration, _completion in ramps],
+                [(pb._deck_volume, pb.FADE_IN_MS)],
+            )
             self.assertFalse(pb._deck_drag_active)
             self.assertEqual(pb.wave._position_ms, 20_000)
         finally:
@@ -1276,25 +1281,34 @@ class PlayerHardening(unittest.TestCase):
         try:
             fake = FakePlayer()
             pb.player = fake
+            ramps = []
             pb._animate_gain = (
-                lambda _end, _duration, completion=None:
-                setattr(pb, "_gain_completion", completion))
+                lambda end, duration, completion=None:
+                ramps.append((end, duration, completion)))
             pb._src_path = "/tmp/loaded.wav"
             pb._dur = 30_000
+            pb._transport_play_active = True
             pb._anchor_transport(10_000, True)
             pb._on_wave_drag_started()
-            self.assertTrue(pb._pause_pending)
-            self.assertEqual(fake.pauses, 0)  # fade reaches silence first
-            pb._on_gain_finished()
             self.assertEqual(fake.pauses, 1)
             self.assertFalse(pb._pause_pending)
+            self.assertEqual(pb.audio.volume(), 0.0)
+            self.assertFalse(pb._transport_running)
+            self.assertEqual(ramps, [])
+            pb._on_state(PlaybackState.PAUSED)
+            self.assertTrue(pb._transport_play_active)
 
             pb._seek(8_000 / 30_000)  # release's one authoritative seek
-            self.assertNotEqual(fake.positions[-1], 8_000)  # held until release
+            self.assertEqual(fake.positions, [])  # held until release
             pb._on_wave_drag_finished()
             self.assertEqual(fake.positions[-1], 8_000)
             self.assertEqual(fake.plays, 1)
             self.assertEqual(fake.state, PlaybackState.PLAYING)
+            self.assertTrue(pb._transport_play_active)
+            self.assertEqual(
+                [(end, duration) for end, duration, _completion in ramps],
+                [(pb._deck_volume, pb.FADE_IN_MS)],
+            )
         finally:
             pb.player = real_player
             pb.shutdown_waveforms()

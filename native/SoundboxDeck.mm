@@ -1794,7 +1794,8 @@ struct WavePair {
     float heightA;
     float heightB;
     float phase;
-    float3 color;
+    float3 colorA;
+    float3 colorB;
     float valid;
 };
 struct EnvelopePair {
@@ -1805,7 +1806,8 @@ struct EnvelopePair {
 };
 struct WaveSurface {
     float coverage;
-    float3 color;
+    float3 weightedColor;
+    float colorWeight;
     float valid;
 };
 inline float vivid_wave_coverage(float coverage) {
@@ -1838,7 +1840,7 @@ inline WavePair wave_pair(
         uint levelOffset, uint levelCount,
         uint baseAnchor, float baseLocal, uint level) {
     WavePair result{
-        0.0, 0.0, 0.0, float3(0.0), 0.0
+        0.0, 0.0, 0.0, float3(0.0), float3(0.0), 0.0
     };
     if (levelCount == 0) {
         return result;
@@ -1861,10 +1863,8 @@ inline WavePair wave_pair(
     result.heightA = a.height;
     result.heightB = b.height;
     result.phase = local - float(whole);
-    result.color = mix(
-        float3(a.r, a.g, a.b),
-        float3(b.r, b.g, b.b),
-        result.phase);
+    result.colorA = float3(a.r, a.g, a.b);
+    result.colorB = float3(b.r, b.g, b.b);
     result.valid = 1.0;
     return result;
 }
@@ -1909,12 +1909,70 @@ inline float pair_coverage(
     return mix(coverageA, coverageB, phase);
 }
 
+inline WaveSurface integrated_wave_level(
+        const device WaveSample *samples,
+        uint levelOffset, uint levelCount, uint level,
+        uint baseAnchor, float baseLocal, float sampleFootprint,
+        float distance, float heightScale, float antialias) {
+    WaveSurface result{0.0, float3(0.0), 0.0, 0.0};
+    // Integrate the song surface over each physical output pixel. Sampling
+    // only its center aliases dense contours and adjacent RGB rows as the
+    // fractional playback phase advances. These song-anchored midpoint taps
+    // are shared by every zoom and by both adjacent continuous-LOD levels.
+    const float tapOffsets[4] = {-0.375, -0.125, 0.125, 0.375};
+    for (uint tap = 0; tap < 4; ++tap) {
+        const WavePair pair = wave_pair(
+            samples, levelOffset, levelCount,
+            baseAnchor,
+            baseLocal + tapOffsets[tap] * sampleFootprint,
+            level);
+        if (pair.valid == 0.0) {
+            continue;
+        }
+        const float coverage = pair_coverage(
+            pair.heightA, pair.heightB, pair.phase,
+            distance, heightScale, antialias);
+        const float colorWeight = mix(
+            pair.heightA, pair.heightB, pair.phase);
+        result.coverage += coverage * 0.25;
+        result.weightedColor += mix(
+            pair.colorA * pair.heightA,
+            pair.colorB * pair.heightB,
+            pair.phase) * 0.25;
+        result.colorWeight += colorWeight * 0.25;
+        result.valid = 1.0;
+    }
+    return result;
+}
+
+inline float integrated_envelope_level(
+        const device AudioEnvelopeSample *samples,
+        uint levelOffset, uint levelCount, uint level,
+        uint baseAnchor, float baseLocal, float sampleFootprint,
+        float distance, float heightScale, float antialias) {
+    float coverage = 0.0;
+    const float tapOffsets[4] = {-0.375, -0.125, 0.125, 0.375};
+    for (uint tap = 0; tap < 4; ++tap) {
+        const EnvelopePair pair = envelope_pair(
+            samples, levelOffset, levelCount,
+            baseAnchor,
+            baseLocal + tapOffsets[tap] * sampleFootprint,
+            level);
+        if (pair.valid > 0.0) {
+            coverage += pair_coverage(
+                pair.heightA, pair.heightB, pair.phase,
+                distance, heightScale, antialias) * 0.25;
+        }
+    }
+    return coverage;
+}
+
 inline WaveSurface filtered_wave_surface(
         const device WaveSample *samples,
         constant uint *offsets, constant uint *counts, uint mipCount,
         uint baseAnchor, float baseLocal, float sampleFootprint,
         float distance, float heightScale, float antialias) {
-    WaveSurface result{0.0, float3(0.0), 0.0};
+    WaveSurface result{0.0, float3(0.0), 0.0, 0.0};
     if (mipCount == 0) {
         return result;
     }
@@ -1927,29 +1985,29 @@ inline WaveSurface filtered_wave_surface(
     const uint lowLevel = uint(floor(lod));
     const uint highLevel = min(lowLevel + 1, mipCount - 1);
     const float lodMix = lod - float(lowLevel);
-    const WavePair low = wave_pair(
-        samples, offsets[lowLevel], counts[lowLevel],
-        baseAnchor, baseLocal, lowLevel);
-    const WavePair high = wave_pair(
-        samples, offsets[highLevel], counts[highLevel],
-        baseAnchor, baseLocal, highLevel);
+    const WaveSurface low = integrated_wave_level(
+        samples, offsets[lowLevel], counts[lowLevel], lowLevel,
+        baseAnchor, baseLocal, sampleFootprint,
+        distance, heightScale, antialias);
+    const WaveSurface high = integrated_wave_level(
+        samples, offsets[highLevel], counts[highLevel], highLevel,
+        baseAnchor, baseLocal, sampleFootprint,
+        distance, heightScale, antialias);
     if (low.valid == 0.0 && high.valid == 0.0) {
         return result;
     }
-    const float lowCoverage = low.valid > 0.0
-        ? pair_coverage(
-            low.heightA, low.heightB, low.phase,
-            distance, heightScale, antialias)
-        : 0.0;
-    const float highCoverage = high.valid > 0.0
-        ? pair_coverage(
-            high.heightA, high.heightB, high.phase,
-            distance, heightScale, antialias)
-        : lowCoverage;
+    const float lowCoverage =
+        low.valid > 0.0 ? low.coverage : high.coverage;
+    const float highCoverage =
+        high.valid > 0.0 ? high.coverage : low.coverage;
     result.coverage = mix(lowCoverage, highCoverage, lodMix);
-    result.color = mix(
-        low.valid > 0.0 ? low.color : high.color,
-        high.valid > 0.0 ? high.color : low.color,
+    result.weightedColor = mix(
+        low.valid > 0.0 ? low.weightedColor : high.weightedColor,
+        high.valid > 0.0 ? high.weightedColor : low.weightedColor,
+        lodMix);
+    result.colorWeight = mix(
+        low.valid > 0.0 ? low.colorWeight : high.colorWeight,
+        high.valid > 0.0 ? high.colorWeight : low.colorWeight,
         lodMix);
     result.valid = 1.0;
     return result;
@@ -1969,25 +2027,14 @@ inline float filtered_envelope_coverage(
     const uint lowLevel = uint(floor(lod));
     const uint highLevel = min(lowLevel + 1, mipCount - 1);
     const float lodMix = lod - float(lowLevel);
-    const EnvelopePair low = envelope_pair(
-        samples, offsets[lowLevel], counts[lowLevel],
-        baseAnchor, baseLocal, lowLevel);
-    const EnvelopePair high = envelope_pair(
-        samples, offsets[highLevel], counts[highLevel],
-        baseAnchor, baseLocal, highLevel);
-    if (low.valid == 0.0 && high.valid == 0.0) {
-        return 0.0;
-    }
-    const float lowCoverage = low.valid > 0.0
-        ? pair_coverage(
-            low.heightA, low.heightB, low.phase,
-            distance, heightScale, antialias)
-        : 0.0;
-    const float highCoverage = high.valid > 0.0
-        ? pair_coverage(
-            high.heightA, high.heightB, high.phase,
-            distance, heightScale, antialias)
-        : lowCoverage;
+    const float lowCoverage = integrated_envelope_level(
+        samples, offsets[lowLevel], counts[lowLevel], lowLevel,
+        baseAnchor, baseLocal, sampleFootprint,
+        distance, heightScale, antialias);
+    const float highCoverage = integrated_envelope_level(
+        samples, offsets[highLevel], counts[highLevel], highLevel,
+        baseAnchor, baseLocal, sampleFootprint,
+        distance, heightScale, antialias);
     return mix(lowCoverage, highCoverage, lodMix);
 }
 
@@ -2024,8 +2071,10 @@ fragment float4 wave_surface_fragment(
         if (surface.valid == 0.0 || surface.coverage <= 0.0) {
             discard_fragment();
         }
+        const float3 color = surface.weightedColor
+            / max(surface.colorWeight, 0.0001);
         return float4(mix(
-            background, surface.color,
+            background, color,
             vivid_wave_coverage(surface.coverage)), 1.0);
     }
     if (yPoints < 49.0) {
@@ -2050,6 +2099,8 @@ fragment float4 wave_surface_fragment(
     if (colorSurface.valid == 0.0) {
         discard_fragment();
     }
+    const float3 color = colorSurface.weightedColor
+        / max(colorSurface.colorWeight, 0.0001);
     float coverage = colorSurface.coverage;
     if (u.audioDetailSampleCount > 0 && u.audioDetailMipCount > 0) {
         const float audioLocal =
@@ -2068,7 +2119,7 @@ fragment float4 wave_surface_fragment(
         discard_fragment();
     }
     return float4(mix(
-        background, colorSurface.color,
+        background, color,
         vivid_wave_coverage(coverage)), 1.0);
 }
 vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
