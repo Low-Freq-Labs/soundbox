@@ -9,16 +9,18 @@ device (_on_external_device) — system volumes and mount roots are unreachable.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
+from soundbox import engine, imports as import_mod
 from soundbox.paths import sanitize_component
 
 from .devices import _external_volume_of, _on_external_device
-from .workers import DeleteWorker, _running
+from .workers import DeleteWorker, OneShotTask, _running
 
 LOG = logging.getLogger("soundbox")
 
@@ -31,8 +33,44 @@ class DeviceBrowserMixin:
             self._eject(path)
 
     def _eject(self, dev: str):
-        # Async via QProcess so the UI never beachballs while diskutil unmounts.
-        self._start_pulse("Ejecting")  # animated dots like Finalizing/Cancelling
+        # Never race a live writer. Verification and flush are also threaded:
+        # removable I/O on the UI thread can block for seconds under fskit.
+        if any(_running(getattr(self, name, None)) for name in (
+                "_export_worker", "_resync_worker", "_delete_worker")):
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        if _running(getattr(self, "_eject_verify_worker", None)):
+            return
+        self._start_pulse("Verifying")
+
+        def verify():
+            os.sync()
+            return engine.verify_export(dev)
+
+        w = OneShotTask(verify)
+        self._eject_verify_worker = w
+        w.done.connect(lambda result, d=dev: self._after_eject_verify(d, result))
+        w.finished.connect(
+            lambda ww=w: self._finish_worker("_eject_verify_worker", ww))
+        w.start()
+
+    def _after_eject_verify(self, dev: str, result):
+        if isinstance(result, Exception):
+            self._stop_pulse()
+            QMessageBox.warning(self, "Eject verification failed", str(result))
+            return
+        problems = list(result.get("missing") or [])
+        problems.extend(result.get("managed_issues") or [])
+        if problems:
+            self._stop_pulse()
+            QMessageBox.warning(
+                self, "Device needs repair",
+                "SoundBox found missing or invalid managed references. "
+                "Run Sync or Deep Verify before ejecting.")
+            return
+        self._start_pulse("Ejecting")
 
         def succeeded():
             self._stop_pulse()
@@ -54,8 +92,12 @@ class DeviceBrowserMixin:
             self.status_label.setText("Ready")
 
         def try_force(_p):
-            # Normal eject was dissented (often Spotlight 'mds'). Force-unmount —
-            # safe to physically remove afterward (it's only being indexed).
+            if QMessageBox.question(
+                    self, "Force unmount?",
+                    "Normal eject was refused. Force-unmount the device? "
+                    "Only continue if no other app is writing to it.") != QMessageBox.Yes:
+                gave_up(_p)
+                return
             self._start_pulse("Forcing")
             run(["unmount", "force", dev], gave_up)
 
@@ -71,6 +113,11 @@ class DeviceBrowserMixin:
         menu = QMenu(self)
 
         if len(paths) > 1:  # multi-select → delete only
+            if all(import_mod.is_audio(p) or p.suffix.lower() == ".m3u8"
+                   for p in paths):
+                menu.addAction(
+                    f"Import {len(paths)} to SoundBox…",
+                    lambda: self._import_device_paths(paths))
             menu.addAction(f"Delete {len(paths)} items", lambda: self._delete_paths(paths))
         elif not paths:  # empty space → new folder at root
             root = Path(self.fs_model.filePath(self.fs_view.rootIndex()))
@@ -82,12 +129,38 @@ class DeviceBrowserMixin:
                 menu.addAction("New Folder…", lambda p=path: self._new_folder(p))
                 menu.addAction("Delete", lambda p=path: self._delete_paths([p]))
             else:  # audio file
+                if import_mod.is_audio(path) or path.suffix.lower() == ".m3u8":
+                    menu.addAction(
+                        "Import to SoundBox…",
+                        lambda p=path: self._import_device_paths([p]))
                 if path.parent.name == "Unknown Artist":
                     menu.addAction("Assign Artist…", lambda p=path: self._assign_artist(p))
                 menu.addAction("Delete", lambda p=path: self._delete_paths([p]))
 
         if not menu.isEmpty():
             menu.exec(self.fs_view.mapToGlobal(pos))
+
+    def _import_device_paths(self, paths: list[Path]):
+        if (not paths
+                or any(_external_volume_of(path) is None for path in paths)
+                or _running(getattr(self, "_device_import_worker", None))):
+            return
+        self._start_pulse("IMPORTING")
+        w = OneShotTask(lambda: import_mod.copy_from_device(paths))
+        self._device_import_worker = w
+        w.done.connect(self._on_device_imported)
+        w.finished.connect(
+            lambda ww=w: self._finish_worker("_device_import_worker", ww))
+        w.start()
+
+    def _on_device_imported(self, result):
+        self._stop_pulse()
+        if isinstance(result, Exception):
+            QMessageBox.warning(self, "Import failed", str(result))
+            return
+        # Register the SoundBox-owned copies; the device and original Finder
+        # files remain untouched.
+        self._import_files([str(path) for path in result])
 
     def _edit_name(self, index):
         # Inline rename (like the playlist cells) — QFileSystemModel renames on disk.
@@ -159,4 +232,3 @@ class DeviceBrowserMixin:
             self.fs_view.setRootIndex(self.fs_model.setRootPath(self.fs_model.rootPath()))
         if errors:
             QMessageBox.critical(self, "Delete failed", "\n".join(errors[:10]))
-

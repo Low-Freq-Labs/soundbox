@@ -74,6 +74,17 @@ class Track:
     # exactly what is_untracked keys on, so the flag exempts them: a track the
     # user deliberately added must never be swept as a "cue marker".
     imported: bool = False
+    # Absolute path to rekordbox's existing ANLZ0000.DAT for this track.
+    # Read-only, populated only by the live DB reader; XML/imported tracks leave
+    # it blank. The player lazily reads PQTZ/PWV5 when the track is loaded.
+    analysis_path: str = ""
+    # Canonical cue rows imported from the live rekordbox DB snapshot.
+    # ``None`` means no authoritative DB cue source was available (XML import
+    # and SoundBox-native tracks); ``[]`` means the DB authoritatively contains
+    # no active cues for this track.  Keeping those states distinct lets a
+    # read-only refresh clear cues deleted in rekordbox without making
+    # rekordbox a runtime dependency of the player.
+    rekordbox_cues: list[dict] | None = None
 
     @property
     def path(self) -> Path:

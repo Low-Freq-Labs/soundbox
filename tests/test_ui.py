@@ -8,17 +8,20 @@ One QApplication + one MainWindow for the module (Qt allows only one app).
 """
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
 
-from PySide6.QtCore import QStandardPaths, Qt
+from PySide6.QtCore import QEvent, QPoint, QStandardPaths, Qt
+from PySide6.QtGui import QKeyEvent
 
 QStandardPaths.setTestModeEnabled(True)
 
 from soundbox import engine, rekordbox_db
 from soundbox.rekordbox_xml import Library, Playlist, Track
+from desktop.native_deck import PlaybackState
 
 _app = _win = None
 
@@ -533,23 +536,427 @@ class SuggestQueue(unittest.TestCase):
 
 
 class PlayerHardening(unittest.TestCase):
+    def test_cue_pages_align_to_waveform_and_deck_buttons_are_circles(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb.resize(900, 140)
+            pb.show()
+            _app.processEvents()
+            wave_top = pb.wave.mapTo(pb, QPoint(0, 0)).y()
+            cue_top = pb.cue_panel.hot_slots[0].mapTo(pb, QPoint(0, 0)).y()
+            self.assertLessEqual(abs(cue_top - wave_top), 1)
+            self.assertFalse(hasattr(pb, "time"))
+            self.assertFalse(hasattr(pb.cue_panel, "time"))
+            self.assertEqual(pb.cue_btn.width(), pb.cue_btn.height())
+            self.assertEqual(pb.play_btn.width(), pb.play_btn.height())
+            self.assertEqual(pb.cue_btn.size(), pb.play_btn.size())
+            selector_top = pb.beat_selector_btn.mapTo(
+                pb, QPoint(0, 0)).y()
+            cue_top = pb.cue_btn.mapTo(pb, QPoint(0, 0)).y()
+            self.assertGreaterEqual(
+                cue_top - (selector_top + pb.beat_selector_btn.height()), 7)
+        finally:
+            pb.close()
+            pb.shutdown_waveforms()
+
+    def test_cue_panel_has_two_eight_slot_pages_and_emits_gate_edges(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb._playback_available = True
+        try:
+            self.assertEqual(len(pb.cue_panel.hot_slots), 8)
+            self.assertEqual(len(pb.cue_panel.memory_slots), 8)
+            self.assertEqual(pb.cue_panel.pages.count(), 2)
+            cues = [
+                {"kind": "hot", "slot": 0, "position_ms": 5_000,
+                 "type": "single", "label": "Intro", "color": [255, 59, 125]},
+                {"kind": "memory", "slot": 7, "position_ms": 17_145,
+                 "type": "loop", "label": "Mix", "color": [0, 0, 0]},
+            ]
+            hits = []
+            presses = []
+            releases = []
+            pb.cue_panel.cue_requested.connect(hits.append)
+            pb.cue_panel.cue_pressed.connect(
+                lambda kind, slot, position:
+                presses.append((kind, slot, position)))
+            pb.cue_panel.cue_released.connect(
+                lambda kind, slot: releases.append((kind, slot)))
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb.cue_panel.set_cues(cues)
+            pb.cue_panel.set_loaded(True)
+            pb.cue_panel.hot_slots[0].click()
+            pb.cue_panel.memory_tab.click()
+            pb.cue_panel.memory_slots[7].click()
+            self.assertEqual(pb.cue_panel.pages.currentIndex(), 1)
+            self.assertEqual(hits, [5_000, 17_145])
+            self.assertEqual(
+                presses, [("hot", 0, 5_000), ("memory", 7, 17_145)])
+            self.assertEqual(releases, [("hot", 0), ("memory", 7)])
+            self.assertIn("Intro", pb.cue_panel.hot_slots[0].toolTip())
+            self.assertIn("Loop", pb.cue_panel.memory_slots[7].toolTip())
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_waveform_cues_use_fixed_slot_color_and_red_memory_identity(self):
+        from PySide6.QtGui import QImage
+        from desktop.player import WaveformBar
+
+        wave = WaveformBar()
+        wave.resize(900, 132)
+        wave.set_zoom(64.0)
+        wave.set_timing(60_000, 120_000)
+        imported_hot = [220, 40, 90]
+        slot_hot = (255, 55, 111)
+        wave.set_analysis({
+            "heights": [0.4] * 180,
+            "colors": [[7, 1, 1]] * 180,
+            "sample_rate": 150.0,
+            "beats": [],
+            "cues": [
+                {"kind": "hot", "slot": 0, "position_ms": 58_000,
+                 "color": imported_hot},
+                # A stored non-red color must never leak into memory markers.
+                {"kind": "memory", "slot": 0, "position_ms": 62_000,
+                 "color": [20, 80, 240]},
+            ],
+        })
+        image = QImage(wave.size(), QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        wave.render(image)
+
+        overview_hot_x = round(58_000 / 120_000 * 900)
+        overview_box_left = round(overview_hot_x - 9)
+        self.assertEqual(
+            image.pixelColor(overview_box_left, 1).name(), "#050608")
+        self.assertEqual(
+            image.pixelColor(overview_box_left + 2, 3).getRgb()[:3],
+            slot_hot)
+        overview_memory_x = round(62_000 / 120_000 * 900)
+        self.assertEqual(
+            image.pixelColor(overview_memory_x, 25).getRgb()[:3],
+            (255, 52, 52))
+        # The slightly larger arrow reaches the lane edge, hiding any
+        # coincident red grid/stem instead of leaving a one-pixel sliver.
+        self.assertIn(
+            image.pixelColor(overview_memory_x, 27).name(),
+            ("#050608", "#ff3434"))
+
+        detail_hot_x = 900 // 2 + round((58_000 - 60_000) / 1000 * 64)
+        self.assertEqual(
+            image.pixelColor(detail_hot_x - 9, 52).getRgb()[:3],
+            slot_hot)
+        self.assertEqual(
+            image.pixelColor(detail_hot_x, 49).name(), "#050608")
+        detail_memory_x = (
+            900 // 2 + round((62_000 - 60_000) / 1000 * 64))
+        self.assertEqual(
+            image.pixelColor(detail_memory_x, 129).getRgb()[:3],
+            (255, 52, 52))
+        self.assertIn(
+            image.pixelColor(detail_memory_x, 131).name(),
+            ("#050608", "#ff3434"))
+
+    def test_session_cue_is_orange_in_overview_and_detail(self):
+        from PySide6.QtGui import QImage
+        from desktop.player import WaveformBar
+
+        wave = WaveformBar()
+        wave.resize(900, 132)
+        wave.set_zoom(64.0)
+        wave.set_timing(60_000, 120_000)
+        wave.set_analysis({
+            "heights": [0.4] * 180,
+            "colors": [[7, 1, 1]] * 180,
+            "sample_rate": 150.0,
+            "beats": [],
+            "cues": [],
+        })
+        wave.set_session_cue(58_000)
+        image = QImage(wave.size(), QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        wave.render(image)
+
+        overview_x = round(58_000 / 120_000 * 900)
+        detail_x = 900 // 2 + round((58_000 - 60_000) / 1000 * 64)
+        # Session CUE is arrow-only: the waveform body has no orange stem.
+        self.assertNotEqual(
+            image.pixelColor(overview_x, 10).name(), "#f08a19")
+        self.assertEqual(
+            image.pixelColor(overview_x, 22).name(), "#f08a19")
+        self.assertNotEqual(
+            image.pixelColor(detail_x, 80).name(), "#f08a19")
+        self.assertEqual(
+            image.pixelColor(detail_x, 125).name(), "#f08a19")
+        self.assertIn(
+            image.pixelColor(detail_x, 131).name(),
+            ("#050608", "#f08a19"))
+
+    def test_hot_cue_a_through_h_palette_is_exact_and_ignores_imported_rgb(self):
+        from desktop.native_deck import NativeDeckBackend
+        from desktop.player import _HOT_CUE_FALLBACKS
+
+        expected = (
+            "#ff376f", "#45acdb", "#7dc13d", "#aa72ff",
+            "#30d26e", "#e0641b", "#305aff", "#c3af04",
+        )
+        self.assertEqual(_HOT_CUE_FALLBACKS, expected)
+        imported = {"kind": "hot", "color": [1, 2, 3]}
+        self.assertEqual(
+            [NativeDeckBackend._cue_rgb(imported, slot)
+             for slot in range(8)],
+            [
+                (255, 55, 111), (69, 172, 219), (125, 193, 61),
+                (170, 114, 255), (48, 210, 110), (224, 100, 27),
+                (48, 90, 255), (195, 175, 4),
+            ],
+        )
+
+    def test_hot_and_memory_cues_gate_and_space_latches_playback(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        pb._playback_available = True
+        state = {"playing": False}
+        events = []
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb.is_playing = lambda: state["playing"]
+
+            def position(target):
+                pb._pos = target
+                events.append(("seek", target))
+
+            pb._set_position = position
+
+            def play():
+                state["playing"] = True
+                events.append(("play",))
+
+            def pause(after=None):
+                state["playing"] = False
+                events.append(("pause",))
+                if after is not None:
+                    after()
+
+            pb._play_clean = play
+            pb._pause_clean = pause
+            pb.cue_panel.set_cues([
+                {"kind": "hot", "slot": 3, "position_ms": 12_345},
+                {"kind": "memory", "slot": 0, "position_ms": 23_456},
+            ])
+            pb.cue_panel.set_loaded(True)
+
+            pb.cue_panel.hot_slots[3].pressed.emit()
+            self.assertTrue(state["playing"])
+            self.assertTrue(pb.cue_btn.property("active"))
+            self.assertFalse(pb.play_btn.property("playing"))
+            self.assertEqual(pb.play_btn.text(), "▶")
+            self.assertEqual(events[-2:], [("seek", 12_345), ("play",)])
+            pb.cue_panel.hot_slots[3].released.emit()
+            self.assertFalse(state["playing"])
+            self.assertFalse(pb.cue_btn.property("active"))
+            self.assertFalse(pb.play_btn.property("playing"))
+            self.assertEqual(events[-2:], [("pause",), ("seek", 12_345)])
+
+            pb.cue_panel.memory_slots[0].pressed.emit()
+            self.assertTrue(pb.cue_btn.property("active"))
+            self.assertFalse(pb.play_btn.property("playing"))
+            self.assertEqual(pb.play_btn.text(), "▶")
+            pb.toggle()  # Space/play while held latches the preview.
+            self.assertTrue(pb.cue_btn.property("active"))
+            self.assertTrue(pb.play_btn.property("playing"))
+            self.assertEqual(pb.play_btn.text(), "❚❚")
+            pb.cue_panel.memory_slots[0].released.emit()
+            self.assertTrue(state["playing"])
+            self.assertTrue(pb._cue_preview_latched)
+            self.assertFalse(pb.cue_btn.property("active"))
+            self.assertTrue(pb.play_btn.property("playing"))
+            pb.toggle()
+            self.assertFalse(state["playing"])
+            self.assertFalse(pb._cue_preview_latched)
+            self.assertFalse(pb.play_btn.property("playing"))
+            self.assertEqual(pb.play_btn.text(), "▶")
+
+            pb._move_clean(34_567)
+            pb.cue_btn.pressed.emit()
+            # The first CUE press after a paused manual move only relocates the
+            # transient orange marker. It does not start a preview.
+            self.assertFalse(pb.cue_btn.property("active"))
+            self.assertFalse(state["playing"])
+            self.assertEqual(pb.wave._session_cue_ms, 34_567)
+            pb.cue_btn.released.emit()
+            pb.cue_btn.pressed.emit()
+            self.assertTrue(pb.cue_btn.property("active"))
+            self.assertFalse(pb.play_btn.property("playing"))
+            self.assertEqual(pb.wave._session_cue_ms, 34_567)
+            pb.toggle()
+            pb.cue_btn.released.emit()
+            self.assertTrue(state["playing"])
+            self.assertEqual(pb._cue_ms, 34_567)
+            self.assertTrue(pb._cue_preview_latched)
+            self.assertFalse(pb.cue_btn.property("active"))
+            self.assertTrue(pb.play_btn.property("playing"))
+            self.assertEqual(pb.play_btn.text(), "❚❚")
+            pb.toggle()
+            self.assertFalse(state["playing"])
+            self.assertFalse(pb.play_btn.property("playing"))
+            self.assertEqual(pb.play_btn.text(), "▶")
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_cue_press_during_latch_starts_a_new_momentary_gate(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        pb._playback_available = True
+        state = {"playing": False}
+        events = []
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb.is_playing = lambda: state["playing"]
+            pb._set_position = lambda target: events.append(("seek", target))
+
+            def play():
+                state["playing"] = True
+                events.append(("play",))
+
+            def pause(after=None):
+                state["playing"] = False
+                events.append(("pause",))
+                if after is not None:
+                    after()
+
+            pb._play_clean = play
+            pb._pause_clean = pause
+            pb.cue_panel.set_cues([
+                {"kind": "hot", "slot": 0, "position_ms": 1_000},
+                {"kind": "hot", "slot": 1, "position_ms": 2_000},
+            ])
+            pb.cue_panel.set_loaded(True)
+            pb.cue_panel.hot_slots[0].pressed.emit()
+            pb.toggle()
+            pb.cue_panel.hot_slots[0].released.emit()
+            self.assertTrue(pb._cue_preview_latched)
+
+            pb.cue_panel.hot_slots[1].pressed.emit()
+            self.assertFalse(pb._cue_preview_latched)
+            self.assertTrue(state["playing"])
+            pb.cue_panel.hot_slots[1].released.emit()
+            self.assertFalse(state["playing"])
+            self.assertEqual(events[-1], ("seek", 2_000))
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_space_latch_survives_release_during_pending_seek_fade(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        state = {"playing": True}
+        pending = []
+        events = []
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb.is_playing = lambda: state["playing"]
+            pb._pause_clean = lambda after=None: pending.append(after)
+            pb._set_position = lambda target: events.append(("seek", target))
+
+            def play():
+                state["playing"] = True
+                events.append(("play",))
+
+            pb._play_clean = play
+            pb._start_cue_preview(9_876, ("hot", 3))
+            pb.toggle()
+            pb._release_cue_preview(("hot", 3))
+            self.assertTrue(pb._cue_preview_latched)
+            self.assertEqual(len(pending), 1)
+
+            state["playing"] = False  # the real fade has now reached silence
+            pending.pop()()
+            self.assertTrue(state["playing"])
+            self.assertEqual(events, [("seek", 9_876), ("play",)])
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_live_database_cues_override_stale_or_missing_waveform_sidecars(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        try:
+            live = [{
+                "kind": "hot", "slot": 3, "position_ms": 44_000,
+                "label": "Drop", "color": [170, 114, 255],
+            }]
+            stale = [{
+                "kind": "hot", "slot": 4, "position_ms": 44_000,
+                "label": "Wrong shifted slot", "color": [1, 2, 3],
+            }]
+            pb._live_cues = live
+            pb._apply_analysis({
+                "beats": [], "heights": [], "colors": [],
+                "sample_rate": 150.0, "cues": stale,
+            })
+            self.assertEqual(pb.wave._cues, live)
+            self.assertIsNotNone(pb.cue_panel._cues["hot"][3])
+            self.assertIsNone(pb.cue_panel._cues["hot"][4])
+
+        finally:
+            pb.close()
+            pb.shutdown_waveforms()
+
+    def test_track_navigation_icons_are_exact_mirrors(self):
+        from PySide6.QtCore import QSize
+        from desktop.player import _track_nav_icon
+
+        previous = _track_nav_icon(-1).pixmap(QSize(18, 14)).toImage()
+        following = _track_nav_icon(1).pixmap(QSize(18, 14)).toImage()
+        self.assertEqual(previous.size(), following.size())
+        for y in range(previous.height()):
+            for x in range(previous.width()):
+                self.assertEqual(
+                    previous.pixelColor(x, y),
+                    following.pixelColor(previous.width() - 1 - x, y),
+                )
+
     def test_scrub_disarmed_until_track_loaded(self):
         from desktop.player import WaveformBar
         w = WaveformBar()
         w.resize(400, 44)
+        w.set_timing(10_000, 30_000)
         hits = []
         w.seeked.connect(hits.append)
-        # simulate what mousePressEvent does when inactive vs active
+        # Main-wave navigation begins only after a deliberate drag threshold.
         class Ev:
+            def __init__(self, x=200.0, buttons=Qt.NoButton):
+                self.x = x
+                self._buttons = buttons
+
             def position(self):
-                class P:  # noqa: N801
-                    def x(self):
-                        return 200.0
-                return P()
-        w.mousePressEvent(Ev())          # disarmed → ignored
+                return type("P", (), {"x": lambda _self: self.x})()
+
+            def buttons(self):
+                return self._buttons
+
+            def accept(self):
+                pass
+
+        w.mousePressEvent(Ev())
+        w.mouseReleaseEvent(Ev())        # disarmed → ignored
         self.assertEqual(hits, [])
         w.set_active(True)
-        w.mousePressEvent(Ev())          # armed → seeks
+        w.mousePressEvent(Ev())
+        self.assertEqual(hits, [])        # no jump on mouse-down
+        w.mouseReleaseEvent(Ev())        # stationary click → inert
+        self.assertEqual(hits, [])
+        w.mousePressEvent(Ev())
+        w.mouseMoveEvent(Ev(108.0, Qt.LeftButton))
+        w.mouseReleaseEvent(Ev(108.0))
         self.assertEqual(len(hits), 1)
 
     def test_play_track_arms_wave_and_rebinding_is_safe(self):
@@ -557,7 +964,8 @@ class PlayerHardening(unittest.TestCase):
         self.assertFalse(pb.wave._active)
         pb.play_track("1", "/tmp/nonexistent.wav", title="X — Y")
         self.assertTrue(pb.wave._active)
-        pb._rebind_audio_device()  # never raises, even with no device change
+        self.assertEqual(_win.now_playing.toolTip(), "")
+        self.assertIn("X", _win.now_playing.text())
         pb.stop()
 
     def test_playback_error_signal_wired_to_status(self):
@@ -576,9 +984,872 @@ class PlayerHardening(unittest.TestCase):
         self.assertTrue(hits)
         self.assertEqual(set(hits), {"Playback error"})
 
+    def test_16_beat_jump_math_and_boundaries(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._bpm = 120.0
+            pb._dur = 30_000
+            self.assertEqual(pb._beat_delta_ms(), 8_000)  # 16 beats at 120 BPM
+            pb._pos = 7_999
+            self.assertIsNone(pb._beat_jump_target(-1))
+            self.assertEqual(pb._beat_jump_target(1), 15_999)
+            pb._pos = 22_001
+            self.assertEqual(pb._beat_jump_target(-1), 14_001)
+            self.assertIsNone(pb._beat_jump_target(1))
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_16_beat_jump_uses_exact_rekordbox_grid(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            # Deliberately uneven grid: proves this is timestamps, not headline BPM.
+            pb._beat_grid = [i * 500 + (40 if i >= 10 else 0) for i in range(40)]
+            pb._pos = 5_140  # 100ms into grid beat at 5.040s
+            self.assertEqual(pb._beat_jump_target(1), 13_140)
+            self.assertIsNone(pb._beat_jump_target(-1))  # fewer than 16 behind
+            pb._pos = 13_140
+            self.assertEqual(pb._beat_jump_target(-1), 5_140)
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_jump_selector_supports_beats_and_bars(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        changes = []
+        pb.jump_mode_changed.connect(changes.append)
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._bpm = 120.0
+            pb._dur = 120_000
+            pb._pos = 20_000
+            pb.set_jump_mode("4 BEATS")
+            self.assertEqual(pb._beat_delta_ms(), 2_000)
+            self.assertEqual(pb._beat_jump_target(1), 22_000)
+            pb.set_jump_mode("8 BARS")
+            self.assertEqual(pb._beat_delta_ms(), 16_000)
+            self.assertEqual(pb._beat_jump_target(-1), 4_000)
+            self.assertEqual(changes, ["4 BEATS", "8 BARS"])
+            self.assertEqual(pb.beat_selector_btn.text(), "8 BARS")
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_beat_buttons_disable_at_track_edges(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb._playback_available = True
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._bpm = 120.0
+            pb._on_dur(30_000)
+            pb._on_pos(0)
+            self.assertFalse(pb.beat_back_btn.isEnabled())
+            self.assertTrue(pb.beat_forward_btn.isEnabled())
+            pb._on_pos(30_000)
+            self.assertTrue(pb.beat_back_btn.isEnabled())
+            self.assertFalse(pb.beat_forward_btn.isEnabled())
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_paused_cue_holds_preview_then_returns(self):
+        from desktop.player import PlayerBar
+
+        class FakePlayer:
+            def __init__(self):
+                self.state = PlaybackState.PAUSED
+                self.positions = []
+                self.plays = 0
+                self.pauses = 0
+
+            def playbackState(self):
+                return self.state
+
+            def play(self):
+                self.plays += 1
+                self.state = PlaybackState.PLAYING
+
+            def pause(self):
+                self.pauses += 1
+                self.state = PlaybackState.PAUSED
+
+            def setPosition(self, ms):
+                self.positions.append(ms)
+
+        pb = PlayerBar()
+        pb._playback_available = True
+        real_player = pb.player
+        try:
+            fake = FakePlayer()
+            pb.player = fake
+            pb._pause_clean = lambda after=None: (
+                fake.pause(), after() if after is not None else None)
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb._set_session_cue(12_345)
+            pb._pos = 13_000
+            pb.cue_btn.pressed.emit()
+            self.assertEqual(pb._cue_ms, 12_345)
+            self.assertEqual(fake.plays, 1)
+            self.assertTrue(pb._cue_preview_active)
+            pb._pos = 13_000  # playback advanced while the button was held
+            pb.cue_btn.released.emit()
+            self.assertEqual(fake.pauses, 1)
+            self.assertEqual(fake.positions, [12_345, 12_345])
+            self.assertEqual(pb._pos, 12_345)
+            self.assertFalse(pb._cue_preview_active)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_paused_manual_move_relocates_session_cue_once(self):
+        from desktop.player import PlayerBar, SessionCueState
+
+        pb = PlayerBar()
+        state = {"playing": False}
+        events = []
+        try:
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb.is_playing = lambda: state["playing"]
+
+            def position(target):
+                pb._pos = target
+                events.append(("seek", target))
+
+            def play():
+                state["playing"] = True
+                events.append(("play",))
+
+            def pause(after=None):
+                state["playing"] = False
+                events.append(("pause",))
+                if after is not None:
+                    after()
+
+            pb._set_position = position
+            pb._play_clean = play
+            pb._pause_clean = pause
+            pb._set_session_cue(1_000)
+
+            pb._move_clean(20_000)
+            self.assertEqual(
+                pb._session_cue_state,
+                SessionCueState.RELOCATION_PENDING)
+            pb.cue_btn.pressed.emit()
+            self.assertEqual(pb._cue_ms, 20_000)
+            self.assertEqual(pb._session_cue_state, SessionCueState.SET)
+            self.assertFalse(pb._cue_preview_active)
+            self.assertFalse(state["playing"])
+            self.assertEqual(events, [("seek", 20_000)])
+            pb.cue_btn.released.emit()
+
+            pb.cue_btn.pressed.emit()
+            self.assertTrue(pb._cue_preview_active)
+            self.assertTrue(state["playing"])
+            self.assertEqual(events[-2:], [("seek", 20_000), ("play",)])
+            pb.cue_btn.released.emit()
+            self.assertFalse(state["playing"])
+
+            pb._move_clean(31_000)
+            self.assertEqual(
+                pb._session_cue_state,
+                SessionCueState.RELOCATION_PENDING)
+            pb.cue_btn.pressed.emit()
+            self.assertEqual(pb._cue_ms, 31_000)
+            self.assertFalse(pb._cue_preview_active)
+            self.assertFalse(state["playing"])
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_stationary_main_wave_hold_does_not_pause_or_seek(self):
+        from desktop.player import PlayerBar
+
+        class FakePlayer:
+            def __init__(self):
+                self.positions = []
+                self.pauses = 0
+
+            def playbackState(self):
+                return PlaybackState.PLAYING
+
+            def setPosition(self, ms):
+                self.positions.append(ms)
+
+            def pause(self):
+                self.pauses += 1
+
+        class Ev:
+            def position(self):
+                return type("P", (), {
+                    "x": lambda _self: 300.0,
+                    "y": lambda _self: 100.0,
+                })()
+
+            def accept(self):
+                pass
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            fake = FakePlayer()
+            pb.player = fake
+            pb._animate_gain = (
+                lambda _end, _duration, completion=None:
+                setattr(pb, "_gain_completion", completion))
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 60_000
+            pb.wave.resize(600, 132)
+            pb.wave.set_active(True)
+            pb.wave.set_timing(20_000, 60_000)
+            pb.wave.mousePressEvent(Ev())
+            self.assertFalse(pb.wave.is_dragging())
+            pb.wave.mouseReleaseEvent(Ev())
+            self.assertEqual(fake.positions, [])
+            self.assertEqual(fake.pauses, 0)
+            self.assertFalse(pb._deck_drag_active)
+            self.assertEqual(pb.wave._position_ms, 20_000)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_playing_waveform_drag_pauses_then_seeks_once_and_resumes(self):
+        from desktop.player import PlayerBar
+
+        class FakePlayer:
+            def __init__(self):
+                self.state = PlaybackState.PLAYING
+                self.pos = 10_000
+                self.positions = []
+                self.plays = 0
+                self.pauses = 0
+
+            def playbackState(self):
+                return self.state
+
+            def playbackRate(self):
+                return 1.0
+
+            def position(self):
+                return self.pos
+
+            def setPosition(self, ms):
+                self.pos = ms
+                self.positions.append(ms)
+
+            def play(self):
+                self.plays += 1
+                self.state = PlaybackState.PLAYING
+
+            def pause(self):
+                self.pauses += 1
+                self.state = PlaybackState.PAUSED
+
+        pb = PlayerBar()
+        pb._playback_available = True
+        real_player = pb.player
+        try:
+            fake = FakePlayer()
+            pb.player = fake
+            pb._animate_gain = (
+                lambda _end, _duration, completion=None:
+                setattr(pb, "_gain_completion", completion))
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 30_000
+            pb._anchor_transport(10_000, True)
+            pb._on_wave_drag_started()
+            self.assertTrue(pb._pause_pending)
+            self.assertEqual(fake.pauses, 0)  # fade reaches silence first
+            pb._on_gain_finished()
+            self.assertEqual(fake.pauses, 1)
+            self.assertFalse(pb._pause_pending)
+
+            pb._seek(8_000 / 30_000)  # release's one authoritative seek
+            self.assertNotEqual(fake.positions[-1], 8_000)  # held until release
+            pb._on_wave_drag_finished()
+            self.assertEqual(fake.positions[-1], 8_000)
+            self.assertEqual(fake.plays, 1)
+            self.assertEqual(fake.state, PlaybackState.PLAYING)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_clean_pause_pins_backend_to_interpolated_visual_position(self):
+        from desktop.player import PlayerBar
+        from PySide6.QtTest import QTest
+
+        class FakePlayer:
+            def __init__(self):
+                self.state = PlaybackState.PLAYING
+                self.pos = 9_900
+
+            def playbackState(self):
+                return self.state
+
+            def playbackRate(self):
+                return 1.0
+
+            def position(self):
+                return self.pos
+
+            def setPosition(self, ms):
+                self.pos = ms
+
+            def pause(self):
+                self.state = PlaybackState.PAUSED
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            fake = FakePlayer()
+            pb.player = fake
+            pb._animate_gain = (
+                lambda _end, _duration, completion=None:
+                setattr(pb, "_gain_completion", completion))
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 30_000
+            pb._anchor_transport(10_000, True)
+            QTest.qWait(12)
+            pb._pause_clean()
+            pb._on_gain_finished()
+            # Resume will start from the smooth visual clock, never jump back
+            # to the backend's stale coarse 9.9-second position.
+            self.assertGreaterEqual(fake.pos, 10_008)
+            self.assertEqual(pb._pos, fake.pos)
+            self.assertFalse(pb._transport_running)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_transport_clock_interpolates_between_backend_ticks(self):
+        from desktop.player import PlayerBar
+        from PySide6.QtTest import QTest
+
+        class FakePlayer:
+            def playbackState(self):
+                return PlaybackState.PLAYING
+
+            def playbackRate(self):
+                return 1.0
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            pb.player = FakePlayer()
+            pb._dur = 10_000
+            pb._anchor_transport(1_000, True)
+            QTest.qWait(35)
+            # The fake backend is frozen; only the monotonic transport clock
+            # can advance this value between backend position signals.
+            self.assertGreaterEqual(pb._transport_position(), 1_025)
+            self.assertLess(pb._transport_position(), 1_150)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_activation_resynchronizes_audio_buttons_and_waveform(self):
+        from desktop.player import PlayerBar
+
+        class FakeNative:
+            def __init__(self):
+                self.state = PlaybackState.PLAYING
+                self.synced = 0
+
+            def synchronize(self):
+                self.synced += 1
+
+            def playbackState(self):
+                return self.state
+
+            def playbackRate(self):
+                return 1.0
+
+            def position(self):
+                return 4321
+
+            def set_visual_position(self, _ms, _preview):
+                pass
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            fake = FakeNative()
+            pb.player = fake
+            pb._src_path = "/tmp/loaded.wav"
+            pb._dur = 30_000
+            pb._pos = 1000
+            pb._transport_play_active = False
+            pb.resynchronize_transport()
+            self.assertEqual(fake.synced, 1)
+            self.assertEqual(pb._pos, 4321)
+            self.assertTrue(pb._transport_play_active)
+            self.assertEqual(pb.play_btn.text(), "❚❚")
+
+            fake.state = PlaybackState.PAUSED
+            pb.resynchronize_transport()
+            self.assertEqual(pb._pos, 4321)
+            self.assertFalse(pb._transport_play_active)
+            self.assertEqual(pb.play_btn.text(), "▶")
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_new_transport_intent_rejects_stale_gain_completion(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        called = []
+        try:
+            pb._gain_completion = lambda: called.append("stale")
+            pb._gain_epoch = pb._transport_epoch
+            pb._begin_transport_intent()
+            pb._on_gain_finished()
+            self.assertEqual(called, [])
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_transport_has_no_python_repaint_timer(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            self.assertFalse(hasattr(pb, "_scroll_timer"))
+        finally:
+            pb.shutdown_waveforms()
+
+    def test_backend_drift_is_slewed_not_applied_as_a_tick(self):
+        from desktop.player import PlayerBar
+
+        class FakePlayer:
+            def playbackState(self):
+                return PlaybackState.PLAYING
+
+            def playbackRate(self):
+                return 1.0
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            pb.player = FakePlayer()
+            pb._dur = 10_000
+            pb._anchor_transport(1_000, True)
+            before = pb._transport_anchor_ms
+            pb._on_backend_pos(1_100)
+            # A normal backend correction queues a slew; it cannot jump the
+            # waveform in the signal handler.
+            self.assertEqual(pb._transport_anchor_ms, before)
+            self.assertGreater(pb._transport_slew_ms, 0)
+            self.assertEqual(pb._transport_anchor_ms, before)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_new_track_waits_then_starts_on_first_grid_beat(self):
+        from desktop.player import PlayerBar
+
+        class FakePlayer:
+            def __init__(self):
+                self.state = PlaybackState.PAUSED
+                self.positions = []
+                self.plays = 0
+
+            def playbackState(self):
+                return self.state
+
+            def setPosition(self, ms):
+                self.positions.append(ms)
+
+            def play(self):
+                self.plays += 1
+                self.state = PlaybackState.PLAYING
+
+        pb = PlayerBar()
+        pb._playback_available = True
+        real_player = pb.player
+        try:
+            fake = FakePlayer()
+            pb.player = fake
+            pb._src_path = "/tmp/loaded.wav"
+            pb._pending_autoplay = True
+            pb._dur = 0  # analysis wins the race; media is not loaded yet
+            pb._apply_analysis({
+                "beats": [[1, 875, 140.0], [2, 1304, 140.0]],
+                "heights": [], "colors": [],
+                "provenance": {"grid": "rekordbox"},
+            })
+            self.assertEqual(fake.plays, 0)
+            pb._on_dur(60_000)
+            self.assertEqual(fake.positions, [875])
+            self.assertEqual(fake.plays, 1)
+            self.assertEqual(pb._pos, 875)
+            self.assertEqual(pb._cue_ms, 875)
+            self.assertEqual(pb.wave._session_cue_ms, 875)
+            self.assertFalse(pb._pending_autoplay)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_load_only_waits_then_pauses_on_first_grid_beat(self):
+        from desktop.player import PlayerBar
+
+        class FakePlayer:
+            def __init__(self):
+                self.positions = []
+                self.plays = 0
+
+            def playbackState(self):
+                return PlaybackState.PAUSED
+
+            def setPosition(self, ms):
+                self.positions.append(ms)
+
+            def play(self):
+                self.plays += 1
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            fake = FakePlayer()
+            pb.player = fake
+            pb._src_path = "/tmp/loaded.wav"
+            pb._pending_autoplay = True
+            pb._pending_should_play = False
+            pb._dur = 0
+            pb._apply_analysis({
+                "beats": [[1, 875, 140.0], [2, 1304, 140.0]],
+                "heights": [], "colors": [],
+                "provenance": {"grid": "rekordbox"},
+            })
+            self.assertEqual(fake.plays, 0)
+            pb._on_dur(60_000)
+            self.assertEqual(fake.positions, [875])
+            self.assertEqual(fake.plays, 0)
+            self.assertEqual(pb._pos, 875)
+            self.assertEqual(pb._cue_ms, 875)
+            self.assertFalse(pb._pending_autoplay)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_rgb_raster_is_stable_and_song_anchored(self):
+        from desktop.player import WaveformBar, _rasterize_rgb
+        heights = [0.1, 0.8, 0.2, 0.6, 0.4, 1.0]
+        colors = [[1, 2, 3], [4, 5, 6], [7, 1, 2],
+                  [2, 7, 1], [3, 4, 5], [14, 0, 0]]
+        columns = _rasterize_rgb(heights, colors, 6.0, 3.0)
+        # Fixed 2-sample bins choose the local peak once; viewport position
+        # never participates in color selection.
+        self.assertEqual(columns, [
+            [0.8, [4, 5, 6]], [0.6, [2, 7, 1]], [1.0, [14, 0, 0]],
+        ])
+        w = WaveformBar()
+        w.PIXELS_PER_SECOND = 3.0
+        w.set_analysis({
+            "heights": heights, "colors": colors, "sample_rate": 6.0,
+            "columns": columns,
+            "_detail_bands": bytes([
+                1, 2, 3,
+                4, 5, 127,
+                6, 7, 8,
+                9, 10, 11,
+                12, 13, 14,
+                15, 16, 17,
+            ]),
+        })
+        before = [(height, color.rgb()) for height, color in w._rgb_columns]
+        w.set_timing(250, 10_000)
+        w.set_timing(750, 10_000)
+        after = [(height, color.rgb()) for height, color in w._rgb_columns]
+        self.assertEqual(after, before)
+        self.assertEqual(w._song_column(1000), 3)
+        self.assertEqual(w._rgb_detail[1][0], 1.0)
+
+    def test_qt_waveform_preserves_dedicated_rgb_despite_band_master(self):
+        from desktop.player import WaveformBar
+
+        colors = [[14, 0, 0], [0, 7, 0], [0, 0, 7]]
+        w = WaveformBar()
+        w.set_analysis({
+            "heights": [0.5, 0.5, 0.5],
+            "colors": colors,
+            "sample_rate": 150.0,
+            "_spectral_24": bytes(
+                [255] * 8 + [0] * 16
+                + [0] * 8 + [255] * 8 + [0] * 8
+                + [0] * 16 + [255] * 8),
+        })
+        self.assertEqual(w._rgb_colors, colors)
+
+    def test_waveform_builds_bar_beat_positions_from_imported_grid(self):
+        from desktop.player import WaveformBar
+
+        w = WaveformBar()
+        w.set_analysis({
+            "beats": [
+                [1, 500, 120.0], [2, 1000, 120.0],
+                [3, 1500, 120.0], [4, 2000, 120.0],
+                [1, 2500, 120.0], [2, 3000, 120.0],
+            ],
+        })
+        self.assertEqual(w._beat_positions, [
+            (500, 1, 1), (1000, 1, 2), (1500, 1, 3),
+            (2000, 1, 4), (2500, 2, 1), (3000, 2, 2),
+        ])
+
+    def test_waveform_motion_keeps_subpixel_phase_at_120hz(self):
+        from desktop.player import WaveformBar
+        w = WaveformBar()
+        # At 92 px/s, 120 Hz advances 0.736 logical pixels per frame. Integer
+        # columns would duplicate some frames; the continuous song coordinate
+        # preserves a distinct phase for every refresh.
+        xs = [w._song_x(i * 8) for i in range(12)]
+        self.assertEqual(len(set(xs)), len(xs))
+        for a, b in zip(xs, xs[1:]):
+            self.assertAlmostEqual(b - a, 0.736, places=6)
+
+    def test_scrolling_waveform_seek_is_relative_to_fixed_playhead(self):
+        from desktop.player import WaveformBar
+
+        class Ev:
+            def __init__(self, x, buttons=Qt.NoButton):
+                self.x = x
+                self._buttons = buttons
+
+            def position(self):
+                return type("P", (), {"x": lambda _self: self.x})()
+
+            def buttons(self):
+                return self._buttons
+
+            def accept(self):
+                pass
+
+        w = WaveformBar()
+        w.resize(400, 92)
+        w.set_active(True)
+        w.set_timing(10_000, 30_000)
+        hits = []
+        w.seeked.connect(hits.append)
+        # Center is current time; 92px right is exactly +1 second.
+        self.assertEqual(w._time_at_x(200, 200), 10.0)
+        self.assertEqual(w._time_at_x(292, 200), 11.0)
+        # Grab the waveform and pull it left by 92px to reveal +1 second.
+        w.mousePressEvent(Ev(200))
+        w.mouseMoveEvent(Ev(108, Qt.LeftButton))
+        w.mouseReleaseEvent(Ev(108))
+        self.assertAlmostEqual(hits[-1], 11 / 30, places=4)
+        self.assertEqual(w._position_ms, 11_000)
+
+    def test_overview_click_seeks_to_absolute_song_position(self):
+        from desktop.player import WaveformBar
+
+        class Ev:
+            def __init__(self, x, y):
+                self._x = x
+                self._y = y
+
+            def position(self):
+                return type("P", (), {
+                    "x": lambda _self: self._x,
+                    "y": lambda _self: self._y,
+                })()
+
+            def accept(self):
+                pass
+
+        w = WaveformBar()
+        w.resize(400, 132)
+        w.set_active(True)
+        w.set_timing(10_000, 30_000)
+        previews, seeks = [], []
+        w.previewed.connect(previews.append)
+        w.seeked.connect(seeks.append)
+        w.mousePressEvent(Ev(300, 10))
+        self.assertEqual(previews, [22_500])
+        w.mouseReleaseEvent(Ev(300, 10))
+        self.assertEqual(seeks, [0.75])
+        self.assertEqual(w._position_ms, 22_500)
+
+    def test_zoom_controls_scale_only_the_detail_waveform(self):
+        from desktop.player import WaveformBar
+
+        class Ev:
+            def __init__(self, x, y):
+                self._x, self._y = x, y
+
+            def position(self):
+                return type("P", (), {
+                    "x": lambda _self: self._x,
+                    "y": lambda _self: self._y,
+                })()
+
+            def accept(self):
+                pass
+
+        w = WaveformBar()
+        w.resize(400, 132)
+        w.set_timing(10_000, 30_000)
+        changes, seeks = [], []
+        w.zoom_changed.connect(changes.append)
+        w.seeked.connect(seeks.append)
+        overview_target = w._overview_time_at_x(300)
+        self.assertEqual(w.PIXELS_PER_SECOND, 92.0)
+        w.mousePressEvent(Ev(50, 40))  # plus
+        self.assertEqual(w.PIXELS_PER_SECOND, 128.0)
+        self.assertEqual(w._overview_time_at_x(300), overview_target)
+        self.assertAlmostEqual(w._time_at_x(328, 200), 11.0)
+        w.mousePressEvent(Ev(20, 40))  # minus
+        self.assertEqual(w.PIXELS_PER_SECOND, 92.0)
+        w.set_zoom(2000.0)
+        self.assertEqual(w.PIXELS_PER_SECOND, 2048.0)
+        self.assertEqual(w._overview_time_at_x(300), overview_target)
+        self.assertAlmostEqual(w._time_at_x(2248, 200), 11.0)
+        self.assertEqual(changes, [128.0, 92.0, 2048.0])
+        self.assertEqual(seeks, [])
+
+    def test_waveform_drag_is_anchored_and_releases_exactly(self):
+        from desktop.player import WaveformBar
+
+        class Ev:
+            def __init__(self, x, buttons=Qt.NoButton):
+                self.x = x
+                self._buttons = buttons
+
+            def position(self):
+                return type("P", (), {"x": lambda _self: self.x})()
+
+            def buttons(self):
+                return self._buttons
+
+            def accept(self):
+                pass
+
+        w = WaveformBar()
+        w.resize(400, 92)
+        w.set_active(True)
+        w.set_analysis({
+            "beats": [[1, 8_000, 140.0], [2, 9_000, 140.0],
+                      [3, 10_000, 140.0]],
+        })
+        w.set_timing(10_000, 30_000)
+        hits = []
+        previews = []
+        w.seeked.connect(hits.append)
+        w.previewed.connect(previews.append)
+        w.mousePressEvent(Ev(200))
+        w.mouseMoveEvent(Ev(290, Qt.LeftButton))
+        self.assertEqual(w._position_ms, 9_022)
+        self.assertEqual(hits, [])  # no decoder seek while the hand is moving
+        w.mouseMoveEvent(Ev(380, Qt.LeftButton))
+        # Still calculated from the original 10s mouse-down position. The old
+        # compounding implementation would have run away to roughly 7 seconds.
+        self.assertEqual(w._position_ms, 8_044)
+        self.assertEqual(hits, [])
+        self.assertEqual(previews, [9_022, 8_044])
+        w.mouseReleaseEvent(Ev(380))
+        # One exact decoder seek at the timestamp under the hand. There is no
+        # release-time magnet that can make the waveform slip several pixels.
+        self.assertEqual([round(x * 30_000) for x in hits], [8_044])
+
+    def test_native_drag_preview_is_forwarded_before_release(self):
+        from desktop.player import PlayerBar
+
+        class FakeNative:
+            def __init__(self):
+                self.visual = []
+
+            def set_visual_position(self, ms, preview):
+                self.visual.append((ms, preview))
+
+            def playbackState(self):
+                return PlaybackState.PAUSED
+
+        pb = PlayerBar()
+        real = pb.player
+        try:
+            fake = FakeNative()
+            pb.player = fake
+            pb._pos = 10_000
+            pb._on_wave_drag_started()
+            pb._on_wave_preview(8_750)
+            self.assertEqual(fake.visual, [
+                (10_000, True), (8_750, True),
+            ])
+            pb._deck_drag_target = 8_750
+            pb._paint_position(10_100)
+            # A late backend/fade tick cannot overwrite the held destination
+            # between mouse-up and the decoder's one authoritative seek.
+            self.assertEqual(fake.visual, [
+                (10_000, True), (8_750, True),
+            ])
+        finally:
+            pb.player = real
+            pb.shutdown_waveforms()
+
+    def test_track_arrows_follow_visible_row_order(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))  # Collection
+        _win.model.set_filter("")
+        _app.processEvents()
+        self.assertEqual(_win._player_order(), ["2", "1", "3"])
+        played = []
+        real = _win._play_track
+        _win._play_track = lambda t: played.append(t.track_id)
+        try:
+            _win.player_bar._track_id = "1"
+            _win._play_relative(-1)
+            _win._play_relative(1)
+        finally:
+            _win._play_track = real
+            _win.player_bar._track_id = None
+        self.assertEqual(played, ["2", "3"])
+
+    def test_track_buttons_emit_direction_requests(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        hits = []
+        try:
+            pb._track_id = "loaded"
+            pb.set_track_navigation(True, True)
+            pb.previous_requested.connect(lambda: hits.append(-1))
+            pb.next_requested.connect(lambda: hits.append(1))
+            pb.previous_btn.click()
+            pb.next_btn.click()
+            self.assertEqual(hits, [-1, 1])
+        finally:
+            pb.shutdown_waveforms()
+
 
 class QtTrapAudit(unittest.TestCase):
     """Regression pins for the 2026-07-03 Qt-trap audit."""
+
+    def test_interaction_deferral_does_not_wake_every_waveform_frame(self):
+        """Only the waveform host resize owns native geometry/display work."""
+        class Worker:
+            def __init__(self):
+                self.seconds = []
+
+            def defer_for_interaction(self, seconds):
+                self.seconds.append(seconds)
+
+        worker = Worker()
+        player = _win.player_bar.player
+        wakes = []
+        old_worker = getattr(_win, "_wf_fill_worker", None)
+        old_request = getattr(player, "request_display", None)
+        _win._wf_fill_worker = worker
+        player.request_display = lambda: wakes.append(True)
+        try:
+            _win._defer_library_prep(0.75)
+            self.assertEqual(worker.seconds, [0.75])
+            self.assertEqual(wakes, [])
+        finally:
+            _win._wf_fill_worker = old_worker
+            if old_request is None:
+                del player.request_display
+            else:
+                player.request_display = old_request
 
     def test_oneshots_pruned_after_finish(self):
         from desktop.workers import _OneShotArt
@@ -597,6 +1868,64 @@ class QtTrapAudit(unittest.TestCase):
         self.assertFalse(_win._space_should_play(_win._grave))   # native toggle
         self.assertFalse(_win._space_should_play(_win._rules))
         self.assertFalse(_win._space_should_play(_win.fs_view))  # device browser
+
+    def test_c_key_routes_press_and_release_to_momentary_cue(self):
+        calls = []
+        real_policy = _win._space_should_play
+        real_press = _win.player_bar._cue_press
+        real_release = _win.player_bar._cue_release
+        _win._space_should_play = lambda _focus: True
+        _win.player_bar._cue_press = lambda: calls.append("press")
+        _win.player_bar._cue_release = lambda: calls.append("release")
+        try:
+            press = QKeyEvent(QEvent.KeyPress, Qt.Key_C, Qt.NoModifier)
+            release = QKeyEvent(QEvent.KeyRelease, Qt.Key_C, Qt.NoModifier)
+            self.assertTrue(_win.eventFilter(_win.table, press))
+            self.assertTrue(_win.eventFilter(_win.table, release))
+            self.assertEqual(calls, ["press", "release"])
+        finally:
+            _win._space_should_play = real_policy
+            _win.player_bar._cue_press = real_press
+            _win.player_bar._cue_release = real_release
+            _win._cue_key_down = False
+
+    def test_c_claims_shortcut_override_and_swallows_native_repeats(self):
+        calls = []
+        real_policy = _win._space_should_play
+        real_press = _win.player_bar._cue_press
+        real_release = _win.player_bar._cue_release
+        _win._space_should_play = lambda _focus: True
+        _win.player_bar._cue_press = lambda: calls.append("press")
+        _win.player_bar._cue_release = lambda: calls.append("release")
+        try:
+            override = QKeyEvent(
+                QEvent.ShortcutOverride, Qt.Key_C, Qt.NoModifier)
+            press = QKeyEvent(QEvent.KeyPress, Qt.Key_C, Qt.NoModifier)
+            repeat = QKeyEvent(
+                QEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c", True, 2)
+            release = QKeyEvent(QEvent.KeyRelease, Qt.Key_C, Qt.NoModifier)
+            self.assertTrue(_win.eventFilter(_win.table, override))
+            self.assertTrue(override.isAccepted())
+            self.assertTrue(_win.eventFilter(_win.table, press))
+            self.assertTrue(_win.eventFilter(_win.table, repeat))
+            self.assertTrue(_win.eventFilter(_win.table, release))
+            self.assertEqual(calls, ["press", "release"])
+        finally:
+            _win._space_should_play = real_policy
+            _win.player_bar._cue_press = real_press
+            _win.player_bar._cue_release = real_release
+            _win._cue_key_down = False
+
+    def test_command_c_is_not_stolen_by_cue_shortcut(self):
+        calls = []
+        real_press = _win.player_bar._cue_press
+        _win.player_bar._cue_press = lambda: calls.append("press")
+        try:
+            event = QKeyEvent(QEvent.KeyPress, Qt.Key_C, Qt.MetaModifier)
+            self.assertFalse(_win.eventFilter(_win.search, event))
+            self.assertEqual(calls, [])
+        finally:
+            _win.player_bar._cue_press = real_press
 
     def test_art_index_save_is_atomic(self):
         import json, tempfile
@@ -746,6 +2075,54 @@ class GraveyardFreshness(unittest.TestCase):
 
 
 class ArtistsView(unittest.TestCase):
+    def test_columns_share_exact_playlist_boundaries(self):
+        from desktop.model import COLUMNS
+
+        _win._show_collection()
+        _app.processEvents()
+        table_header = _win.table.horizontalHeader()
+        expected = {
+            column: (
+                table_header.sectionViewportPosition(column),
+                table_header.sectionSize(column),
+            )
+            for column in range(len(COLUMNS))
+            if not _win.table.isColumnHidden(column)
+        }
+
+        _win._show_artists()
+        _app.processEvents()
+        artist_header = _win.artists_view.header()
+        self.assertEqual(_win.artists_view.columnCount(), len(COLUMNS))
+        self.assertEqual(
+            [artist_header.model().headerData(i, Qt.Horizontal)
+             for i in range(len(COLUMNS))],
+            ["Artist / Track", *(label for _key, label, _hidden in COLUMNS[1:])],
+        )
+        actual = {
+            column: (
+                artist_header.sectionViewportPosition(column),
+                artist_header.sectionSize(column),
+            )
+            for column in range(len(COLUMNS))
+            if not _win.artists_view.isColumnHidden(column)
+        }
+        self.assertEqual(actual, expected)
+
+    def test_resizing_either_view_keeps_shared_boundaries(self):
+        column = 1  # Artist
+        original = _win.table.columnWidth(column)
+        try:
+            _win.table.setColumnWidth(column, original + 17)
+            _app.processEvents()
+            self.assertEqual(
+                _win.artists_view.columnWidth(column), original + 17)
+            _win.artists_view.setColumnWidth(column, original + 9)
+            _app.processEvents()
+            self.assertEqual(_win.table.columnWidth(column), original + 9)
+        finally:
+            _win.table.setColumnWidth(column, original)
+
     def test_click_opens_browser_folder_page(self):
         _win._refresh_custom()
         it = _win.sb_tree.topLevelItem(1)
@@ -781,7 +2158,7 @@ class ArtistsView(unittest.TestCase):
         zed.setExpanded(True)
         _app.processEvents()
         _win.artists_view.setCurrentItem(zed.child(0))
-        t = _win._selected_track()      # Space-play source of truth
+        t = _win._selected_track()      # browser selection source of truth
         self.assertIsNotNone(t)
         self.assertEqual(t.track_id, "1")
         _win.artists_view.setCurrentItem(zed)   # artist row = nothing to play
@@ -917,10 +2294,41 @@ class NowPlayingHighlight(unittest.TestCase):
         _win._highlight_now_playing("no-such-track")
         self.assertEqual(_win.table.currentIndex().row(), before)
 
+    def test_title_focus_clears_search_and_falls_back_to_collection(self):
+        from desktop.app import COLLECTION_ROLE
+
+        playlist = _win._find_tree_item("SET TWO")
+        self.assertIsNotNone(playlist)
+        _win.tree.setCurrentItem(playlist)  # contains only track 2
+        _win.search.setText("alpha")
+        _win.player_bar._track_id = "1"
+        try:
+            _win._focus_now_playing()
+            self.assertEqual(_win.search.text(), "")
+            self.assertTrue(
+                _win.sb_tree.currentItem().data(0, COLLECTION_ROLE))
+            idx = _win.table.currentIndex()
+            self.assertTrue(idx.isValid())
+            self.assertEqual(_win.model._rows[idx.row()]["id"], "1")
+        finally:
+            _win.player_bar._track_id = None
+
+    def test_title_focus_preserves_current_view_when_track_is_present(self):
+        playlist = _win._find_tree_item("CRATES / SET ONE")
+        self.assertIsNotNone(playlist)
+        _win.tree.setCurrentItem(playlist)
+        _win.player_bar._track_id = "1"
+        try:
+            _win._focus_now_playing()
+            self.assertIs(_win.tree.currentItem(), playlist)
+            idx = _win.table.currentIndex()
+            self.assertEqual(_win.model._rows[idx.row()]["id"], "1")
+        finally:
+            _win.player_bar._track_id = None
+
 
 class SpaceSemantics(unittest.TestCase):
-    """Space plays the HIGHLIGHTED track when it isn't the loaded one —
-    pausing is only for when cursor and loaded track agree."""
+    """Space controls only the loaded deck and never opens browser selection."""
 
     def setUp(self):
         self._played = []
@@ -939,31 +2347,65 @@ class SpaceSemantics(unittest.TestCase):
         row = next(i for i, r in enumerate(_win.model._rows) if r["id"] == tid)
         _win.table.setCurrentIndex(_win.model.index(row, 0))
 
-    def test_different_track_highlighted_loads_it(self):
+    def test_different_track_highlighted_still_toggles_loaded_deck(self):
         _win.player_bar._track_id = "1"       # something else is loaded
         self._select("2")
-        _win._play_selected()
-        self.assertEqual(self._played, ["2"])  # loads, never just pauses
-        self.assertEqual(self._toggled, [])
+        _win._toggle_player()
+        self.assertEqual(self._played, [])
+        self.assertEqual(self._toggled, [1])
 
     def test_same_track_highlighted_toggles(self):
         _win.player_bar._track_id = "2"
         self._select("2")
-        _win._play_selected()
+        _win._toggle_player()
         self.assertEqual(self._played, [])
         self.assertEqual(self._toggled, [1])
 
-    def test_no_selection_toggles_loaded(self):
-        _win.player_bar._track_id = "1"
-        _win.table.setCurrentIndex(_win.model.index(-1, -1))
-        _win._play_selected()
+    def test_nothing_loaded_is_a_noop(self):
+        _win.player_bar._track_id = None
+        self._select("2")
+        _win._toggle_player()
         self.assertEqual(self._played, [])
-        self.assertEqual(self._toggled, [1])
+        self.assertEqual(self._toggled, [])
+
+
+class DoubleClickSemantics(unittest.TestCase):
+    """Browser mouse activation is the sole direct load gesture."""
+
+    def setUp(self):
+        self._loaded = []
+        self._played = []
+        self._orig_load, self._orig_play = _win._load_track, _win._play_track
+        _win._load_track = lambda t: self._loaded.append(t.track_id)
+        _win._play_track = lambda t: self._played.append(t.track_id)
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))  # Collection
+        _app.processEvents()
+
+    def tearDown(self):
+        _win._load_track, _win._play_track = self._orig_load, self._orig_play
+
+    def test_table_double_click_loads_without_playing(self):
+        row = next(i for i, r in enumerate(_win.model._rows) if r["id"] == "2")
+        _win._play_row(_win.model.index(row, 0))
+        self.assertEqual(self._loaded, ["2"])
+        self.assertEqual(self._played, [])
+
+    def test_artist_double_click_loads_without_playing(self):
+        from desktop.app import ARTIST_TRACK_ROLE
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))  # Artists
+        _app.processEvents()
+        top = _win.artists_view.topLevelItem(0)
+        top.setExpanded(True)
+        child = top.child(0)
+        self.assertIsNotNone(child)
+        self.assertTrue(child.data(0, ARTIST_TRACK_ROLE))
+        _win._artists_double(child, 0)
+        self.assertEqual(len(self._loaded), 1)
+        self.assertEqual(self._played, [])
 
 
 class QtWaveformFallback(unittest.TestCase):
-    """ALAC/AAC (.m4a) get a REAL waveform via the Qt/ffmpeg decoder — same
-    normalization as the libsndfile path, so the bar looks identical."""
+    """AAC/ALAC receive the same canonical V4 analysis via QAudioDecoder."""
 
     @classmethod
     def setUpClass(cls):
@@ -990,17 +2432,15 @@ class QtWaveformFallback(unittest.TestCase):
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     def _check(self, name):
-        from desktop.player import qt_peaks
-        from soundbox.waveform import DEFAULT_BUCKETS, peaks
+        from desktop.player import qt_detail_peaks
         path = f"{self.dir}/{name}"
-        self.assertEqual(peaks(path), [], "libsndfile grew m4a support — "
-                         "fallback untested; revisit")
-        pk = qt_peaks(path)
-        self.assertEqual(len(pk), DEFAULT_BUCKETS)
-        self.assertEqual(max(pk), 1.0)            # normalized to fill the bar
-        half = DEFAULT_BUCKETS // 2
-        self.assertGreater(max(pk[:half - 10]), 0.9)   # tone half is loud
-        self.assertLess(max(pk[half + 10:]), 0.1)      # silent half is quiet
+        detail = qt_detail_peaks(path)
+        self.assertGreater(detail["detail_rate"], 6100)
+        self.assertLess(detail["detail_rate"], 6200)
+        heights = detail["detail_heights"]
+        midpoint = len(heights) // 2
+        self.assertGreater(max(heights[:midpoint - 30]), 245)
+        self.assertLess(max(heights[midpoint + 30:]), 12)
 
     def test_alac_waveform(self):
         self._check("alac.m4a")
@@ -1053,7 +2493,7 @@ class DuplicateAdds(unittest.TestCase):
 
 class SearchFocusPolicy(unittest.TestCase):
     """The search box must never grab keyboard focus at launch — the app opens
-    on Collection ready to browse (Space-play, arrows), not typing into search."""
+    on Collection ready to browse (transport keys, arrows), not typing into search."""
 
     def test_search_is_click_to_focus_only(self):
         self.assertEqual(_win.search.focusPolicy(), Qt.ClickFocus)
@@ -1250,9 +2690,20 @@ class ExportableViews(unittest.TestCase):
         self.assertEqual([p.name for p in pls], ["Collection", "Artists"])
 
     def test_sync_playlists_includes_views(self):
+        _win._sync_playlists_cache = None
         names = [p.name for p in _win._sync_playlists()]
         self.assertIn("Collection", names)
         self.assertIn("Artists", names)
+
+    def test_sync_playlists_are_not_rebuilt_by_each_device_poll(self):
+        _win._sync_playlists_cache = None
+        first = _win._sync_playlists()
+        real = _win._view_playlist
+        _win._view_playlist = lambda _name: self.fail("rebuilt cached views")
+        try:
+            self.assertIs(_win._sync_playlists(), first)
+        finally:
+            _win._view_playlist = real
 
     def test_tree_drag_emits_sbview_lines(self):
         md = _win.sb_tree.mimeData([_win.sb_tree.topLevelItem(0),
@@ -1299,6 +2750,78 @@ class SidebarSplit(unittest.TestCase):
         self.assertGreater(_win.device_tree.maximumHeight(), 96)
         self.assertGreaterEqual(_win.device_tree.minimumHeight(), 48)
 
+    def test_window_and_panes_restore_as_one_layout(self):
+        original_geometry = _win.saveGeometry()
+        original_setting = _win.settings.get("window_geometry")
+        original_rect = _win.settings.get("window_rect")
+        original_split = list(_win._sidebar_split.sizes())
+        try:
+            # Stay inside the offscreen platform's synthetic 800x800 display;
+            # restoreGeometry intentionally clamps oversized windows.
+            _win.resize(760, 700)
+            _app.processEvents()
+            saved_size = (_win.width(), _win.height())
+            _win._sidebar_split.setSizes([280, 260, 96])
+            _win._save_columns()
+            saved_geometry = _win.settings["window_geometry"]
+            saved_rect = list(_win.settings["window_rect"])
+            saved_split = list(_win.settings["sidebar_split"])
+
+            _win.resize(900, 650)
+            _win._sidebar_split.setSizes([100, 100, 100])
+            _win.settings["window_geometry"] = saved_geometry
+            _win.settings["window_rect"] = saved_rect
+            _win.settings["sidebar_split"] = saved_split
+            _win._restore_window_geometry()
+            _win._restore_columns()
+            _app.processEvents()
+
+            self.assertEqual((_win.width(), _win.height()), saved_size)
+            self.assertEqual(_win._sidebar_split.sizes(), saved_split)
+        finally:
+            _win.restoreGeometry(original_geometry)
+            _win._sidebar_split.setSizes(original_split)
+            if original_setting is None:
+                _win.settings.pop("window_geometry", None)
+            else:
+                _win.settings["window_geometry"] = original_setting
+            if original_rect is None:
+                _win.settings.pop("window_rect", None)
+            else:
+                _win.settings["window_rect"] = original_rect
+
+    def test_corrupt_window_geometry_is_ignored(self):
+        original = _win.settings.get("window_geometry")
+        original_rect = _win.settings.get("window_rect")
+        before = _win.size()
+        try:
+            _win.settings["window_rect"] = ["nope", 1, 2, 3]
+            _win.settings["window_geometry"] = "not base64 geometry"
+            _win._restore_window_geometry()  # must not raise or resize
+            self.assertEqual(_win.size(), before)
+        finally:
+            if original is None:
+                _win.settings.pop("window_geometry", None)
+            else:
+                _win.settings["window_geometry"] = original
+            if original_rect is None:
+                _win.settings.pop("window_rect", None)
+            else:
+                _win.settings["window_rect"] = original_rect
+
+    def test_offscreen_window_rect_clamps_to_current_display(self):
+        original = _win.settings.get("window_rect")
+        try:
+            _win.settings["window_rect"] = [99999, 99999, 900, 650]
+            _win._restore_window_geometry()
+            available = _app.primaryScreen().availableGeometry()
+            self.assertTrue(available.contains(_win.frameGeometry().center()))
+        finally:
+            if original is None:
+                _win.settings.pop("window_rect", None)
+            else:
+                _win.settings["window_rect"] = original
+
 
 class ArtFetchHonesty(unittest.TestCase):
     """A broken fetch must say 'failed', never masquerade as 'no art found'."""
@@ -1332,9 +2855,7 @@ class ArtFetchHonesty(unittest.TestCase):
 
 
 class WaveformFill(unittest.TestCase):
-    """Background pre-cache: decode+store peaks for every uncached track, skip
-    cached / hidden / missing-file ones. Runs .run() synchronously (logic, not
-    the thread)."""
+    """Canonical V4 preparation is resumable, safe, and metadata-aware."""
 
     @classmethod
     def setUpClass(cls):
@@ -1372,39 +2893,132 @@ class WaveformFill(unittest.TestCase):
         import shutil
         shutil.rmtree(self.cache, ignore_errors=True)
 
-    def _todo_count(self):
-        from soundbox.waveform import is_cached
-        return sum(1 for t in self.lib.tracks_by_id.values()
-                   if t.path.is_file() and not is_cached(self.cache, t.path))
-
-    def test_fills_all_uncached_then_nothing_left(self):
+    def test_loaded_track_bypasses_bulk_playback_and_low_power_deferral(self):
         from desktop.workers import WaveformFillWorker
-        from soundbox.waveform import cache_load
-        self.assertEqual(self._todo_count(), 3)          # ghost file excluded
-        WaveformFillWorker(self.lib, self.cache).run()
-        self.assertEqual(self._todo_count(), 0)          # all cached now
-        for p in self.paths:
-            self.assertIsNotNone(cache_load(self.cache, p))
 
-    def test_resume_only_decodes_new(self):
-        from desktop.workers import WaveformFillWorker
-        from soundbox.waveform import cache_store
-        cache_store(self.cache, self.paths[0], [0.5])    # pretend set0 already done
-        self.assertEqual(self._todo_count(), 2)
-        WaveformFillWorker(self.lib, self.cache).run()
-        self.assertEqual(self._todo_count(), 0)
+        worker = WaveformFillWorker(self.lib, Path(self.cache) / "track_analysis")
+        worker.prioritize(self.paths[1])
+        worker._active_task_path = self.paths[1]
+        worker._playback_active.set()
+        worker._power_policy = "low-power"
+        worker.defer_for_interaction(60)
+        self.assertTrue(worker._analysis_checkpoint())
 
-    def test_hidden_tracks_skipped(self):
+    def test_prepares_canonical_v4_analysis_and_never_writes_audio(self):
+        from pathlib import Path
         from desktop.workers import WaveformFillWorker
-        from soundbox.waveform import is_cached
+        from soundbox.track_analysis import load
+
+        canonical = Path(self.cache) / "track_analysis"
+        before = Path(self.paths[0]).read_bytes()
+        WaveformFillWorker(self.lib, canonical).run()
+        got = load(canonical, "0", self.paths[0])
+        self.assertIsNotNone(got)
+        self.assertGreater(len(got["_audio_detail"]["heights"]), 5000)
+        self.assertEqual(Path(self.paths[0]).read_bytes(), before)
+
+    def test_worker_has_safe_stack_and_metadata_only_cue_refresh(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+
+        canonical = Path(self.cache) / "track_analysis"
+        track = self.lib.tracks_by_id["0"]
+        track.rekordbox_cues = [{
+            "kind": "hot", "slot": 0, "position_ms": 500,
+            "end_ms": -1, "type": "single", "label": "DROP",
+            "color": [255, 59, 125],
+        }]
+        track_analysis.store(canonical, "0", self.paths[0], {
+            "detail_heights": b"\x20" * 6000,
+            "detail_rate": 6000.0,
+            "overview_heights": b"\x20",
+            "overview_rgb": b"\x01\x02\x03",
+            "spectral_bands": bytes(range(24)),
+            "color_model": track_analysis.COLOR_MODEL,
+        })
+        before = track_analysis._read_container_manifest(
+            canonical, "0", self.paths[0])[2]
+        worker = WaveformFillWorker(self.lib, canonical)
+        self.assertEqual(worker.stackSize(), worker.STACK_BYTES)
+        ready = []
+        worker.detail_ready.connect(ready.append)
+        with patch(
+                "soundbox.track_analysis.analyze_soundfile",
+                side_effect=AssertionError("cue refresh decoded audio")):
+            worker.run()
+        after = track_analysis._read_container_manifest(
+            canonical, "0", self.paths[0])[2]
+        self.assertEqual(after, before)
+        self.assertEqual(ready, [self.paths[0]])
+        self.assertEqual(
+            track_analysis.load(
+                canonical, "0", self.paths[0])["cues"],
+            track.rekordbox_cues)
+
+    def test_storage_guard_uses_pause_resume_hysteresis(self):
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+
+        canonical = Path(self.cache) / "track_analysis"
+        canonical.mkdir()
+        worker = WaveformFillWorker(self.lib, canonical)
+        states = []
+        worker.storage_paused.connect(
+            lambda paused, free: states.append((paused, free)))
+        free = [
+            worker.MIN_FREE_BYTES - 1,
+            worker.RESUME_FREE_BYTES,
+        ]
+        with patch(
+                "shutil.disk_usage",
+                side_effect=[
+                    SimpleNamespace(free=value) for value in free
+                ]), patch("time.sleep"):
+            self.assertTrue(worker._wait_for_storage())
+        self.assertEqual(states, [(True, free[0]), (False, free[1])])
+
+    def test_hidden_tracks_remain_in_canonical_analysis(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox.track_analysis import is_ready
+        canonical = Path(self.cache) / "track_analysis"
         self.lib.hidden_ids = {"1"}
-        WaveformFillWorker(self.lib, self.cache).run()
-        self.assertFalse(is_cached(self.cache, self.paths[1]))  # hidden → not filled
-        self.assertTrue(is_cached(self.cache, self.paths[0]))
+        WaveformFillWorker(self.lib, canonical).run()
+        self.assertTrue(is_ready(canonical, "1", self.paths[1]))
+        self.assertTrue(is_ready(canonical, "0", self.paths[0]))
+
+    def test_interrupted_decode_never_degrades_existing_v4(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+
+        canonical = Path(self.cache) / "track_analysis"
+        track_analysis.store(canonical, "0", self.paths[0], {
+            "detail_heights": b"\x33" * 100,
+            "detail_rate": 150.0,
+            "overview_heights": b"\x40",
+            "overview_rgb": b"\x02\x03\x04",
+        })
+        before = track_analysis.cache_path(
+            canonical, "0").read_bytes()
+        worker = WaveformFillWorker(self.lib, canonical)
+        with patch(
+                "soundbox.track_analysis.analyze_soundfile",
+                return_value=None
+        ), patch("desktop.player.qt_detail_peaks", return_value=None):
+            worker.run()
+        self.assertEqual(
+            track_analysis.cache_path(canonical, "0").read_bytes(),
+            before,
+        )
 
     def test_autostart_wiring_starts_a_worker(self):
-        real_dir = _win.player_bar.wave_cache_dir
-        _win.player_bar.wave_cache_dir = self.cache
+        real_dir = _win._track_analysis_dir
+        _win._track_analysis_dir = Path(self.cache) / "track_analysis"
         saved_lib = _win.lib
         _win.lib = self.lib
         try:
@@ -1413,7 +3027,7 @@ class WaveformFill(unittest.TestCase):
             _win._wf_fill_worker.requestInterruption()
             _win._wf_fill_worker.wait(8000)
         finally:
-            _win.player_bar.wave_cache_dir = real_dir
+            _win._track_analysis_dir = real_dir
             _win.lib = saved_lib
 
 
@@ -1585,8 +3199,7 @@ class LibraryInstantPaint(unittest.TestCase):
 
 
 class WaveformRapidLoad(unittest.TestCase):
-    """Rapid track changes must NOT pile up decode threads or GC a running one.
-    Cache hits paint on the UI thread with zero workers."""
+    """Rapid track changes stay safe; V4 hits load synchronously."""
 
     @classmethod
     def setUpClass(cls):
@@ -1614,18 +3227,72 @@ class WaveformRapidLoad(unittest.TestCase):
     def setUp(self):
         from desktop.player import PlayerBar
         self.pb = PlayerBar()
-        self.pb.wave_cache_dir = self.cache
 
     def tearDown(self):
         self.pb.shutdown_waveforms()
 
-    def test_cache_hit_paints_without_a_worker(self):
-        from soundbox.waveform import cache_store
-        cache_store(self.cache, self.paths[0], [0.2, 0.9, 1.0])
+    def test_canonical_v4_loads_inline_with_ultra_detail(self):
+        from pathlib import Path
+        from soundbox.track_analysis import COLOR_MODEL, store
+
+        canonical = Path(self.cache) / "track_analysis"
+        store(canonical, "v4", self.paths[0], {
+            "detail_heights": b"\x20\x80\xff",
+            "detail_rate": 6144.0,
+            "overview_heights": b"\x40\xff",
+            "overview_rgb": b"\x01\x02\x03\x04\x05\x06",
+            "color_model": COLOR_MODEL,
+            "beats": [[1, 625, 128.0]],
+        })
+        self.pb.track_analysis_dir = canonical
+        self.pb._track_id = "v4"
         self.pb._src_path = self.paths[0]
+        self.pb._pending_autoplay = True
         self.pb._start_waveform(self.paths[0])
-        self.assertIsNone(self.pb._wf)              # no thread spun
-        self.assertEqual(self.pb.wave._peaks, [0.2, 0.9, 1.0])
+        worker = self.pb._wf
+        self.assertIsNotNone(worker)
+        worker.wait(5000)
+        _app.processEvents()
+        self.assertIsNone(self.pb._wf)
+        self.assertFalse(self.pb._pending_autoplay)
+        self.assertIsNone(self.pb._pending_start_ms)
+        self.assertEqual(self.pb._cue_ms, 0)
+        self.assertEqual(self.pb.wave._beats[0][1], 0)
+        self.assertEqual(self.pb.wave._audio_detail, b"\x20\x80\xff")
+
+    def test_canonical_rekordbox_grid_keeps_exact_first_beat(self):
+        from pathlib import Path
+        from soundbox.track_analysis import COLOR_MODEL, store
+
+        canonical = Path(self.cache) / "track_analysis"
+        store(canonical, "rb-v4", self.paths[0], {
+            "detail_heights": b"\x20\x80\xff",
+            "detail_rate": 6144.0,
+            "overview_heights": b"\x40\xff",
+            "overview_rgb": b"\x01\x02\x03\x04\x05\x06",
+            "color_model": COLOR_MODEL,
+            "beats": [[1, 625, 128.0], [2, 1094, 128.0]],
+            "provenance": {
+                "analysis": "rekordbox-import+soundbox",
+                "grid": "rekordbox",
+                "owner": "soundbox",
+            },
+        })
+        dat = Path(self.cache) / "ANLZ0000.DAT"
+        dat.write_bytes(b"read-only marker")
+        self.pb.track_analysis_dir = canonical
+        self.pb._track_id = "rb-v4"
+        self.pb._src_path = self.paths[0]
+        self.pb._analysis_path = str(dat)
+        self.pb._pending_autoplay = True
+        self.pb._start_waveform(self.paths[0], str(dat))
+        worker = self.pb._wf
+        self.assertIsNotNone(worker)
+        worker.wait(5000)
+        _app.processEvents()
+        self.assertIsNone(self.pb._wf)
+        self.assertEqual(self.pb._pending_start_ms, 625)
+        self.assertEqual(self.pb.wave._beats[0][1], 625)
 
     def test_rapid_switch_interrupts_previous(self):
         # Fire uncached decodes back to back; each new start interrupts the last.

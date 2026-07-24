@@ -35,9 +35,13 @@ QLabel {{ background: transparent; }}
 #Wordmark {{ font-size: 15px; font-weight: 700; color: {TEXT_HI}; }}
 #WordmarkAccent {{ font-size: 15px; font-weight: 700; color: {PURPLE_LIGHT}; }}
 #AsciiSound {{ color: {TEXT_HI}; background: transparent;
-               font-family: Menlo, Monaco, monospace; font-size: 10px; }}
+               font-family: Menlo, Monaco, monospace; font-size: 9px; }}
 #AsciiBox {{ color: {PURPLE_LIGHT}; background: transparent;
-             font-family: Menlo, Monaco, monospace; font-size: 10px; }}
+             font-family: Menlo, Monaco, monospace; font-size: 9px; }}
+#NowPlaying {{
+    color: {TEXT_HI}; background: {BG}; border: 1px solid {BORDER};
+    border-radius: 5px; padding: 0 12px; font-size: 14px; font-weight: 600;
+}}
 #Subtitle, #Hint {{ color: {TEXT_DIM}; }}
 #Sidebar {{ background: {PANEL}; }}
 #VDivider {{ background: {BORDER}; }}
@@ -86,10 +90,26 @@ QPushButton:hover {{ border: 1px solid {PURPLE_LIGHT}; }}
 QPushButton#Primary {{ background: {PURPLE}; border: 1px solid {PURPLE}; color: white; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
 QPushButton#Ghost {{ background: transparent; }}
-QPushButton#PlayBtn {{ background: {PURPLE}; border: 1px solid {PURPLE};
-    border-radius: 15px; color: white; font-size: 13px; padding: 0; }}
-QPushButton#PlayBtn:hover {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
-#PlayerTime {{ color: {TEXT_DIM}; background: transparent; font-size: 11px; }}
+#CuePanel {{ background: transparent; border-left: 1px solid {BORDER}; }}
+#CuePages {{ background: transparent; }}
+QPushButton#CueSlot {{
+    background: {BG}; border: 1px solid {BORDER}; border-radius: 3px;
+    color: #515661; font-size: 9px; padding: 0 4px; text-align: left;
+}}
+QPushButton#CueSlot[filled="true"] {{
+    color: {TEXT_HI}; border-color: #414652;
+}}
+QPushButton#CueSlot[filled="true"]:hover {{
+    color: white; border-color: {PURPLE_LIGHT}; background: {PANEL};
+}}
+QPushButton#CueTab {{
+    background: {BG}; border: 1px solid {BORDER}; border-radius: 3px;
+    color: {TEXT_DIM}; font-size: 8px; font-weight: 700; padding: 0;
+}}
+QPushButton#CueTab:checked {{
+    color: #18c8ff; border-color: #168fc0; background: #111b23;
+}}
+QPushButton#CueTab:hover {{ color: {TEXT_HI}; border-color: #168fc0; }}
 QPushButton#GearBtn {{ background: transparent; border: 1px solid {BORDER};
     border-radius: 6px; color: {TEXT_DIM}; font-size: 20px; padding: 0; }}
 QPushButton#GearBtn:hover {{ border: 1px solid {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; }}
@@ -97,6 +117,52 @@ QPushButton#BackBtn {{ background: transparent; border: 1px solid {BORDER};
     border-radius: 5px; color: {TEXT}; padding: 4px 12px; }}
 QPushButton#BackBtn:hover {{ border: 1px solid {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; }}
 QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; background: {PANEL}; }}
+
+/* DJ-style top-bar transport */
+#TransportDeck {{ background: transparent; border-right: 1px solid {BORDER}; }}
+QPushButton#BeatSelectorBtn {{
+    color: {TEXT_DIM}; font-size: 9px; font-weight: 700; letter-spacing: 1px;
+    background: transparent; border: none; border-radius: 3px; padding: 0;
+}}
+QPushButton#BeatSelectorBtn:hover {{ color: {TEXT_HI}; background: {BG}; }}
+QPushButton#BeatSelectorBtn::menu-indicator {{ image: none; width: 0; }}
+QPushButton#TransportBtn {{
+    background: {BG}; border: 1px solid {BORDER}; border-radius: 4px;
+    color: {TEXT_HI}; font-size: 12px; font-weight: 700; padding: 0;
+}}
+QPushButton#TransportBtn:hover {{
+    border-color: {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; background: {PANEL};
+}}
+QPushButton#TransportBtn:pressed {{ background: {PURPLE_DARK}; color: white; }}
+QPushButton#TransportBtn:disabled {{
+    background: {BG}; border-color: {BORDER}; color: #454955;
+}}
+QPushButton#CueBtn {{
+    background: transparent; border: 1px solid #f08a19; border-radius: 21px;
+    color: white; font-size: 10px; font-weight: 800; padding: 0;
+}}
+QPushButton#CueBtn:hover {{
+    background: #3a2919; border-color: #ffad42; color: white;
+}}
+QPushButton#CueBtn:pressed, QPushButton#CueBtn[active="true"] {{
+    background: #f08a19; border-color: #f08a19; color: white;
+}}
+QPushButton#DeckPlayBtn {{
+    background: transparent; border: 1px solid {PURPLE}; border-radius: 21px;
+    color: white; font-size: 12px; font-weight: 700; padding: 0;
+}}
+QPushButton#DeckPlayBtn:hover {{
+    background: #28173a; border-color: {PURPLE_LIGHT};
+}}
+QPushButton#DeckPlayBtn:pressed, QPushButton#DeckPlayBtn[playing="true"] {{
+    background: {PURPLE}; border-color: {PURPLE}; color: white;
+}}
+QPushButton#DeckPlayBtn[playing="true"]:hover {{
+    background: {PURPLE_LIGHT}; border-color: {PURPLE_LIGHT};
+}}
+QPushButton#CueBtn:disabled, QPushButton#DeckPlayBtn:disabled {{
+    background: {BG}; border-color: {BORDER}; color: #454955;
+}}
 
 QCheckBox {{ color: {TEXT}; spacing: 5px; }}
 QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER};

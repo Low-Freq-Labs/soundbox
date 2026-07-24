@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = 1
+SCHEMA = 2
 _DIRNAME = ".soundbox"
 _FILENAME = "manifest.json"
 
@@ -27,7 +28,14 @@ def manifest_path(device_root) -> Path:
 
 
 def _empty() -> dict:
-    return {"schema": SCHEMA, "updated": "", "playlists": {}}
+    return {
+        "schema": SCHEMA,
+        "updated": "",
+        "generation": 0,
+        "completed_generation": 0,
+        "playlists": {},
+        "files": {},
+    }
 
 
 def load(device_root) -> dict:
@@ -38,13 +46,38 @@ def load(device_root) -> dict:
         return _empty()
     if not isinstance(data, dict) or not isinstance(data.get("playlists"), dict):
         return _empty()
+    # V1 playlist identity remains useful. Ownership begins empty so upgrading
+    # can never claim or prune pre-existing device content retroactively.
+    if data.get("schema") != SCHEMA:
+        data = {
+            **_empty(),
+            "updated": str(data.get("updated") or ""),
+            "playlists": dict(data.get("playlists") or {}),
+        }
+    data.setdefault("files", {})
+    data.setdefault("generation", 0)
+    data.setdefault("completed_generation", 0)
     return data
 
 
 def save(device_root, manifest: dict) -> None:
     p = manifest_path(device_root)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    encoded = json.dumps(
+        manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.sbpart")
+    try:
+        with tmp.open("wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, p)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def playlist_key(playlist) -> str:
@@ -87,7 +120,8 @@ def entry_for(playlist, hidden=frozenset(), removals=None) -> dict:
 
 
 def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
-                  removals=None) -> dict:
+                  removals=None, *, managed_files: dict | None = None,
+                  completed: bool = True) -> dict:
     """After an export, upsert the exported playlists into the device's manifest
     (accumulates — never clobbers entries for other playlists).
 
@@ -97,12 +131,20 @@ def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
     must never masquerade as a completed one."""
     inc = set(incomplete)
     m = load(device_root)
+    generation = int(m.get("generation") or 0) + 1
     for pl in playlists:
         e = entry_for(pl, hidden, removals)
         if playlist_key(pl) in inc:
             e["sig"] = "partial"
         m["playlists"][playlist_key(pl)] = e
+    if managed_files is not None:
+        m["files"] = {
+            str(path): dict(row) for path, row in managed_files.items()
+        }
     m["schema"] = SCHEMA
+    m["generation"] = generation
+    if completed and not inc:
+        m["completed_generation"] = generation
     m["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     save(device_root, m)
     return m

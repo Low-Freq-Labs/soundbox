@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
+from .rekordbox_analysis import resolve_dat_path
 from .rekordbox_xml import Library, Playlist, Track
 
 REKORDBOX_DB = Path.home() / "Library" / "Pioneer" / "rekordbox" / "master.db"
@@ -30,6 +31,11 @@ _CAMELOT = {
     "Em": "9A", "Fm": "4A", "Gbm": "11A", "F#m": "11A", "Gm": "6A", "Abm": "1A",
     "G#m": "1A", "Am": "8A", "Bbm": "3A", "A#m": "3A", "Bm": "10A",
 }
+
+_HOT_CUE_COLORS = (
+    [255, 55, 111], [69, 172, 219], [125, 193, 61], [170, 114, 255],
+    [48, 210, 110], [224, 100, 27], [48, 90, 255], [195, 175, 4],
+)
 
 
 def db_available() -> bool:
@@ -83,6 +89,7 @@ def _deleted(row) -> bool:
 
 
 def _read_tracks(db) -> dict[str, Track]:
+    cues_by_track = _read_cues(db)
     out: dict[str, Track] = {}
     for c in db.get_content():
         if _deleted(c):
@@ -115,8 +122,107 @@ def _read_tracks(db) -> dict[str, Track]:
             size=int(c.FileSize or 0),
             bitrate=str(c.BitRate or ""),
             rating=str(c.Rating or ""),
+            analysis_path=str(resolve_dat_path(
+                REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
+            rekordbox_cues=cues_by_track.get(str(c.ID), []),
         )
     return out
+
+
+def _integer(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cue_color(row, slot: int) -> list[int]:
+    """Return stable display RGB without pretending undocumented DB indices
+    are RGB values.
+
+    Rekordbox stores a palette index for most hot cues, not an RGB triplet.
+    Until that palette is verified independently, SoundBox uses its established
+    deterministic slot colors. Explicit RGB-like row fields are accepted when
+    a future pyrekordbox schema exposes them.
+    """
+    explicit = [
+        _integer(getattr(row, name, 0))
+        for name in ("ColorRed", "ColorGreen", "ColorBlue")
+    ]
+    if any(explicit):
+        return [max(0, min(255, value)) for value in explicit]
+    if slot >= 0:
+        return list(_HOT_CUE_COLORS[slot % len(_HOT_CUE_COLORS)])
+    return [126, 132, 148]
+
+
+def _hot_cue_slot(kind_number: int) -> int | None:
+    """Translate rekordbox ``djmdCue.Kind`` to its canonical A–P slot.
+
+    The live database does *not* use a contiguous one-based sequence. A/B/C
+    are 1/2/3, value 4 is reserved by rekordbox, and D–P are 5–17. Treating the
+    field as ``Kind - 1`` shifts every cue from D onward and makes D impossible
+    to display. Unknown/reserved values are rejected instead of being assigned
+    a plausible-but-wrong letter.
+    """
+    if 1 <= kind_number <= 3:
+        return kind_number - 1
+    if 5 <= kind_number <= 17:
+        return kind_number - 2
+    return None
+
+
+def _read_cues(db) -> dict[str, list[dict]]:
+    """Read every active cue once and group it by rekordbox ContentID."""
+    grouped: dict[str, list[dict]] = {}
+    try:
+        rows = db.get_cue()
+    except (AttributeError, TypeError):
+        return grouped
+    memory: dict[str, list[dict]] = {}
+    for row in rows:
+        if _deleted(row):
+            continue
+        content_id = str(getattr(row, "ContentID", "") or "")
+        if not content_id:
+            continue
+        kind_number = _integer(getattr(row, "Kind", 0))
+        if kind_number == 0:
+            kind = "memory"
+            slot = -1
+        else:
+            kind = "hot"
+            mapped_slot = _hot_cue_slot(kind_number)
+            if mapped_slot is None:
+                continue
+            slot = mapped_slot
+        position = max(0, _integer(getattr(row, "InMsec", 0)))
+        end = _integer(getattr(row, "OutMsec", -1), -1)
+        is_loop = end > position
+        cue = {
+            "kind": kind,
+            "slot": slot,
+            "position_ms": position,
+            "end_ms": end if is_loop else -1,
+            "type": "loop" if is_loop else "single",
+            "label": str(getattr(row, "Comment", "") or "").strip(),
+            "color": _cue_color(row, slot),
+        }
+        if kind == "memory":
+            memory.setdefault(content_id, []).append(cue)
+        else:
+            grouped.setdefault(content_id, []).append(cue)
+    for content_id, rows in memory.items():
+        rows.sort(key=lambda cue: (
+            cue["position_ms"], cue["end_ms"], cue["label"]))
+        for slot, cue in enumerate(rows):
+            cue["slot"] = slot
+        grouped.setdefault(content_id, []).extend(rows)
+    for rows in grouped.values():
+        rows.sort(key=lambda cue: (
+            0 if cue["kind"] == "hot" else 1,
+            cue["slot"], cue["position_ms"]))
+    return grouped
 
 
 def _read_playlists(db) -> list[Playlist]:

@@ -8,7 +8,7 @@ librt==0.12.0
 macholib==1.16.4
 mypy==2.1.0
 mypy_extensions==1.1.0
-numpy==2.5.0
+numpy==2.4.6
 packaging==26.2
 pathspec==1.1.1
 pillow==12.3.0
@@ -27,6 +27,7 @@ shiboken6==6.11.1
 six==1.17.0
 sortedcontainers==2.4.0
 soundfile==0.14.0
+zstandard==0.25.0
 SQLAlchemy==2.0.51
 sqlcipher3-wheels==0.5.7
 typing_extensions==4.15.0

@@ -8,8 +8,10 @@ last ref in a custom-signal slot GC's the thread mid-run → SIGABRT.
 from __future__ import annotations
 
 import logging
+import subprocess
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -17,7 +19,7 @@ from PySide6.QtCore import QThread, Signal
 from soundbox import artfetch, engine, metadata, rekordbox_db
 from soundbox.rekordbox_xml import Playlist
 
-from .devices import list_devices
+from .devices import device_profile, list_devices
 
 LOG = logging.getLogger("soundbox")
 
@@ -163,7 +165,7 @@ class DeviceScanWorker(QThread):
     animation. Running it here keeps the UI responsive no matter what is hammering
     the disk; results are applied on the main thread via `done`.
     """
-    done = Signal(list)  # list[tuple[name, path, free, drift]]
+    done = Signal(list)  # list[tuple[name, path, free, drift, profile]]
 
     def __init__(self, lib, extra=None):
         super().__init__()
@@ -180,7 +182,7 @@ class DeviceScanWorker(QThread):
                     drift = dr.count() if dr else 0
                 except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
                     drift = 0
-            out.append((name, path, free, drift))
+            out.append((name, path, free, drift, device_profile(path)))
         self.done.emit(out)
 
 
@@ -233,9 +235,21 @@ class ArtFillWorker(QThread):
         self.artist_overrides = artist_overrides
         self.title_overrides = title_overrides
         self._stop = False
+        self._playback_active = threading.Event()
 
     def stop(self):
         self._stop = True
+
+    def set_playback_active(self, active: bool):
+        if active:
+            self._playback_active.set()
+        else:
+            self._playback_active.clear()
+
+    def _wait_for_playback(self):
+        import time
+        while self._playback_active.is_set() and not self._stop:
+            time.sleep(0.05)
 
     def run(self):
         import time
@@ -256,6 +270,7 @@ class ArtFillWorker(QThread):
         LOG.info("Art fill: %d tracks need cover art", total)
         ok = err = 0
         for i, t in enumerate(todo, 1):
+            self._wait_for_playback()
             if self._stop:
                 break
             title = (self.title_overrides or {}).get(t.track_id) or t.name
@@ -279,55 +294,346 @@ class ArtFillWorker(QThread):
 
 
 class WaveformFillWorker(QThread):
-    """Background trickle: pre-decode + cache the waveform for every track whose
-    peaks aren't cached yet, so the scrubber is instant when you load one — no
-    waiting on a live decode. Local decode only (no network): libsndfile for
-    WAV/AIFF/MP3/FLAC, the Qt/ffmpeg path for ALAC/AAC. Cached + resumable; the
-    cache key includes mtime+size, so an edited file re-decodes.
+    """Prepare missing or stale canonical V4 records.
 
-    Runs OFF the UI thread and honors requestInterruption() — qt_peaks spins a
-    local event loop and polls interruption mid-decode, so shutdown breaks a
-    long .m4a cleanly (see soundbox-gotchas: the 3 QAudioDecoder traps)."""
+    Rekordbox analysis is imported read-only into SoundBox-owned records.
+    Source audio is decoded by libsndfile or Qt's QAudioDecoder for AAC/ALAC.
+    No older cache family is read or written.
+
+    Runs off the UI thread and honors requestInterruption().
+    Preparation yields inside the current track during playback and interaction
+    so even an hour-long set cannot monopolize the GIL or decoder."""
     progress = Signal(int, int)  # done, total
+    detail_ready = Signal(str)  # audio path; receiver reloads canonical V4
+    storage_paused = Signal(bool, object)  # paused, free bytes (64-bit)
+    power_policy_changed = Signal(str)  # ac, battery, low-power
 
     DELAY = 0.05  # tiny yield between files — gentle on CPU, never a UI beachball
+    MIN_FREE_BYTES = 5 * 1024 ** 3
+    RESUME_FREE_BYTES = 7 * 1024 ** 3
+    STACK_BYTES = 16 * 1024 ** 2
+    LARGE_BACKLOG = 25
+    BATTERY_CPU_SHARE = 0.45
+    LOW_BATTERY_CPU_SHARE = 0.20
 
-    def __init__(self, lib, cache_dir):
+    def __init__(self, lib, track_analysis_dir):
         super().__init__()
+        # LLVM/Numba used by scientific dependencies can consume substantially
+        # more than macOS's ~512 KiB default QThread stack during first import.
+        # The analysis path no longer relies on JIT, but the larger guard keeps
+        # a transitive lazy import from taking down the packaged process.
+        self.setStackSize(self.STACK_BYTES)
         self.lib = lib
-        self.cache_dir = cache_dir
+        self.track_analysis_dir = track_analysis_dir
+        self._playback_active = threading.Event()
+        self._priority_lock = threading.Lock()
+        self._priority_path = ""
+        self._interaction_lock = threading.Lock()
+        self._defer_until = 0.0
+        self._power_policy = "ac"
+        self._last_power_check = 0.0
+        self._last_low_power_check = 0.0
+        self._low_power_mode = False
+        self._battery_percent = 100.0
+        self._bulk_task_count = 0
+        self._active_task_path = ""
+        self._budget_cpu = time.thread_time()
+        self._budget_wall = time.monotonic()
+
+    def prioritize(self, path: str):
+        """Keep the loaded track in the foreground lane until it changes."""
+        with self._priority_lock:
+            self._priority_path = str(path or "")
+
+    def _foreground_path(self) -> str:
+        with self._priority_lock:
+            return self._priority_path
+
+    def _active_task_is_foreground(self) -> bool:
+        return bool(
+            self._active_task_path
+            and self._active_task_path == self._foreground_path())
+
+    def set_playback_active(self, active: bool):
+        if active:
+            self._playback_active.set()
+        else:
+            self._playback_active.clear()
+
+    def defer_for_interaction(self, seconds: float = 0.75):
+        """Yield analysis until shortly after the latest foreground gesture."""
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        with self._interaction_lock:
+            self._defer_until = max(self._defer_until, deadline)
+
+    @staticmethod
+    def _system_power_policy(
+            check_low_power: bool) -> tuple[str, bool, float]:
+        """Return the macOS power source and Low Power Mode without UI work."""
+        percent = 100.0
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            on_battery = bool(battery is not None and not battery.power_plugged)
+            if battery is not None:
+                percent = max(
+                    0.0, min(100.0, float(battery.percent or 0.0)))
+        except Exception:  # noqa: BLE001 - power probing is advisory
+            on_battery = False
+        low_power = False
+        if on_battery and check_low_power:
+            try:
+                result = subprocess.run(
+                    ["/usr/bin/pmset", "-g", "custom"],
+                    capture_output=True, text=True, timeout=2, check=False)
+                section = result.stdout.split("Battery Power:", 1)[-1]
+                section = section.split("AC Power:", 1)[0]
+                low_power = any(
+                    line.strip().startswith("lowpowermode")
+                    and line.split()[-1] == "1"
+                    for line in section.splitlines())
+            except (OSError, subprocess.SubprocessError, IndexError):
+                low_power = False
+        return ("battery" if on_battery else "ac"), low_power, percent
+
+    def _refresh_power_policy(self):
+        now = time.monotonic()
+        if now - self._last_power_check < 10.0:
+            return
+        check_low_power = now - self._last_low_power_check >= 30.0
+        source, low_power, percent = self._system_power_policy(check_low_power)
+        self._last_power_check = now
+        self._battery_percent = percent
+        if check_low_power:
+            self._last_low_power_check = now
+            self._low_power_mode = low_power
+        policy = (
+            "low-power"
+            if source == "battery" and self._low_power_mode else source)
+        if policy != self._power_policy:
+            self._power_policy = policy
+            self.power_policy_changed.emit(policy)
+            LOG.info("Library preparation power policy: %s", policy)
+
+    def _analysis_checkpoint(self) -> bool:
+        """Cooperative suspension and battery CPU budgeting.
+
+        Direct ``run()`` calls are used by hermetic unit tests; power throttling
+        is intentionally active only for a genuinely running QThread.
+        """
+        while not self.isInterruptionRequested():
+            if self.isRunning():
+                self._refresh_power_policy()
+            # The loaded deck is a hard UX lane. It still obeys interruption
+            # and the disk-space guard, but never waits behind playback,
+            # scrolling, Low Power Mode, or a bulk battery CPU budget.
+            if self._active_task_is_foreground():
+                return True
+            with self._interaction_lock:
+                interaction_active = time.monotonic() < self._defer_until
+            if (not self._playback_active.is_set()
+                    and not interaction_active
+                    and self._power_policy != "low-power"):
+                break
+            time.sleep(0.05)
+        if self.isInterruptionRequested():
+            return False
+        if self.isRunning() and self._power_policy == "battery":
+            now_cpu = time.thread_time()
+            now_wall = time.monotonic()
+            cpu = max(0.0, now_cpu - self._budget_cpu)
+            wall = max(1e-6, now_wall - self._budget_wall)
+            # Battery policy changes only the bulk worker's duty cycle, never
+            # its analysis result. A genuinely large backlog becomes gentler
+            # below 50%; small libraries and healthier batteries stay brisk.
+            share = self.BATTERY_CPU_SHARE
+            if (self._battery_percent < 50.0
+                    and self._bulk_task_count >= self.LARGE_BACKLOG):
+                share = self.LOW_BATTERY_CPU_SHARE
+            rest = max(0.0, cpu / share - wall)
+            if rest:
+                time.sleep(min(rest, 0.75))
+            self._budget_cpu = time.thread_time()
+            self._budget_wall = time.monotonic()
+        return not self.isInterruptionRequested()
+
+    def _wait_for_playback(self):
+        self._analysis_checkpoint()
+
+    def _wait_for_storage(self) -> bool:
+        """Pause expensive V4 cooks before AppData can fill the data volume."""
+        import shutil
+        import time
+
+        if not self.track_analysis_dir:
+            return True
+        target = Path(self.track_analysis_dir)
+        probe = target if target.exists() else target.parent
+        paused = False
+        while not self.isInterruptionRequested():
+            try:
+                free = shutil.disk_usage(probe).free
+            except OSError:
+                return True
+            threshold = (
+                self.RESUME_FREE_BYTES if paused else self.MIN_FREE_BYTES)
+            if free >= threshold:
+                if paused:
+                    LOG.info(
+                        "Library preparation resumed with %.1f GiB free",
+                        free / 1024 ** 3)
+                    self.storage_paused.emit(False, free)
+                return True
+            if not paused:
+                paused = True
+                LOG.warning(
+                    "Library preparation paused: %.1f GiB free (needs 7 GiB)",
+                    free / 1024 ** 3)
+                self.storage_paused.emit(True, free)
+            time.sleep(1.0)
+        return False
 
     def run(self):
-        import time
-        from soundbox.waveform import cache_store, is_cached, peaks
-        from .player import qt_peaks
-        todo = []
-        hidden = getattr(self.lib, "hidden_ids", set())
+        from soundbox.rekordbox_analysis import read as read_analysis, read_beats
+        from soundbox.track_analysis import (
+            analyze_soundfile as analyze_track,
+            grid_needs_sync,
+            imported_cues_need_sync,
+            is_ready as track_is_ready,
+            merge_import,
+            store as track_store,
+            update_grid_source,
+            update_imported_cues,
+            with_imported_cues,
+        )
+        from .player import qt_detail_peaks
+        todo: list[tuple[str, str, str, str, float, list[dict] | None]] = []
         for t in self.lib.tracks_by_id.values():
-            if t.track_id in hidden:
-                continue
             try:
-                if not t.path.is_file() or is_cached(self.cache_dir, t.path):
+                analysis_path = getattr(t, "analysis_path", "")
+                rekordbox_cues = getattr(t, "rekordbox_cues", None)
+                audio_path = str(t.path) if t.path.is_file() else ""
+                try:
+                    bpm_hint = float(getattr(t, "bpm", 0) or 0)
+                except (TypeError, ValueError):
+                    bpm_hint = 0.0
+                if (self.track_analysis_dir and audio_path
+                        and not track_is_ready(
+                            self.track_analysis_dir, t.track_id, audio_path)):
+                    todo.append((
+                        "v4", audio_path, str(analysis_path or ""),
+                        str(t.track_id), bpm_hint, rekordbox_cues))
+                    continue
+                grid_sync = bool(
+                    self.track_analysis_dir and audio_path
+                    and grid_needs_sync(
+                        self.track_analysis_dir, t.track_id, audio_path))
+                if grid_sync:
+                    todo.append((
+                        "grid-meta", audio_path, str(analysis_path or ""),
+                        str(t.track_id), bpm_hint, None))
+                if (self.track_analysis_dir and audio_path
+                        and imported_cues_need_sync(
+                            self.track_analysis_dir, t.track_id, audio_path,
+                            rekordbox_cues)):
+                    todo.append((
+                        "cue-meta", audio_path, "", str(t.track_id), 0.0,
+                        rekordbox_cues))
+                    continue
+                if grid_sync:
                     continue
             except OSError:
                 continue
-            todo.append(str(t.path))
         total = len(todo)
-        LOG.info("Waveform fill: %d track(s) need peaks", total)
+        self._bulk_task_count = total
+        task_counts = {
+            kind: sum(task[0] == kind for task in todo)
+            for kind in ("v4", "grid-meta", "cue-meta")
+        }
+        LOG.info(
+            "Library preparation: %d task(s) "
+            "(%d analysis, %d grid metadata, %d cue metadata)",
+            total,
+            task_counts["v4"],
+            task_counts["grid-meta"],
+            task_counts["cue-meta"],
+        )
         done = 0
-        for i, path in enumerate(todo, 1):
+        i = 0
+        while todo:
+            priority = self._foreground_path()
+            task_index = 0
+            if priority:
+                task_index = next(
+                    (j for j, task in enumerate(todo)
+                     if task[0] == "v4"
+                     and task[1] == priority),
+                    0,
+                )
+            kind, path, fallback_path, track_id, bpm_hint, imported_cues = (
+                todo.pop(task_index))
+            self._active_task_path = path if kind == "v4" else ""
+            i += 1
+            if kind not in {"cue-meta", "grid-meta"}:
+                self._wait_for_playback()
             if self.isInterruptionRequested():
                 break
             try:
-                pk = peaks(path) or qt_peaks(path)  # cheap path first, ffmpeg fallback
-                if pk:
-                    cache_store(self.cache_dir, path, pk)  # cache_store ignores []
-                    done += 1
-            except Exception as exc:  # noqa: BLE001 — one bad file never stops the fill
-                LOG.debug("Waveform fill: decode failed for %s: %r", path, exc)
+                if kind == "v4":
+                    if not self._wait_for_storage():
+                        break
+                    native = analyze_track(
+                        path, bpm_hint, self._analysis_checkpoint
+                    ) or qt_detail_peaks(
+                        path, checkpoint=self._analysis_checkpoint)
+                    # A cooperative cancellation or decoder failure returns no
+                    # native result. Never replace an existing playable record
+                    # with a Rekordbox-only shell in that case: doing so loses
+                    # its SoundBox detail stream and guarantees another retry.
+                    if native is not None:
+                        imported = (
+                            read_analysis(fallback_path)
+                            if fallback_path
+                            and Path(fallback_path).is_file() else None)
+                        prepared = merge_import(native, imported)
+                        if prepared is not None and imported_cues is not None:
+                            prepared = with_imported_cues(
+                                prepared, imported_cues)
+                        if prepared and track_store(
+                                self.track_analysis_dir, track_id, path,
+                                prepared
+                        ) and track_is_ready(
+                                self.track_analysis_dir, track_id, path):
+                            done += 1
+                            self.detail_ready.emit(path)
+                    else:
+                        LOG.debug(
+                            "Library preparation kept existing record after "
+                            "decode cancellation/failure: %s",
+                            path,
+                        )
+                elif kind == "cue-meta":
+                    if update_imported_cues(
+                            self.track_analysis_dir, track_id, path,
+                            imported_cues or []):
+                        done += 1
+                        self.detail_ready.emit(path)
+                elif kind == "grid-meta":
+                    imported_beats = (
+                        read_beats(fallback_path)
+                        if fallback_path
+                        and Path(fallback_path).is_file() else [])
+                    if update_grid_source(
+                            self.track_analysis_dir, track_id, path,
+                            imported_beats):
+                        done += 1
+                        self.detail_ready.emit(path)
+            except Exception as exc:  # noqa: BLE001 — one bad track never stops prep
+                LOG.debug("Library preparation failed for %s: %r", path, exc)
             self.progress.emit(i, total)
             time.sleep(self.DELAY)
-        LOG.info("Waveform fill ended: %d cached", done)
+            self._active_task_path = ""
+        LOG.info("Library preparation ended: %d cached", done)
 
 
 class OneShotTask(QThread):
@@ -374,4 +680,3 @@ def _running(w) -> bool:
         return w is not None and w.isRunning()
     except RuntimeError:
         return False
-

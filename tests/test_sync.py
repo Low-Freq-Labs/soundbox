@@ -90,14 +90,25 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.assertEqual(pr.copied, 0)
         self.assertEqual(pr.already_present, 2)
 
-    def test_conflict_not_overwritten(self):
+    def test_manifest_owned_corruption_is_repaired(self):
         sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
-        # Tamper with a target file -> different content, same name.
+        # Manifest ownership permits an atomic repair, including same-size
+        # corruption that a size-only sync would miss.
         victim = self.target / "Music/Artist X/Good One/Good One.flac"
-        victim.write_bytes(b"DIFFERENT-CONTENT")
+        victim.write_bytes(b"ZZZZ")
+        self.assertTrue(sync_mod.verify_managed(self.target, deep=True))
         rep = sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
-        # Must NOT overwrite; content preserved; reported as conflict.
-        self.assertEqual(victim.read_bytes(), b"DIFFERENT-CONTENT")
+        self.assertEqual(victim.read_bytes(), b"AAAA")
+        self.assertEqual(rep.playlists[0].conflicts, 0)
+        self.assertEqual(sync_mod.verify_managed(self.target, deep=True), [])
+
+    def test_unknown_preexisting_music_is_never_overwritten_or_claimed(self):
+        victim = self.target / "Music/Artist X/Good One/Good One.flac"
+        victim.parent.mkdir(parents=True)
+        victim.write_bytes(b"USER-CONTENT")
+        rep = sync_mod.run(
+            self.lib, self.lib.playlists, self.target, dry_run=False)
+        self.assertEqual(victim.read_bytes(), b"USER-CONTENT")
         self.assertEqual(rep.playlists[0].conflicts, 1)
 
     def test_clean_applefiles_scoped(self):
@@ -170,6 +181,38 @@ class TestSyncEndToEnd(unittest.TestCase):
         bad_target = self.src / "inside"
         with self.assertRaises(RuntimeError):
             sync_mod.run(self.lib, self.lib.playlists, bad_target, dry_run=True)
+
+    def test_device_session_rejects_remount_and_symlink_escape(self):
+        self.target.mkdir()
+        session = sync_mod.DeviceSession(
+            self.target, [self.src / "good1.flac"])
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.target / "escape").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(RuntimeError):
+            session.guard(self.target / "escape" / "track.mp3")
+
+        moved = self.root / "old-device"
+        self.target.rename(moved)
+        self.target.mkdir()
+        with self.assertRaises(RuntimeError):
+            session.revalidate()
+
+    def test_fat_case_and_unicode_collisions_are_disambiguated(self):
+        files: dict[str, sync_mod.PlannedFile] = {}
+        root = self.target / "Music"
+        first = sync_mod._assign_device_path(
+            self.src / "good1.flac", "Artist", files, root, "Café")
+        files[first] = sync_mod.PlannedFile(
+            self.src / "good1.flac", first, self.target / first.lstrip("/"), 4)
+        other = self.src / "other.flac"
+        other.write_bytes(b"other")
+        second = sync_mod._assign_device_path(
+            other, "artist", files, root, "CAFE\u0301")
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(
+            sync_mod._destination_key(first),
+            sync_mod._destination_key(second))
 
 
 if __name__ == "__main__":

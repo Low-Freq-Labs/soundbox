@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, cast
@@ -31,6 +32,86 @@ from .rekordbox_xml import Library, Playlist
 
 class NotEnoughSpace(RuntimeError):
     """Raised before any write when the new files won't fit on the target device."""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _destination_key(path: str) -> str:
+    """FAT-safe identity: slash-normalized, Unicode-normalized, case-folded."""
+    normalized = "/" + "/".join(
+        part for part in str(path).replace("\\", "/").split("/") if part)
+    return unicodedata.normalize("NFD", normalized).casefold()
+
+
+class DeviceSession:
+    """Pinned, revalidated authority for one mounted export target."""
+
+    def __init__(self, target: Path, sources: list[Path]):
+        requested = target.expanduser()
+        assert_target_safe(requested, sources)
+        # A generic explicit export folder may not exist yet. Creating exactly
+        # that target is the session's first and only pre-identity write.
+        requested.mkdir(parents=True, exist_ok=True)
+        self.target = requested.resolve(strict=True)
+        assert_target_safe(self.target, sources)
+        stat = self.target.stat()
+        self._device = stat.st_dev
+        self._inode = stat.st_ino
+
+    def revalidate(self) -> None:
+        current = self.target.resolve(strict=True)
+        stat = current.stat()
+        if (current != self.target or stat.st_dev != self._device
+                or stat.st_ino != self._inode):
+            raise RuntimeError(
+                f"Device target changed or was remounted: {self.target}")
+
+    def guard(self, path: Path) -> Path:
+        self.revalidate()
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self.target / candidate
+        # Resolve the nearest existing parent so a symlink cannot redirect a
+        # later mkdir/copy beyond the pinned volume.
+        parent = candidate.parent
+        while not parent.exists() and parent != self.target:
+            parent = parent.parent
+        resolved_parent = parent.resolve(strict=True)
+        if not is_within(resolved_parent, self.target):
+            raise RuntimeError(
+                f"REFUSING path outside device target: {candidate}")
+        return candidate
+
+    def atomic_copy(self, source: Path, destination: Path) -> None:
+        target = self.guard(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self.revalidate()
+        _safe_copy(source, target)
+
+    def atomic_write(self, destination: Path, data: bytes) -> None:
+        target = self.guard(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self.revalidate()
+        tmp = target.with_name(target.name + ".sbpart")
+        try:
+            with tmp.open("wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self.revalidate()
+            os.replace(tmp, target)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
 
 def _fmt_size(n: int) -> str:
@@ -111,6 +192,39 @@ def clean_applefiles(target: Path, dirs=None) -> int:
                 except OSError:
                     pass
     return removed
+
+
+def verify_managed(target: Path, *, deep: bool = False) -> list[str]:
+    """Return integrity problems for manifest-managed device files.
+
+    Normal verification checks references and sizes. Deep Verify additionally
+    rehashes every managed file, including same-size corruption.
+    """
+    root = Path(target).expanduser().resolve()
+    current = manifest.load(root)
+    issues: list[str] = []
+    seen: set[str] = set()
+    for device_path, row in (current.get("files") or {}).items():
+        key = _destination_key(str(device_path))
+        if key in seen:
+            issues.append(f"destination collision: {device_path}")
+            continue
+        seen.add(key)
+        path = root / str(device_path).lstrip("/")
+        try:
+            resolved = path.resolve(strict=True)
+            if not is_within(resolved, root) or not resolved.is_file():
+                issues.append(f"missing or escaped: {device_path}")
+                continue
+            size = resolved.stat().st_size
+            if size != int(row.get("size") or -1):
+                issues.append(f"wrong size: {device_path}")
+                continue
+            if deep and _sha256(resolved) != str(row.get("sha256") or ""):
+                issues.append(f"checksum mismatch: {device_path}")
+        except OSError:
+            issues.append(f"missing or unreadable: {device_path}")
+    return issues
 
 
 def _safe_copy(src: Path, dst: Path) -> None:
@@ -228,12 +342,21 @@ def _assign_device_path(
     """Pick a unique device path, disambiguating collisions from *different*
     source files by appending a short source hash before the extension."""
     base = device_music_path(src, artist, name_override=name_override)
-    if base not in files:
+    occupied = {_destination_key(path) for path in files}
+    if _destination_key(base) not in occupied:
         return base
-    # Collision: same device path wanted by a different source file.
+    # FAT32 is case-insensitive and macOS/device firmware can disagree about
+    # composed Unicode. Treat all equivalent spellings as the same name.
     stem, dot, ext = base.rpartition(".")
     suffix = hashlib.sha1(str(src).encode()).hexdigest()[:6]
-    return f"{stem}_{suffix}{dot}{ext}" if dot else f"{base}_{suffix}"
+    candidate = f"{stem}_{suffix}{dot}{ext}" if dot else f"{base}_{suffix}"
+    counter = 2
+    while _destination_key(candidate) in occupied:
+        candidate = (
+            f"{stem}_{suffix}-{counter}{dot}{ext}"
+            if dot else f"{base}_{suffix}-{counter}")
+        counter += 1
+    return candidate
 
 
 def run(
@@ -255,12 +378,34 @@ def run(
     live progress bar. should_cancel() is polled before each file; if it returns
     True the copy stops cleanly (files already copied are kept).
     """
-    target = target.expanduser()
+    target = target.expanduser().resolve()
 
     files, entries_by_pl = plan(lib, selected, target, derive_artists=derive_artists,
                                 artist_overrides=artist_overrides,
                                 title_overrides=title_overrides)
     assert_target_safe(target, [pf.source for pf in files.values()])
+    session = (
+        DeviceSession(target, [pf.source for pf in files.values()])
+        if not dry_run else None)
+    previous_manifest = manifest.load(target) if not dry_run else {}
+    managed_files = {
+        str(path): dict(row)
+        for path, row in (previous_manifest.get("files") or {}).items()
+        if isinstance(row, dict)
+    }
+    selected_keys = {manifest.playlist_key(pl) for pl in selected}
+    for row in managed_files.values():
+        row["playlists"] = [
+            key for key in (row.get("playlists") or [])
+            if key not in selected_keys
+        ]
+    memberships: dict[str, set[str]] = {}
+    for index, plist in enumerate(selected):
+        key = manifest.playlist_key(plist)
+        for entry in entries_by_pl[index]:
+            if entry.device_path is not None:
+                memberships.setdefault(entry.device_path, set()).add(key)
+    source_hashes: dict[Path, str] = {}
 
     # --- Free-space precheck ---------------------------------------------
     # Refuse to start writing if the NEW files won't fit, with one clear message,
@@ -316,11 +461,32 @@ def run(
             break
         tgt = pf.target_path
         try:
-            if tgt.exists():
-                # Fast idempotency: same size => treat as already present (no hashing).
-                # Different size => real conflict, never auto-overwrite.
-                if tgt.stat().st_size == pf.size:
+            if session is not None:
+                session.guard(tgt)
+            source_stat = pf.source.stat()
+            source_identity = (
+                f"{source_stat.st_size}:{source_stat.st_mtime_ns}")
+            previous = managed_files.get(device_path) or {}
+            expected_hash = (
+                str(previous.get("sha256") or "")
+                if (previous.get("source_identity") == source_identity
+                    and int(previous.get("size") or -1) == pf.size)
+                else "")
+            if not expected_hash:
+                expected_hash = source_hashes.setdefault(
+                    pf.source, _sha256(pf.source))
+            was_present = tgt.exists()
+            if was_present:
+                actual_hash = (
+                    _sha256(tgt) if tgt.stat().st_size == pf.size else "")
+                if actual_hash == expected_hash:
                     already.add(device_path)
+                elif device_path in managed_files and session is not None:
+                    # Only a manifest-owned destination may be repaired.
+                    session.atomic_copy(pf.source, tgt)
+                    bytes_copied += pf.size
+                    copied_paths.add(device_path)
+                    written_dirs.update(_dirs_up_to(tgt.parent, music_root))
                 else:
                     conflicts.add(device_path)
                     global_errors.append(f"CONFLICT (kept existing, not overwritten): {tgt}")
@@ -329,12 +495,24 @@ def run(
                 bytes_copied += pf.size
                 copied_paths.add(device_path)
             else:
-                # WRITE: create dirs + copy file data. Target only.
-                tgt.parent.mkdir(parents=True, exist_ok=True)
-                _safe_copy(pf.source, tgt)
+                # WRITE: session revalidates the pinned mount and atomic path.
+                assert session is not None
+                session.atomic_copy(pf.source, tgt)
                 bytes_copied += pf.size  # count only AFTER a successful copy
                 copied_paths.add(device_path)
                 written_dirs.update(_dirs_up_to(tgt.parent, music_root))
+            if device_path in already or device_path in copied_paths:
+                managed_files[device_path] = {
+                    "kind": "track",
+                    "owned": (
+                        bool(previous.get("owned", True))
+                        if previous else not was_present),
+                    "source": str(pf.source.resolve()),
+                    "source_identity": source_identity,
+                    "size": pf.size,
+                    "sha256": expected_hash,
+                    "playlists": sorted(memberships.get(device_path, ())),
+                }
         except OSError as exc:
             global_errors.append(f"ERROR copying {pf.source} -> {tgt}: {exc}")
         # Drop this track's cover.jpg into its folder (Rockbox reads it per-track).
@@ -342,12 +520,40 @@ def run(
             img = art_cache.image_path(pf.track_id)
             if img:
                 cover = tgt.parent / "cover.jpg"
-                if not cover.exists():
-                    try:
-                        shutil.copyfile(img, cover)
-                        written_dirs.update(_dirs_up_to(tgt.parent, music_root))
-                    except OSError:
-                        pass
+                cover_device_path = "/" + str(
+                    cover.relative_to(target)).replace(os.sep, "/")
+                try:
+                    art_hash = _sha256(img)
+                    previous_art = managed_files.get(cover_device_path) or {}
+                    owned = bool(previous_art.get("owned", True))
+                    was_present = cover.exists()
+                    if (not cover.exists()
+                            or (previous_art and owned
+                                and _sha256(cover) != art_hash)):
+                        assert session is not None
+                        session.atomic_copy(img, cover)
+                        written_dirs.update(
+                            _dirs_up_to(tgt.parent, music_root))
+                    elif not previous_art and _sha256(cover) != art_hash:
+                        raise OSError(
+                            f"unowned artwork conflict at {cover}")
+                    art_stat = img.stat()
+                    managed_files[cover_device_path] = {
+                        "kind": "artwork",
+                        "owned": (
+                            bool(previous_art.get("owned", True))
+                            if previous_art else not was_present),
+                        "source": str(img.resolve()),
+                        "source_identity":
+                            f"{art_stat.st_size}:{art_stat.st_mtime_ns}",
+                        "size": art_stat.st_size,
+                        "sha256": art_hash,
+                        "playlists": sorted(
+                            memberships.get(device_path, ())),
+                    }
+                except OSError as exc:
+                    global_errors.append(
+                        f"ERROR writing artwork {img} -> {cover}: {exc}")
         if on_progress:
             on_progress(done, total, pf.source.name)
 
@@ -358,6 +564,7 @@ def run(
     # made it onto the device, so finished/partial playlists are usable NOW and
     # the incomplete ones are flagged (poisoned sig) for the next Sync to finish.
     incomplete: set[str] = set()
+    used_playlist_paths: dict[str, str] = {}
     for idx, plist in enumerate(selected):
         entries = entries_by_pl[idx]
         pr = PlaylistReport(name=plist.display_path)
@@ -395,13 +602,51 @@ def run(
         if layout in ("flat", "both"):
             out_paths.append(pl_mod.flat_playlist_path(playlists_root, plist.folder_path, plist.name))
 
+        resolved_paths: list[Path] = []
+        playlist_identity = manifest.playlist_key(plist)
         for op in out_paths:
+            key = _destination_key("/" + str(op.relative_to(target)))
+            owner = used_playlist_paths.get(key)
+            if owner is not None and owner != playlist_identity:
+                suffix = hashlib.sha1(
+                    playlist_identity.encode("utf-8")).hexdigest()[:6]
+                op = op.with_name(f"{op.stem}_{suffix}{op.suffix}")
+                key = _destination_key("/" + str(op.relative_to(target)))
+            used_playlist_paths[key] = playlist_identity
+            resolved_paths.append(op)
+
+        for op in resolved_paths:
             pr.playlist_files.append(str(op))
             if not dry_run:
-                # WRITE: playlist file, UTF-8 no BOM. Target only.
-                op.parent.mkdir(parents=True, exist_ok=True)
-                op.write_text(text, encoding="utf-8")
-                written_dirs.update(_dirs_up_to(op.parent, playlists_root))
+                device_playlist_path = "/" + str(
+                    op.relative_to(target)).replace(os.sep, "/")
+                previous_playlist = managed_files.get(
+                    device_playlist_path) or {}
+                try:
+                    if op.exists() and not previous_playlist:
+                        raise OSError(
+                            f"unowned playlist conflict at {op}")
+                    assert session is not None
+                    encoded = text.encode("utf-8")
+                    session.atomic_write(op, encoded)
+                    managed_files[device_playlist_path] = {
+                        "kind": "playlist",
+                        "owned": True,
+                        "source": playlist_identity,
+                        "source_identity": manifest.playlist_sig(
+                            plist,
+                            getattr(lib, "hidden_ids", frozenset()),
+                            getattr(lib, "removed_by_playlist", None)),
+                        "size": len(encoded),
+                        "sha256": hashlib.sha256(encoded).hexdigest(),
+                        "playlists": [playlist_identity],
+                    }
+                    written_dirs.update(
+                        _dirs_up_to(op.parent, playlists_root))
+                except OSError as exc:
+                    incomplete.add(playlist_identity)
+                    pr.errors.append(
+                        f"ERROR writing playlist {op}: {exc}")
 
         report.playlists.append(pr)
 
@@ -409,17 +654,25 @@ def run(
 
     if global_errors and report.playlists:
         report.playlists[0].errors.extend(global_errors)
+        incomplete.update(selected_keys)
 
     # Record what we put on the device (by stable playlist ID) so later syncs can
     # detect drift. Writes only under target (<device>/.soundbox/manifest.json).
     report.cancelled = cancelled
     if not dry_run:
         try:
+            assert session is not None
+            session.revalidate()
             manifest.record_export(target, selected, incomplete,
                                    hidden=getattr(lib, "hidden_ids", frozenset()),
-                                   removals=getattr(lib, "removed_by_playlist", None))
-        except OSError:
-            pass  # a manifest we couldn't write is not worth failing an export over
+                                   removals=getattr(lib, "removed_by_playlist", None),
+                                   managed_files=managed_files,
+                                   completed=not cancelled and not global_errors)
+            session.revalidate()
+        except OSError as exc:
+            if report.playlists:
+                report.playlists[0].errors.append(
+                    f"ERROR writing SoundBox manifest: {exc}")
     return report
 
 
@@ -447,6 +700,43 @@ def _prune_music(music_root: Path, keep_dirs: set[Path]) -> int:
                 artist_dir.rmdir()
         except OSError:
             pass
+    return removed
+
+
+def _prune_manifest_owned(
+        session: DeviceSession, rows: dict[str, dict], *,
+        media: bool) -> int:
+    """Delete only unreferenced paths explicitly owned by manifest v2."""
+    removed = 0
+    emptied: set[Path] = set()
+    for device_path, row in list(rows.items()):
+        if row.get("playlists"):
+            continue
+        kind = str(row.get("kind") or "")
+        if kind != "playlist" and not media:
+            continue
+        path = session.guard(
+            session.target / str(device_path).lstrip("/"))
+        if bool(row.get("owned", False)):
+            try:
+                path.unlink(missing_ok=True)
+                removed += 1
+                emptied.add(path.parent)
+            except OSError:
+                continue
+        # An unowned matching file was referenced but never claimed. Forget
+        # the reference without deleting its bytes.
+        rows.pop(device_path, None)
+    for directory in sorted(
+            emptied, key=lambda path: len(path.parts), reverse=True):
+        for candidate in (directory, directory.parent):
+            if candidate == session.target:
+                continue
+            try:
+                session.guard(candidate)
+                candidate.rmdir()
+            except OSError:
+                pass
     return removed
 
 
@@ -514,10 +804,6 @@ def resync(
     drifted_keys = {k for k, *_ in (drift.renamed + drift.moved + drift.changed)}
     to_export = [p for p in wanted if manifest.playlist_key(p) in drifted_keys]
 
-    playlists_root = target / "Playlists"
-    old_m3u8 = {pl_mod.tree_playlist_path(playlists_root, e.get("folder_path", []),
-                                          e.get("name", "")) for e in prev.values()}
-
     # 1) Re-export ONLY the drifted playlists (copy any new files + rewrite their m3u8s
     #    + upsert their manifest entries). Unchanged playlists are skipped entirely —
     #    the big win: no re-verifying every file of every synced playlist each time.
@@ -526,16 +812,7 @@ def resync(
                  artist_overrides=artist_overrides, title_overrides=title_overrides,
                  art_cache=art_cache)
 
-    # 2) Delete stale m3u8s (old paths from renamed/moved/removed playlists). Compared
-    #    against the CURRENT paths of ALL wanted playlists (unchanged ones keep theirs).
-    new_m3u8 = {pl_mod.tree_playlist_path(playlists_root, p.folder_path, p.name)
-                for p in wanted}
-    for op in old_m3u8 - new_m3u8:
-        try:
-            op.unlink(missing_ok=True)
-        except OSError:
-            pass
-    _prune_empty_dirs(playlists_root)
+    # 2) Stale playlists are removed below through manifest ownership only.
 
     # 3) Prune orphan music — ONLY when something could actually be orphaned (a playlist
     #    was removed, or a changed one dropped a track). The keep-set spans ALL wanted
@@ -549,21 +826,34 @@ def resync(
     # never polled, so ask should_cancel directly before the destructive steps.)
     stopped = report.cancelled or bool(should_cancel and should_cancel())
     report.cancelled = stopped
-    if prune and not stopped and (
-            removed_keys or _dropped_tracks(prev, by_key, drift.changed,
-                                            getattr(lib, "hidden_ids", frozenset()),
-                                            getattr(lib, "removed_by_playlist", None))):
-        files, _ = plan(lib, wanted, target, artist_overrides=artist_overrides,
-                        title_overrides=title_overrides)
-        keep = {pf.target_path.parent.resolve() for pf in files.values()}
-        _prune_music(target / "Music", keep)
+    media_prune = bool(
+        prune and not stopped and (
+            removed_keys or _dropped_tracks(
+                prev, by_key, drift.changed,
+                getattr(lib, "hidden_ids", frozenset()),
+                getattr(lib, "removed_by_playlist", None))))
 
     # 4) Forget playlists that no longer exist in rekordbox.
-    if removed_keys and not stopped:
+    if not stopped:
         mm = manifest.load(target)
         for k in removed_keys:
             mm["playlists"].pop(k, None)
+        for row in (mm.get("files") or {}).values():
+            row["playlists"] = [
+                key for key in (row.get("playlists") or [])
+                if key not in removed_keys
+            ]
+        sources = [
+            track.path for track in lib.tracks_by_id.values()
+            if track.path.is_file()
+        ]
+        session = DeviceSession(target, sources)
+        _prune_manifest_owned(
+            session, mm.setdefault("files", {}), media=media_prune)
+        session.revalidate()
         manifest.save(target, mm)
 
-    clean_applefiles(target, report.written_dirs)  # only the folders we rewrote
+    if not stopped:
+        clean_applefiles(
+            target, report.written_dirs)  # only folders we rewrote
     return report

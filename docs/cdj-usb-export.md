@@ -9,7 +9,13 @@ Honors the same safety contract as the rest of SoundBox: writes land only under
 an explicit USB target, never `master.db`.
 
 Prototype code: **`research/cdj_export/`** (`devicesql.py`, `rows.py`,
-`tracks.py`) — standalone, NOT wired into the app until proven.
+`tracks.py`, `anlz_bridge.py`) — standalone, NOT wired into a USB workflow
+until proven.
+
+Related but separate: the shipped player currently imports PQTZ/PWV5/PWV7 only.
+Read-only memory/hot-cue display now ships in the player (`PLAYER.md`). The
+cue knowledge validated here can inform that reader, but CDJ export code remains
+standalone R&D and must not be pulled into the product wholesale.
 
 ## The format (Deep-Symmetry `crate-digger` spec)
 
@@ -37,6 +43,18 @@ index growing DOWN from the end** in groups of 16 (present-flag bitmask at
 (`0x40`) / long-UTF-16LE (`0x90`).
 
 ## Status
+
+### Analysis-side foundation ✅
+
+- Shipped V4 records contain the future export allowlist, beat grid, every
+  memory/hot cue, RGB overview, 24-band master, and ultra amplitude contour.
+- `anlz_bridge.py` maps that record without writing files into PQTZ tempo/time
+  units, PCOB/PCO2 cue semantics, PWV5 RGB bytes, and PWV7 mid/high/low bytes.
+- MP3, WAV, AIFF/AIF, and FLAC can be candidates. AAC/ALAC/M4A/MP4 are
+  explicitly player-only and must never enter a CDJ export.
+- This does not claim that a newly assembled ANLZ container or compact PDB is
+  hardware-valid. The validated scaffold-and-inject campaign below remains the
+  gate before any app-visible USB export.
 
 ### Proven ✅ (all on Sonny's real files, on real hardware)
 - **Read** the entire format via `pyrekordbox` + our reader — beatgrid, memory +

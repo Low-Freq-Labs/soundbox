@@ -8,8 +8,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   pipeline exit code is `tail`'s `0`, so a FAILING gate gets masked and the
   build/commit proceeds. (Real incident: a syntax-broken module shipped + got
   committed.) Run `./check.sh` bare (or `> file 2>&1; echo $?`), then build.
-- Project is under git (local `master`, no remote). **Commit at the end of every
-  working session.** `dist/`, `build/`, `.venv/` are ignored.
+- Project is under git (local `master`, no remote). Preserve the existing dirty
+  tree and inspect `git status` at handoff. Commit/push only when Sonny asks.
+  `dist/`, `build/`, `.venv/` are ignored.
+- **`AGENTS.md` and `CLAUDE.md` are synchronized runtime equivalents.** A shared
+  rule changed in one must change in the other in the same edit. Shipped
+  behavior/status belongs in the relevant docs; committed work goes in
+  `ROADMAP.md`; exploratory UX belongs in `new-ideas-7-22.md`.
+- **Installation must preserve rollback and AppData.** Back up/hash
+  `library.json`, gracefully quit, move the old app bundle into a temporary
+  rollback directory, install with `ditto`, verify/relaunch/log-check, and
+  compare curated state. Never use `rm -rf /Applications/Soundbox.app`; never
+  replace or clear SoundBox AppData as part of an app install.
 
 ## Qt / PySide6 (these bite HARD)
 - **QThread "destroyed while running" → SIGABRT.** Never let the last Python ref
@@ -23,10 +33,84 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   already deleted`. Guard with the `_running(w)` helper.
 - `shutdown()` (from `closeEvent` + `app.aboutToQuit`) must stop/wait every
   worker BEFORE Qt teardown.
-- **QAudioOutput binds the default output device AT CONSTRUCTION** and never
-  follows macOS device switches (AirPods/DAC) → audio goes to a dead device.
-  FIX (player.py): keep a `QMediaDevices` INSTANCE alive (its signals never fire
-  otherwise), rebind on `audioOutputsChanged` + before every `play_track`.
+- **There is no Qt playback fallback.** Qt Multimedia is analysis-only through
+  `QAudioDecoder` for AAC/ALAC. Native-deck initialization failure must leave
+  library management usable, disable player controls, and surface the exact
+  diagnostic. Do not reintroduce an engine setting or silent fallback.
+- **Native player thread boundary:** no Python callback, Objective-C decode,
+  allocation, file I/O, or blocking lock may enter `renderCallback`. Commands
+  are atomics/generation-tagged; AVAudioFile runs only on the decode thread.
+  Metal runs from CAMetalDisplayLink, not `PlayerBar._scroll_timer`.
+- **A static Metal deck must not own a permanent display loop.** Playback,
+  loading, preview, and live resize wake the link; every other mutation marks
+  one dirty frame and the link pauses again. Python snapshot polling is 8 ms
+  only while active and 125 ms while paused. Any new render-state setter must
+  request a dirty frame, and any focus-return transport path must pull one
+  authoritative native snapshot before repainting Qt state.
+- **Qt child resize events are not Metal resize events.** An application-wide
+  `Resize` filter sees every control affected by a window layout and must only
+  defer background work. `NativeDeckBackend` filters the waveform host itself;
+  its one synchronous C call commits the AppKit child frame and Retina
+  `drawableSize` before requesting a frame. Returning to generic resize wakes
+  causes both a request storm and a one-frame small/stretched waveform.
+- **Scrolling waveform filtering happens in COVERAGE space, never envelope
+  height
+  space.** Interpolating neighboring/mip peak heights makes the contour grow
+  and shrink as its fractional x phase changes (wide zoom looks like static).
+  Keep the song-anchored peak pyramid, filter its one final silhouette into
+  coverage, and select one mip no meaningfully denser than physical output
+  pixels. Do not add a separate translucent/RMS envelope: it reads as a ghost
+  waveform. Color comes separately from the compact SoundBox RGB filterbank
+  stream: overlapping LP 100 Hz, HP 300 + LP 3000 Hz, and HP 1500 Hz paths,
+  with 25/3/1 ms peak holds and per-column energy transfer. The persisted
+  normalized 24-band master is independent analysis and must never be remixed
+  by a renderer or override the dedicated RGB rows. Rekordbox PWV5 is a
+  read-only fallback/reference, never the source for a successfully analyzed
+  SoundBox color record.
+  Four coverage taps are the measured quality/performance sweet spot. Do not
+  add multi-LOD/per-fragment loops: the populated 120 Hz cadence test catches
+  that GPU regression. Current audio-detail position is an integer sample
+  anchor + local float phase; never collapse it into one absolute float.
+- **The visual clock is a continuous PLL, not a corrected counter.** Never
+  `fetch_add` a phase correction onto the visual frame at an Audio Unit callback
+  boundary: the former 0.15 ms cap became almost half a Retina pixel at 1536
+  px/s and looked like close-zoom shaking. CoreAudio timestamp observations may
+  adjust `visualEffectiveRate_`, while rebasing must preserve the already
+  predicted fractional position. Keep the sequence lock around the
+  frame/host/rate tuple. Likewise, scrolling grid vertices stay as integer
+  milliseconds + local phase; subtracting absolute float seconds loses visible
+  precision late in a track.
+- **Player cache schemas are data contracts, not renderer version numbers.**
+  A shader/filter/clock change does not require re-preparing the library.
+  Bump/rebuild only when the persisted payload itself changes. The hot path is
+  canonical V4 sections. Cache hits start one short-lived staged reader: never
+  read/hash the whole record or build Metal buffers on the UI thread.
+  `WaveformFillWorker` remains incremental, prioritizes the
+  selected track, and cooperatively yields inside long tracks during playback
+  and foreground interaction.
+- **`djmdCue.Kind` has a reserved hot-slot gap.** A/B/C are 1/2/3, value 4 is
+  reserved, and D–P are 5–17. `slot = Kind - 1` silently shifts every cue from
+  D onward and makes D impossible. Keep the explicit mapping regression test,
+  reject reserved/unknown values, and preserve I–P even though the current
+  panel shows A–H.
+- Player interaction and transport semantics are specified in `PLAYER.md`.
+  Keep double-click = the only browser load gesture (paused), Space =
+  play/pause for the already-loaded deck only, C = momentary CUE, one decoder
+  seek on drag release, and first-Rekordbox-beat loading when a valid imported
+  grid exists. A missing/invalid imported grid uses the SoundBox fallback with
+  beat 1 at `0:00`; neither path writes to Rekordbox.
+- The scrolling detail waveform must not claim transport on mouse-down. Wait
+  for the three-pixel horizontal threshold before emitting drag-start; otherwise
+  a stationary hold pauses playback and its release can jump to stale preview
+  state. Plain detail clicks are inert. The whole-track overview deliberately
+  retains absolute click/drag navigation.
+- No manual SoundBox grid editor is shipped. V4 has a storage-only ownership
+  boundary for later work, but current precedence is simple: a valid read-only
+  Rekordbox grid wins exactly; otherwise use the zero-anchored fallback. Never
+  infer that boundary from AAC/ALAC/WAV or a filename—those only happened to
+  identify Sonny's current sets. Player load must apply the same zero-anchor
+  contract immediately to a legacy fallback while bulk metadata migration is
+  still in progress.
 - Custom QWidget with layout `stretch=1` may not expand — also set
   `setSizePolicy(Expanding, …)`.
 - QSS: `QLabel { background: transparent }` or you get dark boxes behind text.
@@ -41,11 +125,20 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   stderr and keeps going, so a UI test toggling a widget can PASS while the slot
   is broken. Test slot logic by DIRECT call too. (This hid a real `is_untracked`
   crash that only surfaced in the packaged app.)
-- **Rapid track loads pile up waveform decoders** → hang + latent GC-mid-run
+- **Rapid track loads pile up waveform/analysis workers** → hang + latent GC-mid-run
   crash. Any "load X, user can rapid-switch" worker needs interrupt-previous +
   a strong-ref set (`_wf_pending`), never a single `self.x` reassignment;
-  cache-hit paints on the UI thread with zero workers; `shutdown_waveforms()`
+  every result is track-generation guarded; `shutdown_waveforms()`
   interrupts + waits all.
+- **Track replacement is an atomic renderer boundary.** Call native
+  `begin_track(generation)` before setting the source. It clears overview,
+  detail/mips, grid, imported cues, and session CUE together. Packed overview
+  and detail uploads happen on the staged worker and native code rechecks the
+  generation after allocation, before buffer promotion.
+- **Do not reintroduce black RGB delay padding at 0:00.** New RGB resampling
+  clamps to the first valid hue; selective overview load repairs audible
+  zero-RGB legacy rows. Negative-time fragments and true silence stay pure deck
+  background.
 - **Computed-row cache:** effective title/artist is cached per track_id, warmed
   in background (debounced, generation-guarded), invalidated on
   override/alias/registry/title-junk change. `_row_for` returns a COPY. If you
@@ -87,9 +180,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   "# CANCELLED: N …" footer) and records incomplete playlists with **sig="partial"**
   → drift flags them → next Sync completes. A cancelled export must NEVER look
   fully synced.
-- `sync.resync` on cancel: stale-m3u8 unlink still runs (cheap), but prune +
-  forget are SKIPPED (re-polls `should_cancel` directly); next Sync finishes.
+- `sync.resync` on cancel: ownership prune + forget are SKIPPED (re-polls
+  `should_cancel` directly); next Sync finishes.
   Tests: `tests/test_cancel.py`.
+- Manifest v2 owns individual normalized paths. Only `owned: true` rows may be
+  repaired or pruned; matching pre-existing media can be referenced with
+  `owned: false` but is never claimed or deleted. Every target write goes
+  through a pinned `DeviceSession`, same-filesystem temp, and atomic replace.
+  FAT identity is Unicode-NFD + casefold, not Python path equality.
 
 ## Type-checking + test-honesty
 - `./check.sh` gates: pyflakes + **mypy on `soundbox/` (must stay 0 errors)** +
@@ -150,18 +248,63 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 ## Python 3.14 / build
 - **`aifc`, `audioop`, `sunau` REMOVED in Python 3.13+** → can't decode AIFF with
   stdlib. Use `soundfile` (libsndfile) — reads WAV/AIFF/FLAC/MP3 (NOT ALAC/.m4a).
-- **ALAC/AAC waveforms use `qt_peaks()` (QAudioDecoder = same ffmpeg backend that
-  plays the file).** THREE traps, don't regress: (1) an unreadable file reports
+- **ALAC/AAC V4 analysis uses `qt_detail_peaks()` (QAudioDecoder =
+  same ffmpeg backend that plays the file).** THREE traps, don't regress:
+  (1) an unreadable file reports
   its error SYNCHRONOUSLY inside `dec.start()` — check `done`/`dec.error()` BEFORE
   `loop.exec()` or the worker strands until process exit → SIGABRT; (2)
   `dec.stop()` is async — bounded `isDecoding()` wait before the object dies; (3)
-  `drain()` checks `isInterruptionRequested()` each buffer. Must run off the UI
-  thread.
-- Build: `./build_app.sh` (PyInstaller) collects pyrekordbox, sqlcipher3,
-  sqlalchemy, yt_dlp, soundfile, numpy, `--collect-submodules PySide6.QtMultimedia`,
-  `--collect-all PIL`.
-- App is UNSIGNED → Gatekeeper. Logs at `~/Library/Logs/Soundbox/soundbox.log`
-  (Python errors here; C++ Qt fatals show as macOS crash reports).
+  `drain()` checks interruption/cooperative policy at each bounded PCM chunk.
+  It must consume at most one analysis chunk per event-loop turn so decoder
+  callbacks cannot monopolize the GIL; QAudioDecoder backpressure is the pause
+  mechanism. Must run off the UI thread.
+- **Battery efficiency is cooperative, never a lower-quality cache or a
+  colorless loaded deck.** AC uses uncapped optimized analysis. Battery mode
+  budgets only bulk worker CPU; below 50%, a large backlog is slowed further.
+  Low Power Mode, playback, scrolling, resizing, and focus transitions suspend
+  only bulk work at chunk boundaries. The currently loaded track remains
+  foreground-critical and bypasses those deferrals. Do not reduce V4
+  resolution, skip spectral/color sections, or substitute a colorless
+  placeholder to save power.
+- **PQTZ-only means direct DAT rows, not a smaller generic ANLZ parse.** The
+  legacy grid migration bounds-checks and decodes only the eight-byte PQTZ rows
+  from `ANLZ0000.DAT`. It must never call the generic parser or open EXT/2EX;
+  thousands of tiny metadata migrations otherwise become a needless energy
+  spike. Every Rekordbox path remains read-only.
+- **A V4 cache hit can still be upgrade-pending.** Metadata migration can leave
+  a playable record waiting for its current color/provenance version. Only
+  `track_analysis.is_ready()` decides whether background preparation is done;
+  it requires an ultra-rate contour plus RGB. The player may load any valid V4
+  record immediately. Do not collapse those two meanings. The read-only audit
+  reports valid/playable and current-quality coverage separately for the same
+  reason.
+- **Cancellation must not downgrade V4.** The native analyzer returns no result
+  when its cooperative checkpoint is interrupted. In that case preparation
+  must retain the existing record; writing only an imported Rekordbox shell
+  discards SoundBox detail data and creates a permanent retry loop.
+- **Never put librosa/numba/LLVM in background beat analysis.** LLVM's first
+  compilation overflowed a PySide QThread's 512 KiB stack during
+  `MCJIT::finalizeObject` and SIGBUSed the entire frozen app; disabling JIT by
+  environment variable was not honored reliably by the PyInstaller bundle.
+  `track_analysis._beat_grid()` is deliberately NumPy-only (FFT
+  autocorrelation + onset-phase comb), so the live worker has no LLVM path.
+  `WaveformFillWorker` also reserves a 16 MiB stack as defense in depth against
+  future scientific-library lazy imports; do not remove it because current
+  code happens not to JIT.
+- **A nearly full data volume must pause preparation, never trigger cache
+  cleanup.** V4 audio cooking pauses below 5 GiB and resumes above 7 GiB.
+  `library.json`, its small rotating backups, art, and existing V4 analysis are
+  not expendable. Installer app rollbacks are temporary and only one may exist
+  during verification.
+- Build: `./build_app.sh` first builds the arm64 CoreAudio/Metal dylib, then
+  PyInstaller collects it alongside pyrekordbox, sqlcipher3,
+  sqlalchemy, yt_dlp, soundfile, zstandard, and NumPy's standard runtime hook,
+  `--collect-submodules PySide6.QtMultimedia`, `--collect-all PIL`.
+- The app is locally self-signed when the `Soundbox Self-Signed` identity is
+  available (otherwise ad-hoc), but it is NOT Apple-notarized → Gatekeeper may
+  require right-click → Open. Logs at
+  `~/Library/Logs/Soundbox/soundbox.log` (Python errors here; C++ Qt fatals also
+  leave `crash-stacks.log` / macOS crash reports).
 
 ## rekordbox DB (pyrekordbox) — SACRED, read-only temp copy ONLY
 - **`db.get_playlist_contents()` returns tracks sorted by ContentID, NOT playlist
@@ -206,6 +349,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - Rockbox DB is OPTIONAL (playlists play via File Browser); DB mode needs
   "Update now" after dumping files.
 - Device sync manifest lives at `<device>/.soundbox/manifest.json`.
+- Device detection is read-only and capability-based. See `DEVICES.md`.
+- A stock-only iPod is preview-only: never write `iTunesDB`, `iTunesCDB`,
+  `Library.itdb`, or files beneath `iPod_Control`. A dual-boot FAT32 iPod may
+  receive the Rockbox-style `/Music`, `/Playlists`, and `/.soundbox` export;
+  its stock database remains untouched.
 - UNVALIDATED until hardware: theme renders cover.jpg; exact order/nesting holds;
   no choke at ~2900 tracks; DB refresh flow. (USB is a good proxy for everything
   EXCEPT on-device rendering/playback.)

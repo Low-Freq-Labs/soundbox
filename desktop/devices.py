@@ -11,6 +11,8 @@ import plistlib
 import subprocess
 from pathlib import Path
 
+from soundbox.device_profile import DeviceProfile, inspect_device
+
 MAX_DEVICES = 3
 
 
@@ -36,6 +38,7 @@ _EXTERNAL_CACHE: dict[str, bool] = {}
 # Rockbox devices MUST be FAT32 ("msdos") — HFS+/exFAT iPods won't run Rockbox,
 # so the sidebar warns the moment a non-FAT device mounts.
 _FS_CACHE: dict[str, str] = {}
+_PROFILE_CACHE: dict[str, DeviceProfile] = {}
 
 
 def _is_external(path: Path) -> bool:
@@ -69,6 +72,16 @@ def _is_external(path: Path) -> bool:
 def device_fs(path) -> str:
     """Filesystem type of a probed volume ('msdos'=FAT, 'exfat', 'apfs', 'hfs', '')."""
     return _FS_CACHE.get(str(path), "")
+
+
+def device_profile(path) -> DeviceProfile:
+    """Return the current read-only profile for a previously probed volume."""
+    key = str(path)
+    profile = _PROFILE_CACHE.get(key)
+    if profile is None:
+        profile = inspect_device(key, device_fs(key))
+        _PROFILE_CACHE[key] = profile
+    return profile
 
 
 def _external_volume_of(p):
@@ -110,6 +123,7 @@ def list_devices() -> list[tuple[str, str, int | None]]:
         for stale in [k for k in _EXTERNAL_CACHE if k not in present]:
             _EXTERNAL_CACHE.pop(stale, None)
             _FS_CACHE.pop(stale, None)
+            _PROFILE_CACHE.pop(stale, None)
         for d in sorted(vol.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
@@ -122,4 +136,3 @@ def list_devices() -> list[tuple[str, str, int | None]]:
                 free = None
             out.append((d.name, str(d), free))
     return out[:MAX_DEVICES]
-

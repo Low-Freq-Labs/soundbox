@@ -9,7 +9,9 @@
 
 import unittest
 
-from soundbox.rekordbox_db import _read_playlists, _read_tracks
+from soundbox.rekordbox_db import (
+    _hot_cue_slot, _read_cues, _read_playlists, _read_tracks,
+)
 
 
 class Row:
@@ -26,11 +28,12 @@ class Named:
 
 
 class FakeDB:
-    def __init__(self, tracks=(), nodes=(), members=(), smart=None):
+    def __init__(self, tracks=(), nodes=(), members=(), smart=None, cues=()):
         self._tracks = list(tracks)
         self._nodes = list(nodes)
         self._members = list(members)
         self._smart = smart or {}
+        self._cues = list(cues)
 
     def get_content(self):
         return self._tracks
@@ -48,6 +51,9 @@ class FakeDB:
 
     def get_playlist_contents(self, p):
         return self._smart.get(str(p.ID), [])
+
+    def get_cue(self):
+        return self._cues
 
 
 def _node(id, name, parent="root", attr=0, seq=0, deleted=0):
@@ -102,6 +108,7 @@ class TrackMapping(unittest.TestCase):
     def _track(self, **kw):
         base = dict(ID=265095720, Title="T", Artist=Named("A"),
                     FolderPath="/Users/x/My Music/Track (VIP).wav",
+                    AnalysisDataPath="/PIONEER/USBANLZ/x/ANLZ0000.DAT",
                     BPM=14567, Key=Named("Gm"), Length=200,
                     DateCreated="2026-01-02 03:04", Genre=Named("Dub"),
                     FileSize=9, BitRate=1411, Rating=0)
@@ -116,10 +123,80 @@ class TrackMapping(unittest.TestCase):
         self.assertEqual(t.date_added, "2026-01-02")
         self.assertIn("Track%20%28VIP%29.wav", t.location_uri)  # percent-encoded
         self.assertEqual(str(t.path), "/Users/x/My Music/Track (VIP).wav")
+        self.assertTrue(t.analysis_path.endswith(
+            "/rekordbox/share/PIONEER/USBANLZ/x/ANLZ0000.DAT"))
 
     def test_deleted_track_skipped(self):
         out = _read_tracks(FakeDB(tracks=[self._track(rb_local_deleted=1)]))
         self.assertEqual(out, {})
+
+    def test_live_db_authoritative_empty_cues(self):
+        out = _read_tracks(FakeDB(tracks=[self._track()]))
+        self.assertEqual(out["265095720"].rekordbox_cues, [])
+
+
+class CueMapping(unittest.TestCase):
+    def test_rekordbox_reserved_kind_gap_maps_exact_a_through_p(self):
+        expected = {
+            1: 0, 2: 1, 3: 2,
+            5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
+            10: 8, 11: 9, 12: 10, 13: 11,
+            14: 12, 15: 13, 16: 14, 17: 15,
+        }
+        self.assertEqual(
+            {kind: _hot_cue_slot(kind) for kind in expected}, expected)
+        for reserved in (-1, 0, 4, 18, 999):
+            self.assertIsNone(_hot_cue_slot(reserved))
+
+    def test_hot_memory_loop_comment_and_overflow(self):
+        rows = [
+            Row(ContentID=7, Kind=10, InMsec=1200, OutMsec=-1,
+                Comment="I"),
+            Row(ContentID=7, Kind=4, InMsec=777, OutMsec=-1,
+                Comment="reserved"),
+            Row(ContentID=7, Kind=0, InMsec=900, OutMsec=-1,
+                Comment="later"),
+            Row(ContentID=7, Kind=0, InMsec=100, OutMsec=400,
+                Comment="loop"),
+            Row(ContentID=8, Kind=1, InMsec=1, OutMsec=-1,
+                Comment="", rb_local_deleted=1),
+        ]
+        cues = _read_cues(FakeDB(cues=rows))["7"]
+        self.assertEqual(cues[0]["kind"], "hot")
+        self.assertEqual(cues[0]["slot"], 8)  # I retained, not demoted
+        self.assertNotIn(777, [cue["position_ms"] for cue in cues])
+        memory = [cue for cue in cues if cue["kind"] == "memory"]
+        self.assertEqual([cue["slot"] for cue in memory], [0, 1])
+        self.assertEqual(memory[0]["position_ms"], 100)
+        self.assertEqual(memory[0]["end_ms"], 400)
+        self.assertEqual(memory[0]["type"], "loop")
+        self.assertEqual(memory[0]["label"], "loop")
+        self.assertNotIn("8", cues)
+
+    def test_explicit_rgb_and_deterministic_fallback(self):
+        rows = [
+            Row(ContentID="x", Kind=1, InMsec=0, OutMsec=-1, Comment="",
+                ColorRed=1, ColorGreen=2, ColorBlue=3),
+            Row(ContentID="x", Kind=2, InMsec=1, OutMsec=-1, Comment=""),
+        ]
+        cues = _read_cues(FakeDB(cues=rows))["x"]
+        self.assertEqual(cues[0]["color"], [1, 2, 3])
+        self.assertEqual(cues[1]["color"], [69, 172, 219])
+
+    def test_live_kind_values_keep_d_through_h_in_their_letters(self):
+        rows = [
+            Row(ContentID="x", Kind=kind, InMsec=slot * 100,
+                OutMsec=-1, Comment=chr(ord("A") + slot))
+            for kind, slot in (
+                (1, 0), (2, 1), (3, 2), (5, 3),
+                (6, 4), (7, 5), (8, 6), (9, 7))
+        ]
+        cues = _read_cues(FakeDB(cues=rows))["x"]
+        self.assertEqual(
+            [(cue["slot"], cue["label"], cue["position_ms"]) for cue in cues],
+            [(slot, chr(ord("A") + slot), slot * 100)
+             for slot in range(8)],
+        )
 
 
 if __name__ == "__main__":

@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import time
 import uuid
+import hashlib
+import os
+import shutil
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from .rekordbox_xml import Library, Track
+from .paths import sanitize_component
 
 ID_PREFIX = "sb-"
 
@@ -33,6 +37,76 @@ def is_audio(path: Path) -> bool:
 
 def new_id() -> str:
     return ID_PREFIX + uuid.uuid4().hex[:12]
+
+
+def copy_from_device(
+        selected: list[Path],
+        media_root: Path | None = None) -> list[Path]:
+    """Copy selected device tracks/playlists into SoundBox Media in order.
+
+    Device originals are read-only. M3U8 entries are expanded in playlist
+    order; duplicate source paths keep their first occurrence.
+    """
+    destination = (
+        Path(media_root).expanduser()
+        if media_root is not None
+        else Path.home() / "Music" / "SoundBox Media")
+    ordered: list[Path] = []
+    seen: set[Path] = set()
+    for raw in selected:
+        path = Path(raw).expanduser().resolve()
+        candidates = [path]
+        if path.suffix.lower() == ".m3u8":
+            candidates = []
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            # Root-absolute Rockbox entries are relative to the mounted volume.
+            volume = next(
+                (parent for parent in path.parents
+                 if parent.parent == Path("/Volumes")),
+                (path.parent.parent
+                 if path.parent.name == "Playlists" else path.parent))
+            for line in text.splitlines():
+                entry = line.strip()
+                if not entry or entry.startswith("#"):
+                    continue
+                candidates.append(
+                    (volume / entry.lstrip("/")).resolve()
+                    if entry.startswith("/")
+                    else (path.parent / entry).resolve())
+        for source in candidates:
+            if source in seen or not is_audio(source) or not source.is_file():
+                continue
+            seen.add(source)
+            ordered.append(source)
+
+    artist_dir = destination / "Unknown Artist"
+    artist_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[Path] = []
+    for source in ordered:
+        name = sanitize_component(source.stem) + source.suffix.lower()
+        target = artist_dir / name
+        if target.exists():
+            if target.stat().st_size == source.stat().st_size:
+                copied.append(target)
+                continue
+            suffix = hashlib.sha1(str(source).encode()).hexdigest()[:6]
+            target = artist_dir / (
+                f"{sanitize_component(source.stem)}_{suffix}"
+                f"{source.suffix.lower()}")
+        tmp = target.with_name(target.name + ".sbpart")
+        try:
+            shutil.copyfile(source, tmp)
+            with tmp.open("rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(tmp, target)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        copied.append(target)
+    return copied
 
 
 def probe(path: Path) -> dict:

@@ -4,6 +4,31 @@ Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root
 
 ## Resolution (what was actually done, and what was deliberately declined)
 
+### Follow-up: canonical V4 retirement (2026-07-24)
+
+SoundBox later replaced all player-analysis families with one checksummed V4
+container under `track_analysis/`. Before removing anything, the read-only
+`scripts/audit_analysis_v4.py` production-loader audit combined the last
+library snapshot with all SoundBox imports, including hidden tracks. It found
+3,247 valid V4 records for 3,247 reachable sources, 18 already-missing sources,
+zero invalid reachable records, and zero orphan V4 records. Of those valid,
+immediately playable records, 2,750 already carried the current ultra/RGB
+analysis model and 497 remained in the resumable quality-upgrade queue. The
+audit reports these two facts separately: safe retirement means no reachable
+audio depends on an older cache family; it does not pretend every optional
+quality upgrade has finished.
+
+After a verified `library.json` backup, SoundBox was stopped and only these
+exact retired directories were deleted:
+
+- `analysis/` — 201 MB;
+- `detail_waveforms/` — 2.2 GB;
+- `waveforms/` — 656 KB.
+
+The 7.0 GB canonical `track_analysis/`, artwork, source audio, Rekordbox data,
+and every other AppData path were preserved. The post-shutdown state was backed
+up again because the normal final layout save changed `columns_state`.
+
 - **Backup format: DECLINED by choice.** Sonny reviewed the state-only-backup
   proposal and chose to keep the current always-full backups (library.json +
   history + art, ~200 MB). The app's backup/restore behavior is unchanged —

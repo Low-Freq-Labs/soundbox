@@ -75,7 +75,7 @@ def setup_logging() -> Path | None:
             pass
     return logpath
 
-from PySide6.QtCore import QEvent, QProcess, Qt, QTimer
+from PySide6.QtCore import QEvent, QProcess, QRect, Qt, QTimer
 from PySide6.QtGui import QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit,
@@ -87,10 +87,13 @@ from PySide6.QtWidgets import (
 
 
 from soundbox import artfetch, engine, imports, libcache, metadata, paths, rekordbox_db
+from soundbox.device_profile import plan_stock_ipod_export
 from soundbox.rekordbox_xml import Playlist
 from . import theme
 from .artpicker import ArtPickerDialog
-from .model import COLUMNS, TrackModel, row_matches as _row_matches
+from .model import (
+    COLUMNS, TrackModel, row_display_value, row_matches as _row_matches,
+)
 from .player import PlayerBar
 
 from .device_browser import DeviceBrowserMixin
@@ -136,10 +139,9 @@ _DEFAULT_SETTINGS = {
     "title_rules_off": [],     # ids of built-in title-cleanup rules turned OFF
     "title_words": [],         # user's custom drop-words (safe end/bracket semantics)
     "import_dir": "",          # last folder used by Import Audio Files…
+    "beat_jump_mode": "16 BEATS",
+    "waveform_zoom": 92.0,
 }
-
-
-
 
 class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self):
@@ -160,6 +162,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._art_worker: ArtFillWorker | None = None
         self._art_restart = False  # set by re-scan to restart the fill after it stops
         self._wf_fill_worker: WaveformFillWorker | None = None
+        self._track_analysis_dir = data_dir / "track_analysis"
+        self._preparing_library = False
+        self._prep_power_policy = "ac"
         self._landed_cache: dict[str, float] = {}  # path -> file-landing time
         self._last_xml = ""
         self.lib = None
@@ -171,14 +176,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.hidden_dates: dict[str, str] = {}   # tid -> "YYYY-MM-DD" (graveyard)
         self.removals: dict[str, dict] = {}  # pid -> {tid: removed-date}
         self.aliases: dict[str, str] = {}    # artist merges: variant -> target
-        self.settings: dict = dict(_DEFAULT_SETTINGS)  # defaults; _load_state merges saved
+        self.settings: dict = dict(_DEFAULT_SETTINGS)
         self.export_worker: ExportWorker | None = None
         self._backup_worker = None  # OneShotTask for backup zip / restore
         self._refresh_worker: RefreshWorker | None = None
         self._resync_worker: ResyncWorker | None = None
         self._dev_scan_worker: DeviceScanWorker | None = None
         self._delete_worker: DeleteWorker | None = None
+        self._eject_verify_worker = None
+        self._device_import_worker = None
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
+        self._device_profiles: dict[str, object] = {}
+        self._sync_playlists_cache: list[Playlist] | None = None
         # Computed-row cache: track_id -> row dict (effective title/artist +
         # metadata). effective_title is ~0.17ms/track, so recomputing a 2500-
         # track playlist on every click cost ~440ms — this makes clicks instant.
@@ -191,7 +200,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._deleting = False
         self._accordion_guard = False
         self._build_ui()
-        QApplication.instance().installEventFilter(self)  # Space = play/pause
+        QApplication.instance().installEventFilter(self)  # Space transport + C cue
         # Animated dots for transient states (FINALIZING…, Cancelling…).
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(300)
@@ -211,7 +220,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._dev_timer.timeout.connect(self._refresh_devices)
         self._dev_timer.start(3000)
         self._load_state()  # restore custom playlists + last-opened XML
-        self.table.setFocus()  # open browsing (Space-play, arrows), not typing
+        self.table.setFocus()  # open browsing (transport keys, arrows), not typing
 
     # ---------- persistence ----------
     def _load_state(self):
@@ -237,6 +246,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # User settings (extensible — this is the runway for future toggles).
         self.settings = {**_DEFAULT_SETTINGS, **(data.get("settings") or {})}
         self.settings.pop("title_junk", None)  # v1 raw-pattern list — superseded
+        self.settings.pop("deck_engine", None)  # retired Qt playback preference
+        # Geometry must land before the splitter sizes. Restoring the panes into
+        # the old hard-coded 1240x800 frame made Qt compress them, then resizing
+        # the window redistributed them a second time.
+        self._restore_window_geometry()
+        self.player_bar.set_jump_mode(
+            str(self.settings.get("beat_jump_mode", "16 BEATS")), emit=False)
+        self.player_bar.set_waveform_zoom(
+            float(self.settings.get("waveform_zoom", 92.0)), emit=False)
         self._sync_settings_controls()  # reflect saved values in the Settings page
         self._restore_columns()         # saved column widths/visibility
         self._refresh_custom()
@@ -318,6 +336,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _save_state(self):
         """Write the portable SoundBox library (overrides + custom playlists)."""
+        self._sync_playlists_cache = None
         self._backup_state()  # snapshot the previous good state first
         try:
             self._data_file.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +417,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         registry, or title-junk) — drop the cache, bump the generation so any
         in-flight warm is discarded, and schedule a fresh background warm."""
         self._row_cache.clear()
+        self._sync_playlists_cache = None
         self._cache_gen += 1
         if self.lib is not None:
             self._warm_timer.start()  # debounced → one rebuild per burst
@@ -460,17 +480,71 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     # ---------- player ----------
     def eventFilter(self, obj, ev):
-        # Space toggles playback — but ONLY from the browsing surfaces (track
-        # table + the three sidebar lists) or empty focus. Everywhere else
-        # (editors, search, settings checkbox trees, dialogs, device browser)
-        # Space keeps its native meaning — it must never type a space AND start
-        # audio, or toggle a suggestion checkbox AND blast a track.
-        if (ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Space
-                and not ev.isAutoRepeat()):
-            if self._space_should_play(QApplication.focusWidget()):
-                self._play_selected()
+        if (getattr(self, "now_playing", None) is obj
+                and ev.type() == QEvent.MouseButtonRelease
+                and ev.button() == Qt.LeftButton):
+            self._focus_now_playing()
+            return True
+
+        # Space and C are deck controls only from browsing surfaces. Editors,
+        # search, settings trees, dialogs, and the device browser keep their
+        # native text/toggle behavior. Modifier chords (Cmd+C) are never stolen.
+        if ev.type() in (
+                QEvent.Wheel, QEvent.Resize, QEvent.ApplicationActivate,
+                QEvent.ApplicationDeactivate):
+            self._defer_library_prep(
+                1.0 if ev.type() in (
+                    QEvent.ApplicationActivate,
+                    QEvent.ApplicationDeactivate) else 0.75)
+        elif (ev.type() == QEvent.MouseMove
+              and getattr(ev, "buttons", lambda: Qt.NoButton)()
+              & Qt.LeftButton):
+            self._defer_library_prep()
+
+        if ev.type() == QEvent.ApplicationActivate:
+            self.player_bar.resynchronize_transport()
+            return super().eventFilter(obj, ev)
+        if ev.type() == QEvent.ApplicationDeactivate:
+            if getattr(self, "_cue_key_down", False):
+                self._cue_key_down = False
+                self.player_bar._cue_release()
+            return super().eventFilter(obj, ev)
+        if ev.type() not in (
+                QEvent.ShortcutOverride, QEvent.KeyPress, QEvent.KeyRelease):
+            return super().eventFilter(obj, ev)
+        focus = QApplication.focusWidget()
+        no_modifier = ev.modifiers() == Qt.NoModifier
+        browsing = self._space_should_play(focus)
+        if (ev.key() == Qt.Key_C and no_modifier and browsing
+                and ev.type() == QEvent.ShortcutOverride):
+            # Cocoa's press-and-hold text service asks for this override before
+            # it sends repeat key presses. Claiming it here prevents the
+            # ç/ć/č/ċ character panel from ever opening over the browser.
+            ev.accept()
+            return True
+        if (ev.key() == Qt.Key_Space and no_modifier
+                and ev.type() == QEvent.KeyPress and not ev.isAutoRepeat()):
+            if browsing:
+                self._toggle_player()
+                return True
+        if ev.key() == Qt.Key_C:
+            if ev.type() == QEvent.KeyRelease and getattr(
+                    self, "_cue_key_down", False):
+                self._cue_key_down = False
+                self.player_bar._cue_release()
+                return True
+            if no_modifier and browsing and ev.type() == QEvent.KeyPress:
+                if (not ev.isAutoRepeat()
+                        and not getattr(self, "_cue_key_down", False)):
+                    self._cue_key_down = True
+                    self.player_bar._cue_press()
                 return True
         return super().eventFilter(obj, ev)
+
+    def _defer_library_prep(self, seconds: float = 0.75):
+        worker = getattr(self, "_wf_fill_worker", None)
+        if worker is not None:
+            worker.defer_for_interaction(seconds)
 
     def _space_should_play(self, w) -> bool:
         """Focus policy for the Space shortcut (kept separate so it's directly
@@ -524,6 +598,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             it.setHidden(not has)
             if it.childCount():
                 self._apply_artist_child_filter(it)
+        self._update_player_navigation()
 
     def _apply_artist_child_filter(self, item) -> None:
         terms = self._search_terms()
@@ -546,33 +621,90 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         tid = self.model._rows[idx.row()].get("id")
         return self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
 
-    def _play_selected(self):
-        """Space: if the highlighted track IS the loaded one, toggle
-        pause/play. If a DIFFERENT track is highlighted, load it instead —
-        curation flow is select → fix the name → Space, and that must play
-        the track under the cursor, not pause whatever was on. Highlighting
-        happens on load (in _play_track), never as a side effect of edits."""
-        t = self._selected_track()
-        if t is not None and t.track_id != self.player_bar.current_track():
-            self._play_track(t)
-            return
+    def _toggle_player(self):
+        """Space controls only the loaded deck; browser selection is irrelevant."""
         if self.player_bar.current_track():
             self.player_bar.toggle()
 
     def _play_row(self, index):
-        """Double-click a row → play that track."""
+        """Double-click a row → load that track without starting playback."""
         if not index.isValid() or index.row() >= len(self.model._rows):
             return
         tid = self.model._rows[index.row()].get("id")
         t = self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
         if t is not None:
-            self._play_track(t)
+            self._load_track(t)
 
     def _on_playback_error(self, msg: str):
         LOG.warning("Playback error: %s", msg)
         self._flash_status("Playback error", 6)
 
+    def _player_order(self) -> list[str]:
+        """Track ids in the order the user can currently see.
+
+        Navigation follows the active filter/sort, which makes the transport
+        arrows predictable: "next" means the next row on screen. The Artists
+        browser is flattened artist-by-artist in its visible order.
+        """
+        if self.lib is None:
+            return []
+        if self.stack.currentWidget() is self.artists_view:
+            terms = self._search_terms()
+            out: list[str] = []
+            children = getattr(self, "_artist_children", {})
+            for i in range(self.artists_view.topLevelItemCount()):
+                item = self.artists_view.topLevelItem(i)
+                if item.isHidden():
+                    continue
+                for row in children.get(item.data(0, ARTIST_ROLE), []):
+                    if not terms or _row_matches(row, terms):
+                        tid = row.get("id")
+                        if tid:
+                            out.append(tid)
+            return out
+        return [r["id"] for r in self.model._rows if r.get("id")]
+
+    def _update_player_navigation(self):
+        """Enable track arrows only when a visible adjacent track exists."""
+        pb = getattr(self, "player_bar", None)
+        if pb is None:
+            return
+        tid = pb.current_track()
+        order = self._player_order() if tid else []
+        try:
+            idx = order.index(tid)
+        except ValueError:
+            pb.set_track_navigation(False, False)
+            return
+        pb.set_track_navigation(idx > 0, idx + 1 < len(order))
+
+    def _play_relative(self, direction: int):
+        """Play the previous/next visible track without wrapping at the ends."""
+        if self.lib is None:
+            return
+        order = self._player_order()
+        try:
+            idx = order.index(self.player_bar.current_track())
+        except ValueError:
+            self._update_player_navigation()
+            return
+        target = idx + (-1 if direction < 0 else 1)
+        if not 0 <= target < len(order):
+            self._update_player_navigation()
+            return
+        track = self.lib.tracks_by_id.get(order[target])
+        if track is not None:
+            self._play_track(track)
+
+    def _load_track(self, t):
+        """Load a track paused at its first grid beat."""
+        self._open_track(t, autoplay=False)
+
     def _play_track(self, t):
+        """Load a track and start it at its first grid beat."""
+        self._open_track(t, autoplay=True)
+
+    def _open_track(self, t, autoplay: bool):
         try:
             ok = t.path.is_file()
         except OSError:
@@ -587,17 +719,22 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         title = metadata.effective_title(t.track_id, t.name, artist, self.titles,
                                          self._title_junk())
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
-        self.player_bar.play_track(t.track_id, t.path, title=label)
+        self.player_bar.play_track(
+            t.track_id, t.path, title=label, bpm=t.bpm,
+            analysis_path=getattr(t, "analysis_path", ""),
+            autoplay=autoplay,
+            cues=getattr(t, "rekordbox_cues", None))
         self._highlight_now_playing(t.track_id)
+        self._update_player_navigation()
 
-    def _highlight_now_playing(self, tid: str):
+    def _highlight_now_playing(self, tid: str) -> bool:
         """Loading a track ALWAYS highlights it in the visible browser — a
         playing track with no visible cursor is disorienting. No-op when the
         track isn't in the current view (e.g. a different playlist)."""
         if self.stack.currentWidget() is self.artists_view:
             cur = self.artists_view.currentItem()
             if cur is not None and cur.data(0, ARTIST_TRACK_ROLE) == tid:
-                return
+                return True
             name = next((a for a, rows in getattr(self, "_artist_children", {}).items()
                          if any(r["id"] == tid for r in rows)), None)
             for i in range(self.artists_view.topLevelItemCount()):
@@ -610,10 +747,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     if child.data(0, ARTIST_TRACK_ROLE) == tid:
                         self.artists_view.setCurrentItem(child)
                         self.artists_view.scrollToItem(child)
-                        return
-            return
+                        return True
+            return False
         if self.stack.currentIndex() != 0:
-            return  # device browser etc. — nothing to highlight
+            return False  # device browser etc. — nothing to highlight
         for i, r in enumerate(self.model._rows):
             if r.get("id") == tid:
                 cur = self.table.currentIndex()
@@ -621,7 +758,37 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     col = cur.column() if cur.isValid() else 0
                     self.table.setCurrentIndex(self.model.index(i, col))
                 self.table.scrollTo(self.model.index(i, 0))
+                return True
+        return False
+
+    def _focus_now_playing(self):
+        """Return the browser cursor to the exact loaded track.
+
+        Keep the current playlist/Artists context when it contains the track;
+        otherwise fall back to the SoundBox Collection, which is the reliable
+        all-library home. Search is cleared because a hidden target cannot be
+        meaningfully focused.
+        """
+        tid = self.player_bar.current_track()
+        if self.lib is None or not tid or tid not in self.lib.tracks_by_id:
+            return
+        self.body_stack.setCurrentIndex(0)
+        if self.search.text():
+            self.search.clear()
+        self._keep_tid = tid
+        if not self._highlight_now_playing(tid):
+            collection = (
+                self.sb_tree.topLevelItem(0)
+                if self.sb_tree.topLevelItemCount() else None)
+            if collection is None or not collection.data(0, COLLECTION_ROLE):
                 return
+            if self.sb_tree.currentItem() is collection:
+                self._show_collection()
+                self._view_key = "sb:Collection"
+            else:
+                self.sb_tree.setCurrentItem(collection)
+            self._highlight_now_playing(tid)
+        self.table.setFocus()
 
     def _on_cell_edited(self, field: str, track_id: str, value: str):
         if not track_id:
@@ -679,22 +846,34 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _top_bar(self) -> QWidget:
         bar = QWidget(); bar.setObjectName("TopBar")
         bar.setAttribute(Qt.WA_StyledBackground, True)
-        h = QHBoxLayout(bar); h.setContentsMargins(14, 8, 22, 8); h.setSpacing(10)
+        # Whole-track overview + beat ruler + zoomed waveform stay in separate
+        # lanes, with enough height for the transport stack beside them.
+        bar.setMinimumHeight(218)
+        outer = QVBoxLayout(bar)
+        # The deck begins at the true left edge so its transport section can be
+        # geometrically centered; the header keeps its own breathing room.
+        outer.setContentsMargins(0, 5, 4, 5)
+        outer.setSpacing(3)
+        h = QHBoxLayout(); h.setSpacing(10)
+        h.setContentsMargins(14, 0, 18, 0)
         sound = QLabel(SOUND_ART); sound.setObjectName("AsciiSound")
         sound.setAlignment(Qt.AlignVCenter)
         box = QLabel(BOX_ART); box.setObjectName("AsciiBox")
         box.setAlignment(Qt.AlignVCenter)
         h.addWidget(sound, 0, Qt.AlignVCenter)
         h.addWidget(box, 0, Qt.AlignVCenter)
-        h.addSpacing(14)
-        self.player_bar = PlayerBar()  # waveform scrubber lives where the subtitle was
-        self.player_bar.wave_cache_dir = (
-            Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
-            / "waveforms")  # repeat plays draw instantly
-        self.player_bar.playback_error.connect(self._on_playback_error)
-        self.player_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        h.addWidget(self.player_bar, 1)
-        h.addSpacing(4)  # tight: time↔search (padding lives inside the player instead)
+        h.addSpacing(28)
+        self.now_playing = QLabel("SELECT A TRACK")
+        self.now_playing.setObjectName("NowPlaying")
+        self.now_playing.setAlignment(Qt.AlignCenter)
+        # Long metadata must never squeeze the fixed search/settings controls.
+        self.now_playing.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.now_playing.setMinimumWidth(80)
+        self.now_playing.setFixedHeight(44)
+        self.now_playing.setCursor(Qt.PointingHandCursor)
+        self.now_playing.setToolTip("")
+        h.addWidget(self.now_playing, 1, Qt.AlignVCenter)
+        h.addSpacing(28)
         self.search = QLineEdit()
         self.search.setObjectName("Search")
         self.search.setPlaceholderText("Search title, artist, genre…")
@@ -702,7 +881,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.search.setFixedWidth(165)  # slimmer → more room for the waveform
         # Click-to-focus only: as the first focusable widget it grabbed keyboard
         # focus at launch, so the app opened "typing into search" instead of
-        # ready to browse (Space-play, arrows). Startup focus goes to the table.
+        # ready to browse (transport keys, arrows). Startup focus goes to the table.
         self.search.setFocusPolicy(Qt.ClickFocus)
         self.search.textChanged.connect(self._on_search)
         h.addWidget(self.search, 0, Qt.AlignVCenter)
@@ -714,7 +893,57 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         gear.setCursor(Qt.PointingHandCursor)
         gear.clicked.connect(self._open_settings)
         h.addWidget(gear, 0, Qt.AlignVCenter)
+        outer.addLayout(h)
+
+        # Full-width deck row: controls at the left, then a zoomed waveform that
+        # owns all remaining width. Logo/search/settings stay above it instead
+        # of squeezing the player into the same horizontal strip.
+        self.player_bar = PlayerBar(
+            jump_mode=str(self.settings.get("beat_jump_mode", "16 BEATS")),
+            waveform_zoom=float(self.settings.get("waveform_zoom", 92.0)))
+        self.player_bar.track_analysis_dir = self._track_analysis_dir
+        self.player_bar.playback_error.connect(self._on_playback_error)
+        self.player_bar.now_playing_changed.connect(self._set_now_playing)
+        self.player_bar.playback_active_changed.connect(self._on_playback_active)
+        self.player_bar.source_changed.connect(self._on_player_source_changed)
+        self.player_bar.jump_mode_changed.connect(self._on_jump_mode_changed)
+        self.player_bar.waveform_zoom_changed.connect(
+            self._on_waveform_zoom_changed)
+        self.player_bar.previous_requested.connect(lambda: self._play_relative(-1))
+        self.player_bar.next_requested.connect(lambda: self._play_relative(1))
+        self.player_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        outer.addWidget(self.player_bar, 1)
         return bar
+
+    def _set_now_playing(self, text: str):
+        """Show artist/title in the open header lane, never over the waveform."""
+        text = text or "SELECT A TRACK"
+        available = max(80, self.now_playing.width() - 28)
+        self.now_playing.setText(self.now_playing.fontMetrics().elidedText(
+            text, Qt.ElideRight, available))
+        self.now_playing.setToolTip("")
+
+    def _on_jump_mode_changed(self, mode: str):
+        self.settings["beat_jump_mode"] = mode
+        self._save_state()
+
+    def _on_waveform_zoom_changed(self, pixels_per_second: float):
+        self.settings["waveform_zoom"] = pixels_per_second
+        self._save_state()
+
+    def _on_playback_active(self, active: bool):
+        """Reserve CPU/UI time for the deck while audio is running."""
+        for worker in (self._wf_fill_worker, self._art_worker):
+            if worker is not None:
+                worker.set_playback_active(active)
+        if not active:
+            self.model.refresh_art(self.art_cache.status_kind)
+            self._refresh_devices()
+
+    def _on_player_source_changed(self, path: str):
+        worker = self._wf_fill_worker
+        if worker is not None:
+            worker.prioritize(path)
 
     def _section_header(self, text: str, btn: str | None = None, on_click=None,
                         top: bool = False) -> QWidget:
@@ -808,6 +1037,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table = TrackTable()
         self.model = TrackModel()
         self.table.setModel(self.model)
+        self.model.modelReset.connect(self._update_player_navigation)
         self.model.cell_edited.connect(self._on_cell_edited)  # inline Title/Artist edits
         self.table.setItemDelegate(CellEditDelegate(self.table))  # pre-filled editors
         # No keypress/double-click editing — a stray Space would wipe a cell. The
@@ -815,7 +1045,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context)  # edit or art
-        self.table.doubleClicked.connect(self._play_row)  # double-click = play, everywhere
+        self.table.doubleClicked.connect(self._play_row)  # double-click = load paused
         # ⌘R renames (inline-edits the Title of) the highlighted track.
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._rename_current)
         self.table.setAlternatingRowColors(True)
@@ -898,20 +1128,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # page 2: Artists browser — folder rows per artist, songs on expand
         self.artists_view = ArtistsTree()
         self.artists_view.setObjectName("ArtistsBrowser")
-        self.artists_view.setHeaderLabels(
-            ["Artist / Track", "Artist", "BPM", "Key", "Time"])
+        self.artists_view.setHeaderLabels([
+            "Artist / Track",
+            *(label for _key, label, _hidden in COLUMNS[1:]),
+        ])
         self.artists_view.setAlternatingRowColors(True)
         self.artists_view.setUniformRowHeights(True)
         ah = self.artists_view.header()
         ah.setSectionResizeMode(QHeaderView.Interactive)
         ah.setStretchLastSection(False)
         ah.setMinimumSectionSize(46)
-        # Same first-class layout as Collection: Artist/Track (col 0) absorbs
-        # all extra width; Artist/BPM/Key/Time keep their size.
+        # This header mirrors the normal track table exactly. Artist/Track
+        # absorbs the same slack as Track Title; every other visible/hidden
+        # section keeps the table's saved width.
         ah.setSectionResizeMode(0, QHeaderView.Stretch)
-        ah.resizeSection(1, 170)
-        for c, w in ((2, 70), (3, 60), (4, 60)):
-            ah.resizeSection(c, w)
+        ah.setFixedHeight(26)
         self.artists_view.setIndentation(16)
         # Editing works like Collection: no stray double-click editing — the
         # right-click menu / ⌘R open the editor (pre-filled, cursor at end).
@@ -930,6 +1161,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.stack.addWidget(self.artists_view)
 
         self._apply_default_columns()
+        self._sync_artist_columns()
+        self.table.horizontalHeader().sectionResized.connect(
+            self._sync_artist_columns)
+        ah.sectionResized.connect(self._on_artist_column_resized)
         return self.stack
 
     def _bottom_bar(self) -> QWidget:
@@ -943,7 +1178,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # shove the bar, but the gap to the bar stays tight.
         fm = self.status_label.fontMetrics()
         # Fits the longest status (animated word or art count) so nothing clips.
-        w = max(fm.horizontalAdvance("FINALIZING..."), fm.horizontalAdvance("Art 9999/9999"))
+        w = max(
+            fm.horizontalAdvance("Preparing your library..."),
+            fm.horizontalAdvance("Art 9999/9999"),
+        )
         self.status_label.setFixedWidth(w + 8)
         h.addWidget(self.status_label)
         self.progress = QProgressBar()
@@ -985,7 +1223,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-        QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
+        QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _apply_loaded_library(self):
         """Shared post-load wiring: fold in imported tracks, (re)build the artist
@@ -997,6 +1235,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # landed-time cache MUST be dropped — otherwise a birthtime computed off
         # the snapshot sticks and defeats the newest-added sort.
         self._landed_cache.clear()
+        self._sync_playlists_cache = None
         sb_cur = self.sb_tree.currentItem()  # selection BEFORE the rebuild
         imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         self._build_artist_registry()
@@ -1126,7 +1365,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-        QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
+        QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _on_refresh_fail(self, err):
         self._stop_pulse()
@@ -1542,7 +1781,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             else:
                 self._reload_current_view()  # Collection view picks them up live
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-            QTimer.singleShot(4000, self._maybe_fill_waveforms)  # pre-cache all peaks
+            QTimer.singleShot(500, self._maybe_fill_waveforms)
         elif skipped:
             QMessageBox.warning(
                 self, "Nothing imported",
@@ -1662,7 +1901,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _artist_rows(self, tracks) -> list:
         """Track rows grouped A→Z by effective artist (titles A→Z within each);
         Unknown Artist sinks to the bottom."""
-        rows = self._rows_for(tracks)
+        rows = self._annotate_art(self._rows_for(tracks))
         rows.sort(key=lambda r: (r["artist"] == "Unknown Artist",
                                  r["artist"].casefold(), r["title"].casefold()))
         return rows
@@ -1677,8 +1916,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.artists_view.clear()
         self._artist_children = by_artist
         for name in by_artist:
-            it = QTreeWidgetItem([f"{name}  ({len(by_artist[name])})",
-                                  "", "", ""])
+            it = QTreeWidgetItem([
+                f"{name}  ({len(by_artist[name])})",
+                *([""] * (len(COLUMNS) - 1)),
+            ])
             it.setData(0, ARTIST_ROLE, name)
             # Stash the id list so the whole artist can be dragged to a playlist
             # even while collapsed (children are lazy-filled only on expand).
@@ -1697,8 +1938,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._artists_filling = True
         try:
             for r in getattr(self, "_artist_children", {}).get(name, []):
-                c = QTreeWidgetItem([r["title"], r["artist"], r.get("bpm", ""),
-                                     r.get("key", ""), r.get("time", "")])
+                c = QTreeWidgetItem([
+                    str(row_display_value(r, key) or "")
+                    for key, _label, _hidden in COLUMNS
+                ])
+                for column, (key, _label, _hidden) in enumerate(COLUMNS):
+                    if key == "art":
+                        c.setTextAlignment(
+                            column, Qt.AlignHCenter | Qt.AlignVCenter)
+                    elif key in {"bpm", "time", "bitrate"}:
+                        c.setTextAlignment(
+                            column, Qt.AlignRight | Qt.AlignVCenter)
                 c.setData(0, ARTIST_TRACK_ROLE, r["id"])
                 c.setFlags(c.flags() | Qt.ItemIsEditable)  # title/artist editable
                 item.addChild(c)
@@ -1752,7 +2002,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         tid = item.data(0, ARTIST_TRACK_ROLE)
         t = self.lib.tracks_by_id.get(tid) if (self.lib and tid) else None
         if t is not None:
-            self._play_track(t)
+            self._load_track(t)
 
     def _show_collection(self):
         self.model.set_rows(self._annotate_art(
@@ -1793,12 +2043,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _sync_playlists(self) -> list:
         """Every SoundBox-side playlist a device could hold: customs + the two
-        exportable views. Drift/resync must know them ALL by identity, or a
-        synced Collection would read as stale files and get pruned."""
+        exportable views. Cached because the 3-second device poll must never
+        rebuild/sort the entire library on the UI thread."""
+        if self._sync_playlists_cache is not None:
+            return self._sync_playlists_cache
         views = [self._view_playlist(v) for v in ("collection", "artists")]
-        return self._custom_playlists() + [p for p in views if p is not None]
+        self._sync_playlists_cache = (
+            self._custom_playlists() + [p for p in views if p is not None])
+        return self._sync_playlists_cache
 
-    def _device_label(self, name: str, free, drift: int, fs: str = "") -> str:
+    def _device_label(
+            self, name: str, free, drift: int, fs: str = "",
+            profile=None) -> str:
         # When a device is out of sync, HIDE the "GB free" so the full
         # "⚠ N playlist(s) out of date" fits (it was getting truncated). Free space
         # returns once everything is synced again.
@@ -1808,7 +2064,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if fs and fs not in ("msdos", "fat32"):
             # Rockbox runs on FAT32 only — flag HFS+/exFAT devices immediately.
             return f"⛃  {name}    ⚠ {fs.upper()} (not FAT32)"
-        return f"⛃  {name}    {human(free)} free"
+        kind = f" · {profile.label}" if profile is not None else ""
+        return f"⛃  {name}{kind}    {human(free)} free"
 
     def _refresh_devices(self):
         """Kick a background scan of external devices (free space + drift).
@@ -1822,6 +2079,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # (contention). Each op's done-handler calls _refresh_devices() right after.
         if self._exporting or self._deleting:
             return
+        player = getattr(self, "player_bar", None)
+        if player is not None and player.is_playing():
+            return
         if _running(getattr(self, "_dev_scan_worker", None)):
             return
         w = DeviceScanWorker(self.lib, self._sync_playlists())
@@ -1832,9 +2092,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_devices_scanned(self, devs: list):
         """Apply a background device scan to the tree (main thread). devs is a list
-        of (name, path, free, drift)."""
-        self._drift_cache = {path: drift for _n, path, _f, drift in devs}
-        new_paths = [p for _n, p, _f, _d in devs]
+        of (name, path, free, drift, read-only profile)."""
+        self._drift_cache = {
+            path: drift for _n, path, _f, drift, _profile in devs}
+        self._device_profiles = {
+            path: profile for _n, path, _f, _d, profile in devs}
+        new_paths = [p for _n, p, _f, _d, _profile in devs]
         cur = [self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE)
                for i in range(self.device_tree.topLevelItemCount())]
         if new_paths != cur and QApplication.mouseButtons() & Qt.LeftButton:
@@ -1844,22 +2107,30 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if new_paths == cur:
             # Same devices — refresh label in place (don't disrupt an in-flight drag).
-            for i, (name, path, free, drift) in enumerate(devs):
+            for i, (name, path, free, drift, profile) in enumerate(devs):
                 it = self.device_tree.topLevelItem(i)
                 if it is not None:
-                    it.setText(0, self._device_label(name, free, drift, device_fs(path)))
-                    it.setToolTip(0, self._device_tip(path, free))
+                    it.setText(0, self._device_label(
+                        name, free, drift, device_fs(path), profile))
+                    it.setToolTip(0, self._device_tip(path, free, profile))
             return
         self.device_tree.clear()
-        for name, path, free, drift in devs:
-            it = QTreeWidgetItem([self._device_label(name, free, drift, device_fs(path))])
+        for name, path, free, drift, profile in devs:
+            it = QTreeWidgetItem([self._device_label(
+                name, free, drift, device_fs(path), profile)])
             it.setData(0, DEVPATH_ROLE, path)
-            it.setToolTip(0, self._device_tip(path, free))
+            it.setToolTip(0, self._device_tip(path, free, profile))
             self.device_tree.addTopLevelItem(it)
 
-    def _device_tip(self, path: str, free) -> str:
+    def _device_tip(self, path: str, free, profile=None) -> str:
         fs = device_fs(path) or "unknown"
         tip = f"{path}\nFilesystem: {fs}   ·   {human(free)} free"
+        if profile is not None:
+            tip += f"\nDetected layout: {profile.label}"
+            if profile.model:
+                tip += f" ({profile.model})"
+            if profile.stock_preview and not profile.stock_write:
+                tip += "\nStock iPod export is preview-only; SoundBox will not edit iTunesDB."
         if fs not in ("msdos", "fat32", "unknown"):
             tip += "\n⚠ Rockbox requires FAT32 — this device would need reformatting."
         return tip
@@ -1879,7 +2150,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dev = item.data(0, DEVPATH_ROLE)
         menu = QMenu(self)
         menu.addAction("Browse", lambda: self._on_device_click(item, 0))
+        profile = self._device_profiles.get(dev)
+        if profile is not None and profile.stock_preview:
+            menu.addAction(
+                "Preview stock iPod export…",
+                lambda: self._preview_stock_ipod(dev))
         menu.addAction("Verify export…", lambda: self._verify_device(dev))
+        menu.addAction(
+            "Deep Verify managed files…",
+            lambda: self._verify_device(dev, deep=True))
         n = self._drift_cache.get(dev, 0)  # ≤3s-fresh from the background scan
         if n:
             word = "playlist" if n == 1 else "playlists"
@@ -1891,13 +2170,35 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu.addAction("Eject", lambda: self._eject(dev))
         menu.exec(self.device_tree.mapToGlobal(pos))
 
-    def _verify_device(self, dev: str):
+    def _preview_stock_ipod(self, dev: str):
+        """Show stock-iPod readiness without writing a byte to the device."""
+        profile = self._device_profiles.get(dev)
+        if profile is None:
+            return
+        audio = (
+            [str(t.path) for t in self.lib.tracks_by_id.values()]
+            if self.lib is not None else []
+        )
+        plan = plan_stock_ipod_export(profile, audio)
+        formats = ", ".join(
+            f"{suffix}: {count}"
+            for suffix, count in plan["formats"].items()) or "none"
+        QMessageBox.information(
+            self, "Stock iPod export preview",
+            f"Device: {profile.label}"
+            f"{f' ({profile.model})' if profile.model else ''}\n"
+            f"Tracks visible to planner: {plan['track_count']}\n"
+            f"Formats: {formats}\n\n"
+            "Preview only. SoundBox has not changed this device and will not "
+            "write iTunesDB until that exporter is independently validated.")
+
+    def _verify_device(self, dev: str, deep: bool = False):
         """Post-export sanity: every m3u8 entry on the device must resolve to a
         real file. Walks the USB, so it runs OFF the UI thread."""
         from .workers import OneShotTask
         if _running(getattr(self, "_scan_worker", None)):
             return
-        w = OneShotTask(lambda: engine.verify_export(dev))
+        w = OneShotTask(lambda: engine.verify_export(dev, deep=deep))
         self._scan_worker = w
         w.done.connect(lambda res, d=dev: self._on_verify_done(d, res))
         w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
@@ -1914,7 +2215,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not res["playlists"]:
             QMessageBox.information(self, "Verify export",
                                     f"No SoundBox playlists found on {name}.")
-        elif not res["missing"]:
+        elif not res["missing"] and not res.get("managed_issues"):
             self._flash_status("Verified ✓", 8)
             extra = "".join(f"\n\n⚠ {a}" for a in res.get("advisories", []))
             QMessageBox.information(
@@ -1926,11 +2227,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             more = ("\n  …and "
                     f"{len(res['missing']) - 12} more" if len(res["missing"]) > 12 else "")
             extra = "".join(f"\n\n⚠ {a}" for a in res.get("advisories", []))
+            integrity = "\n".join(
+                f"  {issue}" for issue in res.get("managed_issues", [])[:12])
+            if integrity:
+                integrity = f"\n\nManaged-file integrity:\n{integrity}"
             QMessageBox.warning(
                 self, "Verify export",
                 f"{name}: {len(res['missing'])} of {res['entries']} entries are "
                 f"MISSING their files:\n\n{lines}{more}\n\nA Sync usually "
-                f"heals this (or re-export the affected playlists).{extra}")
+                f"heals this (or re-export the affected playlists)."
+                f"{integrity}{extra}")
 
     def _sync_device(self, dev: str):
         if self.lib is None or not dev:
@@ -1972,6 +2278,32 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.table.setColumnHidden(i, hidden)
         for i, w in enumerate([360, 170, 64, 70, 56, 64, 84, 80, 150, 110]):
             self.table.setColumnWidth(i, w)
+
+    def _sync_artist_columns(self, *_args):
+        """Mirror every table section boundary into the Artists browser."""
+        if getattr(self, "_artist_column_sync", False):
+            return
+        self._artist_column_sync = True
+        try:
+            table_header = self.table.horizontalHeader()
+            artist_header = self.artists_view.header()
+            for column in range(len(COLUMNS)):
+                self.artists_view.setColumnHidden(
+                    column, self.table.isColumnHidden(column))
+                if column:
+                    artist_header.resizeSection(
+                        column, table_header.sectionSize(column))
+            artist_header.setSectionResizeMode(QHeaderView.Interactive)
+            artist_header.setSectionResizeMode(0, QHeaderView.Stretch)
+        finally:
+            self._artist_column_sync = False
+
+    def _on_artist_column_resized(
+            self, column: int, _old_size: int, new_size: int):
+        """A resize made on Artists becomes the normal shared column width."""
+        if getattr(self, "_artist_column_sync", False) or column == 0:
+            return
+        self.table.setColumnWidth(column, new_size)
 
     def _selected_ids(self) -> list[str]:
         sm = self.table.selectionModel()
@@ -2361,6 +2693,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         w = ArtFillWorker(self.lib, self.art_cache, self.overrides, self.titles)
         self._art_worker = w
+        w.set_playback_active(self.player_bar.is_playing())
         w.progress.connect(self._on_art_progress)
         w.finished.connect(self._on_art_finished)
         w.start()
@@ -2375,18 +2708,69 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_art_fill()
 
     def _maybe_fill_waveforms(self):
-        """Background-cache every uncached waveform so the scrubber is instant,
-        never a live decode. Kicks whenever the library (re)loads or files are
-        imported; the worker skips anything already cached, so re-runs are cheap
-        and it only decodes the genuinely-new files."""
-        if self.lib is None or self.player_bar.wave_cache_dir is None:
+        """Prepare every missing canonical V4 record off the UI thread."""
+        if self.lib is None:
             return
         if _running(self._wf_fill_worker):
-            return  # a pass is already grinding through; it re-scans its own todo
-        w = WaveformFillWorker(self.lib, self.player_bar.wave_cache_dir)
+            # A live rekordbox refresh can replace the library while a pass is
+            # running. Its cue fingerprints belong to the old snapshot, so
+            # guarantee one fresh scan after it finishes.
+            self._waveform_rescan_pending = True
+            return
+        w = WaveformFillWorker(self.lib, self._track_analysis_dir)
         self._wf_fill_worker = w
-        w.finished.connect(lambda ww=w: self._finish_worker("_wf_fill_worker", ww))
+        w.set_playback_active(self.player_bar.is_playing())
+        w.prioritize(self.player_bar._src_path or "")
+        w.detail_ready.connect(self.player_bar.refresh_audio_detail)
+        w.storage_paused.connect(self._on_analysis_storage_paused)
+        w.progress.connect(self._on_analysis_progress)
+        w.power_policy_changed.connect(self._on_analysis_power_policy)
+        w.finished.connect(lambda ww=w: self._on_library_prep_finished(ww))
+        self._preparing_library = True
+        if not self._exporting and not self._cancelling and not self._deleting:
+            self._start_pulse("Preparing your library")
         w.start()
+
+    def _on_analysis_progress(self, done: int, total: int):
+        if (not self._preparing_library or self._exporting
+                or self._cancelling or self._deleting):
+            return
+        self._stop_pulse()
+        suffix = " · Eco" if self._prep_power_policy == "battery" else ""
+        self.status_label.setText(f"Prep {done}/{total}{suffix}")
+
+    def _on_analysis_power_policy(self, policy: str):
+        self._prep_power_policy = policy
+        if (not self._preparing_library or self._exporting
+                or self._cancelling or self._deleting):
+            return
+        self._stop_pulse()
+        if policy == "low-power":
+            self.status_label.setText("Prep paused · Low Power")
+        elif policy == "battery":
+            self.status_label.setText("Preparing · Battery Eco")
+        else:
+            self._start_pulse("Preparing your library")
+
+    def _on_analysis_storage_paused(self, paused: bool, free_bytes: int):
+        if self._exporting or self._cancelling or self._deleting:
+            return
+        if paused:
+            self._stop_pulse()
+            self.status_label.setText(
+                f"Analysis paused — {free_bytes / 1024 ** 3:.1f} GiB free")
+        elif self._preparing_library:
+            self._start_pulse("Preparing your library")
+
+    def _on_library_prep_finished(self, w):
+        self._finish_worker("_wf_fill_worker", w)
+        self._preparing_library = False
+        if not self._exporting and not self._cancelling and not self._deleting:
+            self._stop_pulse()
+            self.status_label.setText("Ready")
+        if getattr(self, "_waveform_rescan_pending", False):
+            self._waveform_rescan_pending = False
+            QTimer.singleShot(0, self._maybe_fill_waveforms)
 
     def _stop_art_fill(self):
         if self._art_worker is not None and self._art_worker.isRunning():
@@ -2396,8 +2780,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self.status_label.setText("Ready")
 
     def _on_art_progress(self, done, total):
-        self.model.refresh_art(self.art_cache.status_kind)  # live Art column ticks
-        if not self._exporting and not self._cancelling and not self._deleting:
+        if not self.player_bar.is_playing():
+            self.model.refresh_art(self.art_cache.status_kind)
+        if (not self._exporting and not self._cancelling and not self._deleting
+                and not self._preparing_library):
             # A device op (export/sync/delete) owns the status bar; don't fight it.
             if done >= total:
                 self._flash_status("Art done ✓", 6)
@@ -2415,15 +2801,62 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _set_column_hidden(self, col: int, hidden: bool):
         self.table.setColumnHidden(col, hidden)
+        self._sync_artist_columns()
         self._save_columns()  # visibility toggles persist immediately
 
     def _save_columns(self):
-        """Persist the table layout (column widths + hidden columns) and the
-        sidebar section heights (the draggable SOUNDBOX/DEVICES bars)."""
+        """Persist the complete user-sized shell.
+
+        This runs at shutdown after the user's final resize, so the next launch
+        restores the outer window first and the three sidebar panes second.
+        """
         hh = self.table.horizontalHeader()
         self.settings["columns_state"] = bytes(hh.saveState().toBase64()).decode("ascii")
         self.settings["sidebar_split"] = list(self._sidebar_split.sizes())
+        self.settings["window_geometry"] = bytes(
+            self.saveGeometry().toBase64()).decode("ascii")
+        normal = self.normalGeometry() if self.isMaximized() else self.geometry()
+        self.settings["window_rect"] = [
+            normal.x(), normal.y(), normal.width(), normal.height()]
         self._save_state()
+
+    def _restore_window_geometry(self):
+        """Restore exact size/position, clamping only if its screen disappeared."""
+        rect = self.settings.get("window_rect")
+        if (isinstance(rect, list) and len(rect) == 4
+                and all(isinstance(value, int) for value in rect)
+                and rect[2] >= 640 and rect[3] >= 480):
+            wanted = QRect(*rect)
+            screens = [screen.availableGeometry()
+                       for screen in QApplication.screens()]
+            if screens:
+                screen = max(
+                    screens,
+                    key=lambda area: area.intersected(wanted).width()
+                    * area.intersected(wanted).height())
+                width = min(wanted.width(), screen.width())
+                height = min(wanted.height(), screen.height())
+                x = min(max(wanted.x(), screen.left()),
+                        screen.right() - width + 1)
+                y = min(max(wanted.y(), screen.top()),
+                        screen.bottom() - height + 1)
+                self.setGeometry(x, y, width, height)
+                return
+            self.setGeometry(wanted)
+            return
+
+        # Compatibility with the first geometry-enabled build and Qt's own
+        # maximized/fullscreen encoding. New clean closes always add window_rect.
+        state = self.settings.get("window_geometry")
+        if not isinstance(state, str) or not state:
+            return
+        try:
+            from PySide6.QtCore import QByteArray
+            self.restoreGeometry(QByteArray.fromBase64(
+                state.encode("ascii"), QByteArray.AbortOnBase64DecodingErrors))
+        except (UnicodeEncodeError, ValueError):
+            # Derived UI placement must never prevent the library from opening.
+            return
 
     def _restore_columns(self):
         """Bring back the user's saved column layout + sidebar section heights
@@ -2437,6 +2870,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._sidebar_split.setSizes([600, 400, 96])  # classic proportions
         state = self.settings.get("columns_state")
         if not state:
+            self._sync_artist_columns()
             return
         from PySide6.QtCore import QByteArray
         hh = self.table.horizontalHeader()
@@ -2444,6 +2878,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             hh.setSortIndicator(-1, Qt.AscendingOrder)
             hh.setSectionResizeMode(QHeaderView.Interactive)
             hh.setSectionResizeMode(0, QHeaderView.Stretch)  # Title keeps absorbing slack
+        self._sync_artist_columns()
 
     # ---------- export (auto on drop) ----------
     def _resolve_jobs(self, items: list[tuple[str, str]]) -> list[Playlist]:
@@ -2469,6 +2904,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self.lib is None:
             QMessageBox.information(self, "Open a library first",
                                    "Load your rekordbox library first (↻ on the REKORDBOX header).")
+            return
+        profile = self._device_profiles.get(dev)
+        if profile is not None and not profile.rockbox_export:
+            if profile.stock_preview:
+                self._preview_stock_ipod(dev)
+            else:
+                QMessageBox.warning(
+                    self, "Export unavailable",
+                    "This volume is not a writable FAT32 Rockbox/generic USB "
+                    "target. No files were changed.")
             return
         pls = self._resolve_jobs(items)
         if not pls:
@@ -2536,11 +2981,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._dev_scan_worker.wait(6000)  # read-only scan; let it finish
         if _running(getattr(self, "_delete_worker", None)):
             self._delete_worker.cancel(); self._delete_worker.wait(10000)
+        if _running(getattr(self, "_eject_verify_worker", None)):
+            self._eject_verify_worker.wait(15000)
+        if _running(getattr(self, "_device_import_worker", None)):
+            self._device_import_worker.wait(15000)
         if _running(self._art_worker):
             self._art_worker.stop(); self._art_worker.wait(6000)
         if _running(getattr(self, "_wf_fill_worker", None)):
-            # qt_peaks polls interruption mid-decode (breaks a long .m4a cleanly);
-            # the between-files loop check catches libsndfile tracks.
+            # QAudioDecoder tracks poll interruption during decode; the
+            # between-files loop check catches libsndfile tracks.
             self._wf_fill_worker.requestInterruption(); self._wf_fill_worker.wait(8000)
         if _running(getattr(self, "_scan_worker", None)):
             self._scan_worker.wait(15000)  # pure CPU scan; let it finish
@@ -2554,7 +3003,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         pb = getattr(self, "player_bar", None)
         if pb is not None:
             pb.stop()
-            pb.shutdown_waveforms()  # interrupt + wait ALL in-flight decodes
+            pb.shutdown()  # workers plus native audio/display threads
         p = getattr(self, "_eject_proc", None)
         if p is not None and p.state() != QProcess.NotRunning:
             p.waitForFinished(3000)

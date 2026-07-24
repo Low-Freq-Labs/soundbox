@@ -7,10 +7,18 @@ cover art, honest sync semantics.
 
 ## Docs & roadmap
 
-- **[`CLAUDE.md`](CLAUDE.md)** — orientation + the sacred safety contract (start here).
+- **[`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md)** — synchronized
+  runtime orientation + sacred safety contract (start here).
 - **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — status, scorecard, phases, product decisions.
+- **[`docs/PLAYER.md`](docs/PLAYER.md)** — native deck behavior, architecture,
+  caches, read-only cue panel, non-regression rules, QA, and pending grid work.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — engine/desktop layout, data model, build.
-- **[`docs/GOTCHAS.md`](docs/GOTCHAS.md)** — Qt/rekordbox/Rockbox traps (read before touching workers/sync).
+- **[`docs/DEVICES.md`](docs/DEVICES.md)** — Rockbox, stock iPod, dual-boot,
+  and generic-USB layouts, capabilities, and validation rules.
+- **[`docs/GOTCHAS.md`](docs/GOTCHAS.md)** — Qt/native-player/rekordbox/Rockbox
+  traps (read before touching workers, player, or sync).
+- **[`new-ideas-7-22.md`](new-ideas-7-22.md)** — exploratory QOL backlog; UX
+  workshop before roadmap commitment.
 - **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ USB export R&D (prototype in `research/cdj_export/`).
 
 ## What it does
@@ -58,23 +66,44 @@ per-track blocking ("Remove cover art" is sticky). Everything in the cache is
 normalized to **baseline JPEG** — the only flavor older Rockbox renders — and
 exported as `cover.jpg` per track folder.
 
-**Player.** Click a track, hit Space: waveform scrubber (libsndfile, with a
-Qt/ffmpeg decode fallback for ALAC/AAC), per-track peaks cache for instant
-redraws, output-device hot-swap (AirPods etc.), now-playing pill. Space
-loads the highlighted track or toggles playback; type-ahead is disabled in
-every list so typing never teleports the selection.
+**Player.** The default native deck uses CoreAudio sample-clock playback while
+Metal scrolls the RGB waveform/grid at display refresh (120 Hz on ProMotion).
+It includes a whole-song overview, twelve detail zoom levels, bar/beat
+counting, previous/next, selectable beat/bar jumps, momentary CUE, clean
+play/pause/seek ramps, and precise pause-preview-resume scrubbing. Double-click
+is the only browser load gesture and loads paused; Space only toggles the
+loaded deck, and C is momentary CUE. A newly loaded track starts on
+its first analyzed beat. SoundBox V4 owns the prepared grid/cues, RGB/24-band
+analysis, export eligibility, and single-silhouette ultra waveform. Valid
+Rekordbox analysis seeds missing data, while cues refresh by fingerprint from
+a read-only live-DB snapshot until SoundBox user data claims ownership.
+Stored hot-cue colors appear as black-outlined A–H boxes on both the
+whole-track overview and scrolling waveform; memory cues use one consistent
+red upward arrow in both scales.
+Waveform color comes from SoundBox's dedicated overlapping time-domain
+filterbank: low-pass 100 Hz, band-pass 300–3000 Hz, and high-pass 1500 Hz,
+followed by frequency-dependent peak holds and a local RGB energy transfer.
+The separate 24-band master remains long-term analysis data and never
+recolors or overrides that RGB stream in either renderer.
+Rekordbox and source audio remain read-only. Native-deck failure disables
+playback with a diagnostic while library management remains available.
 
 **Devices & sync.** Drop = export: threaded copy with one aggregating
 progress bar, FINALIZING sweep (AppleDouble scrub), free-space precheck,
 FAT32-safe names (length-budgeted artist/title), tree + flat `/Playlists`
 layout, UTF-8 no-BOM `.m3u8` in exact order with `# MISSING:` comments.
-A per-device manifest tracks what's on the stick: playlist edits/reorders/
-deletes show as **⚠ N playlists out of date**; **Sync** resolves the diff
-(copy new, rewrite m3u8s, prune only when needed). **Cancel is honest** —
+A per-device ownership manifest tracks normalized paths, source identity,
+hashes, playlist membership, artwork, and completed generations. Playlist
+edits/reorders/deletes show as **⚠ N playlists out of date**; **Sync** resolves
+the diff, atomically repairs owned corruption, and prunes only explicitly owned
+paths. **Cancel is honest** —
 partial m3u8s are playable and flagged so the next Sync resumes. Right-click
-a device: Sync, **Verify export…** (re-reads every m3u8, confirms every file),
-Eject. Click one for a full device file browser (rename, new folder, delete,
-assign-artist). Non-FAT32 filesystems get flagged immediately (Rockbox
+a device: Sync, **Verify export…**, **Deep Verify managed files…**, Eject.
+Normal eject flushes and verifies references; force-unmount always asks first.
+The device browser can copy selected audio/M3U8 entries in order into
+`~/Music/SoundBox Media/Unknown Artist/` without changing the device. Click one
+for rename, new folder, delete, and assign-artist. Non-FAT32 filesystems get
+flagged immediately (Rockbox
 requirement).
 
 **Persistence.** Everything user-made lives in one portable
@@ -82,7 +111,8 @@ requirement).
 `~/Library/Application Support/LowFreqLabs/Soundbox/` — keyed by stable
 track IDs so a newer rekordbox library preserves all work. Atomic saves,
 rotating backups, corruption auto-recovery, and one-click full backup/restore
-`.zip` (library + history + art cache) in Settings.
+`.zip` (library + history + art cache) in Settings. Window size/position,
+columns, and sidebar pane proportions reopen exactly from the last clean close.
 
 ## The safety contract (non-negotiable)
 
@@ -102,15 +132,19 @@ rotating backups, corruption auto-recovery, and one-click full backup/restore
     desktop/    PySide6 app: MainWindow + mixins (settings, device browser),
                 workers (all QThreads), trees, player, art picker, suggesters,
                 artist catalog.
-    tests/      317 tests: engine behavior, property-based (hypothesis),
-                mocked live-DB reader, hermetic offscreen UI.
+    native/     arm64 macOS CoreAudio decode/render deck + Metal waveform/grid.
+    tests/      engine, property-based, live-DB mocks, hermetic UI, native deck,
+                and Metal shader contracts; trust ./check.sh for the live count.
 
 ## Development
 
     ./check.sh            # pyflakes + mypy (engine) + full test suite
     ./check.sh --render   # + offscreen UI render to /tmp
+    ./build_native.sh     # CoreAudio/Metal dylib only
     ./build_app.sh        # PyInstaller → dist/Soundbox.app (self-signed)
 
 Python 3.14, deps in `requirements.txt` (venv at `.venv/`). Logs at
-`~/Library/Logs/Soundbox/soundbox.log`. Waveform peaks cache in
-`<app data>/waveforms/` (pure accelerator — safe to delete any time).
+`~/Library/Logs/Soundbox/soundbox.log`. Player accelerators live under AppData:
+`track_analysis/` contains the only player-analysis format: atomic, checksummed
+V4 per-track records. Derived analysis is rebuildable, but `library.json` is
+not; cache maintenance must never touch it, Rekordbox, or source audio.

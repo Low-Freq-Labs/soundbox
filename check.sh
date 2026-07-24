@@ -6,6 +6,9 @@ cd "$(dirname "$0")"
 echo "== pyflakes =="
 ./.venv/bin/python -m pyflakes soundbox/*.py desktop/*.py
 echo "OK"
+echo "== native deck =="
+./build_native.sh
+echo "OK"
 echo "== mypy (engine) =="
 ./.venv/bin/python -m mypy soundbox/
 echo "== tests =="

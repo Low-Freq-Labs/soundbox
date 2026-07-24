@@ -12,7 +12,13 @@ def _lib() -> Library:
     tracks = {
         "1": Track("1", "Bravo", "Zed", "file://localhost/tmp/b.wav",
                    bpm="140.00", key="10A", total_time=185, date_added="2026-01-02",
-                   added_ts=1_767_000_000.0, genre="Riddim", size=123, bitrate="1411"),
+                   added_ts=1_767_000_000.0, genre="Riddim", size=123, bitrate="1411",
+                   analysis_path="/rekordbox/share/x/ANLZ0000.DAT",
+                   rekordbox_cues=[{
+                       "kind": "hot", "slot": 0, "position_ms": 1000,
+                       "end_ms": -1, "type": "single", "label": "DROP",
+                       "color": [255, 0, 0],
+                   }]),
         "sb-x": Track("sb-x", "Liveset", "", "file://localhost/tmp/set.m4a",
                       total_time=5400, added_ts=1_768_000_000.5, imported=True),
     }
@@ -35,6 +41,11 @@ class RoundTrip(unittest.TestCase):
             # it; when it was dropped here, instant-paint fell back to birthtime.
             self.assertEqual(got.tracks_by_id["1"].added_ts, 1_767_000_000.0)
             self.assertEqual(got.tracks_by_id["sb-x"].added_ts, 1_768_000_000.5)
+            self.assertEqual(got.tracks_by_id["1"].analysis_path,
+                             "/rekordbox/share/x/ANLZ0000.DAT")
+            self.assertEqual(
+                got.tracks_by_id["1"].rekordbox_cues[0]["label"], "DROP")
+            self.assertIsNone(got.tracks_by_id["sb-x"].rekordbox_cues)
             self.assertEqual(got.playlists[0].keys, ["1", "sb-x"])
             self.assertEqual(got.playlists[0].pid, "99")
 

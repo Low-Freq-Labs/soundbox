@@ -170,5 +170,39 @@ class FixLinks(unittest.TestCase):
         self.assertIn(self.root, roots)          # nearest survivor for x.m4a
         self.assertNotIn(keep.parent, roots)     # contained in root — deduped
 
+
+class DeviceImport(unittest.TestCase):
+    def test_playlist_order_copies_to_soundbox_media_without_touching_device(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            device = root / "DEVICE"
+            media = root / "SoundBox Media"
+            music = device / "Music"
+            music.mkdir(parents=True)
+            first = music / "one.mp3"
+            second = music / "two.mp3"
+            first.write_bytes(b"one")
+            second.write_bytes(b"two")
+            playlist = device / "Playlists" / "set.m3u8"
+            playlist.parent.mkdir()
+            playlist.write_text(
+                "#EXTM3U\n/Music/two.mp3\n/Music/one.mp3\n",
+                encoding="utf-8")
+            before = {
+                path.relative_to(device): path.read_bytes()
+                for path in device.rglob("*") if path.is_file()
+            }
+            copied = imports.copy_from_device([playlist], media)
+            self.assertEqual([path.name for path in copied],
+                             ["two.mp3", "one.mp3"])
+            self.assertTrue(all(
+                path.parent == media / "Unknown Artist"
+                for path in copied))
+            after = {
+                path.relative_to(device): path.read_bytes()
+                for path in device.rglob("*") if path.is_file()
+            }
+            self.assertEqual(after, before)
+
 if __name__ == "__main__":
     unittest.main()

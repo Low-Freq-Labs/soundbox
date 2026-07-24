@@ -147,13 +147,18 @@ def _rockbox_art_advisory(target: Path) -> str | None:
     return None
 
 
-def verify_export(target: str | Path) -> dict:
+def verify_export(target: str | Path, *, deep: bool = False) -> dict:
     """Re-read every generated .m3u8 under the target and confirm each referenced
     file actually exists on the device. READ-ONLY — the post-export
     "did everything land?" check (run it off the UI thread; it walks the USB).
     Returns {"playlists": n, "entries": n, "missing": [(playlist, entry), ...]}."""
     target = Path(target)
-    res: dict = {"playlists": 0, "entries": 0, "missing": [], "advisories": []}
+    res: dict = {
+        "playlists": 0, "entries": 0, "missing": [], "advisories": [],
+    }
+    managed_issues = sync_mod.verify_managed(Path(target), deep=deep)
+    if deep or managed_issues:
+        res["managed_issues"] = managed_issues
     adv = _rockbox_art_advisory(target)
     if adv:
         res["advisories"].append(adv)

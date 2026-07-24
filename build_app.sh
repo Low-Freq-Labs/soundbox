@@ -11,6 +11,9 @@ cd "$(dirname "$0")"
 # type Code Signing).
 SIGN_IDENTITY="Soundbox Self-Signed"
 
+# Compile the arm64 CoreAudio + Metal deck before PyInstaller collects it.
+./build_native.sh
+
 ARGS=(
   --windowed
   --name Soundbox
@@ -23,8 +26,9 @@ ARGS=(
   --collect-all yt_dlp
   --collect-all PIL
   --collect-all soundfile
-  --collect-all numpy
+  --collect-all zstandard
   --collect-submodules PySide6.QtMultimedia
+  --add-binary "build/native/libsoundbox_deck.dylib:native"
 )
 
 [ -f assets/Soundbox.icns ] && ARGS+=(--icon assets/Soundbox.icns)

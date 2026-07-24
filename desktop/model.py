@@ -78,6 +78,16 @@ _CAMELOT = re.compile(r"^\s*(\d{1,2})\s*([ABab])\s*$")
 _DURATION = re.compile(r"^\s*(\d+):(\d{2})\s*$")
 
 
+def row_display_value(row: dict, key: str):
+    """Shared display text for the table and Artists-tree track rows."""
+    val = row.get(key, "")
+    if key == "art":
+        return _ART_GLYPH.get(val, "")
+    if key == "artist" and not val:
+        return "—"
+    return val
+
+
 def _sort_value(key: str, row: dict):
     """Type-aware sort key: numbers as numbers, M:SS as seconds, Camelot keys on
     the wheel (2A < 10A), art by usefulness; empties always group together."""
@@ -170,12 +180,7 @@ class TrackModel(QAbstractTableModel):
             return None
         key = COLUMNS[index.column()][0]
         if role == Qt.DisplayRole:
-            val = self._rows[index.row()].get(key, "")
-            if key == "art":
-                return _ART_GLYPH.get(val, "")
-            if key == "artist" and not val:
-                return "—"
-            return val
+            return row_display_value(self._rows[index.row()], key)
         if role == Qt.EditRole:  # editing starts from the real value, not "—"
             return self._rows[index.row()].get(key, "")
         if role == Qt.ToolTipRole and key == "art":

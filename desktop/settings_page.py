@@ -182,8 +182,6 @@ class SettingsPageMixin:
                                              indent=22)
         bl.addWidget(self._row_short)
 
-
-
         # --- BACKUP --------------------------------------------------------
         bl.addWidget(self._settings_section("BACKUP"))
         exp = QPushButton("Back Up…"); exp.setCursor(Qt.PointingHandCursor)
@@ -495,4 +493,3 @@ class SettingsPageMixin:
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))  # refresh sidebar counts
             self._reload_current_view()
-
