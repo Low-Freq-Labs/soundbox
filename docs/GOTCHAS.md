@@ -172,7 +172,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the active screen cadence so fixed-60 Hz, ProMotion, power throttling, and
   moving the window between displays remain evenly paced. Snapshot render
   buffers under the renderer mutex, then release it before command encoding;
-  the display thread also reuses its overlay vertex storage.
+  the display thread also reuses its overlay vertex storage. The final
+  2026-07-28 phone/native comparison proved that the remaining rare doubled
+  interval begins at `CAMetalDisplayLink` itself: its next
+  `targetPresentationTimestamp` occasionally advances by 16.667 ms, the
+  callback arrives on that same interval, and Metal still has about 8.2 ms
+  before `targetTimestamp`. Geometry, GPU load, the CoreAudio PLL, and drawable
+  presentation are therefore downstream of the omission. Hard 120 Hz and a
+  90–120 Hz floor both increased gaps and were reverted. A registered 60 fps
+  phone capture cannot resolve every 120 Hz panel refresh by itself, but paired
+  with native target/presentation counters it can expose the conserved
+  half-step/one-and-a-half-step sampling pairs without screen-recorder
+  compositor interference.
 - **A display-link submission is not an onscreen frame.** Target timestamps
   can run ahead of the drawable the hand actually sees. Count cadence from
   `MTLDrawable.presentedTime`, ignore its documented zero value for a dropped
@@ -181,7 +192,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   older submitted frame produces a visible rewind. A measured latency-two
   retry on 2026-07-27 reduced five-second close-zoom cadence and did not remove
   the occasional doubled presentation interval; do not revive it as a hitch
-  fix.
+  fix. The 2026-07-28 retry was worse again and reached a 25 ms gap at
+  1152 px/s.
 - **NEVER motion-blur the scrolling waveform.** This was built twice — a
   180-degree box, then a full-interval tent — and rejected on sight both
   times. The premise is wrong: rendered motion blur is for content the eye

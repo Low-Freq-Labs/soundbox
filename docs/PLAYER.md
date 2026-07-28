@@ -1195,6 +1195,57 @@ unchanged, and the protected curated-state hash remained exact. The unrelated
 one-time waveform migration had progressed to 3,160 remaining legacy analysis
 records at that launch.
 
+### Phone/native cadence boundary on 2026-07-28
+
+The final 64.995-second phone recording contained 3,897 HEVC frames at a
+stable 59.94 fps while traversing the complete zoom ladder. After the phone
+was moved close at roughly 23 seconds, registration against static library UI
+showed essentially zero camera translation. Waveform travel then formed the
+expected zoom-proportional clusters from roughly 2.11 camera pixels per phone
+frame at 128 px/s through 25.79 at 1536 px/s.
+
+Almost all travel was even. The remaining outliers were sparse complementary
+short/long pairs: at 1536 px/s, for example, roughly 13-pixel travel was
+followed by roughly 39-pixel travel around the expected 25.8. The paired
+distance equaled two normal phone-frame steps, so there was no accumulating
+transport drift. The same proportional pattern appeared at several
+384–1152 px/s stops. A 60 fps camera cannot independently resolve every 120 Hz
+panel refresh, but the static registration and conserved travel made it a
+useful presentation trace when combined with native counters.
+
+A clean full-width native pass then exercised all thirteen zooms with the real
+audio path silent. Most 2.5-second windows measured 118–120 actual drawable
+presentations per second; waveform complexity did not correlate with the rare
+16.667 ms maximum gaps. At 1536 px/s, a longer 15-second pass presented 1,786
+drawables at 119.066 fps. Presentation landed within 0.011 ms mean and
+0.025 ms worst-case of the submitted `targetPresentationTimestamp`.
+
+A temporary callback probe isolated the boundary. Each stable hitch reported
+a 16.667 ms jump in `CAMetalDisplayLinkUpdate.targetPresentationTimestamp`,
+the callback itself arrived roughly 16.5–16.7 ms after the prior callback, and
+Metal still had roughly 8.1–8.2 ms before `targetTimestamp`, its render
+deadline. The renderer did not run late and the compositor did not discard a
+finished drawable: Core Animation omitted one 120 Hz update while negotiating
+the ProMotion cadence. That one absent temporal sample is most visible at high
+zoom because the correct constant-velocity distance per interval is larger.
+It is not an envelope, cache, LOD, color, grid, clock, or audio-drop defect.
+
+Three targeted policies were measured and rejected:
+
+- hard-locking the range to 120–120 Hz increased 16.667 ms gaps across nearly
+  every zoom;
+- raising the floor to 90–120 Hz produced 118.866 fps over the long
+  close-zoom pass, retained doubled intervals, and introduced one full-frame
+  presentation-target error;
+- increasing `preferredFrameLatency` from one to two reduced cadence and
+  reached a 25 ms gap at 1152 px/s while retaining the grab/run-on tradeoff.
+
+All probes and experimental policies were removed. The shipped renderer keeps
+latency one, the negotiated 60–120 Hz range, future-presentation prediction,
+and exact CoreAudio alignment. A fixed 60 Hz comparison remains a possible
+deliberate user-facing A/B experiment, but replacing the mostly 120 Hz path
+would trade away overall fluidity and was not shipped speculatively.
+
 ## Committed next player work
 
 See `ROADMAP.md` for sequencing.

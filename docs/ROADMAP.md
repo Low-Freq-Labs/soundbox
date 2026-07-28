@@ -105,6 +105,12 @@ For the live test count, trust `./check.sh` output—not any number written here
   measured from actual drawable presentations, not display-link submissions,
   and `sb_deck_presentation_error_*` now reports predicted-versus-actual
   presentation timing, measured at single-digit microseconds across all zooms.
+  The final registered phone/native comparison isolated the remaining rare
+  doubled interval at `CAMetalDisplayLink` callback delivery itself while
+  Metal still had roughly 8.2 ms before deadline. Hard 120 Hz, a 90–120 Hz
+  floor, and latency two all measured worse and were reverted; the shipped
+  latency-one negotiated 60–120 Hz policy is the validated boundary, not an
+  unfinished waveform/cache fix.
   Per-frame positional stability on a real library track is 0.3% of travel
   (~0.07 Retina pixels at maximum zoom), so motion is exact by measurement.
   A latency-one grab freezes the newest presented/committed source frame,
