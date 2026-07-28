@@ -16,12 +16,32 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from desktop.native_deck import (
-    NativeDeckBackend, native_available, native_library_path,
+    NativeDeckBackend, _repair_pwv5_visibility,
+    native_available, native_library_path,
 )
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class WaveformStreamRepair(unittest.TestCase):
+    def test_audible_zero_pwv5_rows_receive_only_a_minimum_color_carrier(self):
+        packed = bytes.fromhex("e07c 0000 0000 0384")
+        overview = struct.pack("<HHHH", 100, 20, 0, 30)
+        repaired = _repair_pwv5_visibility(
+            packed, overview, "linear-u16le")
+        self.assertEqual(
+            repaired,
+            bytes.fromhex("e07c e004 0000 0384"))
+
+    def test_repair_is_track_agnostic_and_preserves_true_silence(self):
+        packed = bytes.fromhex("e07c 0000 0384")
+        overview = struct.pack("<HHH", 100, 0, 30)
+        self.assertEqual(
+            _repair_pwv5_visibility(
+                packed, overview, "linear-u16le"),
+            packed)
 
 
 class NativeDeckContract(unittest.TestCase):
@@ -169,6 +189,20 @@ class NativeDeckContract(unittest.TestCase):
         QTest.qWait(30)
         self.deck.set_visual_position(750, False)
 
+    def test_blue_rgb_and_three_band_streams_switch_without_recooking(self):
+        detail = {
+            "_blue_detail": b"\x21\x42\x63\x7f",
+            "_rgb_detail": b"\xe0\x7c\x1c\x40\x03\x80\x7c\x20",
+            "_detail_bands": bytes(
+                [100, 20, 5, 20, 100, 5, 5, 20, 120, 40, 50, 60]),
+        }
+        self.assertTrue(self.deck._set_waveform_streams(detail, 150.0))
+        for mode in ("BLUE", "RGB", "3BAND"):
+            self.assertEqual(self.deck.set_waveform_mode(mode), mode)
+            self.assertEqual(self.deck.diagnostic_waveform_mode(), mode)
+            self.assertEqual(
+                self.deck.diagnostic_analysis_shape(), (4, 150.0))
+
     def test_mouse_hold_atomically_captures_the_continuous_visual_clock(self):
         self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
         self.deck.play()
@@ -255,16 +289,16 @@ class NativeDeckContract(unittest.TestCase):
         self.assertAlmostEqual(self.deck.diagnostic_detail_peak(), 1.0)
         # The scrolling waveform uses this peak-preserving pyramid at every
         # zoom; PWV7 is now only a fallback while the additive cache is absent.
-        self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 4)
-        # One ushort peak per sample, including all mip levels. The old
-        # WaveSample pyramid consumed 16 bytes/sample and duplicated RGB.
+        self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 6)
+        # Two ushort polarity peaks per sample, including all mip levels. The
+        # old WaveSample pyramid consumed 16 bytes/sample and duplicated RGB.
         self.assertLessEqual(
-            self.deck.diagnostic_audio_detail_buffer_bytes(), 24)
+            self.deck.diagnostic_audio_detail_buffer_bytes(), 64)
         for zoom in (
                 24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0,
                 256.0, 384.0, 576.0, 864.0, 1152.0, 1536.0):
             self.assertEqual(self.deck.set_zoom(zoom), zoom)
-            self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 4)
+            self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 6)
 
     def test_complete_analysis_commits_overview_and_ultra_as_one_surface(self):
         overview = {
@@ -308,7 +342,22 @@ class NativeDeckContract(unittest.TestCase):
         self.assertTrue(detail_ok)
         self.assertEqual(self.deck.diagnostic_analysis_shape(), (4, 150.0))
         self.assertEqual(self.deck.diagnostic_detail_shape(), (4, 6144.0))
-        self.assertAlmostEqual(self.deck.diagnostic_detail_peak(), 1.0)
+        self.assertAlmostEqual(
+            self.deck.diagnostic_detail_peak(), 0.84, places=4)
+        self.assertGreater(
+            self.deck.diagnostic_audio_detail_buffer_bytes(), 0)
+
+    def test_u16_audio_detail_upload_keeps_upper_and_lower_independent(self):
+        detail = {
+            "rate": 6144.0,
+            "heights": struct.pack("<4H", 65535, 32768, 1000, 0),
+            "lower_heights": struct.pack("<4H", 0, 1000, 32768, 65535),
+            "encoding": "linear-u16le",
+        }
+        self.deck.set_audio_detail(detail)
+        self.assertEqual(self.deck.diagnostic_detail_shape(), (4, 6144.0))
+        self.assertAlmostEqual(
+            self.deck.diagnostic_detail_peak(), 0.84, places=4)
         self.assertGreater(
             self.deck.diagnostic_audio_detail_buffer_bytes(), 0)
 

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
@@ -147,6 +147,40 @@ class SettingsPageMixin:
         cols.addWidget(col, 0, Qt.AlignTop)     # LIBRARY + BACKUP on the left
         cols.addWidget(left, 0, Qt.AlignTop)    # GRAVEYARD on the right
         cols.addStretch(1)
+
+        # --- PLAYER --------------------------------------------------------
+        bl.addWidget(self._settings_section("PLAYER"))
+        self._waveform_mode = QWidget()
+        self._waveform_mode.setObjectName("WaveformModeControl")
+        mode_layout = QHBoxLayout(self._waveform_mode)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+        mode_layout.setSpacing(0)
+        self._waveform_mode_group = QButtonGroup(self._waveform_mode)
+        self._waveform_mode_group.setExclusive(True)
+        self._waveform_mode_buttons = {}
+        modes = ("BLUE", "RGB", "3BAND")
+        for index, mode in enumerate(modes):
+            button = QPushButton(mode)
+            button.setObjectName("WaveformModeButton")
+            button.setProperty(
+                "segment",
+                "first" if index == 0
+                else "last" if index == len(modes) - 1
+                else "middle",
+            )
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFixedSize(66, 30)
+            button.clicked.connect(
+                lambda _checked=False, value=mode:
+                    self._on_waveform_mode_changed(value))
+            self._waveform_mode_group.addButton(button)
+            self._waveform_mode_buttons[mode] = button
+            mode_layout.addWidget(button)
+        bl.addWidget(self._settings_row(
+            "Waveform display", self._waveform_mode,
+            "Changes immediately. All three modes are prepared together, so "
+            "switching never recooks the track."))
 
         # --- LIBRARY -------------------------------------------------------
         bl.addWidget(self._settings_section("LIBRARY"))
@@ -483,8 +517,24 @@ class SettingsPageMixin:
                        (self._chk_nokey, self.settings.get("hide_nokey", True)),
                        (self._chk_short, self.settings.get("hide_short", True))):
             w.blockSignals(True); w.setChecked(bool(val)); w.blockSignals(False)
+        mode = str(self.settings.get("waveform_mode", "3BAND")).upper()
+        if mode not in {"BLUE", "RGB", "3BAND"}:
+            mode = "3BAND"
+        for name, button in self._waveform_mode_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(name == mode)
+            button.blockSignals(False)
         self._set_secs_label()
         self._sync_settings_enabled()
+
+    def _on_waveform_mode_changed(self, mode: str):
+        normalized = str(mode).upper()
+        if normalized not in {"BLUE", "RGB", "3BAND"}:
+            return
+        self.settings["waveform_mode"] = normalized
+        if hasattr(self, "player_bar"):
+            self.player_bar.set_waveform_mode(normalized)
+        self._save_state()
 
     def _apply_and_refresh(self):
         """Persist settings, push them to the library, and re-render the view + counts."""

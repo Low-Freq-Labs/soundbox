@@ -31,16 +31,37 @@ For the live test count, trust `./check.sh` output—not any number written here
   Renderers no longer remix the independently normalized 24-band master.
   Existing V4 records upgrade atomically one track at a time, preserving
   SoundBox-owned grid/cue rows and the established ultra silhouette.
-- **QUIET-SIGNAL GEOMETRY UPGRADE SHIPPED.** Overview and ultra contours now
-  measure the peak absolute sample in either source channel, eliminating the
-  stereo/anti-phase cancellation caused by the former mono sum. Linear
-  little-endian uint16 storage retains roughly 48 dB more quiet amplitude than
-  the former byte envelope. A gentle display-only `height^0.80` curve keeps
-  low-level musical tails visible without a fake minimum line; true zero stays
-  zero. `waveform_model` versions the persisted payload, so legacy V4 remains
-  playable while the worker performs one atomic rolling recook and preserves
-  SoundBox-owned grids/cues. Because the cache stays linear, future visual
-  tuning is renderer-only and cannot trigger another audio recook.
+- **POLARITY/QUIET GEOMETRY + RGB TIMING UPGRADE SHIPPED.** The ultra contour
+  stores independent positive and negative stereo-midpoint peaks with a 1/16
+  channel-safe floor, so real asymmetric detail replaces the formerly mirrored
+  upper/lower silhouette while anti-phase/quiet signal survives in linear
+  uint16. The 150 Hz envelope uses complete non-overlapping cells instead of
+  the 46 ms spectral window. A display-only `height^1.4` curve, 0.84 ceiling,
+  and true-zero continuous shoulder retain both attack shoulders and a stable
+  subpixel tail. Lossless RGB uses zero timeline correction; MP3 retains its
+  measured seven-row decoder correction. The waveform model receives one
+  rolling atomic recook while preserving SoundBox-owned grids/cues.
+- **REKORDBOX BLUE/RGB/3BAND DISPLAY MODES SHIPPED.** Settings persistently
+  selects among three independently cached native waveform pyramids. Existing
+  Rekordbox tracks import exact packed PWV3/PWV5/PWV7 rows read-only; other
+  tracks derive the full set in the same analysis pass, so one model migration
+  is sufficient. Every mode retains the high-resolution SoundBox outer contour
+  continuously at every zoom. A bounded selected-display-envelope floor
+  retains distant-scale low body, then tapers completely away from 384 to
+  576 px/s so close positive/negative lobes remain separated. The 3BAND
+  renderer uses measured Display-P3 red/amber/blue anchors and energy-weighted
+  low/mid/high color, so kicks
+  remain true red and clap detail remains blue instead of becoming a rounded,
+  muddy, or picket-fence block. RGB treats PWV5 correctly as one compact color
+  per row—not three layered bands—keeps close cell boundaries crisp, and uses
+  the measured channel expansion rather than smearing them into pastel
+  gradients. The ultra contour now selects from footprint-matched integer
+  peak divisors instead of rounding a 4.2-cell pixel up to an 8-cell max mip,
+  retaining Rekordbox-like broken attacks without blending moving lattices.
+  Audible all-zero PWV5 rows receive a
+  minimum, nearest-color upload carrier gated by the independent overview, so
+  ultra geometry cannot be painted black; this is renderer-wide, preserves
+  true silence, leaves caches untouched, and requires no recook.
 - **PERFORMANCE/POLISH PASS SHIPPED.** Long-track preparation is bounded,
   cooperatively interruptible, and automatically battery-aware; playback and
   foreground interaction preempt it inside the current file. Static Metal
@@ -199,9 +220,13 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
       main-wave seeking with pause/live preview/resume semantics.
 - [x] SoundBox-owned background caches for instant loads and high-detail
       all-zoom rendering; preparation pauses during playback.
-- [x] Channel-safe linear uint16 overview/ultra geometry with one rolling
-      model upgrade; legacy byte V4 remains playable during migration and the
-      display visibility curve stays outside the persisted cache.
+- [x] Independent positive/negative, midpoint-faithful linear uint16 ultra
+      geometry plus format-aware RGB timing with one rolling model upgrade;
+      legacy V4 remains playable during migration and the display
+      contrast/visibility curve stays outside the persisted cache.
+- [x] Persistent BLUE/RGB/3BAND selector backed by one combined cache model,
+      exact read-only PWV3/PWV5/PWV7 imports where available, and immediate
+      resident-GPU switching without recooking.
 - [x] Native arm64 macOS deck: AVAudioFile decode thread, lock-free ring,
       CoreAudio render callback, CAMetalDisplayLink, coverage-filtered Metal
       waveform, continuous visual PLL.

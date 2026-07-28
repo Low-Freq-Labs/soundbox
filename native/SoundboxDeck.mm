@@ -35,15 +35,26 @@ constexpr float kOverviewHeight = 28.0f;
 constexpr float kRulerTop = 31.0f;
 constexpr float kZoomTop = 49.0f;
 constexpr size_t kWaveMipLevels = 32;
+constexpr std::array<uint32_t, 18> kAudioDetailMipDivisors = {
+    1, 2, 3, 4, 5, 6, 8, 9, 13,
+    18, 25, 35, 50, 66, 99, 132, 192, 256,
+};
 constexpr float kWaveAttributeSmoothSamplesPerPixel = 4.0f;
 constexpr NSUInteger kWaveAttributeMarginPixels = 4096;
-// Persisted current geometry remains linear. A gentle display-only compander
-// gives ordinary quiet tails useful height, while a small continuous shoulder
-// resolves the last nonzero uint16 values as a physical-pixel hairline. The
+// Persisted current geometry remains linear. A contrast-preserving display
+// curve keeps narrow attacks and decay valleys distinct, while a small
+// continuous shoulder resolves the last nonzero uint16 values as a
+// physical-pixel hairline. The
 // shoulder is zero at digital zero and is applied before spatial
 // reconstruction, so entering/leaving true silence remains continuous.
-constexpr float kWaveformDisplayExponent = 0.80f;
-constexpr float kWaveformVisibilityShoulder = 1.0f / 128.0f;
+// Preserve the shoulders of real attacks. Squaring the linear envelope made
+// ordinary mid-level samples collapse toward the center line, leaving only
+// needle-like maxima even though the polarity cache retained the detail.
+// Rekordbox's close waveform sits between a linear amplitude map and the
+// rejected squared curve: retain mid-level shoulders without filling valleys.
+constexpr float kWaveformDisplayExponent = 1.4f;
+constexpr float kWaveformDisplayScale = 0.84f;
+constexpr float kWaveformVisibilityShoulder = 1.0f / 64.0f;
 constexpr float kWaveformVisibilityKnee = 4.0f / 65535.0f;
 
 static float displayWaveformHeight(uint16_t encodedHeight) {
@@ -57,10 +68,16 @@ static float displayWaveformHeight(uint16_t encodedHeight) {
     const float visibility = 1.0f - std::exp(
         -linear / kWaveformVisibilityKnee);
     return std::clamp(
-        companded
+        kWaveformDisplayScale * (companded
             + kWaveformVisibilityShoulder
-                * (1.0f - companded) * visibility,
+                * (1.0f - companded) * visibility),
         0.0f, 1.0f);
+}
+
+static float displayWaveformHeight(float linearHeight) {
+    const float bounded = std::clamp(linearHeight, 0.0f, 1.0f);
+    return displayWaveformHeight(static_cast<uint16_t>(std::lround(
+        bounded * 65535.0f)));
 }
 
 struct WaveSample {
@@ -70,8 +87,18 @@ struct WaveSample {
     float b;
 };
 
+struct DisplayWaveform {
+    id<MTLBuffer> buffer = nil;
+    NSUInteger sampleCount = 0;
+    float samplesPerSecond = 0.0f;
+    std::array<uint32_t, kWaveMipLevels> mipOffsets{};
+    std::array<uint32_t, kWaveMipLevels> mipCounts{};
+    size_t mipCount = 0;
+};
+
 struct AudioEnvelopeSample {
-    uint16_t height;
+    uint16_t upper;
+    uint16_t lower;
 };
 
 struct GridVertex {
@@ -141,10 +168,13 @@ struct Uniforms {
     uint32_t audioDetailMipCount;
     uint32_t audioDetailMipOffsets[kWaveMipLevels];
     uint32_t audioDetailMipCounts[kWaveMipLevels];
+    uint32_t audioDetailMipDivisors[kWaveMipLevels];
     uint32_t waveAttributeCount;
     float waveAttributeCurrentOffset;
     float waveAttributeSamplesPerPixel;
     uint32_t waveAttributeValid;
+    uint32_t threeBandActive;
+    uint32_t waveformMode;
 };
 
 struct AudioRing {
@@ -294,6 +324,12 @@ public:
         audioDetailMipCount_ = 0;
         audioDetailMipOffsets_.fill(0);
         audioDetailMipCounts_.fill(0);
+        audioDetailMipDivisors_.fill(0);
+        threeBandActive_ = false;
+        displayWaveformActive_ = false;
+        for (DisplayWaveform &waveform : displayWaveforms_) {
+            waveform = DisplayWaveform{};
+        }
         beatPositions_.clear();
         waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
@@ -600,7 +636,9 @@ public:
             const auto *samples =
                 static_cast<const AudioEnvelopeSample *>(buffer.contents);
             for (NSUInteger i = 0; i < count; ++i) {
-                peak = std::max(peak, samples[i].height / 65535.0f);
+                peak = std::max(
+                    peak,
+                    std::max(samples[i].upper, samples[i].lower) / 65535.0f);
             }
         } else {
             const auto *samples =
@@ -718,6 +756,7 @@ public:
             audioDetailSamplesPerSecond_ = 0;
             audioDetailMipCount_ = 0;
             audioDetailMipOffsets_.fill(0);
+            audioDetailMipDivisors_.fill(0);
             waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
             audioDetailMipCounts_.fill(0);
             gridBuffer_ = nil;
@@ -800,6 +839,52 @@ public:
             pyramid.insert(pyramid.end(), next.begin(), next.end());
             level = std::move(next);
             levelEnergy = std::move(nextEnergy);
+            ++mipCount;
+        }
+        return pyramid;
+    }
+
+    static std::vector<WaveSample> buildThreeBandPyramid(
+            const std::vector<WaveSample> &base,
+            std::array<uint32_t, kWaveMipLevels> &offsets,
+            std::array<uint32_t, kWaveMipLevels> &counts,
+            size_t &mipCount) {
+        offsets.fill(0);
+        counts.fill(0);
+        mipCount = 0;
+        if (base.empty()) {
+            return {};
+        }
+        std::vector<WaveSample> pyramid = base;
+        std::vector<WaveSample> level = base;
+        counts[0] = static_cast<uint32_t>(level.size());
+        mipCount = 1;
+        while (mipCount < kWaveMipLevels && level.size() > 1) {
+            std::vector<WaveSample> next;
+            next.reserve((level.size() + 1) / 2);
+            for (size_t i = 0; i < level.size(); i += 2) {
+                const WaveSample &a = level[i];
+                const WaveSample &b =
+                    i + 1 < level.size() ? level[i + 1] : a;
+                const float low = std::max(
+                    a.r * a.height, b.r * b.height);
+                const float mid = std::max(
+                    a.g * a.height, b.g * b.height);
+                const float high = std::max(
+                    a.b * a.height, b.b * b.height);
+                const float height = std::max({low, mid, high});
+                next.push_back({
+                    height,
+                    height > 0.0f ? low / height : 0.0f,
+                    height > 0.0f ? mid / height : 0.0f,
+                    height > 0.0f ? high / height : 0.0f,
+                });
+            }
+            offsets[mipCount] =
+                static_cast<uint32_t>(pyramid.size());
+            counts[mipCount] = static_cast<uint32_t>(next.size());
+            pyramid.insert(pyramid.end(), next.begin(), next.end());
+            level = std::move(next);
             ++mipCount;
         }
         return pyramid;
@@ -1233,32 +1318,202 @@ public:
         std::vector<WaveSample> detail;
         {
             std::lock_guard<std::mutex> lock(renderMutex_);
-            if (!detailBuffer_ || detailSampleCount_ != count) {
+            if (detailSamplesPerSecond_ <= 0.0f) {
                 return false;
             }
-            const auto *source = static_cast<const WaveSample *>(
-                detailBuffer_.contents);
-            detail.assign(source, source + count);
         }
+        detail.reserve(count);
         for (size_t i = 0; i < count; ++i) {
-            const uint8_t energy = std::max({
-                static_cast<uint8_t>(bands[i * 3] & 0x7f),
-                static_cast<uint8_t>(bands[i * 3 + 1] & 0x7f),
-                static_cast<uint8_t>(bands[i * 3 + 2] & 0x7f),
+            const float low = (bands[i * 3] & 0x7f) / 127.0f;
+            const float mid = (bands[i * 3 + 1] & 0x7f) / 127.0f;
+            const float high = (bands[i * 3 + 2] & 0x7f) / 127.0f;
+            const float height = std::max({mid, high, low});
+            detail.push_back({
+                height,
+                height > 0.0f ? low / height : 0.0f,
+                height > 0.0f ? mid / height : 0.0f,
+                height > 0.0f ? high / height : 0.0f,
             });
-            detail[i].height = energy / 127.0f;
         }
-        id<MTLBuffer> buffer = [device_ newBufferWithBytes:detail.data()
-            length:detail.size() * sizeof(WaveSample)
+        std::array<uint32_t, kWaveMipLevels> mipOffsets{};
+        std::array<uint32_t, kWaveMipLevels> mipCounts{};
+        size_t mipCount = 0;
+        std::vector<WaveSample> pyramid = buildThreeBandPyramid(
+            detail, mipOffsets, mipCounts, mipCount);
+        id<MTLBuffer> buffer = [device_ newBufferWithBytes:pyramid.data()
+            length:pyramid.size() * sizeof(WaveSample)
             options:MTLResourceStorageModeShared];
         if (!buffer) {
             setError(-42, "Metal three-band waveform allocation failed");
             return false;
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
+        waveBuffer_ = buffer;
         detailBuffer_ = buffer;
+        waveSampleCount_ = detail.size();
+        detailSampleCount_ = detail.size();
+        waveSamplesPerSecond_ = detailSamplesPerSecond_;
+        waveMipOffsets_ = mipOffsets;
+        waveMipCounts_ = mipCounts;
+        waveMipCount_ = mipCount;
+        threeBandActive_ = true;
         waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
+    }
+
+    static WaveSample blueWaveSample(uint8_t packed) {
+        const float height = displayWaveformHeight(
+            (packed & 0x1f) / 31.0f);
+        const float luminance = ((packed >> 5) & 0x07) / 7.0f;
+        // PWV3's upper bits lift Pioneer blue toward white. Keep the original
+        // five-bit geometry completely independent from that luminance.
+        return {
+            height,
+            0.05f + 0.62f * luminance,
+            0.34f + 0.50f * luminance,
+            1.0f,
+        };
+    }
+
+    static WaveSample rgbWaveSample(const uint8_t *packed) {
+        const uint16_t value =
+            static_cast<uint16_t>(packed[0]) << 8
+            | static_cast<uint16_t>(packed[1]);
+        const uint8_t raw[3] = {
+            static_cast<uint8_t>((value & 0xe000) >> 12),
+            static_cast<uint8_t>((value & 0x1c00) >> 10),
+            static_cast<uint8_t>((value & 0x0380) >> 7),
+        };
+        // PWV5 stores one compact RGB display color, not three independent
+        // band heights. Expand each channel through its own encoded range:
+        // red uses the even 0..14 codes while green and blue use 0..7.
+        // The measured Rekordbox display transfer leaves a little headroom
+        // above the nominal three-bit green/blue maxima; driving both to
+        // 1.0 makes the captured RGB lane too blue and slightly too green.
+        return {
+            displayWaveformHeight(
+                ((value & 0x007c) >> 2) / 31.0f),
+            raw[0] / 14.0f,
+            raw[1] / 8.0f,
+            raw[2] / 8.75f,
+        };
+    }
+
+    static WaveSample threeBandWaveSample(const uint8_t *packed) {
+        // The exact High & Scared pixels establish the display-frequency order
+        // as low, mid, high: the third stream owns the blue clap transient.
+        const float low = displayWaveformHeight(
+            (packed[0] & 0x7f) / 127.0f);
+        const float mid = displayWaveformHeight(
+            (packed[1] & 0x7f) / 127.0f);
+        const float high = displayWaveformHeight(
+            (packed[2] & 0x7f) / 127.0f);
+        const float height = std::max({low, mid, high});
+        return {
+            height,
+            height > 0.0f ? low / height : 0.0f,
+            height > 0.0f ? mid / height : 0.0f,
+            height > 0.0f ? high / height : 0.0f,
+        };
+    }
+
+    bool activateWaveformModeLocked() {
+        const size_t index = waveformMode_ - 1;
+        if (index >= displayWaveforms_.size()) {
+            return false;
+        }
+        const DisplayWaveform &selected = displayWaveforms_[index];
+        if (!selected.buffer || !selected.sampleCount || !selected.mipCount) {
+            return false;
+        }
+        waveBuffer_ = selected.buffer;
+        detailBuffer_ = selected.buffer;
+        waveSampleCount_ = selected.sampleCount;
+        detailSampleCount_ = selected.sampleCount;
+        waveSamplesPerSecond_ = selected.samplesPerSecond;
+        detailSamplesPerSecond_ = selected.samplesPerSecond;
+        waveMipOffsets_ = selected.mipOffsets;
+        waveMipCounts_ = selected.mipCounts;
+        waveMipCount_ = selected.mipCount;
+        // Only PWV7 3BAND carries three independent band heights. PWV5 RGB
+        // carries one color plus one compact height and must use the ordinary
+        // single-color contour compositor.
+        threeBandActive_ = waveformMode_ == 3;
+        displayWaveformActive_ = true;
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
+        return true;
+    }
+
+    bool setWaveformStreams(
+            const uint8_t *blueRows, size_t blueCount,
+            const uint8_t *rgbRows, size_t rgbCount,
+            const uint8_t *threeBandRows, size_t threeBandCount,
+            double samplesPerSecond) {
+        if (!blueRows || !blueCount || !rgbRows || !rgbCount
+                || !threeBandRows || !threeBandCount
+                || samplesPerSecond <= 0.0) {
+            return false;
+        }
+        std::array<std::vector<WaveSample>, 3> base;
+        base[0].reserve(blueCount);
+        base[1].reserve(rgbCount);
+        base[2].reserve(threeBandCount);
+        for (size_t i = 0; i < blueCount; ++i) {
+            base[0].push_back(blueWaveSample(blueRows[i]));
+        }
+        for (size_t i = 0; i < rgbCount; ++i) {
+            base[1].push_back(rgbWaveSample(rgbRows + i * 2));
+        }
+        for (size_t i = 0; i < threeBandCount; ++i) {
+            base[2].push_back(threeBandWaveSample(
+                threeBandRows + i * 3));
+        }
+
+        std::array<DisplayWaveform, 3> prepared;
+        for (size_t mode = 0; mode < prepared.size(); ++mode) {
+            std::vector<WaveSample> pyramid = mode == 2
+                ? buildThreeBandPyramid(
+                    base[mode],
+                    prepared[mode].mipOffsets,
+                    prepared[mode].mipCounts,
+                    prepared[mode].mipCount)
+                : buildWavePyramid(
+                    base[mode],
+                    prepared[mode].mipOffsets,
+                    prepared[mode].mipCounts,
+                    prepared[mode].mipCount);
+            prepared[mode].buffer = [device_
+                newBufferWithBytes:pyramid.data()
+                    length:pyramid.size() * sizeof(WaveSample)
+                    options:MTLResourceStorageModeShared];
+            if (!prepared[mode].buffer) {
+                setError(-46, "Metal waveform-mode buffer allocation failed");
+                return false;
+            }
+            prepared[mode].sampleCount = base[mode].size();
+            prepared[mode].samplesPerSecond =
+                static_cast<float>(samplesPerSecond);
+        }
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        displayWaveforms_ = std::move(prepared);
+        return activateWaveformModeLocked();
+    }
+
+    bool setWaveformMode(uint32_t mode) {
+        if (mode < 1 || mode > 3) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        waveformMode_ = mode;
+        // Settings load can select a mode before this track's streams arrive.
+        // Preserve the intent; setWaveformStreams activates it atomically.
+        return !displayWaveforms_[mode - 1].buffer
+            || activateWaveformModeLocked();
+    }
+
+    uint32_t waveformMode() {
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        return waveformMode_;
     }
 
     bool setSpectralAnalysis(
@@ -1290,6 +1545,8 @@ public:
             detail.push_back({
                 static_cast<uint16_t>(
                     static_cast<uint16_t>(heights[i]) * 257u),
+                static_cast<uint16_t>(
+                    static_cast<uint16_t>(heights[i]) * 257u),
             });
         }
         return installAudioDetail(
@@ -1314,6 +1571,36 @@ public:
             detail.push_back({
                 static_cast<uint16_t>(std::clamp(
                     std::lround(displayed * 65535.0f), 0L, 65535L)),
+                static_cast<uint16_t>(std::clamp(
+                    std::lround(displayed * 65535.0f), 0L, 65535L)),
+            });
+        }
+        return installAudioDetail(
+            std::move(detail), count, samplesPerSecond, expectedGeneration);
+    }
+
+    bool setAudioDetailPolarity16(
+        const uint16_t *upper, const uint16_t *lower,
+        size_t count, double samplesPerSecond,
+        uint64_t expectedGeneration = 0) {
+        if (expectedGeneration
+                && renderGeneration_.load(std::memory_order_acquire)
+                    != expectedGeneration) {
+            return false;
+        }
+        if (!upper || !lower || !count || samplesPerSecond <= 0) {
+            return false;
+        }
+        std::vector<AudioEnvelopeSample> detail;
+        detail.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float displayedUpper = displayWaveformHeight(upper[i]);
+            const float displayedLower = displayWaveformHeight(lower[i]);
+            detail.push_back({
+                static_cast<uint16_t>(std::clamp(
+                    std::lround(displayedUpper * 65535.0f), 0L, 65535L)),
+                static_cast<uint16_t>(std::clamp(
+                    std::lround(displayedLower * 65535.0f), 0L, 65535L)),
             });
         }
         return installAudioDetail(
@@ -1324,30 +1611,46 @@ public:
         std::vector<AudioEnvelopeSample> detail,
         size_t count, double samplesPerSecond,
         uint64_t expectedGeneration) {
-        // A single peak-preserving silhouette keeps the old SoundBox/Rekordbox
-        // visual language while the V4 ultra stream supplies close-zoom detail.
-        // Current caches are linear uint16 and receive only a display-time
-        // compander; legacy uint8 remains playable until its atomic upgrade.
+        // Upper and lower polarity peaks stay independent through every
+        // song-anchored mip. Use footprint-matched integer divisors instead of
+        // power-of-two-only levels: choosing 8 source cells for a 4.2-cell
+        // physical pixel visibly rounds away nearly half the contour detail.
+        // The denser ladder always stays at or just above the pixel footprint,
+        // retaining the anti-aliasing contract without that 2x oversmoothing.
+        // Legacy one-height inputs are duplicated by their setters until the
+        // rolling v3 cache migration replaces them.
         std::array<uint32_t, kWaveMipLevels> mipOffsets{};
         std::array<uint32_t, kWaveMipLevels> mipCounts{};
-        std::vector<AudioEnvelopeSample> pyramid = detail;
-        mipCounts[0] = static_cast<uint32_t>(detail.size());
-        size_t mipCount = 1;
-        std::vector<AudioEnvelopeSample> level = std::move(detail);
-        while (mipCount < kWaveMipLevels && level.size() > 1) {
-            std::vector<AudioEnvelopeSample> next;
-            next.reserve((level.size() + 1) / 2);
-            for (size_t i = 0; i < level.size(); i += 2) {
-                const AudioEnvelopeSample &a = level[i];
-                const bool hasB = i + 1 < level.size();
-                const AudioEnvelopeSample &b = hasB ? level[i + 1] : a;
-                next.push_back({std::max(a.height, b.height)});
+        std::array<uint32_t, kWaveMipLevels> mipDivisors{};
+        std::vector<AudioEnvelopeSample> pyramid;
+        size_t mipCount = 0;
+        for (const uint32_t divisor : kAudioDetailMipDivisors) {
+            if (mipCount >= kWaveMipLevels) {
+                break;
+            }
+            const size_t levelCount =
+                (detail.size() + divisor - 1) / divisor;
+            std::vector<AudioEnvelopeSample> level;
+            level.reserve(levelCount);
+            for (size_t start = 0; start < detail.size();
+                    start += divisor) {
+                AudioEnvelopeSample peak{};
+                const size_t end = std::min(
+                    detail.size(), start + divisor);
+                for (size_t i = start; i < end; ++i) {
+                    peak.upper = std::max(peak.upper, detail[i].upper);
+                    peak.lower = std::max(peak.lower, detail[i].lower);
+                }
+                level.push_back(peak);
             }
             mipOffsets[mipCount] = static_cast<uint32_t>(pyramid.size());
-            mipCounts[mipCount] = static_cast<uint32_t>(next.size());
-            pyramid.insert(pyramid.end(), next.begin(), next.end());
-            level = std::move(next);
+            mipCounts[mipCount] = static_cast<uint32_t>(level.size());
+            mipDivisors[mipCount] = divisor;
+            pyramid.insert(pyramid.end(), level.begin(), level.end());
             ++mipCount;
+            if (levelCount <= 1) {
+                break;
+            }
         }
         id<MTLBuffer> buffer = [device_ newBufferWithBytes:pyramid.data()
             length:pyramid.size() * sizeof(AudioEnvelopeSample)
@@ -1368,6 +1671,7 @@ public:
         audioDetailMipCount_ = mipCount;
         audioDetailMipOffsets_ = mipOffsets;
         audioDetailMipCounts_ = mipCounts;
+        audioDetailMipDivisors_ = mipDivisors;
         waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
@@ -1514,6 +1818,13 @@ public:
                 audioDetailMipCounts_.begin(),
                 audioDetailMipCounts_.end(),
                 uniforms.audioDetailMipCounts);
+            std::copy(
+                audioDetailMipDivisors_.begin(),
+                audioDetailMipDivisors_.end(),
+                uniforms.audioDetailMipDivisors);
+            uniforms.threeBandActive = threeBandActive_ ? 1u : 0u;
+            uniforms.waveformMode =
+                displayWaveformActive_ ? waveformMode_ : 0u;
             waveBuffer = waveBuffer_;
             audioDetailBuffer = audioDetailBuffer_;
             gridBuffer = gridBuffer_;
@@ -1563,7 +1874,7 @@ public:
                 || waveAttributeCount_ != desiredAttributeCount) {
             waveAttributeBuffer_ = [device_
                 newBufferWithLength:
-                    desiredAttributeCount * sizeof(float) * 4
+                    desiredAttributeCount * sizeof(float) * 8
                 options:MTLResourceStorageModePrivate];
             waveAttributeCount_ = waveAttributeBuffer_
                 ? desiredAttributeCount : 0;
@@ -2101,11 +2412,17 @@ private:
         auto create = ^{
             metalView_ = [[SBMetalView alloc] initWithFrame:parentView_.bounds];
             metalLayer_ = metalView_.deckLayer;
-            // Renderer RGB is authored as display-sRGB. The sRGB attachment
-            // lets Metal blend subpixel coverage in linear light, then encode
-            // once on store. BGRA8Unorm made equal waveform/grid areas pulse
-            // at different perceived brightness.
+            // Rekordbox's captured waveform anchors use the display's P3
+            // primaries directly (red 255/0/0, high blue 127/162/255).
+            // Without an explicit layer color space, macOS treated these as
+            // sRGB and converted them to 234/51/35 and 134/162/248 on the
+            // built-in P3 panel. Keep the sRGB transfer attachment for linear
+            // coverage blending, but declare the authored output primaries.
             metalLayer_.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+            CGColorSpaceRef displayP3 =
+                CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3);
+            metalLayer_.colorspace = displayP3;
+            CGColorSpaceRelease(displayP3);
             metalLayer_.framebufferOnly = YES;
             metalLayer_.maximumDrawableCount = 3;
             [parentView_ addSubview:metalView_ positioned:NSWindowAbove relativeTo:nil];
@@ -2140,7 +2457,7 @@ private:
 #include <metal_stdlib>
 using namespace metal;
 struct WaveSample { float height; float r; float g; float b; };
-struct AudioEnvelopeSample { ushort height; };
+struct AudioEnvelopeSample { ushort upper; ushort lower; };
 struct GridVertex { uint songMillis; float songMillisPhase;
                     float xOffsetPixels; float yPixels;
                     float r; float g; float b; float a;
@@ -2166,10 +2483,13 @@ struct Uniforms { float currentSeconds;
                   uint audioDetailMipCount;
                   uint audioDetailMipOffsets[32];
                   uint audioDetailMipCounts[32];
+                  uint audioDetailMipDivisors[32];
                   uint waveAttributeCount;
                   float waveAttributeCurrentOffset;
                   float waveAttributeSamplesPerPixel;
                   uint waveAttributeValid;
+                  uint threeBandActive;
+                  uint waveformMode;
                   };
 constant uint kAttributeProfileSamples = 5u;
 struct Out {
@@ -2185,7 +2505,8 @@ struct WaveTap {
     float valid;
 };
 struct EnvelopeTap {
-    float height;
+    float upper;
+    float lower;
     float valid;
 };
 struct WaveSurface {
@@ -2193,6 +2514,10 @@ struct WaveSurface {
     float3 weightedColor;
     float colorWeight;
     float valid;
+};
+struct WaveAttribute {
+    float4 colorAndUpper;
+    float4 lowerAndPadding;
 };
 inline float vivid_wave_coverage(float coverage) {
     // Keep thin contours bright without a nonzero visibility floor. A hard
@@ -2210,6 +2535,17 @@ inline float3 display_srgb_to_linear(float3 value) {
     const float3 upper = pow(
         (value + 0.055) / 1.055, float3(2.4));
     return select(upper, lower, value <= float3(0.04045));
+}
+inline float3 three_band_color(float3 bands) {
+    // Stored WaveSample RGB carries low/mid/high geometry, not display RGB.
+    // These are the saturated Rekordbox 3BAND anchors: low is true red, mid
+    // is warm pink, and high is the measured 127/162/255 blue.
+    const float3 lowColor = float3(1.0, 0.0, 0.0);
+    const float3 midColor = float3(1.0, 0.55, 0.0);
+    const float3 highColor = float3(0.50, 0.64, 1.0);
+    const float3 mixed =
+        bands.r * lowColor + bands.g * midColor + bands.b * highColor;
+    return mixed / max(max(mixed.r, max(mixed.g, mixed.b)), 0.0001);
 }
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     const float2 positions[3] = {
@@ -2281,12 +2617,11 @@ inline WaveTap wave_tap(
 inline EnvelopeTap envelope_tap(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
-        uint baseAnchor, float baseLocal, uint level) {
-    EnvelopeTap result{0.0, 0.0};
+        uint baseAnchor, float baseLocal, uint divisor) {
+    EnvelopeTap result{0.0, 0.0, 0.0};
     if (levelCount == 0) {
         return result;
     }
-    const uint divisor = mip_divisor(level);
     const uint anchor = baseAnchor / divisor;
     const uint remainder = baseAnchor % divisor;
     const float local =
@@ -2300,35 +2635,36 @@ inline EnvelopeTap envelope_tap(
     for (int support = -1; support <= 2; ++support) {
         const uint index = levelOffset + uint(clamp(
             left + support, 0, int(levelCount) - 1));
-        result.height +=
-            float(samples[index].height) / 65535.0
-            * weights[uint(support + 1)];
+        const float weight = weights[uint(support + 1)];
+        result.upper += float(samples[index].upper) / 65535.0 * weight;
+        result.lower += float(samples[index].lower) / 65535.0 * weight;
     }
     result.valid = 1.0;
     return result;
 }
 
-inline float envelope_support_max(
+inline float2 envelope_support_max(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
-        uint baseAnchor, float baseLocal, uint level) {
+        uint baseAnchor, float baseLocal, uint divisor) {
     if (levelCount == 0) {
-        return 0.0;
+        return float2(0.0);
     }
-    const uint divisor = mip_divisor(level);
     const uint anchor = baseAnchor / divisor;
     const uint remainder = baseAnchor % divisor;
     const float local =
         (float(remainder) + baseLocal) / float(divisor);
     const int left = int(anchor) + int(floor(local));
     if (left < 0 || left >= int(levelCount)) {
-        return 0.0;
+        return float2(0.0);
     }
-    float result = 0.0;
+    float2 result = float2(0.0);
     for (int support = -1; support <= 2; ++support) {
         const uint index = levelOffset + uint(clamp(
             left + support, 0, int(levelCount) - 1));
-        result = max(result, float(samples[index].height) / 65535.0);
+        result = max(
+            result,
+            float2(samples[index].upper, samples[index].lower) / 65535.0);
     }
     return result;
 }
@@ -2342,6 +2678,36 @@ inline uint detail_lod(float footprint, uint mipCount) {
     return uint(clamp(
         ceil(log2(max(1.0, footprint))),
         0.0, float(mipCount - 1)));
+}
+
+inline uint audio_detail_lod(
+        float footprint, constant uint *divisors, uint mipCount) {
+    if (mipCount == 0) {
+        return 0;
+    }
+    // A 6% tolerance lets a 2-cell level serve a 2.1-cell Retina pixel
+    // instead of jumping to 3. The five-sample analytic profile absorbs that
+    // tiny overlap while the next genuinely undersized level is rejected.
+    const float required = max(1.0, footprint * 0.94);
+    for (uint level = 0; level < mipCount; ++level) {
+        if (float(divisors[level]) >= required) {
+            return level;
+        }
+    }
+    return mipCount - 1;
+}
+
+inline uint audio_detail_bound_lod(
+        float span, constant uint *divisors, uint mipCount) {
+    if (mipCount == 0) {
+        return 0;
+    }
+    for (uint level = 0; level < mipCount; ++level) {
+        if (float(divisors[level]) >= max(1.0, span)) {
+            return level;
+        }
+    }
+    return mipCount - 1;
 }
 
 inline float monotone_slope(float before, float after) {
@@ -2422,15 +2788,34 @@ inline WaveTap sharp_wave_tap(
     return result;
 }
 
+inline float3 nearest_wave_color(
+        const device WaveSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint level) {
+    if (levelCount == 0) {
+        return float3(0.0);
+    }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int cell = int(anchor) + int(floor(local));
+    if (cell < 0 || cell >= int(levelCount)) {
+        return float3(0.0);
+    }
+    const WaveSample sample = samples[levelOffset + uint(cell)];
+    return float3(sample.r, sample.g, sample.b);
+}
+
 inline EnvelopeTap sharp_envelope_tap(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
-        uint baseAnchor, float baseLocal, uint level) {
-    EnvelopeTap result{0.0, 0.0};
+        uint baseAnchor, float baseLocal, uint divisor) {
+    EnvelopeTap result{0.0, 0.0, 0.0};
     if (levelCount == 0) {
         return result;
     }
-    const uint divisor = mip_divisor(level);
     const uint anchor = baseAnchor / divisor;
     const uint remainder = baseAnchor % divisor;
     const float local =
@@ -2440,28 +2825,39 @@ inline EnvelopeTap sharp_envelope_tap(
     if (left < 0 || left >= int(levelCount)) {
         return result;
     }
-    float support[4];
+    float2 support[4];
     for (int tap = -1; tap <= 2; ++tap) {
-        support[tap + 1] = float(samples[levelOffset + uint(clamp(
-            left + tap, 0, int(levelCount) - 1))].height) / 65535.0;
+        const AudioEnvelopeSample sample = samples[levelOffset + uint(clamp(
+            left + tap, 0, int(levelCount) - 1))];
+        support[tap + 1] =
+            float2(sample.upper, sample.lower) / 65535.0;
     }
-    result.height = monotone_hermite(
-        support[0], support[1], support[2], support[3],
-        local - float(whole));
+    const float phase = local - float(whole);
+    result.upper = monotone_hermite(
+        support[0].x, support[1].x, support[2].x, support[3].x, phase);
+    result.lower = monotone_hermite(
+        support[0].y, support[1].y, support[2].y, support[3].y, phase);
     result.valid = 1.0;
     return result;
 }
 
-inline float4 linear_attribute(
-        const device float4 *attributes, uint count, float coordinate) {
+inline WaveAttribute linear_attribute(
+        const device WaveAttribute *attributes, uint count, float coordinate) {
     const float bounded = clamp(
         coordinate, 0.0, max(0.0, float(count) - 1.0));
     const int left = int(floor(bounded));
     const int right = min(left + 1, int(count) - 1);
-    return mix(
-        attributes[uint(left)],
-        attributes[uint(right)],
-        bounded - float(left));
+    const float phase = bounded - float(left);
+    WaveAttribute result;
+    result.colorAndUpper = mix(
+        attributes[uint(left)].colorAndUpper,
+        attributes[uint(right)].colorAndUpper,
+        phase);
+    result.lowerAndPadding = mix(
+        attributes[uint(left)].lowerAndPadding,
+        attributes[uint(right)].lowerAndPadding,
+        phase);
+    return result;
 }
 
 inline float targeted_stop_filter(float pixelsPerSecond) {
@@ -2480,7 +2876,7 @@ kernel void wave_attribute_kernel(
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
-        device float4 *attributes [[buffer(5)]],
+        device WaveAttribute *attributes [[buffer(5)]],
         uint id [[thread_position_in_grid]]) {
     if (id >= u.waveAttributeCount
             || u.sampleCount == 0 || u.waveMipCount == 0) {
@@ -2504,7 +2900,8 @@ kernel void wave_attribute_kernel(
         u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
         waveLevel);
     if (sharpWave.valid == 0.0) {
-        attributes[id] = float4(0.0);
+        attributes[id].colorAndUpper = float4(0.0);
+        attributes[id].lowerAndPadding = float4(0.0);
         return;
     }
     // The targeted full-ladder recording isolates residual wiggle to
@@ -2577,15 +2974,46 @@ kernel void wave_attribute_kernel(
         sharpWave.weightedColor,
         stableWave.weightedColor,
         stableKernel);
-    const float3 color = weightedColor
+    float3 color = weightedColor
         / max(heightWeight, 0.0001);
+    if (u.waveformMode == 2) {
+        // PWV5 RGB rows are discrete display colors. Rekordbox keeps their
+        // close-zoom boundaries crisp; cubic interpolation turns each
+        // approximately 150 Hz row into a broad pastel gradient. Preserve
+        // the already-stable interpolation at distant stops, then converge
+        // to a song-anchored nearest row over the 384..576 close transition.
+        const float3 crispColor = nearest_wave_color(
+            samples,
+            u.waveMipOffsets[waveLevel],
+            u.waveMipCounts[waveLevel],
+            u.waveCurrentIndex,
+            u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+            waveLevel);
+        color = mix(
+            color, crispColor,
+            smoothstep(384.0, 576.0, u.pixelsPerSecond));
+    }
     float height = mix(
         sharpWave.height, stableWave.height, stableKernel);
-    if (u.audioDetailSampleCount > 0 && u.audioDetailMipCount > 0) {
+    const float displayEnvelopeHeight = height;
+    float upperHeight = height;
+    float lowerHeight = height;
+    // Exact PWV3/PWV5/PWV7 rows provide display color/frequency identity, but
+    // their 150 Hz envelopes cannot describe the individual close-zoom audio
+    // cycles visible in Rekordbox. The decoded envelope therefore owns the
+    // continuous outer silhouette in every mode. Crucially, it remains a
+    // continuous surface: gating it by the 150 Hz display-row lattice punched
+    // false gaps into claps and bass tails on High & Scared.
+    if (u.audioDetailSampleCount > 0
+            && u.audioDetailMipCount > 0) {
         const float detailFootprint = u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
-        const uint detailLevel = detail_lod(
-            detailFootprint, u.audioDetailMipCount);
+        const uint detailLevel = audio_detail_lod(
+            detailFootprint,
+            u.audioDetailMipDivisors,
+            u.audioDetailMipCount);
+        const uint detailDivisor =
+            u.audioDetailMipDivisors[detailLevel];
         const EnvelopeTap sharpDetail = sharp_envelope_tap(
             audioDetailSamples,
             u.audioDetailMipOffsets[detailLevel],
@@ -2593,7 +3021,7 @@ kernel void wave_attribute_kernel(
             u.audioDetailCurrentIndex,
             u.audioDetailCurrentPhase
                 + secondOffset * u.audioDetailSamplesPerSecond,
-            detailLevel);
+            detailDivisor);
         if (sharpDetail.valid > 0.0) {
             const EnvelopeTap smoothDetail = envelope_tap(
                 audioDetailSamples,
@@ -2602,7 +3030,7 @@ kernel void wave_attribute_kernel(
                 u.audioDetailCurrentIndex,
                 u.audioDetailCurrentPhase
                     + secondOffset * u.audioDetailSamplesPerSecond,
-                detailLevel);
+                detailDivisor);
             const float detailFilterOffset =
                 filterSeconds * u.audioDetailSamplesPerSecond;
             const float detailLocal =
@@ -2614,24 +3042,63 @@ kernel void wave_attribute_kernel(
                 u.audioDetailMipCounts[detailLevel],
                 u.audioDetailCurrentIndex,
                 detailLocal - detailFilterOffset,
-                detailLevel);
+                detailDivisor);
             const EnvelopeTap rightSmoothDetail = envelope_tap(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
                 u.audioDetailMipCounts[detailLevel],
                 u.audioDetailCurrentIndex,
                 detailLocal + detailFilterOffset,
-                detailLevel);
+                detailDivisor);
             const float detailFilter = targetedFilter
                 * leftSmoothDetail.valid * rightSmoothDetail.valid;
-            const float stableDetail = mix(
-                smoothDetail.height,
-                (leftSmoothDetail.height
-                    + 2.0 * smoothDetail.height
-                    + rightSmoothDetail.height) * 0.25,
+            const float2 smoothDetailPair =
+                float2(smoothDetail.upper, smoothDetail.lower);
+            const float2 stableDetail = mix(
+                smoothDetailPair,
+                (float2(leftSmoothDetail.upper, leftSmoothDetail.lower)
+                    + 2.0 * smoothDetailPair
+                    + float2(
+                        rightSmoothDetail.upper,
+                        rightSmoothDetail.lower)) * 0.25,
                 detailFilter);
-            height = mix(
-                sharpDetail.height, stableDetail, stableKernel);
+            const float2 audioEnvelopeHeight = mix(
+                float2(sharpDetail.upper, sharpDetail.lower),
+                stableDetail, stableKernel);
+            // Rekordbox retains a low, varying display-envelope body at
+            // distant scales, where a compact 150 Hz cell represents many
+            // individual cycles. Keep that bounded floor only through the
+            // overview/middle ladder. Applying it to both polarities at close
+            // zoom reconnects positive and negative lobes through the center,
+            // fattens blue transients into blocks, and destroys the signed
+            // oscillation that the V3 cache was introduced to preserve.
+            // Taper it away between the fixed 384 and 576 stops; every close
+            // stop then uses the independent decoded upper/lower geometry
+            // exactly, while true zero remains zero at every scale.
+            const float displayFloorWeight = 1.0 - smoothstep(
+                384.0, 576.0, u.pixelsPerSecond);
+            float2 polarityHeight = max(
+                audioEnvelopeHeight,
+                float2(
+                    displayEnvelopeHeight * 0.30 * displayFloorWeight));
+            // The u16 ultra stream can legitimately quantize extremely quiet
+            // nonzero audio to zero even though the independent 150 Hz
+            // display envelope still proves signal exists. At close zoom,
+            // recover only that missing near-center ink and cap it to a thin
+            // line. The rescue fades out as soon as either decoded polarity
+            // has its own visible height, so it cannot reconnect normal
+            // attacks, fill clap cutouts, or round strong-song detail.
+            const float audioMaximum = max(
+                audioEnvelopeHeight.x, audioEnvelopeHeight.y);
+            const float quietDisplayRescue =
+                min(displayEnvelopeHeight * 0.30, 0.0125)
+                * smoothstep(384.0, 576.0, u.pixelsPerSecond)
+                * (1.0 - smoothstep(0.0, 0.01, audioMaximum));
+            polarityHeight = max(
+                polarityHeight, float2(quietDisplayRescue));
+            upperHeight = polarityHeight.x;
+            lowerHeight = polarityHeight.y;
+            height = max(upperHeight, lowerHeight);
         }
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
@@ -2640,7 +3107,10 @@ kernel void wave_attribute_kernel(
     // with playback phase. That was the last visible color pulse along an
     // otherwise song-locked contour. Premultiplication makes both RGB energy
     // and height piecewise linear, so the final one-pixel integral is exact.
-    attributes[id] = float4(color * height, height);
+    attributes[id].colorAndUpper =
+        float4(color * height, upperHeight);
+    attributes[id].lowerAndPadding =
+        float4(lowerHeight, 0.0, 0.0, 0.0);
 }
 
 // Eight midpoint taps per physical pixel, at the footprint-matched LOD.
@@ -2773,8 +3243,9 @@ inline WaveSurface integrated_wave_level(
 
 inline float integrated_envelope_level(
         const device AudioEnvelopeSample *samples,
-        uint levelOffset, uint levelCount, uint level,
+        uint levelOffset, uint levelCount, uint divisor,
         uint baseAnchor, float baseLocal, float sampleFootprint,
+        bool upperSide,
         float distance, float heightScale, float antialias) {
     const uint tapCount = kIntegrationTaps;
     float heights[kIntegrationTaps];
@@ -2785,9 +3256,10 @@ inline float integrated_envelope_level(
             samples, levelOffset, levelCount,
             baseAnchor,
             baseLocal + offset * sampleFootprint,
-            level);
+            divisor);
         if (sample.valid > 0.0) {
-            heights[gathered++] = sample.height;
+            heights[gathered++] =
+                upperSide ? sample.upper : sample.lower;
         }
     }
     return profile_coverage(
@@ -2796,8 +3268,9 @@ inline float integrated_envelope_level(
 
 inline float envelope_span_bound(
         const device AudioEnvelopeSample *samples,
-        constant uint *offsets, constant uint *counts, uint mipCount,
-        uint baseAnchor, float baseLocal, float span) {
+        constant uint *offsets, constant uint *counts,
+        constant uint *divisors, uint mipCount,
+        uint baseAnchor, float baseLocal, float span, bool upperSide) {
     // Every pyramid level is a song-anchored maximum, so one coarse level
     // whose bins are at least as wide as the integration span bounds every
     // tap taken inside it. Probing both span endpoints covers the whole
@@ -2807,17 +3280,17 @@ inline float envelope_span_bound(
     if (mipCount == 0) {
         return 0.0;
     }
-    const uint coarse = uint(min(
-        ceil(log2(max(span, 1.0))), float(mipCount - 1)));
+    const uint coarse = audio_detail_bound_lod(
+        span, divisors, mipCount);
     const float halfSpan = span * 0.5;
     float bound = 0.0;
     for (uint side = 0; side < 2; ++side) {
-        const float supportMax = envelope_support_max(
+        const float2 supportMax = envelope_support_max(
             samples, offsets[coarse], counts[coarse],
             baseAnchor,
             baseLocal + (side == 0 ? -halfSpan : halfSpan),
-            coarse);
-        bound = max(bound, supportMax);
+            divisors[coarse]);
+        bound = max(bound, upperSide ? supportMax.x : supportMax.y);
     }
     return bound;
 }
@@ -2844,23 +3317,27 @@ inline WaveSurface filtered_wave_surface(
 
 inline float filtered_envelope_coverage(
         const device AudioEnvelopeSample *samples,
-        constant uint *offsets, constant uint *counts, uint mipCount,
+        constant uint *offsets, constant uint *counts,
+        constant uint *divisors, uint mipCount,
         uint baseAnchor, float baseLocal,
         float lodFootprint, float integrationFootprint,
+        bool upperSide,
         float distance, float heightScale, float antialias) {
     if (mipCount == 0) {
         return 0.0;
     }
     const float bound = envelope_span_bound(
-        samples, offsets, counts, mipCount,
-        baseAnchor, baseLocal, integrationFootprint);
+        samples, offsets, counts, divisors, mipCount,
+        baseAnchor, baseLocal, integrationFootprint, upperSide);
     if (distance > bound * heightScale + antialias) {
         return 0.0;
     }
-    const uint level = biased_lod(lodFootprint, mipCount);
+    const uint level = audio_detail_lod(
+        lodFootprint, divisors, mipCount);
     return integrated_envelope_level(
-        samples, offsets[level], counts[level], level,
+        samples, offsets[level], counts[level], divisors[level],
         baseAnchor, baseLocal, integrationFootprint,
+        upperSide,
         distance, heightScale, antialias);
 }
 
@@ -2869,7 +3346,7 @@ fragment float4 wave_surface_fragment(
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
-        const device float4 *attributes [[buffer(5)]]) {
+        const device WaveAttribute *attributes [[buffer(5)]]) {
     const float scale = max(1.0, u.drawableScale);
     const float xPoints = in.position.x / scale;
     const float yPoints = in.position.y / scale;
@@ -2898,9 +3375,13 @@ fragment float4 wave_surface_fragment(
         if (surface.valid == 0.0 || surface.coverage <= 0.0) {
             discard_fragment();
         }
-        const float3 color = display_srgb_to_linear(
+        const float3 encodedColor =
             surface.weightedColor
-            / max(surface.colorWeight, 0.0001));
+            / max(surface.colorWeight, 0.0001);
+        const float3 color = display_srgb_to_linear(
+            u.threeBandActive != 0
+            ? three_band_color(encodedColor)
+            : encodedColor);
         return float4(mix(
             background, color,
             vivid_wave_coverage(surface.coverage)), 1.0);
@@ -2939,27 +3420,106 @@ fragment float4 wave_surface_fragment(
         // piecewise-linear crossing integral, not an average of five
         // near-binary alpha tests.
         float heights[kAttributeProfileSamples];
+        float midHeights[kAttributeProfileSamples];
+        float highHeights[kAttributeProfileSamples];
+        float lowHeights[kAttributeProfileSamples];
         float3 weightedColor = float3(0.0);
         float colorWeight = 0.0;
         for (uint i = 0; i < kAttributeProfileSamples; ++i) {
             const float offset =
                 (float(i) - 2.0) * attributeStep;
-            const float4 attribute = linear_attribute(
+            const WaveAttribute attribute = linear_attribute(
                 attributes, u.waveAttributeCount, tileX + offset);
-            heights[i] = attribute.a;
+            const float upperHeight = attribute.colorAndUpper.a;
+            const float lowerHeight = attribute.lowerAndPadding.x;
+            const float outerHeight = max(upperHeight, lowerHeight);
+            const float sideHeight =
+                yPoints <= waveCenter ? upperHeight : lowerHeight;
+            heights[i] = sideHeight;
+            // All three display modes share the stabilized high-resolution
+            // audio silhouette in `a`. RGB carries frequency/color
+            // proportions premultiplied by that silhouette. Reconstruct the
+            // ratios first, then clip every 3BAND layer to the same detailed
+            // outer contour. This prevents a held 150 Hz band cell from
+            // becoming a full-height slab over short clap/bass structure.
+            // Cubing the ratios is also intentional: the previous square let
+            // weak high-band leakage reach the outside of low-dominant kick
+            // lobes, turning their Rekordbox-red edge lavender. Dominant
+            // bands remain full height (1^3 == 1), so real blue claps keep
+            // their complete silhouette while weaker overlap stays confined
+            // to the pale shared center.
+            const float inverseOuter =
+                outerHeight > 0.0001 ? 1.0 / outerHeight : 0.0;
+            lowHeights[i] = sideHeight
+                * pow(saturate(
+                    attribute.colorAndUpper.r * inverseOuter), 3.0);
+            midHeights[i] = sideHeight
+                * pow(saturate(
+                    attribute.colorAndUpper.g * inverseOuter), 3.0);
+            highHeights[i] = sideHeight
+                * pow(saturate(
+                    attribute.colorAndUpper.b * inverseOuter), 3.0);
             const float weight =
                 i == 0 || i + 1 == kAttributeProfileSamples ? 0.5 : 1.0;
-            weightedColor += attribute.rgb * weight;
-            colorWeight += attribute.a * weight;
+            weightedColor += attribute.colorAndUpper.rgb * weight;
+            colorWeight += outerHeight * weight;
         }
         const float coverage = profile_coverage(
             heights, kAttributeProfileSamples,
             distance, heightScale, antialias);
-        if (coverage <= 0.0) {
+        if (u.threeBandActive == 0 && coverage <= 0.0) {
             discard_fragment();
         }
-        const float3 color = display_srgb_to_linear(
-            weightedColor / max(colorWeight, 0.0001));
+        if (u.threeBandActive != 0) {
+            const float midCoverage = profile_coverage(
+                midHeights, kAttributeProfileSamples,
+                distance, heightScale, antialias);
+            const float highCoverage = profile_coverage(
+                highHeights, kAttributeProfileSamples,
+                distance, heightScale, antialias);
+            const float lowCoverage = profile_coverage(
+                lowHeights, kAttributeProfileSamples,
+                distance, heightScale, antialias);
+            // Rekordbox's 3BAND identity is a simultaneous frequency mix, not
+            // three opaque paints with blue always winning. Weight every
+            // visible band at this pixel; a kick that also has upper energy
+            // becomes pink at the overlap while a genuinely high-dominant
+            // clap remains blue.
+            const float3 averageBands = saturate(
+                weightedColor / max(colorWeight, 0.0001));
+            // Coverage says whether a band reaches this vertical pixel;
+            // actual PWV7 energy says how much color that band contributes.
+            // Giving every nonzero leakage band an equal vote washed a
+            // low-dominant kick into dusty pink at the center line.
+            const float3 bandWeights = saturate(float3(
+                lowCoverage, midCoverage, highCoverage))
+                * pow(averageBands, float3(2.0));
+            if (dot(bandWeights, float3(1.0)) <= 0.0) {
+                discard_fragment();
+            }
+            const float3 mixedColor =
+                bandWeights.r * float3(1.0, 0.0, 0.0)
+                + bandWeights.g * float3(1.0, 0.55, 0.0)
+                + bandWeights.b * float3(0.50, 0.64, 1.0);
+            // Normalize by the brightest channel rather than the sum of
+            // weights. Mixed frequency content remains vivid instead of
+            // becoming a low-saturation average.
+            const float3 displayColor = mixedColor / max(
+                max(mixedColor.r, max(mixedColor.g, mixedColor.b)),
+                0.0001);
+            // Band energy chooses hue; geometric coverage chooses opacity.
+            // Reusing the squared hue weights as alpha dimmed an otherwise
+            // fully covered red kick to 234/51/35 instead of Rekordbox red.
+            const float alpha = max(
+                lowCoverage, max(midCoverage, highCoverage));
+            return float4(mix(
+                background,
+                display_srgb_to_linear(displayColor),
+                alpha), 1.0);
+        }
+        const float3 encodedColor =
+            weightedColor / max(colorWeight, 0.0001);
+        const float3 color = display_srgb_to_linear(encodedColor);
         return float4(mix(
             background, color,
             saturate(coverage)), 1.0);
@@ -2986,11 +3546,13 @@ fragment float4 wave_surface_fragment(
     if (colorSurface.valid == 0.0) {
         discard_fragment();
     }
-    const float3 color = display_srgb_to_linear(
+    const float3 encodedColor =
         colorSurface.weightedColor
-        / max(colorSurface.colorWeight, 0.0001));
+        / max(colorSurface.colorWeight, 0.0001);
+    const float3 color = display_srgb_to_linear(encodedColor);
     float coverage = colorSurface.coverage;
-    if (u.audioDetailSampleCount > 0 && u.audioDetailMipCount > 0) {
+    if (u.audioDetailSampleCount > 0
+            && u.audioDetailMipCount > 0) {
         const float audioLocal =
             u.audioDetailCurrentPhase
             + secondOffset * u.audioDetailSamplesPerSecond;
@@ -3000,9 +3562,11 @@ fragment float4 wave_surface_fragment(
         coverage = filtered_envelope_coverage(
             audioDetailSamples,
             u.audioDetailMipOffsets, u.audioDetailMipCounts,
+            u.audioDetailMipDivisors,
             u.audioDetailMipCount,
             u.audioDetailCurrentIndex, audioLocal,
             audioSpatialFootprint, audioIntegrationFootprint,
+            yPoints <= waveCenter,
             distance, heightScale, antialias);
     }
     if (coverage <= 0.0) {
@@ -3527,6 +4091,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     size_t waveMipCount_ = 0;
     std::array<uint32_t, kWaveMipLevels> audioDetailMipOffsets_{};
     std::array<uint32_t, kWaveMipLevels> audioDetailMipCounts_{};
+    std::array<uint32_t, kWaveMipLevels> audioDetailMipDivisors_{};
     float waveSamplesPerSecond_ = 0.0f;
     float detailSamplesPerSecond_ = 0.0f;
     float audioDetailSamplesPerSecond_ = 0.0f;
@@ -3540,6 +4105,10 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     float waveAttributeZoom_ = 0.0f;
     float waveAttributeScale_ = 0.0f;
     float waveAttributeSamplesPerPixel_ = 0.0f;
+    bool threeBandActive_ = false;
+    bool displayWaveformActive_ = false;
+    uint32_t waveformMode_ = 3;
+    std::array<DisplayWaveform, 3> displayWaveforms_{};
     std::atomic<uint64_t> waveformRevision_{1};
     std::vector<BeatPosition> beatPositions_;
     // Display-thread-only storage: rebuilding the small dynamic overlay never
@@ -3832,6 +4401,38 @@ int sb_deck_set_detail_bands(
     return result;
 }
 
+int sb_deck_set_waveform_streams(
+    SBDeckRef deck,
+    const uint8_t *blue_rows,
+    size_t blue_count,
+    const uint8_t *rgb_rows,
+    size_t rgb_count,
+    const uint8_t *three_band_rows,
+    size_t three_band_count,
+    double samples_per_second) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setWaveformStreams(
+        blue_rows, blue_count,
+        rgb_rows, rgb_count,
+        three_band_rows, three_band_count,
+        samples_per_second);
+    instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setWaveformMode(mode);
+    instance->requestDisplay();
+    return result;
+}
+
+uint32_t sb_deck_waveform_mode(SBDeckRef deck) {
+    return deck ? static_cast<SBDeck *>(deck)->waveformMode() : 0;
+}
+
 int sb_deck_set_spectral_analysis(
     SBDeckRef deck,
     const uint8_t *bands,
@@ -3879,6 +4480,22 @@ int sb_deck_set_audio_detail_u16_for_generation(
     auto *instance = static_cast<SBDeck *>(deck);
     const int result = instance->setAudioDetail16(
         heights, sample_count, samples_per_second, generation);
+    if (result) instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_audio_detail_polarity_u16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *upper_heights,
+    const uint16_t *lower_heights,
+    size_t sample_count,
+    double samples_per_second) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setAudioDetailPolarity16(
+        upper_heights, lower_heights, sample_count,
+        samples_per_second, generation);
     if (result) instance->requestDisplay();
     return result;
 }

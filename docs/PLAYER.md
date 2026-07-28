@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-07-24. This is the player handoff: shipped behavior,
+Current as of 2026-07-28. This is the player handoff: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -127,6 +127,28 @@ across the deck for a typical 140–175 BPM track). The native ABI returns its
 applied scale, so persisted zoom, paint, grid translation, and scrub math can
 never disagree about a silently clamped value.
 
+Settings exposes three persistent waveform displays:
+
+- `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one.
+- `RGB` uses the exact packed PWV5 stream. Each row is one display color plus
+  one compact height—not three band layers. At close zoom its song-anchored
+  color-cell boundaries remain crisp while the separate ultra contour supplies
+  the detailed shape.
+- `3BAND` uses the exact packed PWV7 low/mid/high shapes, with saturated
+  Display-P3 red/amber/blue anchors. Low-dominant kicks remain red and
+  high-dominant claps remain blue.
+
+All three streams are imported or derived in one cache preparation pass and
+remain resident as separate native GPU pyramids. Switching the selector is
+immediate and never recooks the track. The 150 Hz mode stream owns color and
+frequency proportions while the shared approximately 6300-window/s SoundBox
+envelope owns the detailed outer contour, so a held analysis row cannot blur a
+short clap into a rectangle. A 30% floor from the contrast-curved selected
+display envelope retains Rekordbox's low body between individual audio cycles
+without replacing their detail or creating signal where both inputs are zero.
+The surface remains continuous at every zoom; display rows are never punched
+into separated columns.
+
 Main-waveform scrubbing is relative and precise:
 
 - Mouse-down atomically captures the last Metal drawable whose presentation
@@ -204,9 +226,10 @@ resolved beneath Rekordbox's `share/` directory for analysis fallback:
 - `ANLZ0000.DAT` / `PQTZ`: beat-in-bar, exact millisecond position, BPM.
 - `master.db` snapshot / `djmdCue`: active memory/hot cues, loops, and labels.
 - `ANLZ0000.DAT` / `PCOB`: fallback cue positions and types.
+- `ANLZ0000.EXT` / `PWV3`: approximately 150 Hz BLUE waveform.
 - `ANLZ0000.EXT` / `PWV5`: approximately 150 Hz RGB waveform.
 - `ANLZ0000.EXT` / `PCO2`: fallback cue comments and explicit RGB colors.
-- `ANLZ0000.2EX` / `PWV7`: three-band detail used to sharpen fallback height.
+- `ANLZ0000.2EX` / `PWV7`: approximately 150 Hz 3BAND shapes.
 
 SoundBox then persists the complete canonical record independently; prepared
 playback does not reopen Rekordbox analysis. Exact normalized grid and cue
@@ -215,9 +238,10 @@ a future SoundBox edit claims ownership. Correcting Rekordbox's initial
 automatic beat grid therefore reaches SoundBox on the next live-library
 refresh without reanalyzing audio, and waveform payload bytes never change
 during either metadata refresh.
-SoundBox's audio analyzer supplies the ultra contour, dedicated RGB stream,
-and 24-band spectral master. No player code opens Rekordbox files for writing.
-No SoundBox operation updates `master.db`, ANLZ data, or source audio.
+SoundBox's audio analyzer supplies the ultra contour, derived BLUE/RGB/3BAND
+fallbacks for tracks without complete Rekordbox detail, and the 24-band
+spectral master. No player code opens Rekordbox files for writing. No SoundBox
+operation updates `master.db`, ANLZ data, or source audio.
 
 ## SoundBox-owned caches
 
@@ -227,7 +251,7 @@ All derived caches are disposable accelerators under
 | Directory/file | Owner and purpose |
 |---|---|
 | `libcache.json` | Last read-only library snapshot for instant first paint |
-| `track_analysis/*.sba4` | Canonical V4: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz RGB, 24-band spectral master, and ultra contour |
+| `track_analysis/*.sba4` | Canonical V4: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND display streams, 24-band spectral master, and ultra contour |
 
 Each V4 record is atomically replaced, keyed by track ID plus audio identity.
 Interactive loads validate only the requested section SHA-256; cache audits
@@ -237,7 +261,8 @@ support is a dormant boundary for later work; no manual grid editor exists.
 
 The native analyzer streams PCM in bounded memory, derives approximately
 6144 peak windows/second, keeps a normalized 24-band master, and builds the
-separate 150 Hz RGB stream from overlapping second-order Butterworth paths:
+three 150 Hz display-mode fallbacks from overlapping second-order Butterworth
+paths:
 LP 100 Hz, HP 300 + LP 3000 Hz, and HP 1500 Hz. One-millisecond band peaks use
 approximately 25/3/1 ms low/mid/high holds before a local per-column energy
 transfer, overlap correction, green restraint, blue lift, and compact
@@ -248,19 +273,35 @@ Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips. Export eligibility is
 deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
 candidates; AAC/ALAC/M4A/MP4 are always player-only.
 
-Waveform geometry uses the peak absolute sample in either source channel,
-rather than the absolute value of a mono sum. This preserves stereo-width and
-anti-phase decay that remains audible but can cancel in `(L + R) / 2`.
-Overview and ultra peaks are normalized linearly and stored as little-endian
-uint16 under `soundbox-channel-peak-u16-v1`, retaining quiet signal roughly
-48 dB below the former byte quantizer's resolution. The renderer applies a
-gentle `height^0.80` visibility curve plus a continuous four-LSB low-end
-shoulder only while uploading current geometry. The shoulder resolves real
--60 to -73 dB tails as a physical-pixel hairline but evaluates to exactly zero
-at digital zero; it is not a hard minimum-height rule. The cache remains
-linear, so later visual tuning does not require another audio recook. Legacy
-uint8 V4 records load normally while the background worker replaces them
-atomically one track at a time, preserving SoundBox-owned grid/cue data.
+Waveform geometry follows the stereo midpoint, which preserves the
+attack/decay contrast lost when the louder channel was allowed to inflate every
+row. A 1/16 peak-channel safety floor retains genuinely wide or anti-phase
+signal that cancels at the midpoint. The ultra stream stores independent
+positive and negative peak sections as little-endian uint16 under
+`soundbox-polarity-peak-u16-v3`; mirroring one unsigned height cannot reproduce
+the asymmetric upper/lower contour visible in Rekordbox. The compact overview
+remains a symmetric maximum for its 28-point-high lane. The 150 Hz overview
+uses complete, non-overlapping 1/150-second cells; it never reuses the wider
+spectral FFT window, which previously looked ahead about 46 ms, rounded
+attacks, filled decay valleys, and omitted the final seven rows.
+
+The renderer applies a display-only `height^1.4` curve and 0.84 full-scale
+ceiling plus a continuous low-end shoulder while uploading current
+geometry. This visually validated middle curve retains real shoulders without
+the needle-like peaks caused by `height^2` or the swollen center body caused by
+a linear map. The 1/64-height shoulder rises through a four-LSB knee and
+resolves real -60 to -73 dB tails as a
+physical-pixel hairline but evaluates to exactly zero at digital zero; it is
+not a hard minimum-height rule. The cache remains linear. Older V4 records load
+normally by duplicating their one height to both sides while the background
+worker atomically replaces them, preserving SoundBox-owned grid/cue data.
+
+RGB rows use the same track timeline, but decoder compensation is
+format-specific. Lossless PCM (WAV/AIFF/FLAC) has no correction. MP3 retains
+the measured seven-row / 46.7 ms decoder correction. Applying that MP3
+correction globally made lossless color arrive seven rows late, so a kick
+could inherit the preceding clap/snare hue. `soundbox-rgb-filterbank-v2`
+versions this corrected timing contract.
 
 The zero-anchor contract has a one-time metadata-only migration for older V4
 records. It reads only the small read-only DAT/PQTZ grid, never EXT/2EX
@@ -281,9 +322,9 @@ The background `WaveformFillWorker`:
 - runs bulk work uncapped at background/utility priority on AC, budgets 45% of
   one worker CPU on battery, drops a backlog of at least 25 items to 20% below
   50% charge, and pauses only bulk preparation in Low Power Mode;
-- imports grid/cues as seeds, uses PWV5 RGB only when native audio analysis is
-  unavailable, and refreshes live-DB cue metadata until SoundBox user data
-  claims that field;
+- imports grid/cues as seeds, copies complete PWV3/PWV5/PWV7 display rows
+  read-only over the derived mode fallbacks, and refreshes live-DB cue metadata
+  until SoundBox user data claims that field;
 - uses a direct, bounds-checked PQTZ row reader to fingerprint current
   Rekordbox grids and migrate legacy grid metadata, so it never inflates generic
   Rekordbox objects or opens EXT/2EX waveform/color analysis just to determine
@@ -295,13 +336,13 @@ The background `WaveformFillWorker`:
 - is interrupted and joined during shutdown.
 
 A prepared canonical cache hit is staged off the UI thread: the small manifest
-positions transport first, the packed RGB overview is decompressed and uploaded
-once as the permanent color/overview pyramid, and ultra geometry is prepared
-last. Overview and ultra buffers are committed inside one native presentation
-transaction: the display link skips incomplete grouped uploads, so a long set's
-first visible waveform is already its final silhouette rather than a smaller
-overview that visibly inflates. The detail stage never re-uploads the color
-payload. Native decode starts
+positions transport first, the packed overview is decompressed, and the
+BLUE/RGB/3BAND plus ultra sections are prepared together. All display pyramids
+and ultra geometry are committed inside one native presentation transaction:
+the display link skips incomplete grouped uploads, so a long set's first
+visible waveform is already its final silhouette rather than a smaller
+overview that visibly inflates. Selecting another resident mode never
+re-uploads or recooks the payload. Native decode starts
 before those reads. Every stage carries a monotonic track generation;
 `begin_track(generation)` atomically clears the previous waveform, grid, cues,
 session marker, and detail before the replacement source appears. Late stages
@@ -314,28 +355,48 @@ sampling to the first valid color rather than writing black leading rows. Time
 before `0:00` is deck background, true silence remains zero-height, and overview,
 ultra detail, grid, and cues share one origin.
 
+Exact imported PWV5 also has a separate runtime edge case: a row may contain
+zero height and zero color even when SoundBox's independent decoded overview
+and ultra envelopes prove that the source audio is nonzero. That row used to
+leave the correct Metal contour present but black, which looked like missing
+waveform. Before upload, SoundBox now gates on the overview height, borrows only
+the nearest valid PWV5 color bits, and assigns the minimum representable PWV5
+height as a color carrier. The canonical cache remains byte-for-byte unchanged,
+true-silence rows remain zero, and the rule applies to every track rather than
+one reference passage.
+
 ## Why the waveform remains stable
 
 The following renderer rules are measured invariants, not style preferences:
 
-- The main waveform always uses the SoundBox audio-detail envelope pyramid when
-  available; there is no zoom-level crossover back to PWV7.
+- The main waveform always uses the SoundBox audio-detail envelope pyramid for
+  its outer contour when available. PWV3/PWV5/PWV7 supply mode identity,
+  color, and band proportions; they never replace the ultra silhouette.
 - Pyramid levels are song-anchored maxima that retain transient detail as one
   solid silhouette. Overview and scrolling geometry select one
-  footprint-matched level with `ceil(log2(footprint))`; blending adjacent
-  power-of-two lattices made them beat against each other while moving. There
-  is no zoom threshold or alternate wide/close shader. A second
+  footprint-matched level. Display-color pyramids remain power-of-two, while
+  the higher-rate audio contour uses an in-memory integer divisor ladder
+  (`1,2,3,4,5,6,8,9,13,...`). The dense ladder prevents a 4.2-cell physical
+  pixel from being rounded by an 8-cell max bin. Blending adjacent lattices
+  made them beat against each other while moving, so every frame still selects
+  exactly one song-anchored level. There is no alternate wide/close geometry
+  shader. A second
   RMS/translucent envelope was rejected because it reads as a ghost waveform
-  rather than additional useful detail.
-- The scrolling lane's color comes only from SoundBox's dedicated overlapping
-  RGB filterbank; color remains a compact ~150 Hz buffer rather than being
-  duplicated into millions of ultra samples. Its mip pyramid averages RGB
-  using waveform amplitude as energy weight, then uses the same selected mip
-  level and song anchor as geometry. Adjacent colors therefore converge
-  instead of alternating at far zoom. Per-column normalization retains the real
-  low/mid/high relationship instead of making weak independently normalized
-  FFT bands falsely competitive. The 24-band master is stored independently
-  and neither Metal nor Qt may remix it into display color.
+  rather than additional useful detail. The selected 150 Hz display envelope
+  contributes only a bounded 30% floor beneath that ultra contour. This keeps
+  real low-level body visible while preserving the high-resolution attacks and
+  a true zero when both analyses are zero.
+- Display color remains a compact ~150 Hz mode buffer rather than being
+  duplicated into millions of ultra samples. BLUE/RGB use PWV3/PWV5 directly;
+  3BAND uses low/mid/high PWV7 energy. Each pyramid is song-anchored, so
+  adjacent colors converge instead of alternating at far zoom. For derived
+  records, per-column normalization retains the real low/mid/high relationship
+  instead of making weak independently normalized FFT bands falsely
+  competitive. The 24-band master is stored independently and neither Metal
+  nor Qt may remix it into display color. PWV5 RGB expands its compact channels
+  with the visually measured `14 / 8 / 8.75` divisors; close rows use crisp
+  cell ownership rather than cubic color gradients, and only PWV7 enters the
+  layered 3BAND compositor.
 - `color_model` versions the persisted RGB analysis without changing the V4
   container schema. Old records remain playable while the background worker
   atomically replaces one track at a time; each temporary record lives beside
@@ -1131,7 +1192,7 @@ remaining linear amplitude was quantized directly to uint8. On the real
 skantia Yoyo Bop intro, channel-safe peaks remained roughly -40 to -54 dB in
 rows the legacy cache encoded as zero.
 
-Current V4 records therefore use the `soundbox-channel-peak-u16-v1` geometry
+That first upgrade used the `soundbox-channel-peak-u16-v1` geometry
 model and little-endian `linear-u16le` height encoding at both overview and
 ultra rates. Each analysis row takes the largest absolute sample from either
 channel; spectral color and beat analysis retain their existing mono input.
@@ -1171,6 +1232,201 @@ with the native deck active, 3,265 tracks / 83 playlists loaded, all 3,247
 waveform records and 3,124 artwork files retained, and the protected curated
 state hash unchanged. The rolling migration had progressed to 3,195 remaining
 legacy analysis records at that launch.
+
+This channel-peak/display-0.80 presentation was superseded later the same day
+by the transient-fidelity correction below. Its uint16/true-zero finding
+remains valid; making the louder channel the primary silhouette and lifting it
+with exponent 0.80 did not.
+
+### Transient fidelity and lossless RGB timing on 2026-07-28
+
+The exact `Sonny - High & Scared v13.wav` comparison made two remaining
+analysis errors measurable. The louder-channel envelope inflated ordinary
+stereo content, while the 150 Hz overview reused a 2048-sample spectral window:
+at 44.1 kHz that looked ahead roughly 46 ms, rounded attacks, filled the black
+space between decays, and shortened the record by seven rows. Separately, the
+seven-row decoder correction proven necessary for MP3 had been applied to
+lossless PCM as well, painting every WAV transient with color from 46.7 ms
+late.
+
+`soundbox-mid-peak-u16-v2` now uses peak absolute stereo-midpoint geometry with
+a 1/16 peak-channel safety floor. This restores Rekordbox-like attack/decay
+contrast while linear uint16 and the existing continuous shoulder keep
+cancelled or very quiet real signal visible. The 150 Hz envelope now consists
+of complete, non-overlapping time cells and includes the final partial cell.
+The persisted amplitude remains linear; a renderer-only `height^2` curve
+separates narrow attacks from their valleys without inventing silence or
+discarding close-zoom samples.
+
+`soundbox-rgb-filterbank-v2` makes the pipeline correction format-specific:
+MP3 keeps its measured seven rows, while WAV/AIFF/FLAC and the Qt-decoded
+player-only formats use zero correction unless their own evidence establishes
+otherwise. On the exact reference WAV, the new cache has 24,580 overview rows,
+matching PWV5 exactly; displayed-envelope correlation against the read-only
+PWV5 heights is 0.957 with 0.038 mean absolute error, and RGB correlation is
+best at zero-row offset instead of seven. Native 384 and 1536 px/s pixel
+captures retain the repeated transient gaps and close oscillation detail. Both
+model identifiers changed together, so every stale record receives one full
+atomic recook rather than serial color and geometry migrations.
+
+The source gate and hermetic render gate passed with 532 tests and one expected
+platform skip. The signed app was built, safely installed, and relaunched with
+the packaged native deck active. The 3,265-track instant snapshot and all 83
+playlists loaded; 3,247 waveform records and 3,124 artwork files remained
+present, and the protected `library.json` SHA-256 stayed
+`d0eaba6a65a12e243921f0c09441dc58d173ba5338f33aa96ceee6a42aa3c0fd`.
+The exact High & Scared cache was prepared and fully verified as both v2 models
+before launch. The worker then found 3,244 remaining stale analysis records and
+began the single combined rolling migration; twelve records were already v2
+at the first post-launch audit. The source WAV remained byte-for-byte unchanged.
+
+### BLUE/RGB/3BAND modes and continuous close detail on 2026-07-28
+
+The next exact `Sonny - High & Scared v13.wav` comparison established that
+Rekordbox does not derive BLUE, RGB, and 3BAND from one recolored surface. Its
+read-only ANLZ set contains three independent 24,580-row streams at 150 Hz:
+packed PWV3 in EXT, packed PWV5 in EXT, and packed PWV7 in 2EX. SoundBox now
+copies all three exact byte streams into one owned V4 record and derives the
+same set during one analyzer pass for tracks without complete Rekordbox data.
+`rekordbox-blue-rgb-three-band-v1` gates the complete set, so the migration
+happens once and the persistent Settings selector swaps resident native
+pyramids without cache or file I/O.
+
+Literal 150 Hz height geometry was not sufficient: several saturated clap rows
+became a broad rectangle and discarded the useful close detail already present
+in the 6300-window/s SoundBox envelope. The final renderer uses that ultra
+stream as the common outer contour in every mode. 3BAND independently clips its
+low/mid/high layers to the contour. A first close-detail attempt additionally
+gated that contour with separated 150 Hz columns; the real final-master
+comparison rejected it because it produced sparse picket-fence hits. The
+shipped correction keeps the ultra contour continuous at every zoom and uses a
+30% contrast-curved display-envelope floor to retain the low body Rekordbox
+shows between cycles.
+
+Pixel measurement also found two color errors. Nonzero leakage bands had been
+given equal votes at the center line, muddying kicks, and the implicit layer
+color space converted authored red `255/0/0` to `234/51/35` on the built-in P3
+display. The shipped 3BAND mix weights hue by squared PWV7 energy while geometry
+alone owns opacity, and the Metal layer explicitly declares Display P3. Final
+captures land red at `255/0/0` and high blue at `127/163/255`, against the
+Rekordbox reference values `255/0/0` and `127/162/255`.
+
+The initial 39-combination audit and install used the older
+`2025/12:29/Sonny - High & Scared v13.wav` as its comparison track. That build
+proved the cache/selector/color-space plumbing but was rejected on sight: the
+close column gate lost definition. A second installed candidate removed that
+gate and used the newer track ID `54231927`,
+`2026/4:20/Sonny - High & Scared (final master).wav`, but it was also rejected:
+its one unsigned ultra envelope was mirrored around the center line. Tests and
+aggregate image scores did not catch the obvious diamond-like cycles, rounded
+clap blocks, and missing independent upper/lower detail. Those records are
+historical validation failures, not accepted quality.
+
+### Independent-polarity final-master correction on 2026-07-28
+
+The untouched 2,916×310 Rekordbox final-master capture is now the visual gate,
+not an image score. Inspecting its upper and lower outlines separately exposed
+the representation error: they are strongly asymmetric, while the rejected
+SoundBox surface was almost perfectly mirrored. No filter or palette adjustment
+can recover information a one-height cache never stores.
+
+`soundbox-polarity-peak-u16-v3` adds a second `detail_lower` section. The
+analyzer extracts positive and negative stereo-midpoint peaks with one shared
+normalization ceiling, the Python/native ABI uploads both uint16 arrays, every
+native maximum mip retains both sides, and the fixed song-space Metal lattice
+selects the appropriate side around the center line. Older records temporarily
+duplicate their one envelope during the rolling migration.
+
+Only the exact final-master track was recooked into a temporary cache for
+proof; the live cache was untouched. The fresh native capture and the original
+Rekordbox image were cropped to the same main-lane height, aligned at cue D,
+and viewed together. That direct inspection—not the earlier correlation
+number—drove two additional display-only corrections:
+
+- the rejected `height^2` curve made attacks tall and needle-thin, while a
+  linear trial overfilled the center; `height^1.4` with a 0.84 ceiling retained
+  the reference's shoulders and valleys;
+- the imported PWV7 mid-heavy decay was painted pink because SoundBox's
+  hard-coded mid anchor was pink; the reference is amber/orange, so the current
+  3BAND anchors are red/amber/blue.
+
+The resulting reference strip visibly retains the asymmetric repeating cycles,
+the noisy decay, and the internal cutouts of both large blue clap blocks. A
+second native audit opened BLUE, RGB, and 3BAND at all thirteen actual UI stops
+(`24` through `1536` px/s); the formerly ugly 128/184/256/384 stops were also
+opened at full 2,916-pixel width.
+
+The full gate then passed with 540 tests and one expected platform skip, as did
+the hermetic offscreen-render gate. The stable-signed app was safely installed
+and relaunched with its packaged native deck active; it loaded 3,264 tracks /
+83 playlists, then began the intended one-time rolling V3 migration. The live
+final-master record is now V3 with 1,178,969 genuinely different upper/lower
+detail rows. All 3,247 waveform records and 3,124 artwork files remained
+present.
+
+The first installed comparison was still not sufficient. It was cropped and
+rescaled to align one interval, which understated a full-width mismatch. Sonny's
+subsequent 1152 px/s screenshot rejected that build: its red/pink waveform
+remained connected through a thick center body and the blue transient cells
+were visibly overfilled. The cache polarity was correct; the renderer was
+undoing it by applying 30% of the unsigned 150 Hz display envelope as a minimum
+to *both* signed sides at every zoom.
+
+The correction retains that quiet-signal floor through distant/middle scales,
+then tapers it from full at 384 px/s to zero at 576 px/s. Every close stop
+therefore uses the independent decoded upper/lower geometry without an unsigned
+minimum reconnecting the lobes. Fresh native captures at the exact cue-D window
+show black separation through the center, the decaying signed cycles, the noisy
+orange transition, and detailed blue clap cutouts. BLUE, RGB, and 3BAND were
+each reopened at all thirteen real UI stops using their genuinely independent
+PWV3/PWV5/PWV7 streams; an initial audit harness that accidentally supplied the
+same fallback stream to all three modes was rejected and rerun correctly.
+
+A loaded-window screenshot or an equivalent direct full-width visual comparison
+is required for future waveform-detail changes. A cropped interval, passing
+test count, or aggregate image metric is not visual acceptance.
+
+The subsequent installed RGB comparison exposed three display-only regressions.
+PWV5 had first been treated like three independent band heights even though it
+stores one RGB color and one height per row; only PWV7/3BAND is layered. Cubic
+color interpolation then smeared each close 150 Hz RGB cell into a broad pastel
+gradient, while power-of-two-only audio mips could choose an 8-cell maximum for
+a 4.2-cell physical pixel and round away nearly half the contour detail. RGB
+now retains crisp, song-anchored PWV5 cells through the close ladder, uses the
+measured `14 / 8 / 8.75` channel expansion, and draws the outer shape from the
+single footprint-matched integer audio peak level. The same comparison at bar
+21 showed that the apparent missing waveform was not
+missing geometry or a stale cache: PWV5 contained all-zero color rows while
+the SoundBox ultra envelope and source PCM remained nonzero. The generic
+upload-time color-carrier repair above restores that entire quiet interval
+without recooking or modifying any track cache. Full-width native captures were
+visually aligned against both desktop references: the 185-second
+`Sonny - High & Scared` master at cue D and `Bad Decisions w SUMA (FINAL FR)`
+at bar 17 beat 3. Both exact tracks were then viewed at all thirteen UI stops.
+
+The final visual references are the untouched files in
+`~/Desktop/rekordbox wave`: `Screenshot 2026-07-28 at 4.55.12 AM.png`
+(2,916×310) for the 185-second track ID `211048395`,
+`Sonny - High & Scared.wav`, and
+`Screenshot 2026-07-28 at 1.28.48 PM.png` (2,926×292) for track ID `33638604`,
+`Bad Decisions w SUMA (FINAL FR).wav`. Do not silently substitute either of
+the later High & Scared masters: their audio and waveform are different. The
+accepted proof aligned native full-width captures to those two references at
+the cue-D/bar-17 windows and then opened both exact tracks at all thirteen UI
+zoom stops.
+
+The final source and hermetic-render gates passed with 545 tests and one
+expected platform skip. The stable-signed app was installed and relaunched
+with the packaged native deck active; it loaded 3,265 tracks / 83 playlists,
+warmed all 3,265 rows, and reported zero preparation tasks. All 3,248 waveform
+records remained present. The pre-install `library.json` backup has SHA-256
+`9d265455e1ca4921c5caebed4eb897f38282e87d8915ab0f7dd47d8bdb6fd411`;
+the post-proof live hash is
+`658415d8bcb255942bdc7d0c11a6c9050cb228416b86ac7c31f0861f0b9c85e0`.
+A recursive semantic comparison found changes only in
+`settings.columns_state` and `settings.waveform_zoom`. Playlists, aliases,
+overrides, hidden/import state, and every other curated collection remained
+unchanged.
 
 ### Opaque timing-grid overlay on 2026-07-28
 

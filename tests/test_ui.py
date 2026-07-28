@@ -197,6 +197,21 @@ class SettingsPage(unittest.TestCase):
             _win._chk_hide.setChecked(False)
         self.assertFalse(_win.settings["hide_untracked"])
 
+    def test_waveform_mode_selector_applies_and_persists(self):
+        original = _win.settings.get("waveform_mode", "3BAND")
+        seen = []
+        real = _win.player_bar.set_waveform_mode
+        _win.player_bar.set_waveform_mode = seen.append
+        try:
+            _win._waveform_mode_buttons["RGB"].click()
+            self.assertEqual(_win.settings["waveform_mode"], "RGB")
+            self.assertEqual(seen, ["RGB"])
+            self.assertTrue(_win._waveform_mode_buttons["RGB"].isChecked())
+            self.assertTrue(_win._data_file.exists())
+        finally:
+            _win.player_bar.set_waveform_mode = real
+            _win._waveform_mode_buttons[original].click()
+
 
 class LibraryBackups(unittest.TestCase):
     def test_save_rotates_backups(self):
@@ -1663,8 +1678,8 @@ class PlayerHardening(unittest.TestCase):
         ]
         self.assertEqual(values[0], 0.0)
         self.assertGreater(values[1], 0.0)
-        self.assertGreater(values[3], 0.006)
-        self.assertEqual(values[-1], 1.0)
+        self.assertGreater(values[3], 0.004)
+        self.assertAlmostEqual(values[-1], 0.84)
         self.assertEqual(values, sorted(values))
 
     def test_qt_waveform_preserves_dedicated_rgb_despite_band_master(self):
@@ -3275,8 +3290,14 @@ class WaveformFill(unittest.TestCase):
             "overview_heights": b"\x20\x00",
             "overview_rgb": b"\x01\x02\x03",
             "spectral_bands": bytes(range(24)),
+            "blue_detail": b"\x21",
+            "rgb_detail": b"\xe0\x7c",
+            "three_band": b"\x01\x02\x03",
             "color_model": track_analysis.COLOR_MODEL,
             "waveform_model": track_analysis.WAVEFORM_MODEL,
+            "three_band_model": track_analysis.THREE_BAND_MODEL,
+            "display_waveform_model":
+                track_analysis.DISPLAY_WAVEFORM_MODEL,
             "height_encoding": track_analysis.HEIGHT_ENCODING,
         })
         before = track_analysis._read_container_manifest(
@@ -3317,8 +3338,14 @@ class WaveformFill(unittest.TestCase):
             "overview_heights": b"\x20\x00",
             "overview_rgb": b"\x01\x02\x03",
             "spectral_bands": bytes(range(24)),
+            "blue_detail": b"\x21",
+            "rgb_detail": b"\xe0\x7c",
+            "three_band": b"\x01\x02\x03",
             "color_model": track_analysis.COLOR_MODEL,
             "waveform_model": track_analysis.WAVEFORM_MODEL,
+            "three_band_model": track_analysis.THREE_BAND_MODEL,
+            "display_waveform_model":
+                track_analysis.DISPLAY_WAVEFORM_MODEL,
             "height_encoding": track_analysis.HEIGHT_ENCODING,
             "beats": automatic,
             "provenance": {

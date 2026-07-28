@@ -107,6 +107,24 @@ QComboBox QAbstractItemView {{
 #SettingsTitle {{ color: {TEXT_HI}; font-size: 13px; background: transparent; }}
 #SettingsTitle:disabled {{ color: {TEXT_DIM}; }}
 #SettingsSub {{ color: {TEXT_DIM}; font-size: 11px; background: transparent; }}
+#WaveformModeControl {{ background: transparent; }}
+QPushButton#WaveformModeButton {{
+    background: {BG}; border: 1px solid {BORDER}; border-radius: 0;
+    color: {TEXT_DIM}; font-size: 10px; font-weight: 700; padding: 0;
+}}
+QPushButton#WaveformModeButton[segment="first"] {{
+    border-top-left-radius: 5px; border-bottom-left-radius: 5px;
+}}
+QPushButton#WaveformModeButton[segment="last"] {{
+    border-top-right-radius: 5px; border-bottom-right-radius: 5px;
+}}
+QPushButton#WaveformModeButton:hover {{
+    color: {TEXT_HI}; border-color: {PURPLE_LIGHT};
+}}
+QPushButton#WaveformModeButton:checked {{
+    background: {PURPLE_DARK}; border-color: {PURPLE_LIGHT};
+    color: white;
+}}
 
 QPushButton {{
     background: {PANEL}; border: 1px solid {BORDER}; border-radius: 4px;

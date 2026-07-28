@@ -71,20 +71,37 @@ rows update only the V4 manifest until SoundBox user data claims ownership;
 deleted database cues and later Rekordbox beat-grid corrections therefore land
 without touching the compressed analysis payload or decoding source audio.
 SoundBox's canonical schema-V4 record under `track_analysis/` owns the result:
-full grid/cues, 150 Hz RGB, 24 normalized spectral bands, export eligibility,
-provenance, and an approximately 6144-window/s amplitude envelope. Each section
-is independently Zstandard-compressed and SHA-256 verified inside one atomic
+full grid/cues, exact-or-derived 150 Hz BLUE/PWV3, RGB/PWV5, and 3BAND/PWV7
+display streams, 24 normalized spectral bands, export eligibility, provenance,
+and an approximately 6144-window/s amplitude envelope. Each section is
+independently Zstandard-compressed and SHA-256 verified inside one atomic
 per-track container. Source identity invalidates only the changed track.
-Current overview and ultra geometry are channel-safe linear little-endian
-uint16 peaks: each window measures the largest absolute sample in either
-channel, so stereo/anti-phase tails cannot vanish through mono summing.
+Current ultra geometry is linear little-endian uint16 under
+`soundbox-polarity-peak-u16-v3`. Every cell stores independent positive and
+negative stereo-midpoint peaks in `detail` and `detail_lower`, with a 1/16
+peak-channel safety floor for genuinely wide or anti-phase signal. The compact
+overview keeps one symmetric maximum. The 150 Hz overview uses complete
+nonoverlapping time cells, independent of the wider spectral FFT window.
 `waveform_model` and `height_encoding` version that payload without changing
-the V4 container. Legacy byte records remain playable while preparation
-atomically upgrades one track at a time. A gentle display-only `height^0.80`
-curve and continuous four-LSB visibility shoulder are applied after loading.
-The shoulder resolves genuine subpixel tails but maps zero to zero before
-spatial reconstruction; because the cache stays linear, later visual tuning
-never requires another audio recook and true digital zero stays zero.
+the V4 container. Legacy records remain playable by duplicating their one
+height to both sides while preparation atomically upgrades one track at a
+time. A display-only `height^1.4` curve, 0.84 ceiling, and continuous four-LSB
+visibility shoulder are applied after loading. The shoulder resolves genuine
+subpixel tails but maps zero to zero before spatial reconstruction; the
+persisted amplitudes remain linear.
+
+The dedicated RGB stream is versioned separately as
+`soundbox-rgb-filterbank-v2`. Its timeline correction follows the decoder:
+lossless PCM uses zero offset, while MP3 retains the measured seven-row /
+46.7 ms correction. This prevents lossless kick/snare hue from landing on the
+following transient without changing frequency-band semantics.
+
+`display_waveform_model=rekordbox-blue-rgb-three-band-v1` versions the three
+mode payloads together. A Rekordbox-backed track imports the original packed
+PWV3/PWV5/PWV7 rows read-only; another source derives all three during the same
+audio pass. The native deck retains three GPU pyramids and switches the
+persistent Settings selection immediately, without reopening Rekordbox or
+recooking the track.
 
 Prepared loading is four-stage and generation-guarded: native source decode,
 small manifest, packed RGB overview, then ultra detail/native peak pyramid.
@@ -124,7 +141,7 @@ saturated edges are not over-amplified.
 The two fixed 64 and 184 px/s stops additionally apply one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
 integration. Its narrow zoom-space taper is zero at every neighboring stop;
-it changes neither mip selection nor the 576–1536 px/s close-detail path.
+it changes neither mip selection nor the continuous close-detail path.
 Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
 hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:

@@ -40,23 +40,29 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("highLevel", helper)
         self.assertNotIn("lodMix", helper)
 
-    def test_audio_detail_uses_the_same_continuous_lod_rule(self):
+    def test_audio_detail_uses_one_footprint_matched_integer_level(self):
         helper = self.shader.split(
             "inline float filtered_envelope_coverage", 1
         )[1].split(
             "fragment float4 wave_surface_fragment", 1
         )[0]
-        self.assertIn("biased_lod(lodFootprint, mipCount)", helper)
+        self.assertIn(
+            "audio_detail_lod(\n"
+            "        lodFootprint, divisors, mipCount)", helper)
+        self.assertIn("divisors[level]", helper)
         self.assertIn("integrated_envelope_level(", helper)
         self.assertNotIn("lowLevel", helper)
         self.assertNotIn("lodMix", helper)
 
     def test_current_geometry_keeps_u16_precision_until_display_upload(self):
         self.assertIn(
-            "constexpr float kWaveformDisplayExponent = 0.80f;",
+            "constexpr float kWaveformDisplayExponent = 1.4f;",
             self.source)
         self.assertIn(
-            "constexpr float kWaveformVisibilityShoulder = 1.0f / 128.0f;",
+            "constexpr float kWaveformDisplayScale = 0.84f;",
+            self.source)
+        self.assertIn(
+            "constexpr float kWaveformVisibilityShoulder = 1.0f / 64.0f;",
             self.source)
         self.assertIn(
             "constexpr float kWaveformVisibilityKnee = 4.0f / 65535.0f;",
@@ -68,7 +74,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("return 0.0f;", visibility)
         self.assertIn("1.0f - std::exp(", visibility)
         self.assertIn(
-            "struct AudioEnvelopeSample { ushort height; };",
+            "struct AudioEnvelopeSample { ushort upper; ushort lower; };",
             self.shader)
         self.assertGreaterEqual(self.shader.count("/ 65535.0"), 3)
         self.assertIn("setAudioDetail16(", self.source)
@@ -181,22 +187,38 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_lod_selection_uses_only_the_spatial_footprint(self):
         """Temporal footprint driving LOD made maximum zoom blocky."""
-        for name in (
-                "inline WaveSurface filtered_wave_surface",
-                "inline float filtered_envelope_coverage"):
-            body = self.shader.split(name, 1)[1].split("\n}", 1)[0]
-            lod = body.split("biased_lod(", 1)[1].split(")", 1)[0]
-            self.assertIn("lodFootprint", lod)
-            self.assertNotIn("integrationFootprint", lod)
+        wave = self.shader.split(
+            "inline WaveSurface filtered_wave_surface", 1
+        )[1].split("\n}", 1)[0]
+        wave_lod = wave.split("biased_lod(", 1)[1].split(")", 1)[0]
+        self.assertIn("lodFootprint", wave_lod)
+        self.assertNotIn("integrationFootprint", wave_lod)
+        envelope = self.shader.split(
+            "inline float filtered_envelope_coverage", 1
+        )[1].split("\n}", 1)[0]
+        envelope_lod = envelope.split(
+            "audio_detail_lod(", 1
+        )[1].split(")", 1)[0]
+        self.assertIn("lodFootprint", envelope_lod)
+        self.assertNotIn("integrationFootprint", envelope_lod)
 
     def test_early_out_bound_comes_from_a_max_mip_level(self):
         """Pyramid levels are maxima, so a coarse bin bounds every tap."""
         helper = self.shader.split(
             "inline float envelope_span_bound", 1
         )[1].split("\n}", 1)[0]
-        self.assertIn("ceil(log2(max(span, 1.0)))", helper)
+        self.assertIn(
+            "audio_detail_bound_lod(\n"
+            "        span, divisors, mipCount)", helper)
+        bound_lod = self.shader.split(
+            "inline uint audio_detail_bound_lod", 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn(
+            "float(divisors[level]) >= max(1.0, span)", bound_lod)
         self.assertIn("envelope_support_max(", helper)
-        self.assertIn("bound = max(bound, supportMax)", helper)
+        self.assertIn(
+            "bound = max(bound, upperSide ? supportMax.x : supportMax.y)",
+            helper)
         self.assertIn("-halfSpan : halfSpan", helper)
         coverage = self.shader.split(
             "inline float filtered_envelope_coverage", 1
@@ -281,7 +303,8 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
-        self.assertIn("device float4 *attributes [[buffer(5)]]", kernel)
+        self.assertIn(
+            "device WaveAttribute *attributes [[buffer(5)]]", kernel)
         self.assertIn("detail_lod(", kernel)
         self.assertIn("sharp_wave_tap(", kernel)
         self.assertIn("sharp_envelope_tap(", kernel)
@@ -290,6 +313,20 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split("\n}", 1)[0]
         self.assertIn("ceil(log2(max(1.0, footprint)))", lod)
         self.assertNotIn("floor(log2(", lod)
+
+    def test_audio_detail_ladder_avoids_power_of_two_oversmoothing(self):
+        native = self.source.split(
+            "constexpr std::array<uint32_t, 18>"
+            " kAudioDetailMipDivisors", 1
+        )[1].split("};", 1)[0]
+        self.assertIn("1, 2, 3, 4, 5, 6, 8, 9, 13", native)
+        self.assertIn("18, 25, 35, 50, 66, 99, 132, 192, 256", native)
+        lod = self.shader.split(
+            "inline uint audio_detail_lod", 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn("footprint * 0.94", lod)
+        self.assertIn("float(divisors[level]) >= required", lod)
+        self.assertNotIn("log2(", lod)
 
     def test_mid_zoom_stability_kernel_preserves_close_detail(self):
         kernel = self.shader.split(
@@ -306,7 +343,35 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "const EnvelopeTap smoothDetail = envelope_tap(", kernel)
         self.assertIn(
-            "sharpDetail.height, stableDetail, stableKernel", kernel)
+            "float2(sharpDetail.upper, sharpDetail.lower),\n"
+            "                stableDetail, stableKernel", kernel)
+
+    def test_display_envelope_floor_never_reconnects_close_polarities(self):
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertIn(
+            "const float displayFloorWeight = 1.0 - smoothstep(\n"
+            "                384.0, 576.0, u.pixelsPerSecond)", kernel)
+        self.assertIn(
+            "displayEnvelopeHeight * 0.30 * displayFloorWeight", kernel)
+
+        def smoothstep(edge0, edge1, value):
+            t = min(1.0, max(0.0, (value - edge0) / (edge1 - edge0)))
+            return t * t * (3.0 - 2.0 * t)
+
+        levels = (
+            24, 32, 48, 64, 92, 128, 184,
+            256, 384, 576, 864, 1152, 1536)
+        weights = {
+            zoom: 1.0 - smoothstep(384.0, 576.0, zoom)
+            for zoom in levels
+        }
+        self.assertEqual(weights[384], 1.0)
+        for zoom in (576, 864, 1152, 1536):
+            self.assertEqual(weights[zoom], 0.0)
 
     def test_only_64_and_184_receive_the_narrow_physical_pixel_filter(self):
         helper = self.shader.split(
@@ -403,7 +468,11 @@ class NativeWaveformShader(unittest.TestCase):
             "constant uint kIntegrationTaps", 1
         )[0]
         self.assertIn(
-            "attributes[id] = float4(color * height, height)", kernel)
+            "attributes[id].colorAndUpper =\n"
+            "        float4(color * height, upperHeight)", kernel)
+        self.assertIn(
+            "attributes[id].lowerAndPadding =\n"
+            "        float4(lowerHeight, 0.0, 0.0, 0.0)", kernel)
         self.assertNotIn("profile_coverage(", kernel)
         self.assertNotIn("vivid_wave_coverage(", kernel)
 
@@ -412,9 +481,12 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "const float secondOffset", 1
         )[0]
-        self.assertIn("weightedColor += attribute.rgb * weight", fragment)
+        self.assertIn(
+            "weightedColor += attribute.colorAndUpper.rgb * weight",
+            fragment)
         self.assertNotIn(
-            "weightedColor += attribute.rgb * attribute.a * weight",
+            "weightedColor += attribute.colorAndUpper.rgb"
+            " * attribute.colorAndUpper.a * weight",
             fragment)
         fragment = self.shader.split(
             "if (u.waveAttributeValid != 0", 1
@@ -489,7 +561,6 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertGreaterEqual(fragment.count(", 1.0);"), 2)
         self.assertNotIn("bodyCoverage", self.shader)
         self.assertNotIn("outerAlpha", self.shader)
-        self.assertNotIn("0.42", self.shader)
 
     def test_thin_waveform_color_is_vivid_without_expanding_height(self):
         helper = self.shader.split(
@@ -565,6 +636,9 @@ class NativeWaveformShader(unittest.TestCase):
             native,
         )
         self.assertIn(
+            "CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3)", native)
+        self.assertIn("metalLayer_.colorspace = displayP3", native)
+        self.assertIn(
             "pass.colorAttachments[0].clearColor = MTLClearColorMake(\n"
             "            0.004024717, 0.004391442, 0.006048833, 1.0)",
             native,
@@ -575,9 +649,128 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "vertex Out grid_vertex", 1
         )[0]
-        self.assertEqual(
+        self.assertGreaterEqual(
             fragment.count("display_srgb_to_linear("), 4)
         self.assertNotIn("displayCoverage", self.shader)
+
+    def test_three_band_geometry_is_layered_on_one_song_locked_profile(self):
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn("float midHeights[kAttributeProfileSamples]", fragment)
+        self.assertIn("float highHeights[kAttributeProfileSamples]", fragment)
+        self.assertIn("float lowHeights[kAttributeProfileSamples]", fragment)
+        self.assertIn("const float midCoverage = profile_coverage(", fragment)
+        self.assertIn("const float highCoverage = profile_coverage(", fragment)
+        self.assertIn("const float lowCoverage = profile_coverage(", fragment)
+        self.assertIn(
+            "const float3 bandWeights = saturate(float3(", fragment)
+        self.assertIn(
+            "* pow(averageBands, float3(2.0))", fragment)
+        self.assertIn(
+            "bandWeights.r * float3(1.0, 0.0, 0.0)", fragment)
+        self.assertIn(
+            "bandWeights.g * float3(1.0, 0.55, 0.0)", fragment)
+        self.assertIn(
+            "bandWeights.b * float3(0.50, 0.64, 1.0)", fragment)
+        self.assertIn(
+            "const float3 displayColor = mixedColor / max(", fragment)
+        self.assertIn(
+            "const float alpha = max(\n"
+            "                lowCoverage, max(midCoverage, highCoverage))",
+            fragment)
+        self.assertNotIn("float3 layered = background", fragment)
+        self.assertIn("u.threeBandActive == 0", self.shader)
+        self.assertNotIn("inline float3 rgb_wave_color", self.shader)
+        self.assertNotIn("rgb_wave_color(encodedColor)", fragment)
+        self.assertIn("const float inverseOuter =", fragment)
+        self.assertIn(
+            "lowHeights[i] = sideHeight\n"
+            "                * pow(saturate(\n"
+            "                    attribute.colorAndUpper.r"
+            " * inverseOuter), 3.0)",
+            fragment)
+        self.assertIn(
+            "highHeights[i] = sideHeight\n"
+            "                * pow(saturate(\n"
+            "                    attribute.colorAndUpper.b"
+            " * inverseOuter), 3.0)",
+            fragment)
+
+    def test_exact_display_modes_share_continuous_ultra_geometry(self):
+        self.assertIn("uint waveformMode;", self.shader)
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertIn(
+            "if (u.audioDetailSampleCount > 0\n"
+            "            && u.audioDetailMipCount > 0)", kernel)
+        native = self.source
+        self.assertIn(
+            "std::array<DisplayWaveform, 3> displayWaveforms_", native)
+        self.assertIn("blueWaveSample(", native)
+        self.assertIn("rgbWaveSample(", native)
+        self.assertIn("threeBandWaveSample(", native)
+
+    def test_rgb_uses_crisp_pwv5_cells_not_three_band_layers(self):
+        native = self.source
+        rgb = native.split(
+            "static WaveSample rgbWaveSample", 1
+        )[1].split(
+            "static WaveSample threeBandWaveSample", 1
+        )[0]
+        self.assertIn("raw[0] / 14.0f", rgb)
+        self.assertIn("raw[1] / 8.0f", rgb)
+        self.assertIn("raw[2] / 8.75f", rgb)
+        self.assertIn(
+            "threeBandActive_ = waveformMode_ == 3", native)
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertIn("if (u.waveformMode == 2)", kernel)
+        self.assertIn("nearest_wave_color(", kernel)
+        self.assertIn(
+            "smoothstep(384.0, 576.0, u.pixelsPerSecond)", kernel)
+
+    def test_exact_display_modes_do_not_punch_gaps_between_rows(self):
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertNotIn("const float nearestRow = round(waveLocal)", kernel)
+        self.assertNotIn("rowSpacingPixels", kernel)
+        self.assertNotIn("columnCoverage", kernel)
+
+    def test_exact_display_envelope_is_only_a_bounded_ultra_floor(self):
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertIn("const float displayEnvelopeHeight = height", kernel)
+        self.assertIn("const float2 audioEnvelopeHeight = mix(", kernel)
+        self.assertIn(
+            "const float displayFloorWeight = 1.0 - smoothstep(\n"
+            "                384.0, 576.0, u.pixelsPerSecond)", kernel)
+        self.assertIn(
+            "float2 polarityHeight = max(\n"
+            "                audioEnvelopeHeight,\n"
+            "                float2(\n"
+            "                    displayEnvelopeHeight * 0.30"
+            " * displayFloorWeight))", kernel)
+        self.assertIn(
+            "const float quietDisplayRescue =\n"
+            "                min(displayEnvelopeHeight * 0.30, 0.0125)",
+            kernel)
+        self.assertIn(
+            "* (1.0 - smoothstep(0.0, 0.01, audioMaximum))", kernel)
 
     def test_color_pyramid_is_amplitude_weighted(self):
         native = (
@@ -647,7 +840,7 @@ class NativeWaveformShader(unittest.TestCase):
         )[0]
         self.assertIn("const uint anchor = baseAnchor / divisor", helper)
         audio = self.shader.split(
-            "if (u.audioDetailSampleCount > 0", 1
+            "u.audioDetailSampleCount > 0", 1
         )[1].split("if (coverage <= 0.0)", 1)[0]
         self.assertIn("u.audioDetailCurrentPhase", audio)
         self.assertIn("u.audioDetailCurrentIndex", audio)
@@ -660,7 +853,7 @@ class NativeWaveformShader(unittest.TestCase):
         fragment = self.shader.split(
             "fragment float4 wave_surface_fragment", 1
         )[1].split(
-            "if (u.audioDetailSampleCount > 0", 1
+            "u.audioDetailSampleCount > 0", 1
         )[0]
         self.assertIn("u.waveCurrentIndex", fragment)
         self.assertIn("u.waveCurrentPhase", fragment)

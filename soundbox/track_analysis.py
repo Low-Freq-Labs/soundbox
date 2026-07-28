@@ -29,10 +29,13 @@ SCHEMA = 4
 ULTRA_RATE = 6144.0
 COLOR_RATE = 150.0
 SPECTRAL_BANDS = 24
-COLOR_MODEL = "soundbox-rgb-filterbank-v1"
-WAVEFORM_MODEL = "soundbox-channel-peak-u16-v1"
+COLOR_MODEL = "soundbox-rgb-filterbank-v2"
+WAVEFORM_MODEL = "soundbox-polarity-peak-u16-v3"
+THREE_BAND_MODEL = "soundbox-three-band-u7-v2"
+DISPLAY_WAVEFORM_MODEL = "rekordbox-blue-rgb-three-band-v1"
 HEIGHT_ENCODING = "linear-u16le"
-COLOR_PIPELINE_DELAY = 7.0 / COLOR_RATE
+MP3_COLOR_PIPELINE_DELAY = 7.0 / COLOR_RATE
+CHANNEL_SAFETY_FLOOR = 1.0 / 16.0
 _MAGIC = b"SBA4"
 _HEADER = struct.Struct("<4sI")
 _EXPORTABLE = {".mp3", ".wav", ".aif", ".aiff", ".flac"}
@@ -162,7 +165,8 @@ def _temporal_rgb_envelopes(color_ms, frames_per_second: float):
 
 
 def _resample_rgb_envelopes(
-        envelopes, source_rate: float, output_rate: float, count: int):
+        envelopes, source_rate: float, output_rate: float, count: int,
+        delay_seconds: float = 0.0):
     """Resample the 1 ms envelopes onto persisted RGB row timestamps."""
     import numpy as np
 
@@ -171,7 +175,7 @@ def _resample_rgb_envelopes(
         return np.zeros((max(0, int(count)), 3), dtype=np.float32)
     positions = (
         np.arange(count, dtype=np.float64) * source_rate / output_rate
-        - COLOR_PIPELINE_DELAY * source_rate
+        - max(0.0, float(delay_seconds)) * source_rate
     )
     positions[np.abs(positions) < 1e-9] = 0.0
     source_rows = np.arange(len(rows), dtype=np.float64)
@@ -185,6 +189,123 @@ def _resample_rgb_envelopes(
             left=float(rows[0, channel]), right=float(rows[-1, channel]))
         for channel in range(3)
     ], axis=1)
+
+
+def _resample_peak_envelopes(
+        envelopes, source_rate: float, output_rate: float, count: int,
+        delay_seconds: float = 0.0):
+    """Peak-reduce band energy over each persisted 150 Hz time cell.
+
+    A point sample is sufficient for hue, but it throws away short snare and
+    clap energy between two output timestamps. The three-band silhouette owns
+    the complete output cell, just like the compact amplitude envelope. A
+    centered maximum filter followed by song-clock sampling keeps the operation
+    vectorized for library preparation while retaining those short attacks.
+    """
+    import numpy as np
+    from scipy.ndimage import maximum_filter1d
+
+    rows = np.asarray(envelopes, dtype=np.float32).reshape(-1, 3)
+    if not rows.size or count <= 0 or source_rate <= 0 or output_rate <= 0:
+        return np.zeros((max(0, int(count)), 3), dtype=np.float32)
+    cell_width = float(source_rate) / float(output_rate)
+    filtered = maximum_filter1d(
+        rows,
+        size=max(1, int(np.ceil(cell_width))),
+        axis=0,
+        mode="nearest",
+    )
+    centers = (
+        (np.arange(count, dtype=np.float64) + 0.5) * cell_width
+        - max(0.0, float(delay_seconds)) * source_rate
+    )
+    indices = np.clip(np.rint(centers).astype(np.int64), 0, len(rows) - 1)
+    return filtered[indices]
+
+
+def _pack_three_band_u7(low, mid, high, percentile: float = 99.5) -> bytes:
+    """Pack SoundBox display geometry in measured low/mid/high order.
+
+    One shared per-track ceiling preserves the true relationship among low,
+    mid, and high energy; normalizing each channel independently would make
+    filter leakage look as strong as the intended tone and reverse kick/snare
+    identity. Seven useful bits match Rekordbox's PWV7 precision and already
+    exceed the vertical resolution of the deck. A real nonzero band keeps code
+    1 so quiet signal cannot collapse into false silence.
+    """
+    import numpy as np
+
+    rows = np.stack((
+        np.asarray(low, dtype=np.float64),
+        np.asarray(mid, dtype=np.float64),
+        np.asarray(high, dtype=np.float64),
+    ), axis=-1)
+    if not rows.size:
+        return b""
+    positive = rows[rows > 0]
+    ceiling = (
+        float(np.percentile(positive, percentile))
+        if positive.size else 1.0)
+    encoded = np.clip(
+        np.rint(rows / max(ceiling, 1e-12) * 127.0),
+        0, 127,
+    ).astype(np.uint8)
+    encoded[(rows > 0) & (encoded == 0)] = 1
+    return encoded.tobytes()
+
+
+def _pack_blue_detail(heights, percentile: float = 99.9) -> bytes:
+    """Pack a SoundBox BLUE fallback in PWV3's height/luminance layout."""
+    import numpy as np
+
+    values = np.asarray(heights, dtype=np.float64)
+    if not values.size:
+        return b""
+    positive = values[values > 0]
+    ceiling = (
+        float(np.percentile(positive, percentile))
+        if positive.size else 1.0)
+    normalized = np.clip(values / max(ceiling, 1e-12), 0, 1)
+    height = np.rint(normalized * 31).astype(np.uint8)
+    height[(values > 0) & (height == 0)] = 1
+    # PWV3's upper three bits are the classic blue-wave luminance. Retain
+    # dynamic contrast without changing the geometry in the lower five bits.
+    luminance = np.rint(np.sqrt(normalized) * 7).astype(np.uint8)
+    packed: bytes = ((luminance << 5) | height).tobytes()
+    return packed
+
+
+def _pack_rgb_detail(heights, rgb, percentile: float = 99.9) -> bytes:
+    """Pack a SoundBox RGB fallback in PWV5's exact 16-bit layout."""
+    import numpy as np
+
+    values = np.asarray(heights, dtype=np.float64)
+    colors = np.asarray(rgb, dtype=np.float64).reshape(-1, 3)
+    count = min(len(values), len(colors))
+    if not count:
+        return b""
+    values = values[:count]
+    colors = colors[:count]
+    positive = values[values > 0]
+    ceiling = (
+        float(np.percentile(positive, percentile))
+        if positive.size else 1.0)
+    height = np.rint(
+        np.clip(values / max(ceiling, 1e-12), 0, 1) * 31
+    ).astype(np.uint16)
+    height[(values > 0) & (height == 0)] = 1
+    # PWV5 gives red four effective bits (stored at bits 15..12) and
+    # green/blue three. This is the inverse of NativeDeckBackend._screen_rgb.
+    red = np.rint(np.clip(colors[:, 0], 0, 255) / 18).astype(np.uint16)
+    green = np.rint(np.clip(colors[:, 1], 0, 255) / 36).astype(np.uint16)
+    blue = np.rint(np.clip(colors[:, 2], 0, 255) / 36).astype(np.uint16)
+    packed = (
+        (np.clip(red, 0, 14) << 12)
+        | (np.clip(green, 0, 7) << 10)
+        | (np.clip(blue, 0, 7) << 7)
+        | (height << 2)
+    ).astype(">u2")
+    return packed.tobytes()
 
 
 def _beat_grid(flux, rate: float, bpm_hint: float = 0) -> list[list]:
@@ -387,6 +508,10 @@ def load_manifest(
                 manifest.get("color_rate") or COLOR_RATE),
             "color_model": str(manifest.get("color_model") or ""),
             "waveform_model": str(manifest.get("waveform_model") or ""),
+            "three_band_model": str(
+                manifest.get("three_band_model") or ""),
+            "display_waveform_model": str(
+                manifest.get("display_waveform_model") or ""),
             "height_encoding": str(manifest.get("height_encoding") or ""),
             "detail_rate": float(manifest.get("detail_rate") or 0),
             "provenance": dict(manifest.get("provenance") or {}),
@@ -527,17 +652,31 @@ def load_detail(
     """Load ultra detail independently from manifest and overview sections."""
     try:
         loaded = _load_sections(
-            cache_dir, track_id, audio_path, ("detail", "spectral_24"))
+            cache_dir, track_id, audio_path,
+            ("detail", "spectral_24", "blue_detail", "rgb_detail",
+             "three_band"))
         if loaded is None:
             return None
         manifest, sections = loaded
+        lower = sections["detail"]
+        if (manifest.get("waveform_model") == WAVEFORM_MODEL
+                and "detail_lower" in (manifest.get("sections") or {})):
+            lower_loaded = _load_sections(
+                cache_dir, track_id, audio_path, ("detail_lower",))
+            if lower_loaded is None:
+                return None
+            lower = lower_loaded[1]["detail_lower"]
         return {
             "_audio_detail": {
                 "rate": float(manifest.get("detail_rate") or 0),
                 "heights": sections["detail"],
+                "lower_heights": lower,
                 "encoding": str(manifest.get("height_encoding") or ""),
             },
             "_spectral_24": sections["spectral_24"],
+            "_blue_detail": sections["blue_detail"],
+            "_rgb_detail": sections["rgb_detail"],
+            "_detail_bands": sections["three_band"],
         }
     except Exception:  # noqa: BLE001 - one bad section is a clean miss
         return None
@@ -763,10 +902,18 @@ def is_ready(cache_dir: str | Path, track_id: str,
             == f"{stat.st_size}:{stat.st_mtime_ns}"
             and manifest.get("color_model") == COLOR_MODEL
             and manifest.get("waveform_model") == WAVEFORM_MODEL
+            and manifest.get("three_band_model") == THREE_BAND_MODEL
+            and manifest.get("display_waveform_model")
+            == DISPLAY_WAVEFORM_MODEL
             and manifest.get("height_encoding") == HEIGHT_ENCODING
             and float(manifest.get("detail_rate") or 0) >= 5500
             and int(sections.get("detail", {}).get("raw_size") or 0) > 1
+            and int(
+                sections.get("detail_lower", {}).get("raw_size") or 0) > 1
             and int(sections.get("overview_rgb", {}).get("raw_size") or 0) > 0
+            and int(sections.get("blue_detail", {}).get("raw_size") or 0) > 0
+            and int(sections.get("rgb_detail", {}).get("raw_size") or 0) > 0
+            and int(sections.get("three_band", {}).get("raw_size") or 0) > 0
         )
     except (OSError, ValueError, KeyError, TypeError):
         return False
@@ -844,6 +991,10 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         heights = bytes(prepared.get("detail_heights") or
                         (prepared.get("_audio_detail") or {}).get("heights")
                         or b"")
+        lower_heights = bytes(
+            prepared.get("detail_lower_heights")
+            or (prepared.get("_audio_detail") or {}).get("lower_heights")
+            or heights)
         detail_rate = float(
             prepared.get("detail_rate")
             or (prepared.get("_audio_detail") or {}).get("rate")
@@ -851,6 +1002,9 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         overview_heights = bytes(prepared.get("overview_heights") or b"")
         overview_rgb = bytes(prepared.get("overview_rgb") or b"")
         bands = bytes(prepared.get("spectral_bands") or b"")
+        blue_detail = bytes(prepared.get("blue_detail") or b"")
+        rgb_detail = bytes(prepared.get("rgb_detail") or b"")
+        three_band = bytes(prepared.get("three_band") or b"")
         height_encoding = str(
             prepared.get("height_encoding")
             or (prepared.get("_audio_detail") or {}).get("encoding")
@@ -860,11 +1014,18 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             len(overview_heights) // height_width, len(overview_rgb) // 3)
         overview_heights = overview_heights[:count * height_width]
         overview_rgb = overview_rgb[:count * 3]
+        blue_detail = blue_detail[:count]
+        rgb_detail = rgb_detail[:count * 2]
+        three_band = three_band[:count * 3]
         sections = {
             "detail": heights,
+            "detail_lower": lower_heights,
             "overview_heights": overview_heights,
             "overview_rgb": overview_rgb,
             "spectral_24": bands,
+            "blue_detail": blue_detail,
+            "rgb_detail": rgb_detail,
+            "three_band": three_band,
         }
         section_rows, payload = _encode_sections(sections)
         metadata = {
@@ -886,6 +1047,10 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             "color_rate": float(prepared.get("sample_rate") or COLOR_RATE),
             "color_model": str(prepared.get("color_model") or ""),
             "waveform_model": str(prepared.get("waveform_model") or ""),
+            "three_band_model": str(
+                prepared.get("three_band_model") or ""),
+            "display_waveform_model": str(
+                prepared.get("display_waveform_model") or ""),
             "height_encoding": height_encoding,
             "overview_count": count,
             "spectral_bands": SPECTRAL_BANDS,
@@ -1011,14 +1176,25 @@ def update_user_data(cache_dir: str | Path, track_id: str,
         return False
 
 
+def _color_pipeline_delay(path: str | Path) -> float:
+    """Return only the decoder/timeline correction proven for this format."""
+    return (
+        MP3_COLOR_PIPELINE_DELAY
+        if Path(path).suffix.lower() == ".mp3"
+        else 0.0
+    )
+
+
 class StreamingAnalyzer:
     """Incremental waveform/RGB/grid feature extractor for any PCM decoder."""
 
-    def __init__(self, sample_rate: float):
+    def __init__(
+            self, sample_rate: float, color_pipeline_delay: float = 0.0):
         import numpy as np
 
         self.np = np
         self.sample_rate = float(sample_rate)
+        self.color_pipeline_delay = max(0.0, float(color_pipeline_delay))
         self.detail_window = max(1, round(self.sample_rate / ULTRA_RATE))
         self.detail_rate = self.sample_rate / self.detail_window
         self.color_hop = max(1, round(self.sample_rate / COLOR_RATE))
@@ -1026,11 +1202,13 @@ class StreamingAnalyzer:
         while self.n_fft < max(512, self.color_hop * 4):
             self.n_fft *= 2
         self.n_fft = min(4096, self.n_fft)
-        self._detail_tail = np.empty(0, dtype=np.float32)
+        self._detail_upper_tail = np.empty(0, dtype=np.float32)
+        self._detail_lower_tail = np.empty(0, dtype=np.float32)
         self._spectral_tail = np.empty(0, dtype=np.float32)
         self._overview_tail = np.empty(0, dtype=np.float32)
         self._color_tail = np.empty((0, 3), dtype=np.float32)
         self._detail: list = []
+        self._detail_lower: list = []
         self._overview: list = []
         self._spectra: list = []
         self._color_ms: list = []
@@ -1080,15 +1258,28 @@ class StreamingAnalyzer:
         incoming = np.nan_to_num(incoming, copy=False)
         if incoming.ndim == 1:
             values = incoming.reshape(-1)
-            geometry_values = np.abs(values)
+            geometry_upper = np.maximum(values, 0.0)
+            geometry_lower = np.maximum(-values, 0.0)
+            geometry_values = np.maximum(geometry_upper, geometry_lower)
             color_values = values
         else:
             channels = incoming.reshape(incoming.shape[0], -1)
             values = channels.mean(axis=1, dtype=np.float32)
-            # Waveform geometry represents the audible signal in either
-            # channel. abs((L + R) / 2) can erase wide/anti-phase reverb tails
-            # even though neither speaker is silent.
-            geometry_values = np.max(np.abs(channels), axis=1)
+            # Rekordbox-like silhouette detail follows the stereo midpoint,
+            # not whichever channel happens to be louder. Making channel peak
+            # the primary geometry inflated ordinary stereo ambience and
+            # filled the valleys between attacks. A small channel-safe floor
+            # still preserves fully anti-phase/wide tails in linear uint16;
+            # the display shoulder makes that real signal visible later.
+            midpoint_upper = np.maximum(values, 0.0)
+            midpoint_lower = np.maximum(-values, 0.0)
+            channel_upper = np.max(np.maximum(channels, 0.0), axis=1)
+            channel_lower = np.max(np.maximum(-channels, 0.0), axis=1)
+            geometry_upper = np.maximum(
+                midpoint_upper, channel_upper * CHANNEL_SAFETY_FLOOR)
+            geometry_lower = np.maximum(
+                midpoint_lower, channel_lower * CHANNEL_SAFETY_FLOOR)
+            geometry_values = np.maximum(geometry_upper, geometry_lower)
             if channels.shape[1] == 1:
                 color_values = channels[:, 0]
             else:
@@ -1099,12 +1290,20 @@ class StreamingAnalyzer:
                 color_values = np.where(
                     close, louder, (left + right) * 0.5).astype(np.float32)
 
-        detail = np.concatenate((self._detail_tail, geometry_values))
-        keep = len(detail) - len(detail) % self.detail_window
+        detail_upper = np.concatenate(
+            (self._detail_upper_tail, geometry_upper))
+        detail_lower = np.concatenate(
+            (self._detail_lower_tail, geometry_lower))
+        keep = len(detail_upper) - len(detail_upper) % self.detail_window
         if keep:
             self._detail.append(
-                detail[:keep].reshape(-1, self.detail_window).max(axis=1))
-        self._detail_tail = detail[keep:]
+                detail_upper[:keep].reshape(
+                    -1, self.detail_window).max(axis=1))
+            self._detail_lower.append(
+                detail_lower[:keep].reshape(
+                    -1, self.detail_window).max(axis=1))
+        self._detail_upper_tail = detail_upper[keep:]
+        self._detail_lower_tail = detail_lower[keep:]
 
         filtered = []
         for index, sos in enumerate(self._color_sos):
@@ -1123,27 +1322,36 @@ class StreamingAnalyzer:
                     -1, self._color_window, 3).max(axis=1))
         self._color_tail = color_samples[color_keep:]
 
-        samples = np.concatenate((self._spectral_tail, values))
+        # The visible 150 Hz envelope owns a 1/150-second time cell. Reusing
+        # the 2048-sample FFT window here looked ahead about 46 ms, rounded
+        # attacks, filled decay valleys, and omitted the final seven rows.
+        # Keep geometry on its own non-overlapping clock; spectral analysis
+        # may retain its wider FFT window without changing the silhouette.
         overview_samples = np.concatenate(
             (self._overview_tail, geometry_values))
+        overview_keep = (
+            len(overview_samples)
+            - len(overview_samples) % self.color_hop
+        )
+        if overview_keep:
+            self._overview.append(
+                overview_samples[:overview_keep].reshape(
+                    -1, self.color_hop).max(axis=1))
+        self._overview_tail = overview_samples[overview_keep:]
+
+        samples = np.concatenate((self._spectral_tail, values))
         frame_count = 1 + (len(samples) - self.n_fft) // self.color_hop
         if frame_count <= 0:
             self._spectral_tail = samples
-            self._overview_tail = overview_samples
             return
         # Bound each temporary strided FFT batch. Long set files stay constant
         # memory even though all compact 150 Hz results are retained.
         spectra = []
-        overview = []
         for first in range(0, frame_count, 512):
             count = min(512, frame_count - first)
             starts = (first + np.arange(count)) * self.color_hop
             frames = np.stack(
                 [samples[s:s + self.n_fft] for s in starts], axis=0)
-            overview_frames = np.stack(
-                [overview_samples[s:s + self.n_fft] for s in starts],
-                axis=0)
-            overview.append(overview_frames.max(axis=1))
             power = np.abs(np.fft.rfft(frames * self._window, axis=1))
             rows = np.stack([
                 power[:, start:end].mean(axis=1) if end > start
@@ -1160,10 +1368,8 @@ class StreamingAnalyzer:
             np.maximum(matrix - prior, 0).mean(axis=1).astype(np.float32))
         self._last_spectrum = matrix[-1]
         self._spectra.append(matrix)
-        self._overview.append(np.concatenate(overview))
         consumed = frame_count * self.color_hop
         self._spectral_tail = samples[consumed:]
-        self._overview_tail = overview_samples[consumed:]
 
     @staticmethod
     def _bytes(values, percentile: float = 99.5) -> bytes:
@@ -1201,11 +1407,37 @@ class StreamingAnalyzer:
         ).astype("<u2")
         return bytes(encoded)
 
+    @staticmethod
+    def _u16_polarity_bytes(
+            upper, lower, percentile: float = 99.5) -> tuple[bytes, bytes]:
+        """Normalize upper/lower peaks with one ceiling, preserving asymmetry."""
+        import numpy as np
+
+        upper_raw = np.asarray(upper, dtype=np.float32)
+        lower_raw = np.asarray(lower, dtype=np.float32)
+        joined = np.concatenate((upper_raw, lower_raw))
+        positive = joined[joined > 0]
+        ceiling = (
+            float(np.percentile(positive, percentile))
+            if positive.size else 1.0)
+
+        def encode(values):
+            return bytes(np.clip(
+                np.rint(values / max(ceiling, 1e-9) * 65535),
+                0, 65535).astype("<u2"))
+
+        return encode(upper_raw), encode(lower_raw)
+
     def finish(self, bpm_hint: float = 0) -> dict | None:
         np = self.np
-        if self._detail_tail.size:
+        if self._detail_upper_tail.size:
             self._detail.append(np.asarray(
-                [np.abs(self._detail_tail).max()], dtype=np.float32))
+                [self._detail_upper_tail.max()], dtype=np.float32))
+            self._detail_lower.append(np.asarray(
+                [self._detail_lower_tail.max()], dtype=np.float32))
+        if self._overview_tail.size:
+            self._overview.append(np.asarray(
+                [np.abs(self._overview_tail).max()], dtype=np.float32))
         if self._color_tail.size:
             self._color_ms.append(
                 np.max(self._color_tail, axis=0, keepdims=True))
@@ -1213,8 +1445,11 @@ class StreamingAnalyzer:
             return None
         detail = np.concatenate(self._detail)
         self._detail.clear()
-        detail_bytes = self._u16_bytes(detail, 99.9)
-        del detail
+        detail_lower = np.concatenate(self._detail_lower)
+        self._detail_lower.clear()
+        detail_bytes, detail_lower_bytes = self._u16_polarity_bytes(
+            detail, detail_lower, 99.9)
+        del detail, detail_lower
         overview = (
             np.concatenate(self._overview)
             if self._overview else np.empty(0, dtype=np.float32))
@@ -1237,6 +1472,17 @@ class StreamingAnalyzer:
             normalized = np.clip(
                 spectra / np.maximum(ceilings, 1e-9), 0, 1)
             bands = np.rint(normalized * 255).astype(np.uint8)
+            # The visible envelope includes the short final cell that cannot
+            # form a complete FFT window. Keep the private spectral master on
+            # the same row clock by extending its final known spectrum.
+            if len(bands) < len(overview):
+                bands = np.concatenate((
+                    bands,
+                    np.repeat(
+                        bands[-1:, :], len(overview) - len(bands), axis=0),
+                ), axis=0)
+            else:
+                bands = bands[:len(overview)]
             spectral_bytes = bands.tobytes()
             del normalized, bands, ceilings
         else:
@@ -1254,6 +1500,7 @@ class StreamingAnalyzer:
                 self._color_ms_rate,
                 self.sample_rate / self.color_hop,
                 len(overview),
+                self.color_pipeline_delay,
             )
             low = sampled[:, 0]
             mid = sampled[:, 1]
@@ -1261,8 +1508,27 @@ class StreamingAnalyzer:
             signal_peak = np.maximum.reduce((low, mid, high))
             overview_rgb = _pack_rgb3(
                 _rgb_transfer(low, mid, high), signal_peak)
+            blue_detail = _pack_blue_detail(overview)
+            rgb_detail = _pack_rgb_detail(
+                overview, np.frombuffer(
+                    overview_rgb, dtype=np.uint8).reshape(-1, 3))
+            geometry_bands = _resample_peak_envelopes(
+                envelopes,
+                self._color_ms_rate,
+                self.sample_rate / self.color_hop,
+                len(overview),
+                self.color_pipeline_delay,
+            )
+            three_band = _pack_three_band_u7(
+                geometry_bands[:, 0],
+                geometry_bands[:, 1],
+                geometry_bands[:, 2],
+            )
         else:
             overview_rgb = bytes(len(overview) * 3)
+            blue_detail = bytes(len(overview))
+            rgb_detail = bytes(len(overview) * 2)
+            three_band = bytes(len(overview) * 3)
 
         flux = (
             np.concatenate(self._flux)
@@ -1272,13 +1538,19 @@ class StreamingAnalyzer:
             flux, self.sample_rate / self.color_hop, bpm_hint)
         return {
             "detail_heights": detail_bytes,
+            "detail_lower_heights": detail_lower_bytes,
             "detail_rate": self.detail_rate,
             "overview_heights": overview_bytes,
             "overview_rgb": overview_rgb,
             "spectral_bands": spectral_bytes,
+            "blue_detail": blue_detail,
+            "rgb_detail": rgb_detail,
+            "three_band": three_band,
             "sample_rate": self.sample_rate / self.color_hop,
             "color_model": COLOR_MODEL,
             "waveform_model": WAVEFORM_MODEL,
+            "three_band_model": THREE_BAND_MODEL,
+            "display_waveform_model": DISPLAY_WAVEFORM_MODEL,
             "height_encoding": HEIGHT_ENCODING,
             "beats": beats,
             "cues": [],
@@ -1299,7 +1571,10 @@ def analyze_soundfile(
 
         source = Path(path)
         with sf.SoundFile(str(source)) as audio:
-            analyzer = StreamingAnalyzer(float(audio.samplerate))
+            analyzer = StreamingAnalyzer(
+                float(audio.samplerate),
+                color_pipeline_delay=_color_pipeline_delay(source),
+            )
             while True:
                 if checkpoint is not None and not checkpoint():
                     return None
@@ -1341,11 +1616,28 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
             for row in colors[:count] for channel in list(row)[:3])
         result["sample_rate"] = float(source.get("sample_rate") or COLOR_RATE)
     bands = source.get("_detail_bands")
+    blue_detail = source.get("_blue_detail")
+    rgb_detail = source.get("_rgb_detail")
+    if isinstance(blue_detail, bytes) and blue_detail:
+        result["blue_detail"] = bytes(blue_detail)
+    if isinstance(rgb_detail, bytes) and rgb_detail:
+        result["rgb_detail"] = bytes(rgb_detail)
+    if isinstance(bands, bytes) and bands:
+        # PWV7 is already the exact three independent shapes Rekordbox draws.
+        # Copy it once into the SoundBox-owned cache; the player never depends
+        # on the Rekordbox file after this import.
+        result["three_band"] = bytes(value & 0x7f for value in bands)
+        result["three_band_model"] = THREE_BAND_MODEL
+    if (
+            result.get("blue_detail")
+            and result.get("rgb_detail")
+            and result.get("three_band")):
+        result["display_waveform_model"] = DISPLAY_WAVEFORM_MODEL
     if isinstance(bands, bytes) and bands and not result.get("spectral_bands"):
         # Preserve the authentic three-band source in a 24-band-shaped master.
         expanded = bytearray()
         for offset in range(0, len(bands) - 2, 3):
-            mid, high, low = bands[offset:offset + 3]
+            low, mid, high = bands[offset:offset + 3]
             expanded.extend([low] * 8 + [mid] * 8 + [high] * 8)
         result["spectral_bands"] = bytes(expanded)
     result["provenance"] = {

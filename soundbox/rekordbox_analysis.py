@@ -5,7 +5,7 @@ resolves that path beneath rekordbox's ``share/`` directory, then reads:
 
 * ``ANLZ0000.DAT`` → PQTZ beat number, BPM, and exact beat position.
 * ``ANLZ0000.DAT/EXT`` → PCOB/PCO2 memory and hot cues.
-* ``ANLZ0000.EXT`` → PWV5 detailed RGB waveform (~150 samples/second).
+* ``ANLZ0000.EXT`` → PWV3 BLUE and PWV5 RGB detail (~150 samples/second).
 * ``ANLZ0000.2EX`` → PWV7 higher-precision three-band detail at the same rate.
 
 This module NEVER builds or saves an ANLZ file. It only opens existing files in
@@ -131,34 +131,54 @@ def read_cues(dat_path: str | Path) -> list[dict]:
         return []
 
 
-def _read_pwv7(dat_path: str | Path) -> bytes:
-    """Return the read-only PWV7 three-band rows beside ``dat_path``.
+def _read_waveform_tag(
+        path: str | Path, tag_type: bytes, entry_size: int) -> bytes:
+    """Return one validated waveform tag payload from an existing ANLZ file.
 
-    Each row is three unsigned energy bytes (mid/high/low). Reading this tag
-    directly avoids pyrekordbox object construction on the track-load hot path;
-    the enclosing 2EX file is never opened for writing.
+    BLUE, RGB, and 3BAND must remain distinct renderer inputs. Reading their
+    original packed rows also avoids losing precision through a decode/repack
+    round trip. The file is opened only through ``read_bytes`` and is never
+    modified.
     """
     try:
-        raw = Path(dat_path).with_suffix(".2EX").read_bytes()
+        raw = Path(path).read_bytes()
     except OSError:
         return b""
     cursor = 0
     while True:
-        offset = raw.find(b"PWV7", cursor)
+        offset = raw.find(tag_type, cursor)
         if offset < 0 or offset + 24 > len(raw):
             return b""
         try:
             header_size, tag_size = struct.unpack_from(">II", raw, offset + 4)
-            entry_size, count = struct.unpack_from(">II", raw, offset + 12)
+            stored_entry_size, count = struct.unpack_from(">II", raw, offset + 12)
         except struct.error:
             return b""
         data_start = offset + header_size
-        data_size = count * entry_size
-        if (header_size >= 24 and entry_size == 3
+        data_size = count * stored_entry_size
+        if (header_size >= 24 and stored_entry_size == entry_size
                 and tag_size >= header_size + data_size
                 and data_start + data_size <= len(raw)):
             return raw[data_start:data_start + data_size]
         cursor = offset + 4
+
+
+def _read_pwv3(dat_path: str | Path) -> bytes:
+    """Return exact packed BLUE detail rows from the sibling EXT file."""
+    return _read_waveform_tag(
+        Path(dat_path).with_suffix(".EXT"), b"PWV3", 1)
+
+
+def _read_pwv5(dat_path: str | Path) -> bytes:
+    """Return exact packed RGB detail rows from the sibling EXT file."""
+    return _read_waveform_tag(
+        Path(dat_path).with_suffix(".EXT"), b"PWV5", 2)
+
+
+def _read_pwv7(dat_path: str | Path) -> bytes:
+    """Return exact packed 3BAND rows from the sibling 2EX file."""
+    return _read_waveform_tag(
+        Path(dat_path).with_suffix(".2EX"), b"PWV7", 3)
 
 
 def _beat_rows(dat_file) -> list[list]:
@@ -231,12 +251,13 @@ def resolve_dat_path(db_path: str | Path, analysis_data_path: str) -> Path | Non
 
 
 def read(dat_path: str | Path) -> dict:
-    """Read one track's existing PQTZ/PCOB/PCO2/PWV5 data.
+    """Read one track's existing grid/cues and all detailed waveform modes.
 
     ``beats`` rows are ``[beat_in_bar, position_ms, bpm]``. ``heights`` are
     normalized 0..1 and ``colors`` are rekordbox's per-sample RGB intensities.
-    ``_detail_bands`` contains PWV7 mid/high/low bytes when a 2EX file exists.
-    Both detail streams are fixed at 150 samples/second by the format.
+    ``_blue_detail``, ``_rgb_detail``, and ``_detail_bands`` retain exact
+    PWV3/PWV5/PWV7 packed rows. All three streams use the format's 150 Hz song
+    clock and are copied only into SoundBox-owned cache storage.
     """
     dat = Path(dat_path)
     if dat.suffix.upper() != ".DAT" or not dat.is_file():
@@ -262,6 +283,8 @@ def read(dat_path: str | Path) -> dict:
             "heights": heights,
             "colors": colors,
             "cues": _cue_rows(dat_file, ext_file),
+            "_blue_detail": _read_pwv3(dat),
+            "_rgb_detail": _read_pwv5(dat),
             "_detail_bands": _read_pwv7(dat),
             "sample_rate": 150.0,
         }

@@ -24,6 +24,7 @@ _HOT_CUE_FALLBACKS = (
     (48, 210, 110), (224, 100, 27), (48, 90, 255), (195, 175, 4),
 )
 _MEMORY_CUE_RGB = (255, 52, 52)
+_WAVEFORM_MODES = {"BLUE": 1, "RGB": 2, "3BAND": 3}
 _NATIVE_GEOMETRY_EVENTS = tuple(
     event_type
     for event_type in (
@@ -34,6 +35,74 @@ _NATIVE_GEOMETRY_EVENTS = tuple(
     )
     if event_type is not None
 )
+
+
+def _repair_pwv5_visibility(
+        packed: bytes, overview_heights: bytes,
+        height_encoding: str) -> bytes:
+    """Give audible zero-height PWV5 rows a color carrier, without recooking.
+
+    Rekordbox PWV5 may encode a row as all zero even when SoundBox's independent
+    decoded envelope proves that the audio is nonzero. Metal correctly keeps
+    the decoded contour, but an all-zero PWV5 row also has zero color weight,
+    so that real contour is painted black and appears to vanish. Copying only
+    the nearest valid PWV5 color bits and assigning the minimum representable
+    PWV5 height keeps the exact audio geometry while making it visible.
+    """
+    width = 2 if height_encoding == "linear-u16le" else 1
+    count = min(len(packed) // 2, len(overview_heights) // width)
+    if count <= 0:
+        return packed
+
+    values = [
+        int.from_bytes(packed[index * 2:index * 2 + 2], "big")
+        for index in range(count)
+    ]
+    audible = [
+        int.from_bytes(
+            overview_heights[index * width:(index + 1) * width],
+            "little" if width == 2 else "big") > 0
+        for index in range(count)
+    ]
+    valid = [(value & 0xff80) != 0 for value in values]
+    if not any(valid):
+        return packed
+
+    previous = [-1] * count
+    source = -1
+    for index, is_valid in enumerate(valid):
+        if is_valid:
+            source = index
+        previous[index] = source
+    following = [-1] * count
+    source = -1
+    for index in range(count - 1, -1, -1):
+        if valid[index]:
+            source = index
+        following[index] = source
+
+    repaired = bytearray(packed)
+    changed = False
+    for index, value in enumerate(values):
+        if not audible[index] or (value & 0x007c) != 0:
+            continue
+        color_bits = value & 0xff80
+        if color_bits == 0:
+            before = previous[index]
+            after = following[index]
+            nearest = (
+                after if before < 0
+                else before if after < 0
+                else before if index - before <= after - index
+                else after
+            )
+            if nearest < 0:
+                continue
+            color_bits = values[nearest] & 0xff80
+        repaired[index * 2:index * 2 + 2] = (
+            color_bits | 0x0004).to_bytes(2, "big")
+        changed = True
+    return bytes(repaired) if changed else packed
 
 
 class PlaybackState(IntEnum):
@@ -189,6 +258,21 @@ def _bind(path: Path):
         handle, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
     ]
     lib.sb_deck_set_detail_bands.restype = ctypes.c_int
+    lib.sb_deck_set_waveform_streams.argtypes = [
+        handle,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        ctypes.c_double,
+    ]
+    lib.sb_deck_set_waveform_streams.restype = ctypes.c_int
+    lib.sb_deck_set_waveform_mode.argtypes = [handle, ctypes.c_uint32]
+    lib.sb_deck_set_waveform_mode.restype = ctypes.c_int
+    lib.sb_deck_waveform_mode.argtypes = [handle]
+    lib.sb_deck_waveform_mode.restype = ctypes.c_uint32
     lib.sb_deck_set_spectral_analysis.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_uint8),
@@ -220,6 +304,16 @@ def _bind(path: Path):
         ctypes.c_double,
     ]
     lib.sb_deck_set_audio_detail_u16_for_generation.restype = ctypes.c_int
+    lib.sb_deck_set_audio_detail_polarity_u16_for_generation.argtypes = [
+        handle,
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.c_uint16),
+        ctypes.POINTER(ctypes.c_uint16),
+        ctypes.c_size_t,
+        ctypes.c_double,
+    ]
+    lib.sb_deck_set_audio_detail_polarity_u16_for_generation.restype = (
+        ctypes.c_int)
     lib.sb_deck_set_cues.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_uint32),
@@ -571,6 +665,14 @@ class NativeDeckBackend(QObject):
     def diagnostic_zoom(self) -> float:
         return float(self._lib.sb_deck_pixels_per_second(self._handle))
 
+    def diagnostic_waveform_mode(self) -> str:
+        value = int(self._lib.sb_deck_waveform_mode(self._handle))
+        return next(
+            (name for name, encoded in _WAVEFORM_MODES.items()
+             if encoded == value),
+            "",
+        )
+
     def diagnostic_display_stats(self) -> tuple[int, float, float]:
         """Actual drawable presentations, mean FPS, and largest real gap."""
         return (
@@ -638,6 +740,13 @@ class NativeDeckBackend(QObject):
     def set_zoom(self, pixels_per_second: float):
         return float(self._lib.sb_deck_set_zoom(
             self._handle, float(pixels_per_second)))
+
+    def set_waveform_mode(self, mode: str):
+        value = _WAVEFORM_MODES.get(str(mode).upper(), 3)
+        self._lib.sb_deck_set_waveform_mode(self._handle, value)
+        return next(
+            name for name, encoded in _WAVEFORM_MODES.items()
+            if encoded == value)
 
     @staticmethod
     def _screen_rgb(raw) -> tuple[int, int, int]:
@@ -784,18 +893,61 @@ class NativeDeckBackend(QObject):
     def set_complete_analysis(
             self, overview: dict, detail: dict, generation: int = 0
     ) -> tuple[bool, bool]:
-        """Commit color and ultra geometry as one first visible surface."""
+        """Commit overview plus three-band detail as one visible surface."""
         self._lib.sb_deck_begin_waveform_update(self._handle)
         overview_ok = detail_ok = False
         try:
             overview_ok = bool(self.set_overview(overview, generation))
             if overview_ok:
                 before = self.diagnostic_detail_shape()
-                self._set_audio_detail(detail, generation)
-                detail_ok = self.diagnostic_detail_shape() != before
+                streams_ok = self._set_waveform_streams(
+                    detail, float(overview.get("sample_rate") or 150.0),
+                    overview)
+                band_ok = streams_ok or self._set_detail_bands(
+                    detail.get("_detail_bands"))
+                audio_detail = detail.get("_audio_detail")
+                if audio_detail is None and "heights" in detail:
+                    audio_detail = detail
+                self._set_audio_detail(audio_detail, generation)
+                detail_ok = bool(
+                    band_ok or self.diagnostic_detail_shape() != before)
         finally:
             self._lib.sb_deck_end_waveform_update(self._handle)
         return overview_ok, detail_ok
+
+    def _set_waveform_streams(
+            self, detail: dict, rate: float,
+            overview: dict | None = None) -> bool:
+        blue = detail.get("_blue_detail")
+        rgb = detail.get("_rgb_detail")
+        bands = detail.get("_detail_bands")
+        if not (
+                isinstance(blue, bytes) and blue
+                and isinstance(rgb, bytes) and len(rgb) >= 2
+                and isinstance(bands, bytes) and len(bands) >= 3):
+            return False
+        blue_count = len(blue)
+        rgb_count = len(rgb) // 2
+        band_count = len(bands) // 3
+        if overview is not None:
+            overview_heights = overview.get("_overview_heights")
+            if isinstance(overview_heights, bytes):
+                rgb = _repair_pwv5_visibility(
+                    rgb, overview_heights,
+                    str(overview.get("_height_encoding") or ""))
+                rgb_count = len(rgb) // 2
+        blue_arr = (ctypes.c_uint8 * blue_count).from_buffer_copy(blue)
+        rgb_arr = (ctypes.c_uint8 * (rgb_count * 2)).from_buffer_copy(
+            rgb[:rgb_count * 2])
+        band_arr = (ctypes.c_uint8 * (band_count * 3)).from_buffer_copy(
+            bands[:band_count * 3])
+        return bool(self._lib.sb_deck_set_waveform_streams(
+            self._handle,
+            blue_arr, blue_count,
+            rgb_arr, rgb_count,
+            band_arr, band_count,
+            max(1.0, float(rate)),
+        ))
 
     @staticmethod
     def _cue_rgb(cue: dict, slot: int) -> tuple[int, int, int]:
@@ -846,12 +998,12 @@ class NativeDeckBackend(QObject):
 
     def _set_detail_bands(self, bands):
         if not isinstance(bands, bytes) or len(bands) < 3:
-            return
+            return False
         count = len(bands) // 3
         packed = (ctypes.c_uint8 * (count * 3)).from_buffer_copy(
             bands[:count * 3])
-        self._lib.sb_deck_set_detail_bands(
-            self._handle, packed, count)
+        return bool(self._lib.sb_deck_set_detail_bands(
+            self._handle, packed, count))
 
     def _set_audio_detail(self, detail, generation: int = 0):
         if not isinstance(detail, dict):
@@ -862,11 +1014,22 @@ class NativeDeckBackend(QObject):
             return
         expected = int(generation or self._analysis_generation)
         if detail.get("encoding") == "linear-u16le":
-            count = len(heights) // 2
+            lower = detail.get("lower_heights")
+            count = min(
+                len(heights) // 2,
+                len(lower) // 2 if isinstance(lower, bytes) else len(heights) // 2,
+            )
             if not count:
                 return
             packed = (ctypes.c_uint16 * count).from_buffer_copy(
                 heights[:count * 2])
+            if isinstance(lower, bytes):
+                packed_lower = (
+                    ctypes.c_uint16 * count).from_buffer_copy(
+                        lower[:count * 2])
+                self._lib.sb_deck_set_audio_detail_polarity_u16_for_generation(
+                    self._handle, expected, packed, packed_lower, count, rate)
+                return
             self._lib.sb_deck_set_audio_detail_u16_for_generation(
                 self._handle, expected, packed, count, rate)
             return

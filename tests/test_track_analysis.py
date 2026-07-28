@@ -67,11 +67,30 @@ class TrackAnalysisStore(unittest.TestCase):
                          [29, 30, 31])
         self.assertEqual(np.flatnonzero(held[:, 2]).tolist(), [30])
 
-    def test_rgb_pipeline_delay_clamps_to_first_valid_hue_at_zero(self):
+    def test_rgb_pipeline_delay_is_explicit_and_clamps_at_zero(self):
         rows = np.ones((100, 3), dtype=np.float32)
         sampled = track_analysis._resample_rgb_envelopes(
-            rows, 1000.0, 150.0, 12)
+            rows, 1000.0, 150.0, 12,
+            track_analysis.MP3_COLOR_PIPELINE_DELAY)
         np.testing.assert_array_equal(sampled, np.ones((12, 3)))
+
+    def test_only_mp3_keeps_the_proven_decoder_timeline_correction(self):
+        for suffix in (".wav", ".aif", ".aiff", ".flac", ".aac", ".m4a"):
+            self.assertEqual(
+                track_analysis._color_pipeline_delay(f"x{suffix}"), 0.0)
+        self.assertEqual(
+            track_analysis._color_pipeline_delay("x.MP3"),
+            track_analysis.MP3_COLOR_PIPELINE_DELAY)
+
+    def test_mp3_timeline_correction_is_exactly_seven_rgb_rows(self):
+        rows = np.arange(1000, dtype=np.float32)
+        envelopes = np.stack((rows, rows, rows), axis=1)
+        lossless = track_analysis._resample_rgb_envelopes(
+            envelopes, 1000.0, 150.0, 20)
+        mp3 = track_analysis._resample_rgb_envelopes(
+            envelopes, 1000.0, 150.0, 20,
+            track_analysis.MP3_COLOR_PIPELINE_DELAY)
+        np.testing.assert_allclose(lossless[:-7], mp3[7:])
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -103,8 +122,14 @@ class TrackAnalysisStore(unittest.TestCase):
             "overview_heights": b"\x10\x80",
             "overview_rgb": b"\x01\x02\x03\x04\x05\x06",
             "spectral_bands": bytes(range(48)),
+            "blue_detail": b"\x21\x42",
+            "rgb_detail": b"\x12\x34\x56\x78",
+            "three_band": b"\x01\x02\x03\x04\x05\x06",
             "sample_rate": 150.0,
             "color_model": track_analysis.COLOR_MODEL,
+            "three_band_model": track_analysis.THREE_BAND_MODEL,
+            "display_waveform_model":
+                track_analysis.DISPLAY_WAVEFORM_MODEL,
             "beats": [[1, 125, 140.0]],
             "cues": [{"kind": "hot", "slot": 0, "position_ms": 125}],
         }
@@ -115,6 +140,9 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(got["color_model"], track_analysis.COLOR_MODEL)
         self.assertEqual(got["beats"], data["beats"])
         self.assertEqual(got["_audio_detail"]["heights"], b"\x01\x02\x03")
+        self.assertEqual(got["_detail_bands"], data["three_band"])
+        self.assertEqual(got["_blue_detail"], data["blue_detail"])
+        self.assertEqual(got["_rgb_detail"], data["rgb_detail"])
         self.assertEqual(got["colors"], [[1, 2, 3], [4, 5, 6]])
         self.audio.write_bytes(self.audio.read_bytes() + b"x")
         self.assertIsNone(
@@ -191,6 +219,14 @@ class TrackAnalysisStore(unittest.TestCase):
         count = len(result["overview_heights"]) // 2
         self.assertEqual(len(result["overview_rgb"]), count * 3)
         self.assertEqual(len(result["spectral_bands"]), count * 24)
+        self.assertEqual(len(result["three_band"]), count * 3)
+        self.assertEqual(len(result["blue_detail"]), count)
+        self.assertEqual(len(result["rgb_detail"]), count * 2)
+        self.assertEqual(
+            result["three_band_model"], track_analysis.THREE_BAND_MODEL)
+        self.assertEqual(
+            result["display_waveform_model"],
+            track_analysis.DISPLAY_WAVEFORM_MODEL)
         self.assertTrue(any(result["overview_rgb"]))
         self.assertEqual(result["color_model"], track_analysis.COLOR_MODEL)
         self.assertGreaterEqual(len(result["beats"]), 3)
@@ -236,9 +272,13 @@ class TrackAnalysisStore(unittest.TestCase):
         actual = chunked.finish(bpm_hint=120)
         self.assertEqual(actual["detail_heights"], expected["detail_heights"])
         self.assertEqual(
+            actual["detail_lower_heights"],
+            expected["detail_lower_heights"])
+        self.assertEqual(
             actual["overview_heights"], expected["overview_heights"])
         self.assertEqual(actual["overview_rgb"], expected["overview_rgb"])
         self.assertEqual(actual["spectral_bands"], expected["spectral_bands"])
+        self.assertEqual(actual["three_band"], expected["three_band"])
 
     def test_owned_chunks_preserve_the_exact_analysis_contract(self):
         copied = track_analysis.StreamingAnalyzer(48_000)
@@ -249,8 +289,9 @@ class TrackAnalysisStore(unittest.TestCase):
         owned.feed(self.signal.copy(), owned=True)
         actual = owned.finish(bpm_hint=120)
         for field in (
-                "detail_heights", "overview_heights", "overview_rgb",
-                "spectral_bands", "beats"):
+                "detail_heights", "detail_lower_heights",
+                "overview_heights", "overview_rgb",
+                "spectral_bands", "three_band", "beats"):
             self.assertEqual(actual[field], expected[field])
 
     def test_rgb_pipeline_does_not_change_ultra_silhouette_geometry(self):
@@ -259,13 +300,52 @@ class TrackAnalysisStore(unittest.TestCase):
         result = analyzer.finish()
         window = round(48_000 / track_analysis.ULTRA_RATE)
         keep = len(self.signal) - len(self.signal) % window
-        expected = np.abs(self.signal[:keep]).reshape(-1, window).max(axis=1)
+        upper = np.maximum(self.signal[:keep], 0).reshape(
+            -1, window).max(axis=1)
+        lower = np.maximum(-self.signal[:keep], 0).reshape(
+            -1, window).max(axis=1)
         if keep < len(self.signal):
-            expected = np.append(expected, np.abs(self.signal[keep:]).max())
+            upper = np.append(
+                upper, np.maximum(self.signal[keep:], 0).max())
+            lower = np.append(
+                lower, np.maximum(-self.signal[keep:], 0).max())
+        expected_upper, expected_lower = (
+            track_analysis.StreamingAnalyzer._u16_polarity_bytes(
+                upper, lower, 99.9))
         self.assertEqual(
-            result["detail_heights"],
-            track_analysis.StreamingAnalyzer._u16_bytes(expected, 99.9),
-        )
+            result["detail_heights"], expected_upper)
+        self.assertEqual(
+            result["detail_lower_heights"], expected_lower)
+
+    def test_ultra_geometry_preserves_independent_positive_and_negative_sides(
+            self):
+        signal = np.concatenate((
+            np.full(16, 0.75, dtype=np.float32),
+            np.full(16, -0.25, dtype=np.float32),
+        ))
+        analyzer = track_analysis.StreamingAnalyzer(48_000)
+        analyzer.feed(signal)
+        result = analyzer.finish()
+        upper = np.frombuffer(result["detail_heights"], dtype="<u2")
+        lower = np.frombuffer(result["detail_lower_heights"], dtype="<u2")
+        self.assertEqual(len(upper), len(lower))
+        self.assertFalse(np.array_equal(upper, lower))
+        self.assertGreater(int(upper.max()), int(lower.max()))
+
+    def test_overview_uses_complete_nonoverlapping_color_clock_cells(self):
+        rate = 48_000
+        hop = round(rate / track_analysis.COLOR_RATE)
+        signal = np.zeros(hop * 2, dtype=np.float32)
+        signal[0] = 0.5
+        signal[hop + 10] = 1.0
+        analyzer = track_analysis.StreamingAnalyzer(rate)
+        analyzer.feed(signal)
+        result = analyzer.finish()
+        overview = np.frombuffer(
+            result["overview_heights"], dtype="<u2")
+        self.assertEqual(len(overview), 2)
+        self.assertAlmostEqual(
+            int(overview[0]) / int(overview[1]), 0.5, delta=0.01)
 
     def test_only_current_rgb_and_waveform_models_are_background_ready(self):
         cache = self.root / "analysis"
@@ -274,6 +354,9 @@ class TrackAnalysisStore(unittest.TestCase):
             "detail_rate": 6144.0,
             "overview_heights": b"\x80",
             "overview_rgb": b"\x0e\x00\x00",
+            "blue_detail": b"\x21",
+            "rgb_detail": b"\x12\x34",
+            "three_band": b"\x01\x02\x03",
         }
         track_analysis.store(cache, "old", self.audio, base)
         self.assertFalse(track_analysis.is_ready(
@@ -283,12 +366,15 @@ class TrackAnalysisStore(unittest.TestCase):
             "overview_heights": b"\x80\x00",
             "color_model": track_analysis.COLOR_MODEL,
             "waveform_model": track_analysis.WAVEFORM_MODEL,
+            "three_band_model": track_analysis.THREE_BAND_MODEL,
+            "display_waveform_model":
+                track_analysis.DISPLAY_WAVEFORM_MODEL,
             "height_encoding": track_analysis.HEIGHT_ENCODING,
         })
         self.assertTrue(track_analysis.is_ready(
             cache, "new", self.audio))
 
-    def test_channel_peak_geometry_does_not_cancel_antiphase_audio(self):
+    def test_midpoint_geometry_keeps_a_channel_safe_antiphase_floor(self):
         rate = 48_000
         t = np.arange(rate, dtype=np.float32) / rate
         left = 0.25 * np.sin(2 * np.pi * 440 * t)
@@ -303,7 +389,32 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertGreater(int(detail.max()), 60_000)
         self.assertGreater(int(overview.max()), 60_000)
 
-    def test_stereo_channel_peak_geometry_is_chunk_invariant(self):
+    def test_ordinary_stereo_geometry_follows_midpoint_not_louder_channel(self):
+        rate = 48_000
+        frames = rate
+        left = np.ones(frames, dtype=np.float32)
+        right = np.zeros(frames, dtype=np.float32)
+        stereo = np.stack((left, right), axis=1)
+        analyzer = track_analysis.StreamingAnalyzer(rate)
+        analyzer.feed(stereo)
+        result = analyzer.finish()
+        detail = np.frombuffer(result["detail_heights"], dtype="<u2")
+        # Normalization makes this constant test full-scale; compare against a
+        # second full-midpoint region in one analysis to preserve the ratio.
+        split = np.concatenate((
+            stereo[:frames // 2],
+            np.ones((frames // 2, 2), dtype=np.float32),
+        ))
+        analyzer = track_analysis.StreamingAnalyzer(rate)
+        analyzer.feed(split)
+        mixed = np.frombuffer(
+            analyzer.finish()["detail_heights"], dtype="<u2")
+        first = np.median(mixed[:len(mixed) // 2])
+        second = np.median(mixed[len(mixed) // 2:])
+        self.assertAlmostEqual(first / second, 0.5, delta=0.02)
+        self.assertEqual(int(detail.max()), 65535)
+
+    def test_stereo_midpoint_geometry_is_chunk_invariant(self):
         rate = 48_000
         t = np.arange(rate, dtype=np.float32) / rate
         left = 0.25 * np.sin(2 * np.pi * 440 * t)
@@ -318,8 +429,22 @@ class TrackAnalysisStore(unittest.TestCase):
         actual = chunked.finish()
         for field in (
                 "detail_heights", "overview_heights", "overview_rgb",
-                "spectral_bands", "beats"):
+                "spectral_bands", "blue_detail", "rgb_detail",
+                "three_band", "beats"):
             self.assertEqual(actual[field], expected[field])
+
+    def test_native_three_band_rows_use_measured_low_mid_high_order(self):
+        rate = 48_000
+        t = np.arange(rate * 2, dtype=np.float32) / rate
+        strongest = []
+        for frequency in (60, 1000, 8000):
+            analyzer = track_analysis.StreamingAnalyzer(rate)
+            analyzer.feed(0.5 * np.sin(2 * np.pi * frequency * t))
+            rows = np.frombuffer(
+                analyzer.finish()["three_band"],
+                dtype=np.uint8).reshape(-1, 3)
+            strongest.append(int(np.argmax(rows[50:].mean(axis=0))))
+        self.assertEqual(strongest, [0, 1, 2])
 
     def test_u16_geometry_keeps_quiet_signal_that_a_byte_discards(self):
         peaks = np.asarray([1.0, 0.001, 0.0], dtype=np.float32)
@@ -358,11 +483,22 @@ class TrackAnalysisStore(unittest.TestCase):
             "beats": [[1, 250, 128.0]],
             "cues": [{"kind": "memory", "slot": 0, "position_ms": 500}],
             "sample_rate": 150.0,
+            "_detail_bands": b"\x11\x22\x33",
+            "_blue_detail": b"\x9f",
+            "_rgb_detail": b"\xe0\x7c",
         }
         got = track_analysis.merge_import(native, imported)
         self.assertEqual(got["detail_heights"], b"ultra")
         self.assertEqual(got["beats"], imported["beats"])
         self.assertEqual(got["overview_rgb"], bytes([1, 2, 3]))
+        self.assertEqual(got["three_band"], imported["_detail_bands"])
+        self.assertEqual(got["blue_detail"], imported["_blue_detail"])
+        self.assertEqual(got["rgb_detail"], imported["_rgb_detail"])
+        self.assertEqual(
+            got["three_band_model"], track_analysis.THREE_BAND_MODEL)
+        self.assertEqual(
+            got["display_waveform_model"],
+            track_analysis.DISPLAY_WAVEFORM_MODEL)
         self.assertEqual(got["provenance"]["grid"], "rekordbox")
         self.assertEqual(
             got["grid_import"]["fingerprint"],

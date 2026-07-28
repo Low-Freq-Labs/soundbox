@@ -42,9 +42,11 @@ _OVERVIEW_HEIGHT = 28
 _RULER_TOP = 31
 _ZOOM_TOP = 49
 _HEIGHT_ENCODING_U16 = "linear-u16le"
-_WAVEFORM_DISPLAY_EXPONENT = 0.80
+_WAVEFORM_DISPLAY_EXPONENT = 1.4
+_WAVEFORM_DISPLAY_SCALE = 0.84
 _WAVEFORM_VISIBILITY_SHOULDER = 1.0 / 128.0
 _WAVEFORM_VISIBILITY_KNEE = 4.0 / 65535.0
+_WAVEFORM_MODES = ("BLUE", "RGB", "3BAND")
 # The last stop is intentionally close to Rekordbox's maximum: at the
 # 140–175 BPM range common in this library, a typical detail deck shows about
 # three beats across its full width. These are renderer scales, not rebuilt
@@ -69,9 +71,10 @@ def _display_waveform_height(linear: float) -> float:
     visibility = 1.0 - exp(-value / _WAVEFORM_VISIBILITY_KNEE)
     return min(
         1.0,
-        companded
+        _WAVEFORM_DISPLAY_SCALE * (
+            companded
         + _WAVEFORM_VISIBILITY_SHOULDER
-        * (1.0 - companded) * visibility,
+        * (1.0 - companded) * visibility),
     )
 _SESSION_CUE_COLOR = QColor("#f08a19")
 
@@ -367,15 +370,12 @@ class WaveformWorker(QThread):
             self.track_analysis_dir, self.track_id, self.path)
         if overview is not None and self.native_backend is not None:
             combined = {**manifest, **overview}
-            audio_detail = (
-                detail.get("_audio_detail")
-                if detail is not None else None)
-            if (audio_detail is not None
+            if (detail is not None
                     and hasattr(
                         self.native_backend, "set_complete_analysis")):
                 overview_ok, detail_ok = (
                     self.native_backend.set_complete_analysis(
-                        combined, audio_detail, self.generation))
+                        combined, detail, self.generation))
                 if overview_ok:
                     overview["_native_uploaded"] = True
                 if detail_ok:
@@ -1379,7 +1379,8 @@ class PlayerBar(QWidget):
 
     def __init__(
             self, jump_mode: str = "16 BEATS",
-            waveform_zoom: float = _PIXELS_PER_SECOND):
+            waveform_zoom: float = _PIXELS_PER_SECOND,
+            waveform_mode: str = "3BAND"):
         super().__init__()
         self.track_analysis_dir = None  # canonical SoundBox-owned V4 records
         self._deck_volume = 0.9
@@ -1421,6 +1422,8 @@ class PlayerBar(QWidget):
         self._load_started = 0.0
         self._jump_mode = "16 BEATS"
         self._jump_beats = 16
+        self._waveform_mode = (
+            waveform_mode if waveform_mode in _WAVEFORM_MODES else "3BAND")
         # This monotonic clock keeps transport text/buttons coherent between
         # authoritative native snapshots. Metal uses the CoreAudio clock itself.
         self._transport_clock = QElapsedTimer()
@@ -1532,6 +1535,8 @@ class PlayerBar(QWidget):
         self.wave.set_native_rendering(self._playback_available)
         applied_zoom = self.player.set_zoom(self.wave.PIXELS_PER_SECOND)
         self.wave.set_zoom(applied_zoom, emit=False)
+        if hasattr(self.player, "set_waveform_mode"):
+            self.player.set_waveform_mode(self._waveform_mode)
 
         self.wave.seeked.connect(self._seek)
         self.wave.previewed.connect(self._on_wave_preview)
@@ -1557,6 +1562,14 @@ class PlayerBar(QWidget):
         b.setCursor(Qt.PointingHandCursor)
         b.setFocusPolicy(Qt.NoFocus)
         return b
+
+    def set_waveform_mode(self, mode: str):
+        normalized = str(mode).upper()
+        if normalized not in _WAVEFORM_MODES:
+            normalized = "3BAND"
+        self._waveform_mode = normalized
+        if hasattr(self.player, "set_waveform_mode"):
+            self.player.set_waveform_mode(normalized)
 
     @staticmethod
     def _set_dynamic_property(

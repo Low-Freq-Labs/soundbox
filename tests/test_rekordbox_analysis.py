@@ -90,6 +90,35 @@ class ReadAnalysis(unittest.TestCase):
             self.assertEqual(rekordbox_analysis._read_pwv7(dat), bands)
             self.assertEqual(two_ex.read_bytes(), before)
 
+    def test_reads_exact_blue_rgb_and_three_band_rows_without_modifying_anlz(self):
+        with tempfile.TemporaryDirectory() as td:
+            dat = Path(td) / "ANLZ0000.DAT"
+            ext = dat.with_suffix(".EXT")
+            two_ex = dat.with_suffix(".2EX")
+            blue = b"\x21\x7f"
+            rgb = b"\xe0\x7c\x03\x80"
+            bands = b"\x01\x02\x03\x7f\x20\x10"
+
+            def tag(name, rows, width):
+                return (
+                    name
+                    + struct.pack(
+                        ">IIIII", 24, 24 + len(rows),
+                        width, len(rows) // width, 0x00960000)
+                    + rows
+                )
+
+            dat.write_bytes(b"PMAI")
+            ext.write_bytes(
+                b"prefix" + tag(b"PWV3", blue, 1)
+                + tag(b"PWV5", rgb, 2) + b"suffix")
+            two_ex.write_bytes(tag(b"PWV7", bands, 3))
+            before = (ext.read_bytes(), two_ex.read_bytes())
+            self.assertEqual(rekordbox_analysis._read_pwv3(dat), blue)
+            self.assertEqual(rekordbox_analysis._read_pwv5(dat), rgb)
+            self.assertEqual(rekordbox_analysis._read_pwv7(dat), bands)
+            self.assertEqual((ext.read_bytes(), two_ex.read_bytes()), before)
+
     def test_reads_grid_and_rgb_without_saving(self):
         class Grid:
             beats = [1, 2, 3]

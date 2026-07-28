@@ -145,6 +145,7 @@ _DEFAULT_SETTINGS = {
     "import_dir": "",          # last folder used by Import Audio Files…
     "beat_jump_mode": "16 BEATS",
     "waveform_zoom": 92.0,
+    "waveform_mode": "3BAND",
     "autoplay_mode": "",
 }
 
@@ -289,6 +290,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             str(self.settings.get("beat_jump_mode", "16 BEATS")), emit=False)
         self.player_bar.set_waveform_zoom(
             float(self.settings.get("waveform_zoom", 92.0)), emit=False)
+        self.player_bar.set_waveform_mode(
+            str(self.settings.get("waveform_mode", "3BAND")))
         self._set_autoplay_mode(
             str(self.settings.get("autoplay_mode", "")), save=False)
         self._sync_settings_controls()  # reflect saved values in the Settings page
@@ -1082,7 +1085,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # of squeezing the player into the same horizontal strip.
         self.player_bar = PlayerBar(
             jump_mode=str(self.settings.get("beat_jump_mode", "16 BEATS")),
-            waveform_zoom=float(self.settings.get("waveform_zoom", 92.0)))
+            waveform_zoom=float(self.settings.get("waveform_zoom", 92.0)),
+            waveform_mode=str(
+                self.settings.get("waveform_mode", "3BAND")))
         self.player_bar.track_analysis_dir = self._track_analysis_dir
         self.player_bar.playback_error.connect(self._on_playback_error)
         self.player_bar.now_playing_changed.connect(self._set_now_playing)
