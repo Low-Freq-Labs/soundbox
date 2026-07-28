@@ -66,14 +66,25 @@ or grid quantization.
 
 Rekordbox ANLZ files stay read-only and are an analysis seed/fallback source.
 Active `djmdCue` rows come from the same read-only live database snapshot as
-the library. Their normalized fingerprint updates only the V4 manifest until
-SoundBox user data claims cue ownership; deleted database cues therefore clear
-cleanly without touching the compressed analysis payload.
+the library. Their normalized fingerprint and the exact normalized PQTZ beat
+rows update only the V4 manifest until SoundBox user data claims ownership;
+deleted database cues and later Rekordbox beat-grid corrections therefore land
+without touching the compressed analysis payload or decoding source audio.
 SoundBox's canonical schema-V4 record under `track_analysis/` owns the result:
 full grid/cues, 150 Hz RGB, 24 normalized spectral bands, export eligibility,
 provenance, and an approximately 6144-window/s amplitude envelope. Each section
 is independently Zstandard-compressed and SHA-256 verified inside one atomic
 per-track container. Source identity invalidates only the changed track.
+Current overview and ultra geometry are channel-safe linear little-endian
+uint16 peaks: each window measures the largest absolute sample in either
+channel, so stereo/anti-phase tails cannot vanish through mono summing.
+`waveform_model` and `height_encoding` version that payload without changing
+the V4 container. Legacy byte records remain playable while preparation
+atomically upgrades one track at a time. A gentle display-only `height^0.80`
+curve and continuous four-LSB visibility shoulder are applied after loading.
+The shoulder resolves genuine subpixel tails but maps zero to zero before
+spatial reconstruction; because the cache stays linear, later visual tuning
+never requires another audio recook and true digital zero stays zero.
 
 Prepared loading is four-stage and generation-guarded: native source decode,
 small manifest, packed RGB overview, then ultra detail/native peak pyramid.
@@ -84,28 +95,52 @@ so rapid A→B→C replacement cannot display a late A/B result.
 
 The main scrolling waveform uses V4's ultra envelope at every zoom. On load,
 Metal creates peak-preserving geometry mips and amplitude-weighted RGB mips.
-Overview and scrolling lanes derive one continuous LOD from source samples per
-physical pixel and blend coverage/color from the adjacent levels; there is no
-wide/close zoom branch. Each adjacent level is integrated with four
-song-anchored midpoint taps across the physical output pixel before blending;
-RGB is amplitude-weighted across those same taps so contour and hue share one
-sampling phase. Ultra detail promotes only geometry quality, while the
-already-uploaded compact ~150 Hz RGB pyramid remains the time/color authority.
+Overview and scrolling lanes derive one footprint-matched ceiling LOD from
+source samples per physical pixel and select one song-anchored level; there is
+no adjacent-level blend. For the scrolling lane, a compute pass reconstructs
+height and premultiplied RGB onto a fixed global song-space attribute lattice.
+Keeping color premultiplied makes its final one-pixel integral phase-stable.
+Positive cubic reconstruction stabilizes 24–384 px/s; 576–1536 px/s uses the
+interpolating monotone Hermite kernel, which retains source peaks without
+linear slope corners. Every zoom uses four attributes per Retina pixel for
+continuous subpixel motion. The private buffer margin scales with that density
+and is recentered from an absolute integer song coordinate. Ultra detail
+promotes only geometry quality, while
+the already-uploaded compact ~150 Hz RGB pyramid remains the time/color
+authority.
 The normalized 24-band master remains stored for long-term analysis but never
 participates in renderer color. Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
-precision. The scrolling lane maps its integer anchor plus local phase
-directly into each final Retina drawable pixel. One fragment
-pass selects the continuous LOD, samples geometry and RGB, filters silhouette
-coverage, and composites the final color. There is no translated intermediate
-texture or second coverage/color filter, so motion retains its true fractional
-distance at every zoom. At high visual velocity, the same sampler integrates
-half of the measured presentation interval while leaving physical-pixel LOD
-selection unchanged; paused frames remain fully sharp. Actual
+precision. The scrolling lane translates fixed height/hue attributes into each
+final Retina drawable pixel. The fragment computes vertical silhouette
+coverage and composites the final color exactly once. Five quarter-pixel
+boundary samples integrate the fixed height profile and amplitude-weight RGB
+over exactly one physical pixel. There is no translated RGBA texture or second
+coverage/color filter; every zoom retains fractional travel through the
+oversampled attribute lattice. The antialias window is exactly one physical
+pixel. The small overview applies continuous cubic vividness to true subpixel
+coverage; the scrolling lane uses exact geometric coverage at every zoom so
+saturated edges are not over-amplified.
+The two fixed 64 and 184 px/s stops additionally apply one same-LOD
+half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
+integration. Its narrow zoom-space taper is zero at every neighboring stop;
+it changes neither mip selection nor the 576–1536 px/s close-detail path.
+Scrolling grid rectangles carry signed local line distance into the fragment,
+which applies analytic physical-pixel box coverage instead of rasterizing a
+hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:
+display-authored waveform/grid RGB is decoded before the fragment result,
+coverage and fixed-function grid blending happen in linear light, and Metal
+encodes exactly once on store. Full colors and the `#0d0e12` clear remain
+unchanged while equal geometric edge phases retain equal displayed energy.
+Downbeat grid lines composite as opaque red over the waveform and ordinary
+beat lines as opaque gray. The grid is the final timing-reference layer; its
+color and contrast do not inherit the waveform underneath.
+There is no temporal shutter, so moving and paused contours have the same
+sharpness. Actual
 `MTLDrawable.presentedTime` callbacks, rather than display-link submissions,
 drive cadence diagnostics and the grab handoff. Presentation latency is one
-frame, and the newest committed frame plus its moving integration footprint is
-held atomically so mouse-down cannot rewind or change waveform thickness.
+frame, and the newest committed source frame is held atomically so mouse-down
+cannot rewind or change waveform thickness.
 Redundant inactive-preview updates are absorbed without waking the Metal run
 loop. Render buffers are snapshotted under a short mutex and command encoding
 happens after that mutex is released.

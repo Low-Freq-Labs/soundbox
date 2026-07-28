@@ -98,16 +98,17 @@ dropped pre-allocated pages and stale-copied the index pages). The strategy:
 This is a hardware-gated loop: build a candidate → walk it to the CDJ → read the
 result → adjust. Best done with the decks nearby.
 
-## Reference material (outside the repo)
+## Reference material (local project workspace, git-ignored)
 
-`~/soundbox-cdj-ref/` holds the golden-master snapshots and staged test sticks
-(large audio — deliberately NOT committed):
+`soundbox-cdj-ref/` at the project root holds the golden-master snapshots and
+staged test sticks (large audio — the whole directory is git-ignored and must
+never be committed):
 - `ref-usb-empty/` — a blank rekordbox scaffold (just from plugging a stick in).
 - `ref-usb-full/` — 3 tracks + playlist "Test" + memory/RGB hot cues.
 - `stage-A-clone/` (byte-identical control) + `stage-B-scratch/` (from-scratch).
 
 Run the prototype under the app's own venv (`pyrekordbox` is already a dep):
-`~/Projects/soundbox/.venv/bin/python`.
+`.venv/bin/python`.
 
 Spec source: Deep-Symmetry `crate-digger` (`rekordbox_pdb.ksy` /
 `rekordbox_anlz.ksy`) — note the org slug is hyphenated (`Deep-Symmetry`).

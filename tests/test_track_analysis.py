@@ -184,7 +184,11 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertGreater(len(result["detail_heights"]), 10_000)
         self.assertGreater(result["detail_rate"], 5_500)
         self.assertGreater(len(result["overview_heights"]), 250)
-        count = len(result["overview_heights"])
+        self.assertEqual(
+            result["waveform_model"], track_analysis.WAVEFORM_MODEL)
+        self.assertEqual(
+            result["height_encoding"], track_analysis.HEIGHT_ENCODING)
+        count = len(result["overview_heights"]) // 2
         self.assertEqual(len(result["overview_rgb"]), count * 3)
         self.assertEqual(len(result["spectral_bands"]), count * 24)
         self.assertTrue(any(result["overview_rgb"]))
@@ -260,10 +264,10 @@ class TrackAnalysisStore(unittest.TestCase):
             expected = np.append(expected, np.abs(self.signal[keep:]).max())
         self.assertEqual(
             result["detail_heights"],
-            track_analysis.StreamingAnalyzer._bytes(expected, 99.9),
+            track_analysis.StreamingAnalyzer._u16_bytes(expected, 99.9),
         )
 
-    def test_only_current_rgb_model_is_background_ready(self):
+    def test_only_current_rgb_and_waveform_models_are_background_ready(self):
         cache = self.root / "analysis"
         base = {
             "detail_heights": b"\x20" * 100,
@@ -275,10 +279,59 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertFalse(track_analysis.is_ready(
             cache, "old", self.audio))
         track_analysis.store(cache, "new", self.audio, {
-            **base, "color_model": track_analysis.COLOR_MODEL,
+            **base,
+            "overview_heights": b"\x80\x00",
+            "color_model": track_analysis.COLOR_MODEL,
+            "waveform_model": track_analysis.WAVEFORM_MODEL,
+            "height_encoding": track_analysis.HEIGHT_ENCODING,
         })
         self.assertTrue(track_analysis.is_ready(
             cache, "new", self.audio))
+
+    def test_channel_peak_geometry_does_not_cancel_antiphase_audio(self):
+        rate = 48_000
+        t = np.arange(rate, dtype=np.float32) / rate
+        left = 0.25 * np.sin(2 * np.pi * 440 * t)
+        stereo = np.stack((left, -left), axis=1)
+        analyzer = track_analysis.StreamingAnalyzer(rate)
+        analyzer.feed(stereo)
+        result = analyzer.finish()
+        detail = np.frombuffer(
+            result["detail_heights"], dtype="<u2")
+        overview = np.frombuffer(
+            result["overview_heights"], dtype="<u2")
+        self.assertGreater(int(detail.max()), 60_000)
+        self.assertGreater(int(overview.max()), 60_000)
+
+    def test_stereo_channel_peak_geometry_is_chunk_invariant(self):
+        rate = 48_000
+        t = np.arange(rate, dtype=np.float32) / rate
+        left = 0.25 * np.sin(2 * np.pi * 440 * t)
+        right = -0.18 * np.sin(2 * np.pi * 440 * t + 0.4)
+        stereo = np.stack((left, right), axis=1)
+        whole = track_analysis.StreamingAnalyzer(rate)
+        whole.feed(stereo)
+        expected = whole.finish()
+        chunked = track_analysis.StreamingAnalyzer(rate)
+        for start in range(0, len(stereo), 7919):
+            chunked.feed(stereo[start:start + 7919])
+        actual = chunked.finish()
+        for field in (
+                "detail_heights", "overview_heights", "overview_rgb",
+                "spectral_bands", "beats"):
+            self.assertEqual(actual[field], expected[field])
+
+    def test_u16_geometry_keeps_quiet_signal_that_a_byte_discards(self):
+        peaks = np.asarray([1.0, 0.001, 0.0], dtype=np.float32)
+        legacy = np.frombuffer(
+            track_analysis.StreamingAnalyzer._bytes(peaks, 100),
+            dtype=np.uint8)
+        current = np.frombuffer(
+            track_analysis.StreamingAnalyzer._u16_bytes(peaks, 100),
+            dtype="<u2")
+        self.assertEqual(int(legacy[1]), 0)
+        self.assertGreater(int(current[1]), 0)
+        self.assertEqual(int(current[2]), 0)
 
     def test_beat_grid_uses_numpy_only_and_recovers_pulse_tempo(self):
         rate = 150.0
@@ -311,6 +364,9 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(got["beats"], imported["beats"])
         self.assertEqual(got["overview_rgb"], bytes([1, 2, 3]))
         self.assertEqual(got["provenance"]["grid"], "rekordbox")
+        self.assertEqual(
+            got["grid_import"]["fingerprint"],
+            track_analysis.grid_fingerprint(imported["beats"]))
         self.assertFalse(got["provenance"]["rekordbox_runtime_dependency"])
 
     def test_legacy_grid_metadata_migrates_without_rewriting_waveform(self):
@@ -361,6 +417,49 @@ class TrackAnalysisStore(unittest.TestCase):
         got = track_analysis.load(cache, "rb-grid", self.audio)
         self.assertEqual(got["beats"], imported)
         self.assertEqual(got["provenance"]["grid"], "rekordbox")
+        self.assertEqual(
+            got["grid_import"]["fingerprint"],
+            track_analysis.grid_fingerprint(imported))
+
+    def test_later_rekordbox_grid_edit_refreshes_only_manifest(self):
+        cache = self.root / "analysis"
+        automatic = [[1, 246, 128.0], [2, 715, 128.0]]
+        track_analysis.store(cache, "corrected-grid", self.audio, {
+            "detail_heights": b"\x10\x20",
+            "detail_rate": 6144.0,
+            "overview_heights": b"\x30",
+            "overview_rgb": b"\x01\x02\x03",
+            "color_model": track_analysis.COLOR_MODEL,
+            "beats": automatic,
+            # Deliberately model an old V4 record with no grid_import field.
+            "provenance": {
+                "analysis": "rekordbox-import+soundbox",
+                "grid": "rekordbox",
+                "owner": "soundbox",
+            },
+        })
+        before = track_analysis._read_container_manifest(
+            cache, "corrected-grid", self.audio)
+        self.assertIsNotNone(before)
+        self.assertFalse(track_analysis.grid_needs_sync(
+            cache, "corrected-grid", self.audio, automatic))
+
+        corrected = [[1, 375, 128.0], [2, 844, 128.0]]
+        self.assertTrue(track_analysis.grid_needs_sync(
+            cache, "corrected-grid", self.audio, corrected))
+        self.assertTrue(track_analysis.update_grid_source(
+            cache, "corrected-grid", self.audio, corrected))
+
+        after = track_analysis._read_container_manifest(
+            cache, "corrected-grid", self.audio)
+        self.assertEqual(after[2], before[2])
+        got = track_analysis.load(cache, "corrected-grid", self.audio)
+        self.assertEqual(got["beats"], corrected)
+        self.assertEqual(
+            got["grid_import"]["fingerprint"],
+            track_analysis.grid_fingerprint(corrected))
+        self.assertFalse(track_analysis.grid_needs_sync(
+            cache, "corrected-grid", self.audio, corrected))
 
     def test_user_grid_and_cues_override_import_without_touching_analysis(self):
         cache = self.root / "analysis"
@@ -380,6 +479,7 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(got["_audio_detail"]["heights"], b"\x10\x20")
         self.assertEqual(got["provenance"]["grid"], "soundbox-manual")
         self.assertEqual(got["provenance"]["user_data"], "soundbox")
+        self.assertFalse(got["grid_import"])
 
     def test_analyzer_upgrade_preserves_soundbox_owned_grid_and_cues(self):
         cache = self.root / "analysis"

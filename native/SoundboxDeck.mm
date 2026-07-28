@@ -35,6 +35,33 @@ constexpr float kOverviewHeight = 28.0f;
 constexpr float kRulerTop = 31.0f;
 constexpr float kZoomTop = 49.0f;
 constexpr size_t kWaveMipLevels = 32;
+constexpr float kWaveAttributeSmoothSamplesPerPixel = 4.0f;
+constexpr NSUInteger kWaveAttributeMarginPixels = 4096;
+// Persisted current geometry remains linear. A gentle display-only compander
+// gives ordinary quiet tails useful height, while a small continuous shoulder
+// resolves the last nonzero uint16 values as a physical-pixel hairline. The
+// shoulder is zero at digital zero and is applied before spatial
+// reconstruction, so entering/leaving true silence remains continuous.
+constexpr float kWaveformDisplayExponent = 0.80f;
+constexpr float kWaveformVisibilityShoulder = 1.0f / 128.0f;
+constexpr float kWaveformVisibilityKnee = 4.0f / 65535.0f;
+
+static float displayWaveformHeight(uint16_t encodedHeight) {
+    if (encodedHeight == 0) {
+        return 0.0f;
+    }
+    const float linear = encodedHeight / 65535.0f;
+    const float companded = std::pow(
+        std::clamp(linear, 0.0f, 1.0f),
+        kWaveformDisplayExponent);
+    const float visibility = 1.0f - std::exp(
+        -linear / kWaveformVisibilityKnee);
+    return std::clamp(
+        companded
+            + kWaveformVisibilityShoulder
+                * (1.0f - companded) * visibility,
+        0.0f, 1.0f);
+}
 
 struct WaveSample {
     float height;
@@ -44,7 +71,7 @@ struct WaveSample {
 };
 
 struct AudioEnvelopeSample {
-    uint8_t height;
+    uint16_t height;
 };
 
 struct GridVertex {
@@ -57,6 +84,8 @@ struct GridVertex {
     float b;
     float a;
     uint32_t overview;
+    float lineDistancePoints;
+    float lineHalfWidthPoints;
 };
 
 struct BeatPosition {
@@ -70,14 +99,20 @@ struct PresentedFrameState {
     uint64_t generation = 0;
     CFTimeInterval latestTime = 0.0;
     uint64_t latestFrame = 0;
-    float latestMotionIntegration = 0.0f;
     CFTimeInterval scheduledTarget = 0.0;
     uint64_t scheduledFrame = 0;
-    float scheduledMotionIntegration = 0.0f;
     std::atomic<uint64_t> count{0};
     std::atomic<uint64_t> firstTimeNs{0};
     std::atomic<uint64_t> lastTimeNs{0};
     std::atomic<uint64_t> maxGapNs{0};
+    // Position is predicted for the target presentation timestamp, but a
+    // variable-refresh display may put the drawable on screen at a different
+    // instant. At 1536 px/s a 4 ms error is about twelve Retina pixels of
+    // positional jitter, so measure the spread before trusting the target.
+    std::atomic<uint64_t> errorCount{0};
+    std::atomic<int64_t> errorSumUs{0};
+    std::atomic<int64_t> errorSumSqUs{0};
+    std::atomic<int64_t> errorMaxAbsUs{0};
 };
 
 struct Uniforms {
@@ -106,7 +141,10 @@ struct Uniforms {
     uint32_t audioDetailMipCount;
     uint32_t audioDetailMipOffsets[kWaveMipLevels];
     uint32_t audioDetailMipCounts[kWaveMipLevels];
-    float motionIntegrationSeconds;
+    uint32_t waveAttributeCount;
+    float waveAttributeCurrentOffset;
+    float waveAttributeSamplesPerPixel;
+    uint32_t waveAttributeValid;
 };
 
 struct AudioRing {
@@ -225,16 +263,13 @@ public:
     bool beginTrack(uint64_t generation) {
         renderGeneration_.store(generation, std::memory_order_release);
         previewActive_.store(false, std::memory_order_release);
-        previewMotionIntegration_.store(0.0f, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
             presentedFrames_->generation = generation;
             presentedFrames_->latestTime = 0.0;
             presentedFrames_->latestFrame = 0;
-            presentedFrames_->latestMotionIntegration = 0.0f;
             presentedFrames_->scheduledTarget = 0.0;
             presentedFrames_->scheduledFrame = 0;
-            presentedFrames_->scheduledMotionIntegration = 0.0f;
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
         waveBuffer_ = nil;
@@ -260,6 +295,7 @@ public:
         audioDetailMipOffsets_.fill(0);
         audioDetailMipCounts_.fill(0);
         beatPositions_.clear();
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
 
@@ -337,8 +373,6 @@ public:
         // updates must not wake or enqueue work on the Metal display run loop:
         // CAMetalDisplayLink and the CoreAudio presentation clock own motion.
         if (previewActive_.exchange(false, std::memory_order_acq_rel)) {
-            previewMotionIntegration_.store(
-                0.0f, std::memory_order_release);
             requestDisplay();
         }
     }
@@ -351,7 +385,6 @@ public:
         // selecting the older visible frame would present the queued frame and
         // visibly snap backward afterward.
         uint64_t frame = 0;
-        float motionIntegration = 0.0f;
         const CFTimeInterval now = CACurrentMediaTime();
         constexpr CFTimeInterval kFreshPresentationWindow = 1.0 / 15.0;
         {
@@ -361,8 +394,6 @@ public:
                     && now - presentedFrames_->latestTime
                         <= kFreshPresentationWindow) {
                 frame = presentedFrames_->latestFrame;
-                motionIntegration =
-                    presentedFrames_->latestMotionIntegration;
             }
             if (presentedFrames_->scheduledTarget > 0.0
                     && presentedFrames_->scheduledTarget
@@ -371,8 +402,6 @@ public:
                         <= kFreshPresentationWindow) {
                 if (presentedFrames_->scheduledFrame >= frame) {
                     frame = presentedFrames_->scheduledFrame;
-                    motionIntegration =
-                        presentedFrames_->scheduledMotionIntegration;
                 }
             }
         }
@@ -380,8 +409,6 @@ public:
             frame = visualFrameNow();
         }
         previewFrame_.store(frame, std::memory_order_release);
-        previewMotionIntegration_.store(
-            motionIntegration, std::memory_order_release);
         previewActive_.store(true, std::memory_order_release);
         requestDisplay();
         return frame;
@@ -573,7 +600,7 @@ public:
             const auto *samples =
                 static_cast<const AudioEnvelopeSample *>(buffer.contents);
             for (NSUInteger i = 0; i < count; ++i) {
-                peak = std::max(peak, samples[i].height / 255.0f);
+                peak = std::max(peak, samples[i].height / 65535.0f);
             }
         } else {
             const auto *samples =
@@ -621,11 +648,44 @@ public:
             std::memory_order_acquire) / 1e6;
     }
 
+    double presentationErrorMeanMs() const {
+        const uint64_t n = presentedFrames_->errorCount.load(
+            std::memory_order_acquire);
+        if (n == 0) {
+            return 0.0;
+        }
+        return presentedFrames_->errorSumUs.load(
+            std::memory_order_acquire) / static_cast<double>(n) / 1000.0;
+    }
+
+    double presentationErrorStdDevMs() const {
+        const uint64_t n = presentedFrames_->errorCount.load(
+            std::memory_order_acquire);
+        if (n < 2) {
+            return 0.0;
+        }
+        const double mean = presentedFrames_->errorSumUs.load(
+            std::memory_order_acquire) / static_cast<double>(n);
+        const double meanSquare = presentedFrames_->errorSumSqUs.load(
+            std::memory_order_acquire) / static_cast<double>(n);
+        return std::sqrt(std::max(0.0, meanSquare - mean * mean)) / 1000.0;
+    }
+
+    double presentationErrorMaxMs() const {
+        return presentedFrames_->errorMaxAbsUs.load(
+            std::memory_order_acquire) / 1000.0;
+    }
+
     void resetDisplayStats() {
         presentedFrames_->count.store(0, std::memory_order_release);
         presentedFrames_->firstTimeNs.store(0, std::memory_order_release);
         presentedFrames_->lastTimeNs.store(0, std::memory_order_release);
         presentedFrames_->maxGapNs.store(0, std::memory_order_release);
+        presentedFrames_->errorCount.store(0, std::memory_order_release);
+        presentedFrames_->errorSumUs.store(0, std::memory_order_release);
+        presentedFrames_->errorSumSqUs.store(0, std::memory_order_release);
+        presentedFrames_->errorMaxAbsUs.store(
+            0, std::memory_order_release);
     }
 
     bool setAnalysis(
@@ -658,6 +718,7 @@ public:
             audioDetailSamplesPerSecond_ = 0;
             audioDetailMipCount_ = 0;
             audioDetailMipOffsets_.fill(0);
+            waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
             audioDetailMipCounts_.fill(0);
             gridBuffer_ = nil;
             gridVertexCount_ = 0;
@@ -804,9 +865,12 @@ public:
             const float r = downbeat ? 1.0f : 0.47f;
             const float g = downbeat ? 0.22f : 0.53f;
             const float b = downbeat ? 0.34f : 0.62f;
-            const float a = downbeat ? 0.82f : 0.32f;
+            // Beat lines are timing references, not translucent decoration.
+            // Their red/gray identity must remain constant over every
+            // waveform color; draw order already places this grid last.
+            const float a = 1.0f;
             addGridRect(grid, tMillis, 0.0f, -0.5f, kZoomTop,
-                        0.5f, 4096.0f, r, g, b, a);
+                        0.5f, 4096.0f, r, g, b, a, false, true);
         }
 
         std::array<uint32_t, kWaveMipLevels> waveMipOffsets{};
@@ -848,6 +912,7 @@ public:
         audioDetailMipOffsets_.fill(0);
         audioDetailMipCounts_.fill(0);
         gridBuffer_ = gridBuffer;
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         gridVertexCount_ = grid.size();
         cueBuffer_ = nil;
         cueVertexCount_ = 0;
@@ -932,7 +997,7 @@ public:
                 downbeat ? 1.0f : 0.47f,
                 downbeat ? 0.22f : 0.53f,
                 downbeat ? 0.34f : 0.62f,
-                downbeat ? 0.82f : 0.32f);
+                1.0f, false, true);
         }
         id<MTLBuffer> waveBuffer =
             [device_ newBufferWithBytes:wavePyramid.data()
@@ -963,8 +1028,37 @@ public:
         waveMipCount_ = waveMipCount;
         gridBuffer_ = gridBuffer;
         gridVertexCount_ = grid.size();
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         beatPositions_ = std::move(beatPositions);
         return true;
+    }
+
+    bool setPackedOverview16(
+        uint64_t expectedGeneration,
+        const uint16_t *heights,
+        const uint8_t *rgb,
+        size_t count,
+        double columnsPerSecond,
+        const double *beatSeconds,
+        const uint8_t *beatInBar,
+        size_t beatCount) {
+        if (!heights || !rgb || !count) {
+            return false;
+        }
+        // The overview is only 22 physical pixels tall after padding, so one
+        // display byte already exceeds its raster resolution. Persisted u16
+        // remains linear/high-precision; this short-lived upload applies the
+        // same smooth visibility curve as ultra geometry.
+        std::vector<uint8_t> displayed;
+        displayed.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float height = displayWaveformHeight(heights[i]);
+            displayed.push_back(static_cast<uint8_t>(std::clamp(
+                std::lround(height * 255.0f), 0L, 255L)));
+        }
+        return setPackedOverview(
+            expectedGeneration, displayed.data(), rgb, count,
+            columnsPerSecond, beatSeconds, beatInBar, beatCount);
     }
 
     bool setSessionCue(uint32_t positionMillis, bool active) {
@@ -1128,6 +1222,7 @@ public:
         detailBuffer_ = buffer;
         detailSampleCount_ = detail.size();
         detailSamplesPerSecond_ = static_cast<float>(samplesPerSecond);
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
 
@@ -1162,6 +1257,7 @@ public:
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
         detailBuffer_ = buffer;
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
 
@@ -1191,11 +1287,47 @@ public:
         std::vector<AudioEnvelopeSample> detail;
         detail.reserve(count);
         for (size_t i = 0; i < count; ++i) {
-            detail.push_back({heights[i]});
+            detail.push_back({
+                static_cast<uint16_t>(
+                    static_cast<uint16_t>(heights[i]) * 257u),
+            });
         }
+        return installAudioDetail(
+            std::move(detail), count, samplesPerSecond, expectedGeneration);
+    }
+
+    bool setAudioDetail16(
+        const uint16_t *heights, size_t count, double samplesPerSecond,
+        uint64_t expectedGeneration = 0) {
+        if (expectedGeneration
+                && renderGeneration_.load(std::memory_order_acquire)
+                    != expectedGeneration) {
+            return false;
+        }
+        if (!heights || !count || samplesPerSecond <= 0) {
+            return false;
+        }
+        std::vector<AudioEnvelopeSample> detail;
+        detail.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            const float displayed = displayWaveformHeight(heights[i]);
+            detail.push_back({
+                static_cast<uint16_t>(std::clamp(
+                    std::lround(displayed * 65535.0f), 0L, 65535L)),
+            });
+        }
+        return installAudioDetail(
+            std::move(detail), count, samplesPerSecond, expectedGeneration);
+    }
+
+    bool installAudioDetail(
+        std::vector<AudioEnvelopeSample> detail,
+        size_t count, double samplesPerSecond,
+        uint64_t expectedGeneration) {
         // A single peak-preserving silhouette keeps the old SoundBox/Rekordbox
         // visual language while the V4 ultra stream supplies close-zoom detail.
-        // Mips are derived at load time, so this renderer change needs no recook.
+        // Current caches are linear uint16 and receive only a display-time
+        // compander; legacy uint8 remains playable until its atomic upgrade.
         std::array<uint32_t, kWaveMipLevels> mipOffsets{};
         std::array<uint32_t, kWaveMipLevels> mipCounts{};
         std::vector<AudioEnvelopeSample> pyramid = detail;
@@ -1236,6 +1368,7 @@ public:
         audioDetailMipCount_ = mipCount;
         audioDetailMipOffsets_ = mipOffsets;
         audioDetailMipCounts_ = mipCounts;
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
 
@@ -1277,7 +1410,7 @@ public:
     }
 
     void draw(CAMetalDisplayLinkUpdate *update) {
-        if (!pipeline_ || !update.drawable) {
+        if (!pipeline_ || !attributePipeline_ || !update.drawable) {
             return;
         }
         // Overview and ultra buffers are prepared independently but become
@@ -1307,13 +1440,6 @@ public:
             ? static_cast<double>(
                 previewFrame_.load(std::memory_order_acquire))
             : predictedFrame(update.targetPresentationTimestamp);
-        double presentationInterval =
-            update.targetPresentationTimestamp - lastTargetPresentation_;
-        lastTargetPresentation_ = update.targetPresentationTimestamp;
-        if (presentationInterval <= 0.0
-                || presentationInterval > 1.0 / 30.0) {
-            presentationInterval = 1.0 / 120.0;
-        }
         const uint64_t submittedFrame = static_cast<uint64_t>(
             std::llround(std::max(0.0, exactFrame)));
         const uint64_t submittedGeneration =
@@ -1328,26 +1454,12 @@ public:
         uniforms.widthPoints = static_cast<float>(size.width);
         uniforms.heightPoints = static_cast<float>(size.height);
         uniforms.drawableScale = drawableScale;
-        // A stationary high-zoom raster can move more than twenty physical
-        // pixels between two perfectly timed 120 Hz presentations. Integrate
-        // a 180-degree shutter only while transport is moving; the same
-        // four-tap song sampler then reconstructs temporal coverage instead
-        // of strobing sharp contours at each discrete display instant.
-        uniforms.motionIntegrationSeconds = previewActive
-            ? previewMotionIntegration_.load(std::memory_order_acquire)
-            : (playRequested_.load(std::memory_order_acquire)
-                ? static_cast<float>(presentationInterval * 0.5)
-                : 0.0f);
-        const float submittedMotionIntegration =
-            uniforms.motionIntegrationSeconds;
         {
             std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
             if (presentedFrames_->generation == submittedGeneration) {
                 presentedFrames_->scheduledTarget =
                     update.targetPresentationTimestamp;
                 presentedFrames_->scheduledFrame = submittedFrame;
-                presentedFrames_->scheduledMotionIntegration =
-                    submittedMotionIntegration;
             }
         }
         uniforms.durationSeconds = static_cast<float>(
@@ -1424,13 +1536,134 @@ public:
         }
         setUniformPosition(uniforms, exactFrame, rate);
 
+        // Decide the high-detail silhouette and hue once on a fixed global
+        // song lattice, then translate those attributes smoothly. The old
+        // direct path re-integrated a different screen-pixel window every
+        // frame; song-locking the supplied recording measured about three
+        // physical pixels of contour change after its motion was removed.
+        // Four song-space attributes per physical pixel preserve continuous
+        // subpixel travel at every zoom. A one-attribute close mode retained
+        // the exact same raster after integer motion alignment, but dense
+        // real-track spikes visibly strobed as that raster advanced in 25/26
+        // pixel steps at maximum zoom. Oversampling height/hue (never alpha)
+        // keeps the same footprint-safe detail while allowing the final
+        // drawable to reconstruct its continuously moving contour.
+        const float attributeSamplesPerPixel =
+            kWaveAttributeSmoothSamplesPerPixel;
+        const NSUInteger visibleAttributeSamples =
+            update.drawable.texture.width
+            * static_cast<NSUInteger>(attributeSamplesPerPixel);
+        const NSUInteger desiredAttributeCount =
+            ((visibleAttributeSamples
+                + kWaveAttributeMarginPixels
+                    * static_cast<NSUInteger>(attributeSamplesPerPixel)
+                + 255)
+                / 256) * 256;
+        if (!waveAttributeBuffer_
+                || waveAttributeCount_ != desiredAttributeCount) {
+            waveAttributeBuffer_ = [device_
+                newBufferWithLength:
+                    desiredAttributeCount * sizeof(float) * 4
+                options:MTLResourceStorageModePrivate];
+            waveAttributeCount_ = waveAttributeBuffer_
+                ? desiredAttributeCount : 0;
+            waveAttributeRevision_ = 0;
+        }
+        const uint64_t waveformRevision =
+            waveformRevision_.load(std::memory_order_acquire);
+        const double exactAttributeCenter =
+            exactFrame / rate
+            * static_cast<double>(uniforms.pixelsPerSecond)
+            * static_cast<double>(drawableScale)
+            * static_cast<double>(attributeSamplesPerPixel);
+        const double availableMargin = waveAttributeCount_
+            > visibleAttributeSamples
+            ? static_cast<double>(
+                waveAttributeCount_ - visibleAttributeSamples) * 0.5
+            : 0.0;
+        const bool attributeNeedsPrint =
+            waveAttributeBuffer_
+            && waveBuffer
+            && uniforms.sampleCount
+            && (waveAttributeRevision_ != waveformRevision
+                || waveAttributeZoom_ != uniforms.pixelsPerSecond
+                || waveAttributeScale_ != drawableScale
+                || waveAttributeSamplesPerPixel_
+                    != attributeSamplesPerPixel
+                || std::abs(
+                    exactAttributeCenter
+                    - static_cast<double>(waveAttributeCenter_))
+                    > availableMargin * 0.5);
+        if (attributeNeedsPrint) {
+            waveAttributeCenter_ = static_cast<int64_t>(
+                std::llround(exactAttributeCenter));
+            Uniforms attributeUniforms = uniforms;
+            attributeUniforms.waveAttributeCount =
+                static_cast<uint32_t>(std::min<NSUInteger>(
+                    waveAttributeCount_,
+                    std::numeric_limits<uint32_t>::max()));
+            attributeUniforms.waveAttributeSamplesPerPixel =
+                attributeSamplesPerPixel;
+            const double attributeCenterFrame =
+                static_cast<double>(waveAttributeCenter_)
+                / std::max(
+                    1.0,
+                    static_cast<double>(uniforms.pixelsPerSecond)
+                    * static_cast<double>(drawableScale)
+                    * static_cast<double>(attributeSamplesPerPixel))
+                * rate;
+            setUniformPosition(
+                attributeUniforms, attributeCenterFrame, rate);
+            id<MTLComputeCommandEncoder> compute =
+                [commands computeCommandEncoder];
+            [compute setComputePipelineState:attributePipeline_];
+            [compute setBuffer:waveBuffer offset:0 atIndex:0];
+            [compute setBytes:&attributeUniforms
+                       length:sizeof(attributeUniforms)
+                      atIndex:1];
+            [compute setBuffer:
+                (audioDetailBuffer ? audioDetailBuffer : waveBuffer)
+                offset:0 atIndex:4];
+            [compute setBuffer:waveAttributeBuffer_ offset:0 atIndex:5];
+            const NSUInteger threads = std::min<NSUInteger>(
+                256, attributePipeline_.maxTotalThreadsPerThreadgroup);
+            [compute dispatchThreads:MTLSizeMake(
+                    waveAttributeCount_, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+            [compute endEncoding];
+            waveAttributeRevision_ = waveformRevision;
+            waveAttributeZoom_ = uniforms.pixelsPerSecond;
+            waveAttributeScale_ = drawableScale;
+            waveAttributeSamplesPerPixel_ = attributeSamplesPerPixel;
+        }
+        uniforms.waveAttributeCount =
+            static_cast<uint32_t>(std::min<NSUInteger>(
+                waveAttributeCount_,
+                std::numeric_limits<uint32_t>::max()));
+        uniforms.waveAttributeCurrentOffset = static_cast<float>(
+            exactAttributeCenter
+            - static_cast<double>(waveAttributeCenter_));
+        uniforms.waveAttributeSamplesPerPixel =
+            attributeSamplesPerPixel;
+        uniforms.waveAttributeValid =
+            waveAttributeBuffer_
+            && waveAttributeRevision_ == waveformRevision
+            && waveAttributeZoom_ == uniforms.pixelsPerSecond
+            && waveAttributeScale_ == drawableScale
+            && waveAttributeSamplesPerPixel_
+                == attributeSamplesPerPixel
+            ? 1u : 0u;
+
         MTLRenderPassDescriptor *pass =
             [MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture = update.drawable.texture;
         pass.colorAttachments[0].loadAction = MTLLoadActionClear;
         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        // Clear values for an sRGB attachment are linear-light inputs.
+        // These are the exact sRGB decodes of display codes (13, 14, 18), so
+        // untouched pixels retain the established #0d0e12 appearance.
         pass.colorAttachments[0].clearColor = MTLClearColorMake(
-            13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0, 1.0);
+            0.004024717, 0.004391442, 0.006048833, 1.0);
         id<MTLRenderCommandEncoder> encoder =
             [commands renderCommandEncoderWithDescriptor:pass];
         if (waveBuffer && uniforms.sampleCount) {
@@ -1439,6 +1672,9 @@ public:
             [encoder setFragmentBuffer:
                 (audioDetailBuffer ? audioDetailBuffer : waveBuffer)
                 offset:0 atIndex:4];
+            [encoder setFragmentBuffer:
+                (waveAttributeBuffer_ ? waveAttributeBuffer_ : waveBuffer)
+                offset:0 atIndex:5];
             [encoder setFragmentBytes:&uniforms
                                length:sizeof(uniforms)
                               atIndex:1];
@@ -1483,6 +1719,8 @@ public:
         // drawable; an explicit presentAtTime is invalid in this mode.
         const std::shared_ptr<PresentedFrameState> presented =
             presentedFrames_;
+        const CFTimeInterval submittedTarget =
+            update.targetPresentationTimestamp;
         [update.drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
             const CFTimeInterval actualTime = drawable.presentedTime;
             if (actualTime <= 0.0) {
@@ -1498,8 +1736,6 @@ public:
                 }
                 presented->latestTime = actualTime;
                 presented->latestFrame = submittedFrame;
-                presented->latestMotionIntegration =
-                    submittedMotionIntegration;
             }
             const uint64_t actualNs = static_cast<uint64_t>(
                 std::llround(actualTime * 1e9));
@@ -1518,6 +1754,23 @@ public:
                 }
             }
             presented->count.fetch_add(1, std::memory_order_acq_rel);
+            if (submittedTarget > 0.0) {
+                const int64_t errorUs = static_cast<int64_t>(std::llround(
+                    (actualTime - submittedTarget) * 1e6));
+                presented->errorCount.fetch_add(
+                    1, std::memory_order_acq_rel);
+                presented->errorSumUs.fetch_add(
+                    errorUs, std::memory_order_acq_rel);
+                presented->errorSumSqUs.fetch_add(
+                    errorUs * errorUs, std::memory_order_acq_rel);
+                const int64_t magnitude = std::abs(errorUs);
+                int64_t peak = presented->errorMaxAbsUs.load(
+                    std::memory_order_acquire);
+                while (magnitude > peak
+                        && !presented->errorMaxAbsUs.compare_exchange_weak(
+                            peak, magnitude, std::memory_order_acq_rel)) {
+                }
+            }
         }];
         [commands presentDrawable:update.drawable];
         [commands commit];
@@ -1531,12 +1784,34 @@ private:
     static void addGridRect(
         std::vector<GridVertex> &v, uint32_t tMillis, float tPhase,
         float x0, float y0, float x1, float y1,
-        float r, float g, float b, float a, bool overview = false) {
+        float r, float g, float b, float a, bool overview = false,
+        bool analyticVertical = false) {
         const uint32_t absolute = overview ? 1u : 0u;
-        GridVertex p0{tMillis, tPhase, x0, y0, r, g, b, a, absolute};
-        GridVertex p1{tMillis, tPhase, x1, y0, r, g, b, a, absolute};
-        GridVertex p2{tMillis, tPhase, x1, y1, r, g, b, a, absolute};
-        GridVertex p3{tMillis, tPhase, x0, y1, r, g, b, a, absolute};
+        const float center = (x0 + x1) * 0.5f;
+        const float halfWidth = (x1 - x0) * 0.5f;
+        // The ordinary triangle rasterizer tests only pixel centers, so a
+        // one-point timing line otherwise snaps between whole Retina pixels
+        // while the waveform underneath moves fractionally. Expand the
+        // geometry by one physical-pixel-safe half point and carry its signed
+        // local coordinate to the fragment shader for exact box coverage.
+        const float fringe = analyticVertical ? 0.5f : 0.0f;
+        const float drawX0 = x0 - fringe;
+        const float drawX1 = x1 + fringe;
+        const float lineHalf = analyticVertical ? halfWidth : 0.0f;
+        const float lineX0 = analyticVertical ? drawX0 - center : 0.0f;
+        const float lineX1 = analyticVertical ? drawX1 - center : 0.0f;
+        GridVertex p0{
+            tMillis, tPhase, drawX0, y0, r, g, b, a, absolute,
+            lineX0, lineHalf};
+        GridVertex p1{
+            tMillis, tPhase, drawX1, y0, r, g, b, a, absolute,
+            lineX1, lineHalf};
+        GridVertex p2{
+            tMillis, tPhase, drawX1, y1, r, g, b, a, absolute,
+            lineX1, lineHalf};
+        GridVertex p3{
+            tMillis, tPhase, drawX0, y1, r, g, b, a, absolute,
+            lineX0, lineHalf};
         v.insert(v.end(), {p0, p1, p2, p0, p2, p3});
     }
 
@@ -1546,9 +1821,9 @@ private:
         float r, float g, float b, float a, bool overview = false) {
         const uint32_t absolute = overview ? 1u : 0u;
         v.insert(v.end(), {
-            {tMillis, tPhase, x0, y0, r, g, b, a, absolute},
-            {tMillis, tPhase, x1, y1, r, g, b, a, absolute},
-            {tMillis, tPhase, x2, y2, r, g, b, a, absolute},
+            {tMillis, tPhase, x0, y0, r, g, b, a, absolute, 0.0f, 0.0f},
+            {tMillis, tPhase, x1, y1, r, g, b, a, absolute, 0.0f, 0.0f},
+            {tMillis, tPhase, x2, y2, r, g, b, a, absolute, 0.0f, 0.0f},
         });
     }
 
@@ -1656,11 +1931,11 @@ private:
                     uniforms.heightPoints,
                     0.09f, 0.78f, 1.0f, 1.0f);
         GridVertex a{
-            tMillis, tPhase, -5, kZoomTop, .09f,.78f,1,1,0};
+            tMillis, tPhase, -5, kZoomTop, .09f,.78f,1,1,0,0,0};
         GridVertex b{
-            tMillis, tPhase, 5, kZoomTop, .09f,.78f,1,1,0};
+            tMillis, tPhase, 5, kZoomTop, .09f,.78f,1,1,0,0,0};
         GridVertex c{
-            tMillis, tPhase, 0, kZoomTop + 7, .09f,.78f,1,1,0};
+            tMillis, tPhase, 0, kZoomTop + 7, .09f,.78f,1,1,0,0,0};
         v.insert(v.end(), {a,b,c});
         if (beat) {
             const std::string barText = std::to_string(beat->bar);
@@ -1826,7 +2101,11 @@ private:
         auto create = ^{
             metalView_ = [[SBMetalView alloc] initWithFrame:parentView_.bounds];
             metalLayer_ = metalView_.deckLayer;
-            metalLayer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            // Renderer RGB is authored as display-sRGB. The sRGB attachment
+            // lets Metal blend subpixel coverage in linear light, then encode
+            // once on store. BGRA8Unorm made equal waveform/grid areas pulse
+            // at different perceived brightness.
+            metalLayer_.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
             metalLayer_.framebufferOnly = YES;
             metalLayer_.maximumDrawableCount = 3;
             [parentView_ addSubview:metalView_ positioned:NSWindowAbove relativeTo:nil];
@@ -1861,11 +2140,13 @@ private:
 #include <metal_stdlib>
 using namespace metal;
 struct WaveSample { float height; float r; float g; float b; };
-struct AudioEnvelopeSample { uchar height; };
+struct AudioEnvelopeSample { ushort height; };
 struct GridVertex { uint songMillis; float songMillisPhase;
                     float xOffsetPixels; float yPixels;
                     float r; float g; float b; float a;
-                    uint overview; };
+                    uint overview;
+                    float lineDistancePoints;
+                    float lineHalfWidthPoints; };
 struct Uniforms { float currentSeconds;
                   uint currentMillis; float currentMillisPhase;
                   float pixelsPerSecond;
@@ -1885,20 +2166,26 @@ struct Uniforms { float currentSeconds;
                   uint audioDetailMipCount;
                   uint audioDetailMipOffsets[32];
                   uint audioDetailMipCounts[32];
-                  float motionIntegrationSeconds; };
-struct Out { float4 position [[position]]; float4 color; };
-struct WavePair {
-    float heightA;
-    float heightB;
-    float phase;
-    float3 colorA;
-    float3 colorB;
+                  uint waveAttributeCount;
+                  float waveAttributeCurrentOffset;
+                  float waveAttributeSamplesPerPixel;
+                  uint waveAttributeValid;
+                  };
+constant uint kAttributeProfileSamples = 5u;
+struct Out {
+    float4 position [[position]];
+    float4 color;
+    float lineDistancePixels;
+    float lineHalfWidthPixels;
+};
+struct WaveTap {
+    float height;
+    float3 weightedColor;
+    float colorWeight;
     float valid;
 };
-struct EnvelopePair {
-    float heightA;
-    float heightB;
-    float phase;
+struct EnvelopeTap {
+    float height;
     float valid;
 };
 struct WaveSurface {
@@ -1918,6 +2205,12 @@ inline float vivid_wave_coverage(float coverage) {
     const float inverse = 1.0 - value;
     return 1.0 - inverse * inverse * inverse;
 }
+inline float3 display_srgb_to_linear(float3 value) {
+    const float3 lower = value / 12.92;
+    const float3 upper = pow(
+        (value + 0.055) / 1.055, float3(2.4));
+    return select(upper, lower, value <= float3(0.04045));
+}
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     const float2 positions[3] = {
         float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
@@ -1925,6 +2218,8 @@ vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     Out o;
     o.position = float4(positions[id], 0.0, 1.0);
     o.color = float4(0.0);
+    o.lineDistancePixels = 0.0;
+    o.lineHalfWidthPixels = 0.0;
     return o;
 }
 
@@ -1932,13 +2227,28 @@ inline uint mip_divisor(uint level) {
     return 1u << min(level, 30u);
 }
 
-inline WavePair wave_pair(
+inline float4 cubic_bspline_weights(float phase) {
+    // Positive cubic B-spline reconstruction is deliberately spatial, not
+    // temporal. Linear interpolation left a hard slope change at every
+    // song-anchored mip sample; those corners were the "wiggly ends" visible
+    // while the waveform moved. These weights retain one stable lattice,
+    // never overshoot its positive envelope, and make both silhouette and
+    // premultiplied RGB continuously differentiable as song phase advances.
+    const float t = saturate(phase);
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    return float4(
+        (1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+        (4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+        (1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+        t3 / 6.0);
+}
+
+inline WaveTap wave_tap(
         const device WaveSample *samples,
         uint levelOffset, uint levelCount,
         uint baseAnchor, float baseLocal, uint level) {
-    WavePair result{
-        0.0, 0.0, 0.0, float3(0.0), float3(0.0), 0.0
-    };
+    WaveTap result{0.0, float3(0.0), 0.0, 0.0};
     if (levelCount == 0) {
         return result;
     }
@@ -1952,25 +2262,27 @@ inline WavePair wave_pair(
     if (left < 0 || left >= int(levelCount)) {
         return result;
     }
-    const uint leftIndex = levelOffset + uint(left);
-    const uint rightIndex = levelOffset + uint(min(
-        left + 1, int(levelCount) - 1));
-    const WaveSample a = samples[leftIndex];
-    const WaveSample b = samples[rightIndex];
-    result.heightA = a.height;
-    result.heightB = b.height;
-    result.phase = local - float(whole);
-    result.colorA = float3(a.r, a.g, a.b);
-    result.colorB = float3(b.r, b.g, b.b);
+    const float4 weights = cubic_bspline_weights(local - float(whole));
+    for (int support = -1; support <= 2; ++support) {
+        const uint index = levelOffset + uint(clamp(
+            left + support, 0, int(levelCount) - 1));
+        const WaveSample sample = samples[index];
+        const float weight = weights[uint(support + 1)];
+        result.height += sample.height * weight;
+        result.weightedColor +=
+            float3(sample.r, sample.g, sample.b)
+            * sample.height * weight;
+        result.colorWeight += sample.height * weight;
+    }
     result.valid = 1.0;
     return result;
 }
 
-inline EnvelopePair envelope_pair(
+inline EnvelopeTap envelope_tap(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
         uint baseAnchor, float baseLocal, uint level) {
-    EnvelopePair result{0.0, 0.0, 0.0, 0.0};
+    EnvelopeTap result{0.0, 0.0};
     if (levelCount == 0) {
         return result;
     }
@@ -1984,26 +2296,437 @@ inline EnvelopePair envelope_pair(
     if (left < 0 || left >= int(levelCount)) {
         return result;
     }
-    result.heightA =
-        float(samples[levelOffset + uint(left)].height) / 255.0;
-    result.heightB = float(samples[
-        levelOffset + uint(min(left + 1, int(levelCount) - 1))
-    ].height) / 255.0;
-    result.phase = local - float(whole);
+    const float4 weights = cubic_bspline_weights(local - float(whole));
+    for (int support = -1; support <= 2; ++support) {
+        const uint index = levelOffset + uint(clamp(
+            left + support, 0, int(levelCount) - 1));
+        result.height +=
+            float(samples[index].height) / 65535.0
+            * weights[uint(support + 1)];
+    }
     result.valid = 1.0;
     return result;
 }
 
-inline float pair_coverage(
-        float heightA, float heightB, float phase,
+inline float envelope_support_max(
+        const device AudioEnvelopeSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint level) {
+    if (levelCount == 0) {
+        return 0.0;
+    }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int left = int(anchor) + int(floor(local));
+    if (left < 0 || left >= int(levelCount)) {
+        return 0.0;
+    }
+    float result = 0.0;
+    for (int support = -1; support <= 2; ++support) {
+        const uint index = levelOffset + uint(clamp(
+            left + support, 0, int(levelCount) - 1));
+        result = max(result, float(samples[index].height) / 65535.0);
+    }
+    return result;
+}
+
+inline uint detail_lod(float footprint, uint mipCount) {
+    // Keep the footprint-safe peak mip: selecting the sharper floor mip looked
+    // detailed in a still but exposed a hairy, aliased contour in motion on
+    // the exact real track. Fixed translation and an interpolating monotone
+    // kernel remove phase redraw and slope corners; neither can make
+    // above-Nyquist source detail displayable.
+    return uint(clamp(
+        ceil(log2(max(1.0, footprint))),
+        0.0, float(mipCount - 1)));
+}
+
+inline float monotone_slope(float before, float after) {
+    if (before * after <= 0.0) {
+        return 0.0;
+    }
+    return 2.0 * before * after / (before + after);
+}
+
+inline float monotone_hermite(
+        float before, float left, float right, float after, float phase) {
+    const float d0 = left - before;
+    const float d1 = right - left;
+    const float d2 = after - right;
+    const float m0 = monotone_slope(d0, d1);
+    const float m1 = monotone_slope(d1, d2);
+    const float t = saturate(phase);
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    const float value =
+        (2.0 * t3 - 3.0 * t2 + 1.0) * left
+        + (t3 - 2.0 * t2 + t) * m0
+        + (-2.0 * t3 + 3.0 * t2) * right
+        + (t3 - t2) * m1;
+    return clamp(value, min(left, right), max(left, right));
+}
+
+inline float3 monotone_hermite(
+        float3 before, float3 left, float3 right, float3 after, float phase) {
+    return float3(
+        monotone_hermite(
+            before.r, left.r, right.r, after.r, phase),
+        monotone_hermite(
+            before.g, left.g, right.g, after.g, phase),
+        monotone_hermite(
+            before.b, left.b, right.b, after.b, phase));
+}
+
+inline WaveTap sharp_wave_tap(
+        const device WaveSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint level) {
+    WaveTap result{0.0, float3(0.0), 0.0, 0.0};
+    if (levelCount == 0) {
+        return result;
+    }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int whole = int(floor(local));
+    const int left = int(anchor) + whole;
+    if (left < 0 || left >= int(levelCount)) {
+        return result;
+    }
+    WaveSample support[4];
+    for (int tap = -1; tap <= 2; ++tap) {
+        support[tap + 1] = samples[levelOffset + uint(clamp(
+            left + tap, 0, int(levelCount) - 1))];
+    }
+    const float phase = local - float(whole);
+    result.height = monotone_hermite(
+        support[0].height, support[1].height,
+        support[2].height, support[3].height, phase);
+    result.weightedColor = monotone_hermite(
+        float3(support[0].r, support[0].g, support[0].b)
+            * support[0].height,
+        float3(support[1].r, support[1].g, support[1].b)
+            * support[1].height,
+        float3(support[2].r, support[2].g, support[2].b)
+            * support[2].height,
+        float3(support[3].r, support[3].g, support[3].b)
+            * support[3].height,
+        phase);
+    result.colorWeight = result.height;
+    result.valid = 1.0;
+    return result;
+}
+
+inline EnvelopeTap sharp_envelope_tap(
+        const device AudioEnvelopeSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint level) {
+    EnvelopeTap result{0.0, 0.0};
+    if (levelCount == 0) {
+        return result;
+    }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int whole = int(floor(local));
+    const int left = int(anchor) + whole;
+    if (left < 0 || left >= int(levelCount)) {
+        return result;
+    }
+    float support[4];
+    for (int tap = -1; tap <= 2; ++tap) {
+        support[tap + 1] = float(samples[levelOffset + uint(clamp(
+            left + tap, 0, int(levelCount) - 1))].height) / 65535.0;
+    }
+    result.height = monotone_hermite(
+        support[0], support[1], support[2], support[3],
+        local - float(whole));
+    result.valid = 1.0;
+    return result;
+}
+
+inline float4 linear_attribute(
+        const device float4 *attributes, uint count, float coordinate) {
+    const float bounded = clamp(
+        coordinate, 0.0, max(0.0, float(count) - 1.0));
+    const int left = int(floor(bounded));
+    const int right = min(left + 1, int(count) - 1);
+    return mix(
+        attributes[uint(left)],
+        attributes[uint(right)],
+        bounded - float(left));
+}
+
+inline float targeted_stop_filter(float pixelsPerSecond) {
+    // The fixed 64 and 184 px/s stops are the only two levels still exposing
+    // a one-pixel sawtooth on the real stress passage. Taper narrowly around
+    // those exact stops so none of the neighboring levels—and especially no
+    // close-detail level—changes reconstruction.
+    const float at64 =
+        1.0 - smoothstep(0.0, 8.0, abs(pixelsPerSecond - 64.0));
+    const float at184 =
+        1.0 - smoothstep(0.0, 12.0, abs(pixelsPerSecond - 184.0));
+    return max(at64, at184);
+}
+
+kernel void wave_attribute_kernel(
+        const device WaveSample *samples [[buffer(0)]],
+        constant Uniforms &u [[buffer(1)]],
+        const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
+        device float4 *attributes [[buffer(5)]],
+        uint id [[thread_position_in_grid]]) {
+    if (id >= u.waveAttributeCount
+            || u.sampleCount == 0 || u.waveMipCount == 0) {
+        return;
+    }
+    const float scale = max(1.0, u.drawableScale);
+    const float samplesPerPixel =
+        max(1.0, u.waveAttributeSamplesPerPixel);
+    const float secondOffset =
+        (float(id) - float(u.waveAttributeCount) * 0.5)
+        / max(1.0, u.pixelsPerSecond * scale * samplesPerPixel);
+    const float waveFootprint = u.samplesPerSecond
+        / max(1.0, u.pixelsPerSecond * scale);
+    const uint waveLevel = detail_lod(
+        waveFootprint, u.waveMipCount);
+    const WaveTap sharpWave = sharp_wave_tap(
+        samples,
+        u.waveMipOffsets[waveLevel],
+        u.waveMipCounts[waveLevel],
+        u.waveCurrentIndex,
+        u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+        waveLevel);
+    if (sharpWave.valid == 0.0) {
+        attributes[id] = float4(0.0);
+        return;
+    }
+    // The targeted full-ladder recording isolates residual wiggle to
+    // 24-384 px/s. At those scales positive cubic reconstruction removes
+    // moving mip-lattice corners without sacrificing visible source detail;
+    // the close 576-1536 range uses interpolating monotone Hermite
+    // reconstruction. Unlike the retired B-spline it passes through every
+    // source peak, but unlike linear interpolation it has no moving slope
+    // corners. Zoom is fixed during playback, so this blend never changes
+    // phase from frame to frame.
+    const float stableKernel = 1.0 - smoothstep(
+        384.0, 576.0, u.pixelsPerSecond);
+    const WaveTap smoothWave = wave_tap(
+        samples,
+        u.waveMipOffsets[waveLevel],
+        u.waveMipCounts[waveLevel],
+        u.waveCurrentIndex,
+        u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+        waveLevel);
+    // One symmetric physical-pixel prefilter is enough to remove the
+    // remaining 64/184 sawtooth without selecting a coarser mip. It samples
+    // the same B-spline and the same song-anchored LOD at +/- half a pixel;
+    // a [1 2 1] average is then enabled only by the fixed-stop weight above.
+    const float targetedFilter =
+        targeted_stop_filter(u.pixelsPerSecond);
+    const float filterSeconds =
+        0.5 / max(1.0, u.pixelsPerSecond * scale);
+    const float waveFilterOffset =
+        filterSeconds * u.samplesPerSecond;
+    const float waveLocal =
+        u.waveCurrentPhase + secondOffset * u.samplesPerSecond;
+    const WaveTap leftSmoothWave = wave_tap(
+        samples,
+        u.waveMipOffsets[waveLevel],
+        u.waveMipCounts[waveLevel],
+        u.waveCurrentIndex,
+        waveLocal - waveFilterOffset,
+        waveLevel);
+    const WaveTap rightSmoothWave = wave_tap(
+        samples,
+        u.waveMipOffsets[waveLevel],
+        u.waveMipCounts[waveLevel],
+        u.waveCurrentIndex,
+        waveLocal + waveFilterOffset,
+        waveLevel);
+    const float waveFilter = targetedFilter
+        * leftSmoothWave.valid * rightSmoothWave.valid;
+    WaveTap stableWave = smoothWave;
+    stableWave.height = mix(
+        smoothWave.height,
+        (leftSmoothWave.height
+            + 2.0 * smoothWave.height
+            + rightSmoothWave.height) * 0.25,
+        waveFilter);
+    stableWave.weightedColor = mix(
+        smoothWave.weightedColor,
+        (leftSmoothWave.weightedColor
+            + 2.0 * smoothWave.weightedColor
+            + rightSmoothWave.weightedColor) * 0.25,
+        waveFilter);
+    stableWave.colorWeight = mix(
+        smoothWave.colorWeight,
+        (leftSmoothWave.colorWeight
+            + 2.0 * smoothWave.colorWeight
+            + rightSmoothWave.colorWeight) * 0.25,
+        waveFilter);
+    const float heightWeight = mix(
+        sharpWave.colorWeight, stableWave.colorWeight, stableKernel);
+    const float3 weightedColor = mix(
+        sharpWave.weightedColor,
+        stableWave.weightedColor,
+        stableKernel);
+    const float3 color = weightedColor
+        / max(heightWeight, 0.0001);
+    float height = mix(
+        sharpWave.height, stableWave.height, stableKernel);
+    if (u.audioDetailSampleCount > 0 && u.audioDetailMipCount > 0) {
+        const float detailFootprint = u.audioDetailSamplesPerSecond
+            / max(1.0, u.pixelsPerSecond * scale);
+        const uint detailLevel = detail_lod(
+            detailFootprint, u.audioDetailMipCount);
+        const EnvelopeTap sharpDetail = sharp_envelope_tap(
+            audioDetailSamples,
+            u.audioDetailMipOffsets[detailLevel],
+            u.audioDetailMipCounts[detailLevel],
+            u.audioDetailCurrentIndex,
+            u.audioDetailCurrentPhase
+                + secondOffset * u.audioDetailSamplesPerSecond,
+            detailLevel);
+        if (sharpDetail.valid > 0.0) {
+            const EnvelopeTap smoothDetail = envelope_tap(
+                audioDetailSamples,
+                u.audioDetailMipOffsets[detailLevel],
+                u.audioDetailMipCounts[detailLevel],
+                u.audioDetailCurrentIndex,
+                u.audioDetailCurrentPhase
+                    + secondOffset * u.audioDetailSamplesPerSecond,
+                detailLevel);
+            const float detailFilterOffset =
+                filterSeconds * u.audioDetailSamplesPerSecond;
+            const float detailLocal =
+                u.audioDetailCurrentPhase
+                + secondOffset * u.audioDetailSamplesPerSecond;
+            const EnvelopeTap leftSmoothDetail = envelope_tap(
+                audioDetailSamples,
+                u.audioDetailMipOffsets[detailLevel],
+                u.audioDetailMipCounts[detailLevel],
+                u.audioDetailCurrentIndex,
+                detailLocal - detailFilterOffset,
+                detailLevel);
+            const EnvelopeTap rightSmoothDetail = envelope_tap(
+                audioDetailSamples,
+                u.audioDetailMipOffsets[detailLevel],
+                u.audioDetailMipCounts[detailLevel],
+                u.audioDetailCurrentIndex,
+                detailLocal + detailFilterOffset,
+                detailLevel);
+            const float detailFilter = targetedFilter
+                * leftSmoothDetail.valid * rightSmoothDetail.valid;
+            const float stableDetail = mix(
+                smoothDetail.height,
+                (leftSmoothDetail.height
+                    + 2.0 * smoothDetail.height
+                    + rightSmoothDetail.height) * 0.25,
+                detailFilter);
+            height = mix(
+                sharpDetail.height, stableDetail, stableKernel);
+        }
+    }
+    // Store premultiplied RGB on the fixed lattice. Interpolating straight
+    // color and height separately, then multiplying them in the fragment,
+    // creates a quadratic signal whose five-point trapezoid changes slightly
+    // with playback phase. That was the last visible color pulse along an
+    // otherwise song-locked contour. Premultiplication makes both RGB energy
+    // and height piecewise linear, so the final one-pixel integral is exact.
+    attributes[id] = float4(color * height, height);
+}
+
+// Eight midpoint taps per physical pixel, at the footprint-matched LOD.
+//
+// kLodBias MUST STAY 0. It was 2 -- deliberately selecting a mip two levels
+// sharper -- on the theory that supersampling "buys" mip bias and recovers
+// real detail. That was wrong, and it is what made the middle zooms fuzzy.
+// A negative bias puts four to eight independent envelope values under a
+// single physical pixel, and a pixel cannot display more than about one.
+// The surplus does not become detail; it becomes content above the pixel
+// Nyquist, which turns into per-frame flicker as the song sweeps past. On a
+// real track, measured as the share of coverage energy above the pixel
+// Nyquist, bias 2 scored 0.062 mean / 0.147 worst against bias 0's
+// 0.029 / 0.066 -- worse at every one of the thirteen zooms.
+//
+// Cubic reconstruction uses four positive-weight support samples per tap.
+// Eight taps therefore retain the same 32 envelope reads as the old sixteen
+// two-sample linear taps while removing the lattice corners. The taps feed
+// `profile_coverage`; they never buy detail the display cannot show.
+constant uint kIntegrationTaps = 8u;
+constant float kLodBias = 0.0;
+
+inline float integration_offset(uint tap, uint count) {
+    // Symmetric midpoints across the footprint. count == 4 would reproduce
+    // the original {-0.375, -0.125, 0.125, 0.375} pattern exactly.
+    return (float(tap) + 0.5) / float(count) - 0.5;
+}
+
+inline uint biased_lod(float lodFootprint, uint mipCount) {
+    // ONE level, never a blend of two.
+    //
+    // Mip levels are song-anchored maxima on power-of-two lattices, so level
+    // N quantizes every 2^N bins and level N+1 every 2^(N+1). Blending their
+    // coverage scrolls two differently-quantized lattices at the same speed
+    // and they beat against each other. The artifact tracked the fractional
+    // part of the LOD exactly: at 32/64/128/256/576 px/s it lands near 0.62
+    // and the edges were bad, while at 24/48/92/184/384 px/s it lands near
+    // 0.05, one level dominates, and they were clean.
+    //
+    // Continuous blending only ever protected zoom *transitions*, and zoom is
+    // thirteen fixed steps, so the footprint -- and this level -- is constant
+    // for the whole of playback.
+    // CEIL, not floor or round. Mip levels are powers of two but the thirteen
+    // zoom steps are not, so flooring strands every other zoom at ~1.54
+    // envelope values per pixel while its neighbours sit at ~1.03, and even
+    // rounding leaves up to 1.41. Above one value per pixel the surplus is
+    // undisplayable: it is the hairy comb along the contour that rewrites
+    // itself every frame, measured on a real recording at 4.7 pixels of
+    // column-to-column edge jump. Ceiling guarantees at most one envelope
+    // value per physical pixel (ratio 0.5..1.0), which is the only density a
+    // pixel can hold still. Measured aliasing across all thirteen zooms:
+    // floor 0.029 mean / 0.066 worst, round 0.021 / 0.066, ceil 0.012 / 0.032.
+    return uint(clamp(
+        ceil(log2(max(1.0, lodFootprint)) - kLodBias),
+        0.0, float(mipCount - 1)));
+}
+
+inline float profile_coverage(
+        thread const float *heights, uint count,
         float distance, float heightScale, float antialias) {
-    const float coverageA = 1.0 - smoothstep(
-        heightA * heightScale - antialias,
-        heightA * heightScale + antialias, distance);
-    const float coverageB = 1.0 - smoothstep(
-        heightB * heightScale - antialias,
-        heightB * heightScale + antialias, distance);
-    return mix(coverageA, coverageB, phase);
+    // Exact area coverage of the piecewise-linear silhouette across the
+    // pixel, rather than the mean of N independent per-tap tests.
+    //
+    // Averaging is what made the contour wiggle. One tap's analytic band is
+    // only about 1% of full height, so every tap is effectively a binary
+    // inside/outside test, and the mean of eight of those can only take nine
+    // values. As playback slides the taps, they cross the threshold one at a
+    // time and the edge snaps 2/8 -> 3/8 -> 2/8 at every zoom. Integrating
+    // the linear segment between adjacent taps instead makes coverage a
+    // continuous function of the tap heights, so the edge glides.
+    if (count < 2) {
+        return 0.0;
+    }
+    const float scale = max(heightScale, 1e-5);
+    const float threshold = distance / scale;
+    const float band = max(antialias / scale, 1e-6);
+    float total = 0.0;
+    for (uint i = 0; i + 1 < count; ++i) {
+        const float lo = min(heights[i], heights[i + 1]);
+        const float hi = max(heights[i], heights[i + 1]);
+        // A flat segment falls back to a one-pixel vertical antialias band;
+        // a sloped one uses its exact linear crossing point.
+        total += saturate(
+            (hi + band - threshold) / max(hi - lo, 2.0 * band));
+    }
+    return total / float(count - 1);
 }
 
 inline WaveSurface integrated_wave_level(
@@ -2015,30 +2738,36 @@ inline WaveSurface integrated_wave_level(
     // Integrate the song surface over each physical output pixel. Sampling
     // only its center aliases dense contours and adjacent RGB rows as the
     // fractional playback phase advances. These song-anchored midpoint taps
-    // are shared by every zoom and by both adjacent continuous-LOD levels.
-    const float tapOffsets[4] = {-0.375, -0.125, 0.125, 0.375};
-    for (uint tap = 0; tap < 4; ++tap) {
-        const WavePair pair = wave_pair(
+    // are shared by every zoom and by the selected song-anchored mip level.
+    // Weights stay flat: a box across the pixel is exact area coverage, and
+    // is what keeps a moving contour crisp rather than smeared.
+    const uint tapCount = kIntegrationTaps;
+    float heights[kIntegrationTaps];
+    uint gathered = 0;
+    float totalWeight = 0.0;
+    for (uint tap = 0; tap < tapCount; ++tap) {
+        const float offset = integration_offset(tap, tapCount);
+        const float weight = 1.0;
+        const WaveTap sample = wave_tap(
             samples, levelOffset, levelCount,
             baseAnchor,
-            baseLocal + tapOffsets[tap] * sampleFootprint,
+            baseLocal + offset * sampleFootprint,
             level);
-        if (pair.valid == 0.0) {
+        if (sample.valid == 0.0) {
             continue;
         }
-        const float coverage = pair_coverage(
-            pair.heightA, pair.heightB, pair.phase,
-            distance, heightScale, antialias);
-        const float colorWeight = mix(
-            pair.heightA, pair.heightB, pair.phase);
-        result.coverage += coverage * 0.25;
-        result.weightedColor += mix(
-            pair.colorA * pair.heightA,
-            pair.colorB * pair.heightB,
-            pair.phase) * 0.25;
-        result.colorWeight += colorWeight * 0.25;
+        heights[gathered++] = sample.height;
+        result.weightedColor += sample.weightedColor * weight;
+        result.colorWeight += sample.colorWeight * weight;
+        totalWeight += weight;
         result.valid = 1.0;
     }
+    if (totalWeight > 0.0) {
+        result.weightedColor /= totalWeight;
+        result.colorWeight /= totalWeight;
+    }
+    result.coverage = profile_coverage(
+        heights, gathered, distance, heightScale, antialias);
     return result;
 }
 
@@ -2047,21 +2776,50 @@ inline float integrated_envelope_level(
         uint levelOffset, uint levelCount, uint level,
         uint baseAnchor, float baseLocal, float sampleFootprint,
         float distance, float heightScale, float antialias) {
-    float coverage = 0.0;
-    const float tapOffsets[4] = {-0.375, -0.125, 0.125, 0.375};
-    for (uint tap = 0; tap < 4; ++tap) {
-        const EnvelopePair pair = envelope_pair(
+    const uint tapCount = kIntegrationTaps;
+    float heights[kIntegrationTaps];
+    uint gathered = 0;
+    for (uint tap = 0; tap < tapCount; ++tap) {
+        const float offset = integration_offset(tap, tapCount);
+        const EnvelopeTap sample = envelope_tap(
             samples, levelOffset, levelCount,
             baseAnchor,
-            baseLocal + tapOffsets[tap] * sampleFootprint,
+            baseLocal + offset * sampleFootprint,
             level);
-        if (pair.valid > 0.0) {
-            coverage += pair_coverage(
-                pair.heightA, pair.heightB, pair.phase,
-                distance, heightScale, antialias) * 0.25;
+        if (sample.valid > 0.0) {
+            heights[gathered++] = sample.height;
         }
     }
-    return coverage;
+    return profile_coverage(
+        heights, gathered, distance, heightScale, antialias);
+}
+
+inline float envelope_span_bound(
+        const device AudioEnvelopeSample *samples,
+        constant uint *offsets, constant uint *counts, uint mipCount,
+        uint baseAnchor, float baseLocal, float span) {
+    // Every pyramid level is a song-anchored maximum, so one coarse level
+    // whose bins are at least as wide as the integration span bounds every
+    // tap taken inside it. Probing both span endpoints covers the whole
+    // window wherever the query lands inside a bin. This is exact, never
+    // clips a real contour, and lets the wide close-zoom tap budget stay
+    // affordable: fragments above the envelope cost two reads, not ninety.
+    if (mipCount == 0) {
+        return 0.0;
+    }
+    const uint coarse = uint(min(
+        ceil(log2(max(span, 1.0))), float(mipCount - 1)));
+    const float halfSpan = span * 0.5;
+    float bound = 0.0;
+    for (uint side = 0; side < 2; ++side) {
+        const float supportMax = envelope_support_max(
+            samples, offsets[coarse], counts[coarse],
+            baseAnchor,
+            baseLocal + (side == 0 ? -halfSpan : halfSpan),
+            coarse);
+        bound = max(bound, supportMax);
+    }
+    return bound;
 }
 
 inline WaveSurface filtered_wave_surface(
@@ -2074,41 +2832,14 @@ inline WaveSurface filtered_wave_surface(
     if (mipCount == 0) {
         return result;
     }
-    // Both geometry and RGB use the same continuous song-anchored LOD.
-    // Peak mips retain transients; energy-integrated RGB mips stop adjacent
-    // colors from alternating as a minified physical pixel moves.
-    const float lod = clamp(
-        log2(max(1.0, lodFootprint)),
-        0.0, float(mipCount - 1));
-    const uint lowLevel = uint(floor(lod));
-    const uint highLevel = min(lowLevel + 1, mipCount - 1);
-    const float lodMix = lod - float(lowLevel);
-    const WaveSurface low = integrated_wave_level(
-        samples, offsets[lowLevel], counts[lowLevel], lowLevel,
+    // Geometry and RGB share one song-anchored level. Peak mips retain
+    // transients; energy-integrated RGB mips stop adjacent colors from
+    // alternating as a minified physical pixel moves.
+    const uint level = biased_lod(lodFootprint, mipCount);
+    return integrated_wave_level(
+        samples, offsets[level], counts[level], level,
         baseAnchor, baseLocal, integrationFootprint,
         distance, heightScale, antialias);
-    const WaveSurface high = integrated_wave_level(
-        samples, offsets[highLevel], counts[highLevel], highLevel,
-        baseAnchor, baseLocal, integrationFootprint,
-        distance, heightScale, antialias);
-    if (low.valid == 0.0 && high.valid == 0.0) {
-        return result;
-    }
-    const float lowCoverage =
-        low.valid > 0.0 ? low.coverage : high.coverage;
-    const float highCoverage =
-        high.valid > 0.0 ? high.coverage : low.coverage;
-    result.coverage = mix(lowCoverage, highCoverage, lodMix);
-    result.weightedColor = mix(
-        low.valid > 0.0 ? low.weightedColor : high.weightedColor,
-        high.valid > 0.0 ? high.weightedColor : low.weightedColor,
-        lodMix);
-    result.colorWeight = mix(
-        low.valid > 0.0 ? low.colorWeight : high.colorWeight,
-        high.valid > 0.0 ? high.colorWeight : low.colorWeight,
-        lodMix);
-    result.valid = 1.0;
-    return result;
 }
 
 inline float filtered_envelope_coverage(
@@ -2120,33 +2851,30 @@ inline float filtered_envelope_coverage(
     if (mipCount == 0) {
         return 0.0;
     }
-    const float lod = clamp(
-        log2(max(1.0, lodFootprint)),
-        0.0, float(mipCount - 1));
-    const uint lowLevel = uint(floor(lod));
-    const uint highLevel = min(lowLevel + 1, mipCount - 1);
-    const float lodMix = lod - float(lowLevel);
-    const float lowCoverage = integrated_envelope_level(
-        samples, offsets[lowLevel], counts[lowLevel], lowLevel,
+    const float bound = envelope_span_bound(
+        samples, offsets, counts, mipCount,
+        baseAnchor, baseLocal, integrationFootprint);
+    if (distance > bound * heightScale + antialias) {
+        return 0.0;
+    }
+    const uint level = biased_lod(lodFootprint, mipCount);
+    return integrated_envelope_level(
+        samples, offsets[level], counts[level], level,
         baseAnchor, baseLocal, integrationFootprint,
         distance, heightScale, antialias);
-    const float highCoverage = integrated_envelope_level(
-        samples, offsets[highLevel], counts[highLevel], highLevel,
-        baseAnchor, baseLocal, integrationFootprint,
-        distance, heightScale, antialias);
-    return mix(lowCoverage, highCoverage, lodMix);
 }
 
 fragment float4 wave_surface_fragment(
         Out in [[stage_in]],
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
-        const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]]) {
+        const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
+        const device float4 *attributes [[buffer(5)]]) {
     const float scale = max(1.0, u.drawableScale);
     const float xPoints = in.position.x / scale;
     const float yPoints = in.position.y / scale;
-    const float3 background = float3(
-        13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0);
+    const float3 background = display_srgb_to_linear(float3(
+        13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0));
     const float antialias = 0.5 / scale;
     if (yPoints < 28.0) {
         if (u.sampleCount == 0 || u.waveMipCount == 0) {
@@ -2170,8 +2898,9 @@ fragment float4 wave_surface_fragment(
         if (surface.valid == 0.0 || surface.coverage <= 0.0) {
             discard_fragment();
         }
-        const float3 color = surface.weightedColor
-            / max(surface.colorWeight, 0.0001);
+        const float3 color = display_srgb_to_linear(
+            surface.weightedColor
+            / max(surface.colorWeight, 0.0001));
         return float4(mix(
             background, color,
             vivid_wave_coverage(surface.coverage)), 1.0);
@@ -2183,6 +2912,58 @@ fragment float4 wave_surface_fragment(
     const float distance = abs(yPoints - waveCenter);
     const float heightScale =
         max(4.0, (u.heightPoints - 49.0) * 0.5 - 7.0);
+    if (u.waveAttributeValid != 0 && u.waveAttributeCount >= 2) {
+        // Height and hue live on one fixed, four-samples-per-pixel global song
+        // lattice. Interpolate those attributes first, then perform vertical
+        // antialiasing once at the drawable. Unlike a translated RGBA
+        // waveform this never refilters coverage, and unlike one-pixel nearest
+        // translation it preserves continuous motion through dense contours.
+        const float samplesPerPixel =
+            max(1.0, u.waveAttributeSamplesPerPixel);
+        const float tileX =
+            float(u.waveAttributeCount) * 0.5
+            + (in.position.x - float(u.drawableWidthPixels) * 0.5)
+                * samplesPerPixel
+            + u.waveAttributeCurrentOffset;
+        const float attributeStep = samplesPerPixel * 0.25;
+        if (tileX - 2.0 * attributeStep < 0.0
+                || tileX + 2.0 * attributeStep + 1.0
+                    >= float(u.waveAttributeCount)) {
+            discard_fragment();
+        }
+        // Integrate the fixed song profile over exactly one physical pixel.
+        // Five quarter-pixel boundary samples cover [-0.5, +0.5]; endpoint
+        // half-weights are the trapezoid rule for premultiplied hue and
+        // height. Both are piecewise linear on this lattice, so this is their
+        // exact one-pixel integral. Coverage likewise uses the exact
+        // piecewise-linear crossing integral, not an average of five
+        // near-binary alpha tests.
+        float heights[kAttributeProfileSamples];
+        float3 weightedColor = float3(0.0);
+        float colorWeight = 0.0;
+        for (uint i = 0; i < kAttributeProfileSamples; ++i) {
+            const float offset =
+                (float(i) - 2.0) * attributeStep;
+            const float4 attribute = linear_attribute(
+                attributes, u.waveAttributeCount, tileX + offset);
+            heights[i] = attribute.a;
+            const float weight =
+                i == 0 || i + 1 == kAttributeProfileSamples ? 0.5 : 1.0;
+            weightedColor += attribute.rgb * weight;
+            colorWeight += attribute.a * weight;
+        }
+        const float coverage = profile_coverage(
+            heights, kAttributeProfileSamples,
+            distance, heightScale, antialias);
+        if (coverage <= 0.0) {
+            discard_fragment();
+        }
+        const float3 color = display_srgb_to_linear(
+            weightedColor / max(colorWeight, 0.0001));
+        return float4(mix(
+            background, color,
+            saturate(coverage)), 1.0);
+    }
     const float secondOffset =
         (xPoints - u.widthPoints * 0.5)
         / max(1.0, u.pixelsPerSecond);
@@ -2191,10 +2972,12 @@ fragment float4 wave_surface_fragment(
     const float waveSpatialFootprint =
         u.samplesPerSecond
         / max(1.0, u.pixelsPerSecond * scale);
-    const float waveMotionFootprint =
-        u.samplesPerSecond * u.motionIntegrationSeconds;
-    const float waveIntegrationFootprint =
-        max(waveSpatialFootprint, waveMotionFootprint);
+    // The integration window is the physical pixel and nothing else. A
+    // temporal shutter was tried here and removed: the eye tracks a scrolling
+    // waveform, so under smooth pursuit the waveform is stationary on the
+    // retina and rendered blur simply smears it. The display's own
+    // sample-and-hold already supplies the unavoidable persistence blur.
+    const float waveIntegrationFootprint = waveSpatialFootprint;
     const WaveSurface colorSurface = filtered_wave_surface(
         samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
         u.waveCurrentIndex, waveLocal,
@@ -2203,8 +2986,9 @@ fragment float4 wave_surface_fragment(
     if (colorSurface.valid == 0.0) {
         discard_fragment();
     }
-    const float3 color = colorSurface.weightedColor
-        / max(colorSurface.colorWeight, 0.0001);
+    const float3 color = display_srgb_to_linear(
+        colorSurface.weightedColor
+        / max(colorSurface.colorWeight, 0.0001));
     float coverage = colorSurface.coverage;
     if (u.audioDetailSampleCount > 0 && u.audioDetailMipCount > 0) {
         const float audioLocal =
@@ -2212,10 +2996,7 @@ fragment float4 wave_surface_fragment(
             + secondOffset * u.audioDetailSamplesPerSecond;
         const float audioSpatialFootprint = u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
-        const float audioMotionFootprint =
-            u.audioDetailSamplesPerSecond * u.motionIntegrationSeconds;
-        const float audioIntegrationFootprint =
-            max(audioSpatialFootprint, audioMotionFootprint);
+        const float audioIntegrationFootprint = audioSpatialFootprint;
         coverage = filtered_envelope_coverage(
             audioDetailSamples,
             u.audioDetailMipOffsets, u.audioDetailMipCounts,
@@ -2229,7 +3010,7 @@ fragment float4 wave_surface_fragment(
     }
     return float4(mix(
         background, color,
-        vivid_wave_coverage(coverage)), 1.0);
+        saturate(coverage)), 1.0);
 }
 vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
                        constant Uniforms &u [[buffer(1)]],
@@ -2251,9 +3032,22 @@ vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
     o.position = float4(x / u.widthPoints * 2.0 - 1.0,
                         1.0 - y / u.heightPoints * 2.0, 0, 1);
     o.color = float4(p.r, p.g, p.b, p.a);
+    o.lineDistancePixels =
+        p.lineDistancePoints * max(1.0, u.drawableScale);
+    o.lineHalfWidthPixels =
+        p.lineHalfWidthPoints * max(1.0, u.drawableScale);
     return o;
 }
-fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
+fragment float4 deck_fragment(Out in [[stage_in]]) {
+    float alpha = in.color.a;
+    if (in.lineHalfWidthPixels > 0.0) {
+        const float coverage = saturate(
+            in.lineHalfWidthPixels + 0.5
+            - abs(in.lineDistancePixels));
+        alpha *= coverage;
+    }
+    return float4(display_srgb_to_linear(in.color.rgb), alpha);
+}
 )METAL";
         NSError *error = nil;
         id<MTLLibrary> library = [device_ newLibraryWithSource:source
@@ -2272,6 +3066,11 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
         wave.colorAttachments[0].pixelFormat = metalLayer_.pixelFormat;
         wave.colorAttachments[0].blendingEnabled = NO;
         pipeline_ = [device_ newRenderPipelineStateWithDescriptor:wave error:&error];
+        id<MTLFunction> attributeFunction =
+            [library newFunctionWithName:@"wave_attribute_kernel"];
+        attributePipeline_ = [device_
+            newComputePipelineStateWithFunction:attributeFunction
+            error:&error];
 
         MTLRenderPipelineDescriptor *grid = [wave copy];
         grid.vertexFunction = [library newFunctionWithName:@"grid_vertex"];
@@ -2282,7 +3081,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
         grid.colorAttachments[0].destinationRGBBlendFactor =
             MTLBlendFactorOneMinusSourceAlpha;
         gridPipeline_ = [device_ newRenderPipelineStateWithDescriptor:grid error:&error];
-        if (!pipeline_ || !gridPipeline_) {
+        if (!pipeline_ || !attributePipeline_ || !gridPipeline_) {
             const char *message = error.localizedDescription.UTF8String;
             setError(-42, message ? message : "Metal pipeline failed");
         }
@@ -2710,7 +3509,9 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     id<MTLDevice> device_ = nil;
     id<MTLCommandQueue> commandQueue_ = nil;
     id<MTLRenderPipelineState> pipeline_ = nil;
+    id<MTLComputePipelineState> attributePipeline_ = nil;
     id<MTLRenderPipelineState> gridPipeline_ = nil;
+    id<MTLBuffer> waveAttributeBuffer_ = nil;
     id<MTLBuffer> waveBuffer_ = nil;
     id<MTLBuffer> detailBuffer_ = nil;
     id<MTLBuffer> audioDetailBuffer_ = nil;
@@ -2733,6 +3534,13 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     NSUInteger cueVertexCount_ = 0;
     NSUInteger sessionCueVertexCount_ = 0;
     NSUInteger cueMarkerCount_ = 0;
+    NSUInteger waveAttributeCount_ = 0;
+    int64_t waveAttributeCenter_ = 0;
+    uint64_t waveAttributeRevision_ = 0;
+    float waveAttributeZoom_ = 0.0f;
+    float waveAttributeScale_ = 0.0f;
+    float waveAttributeSamplesPerPixel_ = 0.0f;
+    std::atomic<uint64_t> waveformRevision_{1};
     std::vector<BeatPosition> beatPositions_;
     // Display-thread-only storage: rebuilding the small dynamic overlay never
     // allocates on the playback frame path after the first frame.
@@ -2750,7 +3558,6 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     // state valid if an in-flight presentation finishes during deck teardown.
     std::shared_ptr<PresentedFrameState> presentedFrames_ =
         std::make_shared<PresentedFrameState>();
-    CFTimeInterval lastTargetPresentation_ = 0.0;
     std::atomic<float> zoomPixelsPerSecond_{kPixelsPerSecond};
 
     AudioUnit audioUnit_ = nullptr;
@@ -2800,7 +3607,6 @@ fragment float4 deck_fragment(Out in [[stage_in]]) { return in.color; }
     std::atomic<bool> previewActive_{false};
     std::atomic<uint32_t> waveformUpdateDepth_{0};
     std::atomic<uint64_t> previewFrame_{0};
-    std::atomic<float> previewMotionIntegration_{0.0f};
 
     std::mutex errorMutex_;
     int errorCode_ = 0;
@@ -2984,6 +3790,25 @@ int sb_deck_set_packed_overview_for_generation(
     return result;
 }
 
+int sb_deck_set_packed_overview_u16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *heights,
+    const uint8_t *rgb,
+    size_t column_count,
+    double columns_per_second,
+    const double *beat_seconds,
+    const uint8_t *beat_in_bar,
+    size_t beat_count) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setPackedOverview16(
+        generation, heights, rgb, column_count, columns_per_second,
+        beat_seconds, beat_in_bar, beat_count);
+    if (result) instance->requestDisplay();
+    return result;
+}
+
 int sb_deck_set_detail_analysis(
     SBDeckRef deck,
     const float *heights,
@@ -3039,6 +3864,20 @@ int sb_deck_set_audio_detail_for_generation(
     if (!deck) return 0;
     auto *instance = static_cast<SBDeck *>(deck);
     const int result = instance->setAudioDetail(
+        heights, sample_count, samples_per_second, generation);
+    if (result) instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_audio_detail_u16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *heights,
+    size_t sample_count,
+    double samples_per_second) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setAudioDetail16(
         heights, sample_count, samples_per_second, generation);
     if (result) instance->requestDisplay();
     return result;
@@ -3166,6 +4005,24 @@ double sb_deck_display_average_fps(SBDeckRef deck) {
 double sb_deck_display_max_gap_ms(SBDeckRef deck) {
     return deck
         ? static_cast<SBDeck *>(deck)->displayMaxGapMs()
+        : 0.0;
+}
+
+double sb_deck_presentation_error_mean_ms(SBDeckRef deck) {
+    return deck
+        ? static_cast<SBDeck *>(deck)->presentationErrorMeanMs()
+        : 0.0;
+}
+
+double sb_deck_presentation_error_stddev_ms(SBDeckRef deck) {
+    return deck
+        ? static_cast<SBDeck *>(deck)->presentationErrorStdDevMs()
+        : 0.0;
+}
+
+double sb_deck_presentation_error_max_ms(SBDeckRef deck) {
+    return deck
+        ? static_cast<SBDeck *>(deck)->presentationErrorMaxMs()
         : 0.0;
 }
 

@@ -536,6 +536,58 @@ class SuggestQueue(unittest.TestCase):
 
 
 class PlayerHardening(unittest.TestCase):
+    def test_steady_transport_updates_do_no_widget_work(self):
+        """The 20 Hz position path must not rebuild unchanged button state.
+
+        Rebuilding it anyway allocated a QPixmap and QIcon per cue slot
+        twenty times a second and cost eight display frames per second at
+        maximum zoom in the real app -- each one a doubled scroll step that
+        reads as a shake. Measured, not theoretical: see docs/PLAYER.md.
+        """
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb.resize(900, 140)
+            calls = []
+            real_refresh = pb.cue_panel._refresh
+            pb.cue_panel._refresh = lambda: (
+                calls.append(1), real_refresh())[1]
+            pb._update_transport()
+            calls.clear()
+            for _ in range(40):
+                pb._update_transport()
+            self.assertEqual(
+                calls, [],
+                "steady transport updates rebuilt the cue panel")
+            # A real state change must still land.
+            pb._src_path = "/tmp/x.wav"
+            pb._playback_available = True
+            pb._update_transport()
+            self.assertEqual(len(calls), 1)
+        finally:
+            pb.deleteLater()
+            _app.processEvents()
+
+    def test_native_rendering_suppresses_wasted_qt_repaints(self):
+        """paintEvent early-returns under Metal, so a repaint draws nothing."""
+        from desktop.player import WaveformBar
+        wave = WaveformBar()
+        try:
+            painted = []
+            wave.update = lambda *a, **k: painted.append(1)
+            wave.set_native_rendering(True)
+            painted.clear()
+            wave.set_timing(1234.0, 200_000)
+            self.assertEqual(
+                painted, [], "Qt repainted while Metal owned the pixels")
+            wave.set_native_rendering(False)
+            painted.clear()
+            wave.set_timing(2345.0, 200_000)
+            self.assertEqual(len(painted), 1)
+        finally:
+            wave.deleteLater()
+            _app.processEvents()
+
     def test_cue_pages_align_to_waveform_and_deck_buttons_are_circles(self):
         from desktop.player import PlayerBar
         pb = PlayerBar()
@@ -1602,6 +1654,19 @@ class PlayerHardening(unittest.TestCase):
         self.assertEqual(w._song_column(1000), 3)
         self.assertEqual(w._rgb_detail[1][0], 1.0)
 
+    def test_current_waveform_visibility_shoulder_preserves_true_zero(self):
+        from desktop.player import _display_waveform_height
+
+        values = [
+            _display_waveform_height(value / 65535.0)
+            for value in (0, 1, 2, 6, 66, 65535)
+        ]
+        self.assertEqual(values[0], 0.0)
+        self.assertGreater(values[1], 0.0)
+        self.assertGreater(values[3], 0.006)
+        self.assertEqual(values[-1], 1.0)
+        self.assertEqual(values, sorted(values))
+
     def test_qt_waveform_preserves_dedicated_rgb_despite_band_master(self):
         from desktop.player import WaveformBar
 
@@ -1633,6 +1698,17 @@ class PlayerHardening(unittest.TestCase):
             (500, 1, 1), (1000, 1, 2), (1500, 1, 3),
             (2000, 1, 4), (2500, 2, 1), (3000, 2, 2),
         ])
+
+    def test_qt_fallback_draws_every_beat_as_opaque_timing_ink(self):
+        source = (
+            Path(__file__).parents[1] / "desktop" / "player.py"
+        ).read_text()
+        grid = source.split("def _paint_grid", 1)[1].split(
+            "@staticmethod", 1)[0]
+        self.assertIn("QColor(255, 55, 88)", grid)
+        self.assertIn("QColor(120, 135, 158)", grid)
+        self.assertNotIn("QColor(255, 55, 88, 175)", grid)
+        self.assertNotIn("QColor(120, 135, 158, 85)", grid)
 
     def test_waveform_motion_keeps_subpixel_phase_at_120hz(self):
         from desktop.player import WaveformBar
@@ -2697,10 +2773,13 @@ class QtWaveformFallback(unittest.TestCase):
         detail = qt_detail_peaks(path)
         self.assertGreater(detail["detail_rate"], 6100)
         self.assertLess(detail["detail_rate"], 6200)
-        heights = detail["detail_heights"]
+        self.assertEqual(
+            detail["height_encoding"], "linear-u16le")
+        import numpy as np
+        heights = np.frombuffer(detail["detail_heights"], dtype="<u2")
         midpoint = len(heights) // 2
-        self.assertGreater(max(heights[:midpoint - 30]), 245)
-        self.assertLess(max(heights[midpoint + 30:]), 12)
+        self.assertGreater(int(max(heights[:midpoint - 30])), 63_000)
+        self.assertLess(int(max(heights[midpoint + 30:])), 3_100)
 
     def test_alac_waveform(self):
         self._check("alac.m4a")
@@ -3191,12 +3270,14 @@ class WaveformFill(unittest.TestCase):
             "color": [255, 59, 125],
         }]
         track_analysis.store(canonical, "0", self.paths[0], {
-            "detail_heights": b"\x20" * 6000,
+            "detail_heights": b"\x20\x00" * 6000,
             "detail_rate": 6000.0,
-            "overview_heights": b"\x20",
+            "overview_heights": b"\x20\x00",
             "overview_rgb": b"\x01\x02\x03",
             "spectral_bands": bytes(range(24)),
             "color_model": track_analysis.COLOR_MODEL,
+            "waveform_model": track_analysis.WAVEFORM_MODEL,
+            "height_encoding": track_analysis.HEIGHT_ENCODING,
         })
         before = track_analysis._read_container_manifest(
             canonical, "0", self.paths[0])[2]
@@ -3216,6 +3297,79 @@ class WaveformFill(unittest.TestCase):
             track_analysis.load(
                 canonical, "0", self.paths[0])["cues"],
             track.rekordbox_cues)
+
+    def test_worker_refreshes_corrected_rekordbox_grid_without_audio_decode(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+
+        canonical = Path(self.cache) / "track_analysis"
+        track = self.lib.tracks_by_id["0"]
+        dat = Path(self.cache) / "ANLZ0000.DAT"
+        dat.write_bytes(b"read-only test fixture")
+        track.analysis_path = str(dat)
+        track.rekordbox_cues = []
+        automatic = [[1, 250, 128.0], [2, 719, 128.0]]
+        prepared = track_analysis.with_imported_cues({
+            "detail_heights": b"\x20\x00" * 6000,
+            "detail_rate": 6000.0,
+            "overview_heights": b"\x20\x00",
+            "overview_rgb": b"\x01\x02\x03",
+            "spectral_bands": bytes(range(24)),
+            "color_model": track_analysis.COLOR_MODEL,
+            "waveform_model": track_analysis.WAVEFORM_MODEL,
+            "height_encoding": track_analysis.HEIGHT_ENCODING,
+            "beats": automatic,
+            "provenance": {
+                "analysis": "rekordbox-import+soundbox",
+                "grid": "rekordbox",
+                "owner": "soundbox",
+            },
+        }, [])
+        track_analysis.store(canonical, "0", self.paths[0], prepared)
+        before = track_analysis._read_container_manifest(
+            canonical, "0", self.paths[0])[2]
+        corrected = [[1, 375, 128.0], [2, 844, 128.0]]
+        small_lib = type(self.lib)(
+            tracks_by_id={"0": track}, playlists=[], source_xml="x")
+        worker = WaveformFillWorker(small_lib, canonical)
+        totals = []
+        ready = []
+        worker.tasks_ready.connect(totals.append)
+        worker.detail_ready.connect(ready.append)
+        with patch(
+                "soundbox.rekordbox_analysis.read_beats",
+                return_value=corrected), patch(
+                    "soundbox.track_analysis.analyze_soundfile",
+                    side_effect=AssertionError("grid refresh decoded audio")):
+            worker.run()
+        after = track_analysis._read_container_manifest(
+            canonical, "0", self.paths[0])[2]
+        self.assertEqual(totals, [1])
+        self.assertEqual(ready, [self.paths[0]])
+        self.assertEqual(after, before)
+        self.assertEqual(
+            track_analysis.load(
+                canonical, "0", self.paths[0])["beats"],
+            corrected)
+
+    def test_preparation_status_waits_until_scan_finds_real_work(self):
+        from unittest.mock import patch
+
+        saved = _win._preparing_library
+        _win._preparing_library = False
+        try:
+            with patch.object(_win, "_start_pulse") as pulse:
+                _win._on_analysis_tasks_ready(0)
+                self.assertFalse(_win._preparing_library)
+                pulse.assert_not_called()
+
+                _win._on_analysis_tasks_ready(2)
+                self.assertTrue(_win._preparing_library)
+                pulse.assert_called_once_with("Preparing your library")
+        finally:
+            _win._preparing_library = saved
 
     def test_storage_guard_uses_pause_resume_hysteresis(self):
         from pathlib import Path

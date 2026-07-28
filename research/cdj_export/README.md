@@ -23,11 +23,10 @@ Needs `pyrekordbox` — it's already a SoundBox dependency, so just use the app'
 venv (no separate env needed):
 
     ../../.venv/bin/python devicesql.py     # from research/cdj_export/
-    # i.e. ~/Projects/soundbox/.venv/bin/python
 
 The **reference USB snapshots** (real rekordbox exports + staged test sticks)
-are large audio binaries and deliberately live OUTSIDE this repo at
-`~/soundbox-cdj-ref/` — do not commit them.
+are large audio binaries and live in the project-local, fully git-ignored
+`../../soundbox-cdj-ref/` workspace — do not commit them.
 
 ## Status in one line
 

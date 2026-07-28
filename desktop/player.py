@@ -11,9 +11,11 @@ invariants, validation references, and the cue/grid roadmap.
 
 from __future__ import annotations
 
+from array import array
 from bisect import bisect_right
 from enum import Enum
-from math import ceil, floor
+from math import ceil, exp, floor
+import sys
 from time import perf_counter
 
 from PySide6.QtCore import (
@@ -39,6 +41,10 @@ _PIXELS_PER_SECOND = 92.0
 _OVERVIEW_HEIGHT = 28
 _RULER_TOP = 31
 _ZOOM_TOP = 49
+_HEIGHT_ENCODING_U16 = "linear-u16le"
+_WAVEFORM_DISPLAY_EXPONENT = 0.80
+_WAVEFORM_VISIBILITY_SHOULDER = 1.0 / 128.0
+_WAVEFORM_VISIBILITY_KNEE = 4.0 / 65535.0
 # The last stop is intentionally close to Rekordbox's maximum: at the
 # 140–175 BPM range common in this library, a typical detail deck shows about
 # three beats across its full width. These are renderer scales, not rebuilt
@@ -52,6 +58,21 @@ _HOT_CUE_FALLBACKS = (
     "#30d26e", "#e0641b", "#305aff", "#c3af04",
 )
 _MEMORY_CUE_COLOR = QColor("#ff3434")
+
+
+def _display_waveform_height(linear: float) -> float:
+    """Map current linear geometry to a visible, continuous display height."""
+    value = max(0.0, min(1.0, float(linear)))
+    if value == 0.0:
+        return 0.0
+    companded = value ** _WAVEFORM_DISPLAY_EXPONENT
+    visibility = 1.0 - exp(-value / _WAVEFORM_VISIBILITY_KNEE)
+    return min(
+        1.0,
+        companded
+        + _WAVEFORM_VISIBILITY_SHOULDER
+        * (1.0 - companded) * visibility,
+    )
 _SESSION_CUE_COLOR = QColor("#f08a19")
 
 _JUMP_MODES = {
@@ -165,9 +186,10 @@ def _apply_loaded_grid_contract(
 def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
     """Full V4 analysis through Qt/FFmpeg for AAC/ALAC and friends.
 
-    The signed mono PCM is fed to the same streaming analyzer as WAV/AIFF/
-    MP3/FLAC, so player-only set rips still receive ultra waveform, 24-band RGB
-    and beat-grid data.  They remain explicitly ineligible for CDJ export.
+    Signed stereo PCM is fed to the same streaming analyzer as WAV/AIFF/
+    MP3/FLAC, so player-only set rips retain channel-safe waveform geometry,
+    24-band RGB, and beat-grid data. They remain explicitly ineligible for CDJ
+    export.
     """
     from PySide6.QtCore import (
         QCoreApplication, QElapsedTimer, QEventLoop, QTimer,
@@ -179,7 +201,7 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
     dec = QAudioDecoder()
     fmt = QAudioFormat()
     fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
-    fmt.setChannelCount(1)
+    fmt.setChannelCount(2)
     # 24,576 Hz gives the ultra tier exactly four PCM samples per 6,144 Hz
     # envelope row while retaining enough bandwidth for useful RGB analysis.
     fmt.setSampleRate(24576)
@@ -253,10 +275,8 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
                     np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128
                 ) / 128.0
             channels = max(1, f.channelCount())
-            values = (
-                values.reshape(-1, channels).mean(axis=1)
-                if channels > 1 else values
-            )
+            if channels > 1:
+                values = values.reshape(-1, channels)
             if not analyzer:
                 analyzer.append(StreamingAnalyzer(
                     float(f.sampleRate() or 24576)))
@@ -439,6 +459,8 @@ class WaveformBar(QWidget):
         self._rgb_detail: list[tuple[float, QColor]] = []
         self._audio_detail = b""
         self._audio_detail_rate = 0.0
+        self._audio_detail_scale = 255.0
+        self._audio_detail_companded = False
         self._beats: list[list[float]] = []  # [beat-in-bar, position-ms, bpm]
         self._beat_times: list[int] = []
         self._beat_positions: list[tuple[int, int, int]] = []
@@ -467,6 +489,20 @@ class WaveformBar(QWidget):
         self._native_rendering = bool(active)
         self.update()
 
+    def _repaint(self):
+        """Repaint only when Qt actually owns these pixels.
+
+        ``paintEvent`` early-returns while the Metal child view is rendering,
+        so a Qt repaint composites the window and produces nothing. The
+        transport calls ``set_timing`` twenty times a second, and that waste
+        measured at roughly three dropped display frames per second at
+        maximum zoom in the real app -- each one a doubled scroll step.
+        Metal already draws the playhead, grid, cues, and zoom buttons.
+        """
+        if self._native_rendering:
+            return
+        self.update()
+
     def set_active(self, on: bool):
         """Arm/disarm scrubbing. Until a track is loaded there is nothing to
         seek in — clicks are ignored and the cursor stays a plain arrow."""
@@ -482,7 +518,7 @@ class WaveformBar(QWidget):
         changed = index != self._zoom_level
         self._zoom_level = index
         self.PIXELS_PER_SECOND = _ZOOM_LEVELS[index]
-        self.update()
+        self._repaint()
         if emit and changed:
             self.zoom_changed.emit(self.PIXELS_PER_SECOND)
 
@@ -508,7 +544,7 @@ class WaveformBar(QWidget):
 
     def set_peaks(self, peaks: list[float]):
         self._peaks = peaks or []
-        self.update()
+        self._repaint()
 
     def set_analysis(self, data: dict):
         """Install read-only PQTZ/PWV5 data for the loaded track."""
@@ -524,9 +560,23 @@ class WaveformBar(QWidget):
             self._rgb_colors = []
         elif (isinstance(packed_heights, bytes)
               and isinstance(packed_rgb, bytes)):
-            count = min(len(packed_heights), len(packed_rgb) // 3)
+            encoding = str(data.get("_height_encoding") or "")
+            if encoding == _HEIGHT_ENCODING_U16:
+                values = array("H")
+                values.frombytes(
+                    packed_heights[:len(packed_heights) // 2 * 2])
+                if sys.byteorder != "little":
+                    values.byteswap()
+                scale = 65535.0
+            else:
+                values = packed_heights
+                scale = 255.0
+            count = min(len(values), len(packed_rgb) // 3)
             self._rgb_heights = [
-                value / 255 for value in packed_heights[:count]]
+                (_display_waveform_height(value / scale)
+                 if encoding == _HEIGHT_ENCODING_U16
+                 else value / scale)
+                for value in values[:count]]
             self._rgb_colors = [
                 [packed_rgb[i], packed_rgb[i + 1], packed_rgb[i + 2]]
                 for i in range(0, count * 3, 3)
@@ -598,7 +648,7 @@ class WaveformBar(QWidget):
             elif bar == 0:
                 bar = 1
             self._beat_positions.append((int(row[1]), bar, beat))
-        self.update()
+        self._repaint()
 
     def set_cues(self, cues: list[dict], repaint: bool = True):
         """Install cue markers without changing waveform or grid ownership."""
@@ -624,13 +674,13 @@ class WaveformBar(QWidget):
             ),
         )
         if repaint:
-            self.update()
+            self._repaint()
 
     def set_session_cue(self, position_ms: int | None):
         """Show the loaded deck's transient CUE point without persisting it."""
         self._session_cue_ms = (
             None if position_ms is None else max(0, int(position_ms)))
-        self.update()
+        self._repaint()
 
     def set_audio_detail(self, detail):
         """Install an additive Soundbox-owned high-resolution envelope."""
@@ -638,26 +688,40 @@ class WaveformBar(QWidget):
             heights = detail.get("heights")
             rate = float(detail.get("rate") or 0)
             if isinstance(heights, bytes) and heights and rate > 0:
-                self._audio_detail = heights
+                encoding = str(detail.get("encoding") or "")
+                if encoding == _HEIGHT_ENCODING_U16:
+                    values = array("H")
+                    values.frombytes(heights[:len(heights) // 2 * 2])
+                    if sys.byteorder != "little":
+                        values.byteswap()
+                    self._audio_detail = values
+                    self._audio_detail_scale = 65535.0
+                    self._audio_detail_companded = True
+                else:
+                    self._audio_detail = heights
+                    self._audio_detail_scale = 255.0
+                    self._audio_detail_companded = False
                 self._audio_detail_rate = rate
-                self.update()
+                self._repaint()
                 return
         self._audio_detail = b""
         self._audio_detail_rate = 0.0
-        self.update()
+        self._audio_detail_scale = 255.0
+        self._audio_detail_companded = False
+        self._repaint()
 
     def set_position(self, frac: float):
         self._pos = min(1.0, max(0.0, frac))
         if self._duration_ms:
             self._position_ms = int(self._pos * self._duration_ms)
-        self.update()
+        self._repaint()
 
     def set_timing(self, position_ms: int | float, duration_ms: int):
         self._position_ms = max(0, position_ms)
         self._duration_ms = max(0, duration_ms)
         self._pos = (self._position_ms / self._duration_ms
                      if self._duration_ms else 0.0)
-        self.update()
+        self._repaint()
 
     def _snap_to_beat(self, target_ms: int) -> int:
         """Magnetize close scrubs to rekordbox's exact beat timestamp."""
@@ -874,17 +938,23 @@ class WaveformBar(QWidget):
             if footprint <= 1.0:
                 phase = position - column
                 if audio_detail:
-                    a_height = audio_detail[column] / 255
-                    b_height = audio_detail[min(column + 1, n - 1)] / 255
+                    a_height = (
+                        audio_detail[column] / self._audio_detail_scale)
+                    b_height = (
+                        audio_detail[min(column + 1, n - 1)]
+                        / self._audio_detail_scale)
                 else:
                     a_height = color_detail[column][0]
                     b_height = color_detail[min(column + 1, n - 1)][0]
                 height = a_height + (b_height - a_height) * phase
             elif audio_detail:
-                height = max(audio_detail[start:end]) / 255
+                height = (
+                    max(audio_detail[start:end]) / self._audio_detail_scale)
             else:
                 height = max(
                     row[0] for row in color_detail[start:end])
+            if audio_detail and self._audio_detail_companded:
+                height = _display_waveform_height(height)
             color_position = seconds * color_rate
             color_column = floor(color_position)
             if not 0 <= color_column < len(color_detail):
@@ -1001,11 +1071,11 @@ class WaveformBar(QWidget):
             if not 0 <= x < self.width():
                 continue
             if beat == 1:
-                color = QColor(255, 55, 88, 175)
+                color = QColor(255, 55, 88)
                 p.setPen(QPen(color, 1))
                 p.drawLine(QPointF(x, _ZOOM_TOP), QPointF(x, height))
             else:
-                p.setPen(QPen(QColor(120, 135, 158, 85), 1))
+                p.setPen(QPen(QColor(120, 135, 158), 1))
                 p.drawLine(QPointF(x, _ZOOM_TOP), QPointF(x, height))
 
     @staticmethod
@@ -1225,7 +1295,10 @@ class CuePanel(QWidget):
         return button
 
     def set_loaded(self, loaded: bool):
-        self._loaded = bool(loaded)
+        loaded = bool(loaded)
+        if loaded == self._loaded:
+            return
+        self._loaded = loaded
         self._refresh()
 
     def set_cues(self, cues: list[dict]):
@@ -1337,6 +1410,8 @@ class PlayerBar(QWidget):
         # Momentary cue preview runs the decoder without visually engaging
         # PLAY; Space while held promotes that preview into transport playback.
         self._transport_play_active = False
+        # Sentinel: never equal to a real signature, so the first call applies.
+        self._transport_button_state: tuple | None = None
         self._pending_autoplay = False
         self._pending_should_play = True
         self._pending_start_ms: int | None = None
@@ -1916,13 +1991,28 @@ class PlayerBar(QWidget):
         self._move_clean(target)
 
     def _update_transport(self):
+        # The transport position path calls this twenty times a second, but
+        # every output here is discrete state that changes far more rarely.
+        # Re-applying it anyway cost eight display frames per second at
+        # maximum zoom in the real app -- each one a doubled scroll step that
+        # reads as a shake. Nothing here may run unless something changed.
         loaded = bool(self._src_path) and self._playback_available
-        self.play_btn.setEnabled(loaded)
-        self.cue_btn.setEnabled(loaded)
-        if hasattr(self, "cue_panel"):
-            self.cue_panel.set_loaded(loaded)
-        self.beat_back_btn.setEnabled(loaded and self._beat_jump_target(-1) is not None)
-        self.beat_forward_btn.setEnabled(loaded and self._beat_jump_target(1) is not None)
+        state = (
+            loaded,
+            loaded and self._beat_jump_target(-1) is not None,
+            loaded and self._beat_jump_target(1) is not None,
+        )
+        if state != self._transport_button_state:
+            self._transport_button_state = state
+            self.play_btn.setEnabled(loaded)
+            self.cue_btn.setEnabled(loaded)
+            if hasattr(self, "cue_panel"):
+                self.cue_panel.set_loaded(loaded)
+            self.beat_back_btn.setEnabled(state[1])
+            self.beat_forward_btn.setEnabled(state[2])
+        # Cue/play glyph state carries its own change guards and must never be
+        # gated behind the signature above: a cue press changes it without
+        # changing anything else here.
         self._sync_deck_button_states()
 
     def _seek(self, frac: float):

@@ -2940,13 +2940,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         w.prioritize(self.player_bar._src_path or "")
         w.detail_ready.connect(self.player_bar.refresh_audio_detail)
         w.storage_paused.connect(self._on_analysis_storage_paused)
+        w.tasks_ready.connect(self._on_analysis_tasks_ready)
         w.progress.connect(self._on_analysis_progress)
         w.power_policy_changed.connect(self._on_analysis_power_policy)
         w.finished.connect(lambda ww=w: self._on_library_prep_finished(ww))
+        w.start()
+
+    def _on_analysis_tasks_ready(self, total: int):
+        """Announce preparation only after the background scan found work."""
+        if total <= 0:
+            return
         self._preparing_library = True
         if not self._exporting and not self._cancelling and not self._deleting:
             self._start_pulse("Preparing your library")
-        w.start()
 
     def _on_analysis_progress(self, done: int, total: int):
         if (not self._preparing_library or self._exporting

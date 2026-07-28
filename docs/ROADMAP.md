@@ -4,7 +4,7 @@ Living to-do. Work top-down. The Rockbox iPod remains the hardware priority;
 player work may continue in parallel when it is isolated from export safety.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-07-24)
+## Current status (2026-07-28)
 
 - **CORE LIBRARY/EXPORT COMPLETE + CURATION MONTH COMPLETE.** Every track title
   cut/cleaned, every cover art eye-verified. Engine is mypy-clean,
@@ -20,9 +20,10 @@ For the live test count, trust `./check.sh` output—not any number written here
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
   V4 retains overflow cues beyond the eight visible slots.
 - **V4 ANALYSIS FOUNDATION SHIPPED.** SoundBox now owns checksummed per-track
-  grid/cue/RGB/24-band/ultra-waveform records, refreshes read-only cue metadata
-  by fingerprint, imports valid Rekordbox analysis as a seed/fallback, natively
-  analyzes missing data, and labels AAC/ALAC as player-only.
+  grid/cue/RGB/24-band/ultra-waveform records, refreshes read-only Rekordbox
+  grid and cue metadata by exact fingerprint, imports valid Rekordbox analysis
+  as a seed/fallback, natively analyzes missing data, and labels AAC/ALAC as
+  player-only.
   Rekordbox is no longer a prepared-playback dependency.
 - **SOUNDBOX RGB FILTERBANK SHIPPED.** Display color now comes from the
   dedicated overlapping 100 Hz low / 300–3000 Hz mid / 1500 Hz high analysis
@@ -30,6 +31,16 @@ For the live test count, trust `./check.sh` output—not any number written here
   Renderers no longer remix the independently normalized 24-band master.
   Existing V4 records upgrade atomically one track at a time, preserving
   SoundBox-owned grid/cue rows and the established ultra silhouette.
+- **QUIET-SIGNAL GEOMETRY UPGRADE SHIPPED.** Overview and ultra contours now
+  measure the peak absolute sample in either source channel, eliminating the
+  stereo/anti-phase cancellation caused by the former mono sum. Linear
+  little-endian uint16 storage retains roughly 48 dB more quiet amplitude than
+  the former byte envelope. A gentle display-only `height^0.80` curve keeps
+  low-level musical tails visible without a fake minimum line; true zero stays
+  zero. `waveform_model` versions the persisted payload, so legacy V4 remains
+  playable while the worker performs one atomic rolling recook and preserves
+  SoundBox-owned grids/cues. Because the cache stays linear, future visual
+  tuning is renderer-only and cannot trigger another audio recook.
 - **PERFORMANCE/POLISH PASS SHIPPED.** Long-track preparation is bounded,
   cooperatively interruptible, and automatically battery-aware; playback and
   foreground interaction preempt it inside the current file. Static Metal
@@ -44,25 +55,60 @@ For the live test count, trust `./check.sh` output—not any number written here
   Scrub math consumes the native-applied scale, detail promotion no longer
   re-uploads color, render encoding does not hold the analysis mutex, and
   display cadence follows the active screen through resize/screen changes.
-  The moving lane now rasterizes each final Retina pixel directly from one
-  continuous song coordinate; there is no translated intermediate surface,
-  second coverage/color filter, or texel-step cadence. Overview and ultra
+  The moving lane now translates height/hue attributes from a fixed global
+  song-coordinate lattice, then computes final vertical coverage once at each
+  Retina pixel; there is no translated RGBA surface or second coverage/color
+  filter. Overview and ultra
   buffers make one atomic first-visible commit, so long sets do not inflate
   during detail promotion. A playing waveform grab captures the last drawable
   already presented, preserves its exact source frame through
   fractional-millisecond drag math, and hard-mutes/pauses synchronously on
   mouse-down; a stationary release resumes from exactly that held frame.
-  Four midpoint taps now integrate both continuous-LOD levels across every
-  physical pixel, closing the center-sample aliasing regression without
-  reintroducing zoom branches. Ordinary Qt position
-  publication remains idempotent and cannot wake the Metal run loop through an
-  inactive preview. Close-zoom playback extends that same sampler over a
-  half-presentation temporal footprint while retaining physical-pixel LOD, so
-  fast sharp contours no longer strobe as discrete refresh steps. Cadence is
-  measured from actual drawable presentations, not display-link submissions.
-  A latency-one grab freezes the newest presented/committed source frame and
-  preserves its moving footprint through the first held redraw, eliminating
-  both the backwards mouse-down jump and the apparent thinning pulse.
+  One footprint-matched mip is selected with ceiling rather than blending two
+  differently quantized song lattices or exposing undisplayable detail. Four
+  attributes per physical pixel at every zoom retain continuous subpixel
+  motion; the former one-attribute close mode made dense spikes strobe in large
+  whole-pixel steps. Five quarter-pixel boundary samples integrate height and
+  premultiplied hue over exactly one final pixel. Premultiplication keeps edge
+  color energy phase-stable instead of multiplying separately interpolated
+  straight color and height. The prior cubic B-spline reduced redraw shimmer
+  but visibly softened maximum-zoom detail. The final split uses positive cubic
+  reconstruction through 384 px/s, then an interpolating monotone cubic from
+  576 px/s upward. The close kernel passes through every peak without
+  overshoot while removing linear slope corners; both paths share the narrowly
+  integrated fixed lattice. Final edge compositing keeps the vivid continuous
+  curve only for the small overview; the scrolling lane uses exact geometric
+  coverage at every zoom, removing saturated red/orange amplification without
+  changing reconstruction or detail. Timing lines are opaque red on downbeats
+  and opaque gray on ordinary beats so waveform content cannot alter their
+  color or contrast. Scrolling beat/downbeat
+  geometry now also carries analytic physical-pixel line coverage, so the
+  one-point timing reference moves at fractional Retina positions rather than
+  snapping as a hard two-pixel rectangle. The final all-zoom recording
+  isolated residual contour motion at 64 and 184 px/s; only those two fixed
+  stops receive a narrow same-LOD half-pixel `[1, 2, 1]` pass. Every
+  neighboring stop and the 576–1536 px/s detail-preserving close path remain
+  unchanged. A final red-line-only recording exposed the remaining display
+  transfer pulse: equal analytic box areas were blended as unequal SDR
+  luminance phases in BGRA8Unorm. The line-only compensation confirmed the
+  diagnosis but was incomplete: waveform silhouette coverage still used the
+  same display-code compositor. The final surface is now BGRA8Unorm_sRGB;
+  waveform and grid RGB are decoded before coverage/blending and encoded once
+  by Metal on store. Geometry, reconstruction, LOD, detail density, full
+  colors, and the established background remain unchanged.
+  Ordinary Qt position publication remains idempotent and cannot wake the
+  Metal run loop through an inactive preview. **Rendered motion blur was tried
+  and removed:** the eye
+  tracks a scrolling waveform, so a shutter smears a retinally stationary
+  image, rounds edges, and freezes blurred under a grab. The integration
+  window is the physical pixel and nothing else. Cadence is
+  measured from actual drawable presentations, not display-link submissions,
+  and `sb_deck_presentation_error_*` now reports predicted-versus-actual
+  presentation timing, measured at single-digit microseconds across all zooms.
+  Per-frame positional stability on a real library track is 0.3% of travel
+  (~0.07 Retina pixels at maximum zoom), so motion is exact by measurement.
+  A latency-one grab freezes the newest presented/committed source frame,
+  eliminating the backwards mouse-down jump.
 - **PLAYLIST AUTOPLAY SHIPPED.** Header up/down modes walk the playlist snapshot
   that deliberately started the track; random uses a no-repeat shuffle bag.
   Browsing is independent, a new deliberate source replaces the snapshot, and
@@ -147,6 +193,9 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
       main-wave seeking with pause/live preview/resume semantics.
 - [x] SoundBox-owned background caches for instant loads and high-detail
       all-zoom rendering; preparation pauses during playback.
+- [x] Channel-safe linear uint16 overview/ultra geometry with one rolling
+      model upgrade; legacy byte V4 remains playable during migration and the
+      display visibility curve stays outside the persisted cache.
 - [x] Native arm64 macOS deck: AVAudioFile decode thread, lock-free ring,
       CoreAudio render callback, CAMetalDisplayLink, coverage-filtered Metal
       waveform, continuous visual PLL.
@@ -190,6 +239,10 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
       exactly; otherwise existing fallback spacing is shifted to beat 1 at
       `0:00` without recooking or rewriting ultra waveform payloads. Migration
       reads DAT/PQTZ only, never EXT/2EX waveform/color sections.
+- [x] Later Rekordbox grid correction refresh: exact PQTZ-row fingerprints
+      detect edits to the initial automatic grid and atomically replace only
+      V4 metadata on the next live-library refresh. Clean discovery scans stay
+      silent and never claim to be preparing when zero work exists.
 - [x] Canonical V4 persistence and precedence boundary: SoundBox-owned grid,
       every imported memory cue, RGB/24-band analysis, ultra contour, atomic
       user-data updates, and no Rekordbox runtime dependency.

@@ -7,7 +7,9 @@ individually Zstandard-compressed and checksummed so a damaged derived cache is
 always a clean miss rather than partially trusted state.
 
 The public ``load`` result intentionally matches the player analysis shape:
-beat rows, RGB overview rows, cues, and an ``_audio_detail`` byte envelope.
+beat rows, RGB overview rows, cues, and an ``_audio_detail`` envelope.  Current
+SoundBox geometry is stored as little-endian linear uint16 peaks; legacy uint8
+records remain playable while the background worker upgrades them atomically.
 That lets the native and compatibility decks consume V4 without teaching
 either renderer about the disk format.
 """
@@ -28,6 +30,8 @@ ULTRA_RATE = 6144.0
 COLOR_RATE = 150.0
 SPECTRAL_BANDS = 24
 COLOR_MODEL = "soundbox-rgb-filterbank-v1"
+WAVEFORM_MODEL = "soundbox-channel-peak-u16-v1"
+HEIGHT_ENCODING = "linear-u16le"
 COLOR_PIPELINE_DELAY = 7.0 / COLOR_RATE
 _MAGIC = b"SBA4"
 _HEADER = struct.Struct("<4sI")
@@ -293,6 +297,14 @@ def cue_fingerprint(cues: list[dict]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def grid_fingerprint(beats: list) -> str:
+    """Stable identity for exact imported beat-grid rows."""
+    encoded = json.dumps(
+        list(beats), ensure_ascii=False, separators=(",", ":"),
+        sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def with_imported_cues(data: dict, cues: list[dict]) -> dict:
     """Attach authoritative read-only import metadata to analysis being stored."""
     result = dict(data)
@@ -374,8 +386,11 @@ def load_manifest(
             "sample_rate": float(
                 manifest.get("color_rate") or COLOR_RATE),
             "color_model": str(manifest.get("color_model") or ""),
+            "waveform_model": str(manifest.get("waveform_model") or ""),
+            "height_encoding": str(manifest.get("height_encoding") or ""),
             "detail_rate": float(manifest.get("detail_rate") or 0),
             "provenance": dict(manifest.get("provenance") or {}),
+            "grid_import": dict(manifest.get("grid_import") or {}),
             "cue_import": dict(manifest.get("cue_import") or {}),
             "eligibility": dict(manifest.get("eligibility") or {}),
         }
@@ -431,17 +446,28 @@ def _load_sections(
     return manifest, decoded
 
 
-def _repair_overview_rgb(heights: bytes, rgb: bytes) -> bytes:
+def _height_values(heights: bytes, encoding: str):
+    """Return a zero-copy NumPy view over one persisted height stream."""
+    import numpy as np
+
+    dtype = "<u2" if encoding == HEIGHT_ENCODING else np.uint8
+    width = 2 if encoding == HEIGHT_ENCODING else 1
+    return np.frombuffer(
+        heights, dtype=dtype, count=len(heights) // width)
+
+
+def _repair_overview_rgb(
+        heights: bytes, rgb: bytes, encoding: str = "") -> bytes:
     """Repair legacy black audible rows without changing timing or geometry."""
     import numpy as np
 
-    count = min(len(heights), len(rgb) // 3)
+    values = _height_values(heights, encoding)
+    count = min(len(values), len(rgb) // 3)
     if not count:
         return b""
     colors = np.frombuffer(rgb, dtype=np.uint8, count=count * 3).reshape(
         count, 3)
-    audible = np.frombuffer(
-        heights, dtype=np.uint8, count=count) > 0
+    audible = values[:count] > 0
     valid = np.any(colors != 0, axis=1)
     targets = audible & ~valid
     if not np.any(targets) or not np.any(valid):
@@ -479,13 +505,17 @@ def load_overview(
             return None
         manifest, sections = loaded
         heights = sections["overview_heights"]
-        rgb = _repair_overview_rgb(heights, sections["overview_rgb"])
-        count = min(len(heights), len(rgb) // 3)
+        encoding = str(manifest.get("height_encoding") or "")
+        width = 2 if encoding == HEIGHT_ENCODING else 1
+        rgb = _repair_overview_rgb(
+            heights, sections["overview_rgb"], encoding)
+        count = min(len(heights) // width, len(rgb) // 3)
         return {
             "sample_rate": float(
                 manifest.get("color_rate") or COLOR_RATE),
-            "_overview_heights": heights[:count],
+            "_overview_heights": heights[:count * width],
             "_overview_rgb": rgb[:count * 3],
+            "_height_encoding": encoding,
         }
     except Exception:  # noqa: BLE001 - one bad section is a clean miss
         return None
@@ -505,6 +535,7 @@ def load_detail(
             "_audio_detail": {
                 "rate": float(manifest.get("detail_rate") or 0),
                 "heights": sections["detail"],
+                "encoding": str(manifest.get("height_encoding") or ""),
             },
             "_spectral_24": sections["spectral_24"],
         }
@@ -542,7 +573,7 @@ def imported_cues_need_sync(
     if cues is None:
         return False
     try:
-        record = _read_container_manifest(cache_dir, track_id, audio_path)
+        record = _read_manifest_header(cache_dir, track_id, audio_path)
         if record is None:
             return False
         _, manifest, _ = record
@@ -558,15 +589,34 @@ def imported_cues_need_sync(
 
 
 def grid_needs_sync(
-        cache_dir: str | Path, track_id: str, audio_path: str | Path) -> bool:
-    """Identify pre-contract grids using only the small V4 manifest."""
+        cache_dir: str | Path, track_id: str, audio_path: str | Path,
+        imported_beats: list | None = None) -> bool:
+    """Identify legacy or changed Rekordbox grids from the small V4 manifest.
+
+    ``None`` retains the legacy-migration check. A non-empty imported grid is
+    compared to the exact cached rows, so caches created from Rekordbox's first
+    automatic analysis notice later manual corrections without an audio recook.
+    """
     try:
-        record = _read_container_manifest(cache_dir, track_id, audio_path)
+        record = _read_manifest_header(cache_dir, track_id, audio_path)
         if record is None:
             return False
-        provenance = dict(record[1].get("provenance") or {})
+        manifest = record[1]
+        provenance = dict(manifest.get("provenance") or {})
         if provenance.get("user_data") == "soundbox":
             return False
+        if imported_beats:
+            rows = list(imported_beats)
+            imported = dict(manifest.get("grid_import") or {})
+            cached_fingerprint = (
+                imported.get("fingerprint")
+                if imported.get("source") == "rekordbox-anlz"
+                else grid_fingerprint(list(manifest.get("beats") or []))
+            )
+            return (
+                provenance.get("grid") != "rekordbox"
+                or cached_fingerprint != grid_fingerprint(rows)
+            )
         return provenance.get("grid") not in {
             "rekordbox", "soundbox-zero-anchor",
         }
@@ -596,6 +646,10 @@ def update_grid_source(
         if imported:
             beats = imported
             grid = "rekordbox"
+            manifest["grid_import"] = {
+                "source": "rekordbox-anlz",
+                "fingerprint": grid_fingerprint(beats),
+            }
         else:
             current = list(manifest.get("beats") or [])
             if not current:
@@ -611,6 +665,7 @@ def update_grid_source(
             if not beats:
                 return False
             grid = "soundbox-zero-anchor"
+            manifest.pop("grid_import", None)
         manifest["beats"] = beats
         manifest["provenance"] = {
             **provenance,
@@ -707,8 +762,10 @@ def is_ready(cache_dir: str | Path, track_id: str,
             and manifest.get("source", {}).get("identity")
             == f"{stat.st_size}:{stat.st_mtime_ns}"
             and manifest.get("color_model") == COLOR_MODEL
+            and manifest.get("waveform_model") == WAVEFORM_MODEL
+            and manifest.get("height_encoding") == HEIGHT_ENCODING
             and float(manifest.get("detail_rate") or 0) >= 5500
-            and int(sections.get("detail", {}).get("raw_size") or 0) > 0
+            and int(sections.get("detail", {}).get("raw_size") or 0) > 1
             and int(sections.get("overview_rgb", {}).get("raw_size") or 0) > 0
         )
     except (OSError, ValueError, KeyError, TypeError):
@@ -774,6 +831,7 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             if old_provenance.get("user_data") == "soundbox":
                 prepared["beats"] = list(old_manifest.get("beats") or [])
                 prepared["cues"] = list(old_manifest.get("cues") or [])
+                prepared["grid_import"] = {}
                 prepared["cue_import"] = {}
                 prepared["provenance"] = {
                     **dict(prepared.get("provenance") or {}),
@@ -793,8 +851,14 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         overview_heights = bytes(prepared.get("overview_heights") or b"")
         overview_rgb = bytes(prepared.get("overview_rgb") or b"")
         bands = bytes(prepared.get("spectral_bands") or b"")
-        count = min(len(overview_heights), len(overview_rgb) // 3)
-        overview_heights = overview_heights[:count]
+        height_encoding = str(
+            prepared.get("height_encoding")
+            or (prepared.get("_audio_detail") or {}).get("encoding")
+            or "")
+        height_width = 2 if height_encoding == HEIGHT_ENCODING else 1
+        count = min(
+            len(overview_heights) // height_width, len(overview_rgb) // 3)
+        overview_heights = overview_heights[:count * height_width]
         overview_rgb = overview_rgb[:count * 3]
         sections = {
             "detail": heights,
@@ -821,10 +885,13 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             "detail_rate": detail_rate,
             "color_rate": float(prepared.get("sample_rate") or COLOR_RATE),
             "color_model": str(prepared.get("color_model") or ""),
+            "waveform_model": str(prepared.get("waveform_model") or ""),
+            "height_encoding": height_encoding,
             "overview_count": count,
             "spectral_bands": SPECTRAL_BANDS,
             "beats": list(prepared.get("beats") or []),
             "cues": list(prepared.get("cues") or []),
+            "grid_import": dict(prepared.get("grid_import") or {}),
             "cue_import": dict(prepared.get("cue_import") or {}),
             "sections": section_rows,
             "payload_sha256": hashlib.sha256(payload).hexdigest(),
@@ -868,10 +935,13 @@ def load(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         result.update(overview)
         heights_raw = overview["_overview_heights"]
         rgb_raw = overview["_overview_rgb"]
-        count = min(len(heights_raw), len(rgb_raw) // 3)
+        encoding = str(overview.get("_height_encoding") or "")
+        height_values = _height_values(heights_raw, encoding)
+        count = min(len(height_values), len(rgb_raw) // 3)
         if not compact:
             result["heights"] = [
-                value / 255 for value in heights_raw[:count]]
+                value / (65535 if encoding == HEIGHT_ENCODING else 255)
+                for value in height_values[:count]]
             result["colors"] = [
                 [rgb_raw[i], rgb_raw[i + 1], rgb_raw[i + 2]]
                 for i in range(0, count * 3, 3)
@@ -913,6 +983,7 @@ def update_user_data(cache_dir: str | Path, track_id: str,
             return False
         if beats is not None:
             manifest["beats"] = list(beats)
+            manifest.pop("grid_import", None)
         if cues is not None:
             manifest["cues"] = list(cues)
             manifest.pop("cue_import", None)
@@ -957,6 +1028,7 @@ class StreamingAnalyzer:
         self.n_fft = min(4096, self.n_fft)
         self._detail_tail = np.empty(0, dtype=np.float32)
         self._spectral_tail = np.empty(0, dtype=np.float32)
+        self._overview_tail = np.empty(0, dtype=np.float32)
         self._color_tail = np.empty((0, 3), dtype=np.float32)
         self._detail: list = []
         self._overview: list = []
@@ -1008,10 +1080,15 @@ class StreamingAnalyzer:
         incoming = np.nan_to_num(incoming, copy=False)
         if incoming.ndim == 1:
             values = incoming.reshape(-1)
+            geometry_values = np.abs(values)
             color_values = values
         else:
             channels = incoming.reshape(incoming.shape[0], -1)
             values = channels.mean(axis=1, dtype=np.float32)
+            # Waveform geometry represents the audible signal in either
+            # channel. abs((L + R) / 2) can erase wide/anti-phase reverb tails
+            # even though neither speaker is silent.
+            geometry_values = np.max(np.abs(channels), axis=1)
             if channels.shape[1] == 1:
                 color_values = channels[:, 0]
             else:
@@ -1022,7 +1099,7 @@ class StreamingAnalyzer:
                 color_values = np.where(
                     close, louder, (left + right) * 0.5).astype(np.float32)
 
-        detail = np.concatenate((self._detail_tail, np.abs(values)))
+        detail = np.concatenate((self._detail_tail, geometry_values))
         keep = len(detail) - len(detail) % self.detail_window
         if keep:
             self._detail.append(
@@ -1047,9 +1124,12 @@ class StreamingAnalyzer:
         self._color_tail = color_samples[color_keep:]
 
         samples = np.concatenate((self._spectral_tail, values))
+        overview_samples = np.concatenate(
+            (self._overview_tail, geometry_values))
         frame_count = 1 + (len(samples) - self.n_fft) // self.color_hop
         if frame_count <= 0:
             self._spectral_tail = samples
+            self._overview_tail = overview_samples
             return
         # Bound each temporary strided FFT batch. Long set files stay constant
         # memory even though all compact 150 Hz results are retained.
@@ -1060,7 +1140,10 @@ class StreamingAnalyzer:
             starts = (first + np.arange(count)) * self.color_hop
             frames = np.stack(
                 [samples[s:s + self.n_fft] for s in starts], axis=0)
-            overview.append(np.abs(frames).max(axis=1))
+            overview_frames = np.stack(
+                [overview_samples[s:s + self.n_fft] for s in starts],
+                axis=0)
+            overview.append(overview_frames.max(axis=1))
             power = np.abs(np.fft.rfft(frames * self._window, axis=1))
             rows = np.stack([
                 power[:, start:end].mean(axis=1) if end > start
@@ -1080,6 +1163,7 @@ class StreamingAnalyzer:
         self._overview.append(np.concatenate(overview))
         consumed = frame_count * self.color_hop
         self._spectral_tail = samples[consumed:]
+        self._overview_tail = overview_samples[consumed:]
 
     @staticmethod
     def _bytes(values, percentile: float = 99.5) -> bytes:
@@ -1095,6 +1179,28 @@ class StreamingAnalyzer:
         ).astype(np.uint8)
         return bytes(encoded)
 
+    @staticmethod
+    def _u16_bytes(values, percentile: float = 99.5) -> bytes:
+        """Normalize linear peaks without discarding quiet musical signal.
+
+        Uint16 retains roughly 48 dB more amplitude resolution than the legacy
+        byte envelope.  The persisted values stay linear so display visibility
+        can be tuned later without another audio recook.
+        """
+        import numpy as np
+
+        raw = np.asarray(values, dtype=np.float32)
+        if not raw.size:
+            return b""
+        positive = raw[raw > 0]
+        ceiling = (
+            float(np.percentile(positive, percentile))
+            if positive.size else 1.0)
+        encoded = np.clip(
+            np.rint(raw / max(ceiling, 1e-9) * 65535), 0, 65535
+        ).astype("<u2")
+        return bytes(encoded)
+
     def finish(self, bpm_hint: float = 0) -> dict | None:
         np = self.np
         if self._detail_tail.size:
@@ -1107,13 +1213,13 @@ class StreamingAnalyzer:
             return None
         detail = np.concatenate(self._detail)
         self._detail.clear()
-        detail_bytes = self._bytes(detail, 99.9)
+        detail_bytes = self._u16_bytes(detail, 99.9)
         del detail
         overview = (
             np.concatenate(self._overview)
             if self._overview else np.empty(0, dtype=np.float32))
         self._overview.clear()
-        overview_bytes = self._bytes(overview, 99.9)
+        overview_bytes = self._u16_bytes(overview, 99.9)
         spectra = (
             np.concatenate(self._spectra, axis=0)
             if self._spectra else np.empty((0, SPECTRAL_BANDS), dtype=np.float32))
@@ -1172,6 +1278,8 @@ class StreamingAnalyzer:
             "spectral_bands": spectral_bytes,
             "sample_rate": self.sample_rate / self.color_hop,
             "color_model": COLOR_MODEL,
+            "waveform_model": WAVEFORM_MODEL,
+            "height_encoding": HEIGHT_ENCODING,
             "beats": beats,
             "cues": [],
             "provenance": {
@@ -1252,4 +1360,9 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
         "owner": "soundbox",
         "rekordbox_runtime_dependency": False,
     }
+    if source.get("beats"):
+        result["grid_import"] = {
+            "source": "rekordbox-anlz",
+            "fingerprint": grid_fingerprint(list(source["beats"])),
+        }
     return result

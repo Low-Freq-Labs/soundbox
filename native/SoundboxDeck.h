@@ -84,6 +84,16 @@ int sb_deck_set_packed_overview_for_generation(
     const double *beat_seconds,
     const uint8_t *beat_in_bar,
     size_t beat_count);
+int sb_deck_set_packed_overview_u16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *heights,
+    const uint8_t *rgb,
+    size_t column_count,
+    double columns_per_second,
+    const double *beat_seconds,
+    const uint8_t *beat_in_bar,
+    size_t beat_count);
 int sb_deck_set_detail_analysis(
     SBDeckRef deck,
     const float *heights,
@@ -107,6 +117,12 @@ int sb_deck_set_audio_detail_for_generation(
     SBDeckRef deck,
     uint64_t generation,
     const uint8_t *heights,
+    size_t sample_count,
+    double samples_per_second);
+int sb_deck_set_audio_detail_u16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *heights,
     size_t sample_count,
     double samples_per_second);
 int sb_deck_set_cues(
@@ -135,6 +151,9 @@ double sb_deck_pixels_per_second(SBDeckRef deck);
 uint64_t sb_deck_display_callback_count(SBDeckRef deck);
 double sb_deck_display_average_fps(SBDeckRef deck);
 double sb_deck_display_max_gap_ms(SBDeckRef deck);
+double sb_deck_presentation_error_mean_ms(SBDeckRef deck);
+double sb_deck_presentation_error_stddev_ms(SBDeckRef deck);
+double sb_deck_presentation_error_max_ms(SBDeckRef deck);
 void sb_deck_reset_display_stats(SBDeckRef deck);
 int sb_deck_view_geometry(
     SBDeckRef deck,

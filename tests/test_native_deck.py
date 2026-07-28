@@ -256,10 +256,10 @@ class NativeDeckContract(unittest.TestCase):
         # The scrolling waveform uses this peak-preserving pyramid at every
         # zoom; PWV7 is now only a fallback while the additive cache is absent.
         self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 4)
-        # One uchar peak per sample, including all mip levels. The old
+        # One ushort peak per sample, including all mip levels. The old
         # WaveSample pyramid consumed 16 bytes/sample and duplicated RGB.
         self.assertLessEqual(
-            self.deck.diagnostic_audio_detail_buffer_bytes(), 12)
+            self.deck.diagnostic_audio_detail_buffer_bytes(), 24)
         for zoom in (
                 24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0,
                 256.0, 384.0, 576.0, 864.0, 1152.0, 1536.0):
@@ -286,6 +286,31 @@ class NativeDeckContract(unittest.TestCase):
         self.assertTrue(detail_ok)
         self.assertEqual(self.deck.diagnostic_analysis_shape(), (4, 150.0))
         self.assertEqual(self.deck.diagnostic_detail_shape(), (6, 6144.0))
+
+    def test_u16_channel_peak_analysis_preserves_quiet_display_detail(self):
+        overview = {
+            "_overview_heights": struct.pack(
+                "<4H", 65535, 655, 0, 32768),
+            "_overview_rgb": bytes(
+                [14, 0, 0, 12, 2, 0, 0, 0, 0, 0, 2, 7]),
+            "_height_encoding": "linear-u16le",
+            "sample_rate": 150.0,
+            "beats": [[1, 0, 120.0]],
+        }
+        detail = {
+            "rate": 6144.0,
+            "heights": struct.pack("<4H", 65535, 655, 0, 32768),
+            "encoding": "linear-u16le",
+        }
+        overview_ok, detail_ok = self.deck.set_complete_analysis(
+            overview, detail)
+        self.assertTrue(overview_ok)
+        self.assertTrue(detail_ok)
+        self.assertEqual(self.deck.diagnostic_analysis_shape(), (4, 150.0))
+        self.assertEqual(self.deck.diagnostic_detail_shape(), (4, 6144.0))
+        self.assertAlmostEqual(self.deck.diagnostic_detail_peak(), 1.0)
+        self.assertGreater(
+            self.deck.diagnostic_audio_detail_buffer_bytes(), 0)
 
     def test_native_zoom_returns_the_applied_renderer_scale(self):
         self.assertEqual(self.deck.set_zoom(-100.0), 24.0)
@@ -349,6 +374,35 @@ class NativeDeckContract(unittest.TestCase):
                 presentations, round(expected * 0.7 * 0.85))
             self.assertGreaterEqual(fps, expected * 0.9)
             self.assertLessEqual(max_gap_ms, 2.2 * 1000 / expected)
+
+    def test_presentation_error_is_measured_against_the_submitted_target(self):
+        # Position is predicted for the target presentation timestamp. If the
+        # drawable actually reaches the screen elsewhere, that difference is
+        # positional jitter the shader can never filter out, so it has to be
+        # observable before anyone blames reconstruction for it.
+        self.host.resize(1800, 190)
+        self.app.processEvents()
+        self.deck.set_analysis({
+            "heights": [0.2, 0.7, 0.4, 1.0],
+            "colors": [[1, 2, 7], [14, 0, 0], [2, 7, 2], [8, 2, 7]],
+            "sample_rate": 150.0,
+        })
+        self.deck.set_zoom(1536.0)
+        self.deck.set_visual_position(15_000, True)
+        QTest.qWait(150)
+        self.deck.diagnostic_reset_display_stats()
+        self.assertEqual(
+            self.deck.diagnostic_presentation_error(), (0.0, 0.0, 0.0))
+        QTest.qWait(700)
+        presentations, _, _ = self.deck.diagnostic_display_stats()
+        self.assertGreater(presentations, 0)
+        mean_ms, stddev_ms, max_ms = (
+            self.deck.diagnostic_presentation_error())
+        self.assertGreaterEqual(max_ms, abs(mean_ms))
+        self.assertGreaterEqual(stddev_ms, 0.0)
+        # A drawable cannot present a whole second away from its target; this
+        # only guards the plumbing, the real number is read from the app.
+        self.assertLess(max_ms, 1000.0)
 
     def test_visual_clock_advances_between_audio_buffer_callbacks(self):
         self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))

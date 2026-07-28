@@ -304,6 +304,7 @@ class WaveformFillWorker(QThread):
     Preparation yields inside the current track during playback and interaction
     so even an hour-long set cannot monopolize the GIL or decoder."""
     progress = Signal(int, int)  # done, total
+    tasks_ready = Signal(int)  # scan complete; actual metadata/analysis work
     detail_ready = Signal(str)  # audio path; receiver reloads canonical V4
     storage_paused = Signal(bool, object)  # paused, free bytes (64-bit)
     power_policy_changed = Signal(str)  # ac, battery, low-power
@@ -507,7 +508,9 @@ class WaveformFillWorker(QThread):
             with_imported_cues,
         )
         from .player import qt_detail_peaks
-        todo: list[tuple[str, str, str, str, float, list[dict] | None]] = []
+        todo: list[
+            tuple[str, str, str, str, float, list[dict] | None, list | None]
+        ] = []
         for t in self.lib.tracks_by_id.values():
             try:
                 analysis_path = getattr(t, "analysis_path", "")
@@ -522,23 +525,29 @@ class WaveformFillWorker(QThread):
                             self.track_analysis_dir, t.track_id, audio_path)):
                     todo.append((
                         "v4", audio_path, str(analysis_path or ""),
-                        str(t.track_id), bpm_hint, rekordbox_cues))
+                        str(t.track_id), bpm_hint, rekordbox_cues, None))
                     continue
+                imported_beats = (
+                    read_beats(analysis_path)
+                    if analysis_path and Path(analysis_path).is_file()
+                    else None
+                )
                 grid_sync = bool(
                     self.track_analysis_dir and audio_path
                     and grid_needs_sync(
-                        self.track_analysis_dir, t.track_id, audio_path))
+                        self.track_analysis_dir, t.track_id, audio_path,
+                        imported_beats))
                 if grid_sync:
                     todo.append((
                         "grid-meta", audio_path, str(analysis_path or ""),
-                        str(t.track_id), bpm_hint, None))
+                        str(t.track_id), bpm_hint, None, imported_beats))
                 if (self.track_analysis_dir and audio_path
                         and imported_cues_need_sync(
                             self.track_analysis_dir, t.track_id, audio_path,
                             rekordbox_cues)):
                     todo.append((
                         "cue-meta", audio_path, "", str(t.track_id), 0.0,
-                        rekordbox_cues))
+                        rekordbox_cues, None))
                     continue
                 if grid_sync:
                     continue
@@ -558,6 +567,7 @@ class WaveformFillWorker(QThread):
             task_counts["grid-meta"],
             task_counts["cue-meta"],
         )
+        self.tasks_ready.emit(total)
         done = 0
         i = 0
         while todo:
@@ -570,8 +580,8 @@ class WaveformFillWorker(QThread):
                      and task[1] == priority),
                     0,
                 )
-            kind, path, fallback_path, track_id, bpm_hint, imported_cues = (
-                todo.pop(task_index))
+            (kind, path, fallback_path, track_id, bpm_hint, imported_cues,
+             imported_beats) = todo.pop(task_index)
             self._active_task_path = path if kind == "v4" else ""
             i += 1
             if kind not in {"cue-meta", "grid-meta"}:
@@ -619,13 +629,9 @@ class WaveformFillWorker(QThread):
                         done += 1
                         self.detail_ready.emit(path)
                 elif kind == "grid-meta":
-                    imported_beats = (
-                        read_beats(fallback_path)
-                        if fallback_path
-                        and Path(fallback_path).is_file() else [])
                     if update_grid_source(
                             self.track_analysis_dir, track_id, path,
-                            imported_beats):
+                            imported_beats or []):
                         done += 1
                         self.detail_ready.emit(path)
             except Exception as exc:  # noqa: BLE001 — one bad track never stops prep

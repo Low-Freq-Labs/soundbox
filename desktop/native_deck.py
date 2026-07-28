@@ -165,6 +165,18 @@ def _bind(path: Path):
         ctypes.c_size_t,
     ]
     lib.sb_deck_set_packed_overview_for_generation.restype = ctypes.c_int
+    lib.sb_deck_set_packed_overview_u16_for_generation.argtypes = [
+        handle,
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.c_uint16),
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+        ctypes.c_double,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+    ]
+    lib.sb_deck_set_packed_overview_u16_for_generation.restype = ctypes.c_int
     lib.sb_deck_set_detail_analysis.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_float),
@@ -200,6 +212,14 @@ def _bind(path: Path):
         ctypes.c_double,
     ]
     lib.sb_deck_set_audio_detail_for_generation.restype = ctypes.c_int
+    lib.sb_deck_set_audio_detail_u16_for_generation.argtypes = [
+        handle,
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.c_uint16),
+        ctypes.c_size_t,
+        ctypes.c_double,
+    ]
+    lib.sb_deck_set_audio_detail_u16_for_generation.restype = ctypes.c_int
     lib.sb_deck_set_cues.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_uint32),
@@ -247,6 +267,12 @@ def _bind(path: Path):
     lib.sb_deck_display_average_fps.restype = ctypes.c_double
     lib.sb_deck_display_max_gap_ms.argtypes = [handle]
     lib.sb_deck_display_max_gap_ms.restype = ctypes.c_double
+    lib.sb_deck_presentation_error_mean_ms.argtypes = [handle]
+    lib.sb_deck_presentation_error_mean_ms.restype = ctypes.c_double
+    lib.sb_deck_presentation_error_stddev_ms.argtypes = [handle]
+    lib.sb_deck_presentation_error_stddev_ms.restype = ctypes.c_double
+    lib.sb_deck_presentation_error_max_ms.argtypes = [handle]
+    lib.sb_deck_presentation_error_max_ms.restype = ctypes.c_double
     lib.sb_deck_reset_display_stats.argtypes = [handle]
     lib.sb_deck_view_geometry.argtypes = [
         handle,
@@ -553,6 +579,23 @@ class NativeDeckBackend(QObject):
             float(self._lib.sb_deck_display_max_gap_ms(self._handle)),
         )
 
+    def diagnostic_presentation_error(self) -> tuple[float, float, float]:
+        """Mean, stddev, and worst |presentedTime - target| in ms.
+
+        Position is predicted for the target presentation timestamp. A tight
+        spread means the visible frame lands where the clock says it will, so
+        residual motion complaints are reconstruction, not timing. A wide one
+        means the display itself is adding positional jitter.
+        """
+        return (
+            float(
+                self._lib.sb_deck_presentation_error_mean_ms(self._handle)),
+            float(
+                self._lib.sb_deck_presentation_error_stddev_ms(
+                    self._handle)),
+            float(self._lib.sb_deck_presentation_error_max_ms(self._handle)),
+        )
+
     def diagnostic_reset_display_stats(self):
         self._lib.sb_deck_reset_display_stats(self._handle)
 
@@ -611,6 +654,14 @@ class NativeDeckBackend(QObject):
     def set_analysis(self, data: dict, generation: int = 0):
         packed_heights = data.get("_overview_heights")
         packed_rgb = data.get("_overview_rgb")
+        if (data.get("_height_encoding") == "linear-u16le"
+                and isinstance(packed_heights, bytes)
+                and isinstance(packed_rgb, bytes)):
+            result = self.set_overview(data, generation)
+            self._set_detail_bands(data.get("_detail_bands"))
+            self._set_audio_detail(data.get("_audio_detail"), generation)
+            self.set_cues(data.get("cues") or [])
+            return result
         if (isinstance(packed_heights, bytes)
                 and isinstance(packed_rgb, bytes)):
             count = min(len(packed_heights), len(packed_rgb) // 3)
@@ -696,7 +747,9 @@ class NativeDeckBackend(QObject):
         rgb = data.get("_overview_rgb")
         if not isinstance(heights, bytes) or not isinstance(rgb, bytes):
             return False
-        count = min(len(heights), len(rgb) // 3)
+        encoding = str(data.get("_height_encoding") or "")
+        width = 2 if encoding == "linear-u16le" else 1
+        count = min(len(heights) // width, len(rgb) // 3)
         if not count:
             return False
         beats = [
@@ -710,11 +763,19 @@ class NativeDeckBackend(QObject):
         beat_in_bar = ((ctypes.c_uint8 * beat_count)(
             *(max(0, min(255, int(row[0]))) for row in beats))
             if beat_count else None)
-        packed_heights = (ctypes.c_uint8 * count).from_buffer_copy(
-            heights[:count])
         packed_rgb = (ctypes.c_uint8 * (count * 3)).from_buffer_copy(
             rgb[:count * 3])
         expected = int(generation or self._analysis_generation)
+        if encoding == "linear-u16le":
+            packed_heights = (ctypes.c_uint16 * count).from_buffer_copy(
+                heights[:count * 2])
+            return bool(
+                self._lib.sb_deck_set_packed_overview_u16_for_generation(
+                    self._handle, expected, packed_heights, packed_rgb, count,
+                    float(data.get("sample_rate") or 150.0),
+                    seconds, beat_in_bar, beat_count))
+        packed_heights = (ctypes.c_uint8 * count).from_buffer_copy(
+            heights[:count])
         return bool(self._lib.sb_deck_set_packed_overview_for_generation(
             self._handle, expected, packed_heights, packed_rgb, count,
             float(data.get("sample_rate") or 150.0),
@@ -799,8 +860,17 @@ class NativeDeckBackend(QObject):
         rate = float(detail.get("rate") or 0)
         if not isinstance(heights, bytes) or not heights or rate <= 0:
             return
-        packed = (ctypes.c_uint8 * len(heights)).from_buffer_copy(heights)
         expected = int(generation or self._analysis_generation)
+        if detail.get("encoding") == "linear-u16le":
+            count = len(heights) // 2
+            if not count:
+                return
+            packed = (ctypes.c_uint16 * count).from_buffer_copy(
+                heights[:count * 2])
+            self._lib.sb_deck_set_audio_detail_u16_for_generation(
+                self._handle, expected, packed, count, rate)
+            return
+        packed = (ctypes.c_uint8 * len(heights)).from_buffer_copy(heights)
         if expected:
             self._lib.sb_deck_set_audio_detail_for_generation(
                 self._handle, expected, packed, len(heights), rate)

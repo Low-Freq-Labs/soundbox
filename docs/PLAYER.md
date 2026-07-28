@@ -209,9 +209,12 @@ resolved beneath Rekordbox's `share/` directory for analysis fallback:
 - `ANLZ0000.2EX` / `PWV7`: three-band detail used to sharpen fallback height.
 
 SoundBox then persists the complete canonical record independently; prepared
-playback does not reopen Rekordbox analysis. Cue fingerprints are refreshed
-into V4 through an atomic manifest-only update until a future SoundBox edit
-claims ownership; waveform payload bytes never change during that refresh.
+playback does not reopen Rekordbox analysis. Exact normalized grid and cue
+fingerprints are refreshed into V4 through atomic manifest-only updates until
+a future SoundBox edit claims ownership. Correcting Rekordbox's initial
+automatic beat grid therefore reaches SoundBox on the next live-library
+refresh without reanalyzing audio, and waveform payload bytes never change
+during either metadata refresh.
 SoundBox's audio analyzer supplies the ultra contour, dedicated RGB stream,
 and 24-band spectral master. No player code opens Rekordbox files for writing.
 No SoundBox operation updates `master.db`, ANLZ data, or source audio.
@@ -245,6 +248,20 @@ Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips. Export eligibility is
 deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
 candidates; AAC/ALAC/M4A/MP4 are always player-only.
 
+Waveform geometry uses the peak absolute sample in either source channel,
+rather than the absolute value of a mono sum. This preserves stereo-width and
+anti-phase decay that remains audible but can cancel in `(L + R) / 2`.
+Overview and ultra peaks are normalized linearly and stored as little-endian
+uint16 under `soundbox-channel-peak-u16-v1`, retaining quiet signal roughly
+48 dB below the former byte quantizer's resolution. The renderer applies a
+gentle `height^0.80` visibility curve plus a continuous four-LSB low-end
+shoulder only while uploading current geometry. The shoulder resolves real
+-60 to -73 dB tails as a physical-pixel hairline but evaluates to exactly zero
+at digital zero; it is not a hard minimum-height rule. The cache remains
+linear, so later visual tuning does not require another audio recook. Legacy
+uint8 V4 records load normally while the background worker replaces them
+atomically one track at a time, preserving SoundBox-owned grid/cue data.
+
 The zero-anchor contract has a one-time metadata-only migration for older V4
 records. It reads only the small read-only DAT/PQTZ grid, never EXT/2EX
 waveform/color sections. It then atomically replaces only the SoundBox V4
@@ -267,11 +284,13 @@ The background `WaveformFillWorker`:
 - imports grid/cues as seeds, uses PWV5 RGB only when native audio analysis is
   unavailable, and refreshes live-DB cue metadata until SoundBox user data
   claims that field;
-- uses a direct, bounds-checked PQTZ row reader for legacy grid metadata
-  migration so it never inflates generic Rekordbox objects or opens EXT/2EX
-  waveform/color analysis just to determine grid ownership;
+- uses a direct, bounds-checked PQTZ row reader to fingerprint current
+  Rekordbox grids and migrate legacy grid metadata, so it never inflates generic
+  Rekordbox objects or opens EXT/2EX waveform/color analysis just to determine
+  grid ownership;
 - uses a 16 MiB worker stack and a 5/7 GiB free-space pause/resume guard;
-- reports `Preparing your library…` only when work exists;
+- keeps the discovery scan silent and reports `Preparing your library…` only
+  after actual analysis or metadata work is found;
 - can hot-load newly completed detail for the current track;
 - is interrupted and joined during shutdown.
 
@@ -302,17 +321,18 @@ The following renderer rules are measured invariants, not style preferences:
 - The main waveform always uses the SoundBox audio-detail envelope pyramid when
   available; there is no zoom-level crossover back to PWV7.
 - Pyramid levels are song-anchored maxima that retain transient detail as one
-  solid silhouette. Both overview and scrolling geometry continuously blend
-  the two adjacent levels around the physical-pixel footprint; there is no
-  zoom threshold or alternate wide/close shader. A second RMS/translucent
-  envelope was rejected because it reads as a ghost waveform rather than
-  additional useful detail.
+  solid silhouette. Overview and scrolling geometry select one
+  footprint-matched level with `ceil(log2(footprint))`; blending adjacent
+  power-of-two lattices made them beat against each other while moving. There
+  is no zoom threshold or alternate wide/close shader. A second
+  RMS/translucent envelope was rejected because it reads as a ghost waveform
+  rather than additional useful detail.
 - The scrolling lane's color comes only from SoundBox's dedicated overlapping
   RGB filterbank; color remains a compact ~150 Hz buffer rather than being
   duplicated into millions of ultra samples. Its mip pyramid averages RGB
-  using waveform amplitude as energy weight, then uses the same continuous LOD
-  and song anchor as geometry. Adjacent colors therefore converge instead of
-  alternating at far zoom. Per-column normalization retains the real
+  using waveform amplitude as energy weight, then uses the same selected mip
+  level and song anchor as geometry. Adjacent colors therefore converge
+  instead of alternating at far zoom. Per-column normalization retains the real
   low/mid/high relationship instead of making weak independently normalized
   FFT bands falsely competitive. The 24-band master is stored independently
   and neither Metal nor Qt may remix it into display color.
@@ -320,29 +340,97 @@ The following renderer rules are measured invariants, not style preferences:
   container schema. Old records remain playable while the background worker
   atomically replaces one track at a time; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
-- Derive one continuous LOD from source samples per physical pixel and blend
-  the adjacent peak levels. The overview and main lane call the same sampler;
+- Derive one footprint-matched LOD from source samples per physical pixel and
+  select one peak level. The overview and main lane call the same sampler;
   ultra detail replaces geometry quality only, never timing or color.
-- Integrate four song-anchored midpoint taps across that physical-pixel
-  footprint at both adjacent LOD levels before blending them. A single
-  center-of-pixel sample aliases dense transient edges and neighboring RGB rows
-  as playback phase advances. Color uses amplitude-weighted integration over
-  the identical taps, so hue and silhouette never choose different phases.
-- Rasterize each final Retina pixel directly from its continuous song
-  coordinate in one Metal pass. There is no moving intermediate texture,
-  discrete texel selection, coverage resampling, or refresh seam. This retains
-  the same physical-pixel LOD and maximum-zoom detail while allowing every
-  display frame to advance by its true fractional distance.
-- At close zoom, one 120 Hz refresh can move a sharp contour by more than
-  twenty Retina pixels even when the clock and presentation cadence are
-  perfect. While playback is moving, the four-tap sampler therefore extends
-  its integration footprint across half of the measured presentation interval.
-  The LOD footprint remains the physical output pixel, so this temporal
-  reconstruction reduces strobing without selecting a coarser waveform or
-  changing the paused maximum-zoom surface.
-- Filter final silhouette coverage—not raw peak height. Coverage from each
-  adjacent level is blended after sampling, preventing the contour from
+- Print height and amplitude-weighted RGB onto a fixed, global song-coordinate
+  attribute lattice, then translate those attributes. The lattice stores no
+  alpha or vertical coverage, so it is not a pre-rendered waveform texture and
+  the final drawable never refilters an already-antialiased edge. Every zoom
+  uses four attributes per physical pixel and linear subpixel translation.
+  The earlier one-attribute close mode preserved an identical raster after
+  integer motion alignment, but its 25/26-pixel maximum-zoom steps made dense
+  spikes visibly strobe and bend.
+- **The LOD is footprint-matched and `kLodBias` must stay 0.** A physical
+  pixel cannot display more than about one envelope value. Selecting a mip
+  two levels sharper (`kLodBias = 2`) was tried on the theory that
+  supersampling buys mip bias back as recovered detail; it does not. The
+  surplus four-to-eight values per pixel become content above the pixel
+  Nyquist, and that is per-frame flicker, not detail. Measured on a real
+  track as the share of coverage energy above the pixel Nyquist, bias 2
+  scored 0.062 mean / 0.147 worst against bias 0's 0.029 / 0.066 — worse at
+  every one of the thirteen zooms, with the peak in the middle where the
+  fractional LOD stranded the most unresolvable values under each pixel.
+  The taps still earn their keep by feeding `profile_coverage` a dense
+  profile to integrate; they simply must not buy undisplayable detail.
+- **Ceil the level — at most one envelope value per physical pixel.** Mip
+  levels are powers of two but the thirteen zoom steps are not, so flooring
+  strands every other zoom at ~1.54 envelope values per pixel while its
+  neighbours sit at ~1.03, and rounding still leaves up to 1.41. Anything
+  above 1.0 is undisplayable surplus: it is the hairy comb along the contour
+  that rewrites itself every frame. Measured on a screen recording of the
+  real app, that comb was 4.7 pixels of column-to-column edge jump at the
+  zooms Sonny called worst. Measured aliasing across all thirteen zooms —
+  floor 0.029 mean / 0.066 worst, round 0.021 / 0.066, **ceil 0.012 / 0.032**,
+  better at every zoom. Sonny chose ceil over keeping the extra sharpness
+  after seeing those numbers.
+- **Use one mip level, never a blend of two.** Levels are song-anchored
+  maxima on power-of-two lattices, so level N quantizes every 2^N bins and
+  N+1 every 2^(N+1). Blending scrolls both at the same speed with different
+  quantization and they beat against each other. Continuous blending only
+  ever protected zoom *transitions*, and zoom is thirteen fixed steps, so the
+  level is constant for the whole of playback.
+- **Use the stable B-spline through 384 px/s, then an interpolating monotone
+  cubic at 576 px/s and above.** The B-spline removes mid/wide lattice corners
+  where the display cannot resolve them. Extending it into the close range
+  visibly softened real peaks, while linear interpolation kept the peaks but
+  reintroduced moving slope corners. Monotone Hermite reconstruction passes
+  through every close-range sample, never overshoots its positive envelope,
+  and makes the slope continuous. The kernel blend depends only on the fixed
+  zoom, never on playback phase.
+- Rebuild the small private attribute buffer only when analysis, zoom, Retina
+  scale, or its guarded song-space margin changes. The buffer is deliberately
+  wider than the drawable, and every recenter is computed from an absolute
+  integer song coordinate, so overlapping regions are identical and no tile
+  seam can enter the viewport.
+- Rasterize final vertical coverage exactly once at each Retina drawable
+  pixel. There is no moving RGBA texture, coverage resampling, accumulated
+  frame, or refresh seam. Height and hue move together, while final edge
+  antialiasing remains tied to the destination pixel. The scrolling lane uses
+  exact geometric coverage at every zoom. Boosting 20% coverage to nearly 49%
+  made saturated red/orange edges visibly pulse even at 24 px/s. The small
+  overview alone retains the continuous cubic vividness curve for true
+  subpixel peaks. This distinction affects only compositing, never height,
+  hue, LOD, or detail.
+- Integrate the fixed height/hue profile over exactly one physical pixel before
+  final vertical coverage. Five quarter-pixel boundary samples feed the exact
+  piecewise-linear area calculation; premultiplied color uses the same span.
+  Store premultiplied RGB on the lattice so color energy and height are both
+  piecewise linear and their trapezoid integrals are exact. Interpolating
+  straight color and height separately before multiplying them introduces a
+  phase-dependent quadratic edge signal that reads as a faint color pulse.
+  This removes subpixel needles and edge pulsing without the multi-pixel
+  softening of the retired B-spline.
+- **There is no temporal shutter. The integration window is the physical
+  pixel and nothing else.** Rendered motion blur is correct for content the
+  eye does not track. A DJ stares at the scrolling waveform and tracks it, so
+  under smooth pursuit the waveform is stationary on the retina and any
+  rendered blur is smeared onto it permanently — it destroys exactly the
+  detail it was meant to protect, rounds every edge, and, because a grab
+  freezes the last rendered frame, hands back a blurred still. On top of that
+  the display's own sample-and-hold already supplies ~25 Retina pixels of
+  persistence blur at 1536 px/s, which no software can remove and which a
+  shutter only doubles. Taps stay flat weighted: a box across the pixel is
+  exact area coverage and is what keeps a moving contour crisp.
+- Filter final silhouette coverage—not raw peak height. Geometry and color are
+  reconstructed from the same level and phase, preventing the contour from
   acquiring a separate translucent edge.
+- The direct fallback path still integrates exact area under its tap profile,
+  never the mean of the taps' individual coverages. The normal audio-detail
+  path instead interpolates height/hue first and applies one continuous
+  one-physical-pixel vertical coverage band at final compositing. In neither
+  path may per-tap alpha be averaged or an already-rasterized edge be sampled
+  again.
 - Composite coverage through a continuous cubic ease-out. This keeps
   one-physical-pixel quiet passages vivid against the dark deck without
   increasing their amplitude or adding a second envelope, while avoiding the
@@ -362,8 +450,7 @@ The following renderer rules are measured invariants, not style preferences:
   `MTLDrawable.presentedTime`; zero-time dropped drawables are ignored.
   Latency is one frame, and a grab holds the newest fresh presented or already
   committed source frame so an in-flight drawable cannot land and then rewind.
-  The moving frame's temporal footprint is retained through the first held
-  redraw, preventing a no-motion grab from changing thickness or color.
+  Moving and held frames share the same one-physical-pixel spatial footprint.
 
 Cue markers share one native-renderer contract:
 
@@ -551,9 +638,562 @@ Dated actual-presentation/close-zoom validation on 2026-07-24:
   `library.json` was restored byte-for-byte after interaction testing. No
   waveform cache recook was required.
 
+Dated Rekordbox-grid refresh validation on 2026-07-26:
+
+- The bare gate passed with 500 tests and one expected platform skip. Coverage
+  models an old cache holding Rekordbox's initial automatic grid, applies later
+  corrected PQTZ rows, and verifies that the compressed waveform payload stays
+  byte-identical. A UI regression test verifies that a zero-task discovery scan
+  never enters the `Preparing your library…` state.
+- A read-only scan of the real 3,265-track library found six cached grids that
+  differed from the current Rekordbox rows in 5.1 seconds. The installed signed
+  app then loaded 3,265 tracks / 83 playlists and atomically refreshed seven
+  grid manifests plus current cue changes with zero audio-analysis tasks.
+  Rekordbox remained open and read-only throughout.
+- The installed app retained 3,247 V4 records and 3,124 artwork files. Every
+  curated `library.json` field remained semantically identical; only ordinary
+  runtime window/column settings changed during the launch-and-quit checks.
+
+### Temporal shutter tried and removed on 2026-07-27 (superseded)
+
+A tent-weighted shutter spanning the whole presentation interval was built,
+measured green, installed, and then **rejected on sight**. It is recorded here
+so nobody rebuilds it.
+
+The reasoning that produced it was wrong at the premise: it treated the
+scrolling waveform as content the eye does not track, and reached for motion
+blur to kill judder. A DJ tracks the waveform. Under smooth pursuit the
+waveform is stationary on the retina, so rendered blur is painted onto a
+stationary retinal image and never averages out. Sonny's report was exact —
+"detail gets blurred while scrolling by", "rounding edges", "expanding and
+blurring when it starts and then gets clean when it stops", and worst, a grab
+froze a blurred frame because the hold preserved the moving frame's shutter.
+Widening it from the original 180-degree box made all of this worse, not
+better. The correct reading of the same physics is the opposite: the display's
+sample-and-hold already imposes the persistence blur, and the renderer's only
+job is to put maximum real detail at the exact right position each frame.
+
+### Negative-LOD close-zoom experiment on 2026-07-27 (superseded)
+
+Reported symptom: at maximum zoom the moving waveform looked staticy, and the
+contour appeared to step across the screen rather than glide. Both were
+reproduced as arithmetic before any change was made.
+
+This was an intermediate build, retained as experiment history rather than a
+current renderer contract. It concluded that more raw detail was the fix and
+set `kLodBias = 2`; the later full zoom-ladder recording showed the added
+  above-Nyquist content shimmering at middle zooms. The current rule is the
+  opposite: `kLodBias = 0`, ceiling LOD, one mip, and a fixed song-space
+  height/hue attribute lattice.
+
+- **The experiment treated the renderer as double-filtering.** It selected the nominal footprint LOD
+  *and* integrated the physical pixel on top of it. At 1536 px/s with a
+  6300 bins/s record, one physical pixel spans 2.05 bins, so the nominal LOD
+  is 1: the surface was drawn from two-bin maxima, one value per physical
+  pixel, critically sampled. Every sub-pixel phase change therefore rewrote
+  the contour — the crawling static. Eight taps buy about two mip levels of
+  bias, so `kLodBias = 2` now yields four real bins under every pixel at
+  24/92/384 px/s (a 4.0x detail gain at each) and 2.05 bins at 1536 px/s,
+  where it floors at level 0 — the raw analysis, a 2.1x gain and the most
+  detail that exists.
+- **The position path was audited and cleared.** `predictedFrame` and
+  `setUniformPosition` carry double precision end to end and split to integer
+  index plus float phase, so nothing quantizes translation.
+- **Per-frame positional stability was measured, not assumed**, by sampling
+  the frame attached to each presented drawable while playing a real library
+  track (`NGHTMRE & Subtronics - Nuclear Bass Face`, 1229760 detail bins at
+  6300/s) from 0:30 on an 1800x260 deck. Perfect 120 Hz motion on 44100 Hz
+  audio advances 367.5 audio frames per displayed frame; the measured median
+  is 367.5-368.0 with a 5th-95th percentile spread of 1.0 frame — **0.3% of
+  travel, about 0.07 Retina pixels at 1536 px/s, at every zoom.** There is no
+  positional shake. Synthetic periodic waveforms were abandoned for this
+  measurement because they are materially easier than real music.
+- `sb_deck_presentation_error_*` compares `presentedTime` against the target
+  each frame was predicted for: single-digit microseconds at every zoom (max
+  zoom mean 5.1 us, stddev 0.7 us) — about 0.02 Retina pixels. Occasional
+  whole-frame drops show as an 8.33 ms outlier and a 16.67 ms `max_gap_ms`,
+  but there is no systematic lead or lag, so the prediction and PLL were left
+  untouched. Caveat: the residual is small enough that `presentedTime` may
+  simply echo the scheduled target; either way there is no actionable signal.
+- Cadence on the real track after the change: 118-120 fps across
+  92/384/1536 px/s. Eight taps at a lower LOD cost less than the retired
+  48-tap shutter.
+- The suite went from 500 to 506 passing. Four pre-existing shader contracts
+  were rewritten because the design they encoded was retired:
+  `test_high_velocity_motion_extends_the_same_pixel_footprint` became
+  `..._keeps_the_physical_pixel_footprint`, the two continuous-LOD tests now
+  assert `biased_lod`, and the physical-pixel integration test asserts the
+  generated tap form. `test_no_temporal_shutter_blurs_the_moving_waveform`
+  now fails the build if any shutter symbol returns.
+
+### Dropped frames in the real app on 2026-07-27
+
+The renderer work above was measured green in an isolated deck harness while
+Sonny still reported shaking in the running app. He was right, and the harness
+was the problem: a bare `QWidget` host with hand-uploaded analysis held
+118-120 fps while the real `MainWindow` ran 107-113 on the same machine and
+build. Nothing in the harness was connected to `positionChanged`, so the
+actual cost was invisible to it.
+
+- Instrumenting the real `PlayerBar.player` while playing a real library track
+  at 1536 px/s showed **15-37 lost displayed frames per three seconds**. At
+  that zoom each loss is a doubled 51-Retina-pixel scroll step. That is the
+  shake, and it is not a shader problem.
+- Because run-to-run fps varies by 5+ on this machine, the cost was attributed
+  with **paired alternating A/B rounds inside one process**. Five rounds,
+  consistent every round: disabling `_update_transport` was worth **+8.0 fps**
+  (106.9 -> 115.0) while `set_visual_position` and `wave.set_timing` were
+  worth nothing (-0.4 and -1.0).
+- Cause: the 20 Hz position path called `_update_transport()` unconditionally,
+  which called `cue_panel.set_loaded()` unconditionally, which ran `_refresh()`
+  over all sixteen cue buttons — allocating a `QPixmap` and `QIcon` per filled
+  slot — twenty times a second, for state that had not changed. `set_loaded`
+  is now idempotent and `_update_transport` early-outs on an unchanged
+  signature, with `_sync_deck_button_states()` deliberately left outside that
+  guard because a cue press changes it alone.
+- Result: **106.9 -> 118.0 fps** at maximum zoom in the real app, and removing
+  the transport work now changes nothing (+0.5), so the cost is gone.
+- `WaveformBar._repaint()` was added in the same pass: `paintEvent`
+  early-returns while Metal owns the pixels, so every Qt repaint there
+  composited the window for nothing. This was a real cleanup but **not** the
+  cause; the A/B is what separated them.
+
+### Visual-only contour follow-up on 2026-07-27 (B-spline, superseded)
+
+Sonny confirmed that the remaining report is entirely visual: wiggly waveform
+ends, color pulsing, and uneven-looking motion. There have never been audible
+drops. The supplied 69.9-second 3600×518 screen recording walks the full zoom
+ladder through 1536 px/s. Although its stream declares 120 fps, it contains
+3958 frames (56.6 fps average), mostly 16.67 ms holds plus 482 25 ms holds, so
+it is evidence of the artifact but not a faithful measurement of the live
+120 Hz presentation cadence. Sonny sees the same visual artifact without
+recording.
+
+Song-locking frames from that capture separated color data changes from moving
+edge coverage: center RGB was stable (median change about 1.3/255, 95th
+percentile 3.8/255), while the decoded contour varied much more at maximum
+zoom. Replaying the exact read-only V4 cache for that track showed that
+straight two-point interpolation left sample-lattice corners moving through
+the contour. Positive four-point cubic B-spline reconstruction reduced the
+stabilized motion residual at every one of the thirteen zooms, by about
+10–40%, including 16.4% at 1536 px/s. Its eight midpoint taps use the same 32
+sample reads as the former sixteen linear taps. The change is spatial only:
+audio, transport, the presentation clock, and the no-temporal-shutter contract
+are untouched.
+
+The bare and render gates passed with 512 tests and one expected platform skip.
+The signed app was installed and relaunched with the packaged native deck
+active, 3,265 tracks / 83 playlists loaded, and zero preparation tasks. All
+3,247 V4 records and 3,124 artwork files remained present. Curated
+`library.json` fields matched the protected pre-install copy exactly; only
+ordinary runtime window/column geometry changed during quit and relaunch.
+
+### Fixed song-space attribute validation on 2026-07-27 (nearest close mode,
+superseded)
+
+The paired follow-up recordings made the remaining distinction concrete.
+SoundBox's 70.08-second 3600×582 capture contained 3,975 frames (56.7 fps
+average), while Rekordbox's 75.02-second 3600×760 capture contained 4,248
+frames (56.6 fps average). The recorder therefore still could not judge live
+cadence, but translation-aligning maximum-zoom silhouettes could judge whether
+each renderer redrew its contour. The installed B-spline SoundBox build changed
+by about three physical pixels at the edge after motion was removed; Rekordbox
+translated an effectively fixed raster. The B-spline also visibly removed too
+much close-zoom detail.
+
+The replacement keeps geometry and RGB as attributes on a fixed global
+song-coordinate lattice. At 384–1536 px/s one attribute represents one
+physical pixel and the raster translates in exact whole-pixel steps; slower
+zooms use four attributes per pixel and subpixel interpolation. The buffer is
+recomputed only for analysis/zoom/Retina-scale changes or after the playhead
+crosses half its guarded margin. It stores no coverage: final one-pixel
+vertical antialiasing is evaluated once in the drawable fragment.
+
+A floor-mip prototype recovered still more texture and was **rejected on
+sight** when the real track immediately showed a nasty hairy/wiggly contour in
+motion. The shipped balance retains the footprint-safe ceiling mip and uses
+linear reconstruction instead of the soft B-spline. On the exact read-only
+`XIII - BAD LUCK CHARM (FINAL v4)` V4 record, a 12-second maximum-zoom pass
+presented 1,424 drawables at 118.91 fps. Twelve 120 Hz-equivalent frame grabs
+moved by the expected alternating 25/26 physical pixels; after that translation
+was removed, their binary silhouettes differed by only 0.027% on average
+(0.039% worst), roughly two orders of magnitude below the supplied SoundBox
+recording's 2.5–2.8% residual.
+
+The dated full gate passed with 515 tests and one expected platform skip. The
+signed installed app activated the packaged native deck, loaded 3,265 tracks /
+83 playlists, and scheduled zero preparation work. All 3,247 V4 records and
+3,124 artwork files remained present. Every curated `library.json` field
+matched the protected pre-install copy; only ordinary runtime geometry
+settings changed. No source audio, Rekordbox data, or waveform cache was
+rewritten.
+
+### Full-ladder pixel-integration follow-up on 2026-07-27
+
+Sonny's next 60.93-second 3600×582 recording exercised all thirteen zooms on
+`skantia - Yoyo Bop (Original Mix)`. Its declared 120 fps stream contained
+3,447 frames (56.6 fps average), again making it a visual artifact reference
+rather than a live cadence measurement. Motion-aligned edge error remained
+comparatively controlled through the first five levels, rose through the
+middle, and peaked near 7.4 physical pixels in the dense 0:45–0:50 passage.
+
+An exact read-only replay of the track's 1,416,960-bin V4 envelope crossed two
+forced attribute-buffer recenter boundaries with essentially zero aligned
+contour error. Recenter seams were therefore ruled out. The problem was the
+one-attribute close mode itself: preserving a fixed raster did not make its
+large whole-pixel motion perceptually stable when the contour contained
+one-to-two-pixel spikes.
+
+The renderer now uses four fixed song-space attributes per physical pixel at
+all thirteen zooms. The fragment samples five quarter-pixel boundaries across
+exactly one output pixel, integrates the piecewise-linear height profile for
+coverage, and amplitude-weights RGB over the identical span. Coverage is never
+stored or resampled. The result retains the ceiling-mip detail while replacing
+whole-pixel close motion and center-sample needles with continuous subpixel
+travel and the narrowest valid spatial antialias footprint.
+
+The exact Yoyo Bop dense passage sustained 118.8 fps at 1536 px/s after the
+change. A full visible pass through 24/32/48/64/92/128/184/256/384/576/864/
+1152/1536 px/s remained between 117.1 and 120.0 fps. The dated full source gate
+passed with 515 tests and one expected platform skip.
+
+The signed candidate was installed for Sonny's hands-on visual test. It
+activated the packaged native deck, loaded 3,265 tracks / 83 playlists, and
+scheduled zero preparation work. All 3,247 V4 records and 3,124 artwork files
+remained present. Every curated `library.json` field matched the protected
+pre-install copy; only ordinary runtime settings changed. The replaced
+nearest-close build remains in one temporary rollback directory.
+
+### Targeted 24–384 px/s follow-up on 2026-07-27
+
+The next 43.79-second 3600×582 Yoyo Bop recording intentionally started beyond
+the affected range and walked inward only through 384 px/s. Its 2,475 frames
+again averaged 56.5 fps. Measured travel identifies the shown levels as
+24/32/48/64/92/128/184/256/384 px/s. Residual contour motion is concentrated
+at 256 and remains visible at 384; the already-improved 576–1536 close range
+was not part of the complaint.
+
+The fixed attribute lattice and one-pixel profile integration remain unchanged.
+Only its reconstruction kernel now follows the demonstrated boundary:
+positive cubic at 24–384 px/s and sharp linear at 576–1536 px/s. The zoom is
+fixed during playback, so the static kernel choice cannot pulse with phase.
+On exact 10 Hz-equivalent grabs of the same read-only track passage, correctly
+advanced frame pairs measured about 0.55 physical pixels of aligned edge error
+at 256 and 0.38 at 384, versus roughly 5.25 pixels in the supplied recording.
+The unchanged 576 path measured 0.72 pixels.
+
+Live passes sustained 117.97 fps at 256, 118.25 at 384, and 119.25 at 576,
+with presentation timing error remaining in the single-digit microseconds.
+The dated full source gate passed with 516 tests and one expected platform
+skip.
+
+The signed targeted build was installed and relaunched with the packaged native
+deck active, 3,265 tracks / 83 playlists loaded, and zero preparation work.
+All 3,247 V4 records and 3,124 artwork files remained present. Every curated
+`library.json` field matched the protected pre-install copy; only ordinary
+runtime column state changed. The prior pixel-integrated build remains in one
+temporary rollback directory.
+
+### Targeted edge-color follow-up on 2026-07-27
+
+The next 23.14-second 3600×582 Yoyo Bop recording showed only the remaining
+issue range and advanced through 24/32/48/64/92/128 px/s. Motion-aligning the
+captured silhouettes left them nearly rigid, with median clipped edge error
+between roughly 0.4 and 1.1 physical pixels. The remaining visible motion was
+concentrated in the brightness and hue of partially covered contour pixels,
+not lost close-zoom geometry.
+
+The fixed lattice now stores premultiplied RGB plus height. The final five
+boundary samples integrate that premultiplied color directly and divide by the
+identically integrated height. Both signals are piecewise linear, making the
+one-pixel trapezoid exact and removing the former phase-dependent product of
+separately interpolated straight color and height. Reconstruction kernels,
+ceiling LOD, silhouette height, the one-pixel footprint, and close-zoom detail
+are unchanged.
+
+The dated full source gate passed with 516 tests and one expected platform
+skip. The signed build was installed and relaunched with the packaged native
+deck active, 3,265 tracks / 83 playlists loaded, and zero preparation work.
+All 3,247 V4 records and 3,122 artwork files remained present. Every curated
+`library.json` field matched the protected pre-install copy; only ordinary
+runtime settings changed. The preceding cubic-kernel build remains available
+in one temporary rollback directory.
+
+### Full-ladder motion follow-up on 2026-07-27
+
+The next 68.27-second 3600×582 Yoyo Bop recording covered all thirteen zoom
+levels from 24 through 1536 px/s. Its declared 120 fps stream contained 3,850
+frames, averaging 56.4 captured fps: 3,282 intervals were about 16.7 ms, 501
+were about 25 ms, 18 were about 33.3 ms, and one reached 41.7 ms. Recording
+holds therefore contribute visible horizontal steps, but they do not explain
+the whole contour complaint.
+
+After compensating each captured pair for its horizontal travel, median clipped
+edge error stayed roughly 0.4–1.7 physical pixels through 24–384 except for a
+2.4-pixel dense passage at 256. It rose to 3.5 at 576, 4.5 at 864, 2.7 at
+1152, and 3.2 at 1536. That boundary exactly matched the return to linear
+close-range reconstruction. Linear preserved the detail Sonny preferred but
+left a slope discontinuity at every song-lattice sample, so those corners
+moved through the raster as residual wiggle.
+
+The 576–1536 path now uses monotone cubic Hermite reconstruction for height and
+premultiplied RGB. It interpolates every real mip sample exactly, clamps each
+span between its two endpoints, and sets extrema slopes to zero; unlike the
+retired B-spline it does not average peaks away, and unlike linear
+interpolation it has no moving slope corners. The 24–384 B-spline, ceiling LOD,
+four-attribute density, exact one-pixel integration, and color
+premultiplication remain unchanged.
+
+Motion analysis also found isolated slow-frame/fast-frame pairs that cancel
+over two captured frames. Native presentation tests continued to target actual
+drawables within microseconds but occasionally observed one 16.7 ms
+presentation gap on the variable-refresh display. Increasing the offscreen
+attribute margin did not reliably improve that cadence and was reverted; no
+speculative buffer or clock change shipped from that experiment.
+
+The dated full source gate passed with 517 tests and one expected platform
+skip. Close-range native passes kept actual drawable targets within
+microseconds and reached 120 fps at 1536 px/s. The signed build was installed
+and relaunched with the packaged native deck active, 3,265 tracks / 83
+playlists loaded, and zero preparation work. All 3,247 V4 records and 3,122
+artwork files remained present. Every curated `library.json` field matched the
+protected pre-install copy; only ordinary runtime settings changed. The prior
+linear-close build remains in one temporary rollback directory.
+
 These are useful real-library stress tracks because they expose dense
 high-frequency contours and late-track precision. Automated tests must remain
-hermetic and must not depend on Sonny's personal files.
+hermetic and must not depend on Sonny's personal files; the real-track
+measurements above were run from a scratch harness that only reads the
+existing V4 cache and audio.
+
+### Remaining-artifact follow-up on 2026-07-27
+
+The next 69.98-second 3600×582 recording again covered all thirteen zoom
+levels. It contained 3,960 frames, averaging 56.6 captured fps: 3,391
+intervals were about 16.7 ms, 495 were about 25 ms, 19 were about 33.3 ms,
+and the longest was 33.3 ms. Those held capture frames explain some recorded
+horizontal steps, but a five-second native pass also occasionally observed one
+16.667 ms drawable gap at close zoom. The submitted target remained within
+0.018 ms of the actual presentation. A measured latency-two experiment made
+cadence worse at all three close test zooms and retained the doubled interval,
+so latency one and the existing presentation clock remain unchanged.
+
+The recording also exposed two independent color artifacts. Downbeat lines
+were composited at 82% opacity after the waveform, allowing saturated green
+content to alter the red timing reference; downbeats are now fully opaque
+and ordinary beat lines now use the same opaque-overlay contract in gray. At
+256 px/s and above, cubic
+ease-out coverage was exaggerating small geometric changes at saturated
+red/orange edges. The first candidate transitioned the scrolling lane from
+that wide-zoom visibility curve to exact physical-pixel coverage from 184–256
+px/s. The overview kept its vivid curve, and reconstruction, peak height, hue,
+LOD, and the four-attribute close detail path remained unchanged.
+
+The dated full source gate passed with 519 tests and one expected platform
+skip. The signed build was installed and relaunched with the packaged native
+deck active, 3,265 tracks / 83 playlists loaded, and zero preparation work.
+All 3,247 V4 records and 3,124 artwork files remained present. Every curated
+`library.json` field matched the protected pre-install copy; only ordinary
+runtime settings changed. The preceding build remains in one temporary
+rollback directory.
+
+The next 53.36-second highlighted recording revisited the remaining passages
+back and forth entirely at 24 px/s. It contained 3,024 frames, averaging 56.7
+captured fps: 2,636 intervals were about 16.7 ms, 347 were about 25 ms, nine
+were about 33.3 ms, and two early stalls exceeded 38 ms (one reached 158 ms).
+Those holds add recorded steps, but the same contour pulse recurred during
+ordinary 16.7 ms stretches. Because the first coverage correction began at
+184 px/s, it could not affect the highlighted level. The scrolling lane now
+uses exact physical-pixel coverage at all thirteen zooms; only the overview
+keeps cubic vividness. Geometry, reconstruction, height, hue, and detail
+density remain unchanged.
+
+The exact-coverage build passed the full source and offscreen-render gate with
+519 tests and one expected platform skip. The signed app was installed and
+relaunched with the packaged native deck active, 3,265 tracks / 83 playlists
+loaded, and zero preparation work. All 3,247 V4 records and 3,124 artwork
+files remained present, and every curated `library.json` field matched the
+protected pre-install copy. The immediate predecessor remains the single
+active temporary rollback.
+
+### Grid-edge and isolated-stop follow-up on 2026-07-27
+
+The next 27.73-second 3600×582 recording deliberately traversed all thirteen
+zoom levels and replayed the remaining problem passages. It contained 1,571
+frames, averaging 56.7 captured fps: 1,377 intervals were about 16.7 ms, 186
+were about 25 ms, and only one reached 41.7 ms. Grid spacing mapped the two
+replayed contour passages to 64 and 184 px/s. The highlighted red downbeat did
+not drift in song time; it remained exactly two physical pixels wide, but its
+center moved only on integer Retina pixel boundaries while the waveform used
+continuous subpixel reconstruction. That phase mismatch made the red reference
+appear to step sideways even when both layers represented the same time.
+
+Scrolling beat/downbeat rectangles now carry signed local line distance into
+the fragment and use analytic physical-pixel box coverage. The geometry
+includes a half-point fringe, so a one-point timing line moves continuously
+instead of snapping as a hard two-pixel rectangle. Downbeats remain opaque red
+and ordinary beats are opaque gray; analytic edge coverage is applied after
+that color policy so both retain continuous subpixel motion.
+
+The two isolated waveform stops use a deliberately smaller correction. At
+exactly 64 and 184 px/s, height and premultiplied color receive a same-LOD
+`[1, 2, 1] / 4` pass at half-physical-pixel offsets before the established
+one-pixel profile integration. Narrow zoom-space tapers make its weight zero
+at all eleven neighboring fixed stops. It does not choose a coarser mip,
+change peak storage, or touch the 576–1536 px/s interpolating close-detail
+path. A static nine-phase pass over the real skantia stress track at both
+affected stops retained transient shape and showed continuous grid fringes
+without reopening the close-zoom detail loss.
+
+The candidate passed the full source and offscreen-render gate with 521 tests
+and one expected platform skip. The signed app was installed and relaunched
+with the packaged native deck active, 3,265 tracks / 83 playlists loaded, and
+zero preparation work. All 3,247 V4 records and 3,124 artwork files remained
+present; the curated `library.json` object matched the protected pre-install
+copy exactly, including the 384 px/s runtime zoom. The immediately preceding
+exact-coverage build remains the single active temporary rollback.
+
+### Perceptual grid-coverage follow-up on 2026-07-27
+
+The 24.74-second 3600×582 red-line-only follow-up contained 1,407 frames and
+again traversed the zoom ladder. Lossless source renders showed that analytic
+grid geometry had already solved position and energy: peak red stayed fixed
+and total geometric coverage varied only 0.45%. The remaining pulse came from
+the BGRA8Unorm display path. A two-physical-pixel box alternates between
+`[0.5, 1.0, 0.5]` and `[1.0, 1.0]`; fixed-function blending treats those as
+display-code values, so the equal-area phases differed by about 31% when
+measured as SDR linear-light energy.
+
+Only the analytic grid-line branch now encodes coverage with the scoped
+`coverage^(1/2.2)` transfer before alpha blending. It changes neither the
+signed line distance nor its two-pixel geometric width, and it cannot affect
+waveform reconstruction, final waveform coverage, color, zoom, or transport.
+A sixteen-phase lossless render over the same real skantia cache held the red
+peak constant and reduced displayed-energy variation to 0.86%.
+
+The correction passed the full source and offscreen-render gate with 521 tests
+and one expected platform skip. The signed app was installed and relaunched
+with the packaged native deck active, 3,265 tracks / 83 playlists loaded, and
+zero preparation work. All 3,247 V4 records and 3,124 artwork files remained
+present; curated `library.json` state and the 384 px/s zoom matched the
+protected pre-install copy. The immediately preceding analytic-grid build
+remains the single active temporary rollback.
+
+### Whole-compositor follow-up on 2026-07-28
+
+The next 49.34-second 3600×582 recording contained 2,789 frames at 56.5
+captured fps. Of the measured intervals, 2,392 were about 16.7 ms, 353 were
+about 25 ms, 31 were about 8.3 ms, and 11 were about 33.3 ms; none exceeded
+33.334 ms. Grid spacing mapped the deliberate holds to 184 px/s at roughly
+8–12 and 36–40 seconds, 64 px/s at 17–24 seconds, and 24 px/s at 27–30
+seconds. The rest of the pass stepped through the surrounding ladder up to
+the final 1,152 px/s setting. The repeatable contour/color pulse occurred
+through ordinary capture intervals, so it was neither a stall nor a missed
+drawable.
+
+The line-only display transfer from the preceding build was a useful
+diagnostic but not the complete fix. The scrolling waveform still mixed its
+exact geometric coverage between display-sRGB code values in a
+BGRA8Unorm target. Equal-area subpixel phases therefore retained different
+linear-light energy—the same underlying mistake already measured on the red
+line.
+
+The Metal layer and both render pipelines now use BGRA8Unorm_sRGB.
+Display-authored waveform and grid RGB is decoded in the final fragments,
+waveform coverage and fixed-function grid blending occur in linear light, and
+Metal performs the sole sRGB encode when storing the drawable. The clear color
+uses the exact linear decode of `#0d0e12`. Full-coverage waveform colors match
+the previous build with median zero and 95th-percentile one-code difference;
+the background matches exactly. No height, hue reconstruction, mip, LOD,
+attribute density, zoom, timing, or close-detail path changed.
+
+Sixteen-phase lossless renders over the real skantia cache reduced
+motion-aligned mean edge variation by about 18% at each deliberately held
+level. Worst-edge variation fell about 27% at 24 px/s, 30% at 64 px/s, and
+28% at 184 px/s. The analytic red-line peak remained fixed and its measured
+displayed-energy span tightened to 0.59%.
+
+The whole-compositor correction passed the full source and offscreen-render
+gate with 522 tests and one expected platform skip. The signed app was
+installed and relaunched with the packaged native deck active, 3,265 tracks /
+83 playlists loaded, and zero preparation work. All 3,247 V4 records and
+3,124 artwork files remained present, and curated `library.json` state matched
+the protected pre-install copy exactly; only ordinary runtime settings changed
+during relaunch. The preceding line-compensation build remains the single
+active temporary rollback.
+
+### Quiet-signal geometry upgrade on 2026-07-28
+
+The Rekordbox comparison exposed two independent losses in the persisted
+SoundBox envelope rather than a renderer defect. Geometry was formed from the
+arithmetic stereo mean, so out-of-phase channel content could cancel, and the
+remaining linear amplitude was quantized directly to uint8. On the real
+skantia Yoyo Bop intro, channel-safe peaks remained roughly -40 to -54 dB in
+rows the legacy cache encoded as zero.
+
+Current V4 records therefore use the `soundbox-channel-peak-u16-v1` geometry
+model and little-endian `linear-u16le` height encoding at both overview and
+ultra rates. Each analysis row takes the largest absolute sample from either
+channel; spectral color and beat analysis retain their existing mono input.
+True digital zero remains zero. A renderer-only exponent of 0.80 lifts ordinary
+quiet geometry without baking a visual preference into the cache, so later
+display tuning does not require another recook. A same-day comparison exposed
+one still-darker, genuinely nonzero bridge at roughly -60 to -73 dB: its u16
+rows were intact, but their projected height was below one tenth of a pixel.
+A continuous low-end shoulder over the first four u16 values now resolves that
+signal as a stable physical-pixel hairline. It evaluates to zero at zero and is
+applied before song-space reconstruction, avoiding both a fake silence line
+and a discontinuous moving edge. Legacy uint8 records remain playable and are
+upgraded atomically by the normal prioritized background worker.
+
+A scratch recook of the exact comparison track retained all 1,416,960 detail
+rows and eliminated encoded-zero rows in each pictured quiet interval, where
+the legacy cache lost between 0.53% and 2.94% of rows. The target display
+produced roughly 1.85–3.03 physical pixels of median height in those passages.
+Source audio, Rekordbox data, beats, cues, and import provenance were unchanged.
+
+The upgrade passed the native build, full source gate, and hermetic offscreen
+render gate with 526 tests and one expected platform skip. The signed app was
+installed and relaunched with the packaged native deck active and 3,265 tracks
+/ 83 playlists loaded. The exact Yoyo Bop record was recooked once and verified
+complete before launch; the worker then found 3,245 remaining legacy analysis
+records and began the one-time rolling migration under battery eco policy.
+All 3,247 waveform records and 3,124 artwork files remained present, all
+inspected containers were structurally valid, and the protected curated
+`library.json` semantic hash remained exactly unchanged.
+
+The same-day subpixel-tail follow-up required no cache change or recook. The
+exact comparison cache remained byte-for-byte unchanged while the native and
+Qt display uploads gained the continuous visibility shoulder described above.
+That follow-up passed the full source and offscreen-render gate with 527 tests
+and one expected platform skip. The signed app was installed and relaunched
+with the native deck active, 3,265 tracks / 83 playlists loaded, all 3,247
+waveform records and 3,124 artwork files retained, and the protected curated
+state hash unchanged. The rolling migration had progressed to 3,195 remaining
+legacy analysis records at that launch.
+
+### Opaque timing-grid overlay on 2026-07-28
+
+The beat grid is navigation ink, not waveform decoration. Metal already drew
+the grid after the waveform, but ordinary gray beats still used 32% alpha;
+the Qt fallback also left both red and gray timing lines translucent.
+Waveform color could therefore alter their contrast and, in the fallback,
+their identity.
+
+Both renderers now draw downbeats as opaque red and ordinary beats as opaque
+gray after the waveform. Cues and the playhead remain above that grid.
+Red/gray supplies the hierarchy instead of transparency. Metal retains its
+analytic physical-pixel edge coverage, so the one-point lines remain smoothly
+positioned at subpixel phases without changing their timing or width.
+
+The display-only change passed the native build, full source gate, and
+offscreen-render gate with 528 tests and one expected platform skip. The
+signed app was installed and relaunched with the native deck active and 3,265
+tracks / 83 playlists loaded. All 3,247 waveform records and 3,124 artwork
+files remained present, the Yoyo Bop comparison cache stayed byte-for-byte
+unchanged, and the protected curated-state hash remained exact. The unrelated
+one-time waveform migration had progressed to 3,160 remaining legacy analysis
+records at that launch.
 
 ## Committed next player work
 

@@ -78,8 +78,11 @@ rendering, clocks, transport behavior, analysis loading, or native code.
   (`QAudioDecoder` for AAC/ALAC); native-deck failure disables playback with a
   diagnostic while library management remains available.
 - Logs: `~/Library/Logs/Soundbox/soundbox.log`.
-- Git is local `master` with no remote. Inspect and preserve the dirty worktree.
-  Do not commit or push unless Sonny explicitly asks.
+- Git uses local `main`, tracking `origin/main` on the Low Freq Labs GitHub
+  repository. Inspect and preserve the dirty worktree. Do not commit or push
+  unless Sonny explicitly asks. Sonny saying **“wrap up”** is standing explicit
+  permission to run the final validation, commit the intended completed
+  worktree changes, and push the current branch; never push a failing build.
 
 ## Build/install handoff
 
@@ -104,5 +107,6 @@ Moving/replacing the `.app` bundle must never touch
 
 - The personal liveset/SoundCloud download pipeline is private and must never be
   documented or inferred in this repository.
-- CDJ reference USB snapshots and large audio fixtures live outside the repo at
-  `~/soundbox-cdj-ref/`; only prototype code belongs here.
+- CDJ reference USB snapshots and large audio fixtures live in the local,
+  git-ignored `soundbox-cdj-ref/` workspace at the project root; only prototype
+  code under `research/cdj_export/` belongs in version control.
