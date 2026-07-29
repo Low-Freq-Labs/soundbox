@@ -998,6 +998,7 @@ public:
         audioDetailMipCount_ = 0;
         audioDetailMipOffsets_.fill(0);
         audioDetailMipCounts_.fill(0);
+        audioDetailMipDivisors_.fill(0);
         gridBuffer_ = gridBuffer;
         waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
         gridVertexCount_ = grid.size();
@@ -2634,7 +2635,7 @@ struct Uniforms { float currentSeconds;
                   uint threeBandActive;
                   uint waveformMode;
                   };
-constant uint kAttributeProfileSamples = 5u;
+constant uint kAttributeProfileCapacity = 7u;
 struct Out {
     float4 position [[position]];
     float4 color;
@@ -2659,6 +2660,14 @@ struct WaveSurface {
     float3 weightedColor;
     float colorWeight;
     float valid;
+};
+struct CoverageMoments {
+    float area;
+    float firstMoment;
+};
+struct IntervalSurface {
+    float coverage;
+    float3 premultipliedLinearColor;
 };
 struct WaveAttribute {
     float4 colorAndUpper;
@@ -3174,8 +3183,16 @@ kernel void wave_attribute_kernel(
         / max(1.0, u.pixelsPerSecond * scale * samplesPerPixel);
     const float waveFootprint = u.samplesPerSecond
         / max(1.0, u.pixelsPerSecond * scale);
-    const uint waveLevel = detail_lod(
+    const uint requestedWaveLevel = detail_lod(
         waveFootprint, u.waveMipCount);
+    // PWV7 is stored on the common 150 Hz analysis clock, but Rekordbox's
+    // close 3BAND lane visibly authors one facet per paired row (75 Hz).
+    // Showing level zero exposes twice as many corners and gives the lane its
+    // rejected busy/blocky edge. The per-band max pyramid preserves both rows
+    // while matching the source screenshot's horizontal cell cadence.
+    const uint waveLevel = u.waveformMode == 3 && u.waveMipCount > 1
+        ? max(1u, requestedWaveLevel)
+        : requestedWaveLevel;
     const WaveTap sharpWave = u.waveformMode == 3
         ? three_band_detail_tap(
             samples,
@@ -3303,16 +3320,34 @@ kernel void wave_attribute_kernel(
         const float detailFootprint =
             u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
-        const uint detailLevel = audio_detail_lod(
+        uint detailLevel = audio_detail_lod(
             detailFootprint,
             u.audioDetailMipDivisors,
             u.audioDetailMipCount);
+        if (u.pixelsPerSecond >= 384.0) {
+            detailLevel = audio_detail_lod(
+                detailFootprint * 4.0,
+                u.audioDetailMipDivisors,
+                u.audioDetailMipCount);
+        }
         const uint detailDivisor =
             u.audioDetailMipDivisors[detailLevel];
         const float detailLocal =
             u.audioDetailCurrentPhase
                 + secondOffset * u.audioDetailSamplesPerSecond;
-        EnvelopeTap sharpDetail = u.pixelsPerSecond >= 184.0
+        // Close geometry uses one song-anchored peak knot per roughly four
+        // physical pixels. Selecting the mip from that output-space footprint
+        // retains Rekordbox's angular attack facets and exact extrema while
+        // rejecting denser knots that only change raster phase during motion.
+        EnvelopeTap sharpDetail = u.pixelsPerSecond >= 384.0
+            ? linear_envelope_tap(
+                audioDetailSamples,
+                u.audioDetailMipOffsets[detailLevel],
+                u.audioDetailMipCounts[detailLevel],
+                u.audioDetailCurrentIndex,
+                detailLocal,
+                detailDivisor)
+            : (u.pixelsPerSecond >= 184.0
             ? linear_envelope_tap(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
@@ -3326,7 +3361,7 @@ kernel void wave_attribute_kernel(
                 u.audioDetailMipCounts[detailLevel],
                 u.audioDetailCurrentIndex,
                 detailLocal,
-                detailDivisor);
+                detailDivisor));
         // The signed interval owns BLUE/RGB geometry, so filtering only the
         // PWV color stream cannot stabilize its boundary. At the measured
         // problem stops, apply the same symmetric song-space [1 2 1]
@@ -3335,7 +3370,7 @@ kernel void wave_attribute_kernel(
         // filtering the final pixels or changing neighboring zoom levels.
         const float detailFilter = targeted_stop_filter(
             u.pixelsPerSecond);
-        if (detailFilter > 0.0) {
+        if (detailFilter > 0.0 && u.pixelsPerSecond < 384.0) {
             const float detailPixel =
                 detailFootprint * 1.5;
             const EnvelopeTap leftDetail =
@@ -3392,6 +3427,49 @@ kernel void wave_attribute_kernel(
             }
         }
         if (sharpDetail.valid > 0.0) {
+            // Peak pooling raises the typical envelope as the selected source
+            // divisor grows. Without compensation, fixed zoom changes make
+            // the same song window shrink steadily and then jump taller at
+            // the 256->384 close-family boundary. Normalize against the
+            // 50-cell visual reference from 92 px/s upward. Apply that gain
+            // only through the remaining headroom: a straight multiply clips
+            // loud 256 px/s peaks to the lane edge, then makes them jump
+            // shorter when the four-pixel source family begins at 384 px/s.
+            // This bounded curve fixes zero and full scale while lifting the
+            // quieter middle of the trace; horizontal cadence is unchanged.
+            const float thin64 =
+                1.0 - smoothstep(
+                    0.0, 8.0, abs(u.pixelsPerSecond - 64.0));
+            const float thin92 =
+                1.0 - smoothstep(
+                    0.0, 8.0, abs(u.pixelsPerSecond - 92.0));
+            const float thin128 =
+                1.0 - smoothstep(
+                    0.0, 10.0, abs(u.pixelsPerSecond - 128.0));
+            const float levelHeightGain = u.pixelsPerSecond >= 64.0
+                ? clamp(
+                    pow(
+                        50.0 / max(1.0, float(detailDivisor)),
+                        0.22)
+                        + 0.10 * thin64
+                        + 0.23 * thin92
+                        + 0.26 * thin128,
+                    0.8, 1.5)
+                : 1.0;
+            const float minimumMagnitude = clamp(
+                abs(sharpDetail.minimum), 0.0, 1.0);
+            const float maximumMagnitude = clamp(
+                abs(sharpDetail.maximum), 0.0, 1.0);
+            sharpDetail.minimum = sign(sharpDetail.minimum) * clamp(
+                minimumMagnitude
+                    + (levelHeightGain - 1.0)
+                        * minimumMagnitude * (1.0 - minimumMagnitude),
+                0.0, 1.0);
+            sharpDetail.maximum = sign(sharpDetail.maximum) * clamp(
+                maximumMagnitude
+                    + (levelHeightGain - 1.0)
+                        * maximumMagnitude * (1.0 - maximumMagnitude),
+                0.0, 1.0);
             // A BLUE/RGB column is a signed min/max interval, not two
             // envelopes filled back to zero. Quiet tonal bins therefore form
             // a thin oscillating trace while dense/noisy bins naturally widen
@@ -3499,22 +3577,47 @@ inline float profile_coverage(
     return total / float(count - 1);
 }
 
+inline float positioned_profile_coverage(
+        thread const float *heights,
+        thread const float *positions,
+        uint count,
+        float distance, float heightScale, float antialias) {
+    if (count < 2 || count > kAttributeProfileCapacity) {
+        return 0.0;
+    }
+    const float scale = max(heightScale, 1e-5);
+    const float threshold = distance / scale;
+    const float band = max(antialias / scale, 1e-6);
+    float total = 0.0;
+    float totalSpan = 0.0;
+    for (uint i = 0; i + 1 < count; ++i) {
+        const float span = max(0.0, positions[i + 1] - positions[i]);
+        const float lo = min(heights[i], heights[i + 1]);
+        const float hi = max(heights[i], heights[i + 1]);
+        total += span * saturate(
+            (hi + band - threshold) / max(hi - lo, 2.0 * band));
+        totalSpan += span;
+    }
+    return total / max(totalSpan, 1e-6);
+}
+
 inline float interval_profile_coverage(
         thread const float *minimums,
         thread const float *maximums,
+        thread const float *positions,
         uint count, float signedPosition,
         float heightScale, float antialias,
         float halfWidthScale) {
-    if (count < 2 || count > kAttributeProfileSamples) {
+    if (count < 2 || count > kAttributeProfileCapacity) {
         return 0.0;
     }
     const float minimumHalfWidth =
         1.8 / max(heightScale, 1e-5);
     const float minimumInsetHalfWidth =
         0.65 / max(heightScale, 1e-5);
-    float lowerEdges[kAttributeProfileSamples];
-    float upperEdges[kAttributeProfileSamples];
-    float invertedLowerEdges[kAttributeProfileSamples];
+    float lowerEdges[kAttributeProfileCapacity];
+    float upperEdges[kAttributeProfileCapacity];
+    float invertedLowerEdges[kAttributeProfileCapacity];
     for (uint i = 0; i < count; ++i) {
         const float low = min(minimums[i], maximums[i]);
         const float high = max(minimums[i], maximums[i]);
@@ -3534,15 +3637,209 @@ inline float interval_profile_coverage(
     // advances. The signed interval is always wider than both one-pixel AA
     // bands, so the overlap is the lesser of the exact upper and lower
     // half-plane coverages.
-    const float upperCoverage = profile_coverage(
-        upperEdges, count,
+    const float upperCoverage = positioned_profile_coverage(
+        upperEdges, positions, count,
         signedPosition * heightScale,
         heightScale, antialias);
-    const float lowerCoverage = profile_coverage(
-        invertedLowerEdges, count,
+    const float lowerCoverage = positioned_profile_coverage(
+        invertedLowerEdges, positions, count,
         -signedPosition * heightScale,
         heightScale, antialias);
     return min(upperCoverage, lowerCoverage);
+}
+
+inline CoverageMoments clipped_linear_coverage_moments(
+        float valueAtZero, float valueAtOne,
+        float begin, float end) {
+    // Integrate clamp(valueAtZero + t * slope, 0, 1) and its first
+    // moment exactly over [begin, end]. The two clamp crossings partition
+    // the interval into at most three constant/linear pieces.
+    CoverageMoments result{0.0, 0.0};
+    const float slope = valueAtOne - valueAtZero;
+    float points[4] = {begin, end, end, end};
+    uint pointCount = 2;
+    if (abs(slope) > 1e-7) {
+        const float zeroCrossing = -valueAtZero / slope;
+        const float oneCrossing = (1.0 - valueAtZero) / slope;
+        if (zeroCrossing > begin && zeroCrossing < end) {
+            points[pointCount++] = zeroCrossing;
+        }
+        if (oneCrossing > begin && oneCrossing < end) {
+            points[pointCount++] = oneCrossing;
+        }
+    }
+    for (uint i = 1; i < pointCount; ++i) {
+        const float value = points[i];
+        uint insertion = i;
+        while (insertion > 0 && points[insertion - 1] > value) {
+            points[insertion] = points[insertion - 1];
+            --insertion;
+        }
+        points[insertion] = value;
+    }
+    for (uint i = 0; i + 1 < pointCount; ++i) {
+        const float left = points[i];
+        const float right = points[i + 1];
+        const float midpoint = (left + right) * 0.5;
+        const float midpointValue =
+            valueAtZero + slope * midpoint;
+        if (midpointValue <= 0.0) {
+            continue;
+        }
+        const float squareSpan =
+            right * right - left * left;
+        if (midpointValue >= 1.0) {
+            result.area += right - left;
+            result.firstMoment += squareSpan * 0.5;
+            continue;
+        }
+        const float cubeSpan =
+            right * right * right - left * left * left;
+        result.area +=
+            valueAtZero * (right - left)
+            + slope * squareSpan * 0.5;
+        result.firstMoment +=
+            valueAtZero * squareSpan * 0.5
+            + slope * cubeSpan / 3.0;
+    }
+    return result;
+}
+
+inline IntervalSurface resolve_interval_surface(
+        thread const float *minimums,
+        thread const float *maximums,
+        thread const float3 *encodedColors,
+        thread const float *positions,
+        uint count, float signedPosition,
+        float heightScale, float antialias,
+        bool blueMode) {
+    IntervalSurface result{0.0, float3(0.0)};
+    if (count < 2 || count > kAttributeProfileCapacity) {
+        return result;
+    }
+    const float minimumHalfWidth =
+        1.8 / max(heightScale, 1e-5);
+    const float band =
+        max(antialias / max(heightScale, 1e-5), 1e-6);
+    const float3 whiteLinear = display_srgb_to_linear(
+        float3(237.0 / 255.0, 1.0, 1.0));
+    float totalSpan = 0.0;
+    for (uint segment = 0; segment + 1 < count; ++segment) {
+        const float segmentSpan =
+            max(0.0, positions[segment + 1] - positions[segment]);
+        if (segmentSpan <= 0.0) {
+            continue;
+        }
+        totalSpan += segmentSpan;
+        const float low0 = min(
+            minimums[segment], maximums[segment]);
+        const float high0 = max(
+            minimums[segment], maximums[segment]);
+        const float low1 = min(
+            minimums[segment + 1], maximums[segment + 1]);
+        const float high1 = max(
+            minimums[segment + 1], maximums[segment + 1]);
+        const float center0 = (low0 + high0) * 0.5;
+        const float center1 = (low1 + high1) * 0.5;
+        const float halfWidth0 = max(
+            (high0 - low0) * 0.5, minimumHalfWidth);
+        const float halfWidth1 = max(
+            (high1 - low1) * 0.5, minimumHalfWidth);
+        const float lower0 = center0 - halfWidth0;
+        const float lower1 = center1 - halfWidth1;
+        const float upper0 = center0 + halfWidth0;
+        const float upper1 = center1 + halfWidth1;
+        const float3 color0 =
+            display_srgb_to_linear(saturate(encodedColors[segment]));
+        const float3 color1 =
+            display_srgb_to_linear(saturate(encodedColors[segment + 1]));
+
+        // Split BLUE's smooth procedural field once per quarter-pixel
+        // segment. Also split wherever the queried row crosses the moving
+        // interval center, because the nearer signed boundary changes there.
+        float points[4] = {0.0, 0.5, 1.0, 1.0};
+        uint pointCount = blueMode ? 3u : 2u;
+        if (!blueMode) {
+            points[1] = 1.0;
+        }
+        const float centerSlope = center1 - center0;
+        if (abs(centerSlope) > 1e-7) {
+            const float centerCrossing =
+                (signedPosition - center0) / centerSlope;
+            if (centerCrossing > 0.0 && centerCrossing < 1.0) {
+                points[pointCount++] = centerCrossing;
+            }
+        }
+        for (uint i = 1; i < pointCount; ++i) {
+            const float value = points[i];
+            uint insertion = i;
+            while (insertion > 0 && points[insertion - 1] > value) {
+                points[insertion] = points[insertion - 1];
+                --insertion;
+            }
+            points[insertion] = value;
+        }
+        for (uint piece = 0; piece + 1 < pointCount; ++piece) {
+            const float begin = points[piece];
+            const float end = points[piece + 1];
+            if (end <= begin) {
+                continue;
+            }
+            const float midpoint = (begin + end) * 0.5;
+            const float localCenter =
+                mix(center0, center1, midpoint);
+            const bool upperBoundary =
+                signedPosition >= localCenter;
+            const float value0 = upperBoundary
+                ? (upper0 + band - signedPosition) / (2.0 * band)
+                : (-lower0 + band + signedPosition) / (2.0 * band);
+            const float value1 = upperBoundary
+                ? (upper1 + band - signedPosition) / (2.0 * band)
+                : (-lower1 + band + signedPosition) / (2.0 * band);
+            const CoverageMoments moments =
+                clipped_linear_coverage_moments(
+                    value0, value1, begin, end);
+            if (moments.area <= 0.0) {
+                continue;
+            }
+            result.coverage += moments.area * segmentSpan;
+            if (!blueMode) {
+                // PWV5 color and signed coverage are both piecewise linear
+                // over this song-space segment. Integrate their product in
+                // linear light so a hidden tap cannot tint a visible one.
+                result.premultipliedLinearColor +=
+                    (color0 * moments.area
+                        + (color1 - color0) * moments.firstMoment)
+                    * segmentSpan;
+                continue;
+            }
+            // BLUE's white/cyan/blue field depends on the same moving center
+            // and width as coverage. Evaluate it at the exact coverage
+            // centroid of each half-segment, then accumulate premultiplied
+            // linear-light energy. This keeps the smooth radial information
+            // without independently averaging a color that was not visible.
+            const float centroid = saturate(
+                moments.firstMoment / moments.area);
+            const float center =
+                mix(center0, center1, centroid);
+            const float halfWidth =
+                mix(halfWidth0, halfWidth1, centroid);
+            const float radial = saturate(
+                abs(signedPosition - center)
+                / max(halfWidth, 1e-5));
+            const float radialBlend =
+                smoothstep(0.28, 1.0, radial);
+            const float3 edgeLinear =
+                mix(color0, color1, centroid);
+            result.premultipliedLinearColor += mix(
+                whiteLinear, edgeLinear, radialBlend)
+                * moments.area * segmentSpan;
+        }
+    }
+    const float normalization = 1.0 / max(totalSpan, 1e-6);
+    result.coverage = saturate(result.coverage * normalization);
+    result.premultipliedLinearColor *= normalization;
+    return result;
 }
 
 inline WaveSurface integrated_wave_level(
@@ -3740,7 +4037,7 @@ fragment float4 wave_surface_fragment(
     const float heightScale =
         max(4.0, (u.heightPoints - 49.0) * 0.5 - 7.0);
     if (u.waveAttributeValid != 0 && u.waveAttributeCount >= 2) {
-        // Height and hue live on one fixed, four-samples-per-pixel global song
+        // Height and hue live on one fixed, oversampled global song
         // lattice. Interpolate those attributes first, then perform vertical
         // antialiasing once at the drawable. Unlike a translated RGBA
         // waveform this never refilters coverage, and unlike one-pixel nearest
@@ -3752,32 +4049,57 @@ fragment float4 wave_surface_fragment(
             + (in.position.x - float(u.drawableWidthPixels) * 0.5)
                 * samplesPerPixel
             + u.waveAttributeCurrentOffset;
-        const float attributeStep = samplesPerPixel * 0.25;
-        if (tileX - 2.0 * attributeStep < 0.0
-                || tileX + 2.0 * attributeStep + 1.0
+        const float leftTile = tileX - samplesPerPixel * 0.5;
+        const float rightTile = tileX + samplesPerPixel * 0.5;
+        if (leftTile < 0.0
+                || rightTile + 1.0
                     >= float(u.waveAttributeCount)) {
             discard_fragment();
         }
         // Integrate the fixed song profile over exactly one physical pixel.
-        // Five quarter-pixel boundary samples cover [-0.5, +0.5]; endpoint
-        // half-weights are the trapezoid rule for premultiplied hue and
-        // height. Both are piecewise linear on this lattice, so this is their
-        // exact one-pixel integral. Coverage likewise uses the exact
-        // piecewise-linear crossing integral, not an average of five
-        // near-binary alpha tests.
-        float heights[kAttributeProfileSamples];
-        float midHeights[kAttributeProfileSamples];
-        float highHeights[kAttributeProfileSamples];
-        float lowHeights[kAttributeProfileSamples];
-        float blueMinimums[kAttributeProfileSamples];
-        float blueMaximums[kAttributeProfileSamples];
+        // At the close stops, the pixel endpoints plus every integer
+        // attribute-lattice knot inside it are the complete piecewise-linear
+        // profile. Fixed quarter-pixel probes miss one moving knot whenever
+        // the song phase is fractional. Keep the accepted fixed five-point
+        // resolve below 1152 px/s, where the exact-knot topology measured
+        // fractionally worse on the Bad Decisions reference sweep.
+        float tilePositions[kAttributeProfileCapacity];
+        float profilePositions[kAttributeProfileCapacity];
+        uint profileCount = 0;
+        if (u.pixelsPerSecond >= 1152.0) {
+            tilePositions[profileCount++] = leftTile;
+            const float firstKnot = floor(leftTile) + 1.0;
+            for (uint i = 0; i + 2 < kAttributeProfileCapacity; ++i) {
+                const float knot = firstKnot + float(i);
+                if (knot >= rightTile) {
+                    break;
+                }
+                tilePositions[profileCount++] = knot;
+            }
+            tilePositions[profileCount++] = rightTile;
+        } else {
+            for (uint i = 0; i < 5u; ++i) {
+                tilePositions[profileCount++] =
+                    leftTile + samplesPerPixel * float(i) * 0.25;
+            }
+        }
+        float heights[kAttributeProfileCapacity];
+        float outerHeights[kAttributeProfileCapacity];
+        float midHeights[kAttributeProfileCapacity];
+        float highHeights[kAttributeProfileCapacity];
+        float lowHeights[kAttributeProfileCapacity];
+        float blueMinimums[kAttributeProfileCapacity];
+        float blueMaximums[kAttributeProfileCapacity];
+        float3 attributeColors[kAttributeProfileCapacity];
+        float3 intervalEncodedColors[kAttributeProfileCapacity];
         float3 weightedColor = float3(0.0);
         float colorWeight = 0.0;
-        for (uint i = 0; i < kAttributeProfileSamples; ++i) {
-            const float offset =
-                (float(i) - 2.0) * attributeStep;
+        for (uint i = 0; i < profileCount; ++i) {
+            profilePositions[i] =
+                (tilePositions[i] - leftTile)
+                / max(samplesPerPixel, 1e-5);
             const WaveAttribute attribute = linear_attribute(
-                attributes, u.waveAttributeCount, tileX + offset);
+                attributes, u.waveAttributeCount, tilePositions[i]);
             const float upperHeight = attribute.colorAndUpper.a;
             const float lowerHeight = attribute.lowerAndPadding.x;
             const float outerHeight = u.waveformMode != 3
@@ -3786,6 +4108,7 @@ fragment float4 wave_surface_fragment(
             const float sideHeight =
                 yPoints <= waveCenter ? upperHeight : lowerHeight;
             heights[i] = sideHeight;
+            outerHeights[i] = outerHeight;
             blueMinimums[i] = lowerHeight;
             blueMaximums[i] = upperHeight;
             // In 3BAND the premultiplied RGB attributes are the three absolute
@@ -3794,100 +4117,60 @@ fragment float4 wave_surface_fragment(
             lowHeights[i] = attribute.colorAndUpper.r;
             midHeights[i] = attribute.colorAndUpper.g;
             highHeights[i] = attribute.colorAndUpper.b;
-            const float weight =
-                i == 0 || i + 1 == kAttributeProfileSamples ? 0.5 : 1.0;
-            weightedColor += attribute.colorAndUpper.rgb * weight;
-            colorWeight += outerHeight * weight;
+            attributeColors[i] = attribute.colorAndUpper.rgb;
+            intervalEncodedColors[i] =
+                attribute.colorAndUpper.rgb / max(outerHeight, 0.0001);
+        }
+        for (uint i = 0; i + 1 < profileCount; ++i) {
+            const float span =
+                profilePositions[i + 1] - profilePositions[i];
+            weightedColor +=
+                (attributeColors[i] + attributeColors[i + 1])
+                * (0.5 * span);
+            colorWeight +=
+                (outerHeights[i] + outerHeights[i + 1])
+                * (0.5 * span);
         }
         if (u.waveformMode == 1 || u.waveformMode == 2) {
             const float signedPosition =
                 (waveCenter - yPoints) / max(heightScale, 1e-5);
-            const float coverage = interval_profile_coverage(
-                blueMinimums, blueMaximums, kAttributeProfileSamples,
+            IntervalSurface interval = resolve_interval_surface(
+                blueMinimums, blueMaximums, intervalEncodedColors,
+                profilePositions, profileCount,
+                signedPosition, heightScale, antialias,
+                u.waveformMode == 1);
+            const float acceptedCoverage = interval_profile_coverage(
+                blueMinimums, blueMaximums, profilePositions, profileCount,
                 signedPosition, heightScale, antialias, 1.0);
-            if (coverage <= 0.0) {
+            if (acceptedCoverage <= 0.0 || interval.coverage <= 0.0) {
                 discard_fragment();
             }
-            float3 encodedColor =
-                weightedColor / max(colorWeight, 0.0001);
-            float3 displayColor = encodedColor;
-            if (u.waveformMode == 1) {
-                // Preserve Rekordbox's broad white -> cyan -> blue radial
-                // structure as one smooth field. Discrete nested intervals
-                // stabilized the outer edge but made their internal boundaries
-                // look like traffic lines moving through a stationary wave.
-                // Average the signed center and width over the same complete
-                // physical-pixel profile used by coverage, then evaluate one
-                // continuous transfer with no internal coverage boundaries.
-                const float3 white =
-                    float3(237.0 / 255.0, 1.0, 1.0);
-                float centerSum = 0.0;
-                float halfWidthSum = 0.0;
-                float radialBlendSum = 0.0;
-                float profileWeight = 0.0;
-                for (uint i = 0; i < kAttributeProfileSamples; ++i) {
-                    const float weight =
-                        i == 0 || i + 1 == kAttributeProfileSamples
-                        ? 0.5 : 1.0;
-                    const float low =
-                        min(blueMinimums[i], blueMaximums[i]);
-                    const float high =
-                        max(blueMinimums[i], blueMaximums[i]);
-                    const float sampleCenter =
-                        (low + high) * 0.5;
-                    const float sampleHalfWidth = max(
-                        (high - low) * 0.5,
-                        1.8 / max(heightScale, 1e-5));
-                    centerSum += sampleCenter * weight;
-                    halfWidthSum += sampleHalfWidth * weight;
-                    const float sampleRadial = saturate(
-                        abs(signedPosition - sampleCenter)
-                        / max(sampleHalfWidth, 1e-5));
-                    centerSum += sampleCenter * weight;
-                    halfWidthSum += sampleHalfWidth * weight;
-                    radialBlendSum +=
-                        smoothstep(0.28, 1.0, sampleRadial) * weight;
-                    profileWeight += weight;
-                }
-                const float center =
-                    centerSum / max(profileWeight, 0.0001);
-                const float halfWidth =
-                    halfWidthSum / max(profileWeight, 0.0001);
-                const float radial = saturate(
-                    abs(signedPosition - center)
-                    / max(halfWidth, 1e-5));
-                const float pointRadialBlend =
-                    smoothstep(0.28, 1.0, radial);
-                const float integratedRadialBlend =
-                    radialBlendSum / max(profileWeight, 0.0001);
-                const float radialBlend = mix(
-                    pointRadialBlend,
-                    integratedRadialBlend,
-                    targeted_stop_filter(u.pixelsPerSecond));
-                displayColor = mix(
-                    white, encodedColor,
-                    radialBlend);
-            }
-            return float4(mix(
-                background,
-                display_srgb_to_linear(displayColor),
-                saturate(coverage)), 1.0);
+            // The continuous signed-boundary coverage is already visually
+            // accepted. Preserve it bit-for-bit while using the joint resolve
+            // only to condition color on the locally visible interval.
+            interval.premultipliedLinearColor *=
+                acceptedCoverage / interval.coverage;
+            interval.coverage = acceptedCoverage;
+            return float4(
+                background * (1.0 - interval.coverage)
+                    + interval.premultipliedLinearColor,
+                1.0);
         }
-        const float coverage = profile_coverage(
-            heights, kAttributeProfileSamples,
+        const float coverage = positioned_profile_coverage(
+            heights, profilePositions, profileCount,
             distance, heightScale, antialias);
         if (u.threeBandActive == 0 && coverage <= 0.0) {
             discard_fragment();
         }
         if (u.threeBandActive != 0) {
-            const float midCoverage = profile_coverage(
-                midHeights, kAttributeProfileSamples,
+            const float midCoverage = positioned_profile_coverage(
+                midHeights, profilePositions, profileCount,
                 distance, heightScale, antialias);
-            const float highCoverage = profile_coverage(
-                highHeights, kAttributeProfileSamples,
+            const float highCoverage = positioned_profile_coverage(
+                highHeights, profilePositions, profileCount,
                 distance, heightScale, antialias);
-            const float lowCoverage = profile_coverage(
-                lowHeights, kAttributeProfileSamples,
+            const float lowCoverage = positioned_profile_coverage(
+                lowHeights, profilePositions, profileCount,
                 distance, heightScale, antialias);
             const float low = saturate(lowCoverage);
             const float mid = saturate(midCoverage);

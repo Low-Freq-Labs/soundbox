@@ -4,7 +4,7 @@ Living to-do. Work top-down. The Rockbox iPod remains the hardware priority;
 player work may continue in parallel when it is isolated from export safety.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-07-28)
+## Current status (2026-07-29)
 
 - **CORE LIBRARY/EXPORT COMPLETE + CURATION MONTH COMPLETE.** Every track title
   cut/cleaned, every cover art eye-verified. Engine is mypy-clean,
@@ -15,13 +15,56 @@ For the live test count, trust `./check.sh` output—not any number written here
   grid, persistent zoom/jump controls, CUE/play/track navigation, precision
   scrub, clean gain ramps, and cache-first rapid loading. Full handoff:
   `docs/PLAYER.md`.
-- **SOURCE-ONLY WAVEFORM REFERENCE CHECKPOINT; NOT INSTALLED.** RGB is visually
-  stable, 3BAND is solid with finer close detail, and BLUE's silhouette is
-  stable. BLUE still has a close-zoom internal radial brightness/color tick:
-  flat fill removes it, but constant PWV3 hue with the radial field retains it.
-  After reboot, the next isolated experiment is a joint premultiplied
-  linear-light color/coverage resolve against the two exact real tracks and six
-  Rekordbox screenshots documented in `docs/PLAYER.md`.
+- **WAVEFORM REFINEMENT ACTIVE; FINAL-PULSE CANDIDATE INSTALLED.** BLUE
+  and RGB now resolve signed-interval coverage and dependent color jointly in
+  premultiplied linear light while preserving the already accepted continuous
+  silhouette exactly. BLUE's white/cyan radial field no longer exhibits the
+  close-zoom internal brightness tick; RGB was explicitly phase-swept and
+  retained its established appearance and motion. Both exact tracks passed all
+  thirteen zoom stops, the six-reference corpus, 32-position motion sweeps, and
+  the full source/render gate. Live acceptance now confirms playback and
+  3BAND's Rekordbox-authored paired-row cadence are dialed. The remaining
+  BLUE/RGB static pulse at the five close stops was isolated to extrema-source
+  density. The initial two-ladder-entry reduction helped but remained visible.
+  Those modes now choose one peak mip from a four-physical-pixel output
+  footprint, reducing density from roughly one cell per physical pixel to
+  0.20–0.23 while preserving exact peak extrema and angular facets. In
+  32-position source-frame sweeps, BLUE/RGB mean registered change improved at
+  all five stops; exact ten-refresh-step translations held p99 change to 0–1
+  display code with 0.08–0.14% silhouette mismatch. Both 3BAND reference
+  renders remain byte-for-byte identical. Both full gates passed 551 tests
+  with one expected skip. The signed candidate is installed with its packaged
+  native dylib active, 3,263 tracks / 83 playlists loaded, zero preparation
+  tasks, and all curation-bearing `library.json` sections verified unchanged.
+  Follow-up recordings then isolated a separate peak-mip height discontinuity
+  and ordinary-pause rewind: BLUE/RGB height is now divisor-normalized from
+  64–1536 px/s, and pause uses Metal's exact held frame instead of a coarse
+  millisecond transport estimate. Both full gates passed 551 tests with one
+  expected skip; the signed candidate is installed with its packaged native
+  dylib active, 3,263 tracks / 83 playlists loaded, zero preparation tasks,
+  and `library.json` byte-identical to its post-quit backup. Live visual
+  acceptance rejected the straight-multiply height normalization because loud
+  256 px/s peaks clipped and then collapsed at the 384 px/s source-family
+  crossover. The replacement applies the same divisor compensation only
+  through unused vertical headroom and adds narrow bounded compensation at
+  64/92/128. On the exact recorded passage, the full 24–1536 median outer-height
+  ladder now changes by at most three physical pixels per step and the
+  256→384 drop is gone. Both full gates passed 552 tests with one expected
+  skip; the signed replacement is installed with its packaged native dylib
+  active, 3,263 tracks / 83 playlists loaded, zero preparation tasks, and
+  `library.json` byte-identical to its post-quit backup. Live acceptance
+  confirms the bounded full-ladder transition is much better; height and pause
+  are now the accepted checkpoint.
+- **NEXT: EXPERIMENT-LED BLUE/RGB TEMPORAL-ALIASING R&D.** The residual
+  static/wiggly/color pulse at 384–1536 px/s and a separately reported hitch
+  remain unresolved. Do not restart with generic Apple documentation or blind
+  smoothing. Film the physical panel at high frame rate, capture the exact
+  Metal drawable/presentation sequence, build motion-registered space-time
+  strips, and drive controlled synthetic carriers through the compositor to
+  determine whether the cause is renderer geometry/chroma, presentation
+  cadence, ProMotion/sample-and-hold behavior, panel response, or camera
+  aliasing. Full evidence ledger and acceptance contract:
+  `docs/PLAYER.md` → “BLUE/RGB temporal-aliasing R&D handoff.”
 - **WAITING ON HARDWARE** for Phase 3 (iPod, ~end July).
 - New frontier (2026-07-08): **CDJ USB export** → `docs/cdj-usb-export.md`.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
@@ -61,7 +104,8 @@ For the live test count, trust `./check.sh` output—not any number written here
   three native PWV7 shapes,
   decodes them as
   low/mid/high display layers, applies `0.40/0.43/0.40` native band scales,
-  linearly connects native PWV7 samples for clean slopes, and reproduces
+  begins at the paired-row peak level matching Rekordbox's visible 75 Hz
+  facets, linearly connects those values for clean slopes, and reproduces
   the measured blue/brown/cream/pale-blue/white membership palette. Exact
   display rows retain peak geometry when reduced, remain song anchored, and
   never trigger a cache recook when the persistent selector changes. The
@@ -111,6 +155,18 @@ For the live test count, trust `./check.sh` output—not any number written here
   aligned pixel change from 69.0 to 39.6 display codes and the share above 64
   codes from 1.15% to 0.12%, while static silhouette identity changed by less
   than 0.1% of lane pixels. 3BAND already used continuous profile coverage.
+  BLUE/RGB color is also integrated conditionally on that signed coverage.
+  Clipped-linear coverage moments prevent a hidden PWV5 sample from tinting a
+  visible RGB edge, while BLUE evaluates its white/cyan/blue radial transfer
+  from the same local signed center, width, and coverage centroid. The accepted
+  continuous boundary coverage is reapplied exactly, so this changes color
+  energy only—not silhouette, reconstruction, LOD, or timing. On the two
+  32-position real-track sweeps, Bad Decisions BLUE p99 fell from 127.8 to 68.0
+  display codes and its greater-than-64 share from 9.13% to 1.40%; High &
+  Scared BLUE p99 fell from 36.7 to 29.5. RGB stayed effectively flat or
+  improved slightly. At that checkpoint 3BAND reference renders were
+  byte-identical; the current paired-row follow-up intentionally supersedes
+  that historical result.
   Final compositing keeps the vivid continuous
   curve only for the small overview; the scrolling lane uses exact geometric
   coverage at every zoom, removing saturated red/orange amplification without

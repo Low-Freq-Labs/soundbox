@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-07-28. This is the player handoff: shipped behavior,
+Current as of 2026-07-29. This is the player handoff: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -152,8 +152,11 @@ keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
 Both use the literal physical-pixel footprint. 3BAND is different: its three
 PWV7 heights are the complete native geometry and retain their authored timing
-without borrowing the signed trace. Successive per-band samples are connected
-linearly; holding each row as a rectangle creates visibly coarse stair steps.
+without borrowing the signed trace. The packed stream stays on its 150 Hz cache
+clock, while the scrolling lane begins at the paired-row peak level that
+matches Rekordbox's visible 75 Hz close facets. Successive paired values are
+connected linearly; holding each row as a rectangle creates a different coarse
+staircase.
 
 Main-waveform scrubbing is relative and precise:
 
@@ -454,11 +457,18 @@ The following renderer rules are measured invariants, not style preferences:
 - **Use the stable B-spline through 384 px/s, then preserve the native close
   edges.** The B-spline removes mid/wide lattice corners where the display
   cannot resolve them. At 576 px/s and above, BLUE/RGB signed intervals use
-  direct linear reconstruction. 3BAND linearly connects the authored PWV7
-  cells instead of holding each row as a rectangle. The prior
+  direct linear reconstruction. 3BAND linearly connects the authored
+  paired-row PWV7 peak cells instead of exposing twice the source screenshot's
+  corner density or holding each row as a rectangle. The prior
   monotone-Hermite close path rounded the straight-sided carrier peaks that
   distinguish the supplied Rekordbox views. The kernel choice depends only on
   the fixed zoom, never on playback phase.
+- **At the five close stops, pace signed extrema in output space.** BLUE/RGB
+  selects one conservative peak row from a four-physical-pixel footprint,
+  producing about 0.20–0.23 cells per pixel. Exact extrema and linear facets
+  remain; only adjacent peak knots too dense to stay visually stable are
+  removed. This is the stricter close-family exception to the general
+  one-value-per-pixel ceiling rule. It does not apply to 3BAND.
 - Rebuild the small private attribute buffer only when analysis, zoom, Retina
   scale, or its guarded song-space margin changes. The buffer is deliberately
   wider than the drawable, and every recenter is computed from an absolute
@@ -474,14 +484,28 @@ The following renderer rules are measured invariants, not style preferences:
   subpixel peaks. This distinction affects only compositing, never height,
   hue, LOD, or detail.
 - Integrate the fixed height/hue profile over exactly one physical pixel before
-  final vertical coverage. Five quarter-pixel boundary samples feed the exact
-  piecewise-linear area calculation; premultiplied color uses the same span.
+  final vertical coverage. Below 1152 px/s, five quarter-pixel boundary samples
+  retain the accepted result. At 1152–1536 px/s, use the pixel endpoints plus
+  every integer knot of the four-attributes-per-pixel lattice, weighted by
+  their actual spans; this is the complete piecewise-linear profile and avoids
+  a fractional-phase knot hiding between fixed probes. Premultiplied color uses
+  the same spans.
   Store premultiplied RGB on the lattice so color energy and height are both
   piecewise linear and their trapezoid integrals are exact. Interpolating
   straight color and height separately before multiplying them introduces a
   phase-dependent quadratic edge signal that reads as a faint color pulse.
   This removes subpixel needles and edge pulsing without the multi-pixel
   softening of the retired B-spline.
+- BLUE/RGB interval color must be conditioned on the portion of the signed
+  interval that actually covers the destination pixel. The accepted continuous
+  upper/lower boundary coverage remains unchanged. Within that coverage,
+  clipped-linear moments integrate PWV5 color in premultiplied linear light;
+  a horizontally hidden color sample can no longer tint a visible RGB edge.
+  BLUE evaluates its white/cyan/blue radial transfer from the same local
+  signed center, width, and coverage centroid, then accumulates that energy in
+  premultiplied linear light. Averaging color independently from interval
+  coverage creates an internal brightness/color tick even when the silhouette
+  itself is stationary.
 - **There is no temporal shutter. The integration window is the physical
   pixel and nothing else.** Rendered motion blur is correct for content the
   eye does not track. A DJ stares at the scrolling waveform and tracks it, so
@@ -1598,7 +1622,7 @@ greater-than-64-code tail fell from 1.413% to 0.462%. Bad Decisions at
 engine used the real WAVs and V4 caches and did not launch or mutate the
 installed app.
 
-### Waveform reference refinement checkpoint on 2026-07-28
+### Waveform reference refinement checkpoint on 2026-07-28 (superseded)
 
 This is a **source-only checkpoint**, not an installed or visually accepted
 release. The acceptance corpus remains the six untouched Rekordbox screenshots
@@ -1641,15 +1665,410 @@ not trusted again in this session. Temporary probes remained under `/tmp`; no
 SoundBox app was built or installed and no curated state was touched. Reboot
 macOS before resuming visual acceptance.
 
+### Joint BLUE/RGB color-coverage resolve on 2026-07-29
+
+The reboot restored trustworthy CoreGraphics/Metal capture. The untouched
+six-image Rekordbox corpus, both exact source WAVs, and both canonical V4 caches
+were revalidated before any source change. The first code inspection then found
+two related defects:
+
+- the BLUE radial path accumulated its signed center and half-width twice while
+  dividing by one profile weight; and
+- BLUE and RGB both averaged horizontal color independently of the portion of
+  the signed interval that actually covered the destination pixel. BLUE made
+  this shared mismatch much more visible because its procedural white/cyan/blue
+  field depends on the same moving center and width.
+
+The final joint resolve analytically integrates the clipped linear coverage and
+its first moment within each quarter-pixel song-space segment. RGB integrates
+PWV5 color against those moments in linear light. BLUE evaluates its smooth
+radial transfer at the coverage centroid of each half-segment and accumulates
+the result in premultiplied linear light. The already accepted continuous
+signed-boundary coverage is then reapplied exactly, so this is a color resolve,
+not a silhouette, LOD, reconstruction, timing, or cache change. 3BAND bypasses
+the helper and remained byte-for-byte identical in the six-case corpus.
+
+The harness now supports `--position-count` and `--position-step-ms`, allowing
+motion sweeps to stay inside one native session. Two 32-position, 1 ms sweeps
+compared the committed checkpoint with the joint resolve:
+
+- Bad Decisions BLUE at 768 px/s reduced visible motion-aligned
+  maximum-channel p99 from 127.8 to 68.0 display codes and the share above 64
+  codes from 9.13% to 1.40%. On solid waveform pixels, p99 fell from 131.2 to
+  58.6 and the greater-than-64 share from 8.37% to 0.58%.
+- High & Scared BLUE at 1536 px/s reduced visible p99 from 36.7 to 29.5 and
+  the greater-than-32 share from 1.55% to 0.75%.
+- RGB was explicitly checked rather than assumed clean. Bad Decisions' visible
+  mean/p99 changed from 13.035/63.60 to 13.009/63.36, with its
+  greater-than-64 share improving from 0.967% to 0.947%. High & Scared remained
+  effectively identical at 3.824/27.392 versus 3.832/27.432; its
+  greater-than-64 share stayed 0.052%.
+
+Both tracks were rendered again in BLUE and RGB at all thirteen UI zoom stops.
+The BLUE white/cyan core now follows the supplied Rekordbox references instead
+of collapsing toward dark blue. RGB retained its established appearance: at
+864–1536 px/s, 99% of compared pixels changed by no more than 0–2 display
+codes. The Metal runtime compiled the shader, the exact six-case corpus
+rendered, 83 focused native/reference tests passed, and `./check.sh --render`
+passed 549 tests with one expected platform skip. This validation was
+read-only with respect to source audio, Rekordbox, and SoundBox AppData.
+
+The signed app was then built, safely installed through one temporary rollback
+directory, signature-verified, and relaunched with the packaged native deck
+active. It loaded all 3,263 live tracks and 83 playlists. The protected
+pre-install `library.json` backup has SHA-256
+`a3de5286f637922a6d4708b4b60417825f468bef0433bb7fa7f540e198fe0cc4`;
+recursive comparison after launch found changes only in the actively selected
+waveform mode and zoom. All playlists, aliases, overrides, hidden/import state,
+playlist removals, and other curated data remained identical. The existing
+3,248 V4 records remained present. Startup found 43 genuine per-track
+`is_ready()` misses rather than zero tasks: this renderer-only change did not
+alter any cache model/version, and a read-only audit confirmed the bounded
+queue was the existing set of available changed/new files (predominantly
+player-only M4A sets), not a model-wide recook. Battery policy is processing
+that queue incrementally.
+
+### Close-detail and cadence follow-up on 2026-07-29
+
+Sonny's new 95.903-second, 3600×582 screen recording traverses the BLUE and RGB
+zoom ladders. Its HEVC stream is nominally 120 fps but contains 5,454 frames at
+56.86 fps average: 3,236 intervals are 16.667 ms, 1,617 are 16.666 ms, 599 are
+25 ms, and one is 33.333 ms. At the stable maximum-zoom BLUE and RGB passages,
+ordinary registered travel is 15 physical pixels for a 16.67 ms interval and
+23 pixels for 25 ms. Sparse conserved short/long pairs remain—for example
+8 then 31 pixels or 8 then 23—rather than cumulative transport drift. One exact
+duplicate frame exists. The recording therefore confirms a rare presentation
+pacing irregularity, while its variable capture cadence is itself too uneven
+to label every long source interval as a renderer miss.
+
+Apple's `CAMetalDisplayLink` guidance and current Chromium macOS implementation
+were audited against the deck. Prediction already uses the target presentation
+timestamp; the explicit 60–120 Hz preferred range, latency one,
+`NSRunLoopCommonModes`, actual `MTLDrawable.presentedTime`, and skipped-target
+handling match that platform/community direction. Using the system-default
+range tied the current implementation in repeated eight-second probes. Fixed
+60 Hz introduced 25 ms gaps and approximately 8.33 ms target error. Replacing
+the bounded run-mode pump with a continuously running display thread also tied
+it in paired alternating trials. The existing cadence architecture is
+therefore retained. BBC audiowaveform and Audacity were also checked for
+waveform reconstruction precedent; their display-resolution peak aggregation
+is consistent with this renderer, but the supplied Rekordbox screenshots remain
+the authoritative visual contract.
+
+The exact Desktop screenshots exposed two independent close-detail refinements.
+For BLUE/RGB, a physical pixel spans four attribute samples and can contain one
+fractional-phase integer lattice knot that the previous fixed quarter-pixel
+probes missed. At 1152–1536 px/s the fragment now gathers both pixel endpoints
+and every interior knot, then weights coverage and premultiplied color by the
+true segment spans. On the 32-position High & Scared sweep this reduced BLUE
+visible p99 from 42.443 to 39.903 codes and RGB from 44.321 to 41.571; the
+greater-than-64 tails fell from 0.093% to 0.049% and 0.119% to 0.079%.
+Applying that topology at 768 px/s was fractionally worse, so the accepted
+fixed five-point profile remains below 1152.
+
+For 3BAND, a hard PWV7 cell hold was immediately rejected as blocky. Counting
+the exact screenshot facets instead showed that Rekordbox displays one close
+facet per pair of stored 150 Hz PWV7 rows. The scrolling lane now begins at the
+existing per-band peak mip's paired-row level and linearly connects those 75 Hz
+values. This halves SoundBox's false corner density while retaining the larger
+authored Rekordbox facets and exact measured seven-color membership palette.
+Registered silhouette error improved on both reference tracks; visual
+acceptance remains the untouched six-image Desktop corpus, not that imperfect
+registration metric.
+
+The exact seven 3BAND membership colors and the BLUE/RGB source hues were
+audited directly from the Desktop PNGs. No screenshot-derived compensating RGB
+curve was added: the renderer retains the measured authored display values and
+the explicit Display-P3 layer contract, while coverage is blended in linear
+light. Shape experiments were not allowed to retune color.
+
+Both `./check.sh --render` and the required bare `./check.sh` passed 549 tests
+with one expected platform skip. The signed candidate was built and staged
+with `ditto`; a direct copy into `/Applications` on this macOS build silently
+omitted PyInstaller symlinks and the signature directory, so that incomplete
+copy was never launched. Moving the verified complete staged bundle into place
+preserved all 63 resource symlinks and the signature. The installed app then
+launched with the packaged native CoreAudio/Metal deck, loaded 3,263 tracks and
+83 playlists, and retained all 3,248 V4 records. `library.json` remained
+byte-identical at SHA-256
+`d4e7bf428e87bda019e476703fadba34d55e0208a3ec52a39002e9e3b07d501e`.
+Startup scheduled 11 genuine analysis misses under battery policy; this
+renderer-only change did not alter cache schema or trigger a broad recook. The
+candidate remains subject to Sonny's live visual acceptance.
+
+### Initial close BLUE/RGB extrema-density follow-up on 2026-07-29
+
+Live acceptance established two important boundaries: playback motion across
+all three display modes and 3BAND's paired-row shape are accepted; the only
+remaining visible defect was a static/pulsating texture in both BLUE and RGB
+at the five closest UI stops (384/576/864/1152/1536 px/s). That common mode
+boundary ruled out BLUE's radial transfer and the presentation clock.
+
+The signed audio contour was still selecting 0.91–1.03 peak-extrema cells per
+physical pixel at those stops. A min/max cell may alternate fully against its
+neighbor, so that density places real source energy directly on the pixel
+Nyquist boundary even though the contour is song-locked. The close BLUE/RGB
+path now advances exactly two entries through the existing measured integer
+peak ladder. Its resulting density is 0.51–0.63 cells per physical pixel.
+Linear reconstruction, the four-sample song-space attribute lattice, exact
+one-pixel coverage/color integration, palette, timing, and caches remain
+unchanged. 3BAND bypasses the signed audio contour and is untouched.
+
+Thirty-two-position real-track sweeps measured lower motion-aligned visible
+maximum-channel change at every close stop. Mean change fell from
+10.527/10.638/12.220/11.923/7.156 display codes to
+8.268/7.918/9.731/8.516/4.072 for BLUE and from
+9.504/8.892/10.481/9.935/5.917 to
+8.035/7.009/8.801/7.851/3.434 for RGB. The exact High & Scared RGB reference
+improved silhouette correlation from 0.9111 to 0.9248 and cutout agreement
+from 0.9280 to 0.9383; Bad Decisions RGB also improved on both measures.
+Both 3BAND corpus PNGs remained byte-for-byte identical.
+
+The focused native/reference set passed 83 tests. Both `./check.sh --render`
+and the required bare `./check.sh` passed 549 tests with one expected platform
+skip. The signed app was built, staged with all 320 bundle symlinks intact,
+signature-verified, and installed through the existing temporary rollback
+directory. Relaunch loaded the packaged CoreAudio/Metal deck, 3,263 tracks,
+83 playlists, and zero preparation tasks. All 3,248 V4 records and 3,125 art
+files remained present. `library.json` stayed byte-identical to the post-quit
+backup at SHA-256
+`26fa68974f9b174b5fa00e2059c1ce00c224e9ecf05d2b37a320360faac628af`.
+The installed candidate is ready for the final live pulsation verdict.
+
+### Close BLUE/RGB output-footprint follow-up on 2026-07-29
+
+The final live verdict on the two-entry peak-ladder candidate was that its
+improvement was real but the same static/wiggly color pulse remained visible
+in BLUE and RGB at all five closest stops. The new SDR screen recording was
+H.264 Main, BT.709 `yuv420p`; lossless samples of the exact Retina waveform
+crop measured codec noise below one code value. Registered playback travel was
+also exact. Over ten 120 Hz refresh intervals the five stops moved by the
+expected integer `64/96/144/192/256` physical pixels, yet the installed
+renderer still changed roughly 4–8 display codes with 1–2% silhouette churn.
+The defect was therefore renderer source/raster phase, not HDR conversion,
+capture cadence, presentation hitching, or the transport clock.
+
+Controlled probes separated the remaining variables:
+
+- Doubling the fixed attribute lattice from four to eight values per physical
+  pixel produced essentially identical redraw, ruling out lattice sampling.
+- Triangle/RMS minification and fixed 150–600 Hz song-space low-pass filters
+  reduced redraw but visibly shortened peaks and rounded the straight facets
+  in the supplied desktop references; they were rejected.
+- Retaining the conservative peak extrema while selecting one knot per roughly
+  four physical pixels preserved the angular carrier and attack height while
+  removing the undisplayable alternating extrema cadence.
+
+The shipped candidate derives the close mip with
+`audio_detail_lod(detailFootprint * 4)`. At
+384/576/864/1152/1536 px/s this selects integer peak divisors
+`35/25/18/13/9`, or 0.20–0.23 extrema cells per physical pixel. This is a
+song-anchored source decision, not a final-pixel blur; the four-sample
+attribute lattice, exact interval/color coverage, Display-P3 palette, timing,
+and cache format are unchanged. 3BAND bypasses this signed audio contour.
+
+On the 32-position Bad Decisions source-frame sweep, BLUE registered visible
+mean change fell from `8.252/11.562/7.621/7.344/9.697` display codes to
+`4.829/5.212/4.307/4.778/5.192`; RGB fell from
+`7.994/10.116/6.988/6.754/8.239` to
+`5.177/5.460/4.369/4.718/4.882`. On exact ten-refresh-step translations,
+more than 99% of registered waveform pixels were unchanged: visible p99 was
+0–1 code and silhouette mismatch was 0.08–0.14% across both modes and all five
+stops. Both accepted 3BAND corpus renders remained byte-for-byte identical.
+
+The focused native/reference set passed 85 tests. Both the required bare
+`./check.sh` and `./check.sh --render` passed 551 tests with one expected
+platform skip. The signed app was built and installed with all 320 bundle
+symlinks intact; the packaged and installed native dylibs were byte-identical.
+Relaunch activated the packaged CoreAudio/Metal deck, loaded 3,263 tracks and
+83 playlists, and scheduled zero preparation tasks. All 3,248 V4 records and
+3,125 art files remained present. The pre-install `library.json` is protected
+at SHA-256
+`f11a2c2d0439ea5a3d3fd3773fcae299873f819f2c894b1a381b0d0b465c8141`;
+after relaunch every curation-bearing section remained identical and only the
+actively exercised waveform mode/zoom settings changed.
+
+### Zoom-height and ordinary-pause follow-up on 2026-07-29
+
+The next two SDR recordings separated a perceived playback-size change from a
+transport discontinuity. The dramatic vertical growth occurred while paused
+on a 256→384 zoom change. It was not gain or a playing-only render path: 384
+px/s is the boundary where BLUE/RGB begins using the four-physical-pixel peak
+source, and max pooling over its larger divisor raises typical contour height.
+On the same 0.8-second Bad Decisions song window, median half-height previously
+walked `44.5/42.5/39.5/37.5/33.5` pixels from 64 through 256, jumped to `42.5`
+at 384, then fell `39.5/37.5/34.5/30.5` through 1536. This exactly matched the
+recorded grow/shrink pattern and the reported thin 92/128 region.
+
+BLUE/RGB now applies a shallow signed height normalization from 92 px/s upward
+based only on the selected integer peak divisor:
+`pow(50 / divisor, 0.22)`, bounded to `0.8...1.5`. The same measured window now
+holds a 45.5–47.5-pixel median half-height at every stop from 92 through 1536;
+64 remains 44.5. Horizontal detail, phase, mode color, and caches are
+unchanged. The exact High & Scared desktop references remain the acceptance
+source, and both 3BAND corpus renders remain byte-for-byte identical.
+
+The start/stop recording also exposed an independent pause endpoint bug. After
+the button changed state, queued Metal frames continued forward and the
+millisecond Python estimate then sought 7–13 physical pixels backward. Clean
+pause now captures Metal's newest presented/scheduled source frame at fade
+completion—the same proven atomic hold used by waveform grabbing—then pauses
+and seeks to that fractional-millisecond frame. Resume starts from the exact
+hold rather than a stale poll.
+
+The first recording averaged 56.9 captured fps while the app presented at
+120 Hz, so its irregular 1–3-refresh holds necessarily alias the fast
+carrier/“traffic-line” motion. No temporal shutter or extra waveform smoothing
+was added from that evidence because either would change the desktop-reference
+edges and make paused/playing sharpness disagree. The planned high-frame-rate
+iPhone recording remains the correct live-display check for residual temporal
+motion and hitching.
+
+Both the required bare `./check.sh` and `./check.sh --render` passed 551 tests
+with one expected platform skip. The signed app was built, safely installed
+through one temporary rollback directory, and relaunched with all 320 bundle
+symlinks intact. The packaged and installed native dylibs were byte-identical;
+startup activated that native deck, loaded 3,263 tracks / 83 playlists, and
+scheduled zero preparation tasks. All 3,248 V4 records and 3,125 art files
+remained present. The post-quit backup and relaunched `library.json` were
+byte-identical at SHA-256
+`6053360eb9dd6ed5266a387ef42fdc9c6c265a9d4e5b26cea609ae005e2ff60f`.
+Live acceptance of the normalized height and exact pause endpoint is pending.
+
+### Height-crossover correction on 2026-07-29
+
+The first installed normalization was rejected on sight. The 23.53-second
+SDR follow-up traversed the full RGB zoom ladder during playback and exposed
+what the earlier fixed-window median hid: the divisor curve was applied as a
+straight signed multiply. At the exact 24.2 passage surrounding the
+256→384 click, the 256 row clipped loud extrema toward the lane edge and its
+median outer half-height then fell from 78 to 69 physical pixels when the
+four-pixel source family began. The 92→128 handoff also changed apparent
+tooth height more abruptly than its aggregate median suggested.
+
+The replacement keeps the same divisor selection and shallow gain but applies
+it only through the magnitude's unused headroom:
+`m + (gain - 1) * m * (1 - m)`. Digital zero and full scale are fixed points,
+so a loud row cannot be enlarged into clipping and then collapse at the close
+family boundary. Narrow bounded additions of `0.15` and `0.18` at 92 and
+128 px/s initially lifted the two specifically reported thin stops without
+moving their full-scale peaks. The live follow-up then identified the third
+click from the 24 px/s end—64 px/s—as the remaining midrange waist. The final
+bounded additions are `0.10/0.23/0.26` at 64/92/128 px/s, spreading that lift
+across the whole transition rather than creating another breakpoint.
+
+At the real app geometry and exact recorded 24.2 position, RGB and BLUE now
+share the same median outer-half-height ladder:
+`67/67/66/63/61/60/60/63/65/65/66/66/67` physical pixels at
+24/32/48/64/92/128/184/256/384/576/864/1152/1536 px/s. The largest
+adjacent change is three pixels and the 256→384 crossover is two pixels
+instead of a nine-pixel collapse. This is vertical-only; source density, song
+phase, color, caches, and the accepted 3BAND path are unchanged. Against the
+exact High & Scared desktop source, the replacement improved RGB silhouette
+correlation/MAE to `0.9308/0.1533` and BLUE to `0.6955/0.2141`. Both 3BAND
+corpus PNGs remained byte-for-byte identical to the accepted renders.
+
+Both the required bare and offscreen-render gates passed 552 tests with one
+expected platform skip. The signed app was built, safely installed through one
+temporary rollback directory, and relaunched with all 320 bundle symlinks
+intact. Its packaged and installed native dylibs were byte-identical. Startup
+activated that deck, loaded 3,263 tracks / 83 playlists, and scheduled zero
+preparation tasks; all 3,248 V4 records and 3,125 art files remained present.
+The post-quit backup and relaunched `library.json` were byte-identical at
+SHA-256
+`4bb621ab0e957d9bb32e1c4a306082ca6c40c73965436fc3eb91e3d8ee3d5856`.
+Sonny's immediate live verdict was that the full zoom transition was “much
+better”; the bounded height ladder and exact ordinary-pause endpoint are the
+accepted checkpoint.
+
+### BLUE/RGB temporal-aliasing R&D handoff
+
+The next player session starts here. Do not reopen the accepted 3BAND shape,
+BLUE/RGB height ladder, pause endpoint, palette, or paused desktop-reference
+edges unless new evidence directly implicates one of them. The sole unresolved
+visual defect is the static/wiggly/color-pulse impression while BLUE or RGB
+moves at the five closest stops (384/576/864/1152/1536 px/s). A separate
+reported hitch is not yet isolated and must not be conflated with the carrier
+texture.
+
+Authoritative local evidence:
+
+- Desktop PNGs under `~/Desktop/rekordbox wave/` remain the paused spatial
+  source of truth for color, edge shape, height, and detail.
+- `Screen Recording 2026-07-29 at 4.14.25 PM.mov` traverses RGB and BLUE and
+  is the best existing close-motion recording.
+- `Screen Recording 2026-07-29 at 4.24.58 PM.mov` isolates start/stop; it led
+  to the now-shipped exact Metal pause hold.
+- `Screen Recording 2026-07-29 at 4.49.20 PM.mov` traverses the RGB height
+  ladder; it led to the accepted bounded crossover correction.
+- The first recording is H.264 Main, SDR BT.709 `yuv420p`, 3,600×582, and
+  averaged only 56.9 captured fps while SoundBox presented at 120 Hz. It
+  necessarily contains irregular one-to-three-refresh frame holds and cannot
+  by itself prove or disprove a physical-display temporal artifact.
+
+What the completed investigation already established:
+
+- The display clock advances the waveform by the exact expected physical
+  distance. Registered ten-refresh translations at every close stop held
+  visible p99 change to 0–1 display code and silhouette mismatch to
+  0.08–0.14%; a gross transport-position error is not the pulse.
+- BLUE and RGB share the defect while accepted 3BAND does not. BLUE's radial
+  transfer, RGB's distinct color path, and the authored palette are therefore
+  not sufficient explanations.
+- Doubling the fixed attribute lattice from four to eight values per physical
+  pixel made no material difference.
+- Triangle/RMS minification and 150–600 Hz song-space low-pass probes reduced
+  redraw but rounded attacks and shortened peaks relative to the desktop
+  sources; they were rejected.
+- Selecting one peak knot per roughly four physical pixels improved the
+  artifact materially while retaining angular extrema. It remains the shipped
+  spatial source decision, not proof that the residual is solved.
+- Linear-light joint interval/color integration removed an earlier brightness
+  tick. Final-pixel blur, temporal shutter, or playing-only smoothing remain
+  unacceptable without evidence because they would make stopped and moving
+  spatial truth disagree.
+- The height crossover and pause rewind were separate measured defects and are
+  now fixed. Do not use their before/after recordings as evidence that the
+  residual carrier pulse changed.
+
+The next session must be an experiment-led temporal investigation, not another
+documentation survey or blind filter sweep:
+
+1. Record the physical built-in panel at 120 or 240 fps with the iPhone locked
+   for focus, exposure, white balance, and framing. Capture the same passage
+   stopped and playing at all five close stops, plus accepted 3BAND as a
+   control. Include enough screen border to recover camera/display phase.
+2. Add a diagnostic-only native capture that records the exact Metal drawable
+   sequence and display-link target/present timestamps for the same run.
+   Compare those GPU frames with the filmed panel. This separates shader
+   redraw from compositor/ProMotion cadence, sample-and-hold motion, panel
+   response, and camera aliasing.
+3. Build space-time strips through fixed song coordinates after exact motion
+   registration. Measure carrier temporal frequency, phase reversals, color
+   variance, repeated/late presents, and whether the residual exists in the
+   drawable sequence before it reaches the panel.
+4. Drive synthetic signed carriers through the same Metal interval compositor:
+   constant-color triangles, alternating extrema, isolated impulses, and
+   controlled knot densities bracketing the shipped 0.20–0.23 cells per
+   physical pixel. The smallest pattern that reproduces the filmed defect
+   identifies whether geometry, chroma, coverage, or presentation is causal.
+5. Only after that split should a remedy be designed. Candidate domains include
+   source reconstruction, analytic prefiltering, presentation scheduling, or
+   display-aware temporal treatment; acceptance still requires paused
+   reference fidelity, stopped/playing agreement, 3BAND invariance, and no
+   cache/schema change.
+
+Success is not “looks somewhat calmer in QuickTime.” It is one named causal
+mechanism, a reproducible diagnostic, a remedy that addresses that mechanism,
+and side-by-side physical-panel evidence at every affected zoom.
+
 ## Committed next player work
 
 See `ROADMAP.md` for sequencing.
 
-1. After reboot, re-establish the isolated real-track harness and reconfirm the
-   checkpoint at all thirteen zoom stops. Then prototype one change only:
-   jointly resolve BLUE radial color and interval coverage in premultiplied
-   linear light while preserving PWV3 whiteness/depth. Accept it only against
-   both exact tracks and all six Rekordbox references.
+1. Execute the BLUE/RGB temporal-aliasing experiment above. Preserve the
+   accepted spatial checkpoint and separate renderer, presentation, panel, and
+   camera effects before changing the shipped contour again.
 2. Design the not-yet-shipped grid/cue editing UX on top of the V4 storage
    mutation boundary. It must never mutate Rekordbox analysis. Today a valid
    Rekordbox grid remains authoritative and only the no-grid fallback begins at

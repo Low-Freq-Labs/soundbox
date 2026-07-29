@@ -11,6 +11,7 @@ from pathlib import Path
 import struct
 import unittest
 
+import numpy as np
 from PIL import Image
 
 from scripts.render_waveform_reference import (
@@ -18,6 +19,7 @@ from scripts.render_waveform_reference import (
     DEFAULT_REFERENCE_ROOT,
     REFERENCE_CASES,
 )
+from scripts.compare_waveform_motion import compare as compare_motion
 from soundbox import track_analysis
 
 
@@ -114,3 +116,19 @@ class RekordboxReferenceWaveforms(unittest.TestCase):
                         blue > 180 and green > 80 and red < 80
                         for red, green, blue in colors
                     ))
+
+
+class WaveformMotionMetric(unittest.TestCase):
+    def test_identical_registered_frames_have_zero_residual(self):
+        frame = np.full((12, 20, 3), (13, 14, 18), dtype=np.float32)
+        frame[3:9, 5:15] = (255, 166, 0)
+        result = compare_motion(
+            [frame, frame.copy(), frame.copy()],
+            pixels_per_second=1536.0,
+            sample_rate=44_100.0,
+            frame_step=0,
+            drawable_scale=2.0,
+        )
+        self.assertEqual(result["visible_mean_code_change"], 0.0)
+        self.assertEqual(result["solid_mean_code_change"], 0.0)
+        self.assertEqual(result["silhouette_xor_percent"], 0.0)

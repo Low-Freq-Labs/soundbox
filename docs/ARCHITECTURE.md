@@ -120,9 +120,25 @@ height and premultiplied RGB onto a fixed global song-space attribute lattice.
 Keeping color premultiplied makes its final one-pixel integral phase-stable.
 Positive cubic reconstruction stabilizes 24–384 px/s. At 576–1536 px/s,
 BLUE/RGB signed min/max intervals use direct linear reconstruction with the
-literal physical-pixel footprint. Native PWV7 retains its own display-cell
-timing while successive low/mid/high samples are connected linearly, avoiding
-the coarse staircase produced by nearest-cell holds.
+literal physical-pixel footprint. At the five close UI stops
+(384/576/864/1152/1536), those signed intervals select one native integer peak
+level from a four-physical-pixel output footprint. The resulting
+`35/25/18/13/9` divisors hold alternating extrema density to 0.20–0.23 cells
+per physical pixel before the fixed song-space attribute lattice; it is not a
+final-image blur. Because max pooling raises typical amplitude as divisors
+grow, BLUE/RGB signed min/max are normalized from 64 px/s upward against the
+50-cell row with a shallow divisor curve. The divisor gain is applied only
+through each signed magnitude's remaining headroom,
+`m + (gain - 1) * m * (1 - m)`, rather than as a clipping multiply. Narrow
+64/92/128 compensation completes the far-to-close ladder. This keeps vertical
+scale continuous across the 256→384 source-family boundary while fixing zero
+and full scale and leaving horizontal cadence and cache data unchanged. Native
+PWV7
+retains its own display-cell timing, but the scrolling 3BAND lane begins at
+the paired-row peak level:
+PWV7 is stored on the common 150 Hz clock while Rekordbox's supplied close
+references visibly author 75 Hz facets. Successive paired low/mid/high peaks
+are connected linearly; a nearest-cell hold is still rejected.
 Every zoom uses four attributes per Retina pixel for
 continuous subpixel motion. The private buffer margin scales with that density
 and is recentered from an absolute integer song coordinate. High-rate detail
@@ -134,14 +150,24 @@ participates in renderer color. Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
 precision. The scrolling lane translates fixed height/hue attributes into each
 final Retina drawable pixel. The fragment computes vertical silhouette
-coverage and composites the final color exactly once. Five quarter-pixel
-boundary samples integrate the fixed height profile and amplitude-weight RGB
-over exactly one physical pixel. There is no translated RGBA texture or second
-coverage/color filter; every zoom retains fractional travel through the
-oversampled attribute lattice. The antialias window is exactly one physical
-pixel. The small overview applies continuous cubic vividness to true subpixel
-coverage; the scrolling lane uses exact geometric coverage at every zoom so
-saturated edges are not over-amplified.
+coverage and composites the final color exactly once. The accepted
+quarter-pixel profile remains in use below 1152 px/s. At 1152–1536 px/s the
+pixel endpoints plus every integer knot of the four-attributes-per-pixel
+lattice form the complete piecewise-linear profile; integrating those true
+segment spans avoids a hidden corner moving through a fixed probe interval.
+There is no translated RGBA texture or second coverage/color filter; every
+zoom retains fractional travel through the oversampled attribute lattice. The
+antialias window is exactly one physical pixel. The small overview applies
+continuous cubic vividness to true subpixel coverage; the scrolling lane uses
+exact geometric coverage at every zoom so saturated edges are not
+over-amplified.
+For BLUE/RGB signed intervals, the fragment additionally integrates clipped
+linear coverage moments and conditions color on the locally visible portion of
+each quarter-pixel segment. PWV5 RGB and BLUE's center/width-dependent radial
+field are accumulated in premultiplied linear light; a hidden horizontal sample
+cannot tint a visible interval. The established continuous upper/lower boundary
+coverage is reapplied exactly after the color resolve, preserving silhouette
+geometry independently from color.
 The two fixed 64 and 184 px/s stops additionally apply one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
 integration. Its narrow zoom-space taper is zero at every neighboring stop;
@@ -162,6 +188,9 @@ sharpness. Actual
 drive cadence diagnostics and the grab handoff. Presentation latency is one
 frame, and the newest committed source frame is held atomically so mouse-down
 cannot rewind or change waveform thickness.
+Ordinary pause captures the same exact frame at the end of its gain fade and
+resumes from that fractional-millisecond position; the coarse Python transport
+poll is never the pause endpoint.
 Redundant inactive-preview updates are absorbed without waking the Metal run
 loop. Render buffers are snapshotted under a short mutex and command encoding
 happens after that mutex is released.

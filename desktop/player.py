@@ -1777,18 +1777,24 @@ class PlayerBar(QWidget):
             lambda: self._complete_pause(after))
 
     def _complete_pause(self, after=None):
-        # Capture the interpolated presentation point at the END of the fade,
-        # not when the button was pressed. The backend is explicitly moved to
-        # that point so resume cannot jump backward to a stale coarse tick.
+        # Capture Metal's exact newest committed/scheduled frame at the END of
+        # the fade. The ordinary Python/backend positions are millisecond
+        # snapshots and can trail the drawable by one refresh; seeking back to
+        # either made pause settle a few pixels to the right and then snap
+        # left. Native pause now shares the exact-frame hold used by waveform
+        # grabbing. Non-native backends retain the interpolated fallback.
+        exact_hold = None
+        if hasattr(self.player, "begin_visual_hold"):
+            exact_hold = float(self.player.begin_visual_hold())
         elapsed = (self._pause_clock.nsecsElapsed() / 1_000_000
                    if self._pause_clock.isValid() else 0.0)
         rate = max(0.0, float(self.player.playbackRate()))
         fade_end = round(self._pause_floor_ms + elapsed * rate)
-        target = max(
-            fade_end,
-            self._transport_position() if self._transport_running else 0,
-            self.player.position(),
-        )
+        target = exact_hold if exact_hold is not None else max(
+                fade_end,
+                self._transport_position() if self._transport_running else 0,
+                self.player.position(),
+            )
         if self._dur:
             target = min(target, self._dur)
         self.player.pause()

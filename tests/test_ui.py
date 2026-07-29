@@ -1380,7 +1380,7 @@ class PlayerHardening(unittest.TestCase):
             pb.player = real_player
             pb.shutdown_waveforms()
 
-    def test_clean_pause_pins_backend_to_interpolated_visual_position(self):
+    def test_clean_pause_pins_backend_to_exact_presented_position(self):
         from desktop.player import PlayerBar
         from PySide6.QtTest import QTest
 
@@ -1388,6 +1388,7 @@ class PlayerHardening(unittest.TestCase):
             def __init__(self):
                 self.state = PlaybackState.PLAYING
                 self.pos = 9_900
+                self.holds = 0
 
             def playbackState(self):
                 return self.state
@@ -1400,6 +1401,10 @@ class PlayerHardening(unittest.TestCase):
 
             def setPosition(self, ms):
                 self.pos = ms
+
+            def begin_visual_hold(self):
+                self.holds += 1
+                return 10_037.25
 
             def pause(self):
                 self.state = PlaybackState.PAUSED
@@ -1418,9 +1423,10 @@ class PlayerHardening(unittest.TestCase):
             QTest.qWait(12)
             pb._pause_clean()
             pb._on_gain_finished()
-            # Resume will start from the smooth visual clock, never jump back
-            # to the backend's stale coarse 9.9-second position.
-            self.assertGreaterEqual(fake.pos, 10_008)
+            # Resume starts from the exact newest Metal drawable, never from
+            # the backend's stale coarse 9.9-second position.
+            self.assertEqual(fake.pos, 10_037.25)
+            self.assertEqual(fake.holds, 1)
             self.assertEqual(pb._pos, fake.pos)
             self.assertFalse(pb._transport_running)
         finally:

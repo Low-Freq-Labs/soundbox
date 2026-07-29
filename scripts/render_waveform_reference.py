@@ -505,34 +505,77 @@ def render(args: argparse.Namespace) -> list[Path]:
             _bar_position(manifest.get("beats") or [], args.bar)
             if args.bar else int(args.position_ms)
         )
-        backend.set_visual_position(position_ms, True)
         backend.sync_view_geometry()
 
         args.out.mkdir(parents=True, exist_ok=True)
         outputs = []
         for mode in args.modes:
             backend.set_waveform_mode(mode)
-            backend.request_display()
-            _wait_for(
-                lambda: backend.diagnostic_presented_frame() >= 0,
-                app, 0.25)
-            for _ in range(10):
-                app.processEvents()
-                time.sleep(0.02)
-            screen = QGuiApplication.screenAt(
-                wave.mapToGlobal(QPoint(wave.width() // 2, wave.height() // 2))
-            ) or QGuiApplication.primaryScreen()
-            origin = wave.mapToGlobal(QPoint(0, 0))
-            image = screen.grabWindow(
-                0, origin.x(), origin.y(), wave.width(), wave.height())
-            target = args.out / f"{args.track_id}-{mode}.png"
-            if image.isNull() or not image.save(str(target)):
-                raise RuntimeError(f"could not capture native render: {target}")
-            outputs.append(target)
+            for position_index in range(args.position_count):
+                capture_position = (
+                    position_ms
+                    + (
+                        position_index * args.position_step_frames
+                        / max(1.0, backend._sample_rate) * 1000.0
+                        if args.position_step_frames is not None
+                        else position_index * args.position_step_ms
+                    )
+                )
+                presented_before = backend.diagnostic_presented_frame()
+                expected_frame = round(
+                    capture_position * backend._sample_rate / 1000.0)
+                backend.set_visual_position(capture_position, True)
+                backend.request_display()
+                if not _wait_for(
+                        lambda: (
+                            backend.diagnostic_presented_frame()
+                            == expected_frame),
+                        app, 3.0):
+                    backend._poll()
+                    error_message = bytes(
+                        backend._snapshot.error_message
+                    ).split(b"\0", 1)[0].decode("utf-8", "replace")
+                    raise RuntimeError(
+                        "native renderer did not present the requested frame "
+                        f"(error={backend._snapshot.error_code}: "
+                        f"{error_message or 'none'}; "
+                        f"expected={expected_frame}, "
+                        f"before={presented_before}, "
+                        f"presented={backend.diagnostic_presented_frame()}, "
+                        f"scheduled={backend.diagnostic_scheduled_frame()}, "
+                        f"display={backend.diagnostic_display_stats()})")
+                screen = QGuiApplication.screenAt(
+                    wave.mapToGlobal(
+                        QPoint(wave.width() // 2, wave.height() // 2))
+                ) or QGuiApplication.primaryScreen()
+                origin = wave.mapToGlobal(QPoint(0, 0))
+                image = screen.grabWindow(
+                    0, origin.x(), origin.y(), wave.width(), wave.height())
+                if args.position_count == 1:
+                    suffix = ""
+                elif args.position_step_frames is not None:
+                    suffix = f"-frame{position_index:03d}"
+                else:
+                    suffix = f"-{capture_position:g}ms"
+                target = args.out / f"{args.track_id}-{mode}{suffix}.png"
+                if image.isNull() or not image.save(str(target)):
+                    raise RuntimeError(
+                        f"could not capture native render: {target}")
+                outputs.append(target)
 
         print(
             f"rendered track={args.track_id} source={source.name!r} "
-            f"position_ms={position_ms} zoom={backend.diagnostic_zoom():.0f} "
+            f"position_ms={position_ms}"
+            f"..{(
+                position_ms
+                + (
+                    (args.position_count - 1) * args.position_step_frames
+                    / max(1.0, backend._sample_rate) * 1000.0
+                    if args.position_step_frames is not None
+                    else (args.position_count - 1) * args.position_step_ms
+                )
+            ):g} "
+            f"zoom={backend.diagnostic_zoom():.0f} "
             f"geometry={backend.diagnostic_view_geometry()}"
         )
         return outputs
@@ -580,6 +623,17 @@ def parse_args() -> argparse.Namespace:
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--bar")
     where.add_argument("--position-ms", type=int)
+    parser.add_argument(
+        "--position-count", type=int, default=1,
+        help="capture this many consecutive positions in the same native session")
+    parser.add_argument(
+        "--position-step-ms", type=int, default=1,
+        help="millisecond spacing between captures when --position-count > 1")
+    parser.add_argument(
+        "--position-step-frames", type=int,
+        help=(
+            "source-audio-frame spacing between captures; overrides "
+            "--position-step-ms for subpixel phase sweeps"))
     parser.add_argument("--zoom", type=float, default=92.0)
     parser.add_argument(
         "--experimental-envelope",
@@ -604,6 +658,10 @@ def parse_args() -> argparse.Namespace:
         "--modes", nargs="+", choices=("BLUE", "RGB", "3BAND"),
         default=("BLUE", "RGB", "3BAND"))
     args = parser.parse_args()
+    if args.position_count < 1:
+        parser.error("--position-count must be at least 1")
+    if args.position_step_frames is not None and args.position_step_frames < 1:
+        parser.error("--position-step-frames must be at least 1")
     if not args.corpus and (
             not args.track_id
             or (args.bar is None and args.position_ms is None)):

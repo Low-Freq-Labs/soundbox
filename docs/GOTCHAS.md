@@ -136,19 +136,40 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   reconstructed linearly at the physical-pixel footprint; widening or
   smoothing center-filled peaks does not create either close waveform.
   3BAND is not a recolored version of that contour: render its native PWV7
-  layers directly and linearly connect successive per-band samples. Holding
-  each sample as a rectangle creates the rejected coarse staircase.
+  layers directly. PWV7 storage uses the shared 150 Hz clock, but the supplied
+  Rekordbox edges expose one display facet per paired row (75 Hz); select the
+  first per-band peak mip and linearly connect those paired values. Rendering
+  every stored row doubles the visible corner density, while holding a row as
+  a rectangle creates a different rejected staircase.
   `scripts/render_waveform_reference.py --corpus` is the required
   real-track visual proof; a byte correlation is not acceptance.
 - **Audio-detail peak levels must match the physical-pixel footprint, not just
   the next power of two.** A 4.2-cell pixel rendered from an 8-cell max mip
   throws away nearly half the contour and rounds Rekordbox's narrow broken
   attacks into slabs. Build the native in-memory ladder at the measured
-  integer divisors (`1,2,3,4,5,6,8,9,13,...`) and select the first level within
-  the tightly bounded 6% footprint tolerance. This keeps the real UI stops at
-  `6/4/3/2` cells for 576/864/1152/1536 px/s while preserving one stable,
-  song-anchored level—never blend two lattices and never persist or recook
-  these runtime mips.
+  integer divisors (`1,2,3,4,5,6,8,9,13,...`). Below the close family, select
+  the first level within the tightly bounded 6% footprint tolerance. At the
+  five close UI stops (384/576/864/1152/1536), BLUE/RGB instead select from a
+  four-physical-pixel output footprint (`audio_detail_lod(footprint * 4)`).
+  The fixed stops resolve to divisors `35/25/18/13/9`, or 0.20–0.23 extrema
+  cells per physical pixel. Live acceptance showed that both the original
+  0.91–1.03 density and the first 0.51–0.63 reduction still left a static
+  pulse. This is still one stable song-anchored peak level—never blend two
+  lattices, never blur final pixels, and never persist or recook these runtime
+  mips. 3BAND has its independent paired-PWV7 cadence and must bypass this
+  rule.
+- **Peak mips change typical height even when their extrema are correct.**
+  Coarser max-pooled rows make the same song window taller, so the dedicated
+  close source caused a visible 256→384 height jump while finer rows made
+  64/92/128 and the closest stops progressively thinner. From 64 px/s upward,
+  normalize signed min/max by the selected integer divisor against the
+  50-cell reference with the shallow `pow(50 / divisor, 0.22)` curve, plus
+  narrow headroom compensation at 64/92/128. Never apply this as a straight
+  multiply: loud 256 px/s peaks clip to the lane edge and then collapse when
+  the four-pixel family begins at 384. Apply gain only through remaining
+  headroom, `m + (gain - 1) * m * (1 - m)`. That fixes digital zero and full
+  scale while equalizing the middle of the trace without changing horizontal
+  knot cadence, colors, cache data, or 3BAND.
 - **Waveform primaries are authored for the built-in Display-P3 surface.**
   Keep `CAMetalLayer.colorspace` explicitly set to Display P3 while retaining
   the sRGB-transfer Metal attachment for linear-light coverage blending.
@@ -165,11 +186,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   generous guarded margin scaled by the attribute density and absolute
   integer-song-coordinate recentering so regeneration cannot create a viewport
   seam.
-- **A pixel cannot display more than about one envelope value.** Keep
-  `kLodBias = 0` and ceil the footprint level. Negative bias leaves
-  undisplayable high-frequency content under a pixel, which reappears as a
-  moving hairy contour rather than useful detail. The midpoint taps exist to
-  integrate final coverage, not to buy a sharper mip.
+- **A signed extrema cell needs about four physical pixels at the close
+  stops.** “At most one cell per pixel” was sufficient to stop gross aliasing,
+  and about two pixels per cell improved it, but neither removed the final
+  static pulse: adjacent min/max cells can alternate from one extreme to the
+  other, placing their highest spatial frequency at a visibly phase-sensitive
+  screen cadence. Keep `kLodBias = 0`; select the dedicated close peak level
+  from a four-pixel output footprint without a final-image filter.
+  Midpoint/profile taps integrate final coverage; they do not buy sharper
+  source detail.
 - **Do not recover close detail by flooring the mip.** The fixed lattice stops
   phase-dependent redraw, but it cannot make above-Nyquist values displayable.
   A floor-mip prototype looked richly detailed in a still and immediately
@@ -198,6 +223,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   disjoint. The exact High & Scared close-RGB phase sweep cut the aligned
   greater-than-64-code change tail by almost 90% without changing its accepted
   silhouette.
+- **BLUE/RGB color must be resolved conditionally on signed coverage.** The
+  continuous upper/lower boundary resolve can be perfectly stable while an
+  independently averaged color still ticks inside it. RGB may inherit hue from
+  a horizontal tap that does not cover the queried destination pixel; BLUE
+  exposes the same defect more strongly because its white/cyan/blue radial
+  color depends on the moving signed center and width. Integrate clipped-linear
+  coverage moments per quarter-pixel segment, accumulate only visible color in
+  premultiplied linear light, and evaluate BLUE's radial field at the local
+  coverage centroid. Preserve the accepted `interval_profile_coverage` result
+  exactly so color work cannot move the silhouette. A temporary flat BLUE fill
+  can diagnose this class of defect but is not a fix because it discards PWV3
+  depth information.
 - **Timing-reference color must not inherit waveform color.** Grid lines are
   drawn after the waveform. Downbeats use opaque red and ordinary beats use
   opaque gray; translucent timing ink lets saturated waveform content alter
@@ -232,18 +269,22 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Never cache or interpolate final alpha.
 - **A fixed attribute lattice still needs one-physical-pixel horizontal
   integration.** One center height sample leaves subpixel needles that crawl
-  through dense passages. Sample five quarter-pixel boundaries over
-  `[-0.5, +0.5]`, feed their heights to `profile_coverage`, and
-  integrate premultiplied RGB over that same span. Do not widen the footprint:
-  one pixel removes the alias while retaining the close detail that B-spline
+  through dense passages. Below 1152 px/s, retain the accepted five
+  quarter-pixel boundaries over `[-0.5, +0.5]`. At the two closest stops, a
+  fractional song phase can place one integer attribute-lattice knot between
+  those probes; integrate the two pixel endpoints plus every interior knot
+  with their actual spans. Feed the same positioned profile to silhouette,
+  signed-interval, color, and 3BAND coverage. Do not widen the footprint: one
+  pixel removes the alias while retaining the close detail that B-spline
   reconstruction erased.
-- **Localized stop artifacts do not justify a coarser mip or a wider global
-  filter.** The real all-zoom recording isolated residual contour motion at
-  the fixed 64 and 184 px/s stops. Those stops use a narrow zoom-locked,
-  same-LOD `[1, 2, 1]` pass at `-0.5/0/+0.5` physical pixel before the existing
-  one-pixel integration. Its weight is zero at all eleven other fixed stops.
-  Do not extend it into 576–1536 px/s: that is the detail-preserving monotone
-  path, and broad averaging there repeats the previously rejected detail loss.
+- **Do not cure source aliasing by widening the final image filter.** Narrow
+  fixed-stop `[1, 2, 1]` reconstruction remains song-space and same-LOD.
+  The separate 384–1536 BLUE/RGB fix is a discrete peak-source decision:
+  select one peak row from the four-physical-pixel output footprint, then
+  retain the same one-pixel final integration. A triangle/RMS mip and fixed
+  150–600 Hz low-pass probes reduced motion numerically but rounded the
+  reference facets and were rejected. Do not turn the selected-row rule into
+  a broader screen kernel, an adjacent-LOD blend, or a 3BAND change.
 - **Inactive preview is an idempotent native transition.** PlayerBar publishes
   coarse transport text positions during ordinary playback. Those
   `preview_active=false` calls must do nothing once native preview is already
@@ -267,6 +308,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   with native target/presentation counters it can expose the conserved
   half-step/one-and-a-half-step sampling pairs without screen-recorder
   compositor interference.
+  A 2026-07-29 retry against the new 120 Hz screen recording also rejected
+  three apparent fixes: the system-default frame-rate range tied the existing
+  60–120 preference, fixed 60 Hz introduced 25 ms gaps, and a continuously
+  running display-thread run loop tied the existing bounded run-mode pump in
+  paired trials. Keep the explicit 60–120 preferred range, latency one, common
+  run-loop modes, and timestamp-driven prediction.
 - **A display-link submission is not an onscreen frame.** Target timestamps
   can run ahead of the drawable the hand actually sees. Count cadence from
   `MTLDrawable.presentedTime`, ignore its documented zero value for a dropped
@@ -391,6 +438,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   exact authoritative seek—even without movement—and resumes only when the
   deck was playing before the grab. Never seek the decoder on move events. The
   whole-track overview deliberately retains absolute click/drag navigation.
+- Ordinary click/Space pause must capture that same exact newest Metal frame
+  at fade completion before stopping and seeking the decoder. A coarse Python
+  millisecond estimate trails the drawable by about one refresh: recordings
+  showed forward settling followed by a 7–13 physical-pixel snap backward.
+  Resume must start from the held fractional-millisecond frame. This does not
+  replace the gain envelope; it makes its endpoint authoritative.
 - Overview and ultra waveform buffers are one visible surface. Prepared loads
   must group both native uploads while presentation is suspended and commit
   them together. Painting the overview while a long ultra section is still
