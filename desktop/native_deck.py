@@ -314,6 +314,18 @@ def _bind(path: Path):
     ]
     lib.sb_deck_set_audio_detail_polarity_u16_for_generation.restype = (
         ctypes.c_int)
+    lib.sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation.argtypes = [
+        handle,
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.c_uint16),
+        ctypes.POINTER(ctypes.c_uint16),
+        ctypes.POINTER(ctypes.c_int16),
+        ctypes.POINTER(ctypes.c_int16),
+        ctypes.c_size_t,
+        ctypes.c_double,
+    ]
+    lib.sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation.restype = (
+        ctypes.c_int)
     lib.sb_deck_set_cues.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_uint32),
@@ -1027,6 +1039,25 @@ class NativeDeckBackend(QObject):
                 packed_lower = (
                     ctypes.c_uint16 * count).from_buffer_copy(
                         lower[:count * 2])
+                minimum = detail.get("range_min")
+                maximum = detail.get("range_max")
+                if isinstance(minimum, bytes) and isinstance(maximum, bytes):
+                    range_count = min(
+                        count, len(minimum) // 2, len(maximum) // 2)
+                    packed_minimum = (
+                        ctypes.c_int16 * range_count).from_buffer_copy(
+                            minimum[:range_count * 2])
+                    packed_maximum = (
+                        ctypes.c_int16 * range_count).from_buffer_copy(
+                            maximum[:range_count * 2])
+                    set_polarity_range = (
+                        self._lib
+                        .sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation
+                    )
+                    set_polarity_range(
+                        self._handle, expected, packed, packed_lower,
+                        packed_minimum, packed_maximum, range_count, rate)
+                    return
                 self._lib.sb_deck_set_audio_detail_polarity_u16_for_generation(
                     self._handle, expected, packed, packed_lower, count, rate)
                 return

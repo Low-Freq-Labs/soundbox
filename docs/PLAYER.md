@@ -129,25 +129,31 @@ never disagree about a silently clamped value.
 
 Settings exposes three persistent waveform displays:
 
-- `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one.
+- `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one. Its
+  three luminance bits select the blue/cyan edge while the renderer supplies
+  Rekordbox's white center core. Its scrolling geometry is a high-rate signed
+  min/max trace: low-frequency bins remain thin oscillating lines and dense
+  bins widen naturally.
 - `RGB` uses the exact packed PWV5 stream. Each row is one display color plus
-  one compact height—not three band layers. At close zoom its song-anchored
-  color-cell boundaries remain crisp while the separate ultra contour supplies
-  the detailed shape.
-- `3BAND` uses the exact packed PWV7 low/mid/high shapes, with saturated
-  Display-P3 red/amber/blue anchors. Low-dominant kicks remain red and
-  high-dominant claps remain blue.
+  one compact height—not three band layers. PWV5 owns color and distant-scale
+  amplitude. Its scrolling geometry uses the same signed min/max trace as
+  BLUE, while song-anchored PWV5 color-cell boundaries remain crisp.
+- `3BAND` uses the exact packed PWV7 display rows as three independent
+  shapes. Rekordbox's band scales are applied separately and composited as
+  blue lows, brown mids, white highs, and the measured cream/pale-blue
+  membership colors.
 
 All three streams are imported or derived in one cache preparation pass and
 remain resident as separate native GPU pyramids. Switching the selector is
-immediate and never recooks the track. The 150 Hz mode stream owns color and
-frequency proportions while the shared approximately 6300-window/s SoundBox
-envelope owns the detailed outer contour, so a held analysis row cannot blur a
-short clap into a rectangle. A 30% floor from the contrast-curved selected
-display envelope retains Rekordbox's low body between individual audio cycles
-without replacing their detail or creating signal where both inputs are zero.
-The surface remains continuous at every zoom; display rows are never punched
-into separated columns.
+immediate and never recooks the track. BLUE and RGB combine their authored
+150 Hz color with the same persisted signed minimum/maximum cells rather than
+filling positive and negative envelopes back to zero. That shared geometry
+keeps tonal passages as continuous oscillating traces and lets noisy passages
+widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
+Both use the literal physical-pixel footprint. 3BAND is different: its three
+PWV7 heights are the complete native geometry and retain their authored timing
+without borrowing the signed trace. Successive per-band samples are connected
+linearly; holding each row as a rectangle creates visibly coarse stair steps.
 
 Main-waveform scrubbing is relative and precise:
 
@@ -277,24 +283,27 @@ Waveform geometry follows the stereo midpoint, which preserves the
 attack/decay contrast lost when the louder channel was allowed to inflate every
 row. A 1/16 peak-channel safety floor retains genuinely wide or anti-phase
 signal that cancels at the midpoint. The ultra stream stores independent
-positive and negative peak sections as little-endian uint16 under
-`soundbox-polarity-peak-u16-v3`; mirroring one unsigned height cannot reproduce
-the asymmetric upper/lower contour visible in Rekordbox. The compact overview
-remains a symmetric maximum for its 28-point-high lane. The 150 Hz overview
-uses complete, non-overlapping 1/150-second cells; it never reuses the wider
-spectral FFT window, which previously looked ahead about 46 ms, rounded
-attacks, filled decay valleys, and omitted the final seven rows.
+positive and negative peaks as little-endian uint16 plus signed per-cell
+minimum and maximum as little-endian int16 under
+`soundbox-polarity-range-u16-v4`. Mirroring one unsigned height cannot
+reproduce RGB polarity, while two peak envelopes filled back to zero cannot
+reproduce BLUE's oscillating trace. The compact overview remains a symmetric
+maximum for its 28-point-high lane. The 150 Hz overview uses complete,
+non-overlapping 1/150-second cells; it never reuses the wider spectral FFT
+window, which previously looked ahead about 46 ms, rounded attacks, filled
+decay valleys, and omitted the final seven rows.
 
-The renderer applies a display-only `height^1.4` curve and 0.84 full-scale
-ceiling plus a continuous low-end shoulder while uploading current
-geometry. This visually validated middle curve retains real shoulders without
+Native upload applies a display-only `height^1.4` curve and 0.84 full-scale
+ceiling plus a continuous low-end shoulder. This retains real shoulders without
 the needle-like peaks caused by `height^2` or the swollen center body caused by
 a linear map. The 1/64-height shoulder rises through a four-LSB knee and
 resolves real -60 to -73 dB tails as a
 physical-pixel hairline but evaluates to exactly zero at digital zero; it is
-not a hard minimum-height rule. The cache remains linear. Older V4 records load
-normally by duplicating their one height to both sides while the background
-worker atomically replaces them, preserving SoundBox-owned grid/cue data.
+not a hard minimum-height rule. Packed PWV3/PWV5/PWV7 heights remain linear
+because they are already authored display values. The cache remains linear.
+Existing V3 peak records fall back to a compatibility interval until the
+background worker atomically adds the V4 signed-range sections used by both
+BLUE and RGB, preserving SoundBox-owned grid/cue data.
 
 RGB rows use the same track timeline, but decoder compensation is
 format-specific. Lossless PCM (WAV/AIFF/FLAC) has no correction. MP3 retains
@@ -369,26 +378,27 @@ one reference passage.
 
 The following renderer rules are measured invariants, not style preferences:
 
-- The main waveform always uses the SoundBox audio-detail envelope pyramid for
-  its outer contour when available. PWV3/PWV5/PWV7 supply mode identity,
-  color, and band proportions; they never replace the ultra silhouette.
-- Pyramid levels are song-anchored maxima that retain transient detail as one
-  solid silhouette. Overview and scrolling geometry select one
-  footprint-matched level. Display-color pyramids remain power-of-two, while
-  the higher-rate audio contour uses an in-memory integer divisor ladder
+- BLUE and RGB share persisted signed minimum/maximum detail and a
+  literal-pixel interval trace; only their PWV3/PWV5 color compositors differ.
+  3BAND uses only its three packed PWV7 heights and must never be clipped to
+  the signed audio trace.
+- Pyramid levels remain song-anchored. Exact display pyramids retain peak
+  geometry and amplitude-weighted color. The higher-rate signed detail uses
+  an in-memory integer
+  divisor ladder
   (`1,2,3,4,5,6,8,9,13,...`). The dense ladder prevents a 4.2-cell physical
   pixel from being rounded by an 8-cell max bin. Blending adjacent lattices
   made them beat against each other while moving, so every frame still selects
   exactly one song-anchored level. There is no alternate wide/close geometry
   shader. A second
   RMS/translucent envelope was rejected because it reads as a ghost waveform
-  rather than additional useful detail. The selected 150 Hz display envelope
-  contributes only a bounded 30% floor beneath that ultra contour. This keeps
-  real low-level body visible while preserving the high-resolution attacks and
-  a true zero when both analyses are zero.
+  rather than additional useful detail.
 - Display color remains a compact ~150 Hz mode buffer rather than being
   duplicated into millions of ultra samples. BLUE/RGB use PWV3/PWV5 directly;
-  3BAND uses low/mid/high PWV7 energy. Each pyramid is song-anchored, so
+  3BAND uses measured low/mid/high PWV7 display layers with `0.40/0.43/0.40`
+  vertical transfers. Its compositor uses the exact seven-color membership
+  table instead of alpha-compositing three generic paints. Each pyramid is
+  song-anchored, so
   adjacent colors converge instead of alternating at far zoom. For derived
   records, per-column normalization retains the real low/mid/high relationship
   instead of making weak independently normalized FFT bands falsely
@@ -403,7 +413,7 @@ The following renderer rules are measured invariants, not style preferences:
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
 - Derive one footprint-matched LOD from source samples per physical pixel and
   select one peak level. The overview and main lane call the same sampler;
-  ultra detail replaces geometry quality only, never timing or color.
+  high-rate detail refines geometry only, never timing or color.
 - Print height and amplitude-weighted RGB onto a fixed, global song-coordinate
   attribute lattice, then translate those attributes. The lattice stores no
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
@@ -441,14 +451,14 @@ The following renderer rules are measured invariants, not style preferences:
   quantization and they beat against each other. Continuous blending only
   ever protected zoom *transitions*, and zoom is thirteen fixed steps, so the
   level is constant for the whole of playback.
-- **Use the stable B-spline through 384 px/s, then an interpolating monotone
-  cubic at 576 px/s and above.** The B-spline removes mid/wide lattice corners
-  where the display cannot resolve them. Extending it into the close range
-  visibly softened real peaks, while linear interpolation kept the peaks but
-  reintroduced moving slope corners. Monotone Hermite reconstruction passes
-  through every close-range sample, never overshoots its positive envelope,
-  and makes the slope continuous. The kernel blend depends only on the fixed
-  zoom, never on playback phase.
+- **Use the stable B-spline through 384 px/s, then preserve the native close
+  edges.** The B-spline removes mid/wide lattice corners where the display
+  cannot resolve them. At 576 px/s and above, BLUE/RGB signed intervals use
+  direct linear reconstruction. 3BAND linearly connects the authored PWV7
+  cells instead of holding each row as a rectangle. The prior
+  monotone-Hermite close path rounded the straight-sided carrier peaks that
+  distinguish the supplied Rekordbox views. The kernel choice depends only on
+  the fixed zoom, never on playback phase.
 - Rebuild the small private attribute buffer only when analysis, zoom, Retina
   scale, or its guarded song-space margin changes. The buffer is deliberately
   wider than the drawable, and every recenter is computed from an absolute
@@ -1280,7 +1290,59 @@ before launch. The worker then found 3,244 remaining stale analysis records and
 began the single combined rolling migration; twelve records were already v2
 at the first post-launch audit. The source WAV remained byte-for-byte unchanged.
 
-### BLUE/RGB/3BAND modes and continuous close detail on 2026-07-28
+### Three-mode reference correction on 2026-07-28
+
+The complete reference set is the six untouched PNGs under
+`~/Desktop/rekordbox wave`: BLUE, RGB, and 3BAND for track ID `54231927`
+(`Sonny - High & Scared (final master).wav`) and track ID `33638604`
+(`Bad Decisions w SUMA (FINAL FR).wav`).
+
+Pixel registration against the user-provided SoundBox screenshots established
+that the compared SoundBox view was `1536` points/s, not `184`, and uniquely
+identified the High & Scared source as track `54231927`; the other local
+masters have materially different color/timing streams. Registration against
+the untouched Rekordbox PNGs then established two reference scales: Bad
+Decisions is `768` points/s and High & Scared is `1536` points/s. The fixed
+harness centers them at the grid-derived `25597 ms` (bar 17.3) and `27000 ms`
+(bar 17.2), respectively.
+
+The first installed candidate from this investigation was rejected by the
+exact side-by-side: drawing independent polarity maxima produced a hairy,
+discontinuous RGB contour, while a 1 ms crest still filled both polarity
+envelopes inward to zero and left a false center seam. Substituting PWV5 height
+alone produced overfilled slabs. Outer-silhouette correlation remained above
+`0.87` for both rejected filled models, proving that outline-only scores cannot
+detect the obvious internal representation error.
+
+BLUE required a different data model. Filling positive and negative peaks back
+to zero cannot form Rekordbox's thin low-frequency trace. V4 therefore stores
+the signed minimum and maximum of every high-rate stereo-midpoint cell as
+little-endian int16. Metal renders each cell as a literal-pixel signed interval:
+oscillating material stays a line and dense/noisy material becomes a band. This
+requires one rolling cache migration. RGB now uses the same signed geometry as
+BLUE and differs only in its PWV5 color; exact geometry in either mode appears
+after that track receives its signed-range sections.
+
+3BAND bypasses both audio-derived contours and uses its three native PWV7 layer
+heights directly. The stored blue-low/amber-mid/white-high display layers use
+`0.40/0.43/0.40` transfers, linear per-band edge reconstruction, and a measured
+membership palette including blue
+(`0/85/225`), amber (`255/166/0`), brown (`180/105/10`), cream
+(`245/235/215`), pale blue (`210/220/250`), and white. The source cache remains
+V4; imported rows are reused without recooking, while legacy SoundBox-derived
+rows are permuted in memory.
+
+`scripts/render_waveform_reference.py` is the visual acceptance engine. Its
+`--corpus` mode loads the exact two source WAVs and canonical caches through the
+real native Metal deck and emits all six aligned PNGs without opening
+rekordbox, writing AppData, or starting playback. The source test verifies the
+corpus identity and refuses to substitute a correlation score for rendering.
+
+### Rejected shared-ultra investigation on 2026-07-28
+
+Everything in this subsection through the next major heading is retained as
+failure history. Claims of final visual acceptance, red/pink/blue 3BAND
+identity, or shared-ultra geometry are superseded by the correction above.
 
 The next exact `Sonny - High & Scared v13.wav` comparison established that
 Rekordbox does not derive BLUE, RGB, and 3BAND from one recolored surface. Its
@@ -1406,14 +1468,13 @@ at bar 17 beat 3. Both exact tracks were then viewed at all thirteen UI stops.
 
 The final visual references are the untouched files in
 `~/Desktop/rekordbox wave`: `Screenshot 2026-07-28 at 4.55.12 AM.png`
-(2,916×310) for the 185-second track ID `211048395`,
-`Sonny - High & Scared.wav`, and
+(2,916×310) for track ID `54231927`,
+`Sonny - High & Scared (final master).wav`, and
 `Screenshot 2026-07-28 at 1.28.48 PM.png` (2,926×292) for track ID `33638604`,
 `Bad Decisions w SUMA (FINAL FR).wav`. Do not silently substitute either of
-the later High & Scared masters: their audio and waveform are different. The
-accepted proof aligned native full-width captures to those two references at
-the cue-D/bar-17 windows and then opened both exact tracks at all thirteen UI
-zoom stops.
+the other High & Scared masters: their audio and waveform are different. The
+earlier `211048395` identification was disproved by direct pixel comparison;
+the RGB stream in the supplied SoundBox screenshot matches `54231927`.
 
 The final source and hermetic-render gates passed with 545 tests and one
 expected platform skip. The stable-signed app was installed and relaunched
@@ -1502,11 +1563,94 @@ and exact CoreAudio alignment. A fixed 60 Hz comparison remains a possible
 deliberate user-facing A/B experiment, but replacing the mostly 120 Hz path
 would trade away overall fluidity and was not shipped speculatively.
 
+### Continuous signed-interval coverage on 2026-07-28
+
+The corrected 135.958-second 4K phone recording contains 8,152 HEVC frames at
+59.94 fps. Presentation timestamps are stable: 8,089 of 8,151 intervals are
+16.666/16.667 ms, and the remaining 62 are small periodic 15/18.333 ms camera
+clock corrections with no missing camera frame. Registered high-zoom travel
+again contains sparse complementary half/one-and-a-half-step pairs around the
+normal step. Their two-frame distance is conserved, confirming the previously
+isolated ProMotion callback omission rather than a transport jump.
+
+The recording also exposed an independent shader defect. BLUE/RGB geometry was
+song-locked, but `interval_profile_coverage` still averaged five separate
+point-in-interval tests. Those tests made final edge opacity jump in 20%
+increments as a signed upper or lower boundary crossed the physical pixel.
+3BAND did not share the defect because each PWV7 layer already used continuous
+piecewise-linear `profile_coverage`.
+
+BLUE and RGB now clamp their minimum interval width at each of the same five
+profile locations, integrate the upper boundary continuously, integrate the
+inverted lower boundary continuously, and use the intersection. The two
+one-pixel antialias bands cannot overlap because the interval has an enforced
+3.6-point minimum width. Geometry, signed-range data, reconstruction, LOD,
+color, transport, and cadence are untouched.
+
+The read-only acceptance harness swept 32 consecutive 1 ms positions on the
+exact canonical tracks using both the previous installed dylib and the new
+dylib. Static silhouette XOR was only 0.08–0.13% of lane pixels, confined to
+fractional edge coverage. On High & Scared at 1536 px/s, RGB
+99th-percentile motion-aligned maximum-channel change fell from 68.98 to 39.60
+display codes; pixels exceeding 64 codes fell from 1.152% to 0.124%. BLUE's
+greater-than-64-code tail fell from 1.413% to 0.462%. Bad Decisions at
+768 px/s retained the same accepted waveform geometry. The isolated test
+engine used the real WAVs and V4 caches and did not launch or mutate the
+installed app.
+
+### Waveform reference refinement checkpoint on 2026-07-28
+
+This is a **source-only checkpoint**, not an installed or visually accepted
+release. The acceptance corpus remains the six untouched Rekordbox screenshots
+under `~/Desktop/rekordbox wave`, paired only with the real tracks
+`33638604 Bad Decisions w SUMA (FINAL FR).wav` at 25,597 ms and
+`54231927 Sonny - High & Scared (final master).wav` at 27,000 ms. Synthetic
+audio is not an acceptance fixture.
+
+The last visually proven source state has these properties:
+
+- BLUE and RGB share continuous signed interval geometry. A narrow,
+  song-space `[1 2 1]` detail filter applies only around the
+  64/92/128/184/256/384/864/1152 px/s stops; the 768 and 1536 px/s reference
+  stops remain untouched.
+- RGB is visually stable. 3BAND is solid and its subtle close-detail facet
+  improved the High & Scared reference silhouette error by approximately 5%
+  while leaving Bad Decisions at 768 px/s unchanged.
+- BLUE's silhouette is stable, and integration across the smooth
+  white/cyan/blue radial field materially improved its middle zooms. At the
+  more zoomed-in stops, however, an internal brightness/color tick remains
+  even though the outline itself does not move.
+
+The remaining BLUE issue is not a PWV3 hue-data problem: a temporary flat-fill
+diagnostic removed the tick, while holding encoded hue constant but retaining
+the radial field restored it. Flattening BLUE is therefore not an acceptable
+fix because it discards useful frequency/depth color information. Rendering
+research points instead to jointly integrating dependent coverage and
+procedural color in premultiplied linear light over the final pixel footprint;
+MSAA alone cannot prefilter that nonlinear interior signal. A joint resolve is
+the first next-session experiment, but its unverified implementation was
+reverted before this checkpoint.
+
+The macOS GUI/capture session became unreliable during that experiment.
+SystemUIServer and ControlCenter were restarted to clear a stuck screen-sharing
+indicator, after which standalone harness windows registered zero-sized
+CoreGraphics bounds and native presentation tests temporarily submitted zero
+frames. The final bare `./check.sh` recovered and passed all non-visual gates,
+including the native presentation tests, but the interactive capture path was
+not trusted again in this session. Temporary probes remained under `/tmp`; no
+SoundBox app was built or installed and no curated state was touched. Reboot
+macOS before resuming visual acceptance.
+
 ## Committed next player work
 
 See `ROADMAP.md` for sequencing.
 
-1. Design the not-yet-shipped grid/cue editing UX on top of the V4 storage
+1. After reboot, re-establish the isolated real-track harness and reconfirm the
+   checkpoint at all thirteen zoom stops. Then prototype one change only:
+   jointly resolve BLUE radial color and interval coverage in premultiplied
+   linear light while preserving PWV3 whiteness/depth. Accept it only against
+   both exact tracks and all six Rekordbox references.
+2. Design the not-yet-shipped grid/cue editing UX on top of the V4 storage
    mutation boundary. It must never mutate Rekordbox analysis. Today a valid
    Rekordbox grid remains authoritative and only the no-grid fallback begins at
    `0:00`; later manual adjustment and precedence require a UX workshop.

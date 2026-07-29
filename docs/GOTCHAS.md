@@ -70,27 +70,29 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the source for a successfully analyzed SoundBox color record. Current
   audio-detail and color positions are integer sample anchors + local float
   phase; never collapse either into one absolute float.
-- **The close waveform needs two polarity envelopes; one unsigned height can
-  never match Rekordbox.** Making peak(L,R) the primary silhouette inflates
+- **BLUE and RGB both need a signed range, not filled polarity envelopes.**
+  Making peak(L,R) the primary silhouette inflates
   stereo ambience and fills attack/decay valleys; mirroring
   `abs((L + R) / 2)` forces upper/lower correlation even where the real signal
-  is strongly asymmetric. Current `soundbox-polarity-peak-u16-v3` stores
+  is strongly asymmetric. Current `soundbox-polarity-range-u16-v4` stores
   independent positive and negative stereo-midpoint peaks in `detail` and
-  `detail_lower`, plus a 1/16 peak-channel safety floor. Carry both uint16
-  values through every native mip, fixed attribute, filter, and fragment
-  choice. Legacy one-height records may be duplicated only as a temporary
-  compatibility surface during the rolling recook. Keep the 150 Hz overview
+  `detail_lower`, plus signed midpoint minimum/maximum int16 sections and a
+  1/16 peak-channel safety floor. Both BLUE and RGB render the signed min/max
+  interval; only their PWV3/PWV5 color compositors differ. Drawing raw
+  independent maxima is the rejected hairy contour, and smoothing those maxima
+  into a crest still leaves the rejected center seam because both sides remain
+  filled back to zero. Legacy records may use a compatibility interval only
+  while the rolling recook adds the signed sections. Keep the 150 Hz overview
   on complete non-overlapping 1/150-second cells; the spectral FFT window looks
   ahead about 46 ms and must not own geometry. The visually validated
   `height^1.4` display curve, 0.84 ceiling, and continuous low-end shoulder
   apply only during native/Qt upload. The shoulder is 1/64 of full display
   height after a four-LSB knee so very quiet nonzero audio remains visible;
-  true zero remains zero and persisted amplitudes stay linear. The compact
-  150 Hz display-envelope floor is only a
-  distant/middle-scale visibility aid: taper it from full at 384 px/s to zero
-  at 576 px/s. Applying the same floor to both sides at close zoom reconnects
-  signed lobes through the center and turns blue transients into filled blocks,
-  even though the underlying polarity cache is correct.
+  true zero remains zero and persisted amplitudes stay linear. Packed PWV
+  heights are already authored display values and do not receive this
+  transfer. Applying an equal display-height floor to both sides at close zoom
+  reconnects signed lobes through the center and turns blue transients into
+  filled blocks, even when the polarity cache is correct.
 - **RGB timeline compensation is decoder-specific, never global.** The
   seven-row / 46.7 ms correction is proven for MP3 and remains there. Applying
   it to WAV/AIFF/FLAC makes lossless color late enough for a kick to inherit a
@@ -98,43 +100,46 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   use zero correction; add a format offset only after measuring that decoder
   against an authoritative same-track timeline. Geometry, RGB, grid, and cues
   must still begin at the same track origin.
-- **BLUE, RGB, and 3BAND are three source streams, not one recolored
-  waveform.** Rekordbox-backed records copy the exact packed PWV3/PWV5/PWV7
+- **BLUE, RGB, and 3BAND are three source streams and three geometry models.**
+  Rekordbox-backed records copy the exact packed PWV3/PWV5/PWV7
   rows into SoundBox-owned V4 storage during one read-only import; other
   sources derive all three during the same analysis pass. Version and readiness
-  gate the set together under
+  gate the source set together under
   `rekordbox-blue-rgb-three-band-v1`, so changing the Settings selector must
   only swap an already-resident native pyramid—never recook a track or reopen
-  ANLZ. For the display renderer, the empirically validated PWV7 byte order is
-  low/mid/high: the first stream owns red kick energy and the third owns the
-  blue clap transient. Do not reuse the separate CDJ-export format note as a
-  renderer permutation.
-- **A zero PWV5 row must not paint real ultra geometry black.** PWV5 can encode
+  ANLZ. RGB uses PWV5 color and BLUE uses PWV3 edge tint; both use the
+  SoundBox signed min/max interval trace. 3BAND instead
+  uses three native PWV7 layer heights and must bypass both audio-derived
+  contours. Treat the stored
+  rows as blue-low/amber-mid/white-high display layers, with measured scales
+  of `0.40/0.43/0.40` against Rekordbox's 64-point detail height. BLUE has a
+  white core and blue/cyan edge. 3BAND uses the measured blue/brown/cream/
+  pale-blue/white membership table, not generic alpha-composited paints.
+- **A zero PWV5 row is zero authored RGB geometry.** PWV5 can encode
   both height and RGB as zero while the independent SoundBox overview/ultra
   envelopes prove that the source audio is nonzero. Because the native color
   pyramid amplitude-weights its rows, leaving that row untouched makes the
-  correct contour visually disappear. At upload only, use the overview height
-  as the audible gate, borrow the nearest valid PWV5 color bits, and set the
-  minimum representable PWV5 height as a color carrier. Never change the
-  cached bytes, never touch a true-silence row, and never substitute a
-  track-specific timestamp. PWV5 is one RGB color plus one compact height per
-  row, not three independently layered band heights; only PWV7/3BAND uses the
-  layered compositor. At close zoom, keep PWV5 cell boundaries crisp and
-  song-anchored while the independent ultra contour remains smoothly
-  reconstructed. Cubic-smearing the 150 Hz colors turns visible Rekordbox
+  correct contour visually disappear. At upload only, use the independent
+  overview height to identify audible zero rows, borrow the nearest valid PWV5
+  hue, and assign the minimum representable PWV5 height. Never change cached
+  bytes or substitute a track-specific timestamp. PWV5 is one RGB color plus
+  one compact height per row, not three
+  independently layered band heights; only PWV7/3BAND uses the layered
+  compositor. Keep PWV5 cell boundaries crisp and song-anchored.
+  Cubic-smearing the 150 Hz colors turns visible Rekordbox
   strips into broad pastel gradients. The measured screen expansion retains
   red's 0..14 range while leaving calibrated headroom above green/blue's
   three-bit maxima (`14 / 8 / 8.75` divisors in native display space).
-- **Exact 150 Hz mode rows control identity; the SoundBox ultra stream controls
-  the final outer contour.** Drawing a held PWV row as the complete silhouette
-  turns several strong clap cells into a blurred slab and discards the
-  6300-window/s detail already in V4. Clip 3BAND layers to that shared
-  high-resolution envelope, and use the same envelope for BLUE and RGB
-  geometry. Never gate that contour into separated 150 Hz columns: the
-  final-master reference proved that this creates sparse picket-fence claps.
-  Rekordbox retains some varying body between ultra cycles, so keep only a
-  bounded 30% floor from the contrast-curved selected display envelope. Both
-  inputs at zero must remain a true zero.
+- **The supplied references are not all the same zoom.** Bad Decisions is
+  `768` points/s and High & Scared is `1536`; neither is the `184` stop used
+  by the rejected harness. BLUE and RGB both need the signed interval cache
+  reconstructed linearly at the physical-pixel footprint; widening or
+  smoothing center-filled peaks does not create either close waveform.
+  3BAND is not a recolored version of that contour: render its native PWV7
+  layers directly and linearly connect successive per-band samples. Holding
+  each sample as a rectangle creates the rejected coarse staircase.
+  `scripts/render_waveform_reference.py --corpus` is the required
+  real-track visual proof; a byte correlation is not acceptance.
 - **Audio-detail peak levels must match the physical-pixel footprint, not just
   the next power of two.** A 4.2-cell pixel rendered from an 8-cell max mip
   throws away nearly half the contour and rounds Rekordbox's narrow broken
@@ -149,9 +154,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the sRGB-transfer Metal attachment for linear-light coverage blending.
   Leaving the layer color space implicit converts Rekordbox red `255/0/0` into
   `234/51/35` and high blue `127/162/255` into `134/162/248` on capture. In
-  3BAND, geometric coverage controls opacity while squared PWV7 energy controls
-  the vivid red/amber/blue hue; giving every nonzero leakage band an equal vote
-  muddies kicks, and using hue weights as alpha dims fully covered pixels.
+  3BAND, preserve the measured flat membership palette rather than
+  remixing band energy into red/pink/blue hues.
 - **The scrolling surface must be fixed in song space, not reconstructed at a
   new playback phase each frame.** Print height and amplitude-weighted RGB onto
   a private song-coordinate attribute lattice with four attributes per
@@ -172,10 +176,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   produced a nasty hairy/wiggly edge in motion on the real stress track. Keep
   the conservative ceiling mip. The targeted zoom recording later justified a
   deliberate kernel split: positive B-spline reconstruction through 384 px/s
-  for stable mid/wide contours, returning to an interpolating monotone cubic
-  at 576 px/s and above. Do not extend the averaging B-spline into the close
-  range where it visibly hid useful detail, and do not return to linear there:
-  its slope corners move through the raster even on a fixed song lattice.
+  for stable mid/wide contours, then direct linear reconstruction at 576 px/s
+  and above for BLUE/RGB signed intervals. PWV7 retains its
+  native cell timing. The
+  supplied `1536`
+  references proved that monotone Hermite rounded the native straight-sided
+  carrier peaks. Do not extend the averaging B-spline into the close range.
 - **Antialias coverage must remain continuous through final compositing.** A
   hard minimum vividness for every nonzero fragment turns a contour crossing a
   pixel into an on/off color flash, even when the song coordinate itself is
@@ -184,7 +190,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   geometric coverage at every zoom; at 24 px/s the ease-out still exaggerated
   20% physical coverage to nearly 49%, making saturated red/orange edges pulse.
   Coverage policy may change compositing only—never height, hue, LOD, detail
-  density, or timing.
+  density, or timing. This rule applies to both sides of a signed interval:
+  averaging five independent inside/outside tests still quantizes BLUE/RGB
+  coverage into fifths. Integrate the upper boundary with `profile_coverage`,
+  integrate the inverted lower boundary the same way, and take their overlap.
+  The interval's enforced minimum width keeps the two one-pixel AA bands
+  disjoint. The exact High & Scared close-RGB phase sweep cut the aligned
+  greater-than-64-code change tail by almost 90% without changing its accepted
+  silhouette.
 - **Timing-reference color must not inherit waveform color.** Grid lines are
   drawn after the waveform. Downbeats use opaque red and ordinary beats use
   opaque gray; translucent timing ink lets saturated waveform content alter

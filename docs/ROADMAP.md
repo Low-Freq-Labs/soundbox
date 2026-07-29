@@ -15,6 +15,13 @@ For the live test count, trust `./check.sh` output—not any number written here
   grid, persistent zoom/jump controls, CUE/play/track navigation, precision
   scrub, clean gain ramps, and cache-first rapid loading. Full handoff:
   `docs/PLAYER.md`.
+- **SOURCE-ONLY WAVEFORM REFERENCE CHECKPOINT; NOT INSTALLED.** RGB is visually
+  stable, 3BAND is solid with finer close detail, and BLUE's silhouette is
+  stable. BLUE still has a close-zoom internal radial brightness/color tick:
+  flat fill removes it, but constant PWV3 hue with the radial field retains it.
+  After reboot, the next isolated experiment is a joint premultiplied
+  linear-light color/coverage resolve against the two exact real tracks and six
+  Rekordbox screenshots documented in `docs/PLAYER.md`.
 - **WAITING ON HARDWARE** for Phase 3 (iPod, ~end July).
 - New frontier (2026-07-08): **CDJ USB export** → `docs/cdj-usb-export.md`.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
@@ -31,11 +38,12 @@ For the live test count, trust `./check.sh` output—not any number written here
   Renderers no longer remix the independently normalized 24-band master.
   Existing V4 records upgrade atomically one track at a time, preserving
   SoundBox-owned grid/cue rows and the established ultra silhouette.
-- **POLARITY/QUIET GEOMETRY + RGB TIMING UPGRADE SHIPPED.** The ultra contour
-  stores independent positive and negative stereo-midpoint peaks with a 1/16
-  channel-safe floor, so real asymmetric detail replaces the formerly mirrored
-  upper/lower silhouette while anti-phase/quiet signal survives in linear
-  uint16. The 150 Hz envelope uses complete non-overlapping cells instead of
+- **POLARITY/RANGE GEOMETRY + RGB TIMING UPGRADE SHIPPED.** The high-rate
+  contour stores independent positive and negative stereo-midpoint peaks plus
+  signed per-cell midpoint minimum/maximum with a 1/16 channel-safe floor.
+  BLUE and RGB both render the signed range as a trace instead of filling peaks
+  to the center; their PWV3/PWV5 color compositors remain distinct.
+  The 150 Hz envelope uses complete non-overlapping cells instead of
   the 46 ms spectral window. A display-only `height^1.4` curve, 0.84 ceiling,
   and true-zero continuous shoulder retain both attack shoulders and a stable
   subpixel tail. Lossless RGB uses zero timeline correction; MP3 retains its
@@ -45,23 +53,19 @@ For the live test count, trust `./check.sh` output—not any number written here
   selects among three independently cached native waveform pyramids. Existing
   Rekordbox tracks import exact packed PWV3/PWV5/PWV7 rows read-only; other
   tracks derive the full set in the same analysis pass, so one model migration
-  is sufficient. Every mode retains the high-resolution SoundBox outer contour
-  continuously at every zoom. A bounded selected-display-envelope floor
-  retains distant-scale low body, then tapers completely away from 384 to
-  576 px/s so close positive/negative lobes remain separated. The 3BAND
-  renderer uses measured Display-P3 red/amber/blue anchors and energy-weighted
-  low/mid/high color, so kicks
-  remain true red and clap detail remains blue instead of becoming a rounded,
-  muddy, or picket-fence block. RGB treats PWV5 correctly as one compact color
-  per row—not three layered bands—keeps close cell boundaries crisp, and uses
-  the measured channel expansion rather than smearing them into pastel
-  gradients. The ultra contour now selects from footprint-matched integer
-  peak divisors instead of rounding a 4.2-cell pixel up to an 8-cell max mip,
-  retaining Rekordbox-like broken attacks without blending moving lattices.
-  Audible all-zero PWV5 rows receive a
-  minimum, nearest-color upload carrier gated by the independent overview, so
-  ultra geometry cannot be painted black; this is renderer-wide, preserves
-  true silence, leaves caches untouched, and requires no recook.
+  is sufficient. The July 28 six-reference rebuild gives each mode a distinct
+  geometry contract. Raw ultra maxima and pure PWV slabs were both rejected.
+  BLUE uses PWV3 luminance for its blue/cyan edge and RGB uses PWV5 packed
+  color. Both use the persisted signed min/max trace at the literal
+  physical-pixel footprint. 3BAND instead uses its
+  three native PWV7 shapes,
+  decodes them as
+  low/mid/high display layers, applies `0.40/0.43/0.40` native band scales,
+  linearly connects native PWV7 samples for clean slopes, and reproduces
+  the measured blue/brown/cream/pale-blue/white membership palette. Exact
+  display rows retain peak geometry when reduced, remain song anchored, and
+  never trigger a cache recook when the persistent selector changes. The
+  native real-track corpus renderer is the acceptance gate.
 - **PERFORMANCE/POLISH PASS SHIPPED.** Long-track preparation is bounded,
   cooperatively interruptible, and automatically battery-aware; playback and
   foreground interaction preempt it inside the current file. Static Metal
@@ -94,10 +98,20 @@ For the live test count, trust `./check.sh` output—not any number written here
   color energy phase-stable instead of multiplying separately interpolated
   straight color and height. The prior cubic B-spline reduced redraw shimmer
   but visibly softened maximum-zoom detail. The final split uses positive cubic
-  reconstruction through 384 px/s, then an interpolating monotone cubic from
-  576 px/s upward. The close kernel passes through every peak without
-  overshoot while removing linear slope corners; both paths share the narrowly
-  integrated fixed lattice. Final edge compositing keeps the vivid continuous
+  reconstruction through 384 px/s. From 576 px/s upward, BLUE/RGB signed
+  intervals and the native 3BAND layers retain their close detail;
+  the prior close
+  monotone-cubic path rounded the straight carrier edges in the supplied
+  references. Both paths share the narrowly integrated fixed lattice. Final
+  edge compositing integrates both boundaries of the BLUE/RGB signed interval
+  continuously across the final pixel. The former five independent
+  point-in-interval tests quantized a moving edge into 20% coverage steps even
+  though its geometry was song-locked. On the exact High & Scared 1536 px/s
+  RGB phase sweep, continuous boundary integration reduced the 99th-percentile
+  aligned pixel change from 69.0 to 39.6 display codes and the share above 64
+  codes from 1.15% to 0.12%, while static silhouette identity changed by less
+  than 0.1% of lane pixels. 3BAND already used continuous profile coverage.
+  Final compositing keeps the vivid continuous
   curve only for the small overview; the scrolling lane uses exact geometric
   coverage at every zoom, removing saturated red/orange amplification without
   changing reconstruction or detail. Timing lines are opaque red on downbeats

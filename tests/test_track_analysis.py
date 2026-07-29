@@ -130,6 +130,8 @@ class TrackAnalysisStore(unittest.TestCase):
             "three_band_model": track_analysis.THREE_BAND_MODEL,
             "display_waveform_model":
                 track_analysis.DISPLAY_WAVEFORM_MODEL,
+            "display_render_model":
+                track_analysis.DISPLAY_RENDER_MODEL,
             "beats": [[1, 125, 140.0]],
             "cues": [{"kind": "hot", "slot": 0, "position_ms": 125}],
         }
@@ -143,6 +145,10 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(got["_detail_bands"], data["three_band"])
         self.assertEqual(got["_blue_detail"], data["blue_detail"])
         self.assertEqual(got["_rgb_detail"], data["rgb_detail"])
+        self.assertEqual(
+            track_analysis.load_manifest(
+                cache, "rb-42", self.audio)["display_render_model"],
+            track_analysis.DISPLAY_RENDER_MODEL)
         self.assertEqual(got["colors"], [[1, 2, 3], [4, 5, 6]])
         self.audio.write_bytes(self.audio.read_bytes() + b"x")
         self.assertIsNone(
@@ -216,6 +222,14 @@ class TrackAnalysisStore(unittest.TestCase):
             result["waveform_model"], track_analysis.WAVEFORM_MODEL)
         self.assertEqual(
             result["height_encoding"], track_analysis.HEIGHT_ENCODING)
+        self.assertEqual(
+            result["range_encoding"], track_analysis.RANGE_ENCODING)
+        self.assertEqual(
+            len(result["detail_minimum_values"]),
+            len(result["detail_heights"]))
+        self.assertEqual(
+            len(result["detail_maximum_values"]),
+            len(result["detail_heights"]))
         count = len(result["overview_heights"]) // 2
         self.assertEqual(len(result["overview_rgb"]), count * 3)
         self.assertEqual(len(result["spectral_bands"]), count * 24)
@@ -227,6 +241,9 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(
             result["display_waveform_model"],
             track_analysis.DISPLAY_WAVEFORM_MODEL)
+        self.assertEqual(
+            result["display_render_model"],
+            track_analysis.DISPLAY_RENDER_MODEL)
         self.assertTrue(any(result["overview_rgb"]))
         self.assertEqual(result["color_model"], track_analysis.COLOR_MODEL)
         self.assertGreaterEqual(len(result["beats"]), 3)
@@ -275,6 +292,12 @@ class TrackAnalysisStore(unittest.TestCase):
             actual["detail_lower_heights"],
             expected["detail_lower_heights"])
         self.assertEqual(
+            actual["detail_minimum_values"],
+            expected["detail_minimum_values"])
+        self.assertEqual(
+            actual["detail_maximum_values"],
+            expected["detail_maximum_values"])
+        self.assertEqual(
             actual["overview_heights"], expected["overview_heights"])
         self.assertEqual(actual["overview_rgb"], expected["overview_rgb"])
         self.assertEqual(actual["spectral_bands"], expected["spectral_bands"])
@@ -290,6 +313,7 @@ class TrackAnalysisStore(unittest.TestCase):
         actual = owned.finish(bpm_hint=120)
         for field in (
                 "detail_heights", "detail_lower_heights",
+                "detail_minimum_values", "detail_maximum_values",
                 "overview_heights", "overview_rgb",
                 "spectral_bands", "three_band", "beats"):
             self.assertEqual(actual[field], expected[field])
@@ -304,11 +328,16 @@ class TrackAnalysisStore(unittest.TestCase):
             -1, window).max(axis=1)
         lower = np.maximum(-self.signal[:keep], 0).reshape(
             -1, window).max(axis=1)
+        signed_rows = self.signal[:keep].reshape(-1, window)
+        minimum = signed_rows.min(axis=1)
+        maximum = signed_rows.max(axis=1)
         if keep < len(self.signal):
             upper = np.append(
                 upper, np.maximum(self.signal[keep:], 0).max())
             lower = np.append(
                 lower, np.maximum(-self.signal[keep:], 0).max())
+            minimum = np.append(minimum, self.signal[keep:].min())
+            maximum = np.append(maximum, self.signal[keep:].max())
         expected_upper, expected_lower = (
             track_analysis.StreamingAnalyzer._u16_polarity_bytes(
                 upper, lower, 99.9))
@@ -316,6 +345,13 @@ class TrackAnalysisStore(unittest.TestCase):
             result["detail_heights"], expected_upper)
         self.assertEqual(
             result["detail_lower_heights"], expected_lower)
+        expected_minimum, expected_maximum = (
+            track_analysis.StreamingAnalyzer._i16_range_bytes(
+                minimum, maximum, 99.9))
+        self.assertEqual(
+            result["detail_minimum_values"], expected_minimum)
+        self.assertEqual(
+            result["detail_maximum_values"], expected_maximum)
 
     def test_ultra_geometry_preserves_independent_positive_and_negative_sides(
             self):
@@ -499,6 +535,12 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(
             got["display_waveform_model"],
             track_analysis.DISPLAY_WAVEFORM_MODEL)
+        self.assertEqual(
+            got["display_render_model"],
+            track_analysis.DISPLAY_RENDER_MODEL)
+        self.assertEqual(
+            got["stream_provenance"]["three_band"],
+            "rekordbox-anlz-pwv7")
         self.assertEqual(got["provenance"]["grid"], "rekordbox")
         self.assertEqual(
             got["grid_import"]["fingerprint"],

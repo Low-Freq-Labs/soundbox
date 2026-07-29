@@ -76,19 +76,20 @@ display streams, 24 normalized spectral bands, export eligibility, provenance,
 and an approximately 6144-window/s amplitude envelope. Each section is
 independently Zstandard-compressed and SHA-256 verified inside one atomic
 per-track container. Source identity invalidates only the changed track.
-Current ultra geometry is linear little-endian uint16 under
-`soundbox-polarity-peak-u16-v3`. Every cell stores independent positive and
-negative stereo-midpoint peaks in `detail` and `detail_lower`, with a 1/16
-peak-channel safety floor for genuinely wide or anti-phase signal. The compact
-overview keeps one symmetric maximum. The 150 Hz overview uses complete
-nonoverlapping time cells, independent of the wider spectral FFT window.
-`waveform_model` and `height_encoding` version that payload without changing
-the V4 container. Legacy records remain playable by duplicating their one
-height to both sides while preparation atomically upgrades one track at a
-time. A display-only `height^1.4` curve, 0.84 ceiling, and continuous four-LSB
-visibility shoulder are applied after loading. The shoulder resolves genuine
-subpixel tails but maps zero to zero before spatial reconstruction; the
-persisted amplitudes remain linear.
+Current high-rate geometry is versioned as
+`soundbox-polarity-range-u16-v4`. Every cell stores independent positive and
+negative stereo-midpoint peaks as little-endian uint16 in `detail` and
+`detail_lower`, plus the signed stereo-midpoint minimum and maximum as
+little-endian int16 in `detail_minimum` and `detail_maximum`. The peak sections
+retain a 1/16 channel safety floor for genuinely wide or anti-phase signal;
+the signed range remains the literal midpoint trace used by BLUE. The compact
+overview keeps one symmetric maximum. `waveform_model`, `height_encoding`, and
+`range_encoding` version these payloads without changing the V4 container.
+Older records remain playable with a compatibility interval while preparation
+atomically adds the signed-range sections used by both BLUE and RGB one track
+at a time. A display-only `height^1.4` curve,
+0.84 ceiling, and continuous four-LSB visibility shoulder are applied after
+loading; persisted amplitudes remain linear.
 
 The dedicated RGB stream is versioned separately as
 `soundbox-rgb-filterbank-v2`. Its timeline correction follows the decoder:
@@ -117,11 +118,14 @@ source samples per physical pixel and select one song-anchored level; there is
 no adjacent-level blend. For the scrolling lane, a compute pass reconstructs
 height and premultiplied RGB onto a fixed global song-space attribute lattice.
 Keeping color premultiplied makes its final one-pixel integral phase-stable.
-Positive cubic reconstruction stabilizes 24–384 px/s; 576–1536 px/s uses the
-interpolating monotone Hermite kernel, which retains source peaks without
-linear slope corners. Every zoom uses four attributes per Retina pixel for
+Positive cubic reconstruction stabilizes 24–384 px/s. At 576–1536 px/s,
+BLUE/RGB signed min/max intervals use direct linear reconstruction with the
+literal physical-pixel footprint. Native PWV7 retains its own display-cell
+timing while successive low/mid/high samples are connected linearly, avoiding
+the coarse staircase produced by nearest-cell holds.
+Every zoom uses four attributes per Retina pixel for
 continuous subpixel motion. The private buffer margin scales with that density
-and is recentered from an absolute integer song coordinate. Ultra detail
+and is recentered from an absolute integer song coordinate. High-rate detail
 promotes only geometry quality, while
 the already-uploaded compact ~150 Hz RGB pyramid remains the time/color
 authority.

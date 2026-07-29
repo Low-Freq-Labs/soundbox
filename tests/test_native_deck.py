@@ -290,10 +290,11 @@ class NativeDeckContract(unittest.TestCase):
         # The scrolling waveform uses this peak-preserving pyramid at every
         # zoom; PWV7 is now only a fallback while the additive cache is absent.
         self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 6)
-        # Two ushort polarity peaks per sample, including all mip levels. The
-        # old WaveSample pyramid consumed 16 bytes/sample and duplicated RGB.
+        # Two ushort polarity peaks plus signed min/max per sample, including
+        # all mip levels. The old WaveSample pyramid consumed 16 bytes/sample
+        # and duplicated RGB.
         self.assertLessEqual(
-            self.deck.diagnostic_audio_detail_buffer_bytes(), 64)
+            self.deck.diagnostic_audio_detail_buffer_bytes(), 128)
         for zoom in (
                 24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0,
                 256.0, 384.0, 576.0, 864.0, 1152.0, 1536.0):

@@ -8,10 +8,10 @@ always a clean miss rather than partially trusted state.
 
 The public ``load`` result intentionally matches the player analysis shape:
 beat rows, RGB overview rows, cues, and an ``_audio_detail`` envelope.  Current
-SoundBox geometry is stored as little-endian linear uint16 peaks; legacy uint8
-records remain playable while the background worker upgrades them atomically.
-That lets the native and compatibility decks consume V4 without teaching
-either renderer about the disk format.
+SoundBox geometry stores little-endian linear uint16 polarity peaks plus signed
+int16 minimum/maximum rows. The peaks drive RGB crest reconstruction; the
+signed range drives BLUE's true min/max trace. Legacy records remain playable
+while the background worker upgrades them atomically.
 """
 
 from __future__ import annotations
@@ -30,10 +30,12 @@ ULTRA_RATE = 6144.0
 COLOR_RATE = 150.0
 SPECTRAL_BANDS = 24
 COLOR_MODEL = "soundbox-rgb-filterbank-v2"
-WAVEFORM_MODEL = "soundbox-polarity-peak-u16-v3"
+WAVEFORM_MODEL = "soundbox-polarity-range-u16-v4"
 THREE_BAND_MODEL = "soundbox-three-band-u7-v2"
 DISPLAY_WAVEFORM_MODEL = "rekordbox-blue-rgb-three-band-v1"
+DISPLAY_RENDER_MODEL = "rekordbox-native-mode-render-v3"
 HEIGHT_ENCODING = "linear-u16le"
+RANGE_ENCODING = "linear-i16le"
 MP3_COLOR_PIPELINE_DELAY = 7.0 / COLOR_RATE
 CHANNEL_SAFETY_FLOOR = 1.0 / 16.0
 _MAGIC = b"SBA4"
@@ -512,9 +514,15 @@ def load_manifest(
                 manifest.get("three_band_model") or ""),
             "display_waveform_model": str(
                 manifest.get("display_waveform_model") or ""),
+            "display_render_model": str(
+                manifest.get("display_render_model")
+                or DISPLAY_RENDER_MODEL),
             "height_encoding": str(manifest.get("height_encoding") or ""),
+            "range_encoding": str(manifest.get("range_encoding") or ""),
             "detail_rate": float(manifest.get("detail_rate") or 0),
             "provenance": dict(manifest.get("provenance") or {}),
+            "stream_provenance": dict(
+                manifest.get("stream_provenance") or {}),
             "grid_import": dict(manifest.get("grid_import") or {}),
             "cue_import": dict(manifest.get("cue_import") or {}),
             "eligibility": dict(manifest.get("eligibility") or {}),
@@ -666,12 +674,28 @@ def load_detail(
             if lower_loaded is None:
                 return None
             lower = lower_loaded[1]["detail_lower"]
+        range_rows = {}
+        section_names = manifest.get("sections") or {}
+        if (
+                manifest.get("waveform_model") == WAVEFORM_MODEL
+                and "detail_minimum" in section_names
+                and "detail_maximum" in section_names):
+            range_loaded = _load_sections(
+                cache_dir, track_id, audio_path,
+                ("detail_minimum", "detail_maximum"))
+            if range_loaded is None:
+                return None
+            range_rows = {
+                "range_min": range_loaded[1]["detail_minimum"],
+                "range_max": range_loaded[1]["detail_maximum"],
+            }
         return {
             "_audio_detail": {
                 "rate": float(manifest.get("detail_rate") or 0),
                 "heights": sections["detail"],
                 "lower_heights": lower,
                 "encoding": str(manifest.get("height_encoding") or ""),
+                **range_rows,
             },
             "_spectral_24": sections["spectral_24"],
             "_blue_detail": sections["blue_detail"],
@@ -906,10 +930,15 @@ def is_ready(cache_dir: str | Path, track_id: str,
             and manifest.get("display_waveform_model")
             == DISPLAY_WAVEFORM_MODEL
             and manifest.get("height_encoding") == HEIGHT_ENCODING
+            and manifest.get("range_encoding") == RANGE_ENCODING
             and float(manifest.get("detail_rate") or 0) >= 5500
             and int(sections.get("detail", {}).get("raw_size") or 0) > 1
             and int(
                 sections.get("detail_lower", {}).get("raw_size") or 0) > 1
+            and int(
+                sections.get("detail_minimum", {}).get("raw_size") or 0) > 1
+            and int(
+                sections.get("detail_maximum", {}).get("raw_size") or 0) > 1
             and int(sections.get("overview_rgb", {}).get("raw_size") or 0) > 0
             and int(sections.get("blue_detail", {}).get("raw_size") or 0) > 0
             and int(sections.get("rgb_detail", {}).get("raw_size") or 0) > 0
@@ -995,6 +1024,14 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             prepared.get("detail_lower_heights")
             or (prepared.get("_audio_detail") or {}).get("lower_heights")
             or heights)
+        range_min = bytes(
+            prepared.get("detail_minimum_values")
+            or (prepared.get("_audio_detail") or {}).get("range_min")
+            or bytes(len(heights)))
+        range_max = bytes(
+            prepared.get("detail_maximum_values")
+            or (prepared.get("_audio_detail") or {}).get("range_max")
+            or bytes(len(heights)))
         detail_rate = float(
             prepared.get("detail_rate")
             or (prepared.get("_audio_detail") or {}).get("rate")
@@ -1020,6 +1057,8 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         sections = {
             "detail": heights,
             "detail_lower": lower_heights,
+            "detail_minimum": range_min,
+            "detail_maximum": range_max,
             "overview_heights": overview_heights,
             "overview_rgb": overview_rgb,
             "spectral_24": bands,
@@ -1042,6 +1081,13 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
                 "analysis": "soundbox",
                 "owner": "soundbox",
             }),
+            "stream_provenance": dict(
+                prepared.get("stream_provenance") or {
+                    "detail": "soundbox-analysis",
+                    "blue": "soundbox-analysis",
+                    "rgb": "soundbox-analysis",
+                    "three_band": "soundbox-analysis",
+                }),
             "eligibility": export_eligibility(source),
             "detail_rate": detail_rate,
             "color_rate": float(prepared.get("sample_rate") or COLOR_RATE),
@@ -1051,7 +1097,11 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
                 prepared.get("three_band_model") or ""),
             "display_waveform_model": str(
                 prepared.get("display_waveform_model") or ""),
+            "display_render_model": str(
+                prepared.get("display_render_model")
+                or DISPLAY_RENDER_MODEL),
             "height_encoding": height_encoding,
+            "range_encoding": RANGE_ENCODING,
             "overview_count": count,
             "spectral_bands": SPECTRAL_BANDS,
             "beats": list(prepared.get("beats") or []),
@@ -1204,11 +1254,14 @@ class StreamingAnalyzer:
         self.n_fft = min(4096, self.n_fft)
         self._detail_upper_tail = np.empty(0, dtype=np.float32)
         self._detail_lower_tail = np.empty(0, dtype=np.float32)
+        self._detail_signed_tail = np.empty(0, dtype=np.float32)
         self._spectral_tail = np.empty(0, dtype=np.float32)
         self._overview_tail = np.empty(0, dtype=np.float32)
         self._color_tail = np.empty((0, 3), dtype=np.float32)
         self._detail: list = []
         self._detail_lower: list = []
+        self._detail_minimum: list = []
+        self._detail_maximum: list = []
         self._overview: list = []
         self._spectra: list = []
         self._color_ms: list = []
@@ -1294,6 +1347,8 @@ class StreamingAnalyzer:
             (self._detail_upper_tail, geometry_upper))
         detail_lower = np.concatenate(
             (self._detail_lower_tail, geometry_lower))
+        detail_signed = np.concatenate(
+            (self._detail_signed_tail, values))
         keep = len(detail_upper) - len(detail_upper) % self.detail_window
         if keep:
             self._detail.append(
@@ -1302,8 +1357,13 @@ class StreamingAnalyzer:
             self._detail_lower.append(
                 detail_lower[:keep].reshape(
                     -1, self.detail_window).max(axis=1))
+            signed_rows = detail_signed[:keep].reshape(
+                -1, self.detail_window)
+            self._detail_minimum.append(signed_rows.min(axis=1))
+            self._detail_maximum.append(signed_rows.max(axis=1))
         self._detail_upper_tail = detail_upper[keep:]
         self._detail_lower_tail = detail_lower[keep:]
+        self._detail_signed_tail = detail_signed[keep:]
 
         filtered = []
         for index, sos in enumerate(self._color_sos):
@@ -1428,6 +1488,28 @@ class StreamingAnalyzer:
 
         return encode(upper_raw), encode(lower_raw)
 
+    @staticmethod
+    def _i16_range_bytes(
+            minimum, maximum,
+            percentile: float = 99.5) -> tuple[bytes, bytes]:
+        """Normalize signed min/max rows with one shared linear ceiling."""
+        import numpy as np
+
+        minimum_raw = np.asarray(minimum, dtype=np.float32)
+        maximum_raw = np.asarray(maximum, dtype=np.float32)
+        joined = np.abs(np.concatenate((minimum_raw, maximum_raw)))
+        positive = joined[joined > 0]
+        ceiling = (
+            float(np.percentile(positive, percentile))
+            if positive.size else 1.0)
+
+        def encode(values):
+            return bytes(np.clip(
+                np.rint(values / max(ceiling, 1e-9) * 32767),
+                -32767, 32767).astype("<i2"))
+
+        return encode(minimum_raw), encode(maximum_raw)
+
     def finish(self, bpm_hint: float = 0) -> dict | None:
         np = self.np
         if self._detail_upper_tail.size:
@@ -1435,6 +1517,10 @@ class StreamingAnalyzer:
                 [self._detail_upper_tail.max()], dtype=np.float32))
             self._detail_lower.append(np.asarray(
                 [self._detail_lower_tail.max()], dtype=np.float32))
+            self._detail_minimum.append(np.asarray(
+                [self._detail_signed_tail.min()], dtype=np.float32))
+            self._detail_maximum.append(np.asarray(
+                [self._detail_signed_tail.max()], dtype=np.float32))
         if self._overview_tail.size:
             self._overview.append(np.asarray(
                 [np.abs(self._overview_tail).max()], dtype=np.float32))
@@ -1450,6 +1536,13 @@ class StreamingAnalyzer:
         detail_bytes, detail_lower_bytes = self._u16_polarity_bytes(
             detail, detail_lower, 99.9)
         del detail, detail_lower
+        detail_minimum = np.concatenate(self._detail_minimum)
+        self._detail_minimum.clear()
+        detail_maximum = np.concatenate(self._detail_maximum)
+        self._detail_maximum.clear()
+        detail_minimum_bytes, detail_maximum_bytes = self._i16_range_bytes(
+            detail_minimum, detail_maximum, 99.9)
+        del detail_minimum, detail_maximum
         overview = (
             np.concatenate(self._overview)
             if self._overview else np.empty(0, dtype=np.float32))
@@ -1539,6 +1632,8 @@ class StreamingAnalyzer:
         return {
             "detail_heights": detail_bytes,
             "detail_lower_heights": detail_lower_bytes,
+            "detail_minimum_values": detail_minimum_bytes,
+            "detail_maximum_values": detail_maximum_bytes,
             "detail_rate": self.detail_rate,
             "overview_heights": overview_bytes,
             "overview_rgb": overview_rgb,
@@ -1551,13 +1646,21 @@ class StreamingAnalyzer:
             "waveform_model": WAVEFORM_MODEL,
             "three_band_model": THREE_BAND_MODEL,
             "display_waveform_model": DISPLAY_WAVEFORM_MODEL,
+            "display_render_model": DISPLAY_RENDER_MODEL,
             "height_encoding": HEIGHT_ENCODING,
+            "range_encoding": RANGE_ENCODING,
             "beats": beats,
             "cues": [],
             "provenance": {
                 "analysis": "soundbox",
                 "grid": "soundbox-zero-anchor",
                 "owner": "soundbox",
+            },
+            "stream_provenance": {
+                "detail": "soundbox-analysis",
+                "blue": "soundbox-analysis",
+                "rgb": "soundbox-analysis",
+                "three_band": "soundbox-analysis",
             },
         }
 
@@ -1633,6 +1736,7 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
             and result.get("rgb_detail")
             and result.get("three_band")):
         result["display_waveform_model"] = DISPLAY_WAVEFORM_MODEL
+        result["display_render_model"] = DISPLAY_RENDER_MODEL
     if isinstance(bands, bytes) and bands and not result.get("spectral_bands"):
         # Preserve the authentic three-band source in a 24-band-shaped master.
         expanded = bytearray()
@@ -1652,6 +1756,16 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
         "owner": "soundbox",
         "rekordbox_runtime_dependency": False,
     }
+    stream_provenance = dict(result.get("stream_provenance") or {
+        "detail": "soundbox-analysis" if native else "rekordbox-anlz",
+    })
+    if isinstance(blue_detail, bytes) and blue_detail:
+        stream_provenance["blue"] = "rekordbox-anlz-pwv3"
+    if isinstance(rgb_detail, bytes) and rgb_detail:
+        stream_provenance["rgb"] = "rekordbox-anlz-pwv5"
+    if isinstance(bands, bytes) and bands:
+        stream_provenance["three_band"] = "rekordbox-anlz-pwv7"
+    result["stream_provenance"] = stream_provenance
     if source.get("beats"):
         result["grid_import"] = {
             "source": "rekordbox-anlz",

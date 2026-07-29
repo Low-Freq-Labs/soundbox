@@ -99,6 +99,8 @@ struct DisplayWaveform {
 struct AudioEnvelopeSample {
     uint16_t upper;
     uint16_t lower;
+    int16_t minimum;
+    int16_t maximum;
 };
 
 struct GridVertex {
@@ -1324,9 +1326,15 @@ public:
         }
         detail.reserve(count);
         for (size_t i = 0; i < count; ++i) {
-            const float low = (bands[i * 3] & 0x7f) / 127.0f;
-            const float mid = (bands[i * 3 + 1] & 0x7f) / 127.0f;
-            const float high = (bands[i * 3 + 2] & 0x7f) / 127.0f;
+            const float low = std::clamp(
+                (bands[i * 3] & 0x7f) * 0.40f / 64.0f,
+                0.0f, 1.0f);
+            const float mid = std::clamp(
+                (bands[i * 3 + 1] & 0x7f) * 0.43f / 64.0f,
+                0.0f, 1.0f);
+            const float high = std::clamp(
+                (bands[i * 3 + 2] & 0x7f) * 0.40f / 64.0f,
+                0.0f, 1.0f);
             const float height = std::max({mid, high, low});
             detail.push_back({
                 height,
@@ -1365,13 +1373,14 @@ public:
         const float height = displayWaveformHeight(
             (packed & 0x1f) / 31.0f);
         const float luminance = ((packed >> 5) & 0x07) / 7.0f;
-        // PWV3's upper bits lift Pioneer blue toward white. Keep the original
-        // five-bit geometry completely independent from that luminance.
+        // PWV3 is already a display waveform: its lower five bits are the
+        // exact Rekordbox height and its upper three bits select the blue edge
+        // tint. The fragment shader supplies the separate white center core.
         return {
             height,
-            0.05f + 0.62f * luminance,
-            0.34f + 0.50f * luminance,
-            1.0f,
+            0.14f + 0.10f * luminance,
+            0.34f + 0.26f * luminance,
+            0.82f + 0.14f * luminance,
         };
     }
 
@@ -1400,14 +1409,15 @@ public:
     }
 
     static WaveSample threeBandWaveSample(const uint8_t *packed) {
-        // The exact High & Scared pixels establish the display-frequency order
-        // as low, mid, high: the third stream owns the blue clap transient.
-        const float low = displayWaveformHeight(
-            (packed[0] & 0x7f) / 127.0f);
-        const float mid = displayWaveformHeight(
-            (packed[1] & 0x7f) / 127.0f);
-        const float high = displayWaveformHeight(
-            (packed[2] & 0x7f) / 127.0f);
+        // The supplied Rekordbox pixels establish the stored display-layer
+        // order as blue-low, amber-mid, white-high. Each layer also has its
+        // own measured vertical transfer.
+        const float low = std::clamp(
+            (packed[0] & 0x7f) * 0.40f / 64.0f, 0.0f, 1.0f);
+        const float mid = std::clamp(
+            (packed[1] & 0x7f) * 0.43f / 64.0f, 0.0f, 1.0f);
+        const float high = std::clamp(
+            (packed[2] & 0x7f) * 0.40f / 64.0f, 0.0f, 1.0f);
         const float height = std::max({low, mid, high});
         return {
             height,
@@ -1542,11 +1552,15 @@ public:
         std::vector<AudioEnvelopeSample> detail;
         detail.reserve(count);
         for (size_t i = 0; i < count; ++i) {
+            const uint16_t displayed =
+                static_cast<uint16_t>(
+                    static_cast<uint16_t>(heights[i]) * 257u);
+            const int16_t signedDisplayed = static_cast<int16_t>(
+                std::lround(displayed / 65535.0 * 32767.0));
             detail.push_back({
-                static_cast<uint16_t>(
-                    static_cast<uint16_t>(heights[i]) * 257u),
-                static_cast<uint16_t>(
-                    static_cast<uint16_t>(heights[i]) * 257u),
+                displayed, displayed,
+                static_cast<int16_t>(-signedDisplayed),
+                signedDisplayed,
             });
         }
         return installAudioDetail(
@@ -1568,11 +1582,15 @@ public:
         detail.reserve(count);
         for (size_t i = 0; i < count; ++i) {
             const float displayed = displayWaveformHeight(heights[i]);
+            const int16_t signedDisplayed = static_cast<int16_t>(std::clamp(
+                std::lround(displayed * 32767.0f), 0L, 32767L));
             detail.push_back({
                 static_cast<uint16_t>(std::clamp(
                     std::lround(displayed * 65535.0f), 0L, 65535L)),
                 static_cast<uint16_t>(std::clamp(
                     std::lround(displayed * 65535.0f), 0L, 65535L)),
+                static_cast<int16_t>(-signedDisplayed),
+                signedDisplayed,
             });
         }
         return installAudioDetail(
@@ -1582,7 +1600,9 @@ public:
     bool setAudioDetailPolarity16(
         const uint16_t *upper, const uint16_t *lower,
         size_t count, double samplesPerSecond,
-        uint64_t expectedGeneration = 0) {
+        uint64_t expectedGeneration = 0,
+        const int16_t *minimum = nullptr,
+        const int16_t *maximum = nullptr) {
         if (expectedGeneration
                 && renderGeneration_.load(std::memory_order_acquire)
                     != expectedGeneration) {
@@ -1591,16 +1611,126 @@ public:
         if (!upper || !lower || !count || samplesPerSecond <= 0) {
             return false;
         }
+        const auto displaySigned = [](int16_t encoded) {
+            const float magnitude = std::abs(
+                static_cast<int>(encoded)) / 32767.0f;
+            const float displayed = displayWaveformHeight(magnitude);
+            return static_cast<int16_t>(std::clamp(
+                std::lround(std::copysign(
+                    displayed * 32767.0f,
+                    static_cast<float>(encoded))),
+                -32767L, 32767L));
+        };
+        if (minimum && maximum) {
+            std::vector<AudioEnvelopeSample> detail;
+            detail.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+                const float displayedUpper =
+                    displayWaveformHeight(upper[i]);
+                const float displayedLower =
+                    displayWaveformHeight(lower[i]);
+                detail.push_back({
+                    static_cast<uint16_t>(std::clamp(
+                        std::lround(displayedUpper * 65535.0f),
+                        0L, 65535L)),
+                    static_cast<uint16_t>(std::clamp(
+                        std::lround(displayedLower * 65535.0f),
+                        0L, 65535L)),
+                    displaySigned(minimum[i]),
+                    displaySigned(maximum[i]),
+                });
+            }
+            return installAudioDetail(
+                std::move(detail), count, samplesPerSecond,
+                expectedGeneration);
+        }
+        // Compatibility for V3 records that predate signed range sections:
+        // build a short coherent crest instead of exposing their raw,
+        // independent maxima as a hairy trace. The result is only a temporary
+        // symmetric interval until the rolling V4 recook provides the actual
+        // signed minimum and maximum used by BLUE and RGB.
+        const size_t crestWindow = std::max<size_t>(
+            1, static_cast<size_t>(std::lround(
+                samplesPerSecond * 0.001)));
+        std::vector<float> crestUpper(count);
+        std::vector<float> crestLower(count);
+        const auto buildCrest = [&](const uint16_t *source,
+                                    std::vector<float> &target) {
+            const int64_t half =
+                static_cast<int64_t>(crestWindow / 2);
+            for (size_t i = 0; i < count; ++i) {
+                double squareSum = 0.0;
+                uint16_t peak = 0;
+                for (size_t tap = 0; tap < crestWindow; ++tap) {
+                    const int64_t rawIndex =
+                        static_cast<int64_t>(i)
+                        + static_cast<int64_t>(tap) - half;
+                    const size_t index = static_cast<size_t>(std::clamp(
+                        rawIndex, int64_t{0},
+                        static_cast<int64_t>(count - 1)));
+                    const double value = source[index];
+                    squareSum += value * value;
+                    peak = std::max(peak, source[index]);
+                }
+                const double rms = std::sqrt(
+                    squareSum / static_cast<double>(crestWindow));
+                target[i] = static_cast<float>(std::sqrt(
+                    rms * static_cast<double>(peak)));
+            }
+        };
+        buildCrest(upper, crestUpper);
+        buildCrest(lower, crestLower);
+
+        std::vector<float> positive;
+        positive.reserve(count * 2);
+        for (const auto *side : {&crestUpper, &crestLower}) {
+            for (const float value : *side) {
+                if (value > 0.0f) {
+                    positive.push_back(value);
+                }
+            }
+        }
+        float ceiling = 1.0f;
+        if (!positive.empty()) {
+            const double rank =
+                0.999 * static_cast<double>(positive.size() - 1);
+            const size_t below = static_cast<size_t>(std::floor(rank));
+            const size_t above = static_cast<size_t>(std::ceil(rank));
+            std::nth_element(
+                positive.begin(), positive.begin() + below, positive.end());
+            const float lowerValue = positive[below];
+            float upperValue = lowerValue;
+            if (above != below) {
+                std::nth_element(
+                    positive.begin(), positive.begin() + above,
+                    positive.end());
+                upperValue = positive[above];
+            }
+            ceiling = std::max(
+                1.0f,
+                lowerValue + static_cast<float>(rank - below)
+                    * (upperValue - lowerValue));
+        }
         std::vector<AudioEnvelopeSample> detail;
         detail.reserve(count);
         for (size_t i = 0; i < count; ++i) {
-            const float displayedUpper = displayWaveformHeight(upper[i]);
-            const float displayedLower = displayWaveformHeight(lower[i]);
+            const float displayedUpper = displayWaveformHeight(
+                std::clamp(crestUpper[i] / ceiling, 0.0f, 1.0f));
+            const float displayedLower = displayWaveformHeight(
+                std::clamp(crestLower[i] / ceiling, 0.0f, 1.0f));
+            const int16_t fallbackMinimum = static_cast<int16_t>(std::clamp(
+                -std::lround(displayedLower * 32767.0f),
+                -32767L, 0L));
+            const int16_t fallbackMaximum = static_cast<int16_t>(std::clamp(
+                std::lround(displayedUpper * 32767.0f),
+                0L, 32767L));
             detail.push_back({
                 static_cast<uint16_t>(std::clamp(
                     std::lround(displayedUpper * 65535.0f), 0L, 65535L)),
                 static_cast<uint16_t>(std::clamp(
                     std::lround(displayedLower * 65535.0f), 0L, 65535L)),
+                minimum ? displaySigned(minimum[i]) : fallbackMinimum,
+                maximum ? displaySigned(maximum[i]) : fallbackMaximum,
             });
         }
         return installAudioDetail(
@@ -1634,12 +1764,20 @@ public:
             level.reserve(levelCount);
             for (size_t start = 0; start < detail.size();
                     start += divisor) {
-                AudioEnvelopeSample peak{};
+                AudioEnvelopeSample peak{
+                    0, 0,
+                    std::numeric_limits<int16_t>::max(),
+                    std::numeric_limits<int16_t>::min(),
+                };
                 const size_t end = std::min(
                     detail.size(), start + divisor);
                 for (size_t i = start; i < end; ++i) {
                     peak.upper = std::max(peak.upper, detail[i].upper);
                     peak.lower = std::max(peak.lower, detail[i].lower);
+                    peak.minimum = std::min(
+                        peak.minimum, detail[i].minimum);
+                    peak.maximum = std::max(
+                        peak.maximum, detail[i].maximum);
                 }
                 level.push_back(peak);
             }
@@ -2457,7 +2595,12 @@ private:
 #include <metal_stdlib>
 using namespace metal;
 struct WaveSample { float height; float r; float g; float b; };
-struct AudioEnvelopeSample { ushort upper; ushort lower; };
+struct AudioEnvelopeSample {
+    ushort upper;
+    ushort lower;
+    short minimum;
+    short maximum;
+};
 struct GridVertex { uint songMillis; float songMillisPhase;
                     float xOffsetPixels; float yPixels;
                     float r; float g; float b; float a;
@@ -2507,6 +2650,8 @@ struct WaveTap {
 struct EnvelopeTap {
     float upper;
     float lower;
+    float minimum;
+    float maximum;
     float valid;
 };
 struct WaveSurface {
@@ -2537,15 +2682,17 @@ inline float3 display_srgb_to_linear(float3 value) {
     return select(upper, lower, value <= float3(0.04045));
 }
 inline float3 three_band_color(float3 bands) {
-    // Stored WaveSample RGB carries low/mid/high geometry, not display RGB.
-    // These are the saturated Rekordbox 3BAND anchors: low is true red, mid
-    // is warm pink, and high is the measured 127/162/255 blue.
-    const float3 lowColor = float3(1.0, 0.0, 0.0);
-    const float3 midColor = float3(1.0, 0.55, 0.0);
-    const float3 highColor = float3(0.50, 0.64, 1.0);
-    const float3 mixed =
-        bands.r * lowColor + bands.g * midColor + bands.b * highColor;
-    return mixed / max(max(mixed.r, max(mixed.g, mixed.b)), 0.0001);
+    // PWV7 channels arrive as low/mid/high geometry. The compact overview
+    // cannot show independent vertical layers, so use the color belonging to
+    // the strongest native band. The scrolling lane performs the complete
+    // layered Pioneer compositor below.
+    const float3 lowColor = float3(0.0, 85.0 / 255.0, 225.0 / 255.0);
+    const float3 midColor = float3(1.0, 166.0 / 255.0, 0.0);
+    const float3 highColor = float3(1.0);
+    if (bands.b >= bands.r && bands.b >= bands.g) {
+        return highColor;
+    }
+    return bands.g >= bands.r ? midColor : lowColor;
 }
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     const float2 positions[3] = {
@@ -2618,7 +2765,7 @@ inline EnvelopeTap envelope_tap(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
         uint baseAnchor, float baseLocal, uint divisor) {
-    EnvelopeTap result{0.0, 0.0, 0.0};
+    EnvelopeTap result{0.0, 0.0, 0.0, 0.0, 0.0};
     if (levelCount == 0) {
         return result;
     }
@@ -2638,6 +2785,10 @@ inline EnvelopeTap envelope_tap(
         const float weight = weights[uint(support + 1)];
         result.upper += float(samples[index].upper) / 65535.0 * weight;
         result.lower += float(samples[index].lower) / 65535.0 * weight;
+        result.minimum +=
+            float(samples[index].minimum) / 32767.0 * weight;
+        result.maximum +=
+            float(samples[index].maximum) / 32767.0 * weight;
     }
     result.valid = 1.0;
     return result;
@@ -2808,11 +2959,80 @@ inline float3 nearest_wave_color(
     return float3(sample.r, sample.g, sample.b);
 }
 
+inline WaveTap linear_wave_tap(
+        const device WaveSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint level) {
+    WaveTap result{0.0, float3(0.0), 0.0, 0.0};
+    if (levelCount == 0) {
+        return result;
+    }
+    const uint divisor = mip_divisor(level);
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int left = int(anchor) + int(floor(local));
+    if (left < 0 || left >= int(levelCount)) {
+        return result;
+    }
+    const int right = min(left + 1, int(levelCount) - 1);
+    const float phase = local - floor(local);
+    const WaveSample leftSample =
+        samples[levelOffset + uint(left)];
+    const WaveSample rightSample =
+        samples[levelOffset + uint(right)];
+    result.height = mix(
+        leftSample.height, rightSample.height, phase);
+    result.weightedColor = mix(
+        float3(leftSample.r, leftSample.g, leftSample.b)
+            * leftSample.height,
+        float3(rightSample.r, rightSample.g, rightSample.b)
+            * rightSample.height,
+        phase);
+    result.colorWeight = result.height;
+    result.valid = 1.0;
+    return result;
+}
+
+inline WaveTap three_band_detail_tap(
+        const device WaveSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint level,
+        float pixelsPerSecond) {
+    WaveTap result = linear_wave_tap(
+        samples, levelOffset, levelCount,
+        baseAnchor, baseLocal, level);
+    if (result.valid == 0.0 || levelCount == 0) {
+        return result;
+    }
+    const uint divisor = mip_divisor(level);
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const float phase = local - floor(local);
+    // At the closest zoom Rekordbox leaves the authored PWV7 row visible as a
+    // shallow left-to-right facet. A symmetric neighbor connection turns
+    // small row fluctuations into alternating triangles instead. Retain the
+    // real linear row values, then apply the measured eight-percent facet
+    // only where a 75 Hz source row spans more than thirty screen pixels.
+    // The lower close stops deliberately remain on the proven continuous
+    // interpolation path; exposing the facet there adds teeth that are absent
+    // from the supplied Bad Decisions reference.
+    const float facetStrength =
+        0.08 * smoothstep(1152.0, 1536.0, pixelsPerSecond);
+    const float facet = 1.0 - facetStrength * phase;
+    result.height *= facet;
+    result.weightedColor *= facet;
+    result.colorWeight *= facet;
+    return result;
+}
+
 inline EnvelopeTap sharp_envelope_tap(
         const device AudioEnvelopeSample *samples,
         uint levelOffset, uint levelCount,
         uint baseAnchor, float baseLocal, uint divisor) {
-    EnvelopeTap result{0.0, 0.0, 0.0};
+    EnvelopeTap result{0.0, 0.0, 0.0, 0.0, 0.0};
     if (levelCount == 0) {
         return result;
     }
@@ -2825,18 +3045,66 @@ inline EnvelopeTap sharp_envelope_tap(
     if (left < 0 || left >= int(levelCount)) {
         return result;
     }
-    float2 support[4];
+    float4 support[4];
     for (int tap = -1; tap <= 2; ++tap) {
         const AudioEnvelopeSample sample = samples[levelOffset + uint(clamp(
             left + tap, 0, int(levelCount) - 1))];
-        support[tap + 1] =
-            float2(sample.upper, sample.lower) / 65535.0;
+        support[tap + 1] = float4(
+            float(sample.upper) / 65535.0,
+            float(sample.lower) / 65535.0,
+            float(sample.minimum) / 32767.0,
+            float(sample.maximum) / 32767.0);
     }
     const float phase = local - float(whole);
     result.upper = monotone_hermite(
         support[0].x, support[1].x, support[2].x, support[3].x, phase);
     result.lower = monotone_hermite(
         support[0].y, support[1].y, support[2].y, support[3].y, phase);
+    result.minimum = monotone_hermite(
+        support[0].z, support[1].z, support[2].z, support[3].z, phase);
+    result.maximum = monotone_hermite(
+        support[0].w, support[1].w, support[2].w, support[3].w, phase);
+    result.valid = 1.0;
+    return result;
+}
+
+inline EnvelopeTap linear_envelope_tap(
+        const device AudioEnvelopeSample *samples,
+        uint levelOffset, uint levelCount,
+        uint baseAnchor, float baseLocal, uint divisor) {
+    EnvelopeTap result{0.0, 0.0, 0.0, 0.0, 0.0};
+    if (levelCount == 0) {
+        return result;
+    }
+    const uint anchor = baseAnchor / divisor;
+    const uint remainder = baseAnchor % divisor;
+    const float local =
+        (float(remainder) + baseLocal) / float(divisor);
+    const int left = int(anchor) + int(floor(local));
+    if (left < 0 || left >= int(levelCount)) {
+        return result;
+    }
+    const int right = min(left + 1, int(levelCount) - 1);
+    const float phase = local - floor(local);
+    const AudioEnvelopeSample leftSample =
+        samples[levelOffset + uint(left)];
+    const AudioEnvelopeSample rightSample =
+        samples[levelOffset + uint(right)];
+    const float4 a = float4(
+        float(leftSample.upper) / 65535.0,
+        float(leftSample.lower) / 65535.0,
+        float(leftSample.minimum) / 32767.0,
+        float(leftSample.maximum) / 32767.0);
+    const float4 b = float4(
+        float(rightSample.upper) / 65535.0,
+        float(rightSample.lower) / 65535.0,
+        float(rightSample.minimum) / 32767.0,
+        float(rightSample.maximum) / 32767.0);
+    const float4 value = mix(a, b, phase);
+    result.upper = value.x;
+    result.lower = value.y;
+    result.minimum = value.z;
+    result.maximum = value.w;
     result.valid = 1.0;
     return result;
 }
@@ -2861,15 +3129,31 @@ inline WaveAttribute linear_attribute(
 }
 
 inline float targeted_stop_filter(float pixelsPerSecond) {
-    // The fixed 64 and 184 px/s stops are the only two levels still exposing
-    // a one-pixel sawtooth on the real stress passage. Taper narrowly around
+    // These fixed zoom stops are the levels still exposing a one-pixel
+    // sawtooth on the real stress passages. Taper narrowly around
     // those exact stops so none of the neighboring levels—and especially no
     // close-detail level—changes reconstruction.
     const float at64 =
         1.0 - smoothstep(0.0, 8.0, abs(pixelsPerSecond - 64.0));
+    const float at92 =
+        1.0 - smoothstep(0.0, 8.0, abs(pixelsPerSecond - 92.0));
+    const float at128 =
+        1.0 - smoothstep(0.0, 10.0, abs(pixelsPerSecond - 128.0));
     const float at184 =
         1.0 - smoothstep(0.0, 12.0, abs(pixelsPerSecond - 184.0));
-    return max(at64, at184);
+    const float at256 =
+        1.0 - smoothstep(0.0, 16.0, abs(pixelsPerSecond - 256.0));
+    const float at384 =
+        1.0 - smoothstep(0.0, 24.0, abs(pixelsPerSecond - 384.0));
+    const float at864 =
+        1.0 - smoothstep(0.0, 32.0, abs(pixelsPerSecond - 864.0));
+    const float at1152 =
+        1.0 - smoothstep(0.0, 48.0, abs(pixelsPerSecond - 1152.0));
+    return max(
+        max(max(at64, at92), at128),
+        max(
+            max(at184, at256),
+            max(at384, max(at864, at1152))));
 }
 
 kernel void wave_attribute_kernel(
@@ -2892,26 +3176,33 @@ kernel void wave_attribute_kernel(
         / max(1.0, u.pixelsPerSecond * scale);
     const uint waveLevel = detail_lod(
         waveFootprint, u.waveMipCount);
-    const WaveTap sharpWave = sharp_wave_tap(
-        samples,
-        u.waveMipOffsets[waveLevel],
-        u.waveMipCounts[waveLevel],
-        u.waveCurrentIndex,
-        u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
-        waveLevel);
+    const WaveTap sharpWave = u.waveformMode == 3
+        ? three_band_detail_tap(
+            samples,
+            u.waveMipOffsets[waveLevel],
+            u.waveMipCounts[waveLevel],
+            u.waveCurrentIndex,
+            u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+            waveLevel, u.pixelsPerSecond)
+        : sharp_wave_tap(
+            samples,
+            u.waveMipOffsets[waveLevel],
+            u.waveMipCounts[waveLevel],
+            u.waveCurrentIndex,
+            u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+            waveLevel);
     if (sharpWave.valid == 0.0) {
         attributes[id].colorAndUpper = float4(0.0);
         attributes[id].lowerAndPadding = float4(0.0);
         return;
     }
-    // The targeted full-ladder recording isolates residual wiggle to
-    // 24-384 px/s. At those scales positive cubic reconstruction removes
-    // moving mip-lattice corners without sacrificing visible source detail;
-    // the close 576-1536 range uses interpolating monotone Hermite
-    // reconstruction. Unlike the retired B-spline it passes through every
-    // source peak, but unlike linear interpolation it has no moving slope
-    // corners. Zoom is fixed during playback, so this blend never changes
-    // phase from frame to frame.
+    // Positive cubic reconstruction removes moving mip-lattice corners at
+    // 24-384 px/s. At the close stops sharpWave owns geometry instead:
+    // BLUE/RGB subsequently use linear signed detail, while 3BAND linearly
+    // connects its independent PWV7 band samples. The latter is essential:
+    // holding each row produces coarse stair steps instead of Rekordbox's
+    // clean straight slopes. Zoom is fixed during playback, so the blend never
+    // changes phase from frame to frame.
     const float stableKernel = 1.0 - smoothstep(
         384.0, 576.0, u.pixelsPerSecond);
     const WaveTap smoothWave = wave_tap(
@@ -2981,7 +3272,9 @@ kernel void wave_attribute_kernel(
         // close-zoom boundaries crisp; cubic interpolation turns each
         // approximately 150 Hz row into a broad pastel gradient. Preserve
         // the already-stable interpolation at distant stops, then converge
-        // to a song-anchored nearest row over the 384..576 close transition.
+        // to a song-anchored nearest row over the 92..184 transition. The
+        // uniform is in macOS points/second; on the Retina reference display
+        // 184 points/second is about 368 physical pixels/second.
         const float3 crispColor = nearest_wave_color(
             samples,
             u.waveMipOffsets[waveLevel],
@@ -2991,22 +3284,24 @@ kernel void wave_attribute_kernel(
             waveLevel);
         color = mix(
             color, crispColor,
-            smoothstep(384.0, 576.0, u.pixelsPerSecond));
+            smoothstep(92.0, 184.0, u.pixelsPerSecond));
     }
     float height = mix(
         sharpWave.height, stableWave.height, stableKernel);
-    const float displayEnvelopeHeight = height;
     float upperHeight = height;
     float lowerHeight = height;
-    // Exact PWV3/PWV5/PWV7 rows provide display color/frequency identity, but
-    // their 150 Hz envelopes cannot describe the individual close-zoom audio
-    // cycles visible in Rekordbox. The decoded envelope therefore owns the
-    // continuous outer silhouette in every mode. Crucially, it remains a
-    // continuous surface: gating it by the 150 Hz display-row lattice punched
-    // false gaps into claps and bass tails on High & Scared.
-    if (u.audioDetailSampleCount > 0
+    // BLUE and RGB use close-resolution audio geometry together with their
+    // authored PWV3/PWV5 amplitude and color. 3BAND remains three native
+    // PWV7 layers and bypasses the audio contour.
+    if (u.waveformMode != 3
+            && u.audioDetailSampleCount > 0
             && u.audioDetailMipCount > 0) {
-        const float detailFootprint = u.audioDetailSamplesPerSecond
+        // BLUE and RGB both use the literal signed min/max trace at close
+        // resolution. Filling separate positive/negative envelopes back to
+        // zero creates a false center seam and solid mirrored lobes; the
+        // signed interval preserves the actual carrier crossing instead.
+        const float detailFootprint =
+            u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
         const uint detailLevel = audio_detail_lod(
             detailFootprint,
@@ -3014,91 +3309,96 @@ kernel void wave_attribute_kernel(
             u.audioDetailMipCount);
         const uint detailDivisor =
             u.audioDetailMipDivisors[detailLevel];
-        const EnvelopeTap sharpDetail = sharp_envelope_tap(
-            audioDetailSamples,
-            u.audioDetailMipOffsets[detailLevel],
-            u.audioDetailMipCounts[detailLevel],
-            u.audioDetailCurrentIndex,
+        const float detailLocal =
             u.audioDetailCurrentPhase
-                + secondOffset * u.audioDetailSamplesPerSecond,
-            detailDivisor);
-        if (sharpDetail.valid > 0.0) {
-            const EnvelopeTap smoothDetail = envelope_tap(
-                audioDetailSamples,
-                u.audioDetailMipOffsets[detailLevel],
-                u.audioDetailMipCounts[detailLevel],
-                u.audioDetailCurrentIndex,
-                u.audioDetailCurrentPhase
-                    + secondOffset * u.audioDetailSamplesPerSecond,
-                detailDivisor);
-            const float detailFilterOffset =
-                filterSeconds * u.audioDetailSamplesPerSecond;
-            const float detailLocal =
-                u.audioDetailCurrentPhase
                 + secondOffset * u.audioDetailSamplesPerSecond;
-            const EnvelopeTap leftSmoothDetail = envelope_tap(
+        EnvelopeTap sharpDetail = u.pixelsPerSecond >= 184.0
+            ? linear_envelope_tap(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
                 u.audioDetailMipCounts[detailLevel],
                 u.audioDetailCurrentIndex,
-                detailLocal - detailFilterOffset,
-                detailDivisor);
-            const EnvelopeTap rightSmoothDetail = envelope_tap(
+                detailLocal,
+                detailDivisor)
+            : sharp_envelope_tap(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
                 u.audioDetailMipCounts[detailLevel],
                 u.audioDetailCurrentIndex,
-                detailLocal + detailFilterOffset,
+                detailLocal,
                 detailDivisor);
-            const float detailFilter = targetedFilter
-                * leftSmoothDetail.valid * rightSmoothDetail.valid;
-            const float2 smoothDetailPair =
-                float2(smoothDetail.upper, smoothDetail.lower);
-            const float2 stableDetail = mix(
-                smoothDetailPair,
-                (float2(leftSmoothDetail.upper, leftSmoothDetail.lower)
-                    + 2.0 * smoothDetailPair
-                    + float2(
-                        rightSmoothDetail.upper,
-                        rightSmoothDetail.lower)) * 0.25,
-                detailFilter);
-            const float2 audioEnvelopeHeight = mix(
-                float2(sharpDetail.upper, sharpDetail.lower),
-                stableDetail, stableKernel);
-            // Rekordbox retains a low, varying display-envelope body at
-            // distant scales, where a compact 150 Hz cell represents many
-            // individual cycles. Keep that bounded floor only through the
-            // overview/middle ladder. Applying it to both polarities at close
-            // zoom reconnects positive and negative lobes through the center,
-            // fattens blue transients into blocks, and destroys the signed
-            // oscillation that the V3 cache was introduced to preserve.
-            // Taper it away between the fixed 384 and 576 stops; every close
-            // stop then uses the independent decoded upper/lower geometry
-            // exactly, while true zero remains zero at every scale.
-            const float displayFloorWeight = 1.0 - smoothstep(
-                384.0, 576.0, u.pixelsPerSecond);
-            float2 polarityHeight = max(
-                audioEnvelopeHeight,
-                float2(
-                    displayEnvelopeHeight * 0.30 * displayFloorWeight));
-            // The u16 ultra stream can legitimately quantize extremely quiet
-            // nonzero audio to zero even though the independent 150 Hz
-            // display envelope still proves signal exists. At close zoom,
-            // recover only that missing near-center ink and cap it to a thin
-            // line. The rescue fades out as soon as either decoded polarity
-            // has its own visible height, so it cannot reconnect normal
-            // attacks, fill clap cutouts, or round strong-song detail.
-            const float audioMaximum = max(
-                audioEnvelopeHeight.x, audioEnvelopeHeight.y);
-            const float quietDisplayRescue =
-                min(displayEnvelopeHeight * 0.30, 0.0125)
-                * smoothstep(384.0, 576.0, u.pixelsPerSecond)
-                * (1.0 - smoothstep(0.0, 0.01, audioMaximum));
-            polarityHeight = max(
-                polarityHeight, float2(quietDisplayRescue));
-            upperHeight = polarityHeight.x;
-            lowerHeight = polarityHeight.y;
-            height = max(upperHeight, lowerHeight);
+        // The signed interval owns BLUE/RGB geometry, so filtering only the
+        // PWV color stream cannot stabilize its boundary. At the measured
+        // problem stops, apply the same symmetric song-space [1 2 1]
+        // reconstruction to minimum and maximum before they enter the fixed
+        // song lattice. This removes undisplayable horizontal energy without
+        // filtering the final pixels or changing neighboring zoom levels.
+        const float detailFilter = targeted_stop_filter(
+            u.pixelsPerSecond);
+        if (detailFilter > 0.0) {
+            const float detailPixel =
+                detailFootprint * 1.5;
+            const EnvelopeTap leftDetail =
+                u.pixelsPerSecond >= 184.0
+                ? linear_envelope_tap(
+                    audioDetailSamples,
+                    u.audioDetailMipOffsets[detailLevel],
+                    u.audioDetailMipCounts[detailLevel],
+                    u.audioDetailCurrentIndex,
+                    detailLocal - detailPixel,
+                    detailDivisor)
+                : sharp_envelope_tap(
+                    audioDetailSamples,
+                    u.audioDetailMipOffsets[detailLevel],
+                    u.audioDetailMipCounts[detailLevel],
+                    u.audioDetailCurrentIndex,
+                    detailLocal - detailPixel,
+                    detailDivisor);
+            const EnvelopeTap rightDetail =
+                u.pixelsPerSecond >= 184.0
+                ? linear_envelope_tap(
+                    audioDetailSamples,
+                    u.audioDetailMipOffsets[detailLevel],
+                    u.audioDetailMipCounts[detailLevel],
+                    u.audioDetailCurrentIndex,
+                    detailLocal + detailPixel,
+                    detailDivisor)
+                : sharp_envelope_tap(
+                    audioDetailSamples,
+                    u.audioDetailMipOffsets[detailLevel],
+                    u.audioDetailMipCounts[detailLevel],
+                    u.audioDetailCurrentIndex,
+                    detailLocal + detailPixel,
+                    detailDivisor);
+            if (leftDetail.valid > 0.0 && rightDetail.valid > 0.0) {
+                const float4 filtered = (
+                    float4(
+                        leftDetail.upper, leftDetail.lower,
+                        leftDetail.minimum, leftDetail.maximum)
+                    + 2.0 * float4(
+                        sharpDetail.upper, sharpDetail.lower,
+                        sharpDetail.minimum, sharpDetail.maximum)
+                    + float4(
+                        rightDetail.upper, rightDetail.lower,
+                        rightDetail.minimum, rightDetail.maximum)) * 0.25;
+                sharpDetail.upper = mix(
+                    sharpDetail.upper, filtered.x, detailFilter);
+                sharpDetail.lower = mix(
+                    sharpDetail.lower, filtered.y, detailFilter);
+                sharpDetail.minimum = mix(
+                    sharpDetail.minimum, filtered.z, detailFilter);
+                sharpDetail.maximum = mix(
+                    sharpDetail.maximum, filtered.w, detailFilter);
+            }
+        }
+        if (sharpDetail.valid > 0.0) {
+            // A BLUE/RGB column is a signed min/max interval, not two
+            // envelopes filled back to zero. Quiet tonal bins therefore form
+            // a thin oscillating trace while dense/noisy bins naturally widen
+            // into the solid blocks visible in Rekordbox.
+            upperHeight = sharpDetail.maximum;
+            lowerHeight = sharpDetail.minimum;
+            height = max(abs(upperHeight), abs(lowerHeight));
         }
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
@@ -3197,6 +3497,52 @@ inline float profile_coverage(
             (hi + band - threshold) / max(hi - lo, 2.0 * band));
     }
     return total / float(count - 1);
+}
+
+inline float interval_profile_coverage(
+        thread const float *minimums,
+        thread const float *maximums,
+        uint count, float signedPosition,
+        float heightScale, float antialias,
+        float halfWidthScale) {
+    if (count < 2 || count > kAttributeProfileSamples) {
+        return 0.0;
+    }
+    const float minimumHalfWidth =
+        1.8 / max(heightScale, 1e-5);
+    const float minimumInsetHalfWidth =
+        0.65 / max(heightScale, 1e-5);
+    float lowerEdges[kAttributeProfileSamples];
+    float upperEdges[kAttributeProfileSamples];
+    float invertedLowerEdges[kAttributeProfileSamples];
+    for (uint i = 0; i < count; ++i) {
+        const float low = min(minimums[i], maximums[i]);
+        const float high = max(minimums[i], maximums[i]);
+        const float center = (low + high) * 0.5;
+        const float outerHalfWidth = max(
+            (high - low) * 0.5, minimumHalfWidth);
+        const float halfWidth = max(
+            outerHalfWidth * saturate(halfWidthScale),
+            minimumInsetHalfWidth);
+        lowerEdges[i] = center - halfWidth;
+        upperEdges[i] = center + halfWidth;
+        invertedLowerEdges[i] = -lowerEdges[i];
+    }
+    // Integrate both moving boundaries continuously across the output pixel.
+    // Averaging independent point-in-interval tests quantizes coverage into
+    // fifths, so a sloped BLUE/RGB edge visibly crawls as playback phase
+    // advances. The signed interval is always wider than both one-pixel AA
+    // bands, so the overlap is the lesser of the exact upper and lower
+    // half-plane coverages.
+    const float upperCoverage = profile_coverage(
+        upperEdges, count,
+        signedPosition * heightScale,
+        heightScale, antialias);
+    const float lowerCoverage = profile_coverage(
+        invertedLowerEdges, count,
+        -signedPosition * heightScale,
+        heightScale, antialias);
+    return min(upperCoverage, lowerCoverage);
 }
 
 inline WaveSurface integrated_wave_level(
@@ -3423,6 +3769,8 @@ fragment float4 wave_surface_fragment(
         float midHeights[kAttributeProfileSamples];
         float highHeights[kAttributeProfileSamples];
         float lowHeights[kAttributeProfileSamples];
+        float blueMinimums[kAttributeProfileSamples];
+        float blueMaximums[kAttributeProfileSamples];
         float3 weightedColor = float3(0.0);
         float colorWeight = 0.0;
         for (uint i = 0; i < kAttributeProfileSamples; ++i) {
@@ -3432,37 +3780,98 @@ fragment float4 wave_surface_fragment(
                 attributes, u.waveAttributeCount, tileX + offset);
             const float upperHeight = attribute.colorAndUpper.a;
             const float lowerHeight = attribute.lowerAndPadding.x;
-            const float outerHeight = max(upperHeight, lowerHeight);
+            const float outerHeight = u.waveformMode != 3
+                ? max(abs(upperHeight), abs(lowerHeight))
+                : max(upperHeight, lowerHeight);
             const float sideHeight =
                 yPoints <= waveCenter ? upperHeight : lowerHeight;
             heights[i] = sideHeight;
-            // All three display modes share the stabilized high-resolution
-            // audio silhouette in `a`. RGB carries frequency/color
-            // proportions premultiplied by that silhouette. Reconstruct the
-            // ratios first, then clip every 3BAND layer to the same detailed
-            // outer contour. This prevents a held 150 Hz band cell from
-            // becoming a full-height slab over short clap/bass structure.
-            // Cubing the ratios is also intentional: the previous square let
-            // weak high-band leakage reach the outside of low-dominant kick
-            // lobes, turning their Rekordbox-red edge lavender. Dominant
-            // bands remain full height (1^3 == 1), so real blue claps keep
-            // their complete silhouette while weaker overlap stays confined
-            // to the pale shared center.
-            const float inverseOuter =
-                outerHeight > 0.0001 ? 1.0 / outerHeight : 0.0;
-            lowHeights[i] = sideHeight
-                * pow(saturate(
-                    attribute.colorAndUpper.r * inverseOuter), 3.0);
-            midHeights[i] = sideHeight
-                * pow(saturate(
-                    attribute.colorAndUpper.g * inverseOuter), 3.0);
-            highHeights[i] = sideHeight
-                * pow(saturate(
-                    attribute.colorAndUpper.b * inverseOuter), 3.0);
+            blueMinimums[i] = lowerHeight;
+            blueMaximums[i] = upperHeight;
+            // In 3BAND the premultiplied RGB attributes are the three absolute
+            // PWV7 layer heights. Do not derive ratios from one shared outer
+            // silhouette: each Pioneer band reaches its own vertical extent.
+            lowHeights[i] = attribute.colorAndUpper.r;
+            midHeights[i] = attribute.colorAndUpper.g;
+            highHeights[i] = attribute.colorAndUpper.b;
             const float weight =
                 i == 0 || i + 1 == kAttributeProfileSamples ? 0.5 : 1.0;
             weightedColor += attribute.colorAndUpper.rgb * weight;
             colorWeight += outerHeight * weight;
+        }
+        if (u.waveformMode == 1 || u.waveformMode == 2) {
+            const float signedPosition =
+                (waveCenter - yPoints) / max(heightScale, 1e-5);
+            const float coverage = interval_profile_coverage(
+                blueMinimums, blueMaximums, kAttributeProfileSamples,
+                signedPosition, heightScale, antialias, 1.0);
+            if (coverage <= 0.0) {
+                discard_fragment();
+            }
+            float3 encodedColor =
+                weightedColor / max(colorWeight, 0.0001);
+            float3 displayColor = encodedColor;
+            if (u.waveformMode == 1) {
+                // Preserve Rekordbox's broad white -> cyan -> blue radial
+                // structure as one smooth field. Discrete nested intervals
+                // stabilized the outer edge but made their internal boundaries
+                // look like traffic lines moving through a stationary wave.
+                // Average the signed center and width over the same complete
+                // physical-pixel profile used by coverage, then evaluate one
+                // continuous transfer with no internal coverage boundaries.
+                const float3 white =
+                    float3(237.0 / 255.0, 1.0, 1.0);
+                float centerSum = 0.0;
+                float halfWidthSum = 0.0;
+                float radialBlendSum = 0.0;
+                float profileWeight = 0.0;
+                for (uint i = 0; i < kAttributeProfileSamples; ++i) {
+                    const float weight =
+                        i == 0 || i + 1 == kAttributeProfileSamples
+                        ? 0.5 : 1.0;
+                    const float low =
+                        min(blueMinimums[i], blueMaximums[i]);
+                    const float high =
+                        max(blueMinimums[i], blueMaximums[i]);
+                    const float sampleCenter =
+                        (low + high) * 0.5;
+                    const float sampleHalfWidth = max(
+                        (high - low) * 0.5,
+                        1.8 / max(heightScale, 1e-5));
+                    centerSum += sampleCenter * weight;
+                    halfWidthSum += sampleHalfWidth * weight;
+                    const float sampleRadial = saturate(
+                        abs(signedPosition - sampleCenter)
+                        / max(sampleHalfWidth, 1e-5));
+                    centerSum += sampleCenter * weight;
+                    halfWidthSum += sampleHalfWidth * weight;
+                    radialBlendSum +=
+                        smoothstep(0.28, 1.0, sampleRadial) * weight;
+                    profileWeight += weight;
+                }
+                const float center =
+                    centerSum / max(profileWeight, 0.0001);
+                const float halfWidth =
+                    halfWidthSum / max(profileWeight, 0.0001);
+                const float radial = saturate(
+                    abs(signedPosition - center)
+                    / max(halfWidth, 1e-5));
+                const float pointRadialBlend =
+                    smoothstep(0.28, 1.0, radial);
+                const float integratedRadialBlend =
+                    radialBlendSum / max(profileWeight, 0.0001);
+                const float radialBlend = mix(
+                    pointRadialBlend,
+                    integratedRadialBlend,
+                    targeted_stop_filter(u.pixelsPerSecond));
+                displayColor = mix(
+                    white, encodedColor,
+                    radialBlend);
+            }
+            return float4(mix(
+                background,
+                display_srgb_to_linear(displayColor),
+                saturate(coverage)), 1.0);
         }
         const float coverage = profile_coverage(
             heights, kAttributeProfileSamples,
@@ -3480,38 +3889,45 @@ fragment float4 wave_surface_fragment(
             const float lowCoverage = profile_coverage(
                 lowHeights, kAttributeProfileSamples,
                 distance, heightScale, antialias);
-            // Rekordbox's 3BAND identity is a simultaneous frequency mix, not
-            // three opaque paints with blue always winning. Weight every
-            // visible band at this pixel; a kick that also has upper energy
-            // becomes pink at the overlap while a genuinely high-dominant
-            // clap remains blue.
-            const float3 averageBands = saturate(
-                weightedColor / max(colorWeight, 0.0001));
-            // Coverage says whether a band reaches this vertical pixel;
-            // actual PWV7 energy says how much color that band contributes.
-            // Giving every nonzero leakage band an equal vote washed a
-            // low-dominant kick into dusty pink at the center line.
-            const float3 bandWeights = saturate(float3(
-                lowCoverage, midCoverage, highCoverage))
-                * pow(averageBands, float3(2.0));
-            if (dot(bandWeights, float3(1.0)) <= 0.0) {
+            const float low = saturate(lowCoverage);
+            const float mid = saturate(midCoverage);
+            const float high = saturate(highCoverage);
+            const float none = (1.0 - low) * (1.0 - mid) * (1.0 - high);
+            const float alpha = 1.0 - none;
+            if (alpha <= 0.0) {
                 discard_fragment();
             }
-            const float3 mixedColor =
-                bandWeights.r * float3(1.0, 0.0, 0.0)
-                + bandWeights.g * float3(1.0, 0.55, 0.0)
-                + bandWeights.b * float3(0.50, 0.64, 1.0);
-            // Normalize by the brightest channel rather than the sum of
-            // weights. Mixed frequency content remains vivid instead of
-            // becoming a low-saturation average.
-            const float3 displayColor = mixedColor / max(
-                max(mixedColor.r, max(mixedColor.g, mixedColor.b)),
-                0.0001);
-            // Band energy chooses hue; geometric coverage chooses opacity.
-            // Reusing the squared hue weights as alpha dimmed an otherwise
-            // fully covered red kick to 234/51/35 instead of Rekordbox red.
-            const float alpha = max(
-                lowCoverage, max(midCoverage, highCoverage));
+            const float3 lowColor =
+                float3(0.0, 85.0 / 255.0, 225.0 / 255.0);
+            const float3 midColor =
+                float3(1.0, 166.0 / 255.0, 0.0);
+            const float3 lowMidColor =
+                float3(180.0 / 255.0, 105.0 / 255.0, 10.0 / 255.0);
+            const float3 highColor = float3(1.0);
+            const float3 lowHighColor =
+                float3(210.0 / 255.0, 220.0 / 255.0, 250.0 / 255.0);
+            const float3 midHighColor =
+                float3(1.0, 240.0 / 255.0, 215.0 / 255.0);
+            const float3 allColor =
+                float3(245.0 / 255.0, 235.0 / 255.0, 215.0 / 255.0);
+            // Rekordbox uses a seven-color membership palette, not alpha-
+            // composited blue/orange/white paint. The product weights extend
+            // that exact binary table continuously through antialiased edges.
+            const float lowOnly = low * (1.0 - mid) * (1.0 - high);
+            const float midOnly = (1.0 - low) * mid * (1.0 - high);
+            const float lowMid = low * mid * (1.0 - high);
+            const float highOnly = (1.0 - low) * (1.0 - mid) * high;
+            const float lowHigh = low * (1.0 - mid) * high;
+            const float midHigh = (1.0 - low) * mid * high;
+            const float all = low * mid * high;
+            const float3 displayColor = (
+                lowOnly * lowColor
+                + midOnly * midColor
+                + lowMid * lowMidColor
+                + highOnly * highColor
+                + lowHigh * lowHighColor
+                + midHigh * midHighColor
+                + all * allColor) / max(alpha, 0.0001);
             return float4(mix(
                 background,
                 display_srgb_to_linear(displayColor),
@@ -4496,6 +4912,25 @@ int sb_deck_set_audio_detail_polarity_u16_for_generation(
     const int result = instance->setAudioDetailPolarity16(
         upper_heights, lower_heights, sample_count,
         samples_per_second, generation);
+    if (result) instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *upper_heights,
+    const uint16_t *lower_heights,
+    const int16_t *minimum_values,
+    const int16_t *maximum_values,
+    size_t sample_count,
+    double samples_per_second) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setAudioDetailPolarity16(
+        upper_heights, lower_heights, sample_count,
+        samples_per_second, generation,
+        minimum_values, maximum_values);
     if (result) instance->requestDisplay();
     return result;
 }

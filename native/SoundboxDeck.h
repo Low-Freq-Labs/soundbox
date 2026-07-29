@@ -143,6 +143,15 @@ int sb_deck_set_audio_detail_polarity_u16_for_generation(
     const uint16_t *lower_heights,
     size_t sample_count,
     double samples_per_second);
+int sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const uint16_t *upper_heights,
+    const uint16_t *lower_heights,
+    const int16_t *minimum_values,
+    const int16_t *maximum_values,
+    size_t sample_count,
+    double samples_per_second);
 int sb_deck_set_cues(
     SBDeckRef deck,
     const uint32_t *position_millis,
