@@ -128,6 +128,22 @@ class _Snapshot(ctypes.Structure):
     ]
 
 
+class _FrameTraceStatus(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("active", ctypes.c_uint32),
+        ("max_frames", ctypes.c_uint32),
+        ("submitted_frames", ctypes.c_uint32),
+        ("gpu_completed_frames", ctypes.c_uint32),
+        ("presentation_completed_frames", ctypes.c_uint32),
+        ("crop_width_pixels", ctypes.c_uint32),
+        ("crop_height_pixels", ctypes.c_uint32),
+        ("bytes_per_row", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("capture_bytes", ctypes.c_uint64),
+    ]
+
+
 def _library_candidates() -> list[Path]:
     candidates: list[Path] = []
     frozen = getattr(sys, "_MEIPASS", None)
@@ -273,6 +289,22 @@ def _bind(path: Path):
     lib.sb_deck_set_waveform_mode.restype = ctypes.c_int
     lib.sb_deck_waveform_mode.argtypes = [handle]
     lib.sb_deck_waveform_mode.restype = ctypes.c_uint32
+    lib.sb_deck_set_carrier_neutral_probe.argtypes = [
+        handle, ctypes.c_int,
+    ]
+    lib.sb_deck_set_carrier_neutral_probe.restype = ctypes.c_int
+    lib.sb_deck_set_stable_gap_bed_probe.argtypes = [
+        handle, ctypes.c_float,
+    ]
+    lib.sb_deck_set_stable_gap_bed_probe.restype = ctypes.c_int
+    lib.sb_deck_set_gap_edge_sharpness_probe.argtypes = [
+        handle, ctypes.c_float,
+    ]
+    lib.sb_deck_set_gap_edge_sharpness_probe.restype = ctypes.c_int
+    lib.sb_deck_set_rgb_color_edge_sharpness_probe.argtypes = [
+        handle, ctypes.c_float,
+    ]
+    lib.sb_deck_set_rgb_color_edge_sharpness_probe.restype = ctypes.c_int
     lib.sb_deck_set_spectral_analysis.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_uint8),
@@ -380,6 +412,19 @@ def _bind(path: Path):
     lib.sb_deck_presentation_error_max_ms.argtypes = [handle]
     lib.sb_deck_presentation_error_max_ms.restype = ctypes.c_double
     lib.sb_deck_reset_display_stats.argtypes = [handle]
+    lib.sb_deck_begin_frame_trace.argtypes = [
+        handle, ctypes.c_uint32, ctypes.c_uint32,
+    ]
+    lib.sb_deck_begin_frame_trace.restype = ctypes.c_int
+    lib.sb_deck_frame_trace_status.argtypes = [
+        handle, ctypes.POINTER(_FrameTraceStatus),
+    ]
+    lib.sb_deck_frame_trace_status.restype = ctypes.c_int
+    lib.sb_deck_finish_frame_trace.argtypes = [
+        handle, ctypes.c_char_p,
+    ]
+    lib.sb_deck_finish_frame_trace.restype = ctypes.c_int
+    lib.sb_deck_cancel_frame_trace.argtypes = [handle]
     lib.sb_deck_view_geometry.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_double),
@@ -713,6 +758,55 @@ class NativeDeckBackend(QObject):
     def diagnostic_reset_display_stats(self):
         self._lib.sb_deck_reset_display_stats(self._handle)
 
+    def diagnostic_underruns(self) -> int:
+        """Current cumulative CoreAudio output-buffer underrun count."""
+        self.synchronize()
+        return int(self._snapshot.underruns)
+
+    def diagnostic_begin_frame_trace(
+            self, max_frames: int, crop_width_pixels: int = 768):
+        """Arm a bounded exact-drawable capture with no display-thread I/O."""
+        max_frames = int(max_frames)
+        crop_width_pixels = int(crop_width_pixels)
+        if max_frames < 1 or crop_width_pixels < 0:
+            raise ValueError("invalid Metal frame-trace bounds")
+        if not self._lib.sb_deck_begin_frame_trace(
+                self._handle, max_frames, crop_width_pixels):
+            raise RuntimeError(
+                "Metal frame trace could not allocate its bounded capture")
+        return self.diagnostic_frame_trace_status()
+
+    def diagnostic_frame_trace_status(self) -> dict[str, int | bool]:
+        status = _FrameTraceStatus()
+        if not self._lib.sb_deck_frame_trace_status(
+                self._handle, ctypes.byref(status)):
+            raise RuntimeError("Metal frame-trace status is unavailable")
+        return {
+            "active": bool(status.active),
+            "max_frames": int(status.max_frames),
+            "submitted_frames": int(status.submitted_frames),
+            "gpu_completed_frames": int(status.gpu_completed_frames),
+            "presentation_completed_frames": int(
+                status.presentation_completed_frames),
+            "crop_width_pixels": int(status.crop_width_pixels),
+            "crop_height_pixels": int(status.crop_height_pixels),
+            "bytes_per_row": int(status.bytes_per_row),
+            "capture_bytes": int(status.capture_bytes),
+        }
+
+    def diagnostic_finish_frame_trace(self, output_directory: Path):
+        """Write a stopped trace's raw pixels and per-drawable timing ledger."""
+        output = Path(output_directory).expanduser().resolve()
+        output.mkdir(parents=True, exist_ok=True)
+        if not self._lib.sb_deck_finish_frame_trace(
+                self._handle, str(output).encode("utf-8")):
+            raise RuntimeError(
+                f"Metal frame trace could not be finalized under {output}")
+
+    def diagnostic_cancel_frame_trace(self):
+        if self._handle:
+            self._lib.sb_deck_cancel_frame_trace(self._handle)
+
     def diagnostic_view_geometry(self) -> tuple[float, float, float]:
         """Parent/view widths in points and Metal drawable width in pixels."""
         parent = ctypes.c_double()
@@ -759,6 +853,26 @@ class NativeDeckBackend(QObject):
         return next(
             name for name, encoded in _WAVEFORM_MODES.items()
             if encoded == value)
+
+    def diagnostic_set_carrier_neutral_probe(self, enabled: bool):
+        """Toggle the close carrier-neutral renderer for developer A/Bs."""
+        return bool(self._lib.sb_deck_set_carrier_neutral_probe(
+            self._handle, int(bool(enabled))))
+
+    def diagnostic_set_stable_gap_bed_probe(self, opacity: float):
+        """Place a stable neutral bed behind the untouched signed contour."""
+        return bool(self._lib.sb_deck_set_stable_gap_bed_probe(
+            self._handle, float(opacity)))
+
+    def diagnostic_set_gap_edge_sharpness_probe(self, strength: float):
+        """Sharpen only partial coverage around signed background gaps."""
+        return bool(self._lib.sb_deck_set_gap_edge_sharpness_probe(
+            self._handle, float(strength)))
+
+    def diagnostic_set_rgb_color_edge_sharpness_probe(self, strength: float):
+        """Sharpen fractional PWV5 hue transitions without moving geometry."""
+        return bool(self._lib.sb_deck_set_rgb_color_edge_sharpness_probe(
+            self._handle, float(strength)))
 
     @staticmethod
     def _screen_rgb(raw) -> tuple[int, int, int]:

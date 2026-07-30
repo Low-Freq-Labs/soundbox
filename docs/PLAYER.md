@@ -465,7 +465,7 @@ The following renderer rules are measured invariants, not style preferences:
   the fixed zoom, never on playback phase.
 - **At the five close stops, pace signed extrema in output space.** BLUE/RGB
   selects one conservative peak row from a four-physical-pixel footprint,
-  producing about 0.20–0.23 cells per pixel. Exact extrema and linear facets
+  producing about 0.20–0.26 cells per pixel. Exact extrema and linear facets
   remain; only adjacent peak knots too dense to stay visually stable are
   removed. This is the stricter close-family exception to the general
   one-value-per-pixel ceiling rule. It does not apply to 3BAND.
@@ -1571,6 +1571,19 @@ the ProMotion cadence. That one absent temporal sample is most visible at high
 zoom because the correct constant-velocity distance per interval is larger.
 It is not an envelope, cache, LOD, color, grid, clock, or audio-drop defect.
 
+A 2026-07-29 grid-isolation retry tested that conclusion directly on the real
+448-beat stress track at 1536 px/s. Nine alternating five-second runs in each
+state submitted 5,400 exact drawables with the ordinary 2,688-vertex beat-grid
+draw either present or completely suppressed; waveform, cues, playhead, audio,
+and clocks were unchanged. Grid-on produced 23 display-link target gaps over
+12.5 ms; grid-off produced 24. Both states had zero GPU deadline misses and
+zero CoreAudio underruns. All-frame mean GPU time was 5.450 ms with the grid
+and 5.429 ms without it, a 0.021 ms (0.4%) difference lost inside ordinary
+run-to-run variance; grid-off also had the larger worst GPU duration. The
+grid is built once at track load, then translated from a static buffer. It
+neither causes nor cures the playback hitch. The uninstalled visibility probe
+was removed.
+
 Three targeted policies were measured and rejected:
 
 - hard-locking the range to 120–120 Hz increased 16.667 ms gaps across nearly
@@ -1581,11 +1594,45 @@ Three targeted policies were measured and rejected:
 - increasing `preferredFrameLatency` from one to two reduced cadence and
   reached a 25 ms gap at 1152 px/s while retaining the grab/run-on tradeoff.
 
-All probes and experimental policies were removed. The shipped renderer keeps
-latency one, the negotiated 60–120 Hz range, future-presentation prediction,
-and exact CoreAudio alignment. A fixed 60 Hz comparison remains a possible
-deliberate user-facing A/B experiment, but replacing the mostly 120 Hz path
-would trade away overall fluidity and was not shipped speculatively.
+Hard 120 Hz, a 90–120 Hz floor, fixed 60 Hz, latency two, the system-default
+range, and a continuously running display-thread loop were all measured and
+rejected. The renderer keeps latency one, the explicit negotiated 60–120 Hz
+range, future-presentation prediction, and the CoreAudio master clock.
+
+A 2026-07-29 exact same-event comparison then tested visual recovery rather
+than trying to force Core Animation to produce the absent refresh. A bounded
+diagnostic held the same submitted sample at frames 60/120/180 in five 120 Hz
+rows. The control followed each hold with the live failure's 735-audio-frame
+double jump. Repaying that missing step over 2/4/6/8 following refreshes capped
+the largest advance at 552/460/429/414 frames respectively, without changing
+waveform reconstruction, grid geometry, color, audio, or song time. The middle
+four-refresh preview looked best in that controlled comparison.
+
+The exact natural-cadence four-refresh candidate then covered all thirteen UI
+zooms for 3,120 drawables and caught fifteen real display-link target gaps.
+Every affected stop capped source-frame advance at 460 instead of 735, with
+zero GPU deadline misses and zero CoreAudio underruns. Despite that measurable
+improvement, the installed app felt worse and the restored direct-prediction
+control was definitively better. The recovery layer converted one rare
+correct-time double advance into temporary visual lag followed by four frames
+of altered velocity, making the hitch linger as a rubber-band effect.
+
+The candidate is rejected. Its clock, injection probe, and tests were removed.
+Each display callback again predicts the authoritative CoreAudio position
+directly for `targetPresentationTimestamp`; waveform, grid, cues, and playhead
+remain aligned to that common timestamp. The restored pre-recovery control was
+accepted live, then the recovery source was removed and the exact
+direct-prediction product path was rebuilt, signed, installed, and relaunched.
+The final packaged native dylib SHA-256 is
+`44b26f0744171c0236f14c05b1ea0e57eb579e0fbf21802200c0f002ae178828`.
+Both required gates pass 560 tests with one expected skip. The real library
+loaded 3,263 tracks / 83 playlists with zero preparation tasks and retained all
+3,248 V4 records and 3,125 art files. Post-relaunch `library.json` is
+byte-identical to its protected post-quit backup at SHA-256
+`c3cbdfd0b6be45996987ad0df13a7be7fe9ce0ca1c81cb87d4b835ca9438a235`.
+This is the accepted stopping point: preserve its waveform detail and direct
+motion; the remaining rare hitch is a visual-only omitted ProMotion callback,
+not an audio, grid, GPU-deadline, cache, or transport defect.
 
 ### Continuous signed-interval coverage on 2026-07-28
 
@@ -1862,7 +1909,7 @@ Controlled probes separated the remaining variables:
 The shipped candidate derives the close mip with
 `audio_detail_lod(detailFootprint * 4)`. At
 384/576/864/1152/1536 px/s this selects integer peak divisors
-`35/25/18/13/9`, or 0.20–0.23 extrema cells per physical pixel. This is a
+`35/25/18/13/8`, or 0.20–0.26 extrema cells per physical pixel. This is a
 song-anchored source decision, not a final-pixel blur; the four-sample
 attribute lattice, exact interval/color coverage, Display-P3 palette, timing,
 and cache format are unchanged. 3BAND bypasses this signed audio contour.
@@ -1995,16 +2042,13 @@ Authoritative local evidence:
 
 - Desktop PNGs under `~/Desktop/rekordbox wave/` remain the paused spatial
   source of truth for color, edge shape, height, and detail.
-- `Screen Recording 2026-07-29 at 4.14.25 PM.mov` traverses RGB and BLUE and
-  is the best existing close-motion recording.
-- `Screen Recording 2026-07-29 at 4.24.58 PM.mov` isolates start/stop; it led
-  to the now-shipped exact Metal pause hold.
-- `Screen Recording 2026-07-29 at 4.49.20 PM.mov` traverses the RGB height
-  ladder; it led to the accepted bounded crossover correction.
-- The first recording is H.264 Main, SDR BT.709 `yuv420p`, 3,600×582, and
-  averaged only 56.9 captured fps while SoundBox presented at 120 Hz. It
-  necessarily contains irregular one-to-three-refresh frame holds and cannot
-  by itself prove or disprove a physical-display temporal artifact.
+- No earlier screen recording is an active temporal reference. Those captures
+  were compositor-limited historical inputs to already-shipped corrections
+  and were deliberately retired so they cannot be mistaken for the new
+  physical-panel experiment.
+- The authoritative motion evidence is the untouched iPhone 60 fps original
+  paired with the exact Metal session produced by
+  `scripts/capture_waveform_temporal.py`; its dated result is recorded below.
 
 What the completed investigation already established:
 
@@ -2031,44 +2075,243 @@ What the completed investigation already established:
   now fixed. Do not use their before/after recordings as evidence that the
   residual carrier pulse changed.
 
-The next session must be an experiment-led temporal investigation, not another
-documentation survey or blind filter sweep:
+The paired run, exact motion registration, source/phone spectral split, and
+controlled Metal fixture are complete. A gated polarity-neutral candidate is
+implemented and physically measured below. The remaining work is an explicit
+product choice, not another documentation survey or blind filter sweep:
 
-1. Record the physical built-in panel at 120 or 240 fps with the iPhone locked
-   for focus, exposure, white balance, and framing. Capture the same passage
-   stopped and playing at all five close stops, plus accepted 3BAND as a
-   control. Include enough screen border to recover camera/display phase.
-2. Add a diagnostic-only native capture that records the exact Metal drawable
-   sequence and display-link target/present timestamps for the same run.
-   Compare those GPU frames with the filmed panel. This separates shader
-   redraw from compositor/ProMotion cadence, sample-and-hold motion, panel
-   response, and camera aliasing.
-3. Build space-time strips through fixed song coordinates after exact motion
-   registration. Measure carrier temporal frequency, phase reversals, color
-   variance, repeated/late presents, and whether the residual exists in the
-   drawable sequence before it reaches the panel.
-4. Drive synthetic signed carriers through the same Metal interval compositor:
-   constant-color triangles, alternating extrema, isolated impulses, and
-   controlled knot densities bracketing the shipped 0.20–0.23 cells per
-   physical pixel. The smallest pattern that reproduces the filmed defect
-   identifies whether geometry, chroma, coverage, or presentation is causal.
-5. Only after that split should a remedy be designed. Candidate domains include
-   source reconstruction, analytic prefiltering, presentation scheduling, or
-   display-aware temporal treatment; acceptance still requires paused
-   reference fidelity, stopped/playing agreement, 3BAND invariance, and no
-   cache/schema change.
+1. Choose explicitly whether close BLUE/RGB prioritizes the supplied paused
+   Rekordbox signed texture or a conventional filled envelope without that
+   carrier. The two cannot be pixel-identical because the signed zigzag in the
+   paused reference is the temporal carrier when translated.
+2. If the neutral envelope is accepted, enable it for both stopped and playing
+   close BLUE/RGB, rerun the complete gates, and perform the safe app
+   build/install handoff. Otherwise retain the signed renderer unchanged.
 
 Success is not “looks somewhat calmer in QuickTime.” It is one named causal
 mechanism, a reproducible diagnostic, a remedy that addresses that mechanism,
 and side-by-side physical-panel evidence at every affected zoom.
 
+### Exact-drawable temporal capture implemented on 2026-07-29
+
+The renderer/presentation half of the experiment is ready. The native C ABI can
+arm an explicitly bounded diagnostic trace before playback. It preallocates one
+shared Metal buffer, blits a center crop of each final BGRA8Unorm_sRGB drawable
+after render encoding, and records display-link callback/target/presentation
+timestamps, source frame, drawable ID, GPU start/end times, mode, zoom,
+attribute phase, crop geometry, and actual `MTLDrawable.presentedTime`.
+Dropped or incomplete presentations remain visible in the ledger rather than
+being silently discarded.
+
+No file I/O, image encoding, allocation, Python callback, or blocking wait runs
+on the display-link or audio callback. Capture is capped at 600 drawables and
+512 MiB; file writing happens only after playback stops and only under the
+explicit harness output directory. The harness opens source audio and the
+canonical V4 cache read-only, never writes AppData or Rekordbox, and walks
+BLUE/RGB/3BAND through 384/576/864/1152/1536 px/s from the same track position.
+Each segment exports exact BGRA submission-order pixels plus CSV timing
+metadata, then losslessly packs the pixels as FFV1 after the on-panel run.
+Two repeated 10-bit Gray-code strips plus an alternating parity cell are drawn
+only while the trace is active, at the top and bottom of the main lane. They
+bind a photographed frame to its exact Metal sequence index, expose an
+exposure that blended adjacent refreshes, and reveal a rolling-shutter phase
+change between the two lane edges. The session begins with a fixed-source-frame
+3BAND calibration: only those strips advance, providing a clean 60-camera /
+120-panel transfer measurement before any waveform motion.
+
+Paired six-frame real-cache smoke runs completed with all GPU and presentation
+callbacks accounted for: the calibration held source delta at exactly zero and
+the moving run advanced by the expected 367/368 audio frames per refresh.
+Their target and actual presentation gaps remained 8.333 ms.
+
+### Paired physical/GPU result on 2026-07-29
+
+The authoritative session is
+`~/Desktop/soundbox-temporal-2026-07-29/`, paired with the untouched
+`recording with pimp testing.MOV` original (SHA-256
+`f6e9698c05ff6992a2de1310921a8ed4fb7bb6008f0a07ec11c60518671d6609`).
+The phone produced 4,668 3840×2160 HEVC Main10 frames over 77.853 seconds at
+approximately 59.96 fps. It recorded BT.2020 HLG rather than the requested SDR,
+so it is timing/geometry evidence, not absolute color truth; the exact
+BGRA8Unorm_sRGB traces remain color truth.
+
+The calibration and all fifteen moving segments decoded successfully. Each
+phone segment covers Metal sequences 0–179 in 91–93 camera frames. Both
+Gray-code strips decoded in every accepted frame and agreed in 1,435 of 1,475
+paired reads (97.3%); the disagreements are adjacent-refresh exposure
+boundaries, not waveform-shape changes across the panel. The fixed calibration
+body is byte-identical across all 180 Metal frames. In the phone crop its
+global mean varies by less than one luma code, establishing the physical
+camera/panel noise floor before motion.
+
+The exact timing split rejects presentation as the carrier-pulse cause:
+
+- 2,880 drawables were submitted across sixteen segments. There were sixteen
+  doubled display-link target intervals and nine additional drawables with
+  `actualPresentedTime == 0`.
+- Every dropped drawable completed GPU work about 34–39 ms before its target;
+  there were zero dropped-frame GPU deadline misses. Surviving presentations
+  matched their targets within about 0.0032 ms.
+- After exact five-refresh motion registration, BLUE and RGB repeat at every
+  close zoom with p99 change no greater than one display code, zero waveform
+  pixels above four codes, and mean error below 0.064 code. 3BAND is p99 zero.
+  The submitted pixels therefore contain one rigidly translating surface, not
+  random redraw, color breathing, or transport jitter.
+
+The named mechanism is the signed audio carrier. The tested source passage has
+a dominant 41.333 Hz low-frequency component in the 1.5-second window; a
+longer spectral estimate places its bass fundamental at 41.2092 Hz. BLUE and
+RGB share the close signed min/max audio-detail geometry, and their exact
+drawable sequences are dominated by that same 41.33 Hz line. 3BAND renders
+unsigned Rekordbox band envelopes and does not contain it. At the phone's
+approximately 60 fps sample rate, the line folds to about 18.9 Hz: that bin
+contains roughly 2–9% of BLUE/RGB temporal power, versus 0.3–0.4% for 3BAND
+and 0.9% in the fixed calibration. The residual static/wiggle/pulse is
+therefore a faithfully rendered polarity carrier seen through finite-rate
+sample-and-hold/camera sampling, not an unstable renderer.
+
+For the canonical 6300 Hz audio-detail stream at Retina scale two, the current
+close selector resolves to divisors `35/25/18/13/8` at
+`384/576/864/1152/1536` px/s. The corresponding knot rates fold against the
+120 Hz panel to signed aliases of `-60/+12/-10/+4.62/-52.5` Hz. The final
+divisor is eight because the shader's 6% footprint tolerance accepts the
+eight-cell mip; older documentation that said nine was stale. Temporal
+summaries now record the selected divisor, cells per physical pixel/refresh,
+and panel/camera aliases so future captures expose this immediately.
+
+### Rejected carrier-neutral close compositor experiment on 2026-07-29
+
+The controlled causal fixture now runs through the real native Metal
+compositor, not a NumPy approximation. It generates a 41.2092 Hz stereo tone,
+uploads matching 6300 Hz signed min/max and polarity detail, captures exact
+signed-control and neutral drawables at 384 px/s, and asserts that the neutral
+renderer reduces the carrier bin to less than one fifth of the signed share. The test
+uses the same bounded trace ABI as the physical experiment.
+
+At the five close stops and only for BLUE/RGB, the experiment replaces
+signed min/max polarity with the existing song-anchored peak magnitude:
+
+- positive and negative half-cycles no longer swap sides at the bass
+  fundamental;
+- the result is a conventional symmetric filled amplitude envelope;
+- color, zoom, song position, height transfer, source/cache data, and stopped
+  versus playing reconstruction remain shared;
+- all 3BAND paths bypass the branch; a developer A/B toggle can enable the
+  neutral experiment without touching caches.
+
+On the exact Bad Decisions passage, a 1.5-second exact-drawable sweep measured
+the 40.5–42 Hz band's share as approximately 28–37% in ordinary BLUE and
+19–26% in signed RGB. The neutral renderer reduces it to approximately 2–3%
+in BLUE and 1–2% in RGB at every 384/576/864/1152/1536 stop. Temporal power below 15 Hz
+becomes dominant. Both supplied 3BAND corpus renders remain byte-for-byte
+identical with the neutral renderer.
+
+The supplied paused Rekordbox BLUE/RGB screenshots visibly contain the same
+signed oscillating trace. Removing its temporal pulse necessarily changes that
+paused geometry. The neutral renderer materially worsened registered
+reference silhouette metrics, particularly on the accepted High & Scared
+cases: BLUE correlation/MAE moved from `0.6955/0.2141` to `0.3819/0.4291`, and
+RGB from `0.9308/0.1533` to `0.4693/0.4222`. A narrower one-sided-bin treatment
+preserved more ordinary geometry but left the real carrier band at roughly
+19–31%, so it was rejected.
+
+The matched physical A/B is
+`~/Desktop/soundbox-temporal-neutral-2026-07-29/`, paired with the untouched
+HD60 `newtest.mov` original (SHA-256
+`9e39370c2473ffe1eda8e39393d962ffb76f6f829140f70478299eaa2dd4d067`).
+All sixteen marker runs decoded in order, with 1,386 of 1,446 paired top/bottom
+reads agreeing exactly (95.9%); disagreements remain adjacent-refresh exposure
+boundaries. The exact calibration body is byte-identical through all 180 Metal
+frames. Ten dropped presentations and one drawable presented one refresh late,
+but none missed a GPU deadline; the late drawable's GPU work completed 35.7 ms
+before target.
+
+The physical carrier-suppression result passes decisively. At the expected
+18.66 Hz camera fold, BLUE averages 0.380% temporal power and RGB 0.198%,
+versus 4.858% and 3.297% in the ordinary phone run. Neutral BLUE/RGB are below
+both the fixed calibration (1.066%) and unchanged 3BAND control (0.523% mean).
+The exact Metal trace and controlled fixture agree with the photographed
+panel. The static/wiggle carrier is removed.
+
+The matched physical run initially won acceptance because the moving texture
+was stable. Live use immediately rejected the conventional filled envelope:
+it removed the close waveform detail that defines the desired BLUE/RGB view.
+The detailed signed contour is therefore restored as the stopped-and-playing
+product default. The neutral reconstruction remains developer-only evidence of
+the measured tradeoff, not a candidate for shipment. This rejection also
+confirms that removing the carrier wholesale is not an acceptable solution to
+the remaining aliasing problem.
+
+The restored detailed build passed both source gates (556 tests, one expected
+skip), was signed, safely installed, and relaunched from
+`/Applications/Soundbox.app`. Its packaged native dylib is active. The real
+library loaded 3,263 tracks and 83 playlists with zero preparation tasks,
+unchanged analysis/art cache counts, and `library.json` byte-identical to the
+authoritative post-quit backup.
+
+The next live comparison reframed the perceptual defect as soft scrolling
+negative-space boundaries rather than a request to remove the signed carrier.
+A background-bed experiment reduced binary gap-carrier power but was rejected:
+the untouched far-left BLUE control looked cleanest. A no-fill edge probe then
+won visual acceptance at 0.75 strength for BLUE/RGB. It applies two continuous
+smoothstep passes only to fractional signed coverage, fixing exact black, half
+coverage, and full foreground while leaving every interval boundary in place.
+RGB additionally uses the selected 1.0 strength on only the fractional
+coordinate between adjacent PWV5 endpoint colors. BLUE does not receive that
+RGB-only treatment; its accepted continuous white/cyan/blue radial field stays
+unchanged. The rejected stable bed and carrier-neutral replacement remain
+developer controls at zero. Full-ladder exact Metal capture is complete; live
+installed-app acceptance is still required before calling the defect resolved.
+Both full gates pass 559 tests with one expected skip. The signed candidate is
+installed with its packaged native dylib active; the real library loaded 3,263
+tracks / 83 playlists with zero preparation work, unchanged cache counts, and
+`library.json` byte-identical to its authoritative post-quit backup.
+
+The first installed candidate exposed an invalid scope assumption. Counting
+from fully zoomed out, live use immediately rejected stops 3–6
+(`48/64/92/128` px/s) as horrible. The comparison had established the edge
+transfer only at 384 px/s. Both gap-edge and RGB color-coordinate sharpness are
+therefore hard-gated to the close `384/576/864/1152/1536` family. Every stop
+through 256 uses the prior exact compositor with zero contribution from either
+new transfer.
+
+The corrected exact-Metal run at
+`~/Desktop/soundbox-temporal-sharp-all13-corrected-2026-07-29/` covers every
+real UI stop (`24/32/48/64/92/128/184/256/384/576/864/1152/1536`) in BLUE,
+RGB, and 3BAND: 39 moving segments and 7,020 submitted drawables. All 39
+lossless sequences completed GPU and presentation accounting with decoded
+BGRA hashes and zero GPU deadline misses; the largest actual gap was one
+16.667 ms doubled refresh. Isolated stopped candidate/control renders then
+proved all 24 lower-stop/mode combinations pixel-identical through 256. At the
+384 boundary the candidate differs for BLUE/RGB while 3BAND remains
+pixel-identical. Both required source gates pass 560 tests with one expected
+skip. The corrected signed bundle is installed with packaged native dylib
+SHA-256
+`9b47e7ff750d10f737d08886c6ddd9a575b9404367eb655c40f8b11746162895`.
+Relaunch activated that deck, loaded 3,263 tracks / 83 playlists, scheduled
+zero preparation tasks, preserved all 3,248 V4 records and 3,125 art files,
+and left `library.json` byte-identical to its authoritative post-quit backup at
+SHA-256
+`e6efdb75024a24badbc21e87597ad6bf6bb23b4c95d36305061a42eedc3b1ec2`.
+Sonny's live installed-app acceptance still gates resolution of the perceptual
+defect.
+
+A 2026-07-29 follow-up retried the historical close monotone-Hermite idea under
+the hard detail-preservation boundary. At 384 px/s, exact Metal captures
+compared the current linear signed extrema against 25/50/75/100% blends in
+BLUE and RGB (ten 240-frame, 120 Hz segments with complete GPU and presentation
+accounting). Sonny selected the far-left current renderer; every Hermite blend
+softened the straight-facet micro-detail before producing a worthwhile motion
+gain. The developer probe was removed without installing it. Close signed
+Hermite is therefore rejected, not pending.
+
 ## Committed next player work
 
 See `ROADMAP.md` for sequencing.
 
-1. Execute the BLUE/RGB temporal-aliasing experiment above. Preserve the
-   accepted spatial checkpoint and separate renderer, presentation, panel, and
-   camera effects before changing the shipped contour again.
+1. Continue close BLUE/RGB aliasing R&D under the now-explicit acceptance
+   boundary: preserve the detailed signed inner/outer contour and paused
+   identity. Whole-contour unsigned-envelope replacement is ruled out.
 2. Design the not-yet-shipped grid/cue editing UX on top of the V4 storage
    mutation boundary. It must never mutate Rekordbox analysis. Today a valid
    Rekordbox grid remains authoritative and only the no-grid fallback begins at

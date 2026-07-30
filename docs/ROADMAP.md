@@ -28,7 +28,7 @@ For the live test count, trust `./check.sh` output—not any number written here
   density. The initial two-ladder-entry reduction helped but remained visible.
   Those modes now choose one peak mip from a four-physical-pixel output
   footprint, reducing density from roughly one cell per physical pixel to
-  0.20–0.23 while preserving exact peak extrema and angular facets. In
+  0.20–0.26 while preserving exact peak extrema and angular facets. In
   32-position source-frame sweeps, BLUE/RGB mean registered change improved at
   all five stops; exact ten-refresh-step translations held p99 change to 0–1
   display code with 0.08–0.14% silhouette mismatch. Both 3BAND reference
@@ -55,17 +55,76 @@ For the live test count, trust `./check.sh` output—not any number written here
   `library.json` byte-identical to its post-quit backup. Live acceptance
   confirms the bounded full-ladder transition is much better; height and pause
   are now the accepted checkpoint.
-- **NEXT: EXPERIMENT-LED BLUE/RGB TEMPORAL-ALIASING R&D.** The residual
-  static/wiggly/color pulse at 384–1536 px/s and a separately reported hitch
-  remain unresolved. Do not restart with generic Apple documentation or blind
-  smoothing. Film the physical panel at high frame rate, capture the exact
-  Metal drawable/presentation sequence, build motion-registered space-time
-  strips, and drive controlled synthetic carriers through the compositor to
-  determine whether the cause is renderer geometry/chroma, presentation
-  cadence, ProMotion/sample-and-hold behavior, panel response, or camera
-  aliasing. Full evidence ledger and acceptance contract:
+- **CARRIER-NEUTRAL CLOSE RENDERER REJECTED; DETAIL RESTORED.** The paired
+  physical/GPU run names the residual BLUE/RGB pulse: the source's 41.209 Hz
+  signed bass polarity dominates the exact drawables at 41.33 Hz and folds to
+  about 18.9 Hz in the 60 fps phone recording. Presentation, GPU deadlines,
+  random redraw, transport jitter, and chroma breathing are rejected. A
+  controlled 41.2092 Hz fixture now drives the actual Metal compositor in the
+  native test suite. The close BLUE/RGB renderer replaces signed
+  polarity with the existing song-anchored unsigned peak envelope; across the
+  real five-stop sweep it cuts the causal 41 Hz band from 19–37% of temporal
+  power to 1–3%, while both ordinary rendering and 3BAND remain untouched.
+  The matched physical phone run now passes: BLUE's folded carrier falls from
+  4.86% to 0.38% mean temporal power and RGB from 3.30% to 0.20%; both land
+  below the fixed calibration and unchanged 3BAND control. This exposes the
+  unavoidable product tradeoff cleanly: the supplied paused Rekordbox
+  references visibly contain the same signed zigzag, so removing it changes
+  those close paused shapes into conventional filled envelopes. After
+  reviewing the matched physical result, Sonny initially chose the
+  carrier-neutral moving texture. Live use immediately rejected it because the
+  filled envelope removed the detail that defines the close waveform. The
+  detailed signed contour is restored as the stopped-and-playing product
+  default; 3BAND remains unchanged and a developer control retains the neutral
+  experiment for exact A/Bs. The rejected build had passed both full gates
+  (556 tests, one expected skip) and its safe install preserved all curated
+  state. The restored detailed build also passes both full gates (556 tests,
+  one expected skip) and is safely installed with its packaged native dylib
+  active, 3,263 tracks / 83 playlists loaded, zero preparation tasks, unchanged
+  analysis/art cache counts, and `library.json` byte-identical to its
+  authoritative post-quit backup. The aliasing remains open; the next remedy
+  must preserve the accepted signed inner/outer detail and paused identity,
+  never replace the whole contour with an unsigned envelope.
+  Live exact-Metal comparison subsequently isolated a more useful perceptual
+  target: the black negative-space boundaries looked soft while scrolling.
+  Sonny selected 0.75 continuous gap-edge sharpening for BLUE and RGB, plus
+  1.0 sharpening of RGB's fractional PWV5 color transitions. This candidate
+  preserves exact signed boundaries, full black, half coverage, full color,
+  and endpoint hues; it adds no bed or envelope. Full-ladder capture is
+  complete, both full gates pass 559 tests with one expected skip, and the
+  signed candidate is installed with its packaged native dylib active, 3,263
+  tracks / 83 playlists loaded, zero preparation work, unchanged cache counts,
+  and `library.json` byte-identical to its post-quit backup. Live installed-app
+  acceptance immediately rejected applying those strengths across the entire
+  ladder: counted from fully zoomed out, stops 3–6 (48/64/92/128 px/s) became
+  horrible. Both transfers are now hard-gated to the tested 384–1536 close
+  family; every stop through 256 retains the prior renderer exactly. The
+  corrected 39-segment exact-Metal run covers all thirteen UI stops in all
+  three modes (7,020 drawables, zero GPU deadline misses), and 24 isolated
+  lower-stop/mode candidate-control renders are pixel-identical. At 384,
+  BLUE/RGB change while 3BAND remains pixel-identical. Both full gates pass
+  560 tests with one expected skip. The corrected signed bundle is safely
+  installed with its packaged native dylib active, 3,263 tracks / 83 playlists
+  loaded, zero preparation tasks, unchanged analysis/art cache counts, and
+  `library.json` byte-identical to its post-quit backup. This detailed,
+  close-family renderer is the accepted hardline and must not be softened or
+  traded away to address temporal behavior.
+  A subsequent exact-Metal 384 px/s comparison retried close signed
+  monotone-Hermite reconstruction at 25/50/75/100% in BLUE and RGB. Sonny
+  selected the current linear control over every blend because the alternatives
+  softened the accepted micro-detail before buying enough stability. All ten
+  240-frame traces completed GPU and presentation accounting; the uninstalled
+  developer probe was removed. Signed Hermite is now explicitly rejected.
+  Full evidence ledger and acceptance:
   `docs/PLAYER.md` → “BLUE/RGB temporal-aliasing R&D handoff.”
-- **WAITING ON HARDWARE** for Phase 3 (iPod, ~end July).
+- **NEXT SESSION — Friday 2026-07-31: real iPod hardware validation.**
+  Start read-only: reread `docs/DEVICES.md` and the write contract at the top
+  of `soundbox/sync.py`, resolve the exact mount/profile/filesystem, and verify
+  detection before offering an export. Stock-iPod mode must remain preview-only;
+  Rockbox/dual-boot writes may target only the explicitly confirmed FAT32
+  volume and begin dry-run. Validate playback, artwork, exact playlist order
+  and folder nesting, database refresh, full-library scale, verify, and eject.
+  Never erase, bulk-clean, touch `iPod_Control`, or guess the target.
 - New frontier (2026-07-08): **CDJ USB export** → `docs/cdj-usb-export.md`.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
   V4 retains overflow cues beyond the eight visible slots.
@@ -202,6 +261,22 @@ For the live test count, trust `./check.sh` output—not any number written here
   floor, and latency two all measured worse and were reverted; the shipped
   latency-one negotiated 60–120 Hz policy is the validated boundary, not an
   unfinished waveform/cache fix.
+  A subsequent exact same-event visual-clock comparison tested repayment of
+  one missing 120 Hz sample over 2/4/6/8 refreshes. The middle four-refresh
+  preview looked best and bounded the live 735-audio-frame kick to 460; a
+  natural all-thirteen-zoom run confirmed that bound with zero GPU deadline
+  misses and zero audio underruns. Installed-app acceptance nevertheless found
+  it worse: one rare discontinuity became several frames of visible
+  catch-up/rubber-band velocity. The recovery clock and probe are removed, and
+  the definitively better direct-prediction control is restored. CoreAudio
+  remains master; waveform, grid, cues, and playhead share its predicted target
+  time. The remaining rare hitch is visual-only ProMotion callback omission,
+  not unfinished waveform, grid, cache, clock-drift, GPU, or audio work. Both
+  final gates pass 560 tests with one expected skip. The signed direct-control
+  build is installed with its native deck active, 3,263 tracks / 83 playlists,
+  zero preparation tasks, unchanged 3,248-record analysis and 3,125-file art
+  caches, and post-relaunch `library.json` byte-identical to its protected
+  post-quit backup.
   Per-frame positional stability on a real library track is 0.3% of travel
   (~0.07 Retina pixels at maximum zoom), so motion is exact by measurement.
   A latency-one grab freezes the newest presented/committed source frame,

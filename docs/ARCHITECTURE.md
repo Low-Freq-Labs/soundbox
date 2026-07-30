@@ -61,8 +61,12 @@ phase-locked visual clock: device-rate and phase errors are corrected through a
 tiny velocity bias, never a callback-boundary position step. The predicted
 position remains fractional through the Metal upload, and beat-grid vertices
 use integer milliseconds plus a local fractional phase instead of subtracting
-large absolute floats. Maximum zoom therefore magnifies track detail, not clock
-or grid quantization.
+large absolute floats. Every display callback predicts the authoritative
+CoreAudio position directly for its target presentation timestamp; waveform,
+grid, cues, and playhead share that timestamp. A four-refresh visual-debt
+smoother was rejected in installed-app testing because it turned one rare
+omitted ProMotion callback into several visibly speed-modulated frames.
+Maximum zoom therefore magnifies track detail, not clock or grid quantization.
 
 Rekordbox ANLZ files stay read-only and are an analysis seed/fallback source.
 Active `djmdCue` rows come from the same read-only live database snapshot as
@@ -123,7 +127,7 @@ BLUE/RGB signed min/max intervals use direct linear reconstruction with the
 literal physical-pixel footprint. At the five close UI stops
 (384/576/864/1152/1536), those signed intervals select one native integer peak
 level from a four-physical-pixel output footprint. The resulting
-`35/25/18/13/9` divisors hold alternating extrema density to 0.20–0.23 cells
+`35/25/18/13/8` divisors hold alternating extrema density to 0.20–0.26 cells
 per physical pixel before the fixed song-space attribute lattice; it is not a
 final-image blur. Because max pooling raises typical amplitude as divisors
 grow, BLUE/RGB signed min/max are normalized from 64 px/s upward against the
@@ -188,6 +192,37 @@ sharpness. Actual
 drive cadence diagnostics and the grab handoff. Presentation latency is one
 frame, and the newest committed source frame is held atomically so mouse-down
 cannot rewind or change waveform thickness.
+For temporal R&D, an explicit developer-only frame trace preallocates a bounded
+shared Metal buffer and blits the final drawable crop after encoding. Its CSV
+ledger correlates display-link callback/target times, source frame, drawable
+ID, GPU interval, and actual presentation time with the exact BGRA pixels.
+Nothing writes or encodes on the display/audio paths; export occurs only after
+the stopped run under the caller's explicit directory. The orchestration entry
+point is `scripts/capture_waveform_temporal.py`. While a trace is armed, two
+small repeated Gray-code/parity strips at the main-lane edges encode its exact
+sequence index into the photographed panel. A fixed-waveform calibration
+segment uses those strips to recover the phase, exposure blending, and rolling
+shutter relationship between a 60 fps camera and the 120 Hz display. Timing
+summaries also mirror the deterministic close audio-detail mip selection and
+record the selected divisor, signed-carrier lattice cells per physical
+pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
+carrier distinct from dropped presentation or camera sampling in later
+sessions.
+At close BLUE/RGB stops the default renderer preserves the detailed signed
+contour. A developer-only A/B surface can replace it with the already-loaded
+unsigned polarity peak as a symmetric carrier-neutral envelope, without
+recooking or writing caches. That experiment removes the source-polarity
+strobe but also removes essential waveform detail and failed live product
+acceptance. 3BAND bypasses the branch.
+The visual-acceptance candidate leaves those signed boundaries in place and
+adds no background bed. At only the five close stops from 384 through 1536
+px/s, it applies the selected 0.75 continuous coverage transfer to fractional
+BLUE/RGB edge pixels, fixing exact black, half coverage, and full foreground.
+RGB separately applies the selected 1.0 transfer only to the fractional
+coordinate between adjacent PWV5 endpoint colors; BLUE retains its continuous
+radial white/cyan/blue field. Every stop through 256 takes the prior exact
+compositor, and 3BAND bypasses both transfers at every zoom. Both developer
+rejection probes remain disabled.
 Ordinary pause captures the same exact frame at the end of its gain fade and
 resumes from that fractional-millisecond position; the coarse Python transport
 poll is never the pause endpoint.

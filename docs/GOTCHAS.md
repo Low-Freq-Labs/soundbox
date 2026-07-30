@@ -151,8 +151,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the first level within the tightly bounded 6% footprint tolerance. At the
   five close UI stops (384/576/864/1152/1536), BLUE/RGB instead select from a
   four-physical-pixel output footprint (`audio_detail_lod(footprint * 4)`).
-  The fixed stops resolve to divisors `35/25/18/13/9`, or 0.20–0.23 extrema
-  cells per physical pixel. Live acceptance showed that both the original
+  On a 6300 Hz record at Retina scale two, the fixed stops resolve to divisors
+  `35/25/18/13/8`, or 0.20–0.26 extrema cells per physical pixel. The final
+  divisor is eight because the 6% footprint tolerance accepts it; do not copy
+  the stale pre-measurement value of nine. Live acceptance showed that both
+  the original
   0.91–1.03 density and the first 0.51–0.63 reduction still left a static
   pulse. This is still one stable song-anchored peak level—never blend two
   lattices, never blur final pixels, and never persist or recook these runtime
@@ -314,6 +317,25 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   running display-thread run loop tied the existing bounded run-mode pump in
   paired trials. Keep the explicit 60–120 preferred range, latency one, common
   run-loop modes, and timestamp-driven prediction.
+  A subsequent grid-on/grid-off isolation covered 5,400 exact drawables per
+  state at 1536 px/s. Display-link gaps were 23 with the ordinary static
+  2,688-vertex beat buffer and 24 without it; both had zero GPU deadline
+  misses and zero CoreAudio underruns. Mean GPU time changed by only 0.021 ms.
+  Do not rebuild, hide, decimate, or otherwise blame the beat grid for this
+  cadence omission.
+- **Exact-drawable diagnostics must remain bounded and off the display path.**
+  The temporal trace preallocates its one shared Metal buffer before playback
+  (maximum 600 frames / 512 MiB), then adds only a final-texture blit and
+  timestamp bookkeeping per captured drawable. Never add file I/O, PNG/video
+  encoding, Python callbacks, allocation, or blocking waits to `draw`, its
+  command completion, `addPresentedHandler`, or the CoreAudio callback.
+  Finalization is allowed only after playback stops and only beneath the
+  caller's explicit output directory. Preserve dropped presentations as
+  `presentedTime == 0` ledger rows; omitting them would falsify the cadence
+  experiment. The dual-edge Gray/parity marker is diagnostic-only and must be
+  gated by the exact reserved trace sequence. Never expose it during ordinary
+  playback. Keep the fixed-waveform calibration: without it, a 60 fps camera
+  cannot distinguish panel phase/exposure blending from waveform motion.
 - **A display-link submission is not an onscreen frame.** Target timestamps
   can run ahead of the drawable the hand actually sees. Count cadence from
   `MTLDrawable.presentedTime`, ignore its documented zero value for a dropped
@@ -341,6 +363,42 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the selected LOD, attribute-lattice anchoring/recentering, sample density,
   and final coverage; a stable presentation clock cannot hide content above
   the pixel Nyquist or a contour that is being reprinted at changing phases.
+- **A signed audio contour can be spatially correct and still strobe.** The
+  paired 2026-07-29 physical/GPU run isolated a 41.209 Hz bass fundamental in
+  the source, the same 41.33 Hz line in exact BLUE/RGB drawables, and its
+  approximately 18.9 Hz fold in the 60 fps phone capture. 3BAND's unsigned
+  Rekordbox band envelopes omit that polarity carrier and stayed at the fixed
+  calibration floor. Five-refresh motion registration held BLUE/RGB to p99
+  0–1 display code, so do not misdiagnose this as random redraw, chroma
+  breathing, position jitter, or GPU lateness. Remedy experiments must isolate
+  signed interval center/polarity motion from accepted outer extrema and
+  attacks; never reach first for final-pixel blur or a playing-only shutter.
+- **Removing the signed carrier cannot preserve its paused pixels.** The
+  supplied close Rekordbox screenshots visibly contain the same oscillating
+  polarity trace that strobes when translated. The carrier-neutral compositor
+  experiment proves the tradeoff: using the existing unsigned peak
+  magnitude cuts the real 41 Hz drawable band from 19–37% to 1–3%, but turns
+  the signed zigzag into a symmetric filled envelope and materially changes
+  the paused reference silhouette. The matched physical A/B proves the remedy:
+  BLUE/RGB's phone-folded carrier falls below calibration and 3BAND control.
+  The first physical review accepted its motion, but live use immediately
+  rejected the lost detail. The signed contour therefore remains the close
+  BLUE/RGB product default for stopped and playing, while the neutral envelope
+  remains only a developer A/B probe. Keep 3BAND outside the branch and never
+  reintroduce a playing-only filter.
+- **Do not fill a soft black gap to make it look sharp.** A low-opacity neutral
+  bed behind the signed contour reduced binary negative-space carrier power,
+  but live comparison preferred the untouched far-left BLUE control because
+  every bed made the result look filled. The accepted candidate instead
+  steepens only fractional coverage continuously: exact black, half coverage,
+  full foreground, signed boundaries, and endpoint colors stay fixed. Use
+  0.75 for BLUE/RGB signed coverage. RGB's discrete PWV5 transitions may use
+  the separate selected 1.0 fractional color-coordinate transfer; never apply
+  that RGB-only treatment to BLUE's continuous radial field. Both transfers
+  are accepted only at the five close stops (`384..1536`); applying them to the
+  full ladder made 48/64/92/128 visibly horrible. Hard-gate them off through
+  256, keep 3BAND exact, and regression-check all thirteen real UI zooms rather
+  than extrapolating from one close comparison.
 - **Never blend two mip levels' coverage. Pick one.** Levels are song-anchored
   maxima on power-of-two lattices, so level N quantizes every 2^N bins and
   N+1 every 2^(N+1). Blending scrolls both at the same speed with different
@@ -404,6 +462,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   frame/host/rate tuple. Likewise, scrolling grid vertices stay as integer
   milliseconds + local phase; subtracting absolute float seconds loses visible
   precision late in a track.
+- **Do not spread an omitted ProMotion callback across later frames.**
+  An exact synthetic A/B made four-refresh repayment look best and reduced the
+  largest source-frame advance from 735 to 460, but the installed app felt
+  worse and the direct-prediction control was clearly better. Repayment adds
+  temporary visual lag, then exposes that lag as several frames of altered
+  velocity—a lingering rubber-band effect instead of one rare correct-time
+  double advance. Keep CoreAudio authoritative and predict its position
+  directly for each display target. The absent callback cannot be rendered.
+  Do not revive the recovery clock or its diagnostic injection probe.
 - **Player cache schemas are data contracts, not renderer version numbers.**
   A shader/filter/clock change does not require re-preparing the library.
   Bump/rebuild only when the persisted payload itself changes. The hot path is

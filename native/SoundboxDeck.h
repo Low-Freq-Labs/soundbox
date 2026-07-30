@@ -31,6 +31,20 @@ typedef struct SBDeckSnapshot {
     char error_message[256];
 } SBDeckSnapshot;
 
+typedef struct SBDeckFrameTraceStatus {
+    uint32_t abi_version;
+    uint32_t active;
+    uint32_t max_frames;
+    uint32_t submitted_frames;
+    uint32_t gpu_completed_frames;
+    uint32_t presentation_completed_frames;
+    uint32_t crop_width_pixels;
+    uint32_t crop_height_pixels;
+    uint32_t bytes_per_row;
+    uint32_t reserved;
+    uint64_t capture_bytes;
+} SBDeckFrameTraceStatus;
+
 uint32_t sb_deck_abi_version(void);
 int sb_deck_is_supported(void);
 
@@ -113,6 +127,11 @@ int sb_deck_set_waveform_streams(
     double samples_per_second);
 int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode);
 uint32_t sb_deck_waveform_mode(SBDeckRef deck);
+int sb_deck_set_carrier_neutral_probe(SBDeckRef deck, int enabled);
+int sb_deck_set_stable_gap_bed_probe(SBDeckRef deck, float opacity);
+int sb_deck_set_gap_edge_sharpness_probe(SBDeckRef deck, float strength);
+int sb_deck_set_rgb_color_edge_sharpness_probe(
+    SBDeckRef deck, float strength);
 int sb_deck_set_spectral_analysis(
     SBDeckRef deck,
     const uint8_t *bands,
@@ -182,6 +201,17 @@ double sb_deck_presentation_error_mean_ms(SBDeckRef deck);
 double sb_deck_presentation_error_stddev_ms(SBDeckRef deck);
 double sb_deck_presentation_error_max_ms(SBDeckRef deck);
 void sb_deck_reset_display_stats(SBDeckRef deck);
+int sb_deck_begin_frame_trace(
+    SBDeckRef deck,
+    uint32_t max_frames,
+    uint32_t crop_width_pixels);
+int sb_deck_frame_trace_status(
+    SBDeckRef deck,
+    SBDeckFrameTraceStatus *out_status);
+int sb_deck_finish_frame_trace(
+    SBDeckRef deck,
+    const char *utf8_output_directory);
+void sb_deck_cancel_frame_trace(SBDeckRef deck);
 int sb_deck_view_geometry(
     SBDeckRef deck,
     double *parent_width_points,

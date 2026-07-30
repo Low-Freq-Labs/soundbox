@@ -282,6 +282,52 @@ def _experimental_cached_polarity_crest(
     }
 
 
+def _experimental_center_bandstop(
+        audio_detail: dict, strength: float) -> dict:
+    """Remove only bass-band motion from the signed interval center.
+
+    The positive/negative peak envelopes and every interval half-width remain
+    unchanged. This is an in-memory renderer probe; canonical cache bytes are
+    never touched.
+    """
+    import numpy as np
+    from scipy.signal import butter, sosfiltfilt
+
+    rate = float(audio_detail.get("rate") or 0.0)
+    minimum = np.frombuffer(
+        bytes(audio_detail.get("range_min") or b""), dtype="<i2").astype(
+            np.float64)
+    maximum = np.frombuffer(
+        bytes(audio_detail.get("range_max") or b""), dtype="<i2").astype(
+            np.float64)
+    count = min(len(minimum), len(maximum))
+    if rate <= 110.0 or count < 64:
+        raise RuntimeError("cached signed range is unavailable")
+    minimum = minimum[:count]
+    maximum = maximum[:count]
+    center = (minimum + maximum) * 0.5
+    half_width = (maximum - minimum) * 0.5
+    # The physical trace isolated 41.209 Hz. Use a bounded band rather than
+    # deleting the whole signed center: the hypothesis is that attacks and
+    # non-bass polarity can survive while the coherent visible carrier falls.
+    stop = sosfiltfilt(
+        butter(4, (30.0, 55.0), btype="bandstop", fs=rate, output="sos"),
+        center,
+    )
+    adjusted_center = center + np.clip(strength, 0.0, 1.0) * (stop - center)
+
+    def encode(values) -> bytes:
+        return np.clip(
+            np.rint(values), -32_767, 32_767,
+        ).astype("<i2").tobytes()
+
+    return {
+        **audio_detail,
+        "range_min": encode(adjusted_center - half_width),
+        "range_max": encode(adjusted_center + half_width),
+    }
+
+
 def _experimental_signed_range(source: Path) -> dict:
     """Build close-rate signed min/max rows for BLUE renderer R&D."""
     import numpy as np
@@ -456,6 +502,16 @@ def render(args: argparse.Namespace) -> list[Path]:
                 detail["_audio_detail"], window_ms),
         }
     elif args.experimental_envelope in {
+            "centerstop25", "centerstop50",
+            "centerstop75", "centerstop100"}:
+        strength = float(
+            args.experimental_envelope.removeprefix("centerstop")) / 100.0
+        detail = {
+            **detail,
+            "_audio_detail": _experimental_center_bandstop(
+                detail["_audio_detail"], strength),
+        }
+    elif args.experimental_envelope in {
             "blockrms3", "blockrms7", "blockmean3", "blockmean7"}:
         weight = "rms" if "rms" in args.experimental_envelope else "mean"
         window_ms = float(
@@ -499,7 +555,22 @@ def render(args: argparse.Namespace) -> list[Path]:
             raise RuntimeError("native decoder did not publish track duration")
         if not all(backend.set_complete_analysis(overview, detail, 1)):
             raise RuntimeError("native deck rejected the real waveform cache")
-
+        if not backend.diagnostic_set_carrier_neutral_probe(
+                args.carrier_neutral_probe):
+            raise RuntimeError(
+                "native deck rejected the carrier reconstruction selection")
+        if not backend.diagnostic_set_stable_gap_bed_probe(
+                args.stable_gap_bed_opacity):
+            raise RuntimeError(
+                "native deck rejected the stable-gap bed selection")
+        if not backend.diagnostic_set_gap_edge_sharpness_probe(
+                args.gap_edge_sharpness):
+            raise RuntimeError(
+                "native deck rejected the gap-edge sharpness selection")
+        if not backend.diagnostic_set_rgb_color_edge_sharpness_probe(
+                args.rgb_color_edge_sharpness):
+            raise RuntimeError(
+                "native deck rejected the RGB color-edge selection")
         backend.set_zoom(args.zoom)
         position_ms = (
             _bar_position(manifest.get("beats") or [], args.bar)
@@ -648,9 +719,39 @@ def parse_args() -> argparse.Namespace:
             "pmean05", "pmean1", "pmean2", "pmean4",
             "ppeak05", "ppeak1", "ppeak2", "ppeak4",
             "cachecrest05", "cachecrest1", "cachecrest2", "cachecrest4",
+            "centerstop25", "centerstop50", "centerstop75", "centerstop100",
             "blockrms3", "blockrms7", "blockmean3", "blockmean7",
             "low", "mid", "high", "bandmax"),
         help="replace only geometry in memory; never writes the canonical cache")
+    parser.add_argument(
+        "--carrier-neutral-probe", action="store_true",
+        help=(
+            "render the rejected symmetric BLUE/RGB close envelope for a "
+            "developer A/B; the detailed signed contour is the default"))
+    parser.add_argument(
+        "--stable-gap-bed-opacity",
+        type=float,
+        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
+        default=0.0,
+        help=(
+            "render a neutral bed behind the untouched signed contour; "
+            "developer-only negative-space stabilization probe"))
+    parser.add_argument(
+        "--gap-edge-sharpness",
+        type=float,
+        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
+        default=0.75,
+        help=(
+            "sharpen partial pixels around black signed-waveform gaps without "
+            "filling or moving them; accepted default 0.75"))
+    parser.add_argument(
+        "--rgb-color-edge-sharpness",
+        type=float,
+        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
+        default=1.0,
+        help=(
+            "sharpen fractional PWV5 color transitions without changing "
+            "signed coverage or endpoint hues; accepted default 1.0"))
     parser.add_argument("--width-points", type=int, default=1458)
     parser.add_argument("--height-points", type=int, default=155)
     parser.add_argument("--out", type=Path, required=True)

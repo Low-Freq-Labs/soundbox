@@ -19,9 +19,13 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -41,6 +45,8 @@ constexpr std::array<uint32_t, 18> kAudioDetailMipDivisors = {
 };
 constexpr float kWaveAttributeSmoothSamplesPerPixel = 4.0f;
 constexpr NSUInteger kWaveAttributeMarginPixels = 4096;
+constexpr uint64_t kMaxFrameTraceBytes = 512ull * 1024ull * 1024ull;
+constexpr uint32_t kMaxFrameTraceFrames = 600;
 // Persisted current geometry remains linear. A contrast-preserving display
 // curve keeps narrow attacks and decay valleys distinct, while a small
 // continuous shoulder resolves the last nonzero uint16 values as a
@@ -144,6 +150,46 @@ struct PresentedFrameState {
     std::atomic<int64_t> errorMaxAbsUs{0};
 };
 
+struct FrameTraceRecord {
+    uint32_t sequence = 0;
+    uint64_t generation = 0;
+    uint64_t drawableID = 0;
+    uint64_t sourceFrame = 0;
+    double callbackTime = 0.0;
+    double targetTimestamp = 0.0;
+    double targetPresentationTimestamp = 0.0;
+    double presentedCallbackTime = 0.0;
+    double actualPresentedTime = 0.0;
+    double gpuStartTime = 0.0;
+    double gpuEndTime = 0.0;
+    float pixelsPerSecond = 0.0f;
+    float drawableScale = 0.0f;
+    float attributeOffset = 0.0f;
+    uint32_t waveformMode = 0;
+    uint32_t textureWidth = 0;
+    uint32_t textureHeight = 0;
+    uint32_t cropOriginX = 0;
+    uint32_t cropOriginY = 0;
+    bool gpuCompleted = false;
+    bool presentationCompleted = false;
+};
+
+struct FrameTraceState {
+    std::mutex mutex;
+    std::condition_variable completed;
+    bool active = true;
+    uint32_t maxFrames = 0;
+    uint32_t submittedFrames = 0;
+    uint32_t gpuCompletedFrames = 0;
+    uint32_t presentationCompletedFrames = 0;
+    uint32_t cropWidth = 0;
+    uint32_t cropHeight = 0;
+    uint32_t bytesPerRow = 0;
+    uint64_t frameStride = 0;
+    id<MTLBuffer> pixels = nil;
+    std::vector<FrameTraceRecord> records;
+};
+
 struct Uniforms {
     float currentSeconds;
     uint32_t currentMillis;
@@ -177,6 +223,12 @@ struct Uniforms {
     uint32_t waveAttributeValid;
     uint32_t threeBandActive;
     uint32_t waveformMode;
+    uint32_t carrierNeutralClose;
+    float stableGapBedOpacity;
+    float gapEdgeSharpness;
+    float rgbColorEdgeSharpness;
+    uint32_t frameTraceMarkerActive;
+    uint32_t frameTraceSequence;
 };
 
 struct AudioRing {
@@ -254,6 +306,7 @@ public:
     }
 
     ~SBDeck() {
+        cancelFrameTrace();
         stopRequested_.store(true, std::memory_order_release);
         decodeWake_.notify_all();
         if (decodeThread_.joinable()) {
@@ -726,6 +779,260 @@ public:
         presentedFrames_->errorSumSqUs.store(0, std::memory_order_release);
         presentedFrames_->errorMaxAbsUs.store(
             0, std::memory_order_release);
+    }
+
+    bool beginFrameTrace(uint32_t maxFrames, uint32_t cropWidthPixels) {
+        if (!metalLayer_ || maxFrames == 0
+                || maxFrames > kMaxFrameTraceFrames) {
+            return false;
+        }
+        const CGSize drawable = metalLayer_.drawableSize;
+        const uint32_t textureWidth = static_cast<uint32_t>(std::max(
+            0.0, std::floor(drawable.width)));
+        const uint32_t textureHeight = static_cast<uint32_t>(std::max(
+            0.0, std::floor(drawable.height)));
+        const double widthPoints = std::max(1.0, metalLayer_.bounds.size.width);
+        const double drawableScale = textureWidth / widthPoints;
+        const uint32_t cropOriginY = static_cast<uint32_t>(std::clamp(
+            std::llround(kZoomTop * drawableScale),
+            0ll,
+            static_cast<long long>(textureHeight)));
+        if (textureWidth < 64 || cropOriginY >= textureHeight) {
+            return false;
+        }
+        uint32_t cropWidth = cropWidthPixels
+            ? std::min(cropWidthPixels, textureWidth)
+            : std::min<uint32_t>(768, textureWidth);
+        // A 64-pixel multiple makes each BGRA row naturally satisfy Metal's
+        // 256-byte texture-to-buffer alignment and keeps the exported raw
+        // sequence directly consumable by ffmpeg without repacking.
+        cropWidth = std::max<uint32_t>(64, cropWidth / 64 * 64);
+        cropWidth = std::min(cropWidth, textureWidth / 64 * 64);
+        const uint32_t cropHeight = textureHeight - cropOriginY;
+        const uint32_t bytesPerRow = cropWidth * 4;
+        const uint64_t frameStride =
+            static_cast<uint64_t>(bytesPerRow) * cropHeight;
+        const uint64_t captureBytes = frameStride * maxFrames;
+        if (frameStride == 0 || captureBytes > kMaxFrameTraceBytes) {
+            return false;
+        }
+        id<MTLBuffer> pixels = [device_
+            newBufferWithLength:static_cast<NSUInteger>(captureBytes)
+            options:MTLResourceStorageModeShared];
+        if (!pixels) {
+            return false;
+        }
+        auto trace = std::make_shared<FrameTraceState>();
+        trace->maxFrames = maxFrames;
+        trace->cropWidth = cropWidth;
+        trace->cropHeight = cropHeight;
+        trace->bytesPerRow = bytesPerRow;
+        trace->frameStride = frameStride;
+        trace->pixels = pixels;
+        trace->records.resize(maxFrames);
+        {
+            std::lock_guard<std::mutex> lock(frameTraceMutex_);
+            if (frameTrace_) {
+                return false;
+            }
+            frameTrace_ = trace;
+            frameTraceArmed_.store(true, std::memory_order_release);
+        }
+        return true;
+    }
+
+    bool frameTraceStatus(SBDeckFrameTraceStatus *out) {
+        if (!out) {
+            return false;
+        }
+        std::memset(out, 0, sizeof(*out));
+        out->abi_version = SB_DECK_ABI_VERSION;
+        std::shared_ptr<FrameTraceState> trace;
+        {
+            std::lock_guard<std::mutex> lock(frameTraceMutex_);
+            trace = frameTrace_;
+        }
+        if (!trace) {
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(trace->mutex);
+        out->active = trace->active ? 1u : 0u;
+        out->max_frames = trace->maxFrames;
+        out->submitted_frames = trace->submittedFrames;
+        out->gpu_completed_frames = trace->gpuCompletedFrames;
+        out->presentation_completed_frames =
+            trace->presentationCompletedFrames;
+        out->crop_width_pixels = trace->cropWidth;
+        out->crop_height_pixels = trace->cropHeight;
+        out->bytes_per_row = trace->bytesPerRow;
+        out->capture_bytes =
+            trace->frameStride * trace->maxFrames;
+        return true;
+    }
+
+    bool finishFrameTrace(const char *outputDirectory) {
+        if (!outputDirectory || !*outputDirectory) {
+            return false;
+        }
+        if (playRequested_.load(std::memory_order_acquire)
+                || playing_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        std::shared_ptr<FrameTraceState> trace;
+        {
+            std::lock_guard<std::mutex> lock(frameTraceMutex_);
+            trace = frameTrace_;
+        }
+        if (!trace) {
+            return false;
+        }
+
+        std::vector<FrameTraceRecord> records;
+        uint32_t submitted = 0;
+        uint32_t gpuCompleted = 0;
+        uint32_t presentationCompleted = 0;
+        {
+            std::unique_lock<std::mutex> lock(trace->mutex);
+            trace->active = false;
+            trace->completed.wait_for(
+                lock,
+                std::chrono::seconds(3),
+                [&trace] {
+                    return trace->gpuCompletedFrames
+                            >= trace->submittedFrames
+                        && trace->presentationCompletedFrames
+                            >= trace->submittedFrames;
+                });
+            submitted = trace->submittedFrames;
+            if (trace->gpuCompletedFrames < submitted) {
+                return false;
+            }
+            gpuCompleted = trace->gpuCompletedFrames;
+            presentationCompleted =
+                trace->presentationCompletedFrames;
+            records.assign(
+                trace->records.begin(),
+                trace->records.begin() + submitted);
+        }
+
+        namespace fs = std::filesystem;
+        const fs::path directory(outputDirectory);
+        std::error_code pathError;
+        fs::create_directories(directory, pathError);
+        if (pathError || !fs::is_directory(directory)) {
+            return false;
+        }
+        const fs::path rawPath = directory / "frames.bgra";
+        const fs::path csvPath = directory / "frames.csv";
+        const fs::path manifestPath = directory / "manifest.json";
+        if (fs::exists(rawPath) || fs::exists(csvPath)
+                || fs::exists(manifestPath)) {
+            return false;
+        }
+
+        std::ofstream raw(rawPath, std::ios::binary | std::ios::out);
+        if (!raw) {
+            return false;
+        }
+        const uint64_t rawBytes = trace->frameStride * submitted;
+        raw.write(
+            static_cast<const char *>(trace->pixels.contents),
+            static_cast<std::streamsize>(rawBytes));
+        raw.close();
+        if (!raw) {
+            return false;
+        }
+
+        std::ofstream csv(csvPath, std::ios::out);
+        if (!csv) {
+            return false;
+        }
+        csv << "sequence,generation,drawable_id,source_frame,"
+               "callback_time,target_timestamp,target_presentation_timestamp,"
+               "presented_callback_time,actual_presented_time,"
+               "gpu_start_time,gpu_end_time,pixels_per_second,"
+               "drawable_scale,attribute_offset,waveform_mode,"
+               "texture_width,texture_height,crop_origin_x,crop_origin_y,"
+               "gpu_completed,presentation_completed\n";
+        csv << std::setprecision(17);
+        for (const FrameTraceRecord &record : records) {
+            csv << record.sequence << ','
+                << record.generation << ','
+                << record.drawableID << ','
+                << record.sourceFrame << ','
+                << record.callbackTime << ','
+                << record.targetTimestamp << ','
+                << record.targetPresentationTimestamp << ','
+                << record.presentedCallbackTime << ','
+                << record.actualPresentedTime << ','
+                << record.gpuStartTime << ','
+                << record.gpuEndTime << ','
+                << record.pixelsPerSecond << ','
+                << record.drawableScale << ','
+                << record.attributeOffset << ','
+                << record.waveformMode << ','
+                << record.textureWidth << ','
+                << record.textureHeight << ','
+                << record.cropOriginX << ','
+                << record.cropOriginY << ','
+                << (record.gpuCompleted ? 1 : 0) << ','
+                << (record.presentationCompleted ? 1 : 0)
+                << '\n';
+        }
+        csv.close();
+        if (!csv) {
+            return false;
+        }
+
+        std::ofstream manifest(manifestPath, std::ios::out);
+        if (!manifest) {
+            return false;
+        }
+        manifest
+            << "{\n"
+            << "  \"format\": \"soundbox-metal-frame-trace-v1\",\n"
+            << "  \"pixel_format\": \"bgra8unorm_srgb\",\n"
+            << "  \"frame_order\": \"display_link_submission\",\n"
+            << "  \"camera_sync_marker\": "
+               "\"dual-edge-gray10-plus-parity-v1\",\n"
+            << "  \"submitted_frames\": " << submitted << ",\n"
+            << "  \"gpu_completed_frames\": "
+            << gpuCompleted << ",\n"
+            << "  \"presentation_completed_frames\": "
+            << presentationCompleted << ",\n"
+            << "  \"crop_width_pixels\": " << trace->cropWidth << ",\n"
+            << "  \"crop_height_pixels\": " << trace->cropHeight << ",\n"
+            << "  \"bytes_per_row\": " << trace->bytesPerRow << ",\n"
+            << "  \"frame_stride_bytes\": " << trace->frameStride << ",\n"
+            << "  \"raw_file\": \"frames.bgra\",\n"
+            << "  \"metadata_file\": \"frames.csv\"\n"
+            << "}\n";
+        manifest.close();
+        if (!manifest) {
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(frameTraceMutex_);
+            if (frameTrace_ == trace) {
+                frameTrace_.reset();
+                frameTraceArmed_.store(false, std::memory_order_release);
+            }
+        }
+        return true;
+    }
+
+    void cancelFrameTrace() {
+        std::shared_ptr<FrameTraceState> trace;
+        {
+            std::lock_guard<std::mutex> lock(frameTraceMutex_);
+            trace = std::move(frameTrace_);
+            frameTraceArmed_.store(false, std::memory_order_release);
+        }
+        if (trace) {
+            std::lock_guard<std::mutex> lock(trace->mutex);
+            trace->active = false;
+        }
     }
 
     bool setAnalysis(
@@ -1527,6 +1834,40 @@ public:
         return waveformMode_;
     }
 
+    bool setCarrierNeutralProbe(bool enabled) {
+        carrierNeutralClose_.store(enabled, std::memory_order_release);
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
+        requestDisplay();
+        return true;
+    }
+
+    bool setStableGapBedProbe(float opacity) {
+        stableGapBedOpacity_.store(
+            std::clamp(opacity, 0.0f, 1.0f),
+            std::memory_order_release);
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
+        requestDisplay();
+        return true;
+    }
+
+    bool setGapEdgeSharpnessProbe(float strength) {
+        gapEdgeSharpness_.store(
+            std::clamp(strength, 0.0f, 1.0f),
+            std::memory_order_release);
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
+        requestDisplay();
+        return true;
+    }
+
+    bool setRgbColorEdgeSharpnessProbe(float strength) {
+        rgbColorEdgeSharpness_.store(
+            std::clamp(strength, 0.0f, 1.0f),
+            std::memory_order_release);
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
+        requestDisplay();
+        return true;
+    }
+
     bool setSpectralAnalysis(
         const uint8_t *,
         size_t,
@@ -1856,6 +2197,7 @@ public:
         if (!pipeline_ || !attributePipeline_ || !update.drawable) {
             return;
         }
+        const CFTimeInterval displayCallbackTime = CACurrentMediaTime();
         // Overview and ultra buffers are prepared independently but become
         // one visible waveform. Skip presentation while a grouped upload is
         // in flight so a long set cannot briefly paint the coarse silhouette
@@ -1964,6 +2306,14 @@ public:
             uniforms.threeBandActive = threeBandActive_ ? 1u : 0u;
             uniforms.waveformMode =
                 displayWaveformActive_ ? waveformMode_ : 0u;
+            uniforms.carrierNeutralClose = carrierNeutralClose_.load(
+                std::memory_order_acquire) ? 1u : 0u;
+            uniforms.stableGapBedOpacity = stableGapBedOpacity_.load(
+                std::memory_order_acquire);
+            uniforms.gapEdgeSharpness = gapEdgeSharpness_.load(
+                std::memory_order_acquire);
+            uniforms.rgbColorEdgeSharpness =
+                rgbColorEdgeSharpness_.load(std::memory_order_acquire);
             waveBuffer = waveBuffer_;
             audioDetailBuffer = audioDetailBuffer_;
             gridBuffer = gridBuffer_;
@@ -1985,6 +2335,56 @@ public:
             }
         }
         setUniformPosition(uniforms, exactFrame, rate);
+
+        std::shared_ptr<FrameTraceState> frameTrace;
+        uint32_t frameTraceIndex = std::numeric_limits<uint32_t>::max();
+        if (frameTraceArmed_.load(std::memory_order_acquire)) {
+            {
+                std::lock_guard<std::mutex> lock(frameTraceMutex_);
+                frameTrace = frameTrace_;
+            }
+            if (frameTrace) {
+                std::lock_guard<std::mutex> lock(frameTrace->mutex);
+                const uint32_t textureWidth = static_cast<uint32_t>(
+                    update.drawable.texture.width);
+                const uint32_t textureHeight = static_cast<uint32_t>(
+                    update.drawable.texture.height);
+                if (frameTrace->active
+                        && frameTrace->submittedFrames
+                            < frameTrace->maxFrames
+                        && textureWidth >= frameTrace->cropWidth
+                        && textureHeight >= frameTrace->cropHeight) {
+                    frameTraceIndex = frameTrace->submittedFrames++;
+                    FrameTraceRecord &record =
+                        frameTrace->records[frameTraceIndex];
+                    record.sequence = frameTraceIndex;
+                    record.generation = submittedGeneration;
+                    record.drawableID = update.drawable.drawableID;
+                    record.sourceFrame = submittedFrame;
+                    record.callbackTime = displayCallbackTime;
+                    record.targetTimestamp = update.targetTimestamp;
+                    record.targetPresentationTimestamp =
+                        update.targetPresentationTimestamp;
+                    record.pixelsPerSecond = uniforms.pixelsPerSecond;
+                    record.drawableScale = drawableScale;
+                    record.waveformMode = uniforms.waveformMode;
+                    record.textureWidth = textureWidth;
+                    record.textureHeight = textureHeight;
+                    record.cropOriginX =
+                        (textureWidth - frameTrace->cropWidth) / 2;
+                    record.cropOriginY =
+                        textureHeight - frameTrace->cropHeight;
+                    uniforms.frameTraceMarkerActive = 1;
+                    uniforms.frameTraceSequence = frameTraceIndex;
+                    if (frameTrace->submittedFrames
+                            >= frameTrace->maxFrames) {
+                        frameTrace->active = false;
+                        frameTraceArmed_.store(
+                            false, std::memory_order_release);
+                    }
+                }
+            }
+        }
 
         // Decide the high-detail silhouette and hue once on a fixed global
         // song lattice, then translate those attributes smoothly. The old
@@ -2103,6 +2503,11 @@ public:
             && waveAttributeSamplesPerPixel_
                 == attributeSamplesPerPixel
             ? 1u : 0u;
+        if (frameTraceIndex != std::numeric_limits<uint32_t>::max()) {
+            std::lock_guard<std::mutex> lock(frameTrace->mutex);
+            frameTrace->records[frameTraceIndex].attributeOffset =
+                uniforms.waveAttributeCurrentOffset;
+        }
 
         MTLRenderPassDescriptor *pass =
             [MTLRenderPassDescriptor renderPassDescriptor];
@@ -2165,6 +2570,43 @@ public:
         drawPlayhead(
             encoder, uniforms, hasCurrentBeat ? &currentBeat : nullptr);
         [encoder endEncoding];
+
+        if (frameTraceIndex != std::numeric_limits<uint32_t>::max()) {
+            FrameTraceRecord record;
+            {
+                std::lock_guard<std::mutex> lock(frameTrace->mutex);
+                record = frameTrace->records[frameTraceIndex];
+            }
+            id<MTLBlitCommandEncoder> blit =
+                [commands blitCommandEncoder];
+            [blit copyFromTexture:update.drawable.texture
+                      sourceSlice:0
+                      sourceLevel:0
+                     sourceOrigin:MTLOriginMake(
+                         record.cropOriginX, record.cropOriginY, 0)
+                       sourceSize:MTLSizeMake(
+                           frameTrace->cropWidth,
+                           frameTrace->cropHeight,
+                           1)
+                         toBuffer:frameTrace->pixels
+                destinationOffset:
+                    frameTrace->frameStride * frameTraceIndex
+           destinationBytesPerRow:frameTrace->bytesPerRow
+         destinationBytesPerImage:frameTrace->frameStride];
+            [blit endEncoding];
+            [commands addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+                std::lock_guard<std::mutex> lock(frameTrace->mutex);
+                FrameTraceRecord &completed =
+                    frameTrace->records[frameTraceIndex];
+                if (!completed.gpuCompleted) {
+                    completed.gpuStartTime = buffer.GPUStartTime;
+                    completed.gpuEndTime = buffer.GPUEndTime;
+                    completed.gpuCompleted = true;
+                    ++frameTrace->gpuCompletedFrames;
+                    frameTrace->completed.notify_all();
+                }
+            }];
+        }
         // CAMetalDisplayLink already owns the presentation schedule for this
         // drawable; an explicit presentAtTime is invalid in this mode.
         const std::shared_ptr<PresentedFrameState> presented =
@@ -2173,6 +2615,18 @@ public:
             update.targetPresentationTimestamp;
         [update.drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
             const CFTimeInterval actualTime = drawable.presentedTime;
+            if (frameTraceIndex != std::numeric_limits<uint32_t>::max()) {
+                std::lock_guard<std::mutex> lock(frameTrace->mutex);
+                FrameTraceRecord &completed =
+                    frameTrace->records[frameTraceIndex];
+                if (!completed.presentationCompleted) {
+                    completed.presentedCallbackTime = CACurrentMediaTime();
+                    completed.actualPresentedTime = actualTime;
+                    completed.presentationCompleted = true;
+                    ++frameTrace->presentationCompletedFrames;
+                    frameTrace->completed.notify_all();
+                }
+            }
             if (actualTime <= 0.0) {
                 return;  // Metal documents zero for a dropped drawable.
             }
@@ -2634,6 +3088,12 @@ struct Uniforms { float currentSeconds;
                   uint waveAttributeValid;
                   uint threeBandActive;
                   uint waveformMode;
+                  uint carrierNeutralClose;
+                  float stableGapBedOpacity;
+                  float gapEdgeSharpness;
+                  float rgbColorEdgeSharpness;
+                  uint frameTraceMarkerActive;
+                  uint frameTraceSequence;
                   };
 constant uint kAttributeProfileCapacity = 7u;
 struct Out {
@@ -2713,6 +3173,17 @@ vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     o.lineDistancePixels = 0.0;
     o.lineHalfWidthPixels = 0.0;
     return o;
+}
+
+inline float sharpen_gap_coverage(float coverage, float strength) {
+    // Keep exact black, half coverage, and full foreground fixed while making
+    // only the partial pixels on either side of the black cutout crisper.
+    // Two continuous smoothstep passes avoid the hard threshold that made
+    // older one-pixel edges crawl during subpixel motion.
+    const float value = saturate(coverage);
+    const float cubic = value * value * (3.0 - 2.0 * value);
+    const float sharper = cubic * cubic * (3.0 - 2.0 * cubic);
+    return mix(value, sharper, saturate(strength));
 }
 
 inline uint mip_divisor(uint level) {
@@ -3307,6 +3778,7 @@ kernel void wave_attribute_kernel(
         sharpWave.height, stableWave.height, stableKernel);
     float upperHeight = height;
     float lowerHeight = height;
+    float stableBedHeight = 0.0;
     // BLUE and RGB use close-resolution audio geometry together with their
     // authored PWV3/PWV5 amplitude and color. 3BAND remains three native
     // PWV7 layers and bypasses the audio contour.
@@ -3477,6 +3949,34 @@ kernel void wave_attribute_kernel(
             upperHeight = sharpDetail.maximum;
             lowerHeight = sharpDetail.minimum;
             height = max(abs(upperHeight), abs(lowerHeight));
+            if (u.pixelsPerSecond >= 384.0) {
+                // The neutral magnitude is retained only for diagnostic
+                // compositors. Replacing the signed contour with it removed
+                // too much detail. A separate low-opacity bed can instead sit
+                // behind the untouched signed interval, targeting the black
+                // gaps without erasing their sharp foreground boundaries.
+                const float neutralMagnitude = clamp(
+                    max(sharpDetail.upper, sharpDetail.lower), 0.0, 1.0);
+                stableBedHeight = clamp(
+                    neutralMagnitude
+                        + (levelHeightGain - 1.0)
+                            * neutralMagnitude * (1.0 - neutralMagnitude),
+                    0.0, 1.0);
+            }
+            if (u.carrierNeutralClose != 0
+                    && u.pixelsPerSecond >= 384.0) {
+                // The rejected close BLUE/RGB experiment folds the signed
+                // interval into one polarity-neutral magnitude at the same
+                // selected song-space mip. Positive/negative half-cycles can
+                // no longer swap sides at the bass fundamental; the visible
+                // information becomes the conventional symmetric amplitude
+                // envelope. The developer A/B setter can enable this
+                // experimental reconstruction without changing cache data;
+                // the detailed signed contour remains the product default.
+                upperHeight = stableBedHeight;
+                lowerHeight = -stableBedHeight;
+                height = stableBedHeight;
+            }
         }
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
@@ -3488,7 +3988,7 @@ kernel void wave_attribute_kernel(
     attributes[id].colorAndUpper =
         float4(color * height, upperHeight);
     attributes[id].lowerAndPadding =
-        float4(lowerHeight, 0.0, 0.0, 0.0);
+        float4(lowerHeight, stableBedHeight, 0.0, 0.0);
 }
 
 // Eight midpoint taps per physical pixel, at the footprint-matched LOD.
@@ -3712,7 +4212,7 @@ inline IntervalSurface resolve_interval_surface(
         thread const float *positions,
         uint count, float signedPosition,
         float heightScale, float antialias,
-        bool blueMode) {
+        bool blueMode, float rgbColorEdgeSharpness) {
     IntervalSurface result{0.0, float3(0.0)};
     if (count < 2 || count > kAttributeProfileCapacity) {
         return result;
@@ -3807,9 +4307,15 @@ inline IntervalSurface resolve_interval_surface(
                 // PWV5 color and signed coverage are both piecewise linear
                 // over this song-space segment. Integrate their product in
                 // linear light so a hidden tap cannot tint a visible one.
+                // The optional developer probe steepens only the fractional
+                // color coordinate. Coverage, interval boundaries, and the
+                // authored endpoint hues remain untouched.
+                const float colorCentroid = sharpen_gap_coverage(
+                    saturate(moments.firstMoment / moments.area),
+                    rgbColorEdgeSharpness);
                 result.premultipliedLinearColor +=
-                    (color0 * moments.area
-                        + (color1 - color0) * moments.firstMoment)
+                    mix(color0, color1, colorCentroid)
+                    * moments.area
                     * segmentSpan;
                 continue;
             }
@@ -3995,6 +4501,42 @@ fragment float4 wave_surface_fragment(
     const float yPoints = in.position.y / scale;
     const float3 background = display_srgb_to_linear(float3(
         13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0));
+    if (u.frameTraceMarkerActive != 0) {
+        // Two tiny repeated Gray-code strips bind a photographed panel frame
+        // to this exact submitted drawable. Ten Gray bits cover the bounded
+        // 600-frame trace; the alternating parity cell exposes an exposure
+        // that blended adjacent 120 Hz refreshes. Repeating the code at both
+        // main-lane edges also reveals a rolling-shutter phase change.
+        const float markerHeight = max(4.0, round(4.0 * scale));
+        const float markerGap = max(2.0, round(2.0 * scale));
+        const float mainTop = 49.0 * scale;
+        const float mainBottom = u.heightPoints * scale;
+        const bool markerRow =
+            (in.position.y >= mainTop + markerGap
+                && in.position.y < mainTop + markerGap + markerHeight)
+            || (in.position.y >= mainBottom - markerGap - markerHeight
+                && in.position.y < mainBottom - markerGap);
+        if (markerRow) {
+            const uint cellWidth = max(8u, uint(round(6.0 * scale)));
+            const uint cellCount = 14u;
+            const uint codeWidth = cellWidth * cellCount;
+            const uint groupSpan = codeWidth + cellWidth * 2u;
+            const uint localX = uint(floor(in.position.x)) % groupSpan;
+            if (localX >= codeWidth) {
+                return float4(background, 1.0);
+            }
+            const uint cell = localX / cellWidth;
+            const uint sequence = u.frameTraceSequence & 1023u;
+            const uint gray = sequence ^ (sequence >> 1u);
+            bool on = cell == 0u || cell == cellCount - 1u;
+            if (cell == 2u) {
+                on = (sequence & 1u) != 0u;
+            } else if (cell >= 3u && cell < 13u) {
+                on = ((gray >> (cell - 3u)) & 1u) != 0u;
+            }
+            return float4(on ? float3(1.0) : background, 1.0);
+        }
+    }
     const float antialias = 0.5 / scale;
     if (yPoints < 28.0) {
         if (u.sampleCount == 0 || u.waveMipCount == 0) {
@@ -4090,6 +4632,8 @@ fragment float4 wave_surface_fragment(
         float lowHeights[kAttributeProfileCapacity];
         float blueMinimums[kAttributeProfileCapacity];
         float blueMaximums[kAttributeProfileCapacity];
+        float stableBedMinimums[kAttributeProfileCapacity];
+        float stableBedMaximums[kAttributeProfileCapacity];
         float3 attributeColors[kAttributeProfileCapacity];
         float3 intervalEncodedColors[kAttributeProfileCapacity];
         float3 weightedColor = float3(0.0);
@@ -4111,6 +4655,10 @@ fragment float4 wave_surface_fragment(
             outerHeights[i] = outerHeight;
             blueMinimums[i] = lowerHeight;
             blueMaximums[i] = upperHeight;
+            const float stableBedHeight =
+                attribute.lowerAndPadding.y;
+            stableBedMinimums[i] = -stableBedHeight;
+            stableBedMaximums[i] = stableBedHeight;
             // In 3BAND the premultiplied RGB attributes are the three absolute
             // PWV7 layer heights. Do not derive ratios from one shared outer
             // silhouette: each Pioneer band reaches its own vertical extent.
@@ -4134,25 +4682,78 @@ fragment float4 wave_surface_fragment(
         if (u.waveformMode == 1 || u.waveformMode == 2) {
             const float signedPosition =
                 (waveCenter - yPoints) / max(heightScale, 1e-5);
+            const float closeRgbColorEdgeSharpness =
+                u.pixelsPerSecond >= 384.0
+                ? u.rgbColorEdgeSharpness : 0.0;
             IntervalSurface interval = resolve_interval_surface(
                 blueMinimums, blueMaximums, intervalEncodedColors,
                 profilePositions, profileCount,
                 signedPosition, heightScale, antialias,
-                u.waveformMode == 1);
+                u.waveformMode == 1,
+                closeRgbColorEdgeSharpness);
             const float acceptedCoverage = interval_profile_coverage(
                 blueMinimums, blueMaximums, profilePositions, profileCount,
                 signedPosition, heightScale, antialias, 1.0);
-            if (acceptedCoverage <= 0.0 || interval.coverage <= 0.0) {
+            IntervalSurface bed{0.0, float3(0.0)};
+            float acceptedBedCoverage = 0.0;
+            if (u.stableGapBedOpacity > 0.0) {
+                bed = resolve_interval_surface(
+                    stableBedMinimums, stableBedMaximums,
+                    intervalEncodedColors,
+                    profilePositions, profileCount,
+                    signedPosition, heightScale, antialias,
+                    u.waveformMode == 1,
+                    closeRgbColorEdgeSharpness);
+                acceptedBedCoverage = interval_profile_coverage(
+                    stableBedMinimums, stableBedMaximums,
+                    profilePositions, profileCount,
+                    signedPosition, heightScale, antialias, 1.0);
+            }
+            if ((acceptedCoverage <= 0.0 || interval.coverage <= 0.0)
+                    && (acceptedBedCoverage <= 0.0
+                        || bed.coverage <= 0.0)) {
                 discard_fragment();
             }
             // The continuous signed-boundary coverage is already visually
             // accepted. Preserve it bit-for-bit while using the joint resolve
             // only to condition color on the locally visible interval.
-            interval.premultipliedLinearColor *=
-                acceptedCoverage / interval.coverage;
-            interval.coverage = acceptedCoverage;
+            if (interval.coverage > 0.0 && acceptedCoverage > 0.0) {
+                interval.premultipliedLinearColor *=
+                    acceptedCoverage / interval.coverage;
+                interval.coverage = acceptedCoverage;
+                // The selected sharp treatment was judged only on the close
+                // family. Applying it to 48/64/92/128 made those intermediate
+                // stops harsh and was immediately rejected in the installed
+                // app. Keep every stop through 256 on the prior exact path.
+                const float closeGapEdgeSharpness =
+                    u.pixelsPerSecond >= 384.0
+                    ? u.gapEdgeSharpness : 0.0;
+                const float sharpenedCoverage = sharpen_gap_coverage(
+                    interval.coverage, closeGapEdgeSharpness);
+                interval.premultipliedLinearColor *=
+                    sharpenedCoverage / max(interval.coverage, 1e-6);
+                interval.coverage = sharpenedCoverage;
+            } else {
+                interval.coverage = 0.0;
+                interval.premultipliedLinearColor = float3(0.0);
+            }
+            if (bed.coverage > 0.0 && acceptedBedCoverage > 0.0) {
+                bed.premultipliedLinearColor *=
+                    acceptedBedCoverage / bed.coverage;
+                bed.coverage = acceptedBedCoverage;
+            } else {
+                bed.coverage = 0.0;
+                bed.premultipliedLinearColor = float3(0.0);
+            }
+            const float bedOpacity =
+                saturate(u.stableGapBedOpacity);
+            bed.coverage *= bedOpacity;
+            bed.premultipliedLinearColor *= bedOpacity;
+            const float3 backgroundWithBed =
+                background * (1.0 - bed.coverage)
+                    + bed.premultipliedLinearColor;
             return float4(
-                background * (1.0 - interval.coverage)
+                backgroundWithBed * (1.0 - interval.coverage)
                     + interval.premultipliedLinearColor,
                 1.0);
         }
@@ -4826,6 +5427,16 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     // state valid if an in-flight presentation finishes during deck teardown.
     std::shared_ptr<PresentedFrameState> presentedFrames_ =
         std::make_shared<PresentedFrameState>();
+    // Developer-only, explicitly bounded drawable capture. The shared state
+    // is retained by in-flight Metal callbacks; no file I/O or image encoding
+    // occurs on the display-link path.
+    std::mutex frameTraceMutex_;
+    std::shared_ptr<FrameTraceState> frameTrace_;
+    std::atomic<bool> frameTraceArmed_{false};
+    std::atomic<bool> carrierNeutralClose_{false};
+    std::atomic<float> stableGapBedOpacity_{0.0f};
+    std::atomic<float> gapEdgeSharpness_{0.75f};
+    std::atomic<float> rgbColorEdgeSharpness_{1.0f};
     std::atomic<float> zoomPixelsPerSecond_{kPixelsPerSecond};
 
     AudioUnit audioUnit_ = nullptr;
@@ -5132,6 +5743,28 @@ uint32_t sb_deck_waveform_mode(SBDeckRef deck) {
     return deck ? static_cast<SBDeck *>(deck)->waveformMode() : 0;
 }
 
+int sb_deck_set_carrier_neutral_probe(SBDeckRef deck, int enabled) {
+    return deck
+        && static_cast<SBDeck *>(deck)->setCarrierNeutralProbe(enabled != 0);
+}
+
+int sb_deck_set_stable_gap_bed_probe(SBDeckRef deck, float opacity) {
+    return deck
+        && static_cast<SBDeck *>(deck)->setStableGapBedProbe(opacity);
+}
+
+int sb_deck_set_gap_edge_sharpness_probe(SBDeckRef deck, float strength) {
+    return deck
+        && static_cast<SBDeck *>(deck)->setGapEdgeSharpnessProbe(strength);
+}
+
+int sb_deck_set_rgb_color_edge_sharpness_probe(
+        SBDeckRef deck, float strength) {
+    return deck
+        && static_cast<SBDeck *>(deck)->setRgbColorEdgeSharpnessProbe(
+            strength);
+}
+
 int sb_deck_set_spectral_analysis(
     SBDeckRef deck,
     const uint8_t *bands,
@@ -5364,6 +5997,33 @@ double sb_deck_presentation_error_max_ms(SBDeckRef deck) {
 void sb_deck_reset_display_stats(SBDeckRef deck) {
     if (deck) {
         static_cast<SBDeck *>(deck)->resetDisplayStats();
+    }
+}
+
+int sb_deck_begin_frame_trace(
+        SBDeckRef deck,
+        uint32_t max_frames,
+        uint32_t crop_width_pixels) {
+    return deck && static_cast<SBDeck *>(deck)->beginFrameTrace(
+        max_frames, crop_width_pixels);
+}
+
+int sb_deck_frame_trace_status(
+        SBDeckRef deck,
+        SBDeckFrameTraceStatus *out_status) {
+    return deck && static_cast<SBDeck *>(deck)->frameTraceStatus(out_status);
+}
+
+int sb_deck_finish_frame_trace(
+        SBDeckRef deck,
+        const char *utf8_output_directory) {
+    return deck && static_cast<SBDeck *>(deck)->finishFrameTrace(
+        utf8_output_directory);
+}
+
+void sb_deck_cancel_frame_trace(SBDeckRef deck) {
+    if (deck) {
+        static_cast<SBDeck *>(deck)->cancelFrameTrace();
     }
 }
 

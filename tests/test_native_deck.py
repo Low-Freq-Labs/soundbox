@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import struct
 import tempfile
+import time
 import unittest
 import wave
 from pathlib import Path
@@ -52,6 +54,7 @@ class NativeDeckContract(unittest.TestCase):
             raise unittest.SkipTest("arm64 macOS 14+ native deck unavailable")
         cls.temp = tempfile.TemporaryDirectory(prefix="sb-native-deck-")
         cls.audio = Path(cls.temp.name) / "contract.wav"
+        cls.carrier_audio = Path(cls.temp.name) / "carrier-41hz.wav"
         rate = 44100
         with wave.open(str(cls.audio), "wb") as out:
             out.setnchannels(2)
@@ -64,6 +67,22 @@ class NativeDeckContract(unittest.TestCase):
                     int(0.15 * 32767 * math.sin(2 * math.pi * 330 * i / rate)),
                 )
                 for i in range(rate * 2)
+            ))
+        with wave.open(str(cls.carrier_audio), "wb") as out:
+            out.setnchannels(2)
+            out.setsampwidth(2)
+            out.setframerate(rate)
+            out.writeframes(b"".join(
+                struct.pack(
+                    "<hh",
+                    int(
+                        0.55 * 32767
+                        * math.sin(2 * math.pi * 41.2092 * i / rate)),
+                    int(
+                        0.55 * 32767
+                        * math.sin(2 * math.pi * 41.2092 * i / rate)),
+                )
+                for i in range(rate * 3)
             ))
 
     @classmethod
@@ -368,6 +387,117 @@ class NativeDeckContract(unittest.TestCase):
         self.assertEqual(self.deck.set_zoom(50_000.0), 1536.0)
         self.assertEqual(self.deck.diagnostic_zoom(), 1536.0)
 
+    def test_carrier_neutral_probe_can_be_toggled_without_playback(self):
+        self.assertTrue(
+            self.deck.diagnostic_set_carrier_neutral_probe(True))
+        self.assertTrue(
+            self.deck.diagnostic_set_carrier_neutral_probe(False))
+        self.assertTrue(
+            self.deck.diagnostic_set_stable_gap_bed_probe(0.5))
+        self.assertTrue(
+            self.deck.diagnostic_set_stable_gap_bed_probe(0.0))
+        self.assertTrue(
+            self.deck.diagnostic_set_gap_edge_sharpness_probe(0.5))
+        self.assertTrue(
+            self.deck.diagnostic_set_gap_edge_sharpness_probe(0.0))
+        self.assertTrue(
+            self.deck.diagnostic_set_rgb_color_edge_sharpness_probe(0.5))
+        self.assertTrue(
+            self.deck.diagnostic_set_rgb_color_edge_sharpness_probe(0.0))
+        self.assertGreaterEqual(self.deck.diagnostic_underruns(), 0)
+    def test_carrier_neutral_probe_removes_controlled_41hz_metal_line(self):
+        import numpy as np
+
+        self.deck.setSource(QUrl.fromLocalFile(str(self.carrier_audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        detail_rate = 6300.0
+        count = round(detail_rate * 3)
+        phase = np.arange(count) * (2.0 * math.pi * 41.2092 / detail_rate)
+        signed = np.sin(phase)
+        upper = np.clip(np.rint(
+            np.maximum(signed, 0.0) * 65_535), 0, 65_535
+        ).astype("<u2").tobytes()
+        lower = np.clip(np.rint(
+            np.maximum(-signed, 0.0) * 65_535), 0, 65_535
+        ).astype("<u2").tobytes()
+        encoded_signed = np.clip(
+            np.rint(signed * 32_767), -32_767, 32_767
+        ).astype("<i2").tobytes()
+        overview_count = 450
+        overview = {
+            "_overview_heights": (
+                np.full(overview_count, 42_000, dtype="<u2").tobytes()),
+            "_overview_rgb": bytes([14, 0, 0]) * overview_count,
+            "_height_encoding": "linear-u16le",
+            "sample_rate": 150.0,
+            "beats": [],
+        }
+        detail = {
+            "_blue_detail": bytes([0x5f]) * overview_count,
+            "_rgb_detail": bytes.fromhex("e07c") * overview_count,
+            "_detail_bands": bytes([64, 32, 16]) * overview_count,
+            "_audio_detail": {
+                "rate": detail_rate,
+                "heights": upper,
+                "lower_heights": lower,
+                "range_min": encoded_signed,
+                "range_max": encoded_signed,
+                "encoding": "linear-u16le",
+            },
+        }
+        self.assertEqual(
+            self.deck.set_complete_analysis(overview, detail),
+            (True, True))
+        self.deck.set_waveform_mode("BLUE")
+        self.deck.set_zoom(384.0)
+
+        def capture(probe: bool, label: str):
+            self.deck.pause()
+            self.deck.diagnostic_set_carrier_neutral_probe(probe)
+            self.deck.setPosition(500)
+            self._wait_until(lambda: 490 <= self.deck.position() <= 510)
+            self.deck.diagnostic_begin_frame_trace(120, 64)
+            self.deck.play()
+            self._wait_until(
+                lambda: self.deck.diagnostic_frame_trace_status()[
+                    "submitted_frames"] == 120,
+                3000)
+            self.deck.pause()
+            output = (
+                Path(self.temp.name)
+                / f"carrier-{label}-{time.time_ns()}")
+            self.deck.diagnostic_finish_frame_trace(output)
+            manifest = json.loads(
+                (output / "manifest.json").read_text())
+            return np.frombuffer(
+                (output / "frames.bgra").read_bytes(),
+                dtype=np.uint8,
+            ).reshape(
+                120,
+                manifest["crop_height_pixels"],
+                manifest["crop_width_pixels"],
+                4,
+            )
+
+        ordinary = capture(False, "ordinary")
+        neutral = capture(True, "neutral")
+
+        def target_share(frames) -> float:
+            pixels = frames[:, 12:-12, :, :3].astype(np.float32)
+            pixels -= pixels.mean(axis=0, keepdims=True)
+            energy = (
+                np.abs(np.fft.rfft(pixels, axis=0)) ** 2
+            ).sum(axis=(1, 2, 3))
+            energy[0] = 0.0
+            frequencies = np.fft.rfftfreq(len(frames), 1 / 120.0)
+            target = int(np.argmin(np.abs(frequencies - 41.2092)))
+            return float(energy[target] / max(energy.sum(), 1.0))
+
+        ordinary_share = target_share(ordinary)
+        neutral_share = target_share(neutral)
+        self.assertGreater(ordinary_share, 0.10)
+        self.assertLess(neutral_share, ordinary_share * 0.20)
+
     def test_24_band_master_does_not_override_dedicated_rgb(self):
         spectral = bytes(
             [255] * 8 + [0] * 16
@@ -546,6 +676,49 @@ class NativeDeckContract(unittest.TestCase):
         self.assertGreaterEqual(fps, expected * 0.95)
         self.assertLessEqual(max_gap_ms, 2.1 * 1000 / expected)
         self.deck.pause()
+
+    def test_bounded_frame_trace_exports_exact_pixels_and_timing_rows(self):
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        status = self.deck.diagnostic_begin_frame_trace(4, 64)
+        self.assertEqual(status["max_frames"], 4)
+        self.assertEqual(status["submitted_frames"], 0)
+        self.assertEqual(status["crop_width_pixels"], 64)
+        self.assertLess(status["capture_bytes"], 512 * 1024 * 1024)
+
+        self.deck.play()
+        self._wait_until(
+            lambda: self.deck.diagnostic_frame_trace_status()[
+                "submitted_frames"] == 4)
+        self.deck.pause()
+        output = Path(self.temp.name) / f"frame-trace-{time.time_ns()}"
+        self.deck.diagnostic_finish_frame_trace(output)
+
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(
+            manifest["format"], "soundbox-metal-frame-trace-v1")
+        self.assertEqual(manifest["submitted_frames"], 4)
+        self.assertEqual(manifest["gpu_completed_frames"], 4)
+        self.assertEqual(
+            (output / "frames.bgra").stat().st_size,
+            manifest["frame_stride_bytes"] * 4)
+        rows = (output / "frames.csv").read_text().splitlines()
+        self.assertEqual(len(rows), 5)
+        self.assertIn("target_presentation_timestamp", rows[0])
+        self.assertIn("actual_presented_time", rows[0])
+
+    def test_frame_trace_refuses_file_io_until_playback_stops(self):
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.diagnostic_begin_frame_trace(2, 64)
+        self.deck.play()
+        self._wait_until(
+            lambda: self.deck.playbackState() == PlaybackState.PLAYING)
+        output = Path(self.temp.name) / f"live-trace-{time.time_ns()}"
+        with self.assertRaisesRegex(RuntimeError, "could not be finalized"):
+            self.deck.diagnostic_finish_frame_trace(output)
+        self.deck.pause()
+        self.deck.diagnostic_cancel_frame_trace()
 
     def test_detail_zoom_wakes_one_static_frame_then_sleeps(self):
         self.deck.set_zoom(1536.0)

@@ -465,7 +465,7 @@ class NativeWaveformShader(unittest.TestCase):
             "        float4(color * height, upperHeight)", kernel)
         self.assertIn(
             "attributes[id].lowerAndPadding =\n"
-            "        float4(lowerHeight, 0.0, 0.0, 0.0)", kernel)
+            "        float4(lowerHeight, stableBedHeight, 0.0, 0.0)", kernel)
         self.assertNotIn("profile_coverage(", kernel)
         self.assertNotIn("vivid_wave_coverage(", kernel)
 
@@ -616,7 +616,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertEqual(fragment.count("saturate(coverage)"), 2)
         self.assertIn("interval_profile_coverage(", fragment)
         self.assertIn(
-            "background * (1.0 - interval.coverage)\n"
+            "backgroundWithBed * (1.0 - interval.coverage)\n"
             "                    + interval.premultipliedLinearColor",
             fragment,
         )
@@ -825,7 +825,7 @@ class NativeWaveformShader(unittest.TestCase):
         )[0]
         self.assertIn(
             "if (u.waveformMode == 1 || u.waveformMode == 2)", fragment)
-        self.assertEqual(fragment.count("interval_profile_coverage("), 1)
+        self.assertEqual(fragment.count("interval_profile_coverage("), 2)
         self.assertIn(
             "IntervalSurface interval = resolve_interval_surface(", fragment)
         self.assertIn(
@@ -833,7 +833,10 @@ class NativeWaveformShader(unittest.TestCase):
             "                profilePositions, profileCount",
             fragment,
         )
-        self.assertIn("u.waveformMode == 1);", fragment)
+        self.assertIn(
+            "u.waveformMode == 1,\n"
+            "                closeRgbColorEdgeSharpness);",
+            fragment)
         self.assertIn("const float acceptedCoverage =", fragment)
         self.assertIn(
             "acceptedCoverage / interval.coverage", fragment)
@@ -852,8 +855,8 @@ class NativeWaveformShader(unittest.TestCase):
             resolve,
         )
         self.assertIn(
-            "(color0 * moments.area\n"
-            "                        + (color1 - color0) * moments.firstMoment)",
+            "mix(color0, color1, colorCentroid)\n"
+            "                    * moments.area",
             resolve,
         )
         self.assertIn(
@@ -867,6 +870,126 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("blueWaveSample(", native)
         self.assertIn("rgbWaveSample(", native)
         self.assertIn("threeBandWaveSample(", native)
+
+    def test_carrier_neutral_probe_is_close_signed_mode_only(self):
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertIn(
+            "if (u.carrierNeutralClose != 0\n"
+            "                    && u.pixelsPerSecond >= 384.0)", kernel)
+        self.assertIn(
+            "max(sharpDetail.upper, sharpDetail.lower)",
+            kernel)
+        self.assertIn("upperHeight = stableBedHeight;", kernel)
+        self.assertIn("lowerHeight = -stableBedHeight;", kernel)
+
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn(
+            "blueMinimums, blueMaximums, intervalEncodedColors",
+            fragment)
+        self.assertNotIn("carrierNeutralClose", fragment)
+        self.assertIn(
+            "std::atomic<bool> carrierNeutralClose_{false};",
+            self.source)
+        self.assertIn(
+            "std::atomic<float> stableGapBedOpacity_{0.0f};",
+            self.source)
+        self.assertIn(
+            "std::atomic<float> gapEdgeSharpness_{0.75f};",
+            self.source)
+        self.assertIn(
+            "std::atomic<float> rgbColorEdgeSharpness_{1.0f};",
+            self.source)
+
+    def test_stable_gap_bed_preserves_signed_foreground_compositor(self):
+        kernel = self.shader.split(
+            "kernel void wave_attribute_kernel", 1
+        )[1].split(
+            "constant uint kIntegrationTaps", 1
+        )[0]
+        self.assertIn(
+            "float4(lowerHeight, stableBedHeight, 0.0, 0.0)",
+            kernel)
+
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn(
+            "stableBedMinimums, stableBedMaximums",
+            fragment)
+        self.assertIn(
+            "backgroundWithBed * (1.0 - interval.coverage)",
+            fragment)
+        self.assertIn(
+            "+ interval.premultipliedLinearColor",
+            fragment)
+
+    def test_gap_edge_probe_sharpens_coverage_without_moving_boundaries(self):
+        helper = self.shader.split(
+            "inline float sharpen_gap_coverage", 1
+        )[1].split(
+            "inline float wave_height_at", 1
+        )[0]
+        self.assertIn(
+            "const float cubic = value * value * (3.0 - 2.0 * value)",
+            helper)
+        self.assertIn(
+            "return mix(value, sharper, saturate(strength))",
+            helper)
+
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn(
+            "interval.coverage, closeGapEdgeSharpness",
+            fragment)
+        self.assertIn(
+            "sharpenedCoverage / max(interval.coverage, 1e-6)",
+            fragment)
+        self.assertNotIn(
+            "blueMinimums[i] = mix(", fragment)
+        self.assertNotIn(
+            "blueMaximums[i] = mix(", fragment)
+        self.assertIn(
+            "u.pixelsPerSecond >= 384.0\n"
+            "                    ? u.gapEdgeSharpness : 0.0",
+            fragment)
+
+    def test_rgb_color_edge_probe_changes_only_fractional_color_coordinate(self):
+        resolve = self.shader.split(
+            "inline IntervalSurface resolve_interval_surface", 1
+        )[1].split(
+            "inline WaveSurface integrated_wave_level", 1
+        )[0]
+        self.assertIn(
+            "const float colorCentroid = sharpen_gap_coverage(",
+            resolve)
+        self.assertIn(
+            "rgbColorEdgeSharpness", resolve)
+        self.assertIn(
+            "mix(color0, color1, colorCentroid)", resolve)
+        self.assertIn(
+            "if (!blueMode)", resolve)
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn(
+            "u.pixelsPerSecond >= 384.0\n"
+            "                ? u.rgbColorEdgeSharpness : 0.0",
+            fragment)
 
     def test_zoom_height_normalization_uses_only_available_headroom(self):
         def bounded_gain(value, gain):
@@ -1050,11 +1173,51 @@ class NativeWaveformShader(unittest.TestCase):
             native.count("waveformRevision_.fetch_add"), 5)
         self.assertNotIn("waveTile", native)
         self.assertNotIn("displayPipeline_", native)
-        self.assertNotIn("blitCommandEncoder", draw)
+        # The developer-only trace may copy the already-final drawable into
+        # preallocated shared memory. It must never insert a texture into the
+        # render/composite path or resample that texture back onscreen.
+        self.assertEqual(draw.count("blitCommandEncoder"), 1)
+        self.assertIn(
+            "copyFromTexture:update.drawable.texture", draw)
+        self.assertIn(
+            "frameTraceIndex != std::numeric_limits<uint32_t>::max()",
+            draw)
         self.assertIn(
             "wave.colorAttachments[0].pixelFormat = metalLayer_.pixelFormat",
             native,
         )
+
+    def test_exact_drawable_trace_is_bounded_and_has_no_frame_path_io(self):
+        native = (
+            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
+        ).read_text()
+        draw = native.split("void draw(CAMetalDisplayLinkUpdate", 1)[1].split(
+            "private:", 1)[0]
+        self.assertIn(
+            "constexpr uint64_t kMaxFrameTraceBytes = "
+            "512ull * 1024ull * 1024ull;",
+            native)
+        self.assertIn(
+            "constexpr uint32_t kMaxFrameTraceFrames = 600;", native)
+        self.assertIn("newBufferWithLength", native)
+        self.assertNotIn("std::ofstream", draw)
+        self.assertNotIn("writePNG", draw)
+        self.assertNotIn("writeToFile", draw)
+        self.assertIn(
+            "if (frameTraceArmed_.load(std::memory_order_acquire))",
+            draw)
+        self.assertIn("[commands addCompletedHandler:", draw)
+        self.assertIn("[update.drawable addPresentedHandler:", draw)
+        fragment = self.shader.split(
+            "fragment float4 wave_surface_fragment", 1
+        )[1].split(
+            "vertex Out grid_vertex", 1
+        )[0]
+        self.assertIn("if (u.frameTraceMarkerActive != 0)", fragment)
+        self.assertIn(
+            "const uint gray = sequence ^ (sequence >> 1u)", fragment)
+        self.assertIn(
+            "const bool markerRow =", fragment)
 
     def test_direct_motion_uses_continuous_physical_pixel_coordinates(self):
         fragment = self.shader.split(
