@@ -275,8 +275,9 @@ For the live test count, trust `./check.sh` output—not any number written here
   final gates pass 560 tests with one expected skip. The signed direct-control
   build is installed with its native deck active, 3,263 tracks / 83 playlists,
   zero preparation tasks, unchanged 3,248-record analysis and 3,125-file art
-  caches, and post-relaunch `library.json` byte-identical to its protected
-  post-quit backup.
+  caches. Curated `library.json` data is unchanged; its only semantic
+  post-relaunch difference from the protected post-quit backup is the ordinary
+  `settings.waveform_zoom` save from 576 to 256.
   Per-frame positional stability on a real library track is 0.3% of travel
   (~0.07 Retina pixels at maximum zoom), so motion is exact by measurement.
   A latency-one grab freezes the newest presented/committed source frame,

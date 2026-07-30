@@ -1628,11 +1628,13 @@ The final packaged native dylib SHA-256 is
 Both required gates pass 560 tests with one expected skip. The real library
 loaded 3,263 tracks / 83 playlists with zero preparation tasks and retained all
 3,248 V4 records and 3,125 art files. Post-relaunch `library.json` is
-byte-identical to its protected post-quit backup at SHA-256
-`c3cbdfd0b6be45996987ad0df13a7be7fe9ce0ca1c81cb87d4b835ca9438a235`.
-This is the accepted stopping point: preserve its waveform detail and direct
-motion; the remaining rare hitch is a visual-only omitted ProMotion callback,
-not an audio, grid, GPU-deadline, cache, or transport defect.
+SHA-256
+`cbf37fbfdb1f7a9f6f5747f8c7a5f61b17290b0bac0a06a0d6cc275721217fe8`;
+against its protected post-quit backup, the only semantic difference is the
+ordinary `settings.waveform_zoom` save from 576 to 256. Curated data is
+unchanged. This is the accepted stopping point: preserve its waveform detail
+and direct motion; the remaining rare hitch is a visual-only omitted ProMotion
+callback, not an audio, grid, GPU-deadline, cache, or transport defect.
 
 ### Continuous signed-interval coverage on 2026-07-28
 
