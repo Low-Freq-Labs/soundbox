@@ -92,7 +92,7 @@ from PySide6.QtWidgets import (
 
 from soundbox import artfetch, engine, imports, libcache, metadata, paths, rekordbox_db
 from soundbox.device_profile import plan_stock_ipod_export
-from soundbox.rekordbox_xml import Playlist
+from soundbox.library import Playlist
 from . import theme
 from .artpicker import ArtPickerDialog
 from .model import (
@@ -764,9 +764,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
         self.player_bar.play_track(
             t.track_id, t.path, title=label, bpm=t.bpm,
-            analysis_path=getattr(t, "analysis_path", ""),
+            analysis_path=getattr(t, "source_analysis_path", ""),
             autoplay=autoplay,
-            cues=getattr(t, "rekordbox_cues", None))
+            cues=getattr(t, "source_cues", None))
         self._highlight_now_playing(t.track_id)
         self._update_player_navigation()
         return True
@@ -2239,7 +2239,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         drift/resync recognize them by identity (they aren't in lib.playlists).
         Mirrors the `cust` branch of _resolve_jobs."""
         custom = getattr(self, "custom", None) or {}
-        return [Playlist(name=n, folder_path=[], keys=list(ids), key_type="0")
+        return [Playlist(name=n, folder_path=[], keys=list(ids))
                 for n, ids in custom.items() if ids]
 
     def _view_playlist(self, view: str):
@@ -2256,7 +2256,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             name = "Artists"
         else:
             return None
-        return Playlist(name=name, folder_path=[], keys=keys, key_type="0") if keys else None
+        return Playlist(name=name, folder_path=[], keys=keys) if keys else None
 
     def _sync_playlists(self) -> list:
         """Every SoundBox-side playlist a device could hold: customs + the two
@@ -3120,8 +3120,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 ids = self.custom.get(val, [])
                 if ids:
                     # Top level of /Playlists (no SoundBox subfolder).
-                    pls.append(Playlist(name=val, folder_path=[],
-                                        keys=list(ids), key_type="0"))
+                    pls.append(Playlist(name=val, folder_path=[], keys=list(ids)))
             elif kind == "sbview":
                 pl = self._view_playlist(val)
                 if pl is not None:

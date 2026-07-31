@@ -11,7 +11,7 @@ from soundbox import manifest
 from soundbox.metadata import neat_title, tidy_title
 from soundbox.paths import TITLE_MAX, device_music_path, sanitize_component
 from soundbox.playlists import M3UEntry, render_m3u8
-from soundbox.rekordbox_xml import Playlist
+from soundbox.library import Playlist
 
 _ILLEGAL = set('<>:"/\\|?*')
 text = st.text(max_size=300)

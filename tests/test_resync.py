@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from soundbox import engine, manifest
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 
 
 class TestResync(unittest.TestCase):
@@ -22,7 +22,7 @@ class TestResync(unittest.TestCase):
     def _lib(self, *pls):
         tracks = {k: self._t(k, k.upper(), f"{k}.wav") for k in ("a", "b", "c")}
         tracks["s"] = self._t("s", "Shared", "Shared.wav")
-        return Library(tracks_by_id=tracks, playlists=list(pls), source_xml=Path("x"))
+        return Library(tracks_by_id=tracks, playlists=list(pls), source=Path("x"))
 
     def _m3u8s(self):
         return sorted(str(p.relative_to(self.dev)) for p in (self.dev / "Playlists").rglob("*.m3u8"))

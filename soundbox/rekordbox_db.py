@@ -5,9 +5,9 @@ temp file and reads the COPY read-only via pyrekordbox — same read-only postur
 as the XML import, just sourced from a live snapshot instead of a manual export.
 Never writes to rekordbox.
 
-Produces the exact same `Library` object as the XML parser, so the UI, export,
-and overrides all work unchanged. rekordbox content IDs == XML TrackIDs, so
-artist/title overrides and SoundBox playlists carry over.
+Normalizes into the same source-neutral `Library` model as the XML adapter, so
+the UI, export, and overrides work unchanged. rekordbox content IDs == XML
+TrackIDs, so artist/title overrides and SoundBox playlists carry over.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
+from .library import Library, Playlist, Track
 from .rekordbox_analysis import resolve_dat_path
-from .rekordbox_xml import Library, Playlist, Track
 
 REKORDBOX_DB = Path.home() / "Library" / "Pioneer" / "rekordbox" / "master.db"
 
@@ -77,7 +77,12 @@ def load_live() -> Library:
         # playlist, files usually long gone) so the count matches the real library.
         referenced = {k for pl in playlists for k in pl.keys}
         tracks_by_id = {tid: t for tid, t in tracks_by_id.items() if tid in referenced}
-        return Library(tracks_by_id=tracks_by_id, playlists=playlists, source_xml=REKORDBOX_DB)
+        return Library(
+            tracks_by_id=tracks_by_id,
+            playlists=playlists,
+            source=REKORDBOX_DB,
+            source_kind="rekordbox-db",
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -122,9 +127,9 @@ def _read_tracks(db) -> dict[str, Track]:
             size=int(c.FileSize or 0),
             bitrate=str(c.BitRate or ""),
             rating=str(c.Rating or ""),
-            analysis_path=str(resolve_dat_path(
+            source_analysis_path=str(resolve_dat_path(
                 REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
-            rekordbox_cues=cues_by_track.get(str(c.ID), []),
+            source_cues=cues_by_track.get(str(c.ID), []),
         )
     return out
 

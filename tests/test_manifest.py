@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from soundbox import manifest
-from soundbox.rekordbox_xml import Library, Playlist
+from soundbox.library import Library, Playlist
 
 
 def PL(pid, name, folder, keys):
@@ -11,7 +11,7 @@ def PL(pid, name, folder, keys):
 
 
 def lib_of(*pls):
-    return Library(tracks_by_id={}, playlists=list(pls), source_xml=Path("x"))
+    return Library(tracks_by_id={}, playlists=list(pls), source=Path("x"))
 
 
 class TestManifest(unittest.TestCase):

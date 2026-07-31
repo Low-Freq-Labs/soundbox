@@ -20,7 +20,7 @@ from PySide6.QtGui import QKeyEvent
 QStandardPaths.setTestModeEnabled(True)
 
 from soundbox import engine, rekordbox_db
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 from desktop.native_deck import PlaybackState
 
 _app = _win = None
@@ -37,7 +37,7 @@ def _make_lib() -> Library:
     }
     pls = [Playlist("SET ONE", ["CRATES"], keys=["3", "1"]),
            Playlist("SET TWO", [], keys=["2"])]
-    return Library(tracks_by_id=tracks, playlists=pls, source_xml="synthetic")
+    return Library(tracks_by_id=tracks, playlists=pls, source="synthetic")
 
 
 def setUpModule():
@@ -3240,14 +3240,14 @@ class WaveformFill(unittest.TestCase):
     def setUp(self):
         import tempfile
         from pathlib import Path
-        from soundbox.rekordbox_xml import Library, Track
+        from soundbox.library import Library, Track
         self.cache = tempfile.mkdtemp(prefix="sb-wfcache-")
         tracks = {str(i): Track(str(i), f"Set {i}", "A",
                                 Path(p).as_uri(), bpm="140.00")
                   for i, p in enumerate(self.paths)}
         tracks["ghost"] = Track("ghost", "Gone", "A",
                                 Path(f"{self.dir}/nope.wav").as_uri())
-        self.lib = Library(tracks_by_id=tracks, playlists=[], source_xml="x")
+        self.lib = Library(tracks_by_id=tracks, playlists=[], source="x")
 
     def tearDown(self):
         import shutil
@@ -3290,7 +3290,7 @@ class WaveformFill(unittest.TestCase):
 
         canonical = Path(self.cache) / "track_analysis"
         track = self.lib.tracks_by_id["0"]
-        track.rekordbox_cues = [{
+        track.source_cues = [{
             "kind": "hot", "slot": 0, "position_ms": 500,
             "end_ms": -1, "type": "single", "label": "DROP",
             "color": [255, 59, 125],
@@ -3328,7 +3328,7 @@ class WaveformFill(unittest.TestCase):
         self.assertEqual(
             track_analysis.load(
                 canonical, "0", self.paths[0])["cues"],
-            track.rekordbox_cues)
+            track.source_cues)
 
     def test_worker_refreshes_corrected_rekordbox_grid_without_audio_decode(self):
         from pathlib import Path
@@ -3340,8 +3340,8 @@ class WaveformFill(unittest.TestCase):
         track = self.lib.tracks_by_id["0"]
         dat = Path(self.cache) / "ANLZ0000.DAT"
         dat.write_bytes(b"read-only test fixture")
-        track.analysis_path = str(dat)
-        track.rekordbox_cues = []
+        track.source_analysis_path = str(dat)
+        track.source_cues = []
         automatic = [[1, 250, 128.0], [2, 719, 128.0]]
         prepared = track_analysis.with_imported_cues({
             "detail_heights": b"\x20\x00" * 6000,
@@ -3370,7 +3370,7 @@ class WaveformFill(unittest.TestCase):
             canonical, "0", self.paths[0])[2]
         corrected = [[1, 375, 128.0], [2, 844, 128.0]]
         small_lib = type(self.lib)(
-            tracks_by_id={"0": track}, playlists=[], source_xml="x")
+            tracks_by_id={"0": track}, playlists=[], source="x")
         worker = WaveformFillWorker(small_lib, canonical)
         totals = []
         ready = []
@@ -3490,7 +3490,7 @@ class CollectionLandedOrder(unittest.TestCase):
     def setUp(self):
         import tempfile, time
         from pathlib import Path
-        from soundbox.rekordbox_xml import Library, Track
+        from soundbox.library import Library, Track
         self._td = tempfile.TemporaryDirectory()
         d = Path(self._td.name)
         self.paths = []
@@ -3506,7 +3506,7 @@ class CollectionLandedOrder(unittest.TestCase):
         }
         self._saved_lib, self._saved_cache = _win.lib, _win._landed_cache
         _win._landed_cache = {}
-        _win.lib = Library(tracks_by_id=tracks, playlists=[], source_xml="x")
+        _win.lib = Library(tracks_by_id=tracks, playlists=[], source="x")
 
     def tearDown(self):
         _win.lib, _win._landed_cache = self._saved_lib, self._saved_cache
@@ -3525,7 +3525,7 @@ class CollectionLandedOrder(unittest.TestCase):
         # order across BOTH sources, with time-of-day precision. An import with an
         # OLD file but a later add-time must sort above a rekordbox track with a
         # NEWER file but an earlier add-time.
-        from soundbox.rekordbox_xml import Track
+        from soundbox.library import Track
         _win._landed_cache = {}
         _win.lib.tracks_by_id = {
             # oldest file (paths[0]) but newest add-time -> FIRST (a set imported now)
@@ -3541,7 +3541,7 @@ class CollectionLandedOrder(unittest.TestCase):
 
     def test_missing_add_time_falls_back_to_birthtime(self):
         # No added_ts (e.g. an XML-loaded library) -> file birthtime still orders.
-        from soundbox.rekordbox_xml import Track
+        from soundbox.library import Track
         _win._landed_cache = {}
         _win.lib.tracks_by_id = {
             "1": Track("1", "Zzz Old", "A", self.paths[0].as_uri()),

@@ -123,7 +123,7 @@ class TrackMapping(unittest.TestCase):
         self.assertEqual(t.date_added, "2026-01-02")
         self.assertIn("Track%20%28VIP%29.wav", t.location_uri)  # percent-encoded
         self.assertEqual(str(t.path), "/Users/x/My Music/Track (VIP).wav")
-        self.assertTrue(t.analysis_path.endswith(
+        self.assertTrue(t.source_analysis_path.endswith(
             "/rekordbox/share/PIONEER/USBANLZ/x/ANLZ0000.DAT"))
 
     def test_deleted_track_skipped(self):
@@ -132,7 +132,7 @@ class TrackMapping(unittest.TestCase):
 
     def test_live_db_authoritative_empty_cues(self):
         out = _read_tracks(FakeDB(tracks=[self._track()]))
-        self.assertEqual(out["265095720"].rekordbox_cues, [])
+        self.assertEqual(out["265095720"].source_cues, [])
 
 
 class CueMapping(unittest.TestCase):

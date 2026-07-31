@@ -15,26 +15,32 @@ For the live test count, trust `./check.sh` output—not any number written here
   grid, persistent zoom/jump controls, CUE/play/track navigation, precision
   scrub, clean gain ramps, and cache-first rapid loading. Full reference:
   `docs/PLAYER.md`.
-- **PLAYER SIMPLIFICATION IN SOURCE; INSTALLED HANDOFF PENDING.** The paired
-  physical/GPU run named the residual BLUE/RGB pulse: a 41.209 Hz signed bass
-  carrier, not transport jitter, GPU lateness, random redraw, or chroma
-  breathing. The neutral envelope, background bed, 0.75 coverage sharpening,
-  and 1.0 RGB-transition experiments subsequently accumulated in the
-  production renderer even though the exact continuous coverage/color resolve
-  was already the stable baseline. The current source removes all four visual
-  experiment controls, their ABI/wrapper/script surfaces, and their shader
-  branches; BLUE/RGB now composite the exact interval integral directly. The
-  removed symbols advance the candidate native deck from ABI 3 to ABI 4.
-
-  Native zoom also snaps to the same thirteen canonical UI stops, collapsing
-  an eight-taper stop filter (including three dead close branches) into one
-  explicit 64–256 midrange rule. CoreAudio timing, direct target prediction,
-  close four-pixel mip selection, song-space attribute lattice, height ladder,
-  exact one-pixel integration, and 3BAND are unchanged. The focused native/UI
-  suite and six-image real-track corpus pass. Full gates and installed-app live
-  acceptance remain pending; do not replace the running app while the V5
-  library recook and its required rollback are still active. Full evidence:
-  `docs/PLAYER.md` → “Production renderer simplification on 2026-07-30.”
+- **PLAYER SIMPLIFICATION SHIPPED AND ACCEPTED.** BLUE/RGB now composite the
+  exact continuous interval/color resolve directly; the rejected
+  carrier-neutral envelope, background bed, coverage sharpening, and RGB
+  transition experiments are gone. Native zoom snaps to the same thirteen UI
+  stops, and the old overlapping stop tapers are one explicit 64–256 midrange
+  rule. The signed ABI-4 app is installed and accepted, the full V5 audit is
+  complete, curated state was verified, and no temporary rollback remains.
+  Full evidence: `docs/PLAYER.md` → “Production renderer simplification on
+  2026-07-30” and `docs/HANDOFF.md`.
+- **SOURCE-ADAPTER BOUNDARY SHIPPED.** `soundbox.library` now owns the
+  provider-neutral `Track`, `Playlist`, and `Library` model. The live
+  rekordbox DB and XML readers are concrete read-only adapters into it;
+  curation, cache, sync, workers, and tests no longer import their domain
+  types from an XML parser. Source identity, cues, and optional lazy-analysis
+  paths are normalized, XML `KeyType=1` playlists are converted to canonical
+  track IDs at the edge, and V4 instant-paint snapshots remain readable.
+  There is deliberately no speculative Serato/Traktor registry before a
+  second real source establishes the necessary interface.
+- **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
+  `desktop/app.py` is the remaining general orchestration hotspot. Work in
+  small behavior-preserving stages: extract crown-jewel state persistence,
+  library load/refresh plus row-cache coordination, playback/autoplay
+  orchestration, and custom-playlist/import operations into independently
+  tested services/controllers. Keep `MainWindow` as widget/signal composition.
+  Do not merely scatter methods into cosmetic mixins, and do not combine this
+  with a new DJ-system integration.
 - **HISTORICAL 2026-07-29 — FINAL-PULSE CANDIDATE.** BLUE
   and RGB now resolve signed-interval coverage and dependent color jointly in
   premultiplied linear light while preserving the already accepted continuous

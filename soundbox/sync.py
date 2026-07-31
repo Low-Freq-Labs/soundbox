@@ -25,9 +25,9 @@ from typing import Callable, cast
 from . import playlists as pl_mod
 from . import metadata
 from . import manifest
+from .library import Library, Playlist
 from .paths import device_music_path, is_within
 from .report import PlaylistReport, SyncReport
-from .rekordbox_xml import Library, Playlist
 
 
 class NotEnoughSpace(RuntimeError):

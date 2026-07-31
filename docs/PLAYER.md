@@ -78,8 +78,9 @@ Cue panel:
   are never guessed into a letter.
 - Labels, loops, positions, and verified color information are preserved.
   ANLZ PCOB/PCO2 remains a fallback when no live database cue source exists.
-- The loaded `Track.rekordbox_cues` rows are injected directly into the deck
-  and override cache/ANLZ sidecars. Exact cue identity therefore does not wait
+- The loaded, source-normalized `Track.source_cues` rows are injected directly
+  into the deck and override cache/ANLZ sidecars. Exact cue identity therefore
+  does not wait
   for background waveform preparation; V5 still receives the same rows atomically
   for long-term SoundBox ownership.
 - Populated slots emit separate press/release edges for gated playback. Empty

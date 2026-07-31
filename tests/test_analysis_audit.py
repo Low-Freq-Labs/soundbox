@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scripts.audit_analysis import audit
 from soundbox import imports, libcache
-from soundbox.rekordbox_xml import Library, Track
+from soundbox.library import Library, Track
 from soundbox import track_analysis
 from soundbox.track_analysis import store
 
@@ -32,7 +32,7 @@ class AnalysisAudit(unittest.TestCase):
         libcache.dump(
             Library(
                 tracks_by_id={"1": track}, playlists=[],
-                source_xml=Path("snapshot"),
+                source=Path("snapshot"),
             ),
             self.data / "libcache.json",
         )

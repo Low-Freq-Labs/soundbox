@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import manifest as manifest_mod, metadata, rekordbox_xml, sync as sync_mod
-from .rekordbox_xml import Library, Playlist, Track
+from .library import Library, Playlist, Track
 
 
 def load_library(xml_path: str | Path) -> Library:
@@ -80,7 +80,8 @@ def playlist_rows(lib: Library, display_path: str, overrides: dict | None = None
 def summary(lib: Library) -> dict:
     """Top-level info for the UI on load."""
     return {
-        "xml": str(lib.source_xml),
+        "source": str(lib.source),
+        "sourceKind": lib.source_kind,
         "trackCount": lib.track_count,
         "playlistCount": len(lib.playlists),
         "tree": playlist_tree(lib),

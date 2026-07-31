@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 
 
 def T(tid, *, bpm="", key="", secs=200):
@@ -44,7 +44,7 @@ class TestUntrackedRule(unittest.TestCase):
             T("stub", bpm="", key="7A", secs=1),  # short stub
         )}
         pl = Playlist(name="P", folder_path=[], keys=["real", "---", "stub"])
-        lib = Library(tracks_by_id=tracks, playlists=[pl], source_xml=Path("x"))
+        lib = Library(tracks_by_id=tracks, playlists=[pl], source=Path("x"))
 
         lib.hide_untracked = False
         self.assertEqual([t.track_id for t in lib.resolve(pl)], ["real", "---", "stub"])

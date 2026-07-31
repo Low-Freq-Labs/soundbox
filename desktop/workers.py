@@ -17,7 +17,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from soundbox import artfetch, engine, metadata, rekordbox_db
-from soundbox.rekordbox_xml import Playlist
+from soundbox.library import Playlist
 
 from .devices import device_profile, list_devices
 
@@ -525,8 +525,8 @@ class WaveformFillWorker(QThread):
         ] = []
         for t in self.lib.tracks_by_id.values():
             try:
-                analysis_path = getattr(t, "analysis_path", "")
-                rekordbox_cues = getattr(t, "rekordbox_cues", None)
+                analysis_path = getattr(t, "source_analysis_path", "")
+                source_cues = getattr(t, "source_cues", None)
                 audio_path = str(t.path) if t.path.is_file() else ""
                 try:
                     bpm_hint = float(getattr(t, "bpm", 0) or 0)
@@ -540,7 +540,7 @@ class WaveformFillWorker(QThread):
                     todo.append((
                         "v4-migrate" if legacy.is_file() else "v5",
                         audio_path, str(analysis_path or ""),
-                        str(t.track_id), bpm_hint, rekordbox_cues, None))
+                        str(t.track_id), bpm_hint, source_cues, None))
                     continue
                 imported_beats = (
                     read_beats(analysis_path)
@@ -559,10 +559,10 @@ class WaveformFillWorker(QThread):
                 if (self.track_analysis_dir and audio_path
                         and imported_cues_need_sync(
                             self.track_analysis_dir, t.track_id, audio_path,
-                            rekordbox_cues)):
+                            source_cues)):
                     todo.append((
                         "cue-meta", audio_path, "", str(t.track_id), 0.0,
-                        rekordbox_cues, None))
+                        source_cues, None))
                     continue
                 if grid_sync:
                     continue

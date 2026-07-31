@@ -6,7 +6,7 @@ import wave
 from pathlib import Path
 
 from soundbox import imports
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 
 
 def _write_wav(path: Path, seconds: float = 2.0, rate: int = 8000) -> None:
@@ -71,7 +71,7 @@ class Inject(unittest.TestCase):
         # bpm set: a real rekordbox track always has one from analysis.
         return Library(tracks_by_id={"1": Track("1", "A", "B", "file:///t/a.wav",
                                                 bpm="140.00")},
-                       playlists=[], source_xml="synthetic")
+                       playlists=[], source="synthetic")
 
     def test_joins_pool_and_is_idempotent(self):
         lib = self._lib()

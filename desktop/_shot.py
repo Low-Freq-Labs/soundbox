@@ -18,7 +18,7 @@ from soundbox import engine, rekordbox_db
 rekordbox_db.db_available = lambda: False  # never auto-read the live DB here
 
 from desktop.app import MainWindow, make_app
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 
 
 def synthetic_library() -> Library:
@@ -33,7 +33,7 @@ def synthetic_library() -> Library:
     pls = [Playlist("SET ONE", ["CRATES"], keys=ids[:8], pid="1"),
            Playlist("SET TWO", ["CRATES"], keys=ids[4:], pid="2"),
            Playlist("WARMUPS", [], keys=ids[::2], pid="3")]
-    return Library(tracks_by_id=tracks, playlists=pls, source_xml="synthetic")
+    return Library(tracks_by_id=tracks, playlists=pls, source="synthetic")
 
 
 def main() -> None:

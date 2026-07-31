@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from soundbox import engine, manifest
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 
 
 class TestCancelSemantics(unittest.TestCase):
@@ -29,7 +29,7 @@ class TestCancelSemantics(unittest.TestCase):
 
     def _lib(self, *pls):
         tracks = {k: self._t(k, f"{k}.wav") for k in ("a", "b", "c")}
-        return Library(tracks_by_id=tracks, playlists=list(pls), source_xml=Path("x"))
+        return Library(tracks_by_id=tracks, playlists=list(pls), source=Path("x"))
 
     def _m3u8(self, rel):
         return (self.dev / "Playlists" / rel).read_text(encoding="utf-8")
@@ -130,10 +130,10 @@ class TestResyncCancel(unittest.TestCase):
         tracks = {k: self._t(k, f"{k}.wav") for k in ("a", "b")}
         p1 = Playlist(name="KEEP", folder_path=[], keys=["a"], pid="1")
         p2 = Playlist(name="GONE", folder_path=[], keys=["b"], pid="2")
-        lib1 = Library(tracks_by_id=tracks, playlists=[p1, p2], source_xml=Path("x"))
+        lib1 = Library(tracks_by_id=tracks, playlists=[p1, p2], source=Path("x"))
         engine.export_playlists(lib1, [p1, p2], self.dev)
 
-        lib2 = Library(tracks_by_id=tracks, playlists=[p1], source_xml=Path("x"))
+        lib2 = Library(tracks_by_id=tracks, playlists=[p1], source=Path("x"))
         rep = engine.resync_device(lib2, self.dev, should_cancel=lambda: True)
         self.assertTrue(rep.cancelled)
         # music NOT pruned, manifest NOT forgotten → still resumable

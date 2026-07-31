@@ -2,8 +2,9 @@
 
 ## Repo layout
 
-    soundbox/   pure-Python engine (no Qt): rekordbox readers, data model,
-                sync/resync + manifest drift, playlists (m3u8), metadata
+    soundbox/   pure-Python engine (no Qt): source-neutral library model,
+                rekordbox adapters, sync/resync + manifest drift,
+                playlists (m3u8), metadata
                 derivation, imported-file records + relink, cover-art
                 fetch/encode, backup — mypy-clean, gated by ./check.sh.
     desktop/    PySide6 app: MainWindow + mixins, workers (all QThreads),
@@ -19,8 +20,9 @@
 
 ## Engine modules (`soundbox/`)
 
-`rekordbox_db` (live DB reader) · `rekordbox_xml` (core data model + XML
-parser) · `engine` (the API surface) · `sync` (export + resync; **safety
+`library` (source-neutral `Track` / `Playlist` / `Library` model) ·
+`rekordbox_db` (live DB adapter) · `rekordbox_xml` (XML adapter) ·
+`engine` (the API surface) · `sync` (export + resync; **safety
 contract at the top of the file**) · `paths` (sanitizing, device paths,
 length budgets) · `playlists` (m3u8) · `report` · `metadata` (artist/title
 derivation, title-cleanup rules) · `artfetch` + `artencode` (cover art
@@ -32,6 +34,34 @@ PQTZ/PCOB/PCO2/PWV5/PWV7 parser) · `device_profile` (read-only device
 classification and stock-iPod preview planning) · `backup` · `imports`
 (imported-audio plane) · `libcache` (instant-paint snapshot).
 
+## Source-adapter boundary
+
+The dependency direction is deliberate:
+
+    rekordbox_db ──┐
+                   ├──> library model ──> curation / player / sync / devices
+    rekordbox_xml ─┘
+
+`soundbox.library` owns the only domain types consumed downstream. A source
+adapter reads its own system without modifying it, normalizes tracks and exact
+playlist order into those types, and assigns a stable `source_kind`.
+Provider-native playlist key formats never cross this boundary: for example,
+the rekordbox XML adapter converts `KeyType=1` location keys to canonical track
+IDs before constructing a `Playlist`.
+
+Optional lazy analysis is exposed on `Track` as the provider-neutral
+`source_analysis_path`, while cue rows are normalized into `source_cues`. The
+current rekordbox adapter is the only implementation and the player still
+understands rekordbox ANLZ sidecars. A future source with its own analysis
+format should add a focused adapter/decoder at that edge; it should not teach
+the library model, sync engine, or device exporters about that provider.
+
+There is intentionally no speculative provider registry or abstract base class
+yet. When a second real source is implemented, its actual discovery,
+configuration, refresh, and error semantics should determine that small
+interface. Until then, architecture tests keep the domain model free of
+provider imports, and the existing rekordbox modules remain concrete adapters.
+
 ## Desktop modules (`desktop/`)
 
 `app.py` = `MainWindow` core + orchestration. Mixins/modules: `devices`,
@@ -41,6 +71,16 @@ classification and stock-iPod preview planning) · `backup` · `imports`
 `class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow)`.
 `native_deck.py` adapts the native C ABI to PlayerBar's small transport
 protocol.
+
+`desktop/app.py` remains the largest general orchestration hotspot. Its
+sections are explicit and cohesive mixins already own Settings and the device
+browser, but future product work should move behavior only when it creates a
+real independently testable controller/service boundary; splitting methods
+among cosmetic mixins would reduce line count without reducing coupling.
+`desktop/player.py`, `soundbox/track_analysis.py`, and the native deck are also
+large, but their waveform/cache/realtime invariants are intentionally kept
+close and should be separated only along tested protocol or data-format
+boundaries.
 
 ## Player clocks
 

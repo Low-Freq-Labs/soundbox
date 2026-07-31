@@ -1,11 +1,12 @@
 """Library snapshot cache: faithful round-trip, corruption-tolerant load."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from soundbox import libcache
-from soundbox.rekordbox_xml import Library, Playlist, Track
+from soundbox.library import Library, Playlist, Track
 
 
 def _lib() -> Library:
@@ -13,8 +14,8 @@ def _lib() -> Library:
         "1": Track("1", "Bravo", "Zed", "file://localhost/tmp/b.wav",
                    bpm="140.00", key="10A", total_time=185, date_added="2026-01-02",
                    added_ts=1_767_000_000.0, genre="Riddim", size=123, bitrate="1411",
-                   analysis_path="/rekordbox/share/x/ANLZ0000.DAT",
-                   rekordbox_cues=[{
+                   source_analysis_path="/rekordbox/share/x/ANLZ0000.DAT",
+                   source_cues=[{
                        "kind": "hot", "slot": 0, "position_ms": 1000,
                        "end_ms": -1, "type": "single", "label": "DROP",
                        "color": [255, 0, 0],
@@ -23,7 +24,7 @@ def _lib() -> Library:
                       total_time=5400, added_ts=1_768_000_000.5, imported=True),
     }
     pls = [Playlist("SET ONE", ["CRATES"], keys=["1", "sb-x"], pid="99")]
-    return Library(tracks_by_id=tracks, playlists=pls, source_xml="/x/lib.xml")
+    return Library(tracks_by_id=tracks, playlists=pls, source="/x/lib.xml")
 
 
 class RoundTrip(unittest.TestCase):
@@ -41,11 +42,11 @@ class RoundTrip(unittest.TestCase):
             # it; when it was dropped here, instant-paint fell back to birthtime.
             self.assertEqual(got.tracks_by_id["1"].added_ts, 1_767_000_000.0)
             self.assertEqual(got.tracks_by_id["sb-x"].added_ts, 1_768_000_000.5)
-            self.assertEqual(got.tracks_by_id["1"].analysis_path,
+            self.assertEqual(got.tracks_by_id["1"].source_analysis_path,
                              "/rekordbox/share/x/ANLZ0000.DAT")
             self.assertEqual(
-                got.tracks_by_id["1"].rekordbox_cues[0]["label"], "DROP")
-            self.assertIsNone(got.tracks_by_id["sb-x"].rekordbox_cues)
+                got.tracks_by_id["1"].source_cues[0]["label"], "DROP")
+            self.assertIsNone(got.tracks_by_id["sb-x"].source_cues)
             self.assertEqual(got.playlists[0].keys, ["1", "sb-x"])
             self.assertEqual(got.playlists[0].pid, "99")
 
@@ -58,6 +59,27 @@ class RoundTrip(unittest.TestCase):
 
 
 class Tolerant(unittest.TestCase):
+    def test_v4_snapshot_is_normalized_without_losing_instant_paint(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            old = {
+                "schema": 4,
+                "source": "/x/rekordbox.xml",
+                "tracks": [[
+                    "1", "Track", "Artist", "file:///tmp/track.wav",
+                    "140.00", "8A", 180, "2026-01-01", 0.0, "", "", 0,
+                    "", "", "", False, "/x/ANLZ0000.DAT", [],
+                ]],
+                "playlists": [["Set", ["Folder"], ["1"], "0", "stable-id"]],
+            }
+            p.write_text(json.dumps(old), encoding="utf-8")
+            got = libcache.load(p)
+
+            self.assertIsNotNone(got)
+            self.assertEqual(got.playlists[0].pid, "stable-id")
+            self.assertEqual(got.tracks_by_id["1"].source_analysis_path,
+                             "/x/ANLZ0000.DAT")
+
     def test_missing_file_is_none(self):
         self.assertIsNone(libcache.load("/no/such/libcache.json"))
 
@@ -67,7 +89,6 @@ class Tolerant(unittest.TestCase):
             self.assertIsNone(libcache.load(p))
 
     def test_wrong_schema_is_none(self):
-        import json
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "c.json"; p.write_text(json.dumps({"schema": 999, "tracks": []}))
             self.assertIsNone(libcache.load(p))
@@ -75,7 +96,7 @@ class Tolerant(unittest.TestCase):
     def test_empty_library_is_none(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "c.json"
-            libcache.dump(Library(tracks_by_id={}, playlists=[], source_xml="x"), p)
+            libcache.dump(Library(tracks_by_id={}, playlists=[], source="x"), p)
             self.assertIsNone(libcache.load(p))  # nothing to paint → treat as no cache
 
 

@@ -20,7 +20,7 @@ from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from .rekordbox_xml import Library, Track
+from .library import Library, Track
 from .paths import sanitize_component
 
 ID_PREFIX = "sb-"
