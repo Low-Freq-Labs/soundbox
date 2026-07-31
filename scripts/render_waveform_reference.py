@@ -51,7 +51,9 @@ REFERENCE_CASES = (
 
 
 def _record(cache_root: Path, track_id: str) -> tuple[Path, dict]:
-    matches = sorted(cache_root.glob(f"{track_id}-*.sba4"))
+    matches = sorted(cache_root.glob(f"{track_id}-*.sba5"))
+    if not matches:
+        matches = sorted(cache_root.glob(f"{track_id}-*.sba4"))
     if len(matches) != 1:
         raise RuntimeError(
             f"expected one cache for track {track_id}, found {matches}")
@@ -59,7 +61,7 @@ def _record(cache_root: Path, track_id: str) -> tuple[Path, dict]:
     with cache_path.open("rb") as handle:
         header = handle.read(track_analysis._HEADER.size)
         magic, manifest_size = struct.unpack("<4sI", header)
-        if magic != b"SBA4":
+        if magic not in {b"SBA4", b"SBA5"}:
             raise RuntimeError(f"invalid cache header: {cache_path}")
         manifest = json.loads(handle.read(manifest_size))
     return cache_path, manifest

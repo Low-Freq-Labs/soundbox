@@ -682,14 +682,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   from `ANLZ0000.DAT`. It must never call the generic parser or open EXT/2EX;
   thousands of tiny metadata migrations otherwise become a needless energy
   spike. Every Rekordbox path remains read-only.
-- **A V4 cache hit can still be upgrade-pending.** Metadata migration can leave
-  a playable record waiting for its current color/provenance version. Only
+- **A V4 cache hit is playable but still V5-upgrade-pending.** Only
   `track_analysis.is_ready()` decides whether background preparation is done;
-  it requires an ultra-rate contour plus RGB. The player may load any valid V4
-  record immediately. Do not collapse those two meanings. The read-only audit
-  reports valid/playable and current-quality coverage separately for the same
-  reason.
-- **Cancellation must not downgrade V4.** The native analyzer returns no result
+  it requires the complete V5 mip/color contract. The player may load any valid
+  V4 record immediately. Do not collapse those two meanings. The read-only
+  audit reports playable V4 and verified V5 coverage separately.
+- **Cancellation must not downgrade canonical analysis.** The native analyzer returns no result
   when its cooperative checkpoint is interrupted. In that case preparation
   must retain the existing record; writing only an imported Rekordbox shell
   discards SoundBox detail data and creates a permanent retry loop.
@@ -703,10 +701,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   future scientific-library lazy imports; do not remove it because current
   code happens not to JIT.
 - **A nearly full data volume must pause preparation, never trigger cache
-  cleanup.** V4 audio cooking pauses below 5 GiB and resumes above 7 GiB.
-  `library.json`, its small rotating backups, art, and existing V4 analysis are
-  not expendable. Installer app rollbacks are temporary and only one may exist
-  during verification.
+  cleanup.** Full V5 audio cooking pauses below 20 GiB and resumes above
+  25 GiB. A verified one-record V4→V5 reduction uses a 5/7 GiB guard because
+  it retires its larger V4 only after complete V5 verification. `library.json`,
+  its small rotating backups, art, and existing analysis are not expendable.
+  Installer app rollbacks are temporary and only one may exist during
+  verification.
 - Build: `./build_app.sh` first builds the arm64 CoreAudio/Metal dylib, then
   PyInstaller collects it alongside pyrekordbox, sqlcipher3,
   sqlalchemy, yt_dlp, soundfile, zstandard, and NumPy's standard runtime hook,

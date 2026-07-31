@@ -2079,6 +2079,91 @@ public:
             std::move(detail), count, samplesPerSecond, expectedGeneration);
     }
 
+    bool setAudioDetailRangeMips16(
+        const int16_t *minimum, const int16_t *maximum,
+        const uint32_t *levelCounts, const uint32_t *levelDivisors,
+        size_t levelCount, size_t baseCount, double samplesPerSecond,
+        uint64_t expectedGeneration = 0) {
+        if (expectedGeneration
+                && renderGeneration_.load(std::memory_order_acquire)
+                    != expectedGeneration) {
+            return false;
+        }
+        if (!minimum || !maximum || !levelCounts || !levelDivisors
+                || !levelCount || levelCount > kWaveMipLevels
+                || !baseCount || samplesPerSecond <= 0) {
+            return false;
+        }
+        std::array<uint32_t, kWaveMipLevels> mipOffsets{};
+        std::array<uint32_t, kWaveMipLevels> mipCounts{};
+        std::array<uint32_t, kWaveMipLevels> mipDivisors{};
+        size_t totalCount = 0;
+        for (size_t level = 0; level < levelCount; ++level) {
+            const uint32_t divisor = levelDivisors[level];
+            const size_t expectedCount =
+                divisor ? (baseCount + divisor - 1) / divisor : 0;
+            if (!divisor || !levelCounts[level]
+                    || levelCounts[level] != expectedCount
+                    || totalCount > std::numeric_limits<uint32_t>::max()
+                        - levelCounts[level]) {
+                return false;
+            }
+            mipOffsets[level] = static_cast<uint32_t>(totalCount);
+            mipCounts[level] = levelCounts[level];
+            mipDivisors[level] = divisor;
+            totalCount += levelCounts[level];
+        }
+        const auto displaySigned = [](int16_t encoded) {
+            const float magnitude = std::abs(
+                static_cast<int>(encoded)) / 32767.0f;
+            const float displayed = displayWaveformHeight(magnitude);
+            return static_cast<int16_t>(std::clamp(
+                std::lround(std::copysign(
+                    displayed * 32767.0f,
+                    static_cast<float>(encoded))),
+                -32767L, 32767L));
+        };
+        std::vector<AudioEnvelopeSample> pyramid;
+        pyramid.reserve(totalCount);
+        for (size_t index = 0; index < totalCount; ++index) {
+            if (minimum[index] > maximum[index]) {
+                return false;
+            }
+            const int16_t displayedMinimum = displaySigned(minimum[index]);
+            const int16_t displayedMaximum = displaySigned(maximum[index]);
+            const uint16_t upper = static_cast<uint16_t>(std::clamp(
+                static_cast<int>(displayedMaximum) * 2, 0, 65535));
+            const uint16_t lower = static_cast<uint16_t>(std::clamp(
+                -static_cast<int>(displayedMinimum) * 2, 0, 65535));
+            pyramid.push_back({
+                upper, lower, displayedMinimum, displayedMaximum,
+            });
+        }
+        id<MTLBuffer> buffer = [device_ newBufferWithBytes:pyramid.data()
+            length:pyramid.size() * sizeof(AudioEnvelopeSample)
+            options:MTLResourceStorageModeShared];
+        if (!buffer) {
+            setError(-43, "Metal audio-detail mip allocation failed");
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        if (expectedGeneration
+                && renderGeneration_.load(std::memory_order_acquire)
+                    != expectedGeneration) {
+            return false;
+        }
+        audioDetailBuffer_ = buffer;
+        audioDetailSampleCount_ = baseCount;
+        audioDetailSamplesPerSecond_ =
+            static_cast<float>(samplesPerSecond);
+        audioDetailMipCount_ = levelCount;
+        audioDetailMipOffsets_ = mipOffsets;
+        audioDetailMipCounts_ = mipCounts;
+        audioDetailMipDivisors_ = mipDivisors;
+        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
+        return true;
+    }
+
     bool installAudioDetail(
         std::vector<AudioEnvelopeSample> detail,
         size_t count, double samplesPerSecond,
@@ -5847,6 +5932,25 @@ int sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation(
         upper_heights, lower_heights, sample_count,
         samples_per_second, generation,
         minimum_values, maximum_values);
+    if (result) instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_audio_detail_range_mips_i16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const int16_t *minimum_values,
+    const int16_t *maximum_values,
+    const uint32_t *level_counts,
+    const uint32_t *level_divisors,
+    size_t level_count,
+    size_t base_sample_count,
+    double base_samples_per_second) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setAudioDetailRangeMips16(
+        minimum_values, maximum_values, level_counts, level_divisors,
+        level_count, base_sample_count, base_samples_per_second, generation);
     if (result) instance->requestDisplay();
     return result;
 }

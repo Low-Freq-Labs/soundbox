@@ -126,6 +126,18 @@ For the live test count, trust `./check.sh` output—not any number written here
   and folder nesting, database refresh, full-library scale, verify, and eject.
   Never erase, bulk-clean, touch `iPod_Control`, or guess the target.
 - New frontier (2026-07-08): **CDJ USB export** → `docs/cdj-usb-export.md`.
+- **V5 BOUNDED WAVEFORM CACHE SHIPPED.** The canonical cache now
+  persists only the exact signed min/max mip levels selected by every supported
+  zoom at macOS scale 1/Retina scale 2, while retaining the compact
+  BLUE/RGB/3BAND streams, spectral master, grid, cues, provenance, and source
+  identity. Fresh cooks and V4 migration share one extrema reducer. Migration
+  is atomic, resumable, and retires one V4 only after a complete V5 audit.
+  Full cooks preserve a 20 GiB OS reserve and resume at 25 GiB.
+  The 2026-07-30 controlled installed-app cutover backed up curated state and
+  every V4 manifest, freed the 40 GiB V4 cache before starting V5, verified the
+  signed ABI-3 native deck plus the 3,263-track/83-playlist library, and left
+  the direct V5 recook resumable with its temporary rollback retained until
+  the final full audit.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
   V4 retains overflow cues beyond the eight visible slots.
 - **V4 ANALYSIS FOUNDATION SHIPPED.** SoundBox now owns checksummed per-track

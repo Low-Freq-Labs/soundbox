@@ -178,7 +178,7 @@ def native_available() -> bool:
         lib = ctypes.CDLL(str(path))
         lib.sb_deck_abi_version.restype = ctypes.c_uint32
         lib.sb_deck_is_supported.restype = ctypes.c_int
-        return lib.sb_deck_abi_version() == 2 and bool(lib.sb_deck_is_supported())
+        return lib.sb_deck_abi_version() == 3 and bool(lib.sb_deck_is_supported())
     except (OSError, AttributeError):
         return False
 
@@ -357,6 +357,19 @@ def _bind(path: Path):
         ctypes.c_double,
     ]
     lib.sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation.restype = (
+        ctypes.c_int)
+    lib.sb_deck_set_audio_detail_range_mips_i16_for_generation.argtypes = [
+        handle,
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.c_int16),
+        ctypes.POINTER(ctypes.c_int16),
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.c_double,
+    ]
+    lib.sb_deck_set_audio_detail_range_mips_i16_for_generation.restype = (
         ctypes.c_int)
     lib.sb_deck_set_cues.argtypes = [
         handle,
@@ -564,7 +577,7 @@ class NativeDeckBackend(QObject):
         if path is None:
             raise RuntimeError("Native Soundbox deck library is unavailable")
         self._lib = _bind(path)
-        if self._lib.sb_deck_abi_version() != 2:
+        if self._lib.sb_deck_abi_version() != 3:
             raise RuntimeError("Native Soundbox deck ABI mismatch")
         self._handle = self._lib.sb_deck_create(
             ctypes.c_void_p(int(host_widget.winId())))
@@ -1134,11 +1147,59 @@ class NativeDeckBackend(QObject):
     def _set_audio_detail(self, detail, generation: int = 0):
         if not isinstance(detail, dict):
             return
-        heights = detail.get("heights")
         rate = float(detail.get("rate") or 0)
-        if not isinstance(heights, bytes) or not heights or rate <= 0:
+        if rate <= 0:
             return
         expected = int(generation or self._analysis_generation)
+        minimum_levels = detail.get("range_min_mips")
+        maximum_levels = detail.get("range_max_mips")
+        divisors = detail.get("mip_divisors")
+        counts = detail.get("mip_counts")
+        if (
+                detail.get("encoding")
+                == "song-anchored-extrema-i16le-v1"
+                and isinstance(minimum_levels, list)
+                and isinstance(maximum_levels, list)
+                and isinstance(divisors, list)
+                and isinstance(counts, list)
+                and len(minimum_levels) == len(maximum_levels)
+                == len(divisors) == len(counts)
+                and minimum_levels):
+            level_count = len(minimum_levels)
+            if any(
+                    not isinstance(minimum_levels[index], bytes)
+                    or not isinstance(maximum_levels[index], bytes)
+                    or int(counts[index]) <= 0
+                    or len(minimum_levels[index]) != int(counts[index]) * 2
+                    or len(maximum_levels[index]) != int(counts[index]) * 2
+                    for index in range(level_count)):
+                return
+            flat_minimum = b"".join(minimum_levels)
+            flat_maximum = b"".join(maximum_levels)
+            total = len(flat_minimum) // 2
+            packed_minimum = (
+                ctypes.c_int16 * total).from_buffer_copy(flat_minimum)
+            packed_maximum = (
+                ctypes.c_int16 * total).from_buffer_copy(flat_maximum)
+            packed_counts = (ctypes.c_uint32 * level_count)(
+                *(int(value) for value in counts))
+            packed_divisors = (ctypes.c_uint32 * level_count)(
+                *(int(value) for value in divisors))
+            self._lib.sb_deck_set_audio_detail_range_mips_i16_for_generation(
+                self._handle,
+                expected,
+                packed_minimum,
+                packed_maximum,
+                packed_counts,
+                packed_divisors,
+                level_count,
+                int(detail.get("base_count") or 0),
+                rate,
+            )
+            return
+        heights = detail.get("heights")
+        if not isinstance(heights, bytes) or not heights:
+            return
         if detail.get("encoding") == "linear-u16le":
             lower = detail.get("lower_heights")
             count = min(

@@ -381,6 +381,35 @@ class NativeDeckContract(unittest.TestCase):
         self.assertGreater(
             self.deck.diagnostic_audio_detail_buffer_bytes(), 0)
 
+    def test_v5_prebuilt_range_mips_install_without_rebuilding_base_streams(self):
+        base_count = 256
+        divisors = [8, 13, 18, 25, 35, 50, 66, 99, 132, 192, 256]
+        counts = [
+            (base_count + divisor - 1) // divisor for divisor in divisors]
+        detail = {
+            "rate": 6144.0,
+            "base_count": base_count,
+            "mip_divisors": divisors,
+            "mip_counts": counts,
+            "range_min_mips": [
+                struct.pack(f"<{count}h", *([-12_000] * count))
+                for count in counts
+            ],
+            "range_max_mips": [
+                struct.pack(f"<{count}h", *([18_000] * count))
+                for count in counts
+            ],
+            "encoding": "song-anchored-extrema-i16le-v1",
+        }
+        self.deck.set_audio_detail(detail)
+        self.assertEqual(
+            self.deck.diagnostic_detail_shape(), (base_count, 6144.0))
+        self.assertEqual(
+            self.deck.diagnostic_audio_detail_mip_count(), len(divisors))
+        self.assertEqual(
+            self.deck.diagnostic_audio_detail_buffer_bytes(),
+            sum(counts) * 8)
+
     def test_native_zoom_returns_the_applied_renderer_scale(self):
         self.assertEqual(self.deck.set_zoom(-100.0), 24.0)
         self.assertEqual(self.deck.diagnostic_zoom(), 24.0)

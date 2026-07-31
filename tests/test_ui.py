@@ -3215,7 +3215,7 @@ class ArtFetchHonesty(unittest.TestCase):
 
 
 class WaveformFill(unittest.TestCase):
-    """Canonical V4 preparation is resumable, safe, and metadata-aware."""
+    """Canonical V5 preparation is resumable, safe, and metadata-aware."""
 
     @classmethod
     def setUpClass(cls):
@@ -3264,9 +3264,10 @@ class WaveformFill(unittest.TestCase):
         worker.defer_for_interaction(60)
         self.assertTrue(worker._analysis_checkpoint())
 
-    def test_prepares_canonical_v4_analysis_and_never_writes_audio(self):
+    def test_prepares_canonical_v5_analysis_and_never_writes_audio(self):
         from pathlib import Path
         from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
         from soundbox.track_analysis import load
 
         canonical = Path(self.cache) / "track_analysis"
@@ -3274,7 +3275,11 @@ class WaveformFill(unittest.TestCase):
         WaveformFillWorker(self.lib, canonical).run()
         got = load(canonical, "0", self.paths[0])
         self.assertIsNotNone(got)
-        self.assertGreater(len(got["_audio_detail"]["heights"]), 5000)
+        self.assertEqual(
+            got["_audio_detail"]["mip_divisors"],
+            list(track_analysis.RANGE_MIP_DIVISORS))
+        self.assertGreater(
+            sum(got["_audio_detail"]["mip_counts"]), 500)
         self.assertEqual(Path(self.paths[0]).read_bytes(), before)
 
     def test_worker_has_safe_stack_and_metadata_only_cue_refresh(self):
@@ -3646,7 +3651,7 @@ class LibraryInstantPaint(unittest.TestCase):
 
 
 class WaveformRapidLoad(unittest.TestCase):
-    """Rapid track changes stay safe; V4 hits load synchronously."""
+    """Rapid track changes stay safe; canonical hits load synchronously."""
 
     @classmethod
     def setUpClass(cls):
@@ -3678,7 +3683,7 @@ class WaveformRapidLoad(unittest.TestCase):
     def tearDown(self):
         self.pb.shutdown_waveforms()
 
-    def test_canonical_v4_loads_inline_with_ultra_detail(self):
+    def test_canonical_v5_loads_inline_with_prebuilt_detail(self):
         from pathlib import Path
         from soundbox.track_analysis import COLOR_MODEL, store
 
@@ -3705,7 +3710,8 @@ class WaveformRapidLoad(unittest.TestCase):
         self.assertIsNone(self.pb._pending_start_ms)
         self.assertEqual(self.pb._cue_ms, 0)
         self.assertEqual(self.pb.wave._beats[0][1], 0)
-        self.assertEqual(self.pb.wave._audio_detail, b"\x20\x80\xff")
+        self.assertEqual(list(self.pb.wave._audio_detail), [65534])
+        self.assertEqual(self.pb.wave._audio_detail_rate, 768.0)
 
     def test_canonical_rekordbox_grid_keeps_exact_first_beat(self):
         from pathlib import Path

@@ -228,7 +228,7 @@ player.
 
 ## Analysis ownership and read-only Rekordbox import
 
-V4 analysis is owned by SoundBox. For an existing Rekordbox library track, the
+V5 analysis is owned by SoundBox. For an existing Rekordbox library track, the
 live DB snapshot supplies authoritative cue rows and its `AnalysisDataPath` is
 resolved beneath Rekordbox's `share/` directory for analysis fallback:
 
@@ -242,7 +242,7 @@ resolved beneath Rekordbox's `share/` directory for analysis fallback:
 
 SoundBox then persists the complete canonical record independently; prepared
 playback does not reopen Rekordbox analysis. Exact normalized grid and cue
-fingerprints are refreshed into V4 through atomic manifest-only updates until
+fingerprints are refreshed into V5 through atomic manifest-only updates until
 a future SoundBox edit claims ownership. Correcting Rekordbox's initial
 automatic beat grid therefore reaches SoundBox on the next live-library
 refresh without reanalyzing audio, and waveform payload bytes never change
@@ -260,9 +260,10 @@ All derived caches are disposable accelerators under
 | Directory/file | Owner and purpose |
 |---|---|
 | `libcache.json` | Last read-only library snapshot for instant first paint |
-| `track_analysis/*.sba4` | Canonical V4: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND display streams, 24-band spectral master, and ultra contour |
+| `track_analysis/*.sba5` | Canonical V5: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND display streams, 24-band spectral master, and exact song-anchored signed-range renderer mips |
+| `track_analysis/*.sba4` | Read-only compatibility input during bounded one-record-at-a-time V4 migration |
 
-Each V4 record is atomically replaced, keyed by track ID plus audio identity.
+Each V5 record is atomically replaced, keyed by track ID plus audio identity.
 Interactive loads validate only the requested section SHA-256; cache audits
 also verify the complete compressed payload. A
 changed/new track prepares only its own record. Storage-only cue/grid mutation
@@ -282,16 +283,19 @@ Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips. Export eligibility is
 deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
 candidates; AAC/ALAC/M4A/MP4 are always player-only.
 
-Waveform geometry follows the stereo midpoint, which preserves the
+Waveform geometry is analyzed at approximately 6144 cells/second from the
+stereo midpoint, which preserves the
 attack/decay contrast lost when the louder channel was allowed to inflate every
 row. A 1/16 peak-channel safety floor retains genuinely wide or anti-phase
-signal that cancels at the midpoint. The ultra stream stores independent
-positive and negative peaks as little-endian uint16 plus signed per-cell
-minimum and maximum as little-endian int16 under
-`soundbox-polarity-range-u16-v4`. Mirroring one unsigned height cannot
-reproduce RGB polarity, while two peak envelopes filled back to zero cannot
-reproduce BLUE's oscillating trace. The compact overview remains a symmetric
-maximum for its 28-point-high lane. The 150 Hz overview uses complete,
+signal that cancels at the midpoint. V5 persists the literal signed per-cell
+minimum/maximum after exact song-anchored extrema reduction at divisors
+`8/13/18/25/35/50/66/99/132/192/256` under
+`soundbox-polarity-range-mips-i16-v5`. Those levels are the union selected by
+all supported zoom stops at macOS scale 1 and Retina scale 2. The renderer
+uploads them directly; it does not reconstruct and retain four redundant
+6144 Hz base streams. Mirroring one unsigned height cannot reproduce the
+oscillating trace. The compact overview remains a symmetric maximum for its
+28-point-high lane. The 150 Hz overview uses complete,
 non-overlapping 1/150-second cells; it never reuses the wider spectral FFT
 window, which previously looked ahead about 46 ms, rounded attacks, filled
 decay valleys, and omitted the final seven rows.
@@ -304,9 +308,10 @@ resolves real -60 to -73 dB tails as a
 physical-pixel hairline but evaluates to exactly zero at digital zero; it is
 not a hard minimum-height rule. Packed PWV3/PWV5/PWV7 heights remain linear
 because they are already authored display values. The cache remains linear.
-Existing V3 peak records fall back to a compatibility interval until the
-background worker atomically adds the V4 signed-range sections used by both
-BLUE and RGB, preserving SoundBox-owned grid/cue data.
+V4 stays playable during compatibility migration. A V4 reduction and a fresh
+audio cook use the same extrema routine and must produce byte-identical V5
+waveform sections. The old record is removed only after the new record passes
+schema/source identity, every-section SHA-256, and whole-payload verification.
 
 RGB rows use the same track timeline, but decoder compensation is
 format-specific. Lossless PCM (WAV/AIFF/FLAC) has no correction. MP3 retains
@@ -341,7 +346,9 @@ The background `WaveformFillWorker`:
   Rekordbox grids and migrate legacy grid metadata, so it never inflates generic
   Rekordbox objects or opens EXT/2EX waveform/color analysis just to determine
   grid ownership;
-- uses a 16 MiB worker stack and a 5/7 GiB free-space pause/resume guard;
+- uses a 16 MiB worker stack and a 20/25 GiB full-cook pause/resume guard;
+  verified one-record V4 reductions use 5/7 GiB because each successful
+  migration immediately retires a larger source record;
 - keeps the discovery scan silent and reports `Preparing your library…` only
   after actual analysis or metadata work is found;
 - can hot-load newly completed detail for the current track;
@@ -2314,7 +2321,7 @@ See `ROADMAP.md` for sequencing.
 1. Continue close BLUE/RGB aliasing R&D under the now-explicit acceptance
    boundary: preserve the detailed signed inner/outer contour and paused
    identity. Whole-contour unsigned-envelope replacement is ruled out.
-2. Design the not-yet-shipped grid/cue editing UX on top of the V4 storage
+2. Design the not-yet-shipped grid/cue editing UX on top of the V5 storage
    mutation boundary. It must never mutate Rekordbox analysis. Today a valid
    Rekordbox grid remains authoritative and only the no-grid fallback begins at
    `0:00`; later manual adjustment and precedence require a UX workshop.

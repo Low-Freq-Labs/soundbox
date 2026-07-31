@@ -81,7 +81,7 @@ immediately; releasing without moving resumes from the exact held timestamp.
 A native atomic hold uses the frame actually visible under the fixed playhead,
 not a lagging UI poll. Prepared overview and ultra buffers become visible
 together, so long sets never inflate when detail finishes loading.
-A newly loaded track starts on its first analyzed beat. SoundBox V4 owns the
+A newly loaded track starts on its first analyzed beat. SoundBox V5 owns the
 prepared grid/cues, RGB/24-band
 analysis, export eligibility, and single-silhouette ultra waveform. Valid
 Rekordbox analysis seeds missing data, while cues refresh by fingerprint from
@@ -158,6 +158,7 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
 
 Python 3.14, deps in `requirements.txt` (venv at `.venv/`). Logs at
 `~/Library/Logs/Soundbox/soundbox.log`. Player accelerators live under AppData:
-`track_analysis/` contains the only player-analysis format: atomic, checksummed
-V4 per-track records. Derived analysis is rebuildable, but `library.json` is
+`track_analysis/` contains the canonical player-analysis format: atomic,
+checksummed V5 per-track records; V4 is read-only migration input. Derived
+analysis is rebuildable, but `library.json` is
 not; cache maintenance must never touch it, Rekordbox, or source audio.

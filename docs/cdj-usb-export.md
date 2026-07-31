@@ -46,7 +46,7 @@ index growing DOWN from the end** in groups of 16 (present-flag bitmask at
 
 ### Analysis-side foundation ✅
 
-- Shipped V4 records contain the future export allowlist, beat grid, every
+- Shipped canonical analysis records contain the future export allowlist, beat grid, every
   memory/hot cue, RGB overview, 24-band master, and ultra amplitude contour.
 - `anlz_bridge.py` maps that record without writing files into PQTZ tempo/time
   units, PCOB/PCO2 cue semantics, PWV5 RGB bytes, and PWV7 mid/high/low bytes.

@@ -2930,7 +2930,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_art_fill()
 
     def _maybe_fill_waveforms(self):
-        """Prepare every missing canonical V4 record off the UI thread."""
+        """Prepare every missing canonical V5 record off the UI thread."""
         if self.lib is None:
             return
         if _running(self._wf_fill_worker):

@@ -71,27 +71,26 @@ Maximum zoom therefore magnifies track detail, not clock or grid quantization.
 Rekordbox ANLZ files stay read-only and are an analysis seed/fallback source.
 Active `djmdCue` rows come from the same read-only live database snapshot as
 the library. Their normalized fingerprint and the exact normalized PQTZ beat
-rows update only the V4 manifest until SoundBox user data claims ownership;
+rows update only the V5 manifest until SoundBox user data claims ownership;
 deleted database cues and later Rekordbox beat-grid corrections therefore land
 without touching the compressed analysis payload or decoding source audio.
-SoundBox's canonical schema-V4 record under `track_analysis/` owns the result:
+SoundBox's canonical schema-V5 record under `track_analysis/` owns the result:
 full grid/cues, exact-or-derived 150 Hz BLUE/PWV3, RGB/PWV5, and 3BAND/PWV7
 display streams, 24 normalized spectral bands, export eligibility, provenance,
-and an approximately 6144-window/s amplitude envelope. Each section is
+and exact signed-range renderer mips derived from an approximately
+6144-window/s analysis. Each section is
 independently Zstandard-compressed and SHA-256 verified inside one atomic
 per-track container. Source identity invalidates only the changed track.
 Current high-rate geometry is versioned as
-`soundbox-polarity-range-u16-v4`. Every cell stores independent positive and
-negative stereo-midpoint peaks as little-endian uint16 in `detail` and
-`detail_lower`, plus the signed stereo-midpoint minimum and maximum as
-little-endian int16 in `detail_minimum` and `detail_maximum`. The peak sections
-retain a 1/16 channel safety floor for genuinely wide or anti-phase signal;
-the signed range remains the literal midpoint trace used by BLUE. The compact
-overview keeps one symmetric maximum. `waveform_model`, `height_encoding`, and
-`range_encoding` version these payloads without changing the V4 container.
-Older records remain playable with a compatibility interval while preparation
-atomically adds the signed-range sections used by both BLUE and RGB one track
-at a time. A display-only `height^1.4` curve,
+`soundbox-polarity-range-mips-i16-v5`. V5 stores little-endian signed minimum
+and maximum extrema at the exact song-anchored divisors selected by the
+supported zoom/scale contract:
+`8/13/18/25/35/50/66/99/132/192/256`. The compact overview keeps one symmetric
+maximum. `waveform_model`, `range_encoding`, `range_mip_encoding`, and the
+explicit divisor list version the payload. V4 remains read-only/playable
+during migration; conversion and fresh analysis share one reduction routine,
+and V4 is retired only after a complete V5 audit. A display-only `height^1.4`
+curve,
 0.84 ceiling, and continuous four-LSB visibility shoulder are applied after
 loading; persisted amplitudes remain linear.
 
@@ -115,8 +114,9 @@ compressed byte ranges and validate only that section; `verify_complete()` is
 reserved for audits. `begin_track()` clears every renderer buffer atomically,
 so rapid A→B→C replacement cannot display a late A/B result.
 
-The main scrolling waveform uses V4's ultra envelope at every zoom. On load,
-Metal creates peak-preserving geometry mips and amplitude-weighted RGB mips.
+The main scrolling waveform uses V5's prepared signed-range mip pyramid at
+every supported zoom. Metal uploads those levels directly and still creates
+the compact amplitude-weighted RGB mips.
 Overview and scrolling lanes derive one footprint-matched ceiling LOD from
 source samples per physical pixel and select one song-anchored level; there is
 no adjacent-level blend. For the scrolling lane, a compute pass reconstructs
@@ -232,8 +232,9 @@ happens after that mutex is released.
 Prepared overview and ultra buffers are built off the UI thread and become
 visible in one grouped native commit; the display link skips the incomplete
 transaction so resolution promotion cannot alter a waveform already on screen.
-Library preparation builds V4 incrementally, pauses during
-playback, pauses audio cooking below 5 GiB free until 7 GiB is available, and
+Library preparation builds V5 incrementally, pauses during
+playback, pauses full audio cooking below 20 GiB free until 25 GiB is
+available, and
 can hot-swap finished analysis or cue metadata onto the current track.
 
 Device export is pinned by `sync.DeviceSession` to one resolved mount identity

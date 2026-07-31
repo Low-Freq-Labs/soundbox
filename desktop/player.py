@@ -1,7 +1,7 @@
 """In-app transport + read-only Rekordbox/audio waveform deck.
 
 PlayerBar uses the native CoreAudio/Metal backend. Qt Multimedia is retained
-only for QAudioDecoder so AAC/ALAC files can receive the same canonical V4
+only for QAudioDecoder so AAC/ALAC files can receive the same canonical V5
 analysis as formats handled by libsndfile. Plays local library files only and
 never writes Rekordbox analysis or source audio.
 
@@ -187,7 +187,7 @@ def _apply_loaded_grid_contract(
 
 
 def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
-    """Full V4 analysis through Qt/FFmpeg for AAC/ALAC and friends.
+    """Full V5 analysis through Qt/FFmpeg for AAC/ALAC and friends.
 
     Signed stereo PCM is fed to the same streaming analyzer as WAV/AIFF/
     MP3/FLAC, so player-only set rips retain channel-safe waveform geometry,
@@ -331,7 +331,7 @@ def _thread_running(w) -> bool:
 
 
 class WaveformWorker(QThread):
-    """Build or load one canonical SoundBox V4 analysis record."""
+    """Build or load one canonical SoundBox V5 analysis record."""
 
     manifest_ready = Signal(str, int, dict)
     overview_ready = Signal(str, int, dict)
@@ -685,6 +685,37 @@ class WaveformBar(QWidget):
     def set_audio_detail(self, detail):
         """Install an additive Soundbox-owned high-resolution envelope."""
         if isinstance(detail, dict):
+            minimum_levels = detail.get("range_min_mips")
+            maximum_levels = detail.get("range_max_mips")
+            divisors = detail.get("mip_divisors")
+            if (
+                    detail.get("encoding")
+                    == "song-anchored-extrema-i16le-v1"
+                    and isinstance(minimum_levels, list)
+                    and isinstance(maximum_levels, list)
+                    and isinstance(divisors, list)
+                    and minimum_levels and maximum_levels and divisors):
+                minimum = array("h")
+                maximum = array("h")
+                minimum.frombytes(minimum_levels[0])
+                maximum.frombytes(maximum_levels[0])
+                if sys.byteorder != "little":
+                    minimum.byteswap()
+                    maximum.byteswap()
+                count = min(len(minimum), len(maximum))
+                values = array("H", (
+                    min(65535, max(abs(minimum[index]), maximum[index]) * 2)
+                    for index in range(count)
+                ))
+                rate = float(detail.get("rate") or 0)
+                divisor = int(divisors[0] or 0)
+                if values and rate > 0 and divisor > 0:
+                    self._audio_detail = values
+                    self._audio_detail_scale = 65535.0
+                    self._audio_detail_companded = True
+                    self._audio_detail_rate = rate / divisor
+                    self._repaint()
+                    return
             heights = detail.get("heights")
             rate = float(detail.get("rate") or 0)
             if isinstance(heights, bytes) and heights and rate > 0:
@@ -1382,7 +1413,7 @@ class PlayerBar(QWidget):
             waveform_zoom: float = _PIXELS_PER_SECOND,
             waveform_mode: str = "3BAND"):
         super().__init__()
-        self.track_analysis_dir = None  # canonical SoundBox-owned V4 records
+        self.track_analysis_dir = None  # canonical SoundBox-owned V5 records
         self._deck_volume = 0.9
         self._gain_completion = None
         self._gain_epoch = 0
@@ -2378,7 +2409,7 @@ class PlayerBar(QWidget):
             self._try_pending_autoplay()
 
     def refresh_audio_detail(self, path: str):
-        """Apply a just-finished canonical V4 record to the current deck."""
+        """Apply a just-finished canonical V5 record to the current deck."""
         if path != self._src_path:
             return
         if self.track_analysis_dir and self._track_id:

@@ -34,7 +34,9 @@ EXPECTED_WINDOWS = {
 
 
 def _manifest(track_id: str) -> tuple[dict, Path]:
-    matches = list(DEFAULT_CACHE_ROOT.glob(f"{track_id}-*.sba4"))
+    matches = list(DEFAULT_CACHE_ROOT.glob(f"{track_id}-*.sba5"))
+    if not matches:
+        matches = list(DEFAULT_CACHE_ROOT.glob(f"{track_id}-*.sba4"))
     if len(matches) != 1:
         raise AssertionError(
             f"expected one real cache for {track_id}, found {matches}")
@@ -42,7 +44,7 @@ def _manifest(track_id: str) -> tuple[dict, Path]:
     with path.open("rb") as handle:
         magic, size = struct.unpack(
             "<4sI", handle.read(track_analysis._HEADER.size))
-        if magic != b"SBA4":
+        if magic not in {b"SBA4", b"SBA5"}:
             raise AssertionError(f"bad cache magic: {path}")
         return json.loads(handle.read(size)), path
 

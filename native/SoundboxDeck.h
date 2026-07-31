@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SB_DECK_ABI_VERSION 2u
+#define SB_DECK_ABI_VERSION 3u
 
 typedef void *SBDeckRef;
 
@@ -171,6 +171,16 @@ int sb_deck_set_audio_detail_polarity_range_u16_i16_for_generation(
     const int16_t *maximum_values,
     size_t sample_count,
     double samples_per_second);
+int sb_deck_set_audio_detail_range_mips_i16_for_generation(
+    SBDeckRef deck,
+    uint64_t generation,
+    const int16_t *minimum_values,
+    const int16_t *maximum_values,
+    const uint32_t *level_counts,
+    const uint32_t *level_divisors,
+    size_t level_count,
+    size_t base_sample_count,
+    double base_samples_per_second);
 int sb_deck_set_cues(
     SBDeckRef deck,
     const uint32_t *position_millis,

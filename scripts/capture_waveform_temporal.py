@@ -1,6 +1,6 @@
 """Capture physical-panel and exact Metal evidence from the same playback run.
 
-This developer harness opens one validated SoundBox V4 record read-only, walks
+This developer harness opens one validated canonical record read-only, walks
 the requested waveform modes/zooms, and records a bounded center crop of every
 submitted Metal drawable. Each segment contains exact BGRA pixels plus
 display-link, GPU, and actual-presentation timestamps. Source audio, rekordbox,

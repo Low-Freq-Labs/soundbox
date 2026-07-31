@@ -1,4 +1,4 @@
-"""Pure V4 → rekordbox ANLZ field bridge (no file or device writes).
+"""Pure canonical analysis → rekordbox ANLZ field bridge (no writes).
 
 This module is the seam between SoundBox-owned analysis and the future,
 hardware-gated USB writer.  It expresses the exact units/ranges required by
@@ -82,7 +82,8 @@ def cue_rows(analysis: dict) -> list[CueRow]:
 def waveform_rows(analysis: dict) -> dict:
     """Return exact PWV5 RGB and PWV7 mid/high/low byte streams.
 
-    V4 keeps 24 normalized spectral bands per 150 Hz frame. PWV7 groups those
+    Canonical analysis keeps 24 normalized spectral bands per 150 Hz frame.
+    PWV7 groups those
     into Rekordbox's three-byte order: mid, high, low. PWV5 uses the canonical
     RGB overview directly.  The future writer can insert these bytes into a
     validated scaffold without re-analyzing or color-guessing at export time.

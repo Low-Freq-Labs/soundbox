@@ -294,24 +294,27 @@ class ArtFillWorker(QThread):
 
 
 class WaveformFillWorker(QThread):
-    """Prepare missing or stale canonical V4 records.
+    """Prepare missing or stale canonical V5 records.
 
     Rekordbox analysis is imported read-only into SoundBox-owned records.
     Source audio is decoded by libsndfile or Qt's QAudioDecoder for AAC/ALAC.
-    No older cache family is read or written.
+    A verified V4 can be reduced losslessly to V5 one record at a time; its
+    source V4 is retired only after the V5 payload passes a complete audit.
 
     Runs off the UI thread and honors requestInterruption().
     Preparation yields inside the current track during playback and interaction
     so even an hour-long set cannot monopolize the GIL or decoder."""
     progress = Signal(int, int)  # done, total
     tasks_ready = Signal(int)  # scan complete; actual metadata/analysis work
-    detail_ready = Signal(str)  # audio path; receiver reloads canonical V4
+    detail_ready = Signal(str)  # audio path; receiver reloads canonical V5
     storage_paused = Signal(bool, object)  # paused, free bytes (64-bit)
     power_policy_changed = Signal(str)  # ac, battery, low-power
 
     DELAY = 0.05  # tiny yield between files — gentle on CPU, never a UI beachball
-    MIN_FREE_BYTES = 5 * 1024 ** 3
-    RESUME_FREE_BYTES = 7 * 1024 ** 3
+    MIN_FREE_BYTES = 20 * 1024 ** 3
+    RESUME_FREE_BYTES = 25 * 1024 ** 3
+    MIGRATION_MIN_FREE_BYTES = 5 * 1024 ** 3
+    MIGRATION_RESUME_FREE_BYTES = 7 * 1024 ** 3
     STACK_BYTES = 16 * 1024 ** 2
     LARGE_BACKLOG = 25
     BATTERY_CPU_SHARE = 0.45
@@ -461,8 +464,8 @@ class WaveformFillWorker(QThread):
     def _wait_for_playback(self):
         self._analysis_checkpoint()
 
-    def _wait_for_storage(self) -> bool:
-        """Pause expensive V4 cooks before AppData can fill the data volume."""
+    def _wait_for_storage(self, *, reclaiming: bool = False) -> bool:
+        """Pause cooks before AppData can consume the OS safety reserve."""
         import shutil
         import time
 
@@ -477,7 +480,12 @@ class WaveformFillWorker(QThread):
             except OSError:
                 return True
             threshold = (
-                self.RESUME_FREE_BYTES if paused else self.MIN_FREE_BYTES)
+                self.MIGRATION_RESUME_FREE_BYTES
+                if reclaiming and paused else
+                self.MIGRATION_MIN_FREE_BYTES
+                if reclaiming else
+                self.RESUME_FREE_BYTES
+                if paused else self.MIN_FREE_BYTES)
             if free >= threshold:
                 if paused:
                     LOG.info(
@@ -488,8 +496,9 @@ class WaveformFillWorker(QThread):
             if not paused:
                 paused = True
                 LOG.warning(
-                    "Library preparation paused: %.1f GiB free (needs 7 GiB)",
-                    free / 1024 ** 3)
+                    "Library preparation paused: %.1f GiB free "
+                    "(needs %.0f GiB)",
+                    free / 1024 ** 3, threshold / 1024 ** 3)
                 self.storage_paused.emit(True, free)
             time.sleep(1.0)
         return False
@@ -501,7 +510,10 @@ class WaveformFillWorker(QThread):
             grid_needs_sync,
             imported_cues_need_sync,
             is_ready as track_is_ready,
+            legacy_cache_path,
             merge_import,
+            migrate_v4,
+            retire_legacy_record,
             store as track_store,
             update_grid_source,
             update_imported_cues,
@@ -523,8 +535,11 @@ class WaveformFillWorker(QThread):
                 if (self.track_analysis_dir and audio_path
                         and not track_is_ready(
                             self.track_analysis_dir, t.track_id, audio_path)):
+                    legacy = legacy_cache_path(
+                        self.track_analysis_dir, t.track_id)
                     todo.append((
-                        "v4", audio_path, str(analysis_path or ""),
+                        "v4-migrate" if legacy.is_file() else "v5",
+                        audio_path, str(analysis_path or ""),
                         str(t.track_id), bpm_hint, rekordbox_cues, None))
                     continue
                 imported_beats = (
@@ -557,13 +572,13 @@ class WaveformFillWorker(QThread):
         self._bulk_task_count = total
         task_counts = {
             kind: sum(task[0] == kind for task in todo)
-            for kind in ("v4", "grid-meta", "cue-meta")
+            for kind in ("v5", "v4-migrate", "grid-meta", "cue-meta")
         }
         LOG.info(
             "Library preparation: %d task(s) "
             "(%d analysis, %d grid metadata, %d cue metadata)",
             total,
-            task_counts["v4"],
+            task_counts["v5"] + task_counts["v4-migrate"],
             task_counts["grid-meta"],
             task_counts["cue-meta"],
         )
@@ -576,22 +591,35 @@ class WaveformFillWorker(QThread):
             if priority:
                 task_index = next(
                     (j for j, task in enumerate(todo)
-                     if task[0] == "v4"
+                     if task[0] in {"v5", "v4-migrate"}
                      and task[1] == priority),
                     0,
                 )
             (kind, path, fallback_path, track_id, bpm_hint, imported_cues,
              imported_beats) = todo.pop(task_index)
-            self._active_task_path = path if kind == "v4" else ""
+            self._active_task_path = (
+                path if kind in {"v5", "v4-migrate"} else "")
             i += 1
             if kind not in {"cue-meta", "grid-meta"}:
                 self._wait_for_playback()
             if self.isInterruptionRequested():
                 break
             try:
-                if kind == "v4":
-                    if not self._wait_for_storage():
+                if kind in {"v5", "v4-migrate"}:
+                    # Unit tests exercise ``run`` synchronously. Production
+                    # always reaches this path through QThread.start().
+                    if self.isRunning() and not self._wait_for_storage(
+                            reclaiming=kind == "v4-migrate"):
                         break
+                    if (
+                            kind == "v4-migrate"
+                            and migrate_v4(
+                                self.track_analysis_dir, track_id, path)):
+                        done += 1
+                        self.detail_ready.emit(path)
+                        self.progress.emit(i, total)
+                        time.sleep(self.DELAY)
+                        continue
                     native = analyze_track(
                         path, bpm_hint, self._analysis_checkpoint
                     ) or qt_detail_peaks(
@@ -614,6 +642,8 @@ class WaveformFillWorker(QThread):
                                 prepared
                         ) and track_is_ready(
                                 self.track_analysis_dir, track_id, path):
+                            retire_legacy_record(
+                                self.track_analysis_dir, track_id, path)
                             done += 1
                             self.detail_ready.emit(path)
                     else:

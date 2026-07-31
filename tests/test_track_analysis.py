@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 import wave
+import hashlib
+import json
 
 import numpy as np
 
@@ -114,6 +116,62 @@ class TrackAnalysisStore(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def _write_v4(self, cache: Path, track_id: str, data: dict) -> Path:
+        source = self.audio
+        sections = {
+            "detail": bytes(data["detail_heights"]),
+            "detail_lower": bytes(data["detail_lower_heights"]),
+            "detail_minimum": bytes(data["detail_minimum_values"]),
+            "detail_maximum": bytes(data["detail_maximum_values"]),
+            "overview_heights": bytes(data["overview_heights"]),
+            "overview_rgb": bytes(data["overview_rgb"]),
+            "spectral_24": bytes(data["spectral_bands"]),
+            "blue_detail": bytes(data["blue_detail"]),
+            "rgb_detail": bytes(data["rgb_detail"]),
+            "three_band": bytes(data["three_band"]),
+        }
+        section_rows, payload = track_analysis._encode_sections(sections)
+        stat = source.stat()
+        manifest = {
+            "schema": track_analysis.LEGACY_SCHEMA,
+            "track_id": str(track_id),
+            "source": {
+                "path": str(source.resolve()),
+                "fingerprint": track_analysis.audio_fingerprint(source),
+                "identity": f"{stat.st_size}:{stat.st_mtime_ns}",
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            },
+            "provenance": dict(data["provenance"]),
+            "stream_provenance": dict(data["stream_provenance"]),
+            "detail_rate": float(data["detail_rate"]),
+            "color_rate": float(data["sample_rate"]),
+            "color_model": track_analysis.COLOR_MODEL,
+            "waveform_model": track_analysis.LEGACY_WAVEFORM_MODEL,
+            "three_band_model": track_analysis.THREE_BAND_MODEL,
+            "display_waveform_model":
+                track_analysis.DISPLAY_WAVEFORM_MODEL,
+            "display_render_model": track_analysis.DISPLAY_RENDER_MODEL,
+            "height_encoding": track_analysis.HEIGHT_ENCODING,
+            "range_encoding": track_analysis.RANGE_ENCODING,
+            "beats": list(data["beats"]),
+            "cues": [{"kind": "hot", "slot": 2, "position_ms": 500}],
+            "grid_import": {},
+            "cue_import": {},
+            "sections": section_rows,
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        encoded = json.dumps(
+            manifest, ensure_ascii=False, separators=(",", ":"),
+            sort_keys=True).encode()
+        cache.mkdir(parents=True, exist_ok=True)
+        target = track_analysis.legacy_cache_path(cache, track_id)
+        target.write_bytes(
+            track_analysis._HEADER.pack(
+                track_analysis._LEGACY_MAGIC, len(encoded))
+            + encoded + payload)
+        return target
+
     def test_round_trip_is_source_keyed_and_checksummed(self):
         cache = self.root / "analysis"
         data = {
@@ -138,10 +196,15 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertIsNotNone(
             track_analysis.store(cache, "rb-42", self.audio, data))
         got = track_analysis.load(cache, "rb-42", self.audio)
-        self.assertEqual(got["schema"], 4)
+        self.assertEqual(got["schema"], 5)
         self.assertEqual(got["color_model"], track_analysis.COLOR_MODEL)
         self.assertEqual(got["beats"], data["beats"])
-        self.assertEqual(got["_audio_detail"]["heights"], b"\x01\x02\x03")
+        self.assertEqual(
+            got["_audio_detail"]["encoding"],
+            track_analysis.RANGE_MIP_ENCODING)
+        self.assertEqual(
+            got["_audio_detail"]["mip_divisors"],
+            list(track_analysis.RANGE_MIP_DIVISORS))
         self.assertEqual(got["_detail_bands"], data["three_band"])
         self.assertEqual(got["_blue_detail"], data["blue_detail"])
         self.assertEqual(got["_rgb_detail"], data["rgb_detail"])
@@ -181,7 +244,7 @@ class TrackAnalysisStore(unittest.TestCase):
         start = track_analysis._HEADER.size
         import json
         metadata = json.loads(raw[start:start + manifest_size])
-        detail = metadata["sections"]["detail"]
+        detail = metadata["sections"]["detail_minimum_d8"]
         raw[start + manifest_size + detail["offset"]] ^= 0x55
         path.write_bytes(raw)
         self.assertIsNotNone(track_analysis.load_manifest(
@@ -248,6 +311,79 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(result["color_model"], track_analysis.COLOR_MODEL)
         self.assertGreaterEqual(len(result["beats"]), 3)
         self.assertAlmostEqual(result["beats"][0][2], 120, delta=1)
+
+    def test_v5_mips_are_exact_song_anchored_extrema_and_bounded(self):
+        minimum = np.asarray(
+            [-8, -2, -7, 0, -1, -9, -3, -4, -6], dtype="<i2")
+        maximum = np.asarray(
+            [1, 7, 2, 6, 3, 4, 9, 5, 8], dtype="<i2")
+        sections, count = track_analysis._range_mip_sections(
+            minimum.tobytes(), maximum.tobytes(), (8, 13))
+        self.assertEqual(count, 9)
+        np.testing.assert_array_equal(
+            np.frombuffer(sections["detail_minimum_d8"], dtype="<i2"),
+            [-9, -6])
+        np.testing.assert_array_equal(
+            np.frombuffer(sections["detail_maximum_d8"], dtype="<i2"),
+            [9, 8])
+        np.testing.assert_array_equal(
+            np.frombuffer(sections["detail_minimum_d13"], dtype="<i2"),
+            [-9])
+        np.testing.assert_array_equal(
+            np.frombuffer(sections["detail_maximum_d13"], dtype="<i2"),
+            [9])
+        one_hour = track_analysis.projected_v5_bytes(3600)
+        self.assertLess(one_hour, 64 * 1024 ** 2)
+
+    def test_v4_migration_matches_direct_v5_and_retires_only_after_audit(self):
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        self.assertIsNotNone(data)
+        migrated_cache = self.root / "migrated"
+        direct_cache = self.root / "direct"
+        legacy = self._write_v4(migrated_cache, "same", data)
+        self.assertTrue(legacy.is_file())
+        self.assertFalse(track_analysis.is_ready(
+            migrated_cache, "same", self.audio))
+
+        self.assertTrue(track_analysis.migrate_v4(
+            migrated_cache, "same", self.audio))
+        self.assertFalse(legacy.exists())
+        self.assertTrue(track_analysis.is_ready(
+            migrated_cache, "same", self.audio))
+        self.assertTrue(track_analysis.verify_complete(
+            migrated_cache, "same", self.audio))
+
+        self.assertIsNotNone(track_analysis.store(
+            direct_cache, "same", self.audio, data))
+        migrated = track_analysis.load_detail(
+            migrated_cache, "same", self.audio)
+        direct = track_analysis.load_detail(
+            direct_cache, "same", self.audio)
+        self.assertEqual(
+            migrated["_audio_detail"]["range_min_mips"],
+            direct["_audio_detail"]["range_min_mips"])
+        self.assertEqual(
+            migrated["_audio_detail"]["range_max_mips"],
+            direct["_audio_detail"]["range_max_mips"])
+        migrated_manifest = track_analysis.load_manifest(
+            migrated_cache, "same", self.audio)
+        self.assertEqual(
+            migrated_manifest["cues"],
+            [{"kind": "hot", "slot": 2, "position_ms": 500}])
+
+    def test_corrupt_v5_never_authorizes_legacy_retirement(self):
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        cache = self.root / "retirement"
+        legacy = self._write_v4(cache, "guarded", data)
+        self.assertIsNotNone(track_analysis.store(
+            cache, "guarded", self.audio, data))
+        current = track_analysis.cache_path(cache, "guarded")
+        damaged = bytearray(current.read_bytes())
+        damaged[-1] ^= 0x40
+        current.write_bytes(damaged)
+        self.assertFalse(track_analysis.retire_legacy_record(
+            cache, "guarded", self.audio))
+        self.assertTrue(legacy.exists())
 
     def test_native_analysis_can_cancel_inside_the_current_track(self):
         calls = []
@@ -574,8 +710,8 @@ class TrackAnalysisStore(unittest.TestCase):
             [3, 1000, 120.0],
         ])
         self.assertEqual(
-            after["_audio_detail"]["heights"],
-            before["_audio_detail"]["heights"])
+            after["_audio_detail"]["range_min_mips"],
+            before["_audio_detail"]["range_min_mips"])
         self.assertEqual(
             after["provenance"]["grid"], "soundbox-zero-anchor")
         self.assertFalse(track_analysis.grid_needs_sync(
@@ -647,6 +783,7 @@ class TrackAnalysisStore(unittest.TestCase):
             "beats": [[1, 100, 120.0]],
             "cues": [],
         })
+        before = track_analysis.load(cache, "editable", self.audio)
         cues = [{"kind": "hot", "slot": 0, "position_ms": 500}]
         self.assertTrue(track_analysis.update_user_data(
             cache, "editable", self.audio,
@@ -654,7 +791,9 @@ class TrackAnalysisStore(unittest.TestCase):
         got = track_analysis.load(cache, "editable", self.audio)
         self.assertEqual(got["beats"], [[1, 250, 128.0]])
         self.assertEqual(got["cues"], cues)
-        self.assertEqual(got["_audio_detail"]["heights"], b"\x10\x20")
+        self.assertEqual(
+            got["_audio_detail"]["range_min_mips"],
+            before["_audio_detail"]["range_min_mips"])
         self.assertEqual(got["provenance"]["grid"], "soundbox-manual")
         self.assertEqual(got["provenance"]["user_data"], "soundbox")
         self.assertFalse(got["grid_import"])
@@ -672,6 +811,7 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertTrue(track_analysis.update_user_data(
             cache, "owned", self.audio,
             beats=user_beats, cues=user_cues))
+        before = track_analysis.load(cache, "owned", self.audio)
         track_analysis.store(cache, "owned", self.audio, {
             "detail_heights": b"new-analysis",
             "detail_rate": 6144.0,
@@ -682,7 +822,9 @@ class TrackAnalysisStore(unittest.TestCase):
             "cues": [],
         })
         got = track_analysis.load(cache, "owned", self.audio)
-        self.assertEqual(got["_audio_detail"]["heights"], b"new-analysis")
+        self.assertNotEqual(
+            got["_audio_detail"]["range_min_mips"],
+            before["_audio_detail"]["range_min_mips"])
         self.assertEqual(got["beats"], user_beats)
         self.assertEqual(got["cues"], user_cues)
         self.assertEqual(got["provenance"]["grid"], "soundbox-manual")

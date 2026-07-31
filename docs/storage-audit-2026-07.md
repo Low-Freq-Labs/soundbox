@@ -4,6 +4,33 @@ Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root
 
 ## Resolution (what was actually done, and what was deliberately declined)
 
+### Follow-up: bounded V5 waveform cache (2026-07-30)
+
+The July 28 V4 quality recook had grown `track_analysis/` to 40 GiB because it
+persisted four redundant approximately-6144 Hz streams: upper/lower uint16
+peaks and signed int16 minimum/maximum rows. A production audit found 3,248 V4
+records (3,244 reachable/current and three small orphans), 1,983,934 beat rows,
+11,344 cue rows, and no SoundBox-owned manual grid/cue data.
+
+V5 retains the compact BLUE/RGB/3BAND streams, 24-band spectral master, full
+grid/cues, provenance, and source identity, but stores only exact
+song-anchored signed min/max extrema at the divisors selected by all supported
+zoom stops at macOS scale 1 and Retina scale 2. Real-record sampling projected
+about 11.7 GiB for this library. Direct cooks and compatibility migrations use
+the same reducer; a V4 is removable only after the corresponding V5 passes a
+complete section/payload audit. Full cooking pauses below 20 GiB free and
+resumes at 25 GiB.
+
+For the controlled installed-app cutover, SoundBox was stopped before cache
+removal. The temporary rollback directory contains the old app, pre/post-quit
+`library.json`, `libcache.json`, and a compressed metadata snapshot of every
+V4 grid/cue/provenance manifest. Only the 3,248 resolved `.sba4` files under
+`track_analysis/` were deleted, raising free space from 19 GiB to 59 GiB. The
+signed ABI-3 app then relaunched, activated the native deck, loaded 3,263 tracks
+and 83 playlists, and began the direct resumable V5 recook. Early production
+records passed complete hashes and preserved their prior beat/cue rows exactly.
+The temporary rollback must remain until the full recook and audit finish.
+
 ### Follow-up: canonical V4 retirement (2026-07-24)
 
 SoundBox later replaced all player-analysis families with one checksummed V4
