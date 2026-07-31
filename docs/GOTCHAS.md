@@ -102,7 +102,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   must still begin at the same track origin.
 - **BLUE, RGB, and 3BAND are three source streams and three geometry models.**
   Rekordbox-backed records copy the exact packed PWV3/PWV5/PWV7
-  rows into SoundBox-owned V4 storage during one read-only import; other
+  rows into SoundBox-owned canonical storage during one read-only import; other
   sources derive all three during the same analysis pass. Version and readiness
   gate the source set together under
   `rekordbox-blue-rgb-three-band-v1`, so changing the Settings selector must
@@ -474,11 +474,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Player cache schemas are data contracts, not renderer version numbers.**
   A shader/filter/clock change does not require re-preparing the library.
   Bump/rebuild only when the persisted payload itself changes. The hot path is
-  canonical V4 sections. Cache hits start one short-lived staged reader: never
+  canonical V5 sections. Cache hits start one short-lived staged reader: never
   read/hash the whole record or build Metal buffers on the UI thread.
   `WaveformFillWorker` remains incremental, prioritizes the
   selected track, and cooperatively yields inside long tracks during playback
-  and foreground interaction. Startup metadata discovery reads only V4
+  and foreground interaction. Startup metadata discovery reads only V5
   manifests. Compare the exact cached beat rows with the current read-only
   Rekordbox PQTZ fingerprint so later manual grid corrections refresh metadata
   without an audio recook; do not treat `grid=rekordbox` as permanently fresh.
@@ -515,7 +515,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   must group both native uploads while presentation is suspended and commit
   them together. Painting the overview while a long ultra section is still
   decompressing/building makes the waveform visibly change size on promotion.
-- No manual SoundBox grid editor is shipped. V4 has a storage-only ownership
+- No manual SoundBox grid editor is shipped. V5 has a storage-only ownership
   boundary for later work, but current precedence is simple: a valid read-only
   Rekordbox grid wins exactly; otherwise use the zero-anchored fallback. Never
   infer that boundary from AAC/ALAC/WAV or a filename—those only happened to
@@ -659,7 +659,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 ## Python 3.14 / build
 - **`aifc`, `audioop`, `sunau` REMOVED in Python 3.13+** → can't decode AIFF with
   stdlib. Use `soundfile` (libsndfile) — reads WAV/AIFF/FLAC/MP3 (NOT ALAC/.m4a).
-- **ALAC/AAC V4 analysis uses `qt_detail_peaks()` (QAudioDecoder =
+- **ALAC/AAC V5 analysis uses `qt_detail_peaks()` (QAudioDecoder =
   same ffmpeg backend that plays the file).** THREE traps, don't regress:
   (1) an unreadable file reports
   its error SYNCHRONOUSLY inside `dec.start()` — check `done`/`dec.error()` BEFORE
@@ -674,7 +674,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   budgets only bulk worker CPU; below 50%, a large backlog is slowed further.
   Low Power Mode, playback, scrolling, resizing, and focus transitions suspend
   only bulk work at chunk boundaries. The currently loaded track remains
-  foreground-critical and bypasses those deferrals. Do not reduce V4
+  foreground-critical and bypasses those deferrals. Do not reduce V5
   resolution, skip spectral/color sections, or substitute a colorless
   placeholder to save power.
 - **PQTZ-only means direct DAT rows, not a smaller generic ANLZ parse.** The

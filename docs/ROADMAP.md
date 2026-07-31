@@ -13,7 +13,7 @@ For the live test count, trust `./check.sh` output—not any number written here
 - **NATIVE PLAYER CAMPAIGN COMPLETE.** CoreAudio sample-clock playback and a
   120 Hz Metal deck now provide RGB overview/detail waveforms, Rekordbox beat
   grid, persistent zoom/jump controls, CUE/play/track navigation, precision
-  scrub, clean gain ramps, and cache-first rapid loading. Full handoff:
+  scrub, clean gain ramps, and cache-first rapid loading. Full reference:
   `docs/PLAYER.md`.
 - **WAVEFORM REFINEMENT ACTIVE; FINAL-PULSE CANDIDATE INSTALLED.** BLUE
   and RGB now resolve signed-interval coverage and dependent color jointly in
@@ -116,8 +116,8 @@ For the live test count, trust `./check.sh` output—not any number written here
   240-frame traces completed GPU and presentation accounting; the uninstalled
   developer probe was removed. Signed Hermite is now explicitly rejected.
   Full evidence ledger and acceptance:
-  `docs/PLAYER.md` → “BLUE/RGB temporal-aliasing R&D handoff.”
-- **NEXT SESSION — Friday 2026-07-31: real iPod hardware validation.**
+  `docs/PLAYER.md` → “BLUE/RGB temporal-aliasing R&D record.”
+- **NEXT COMMITTED DEVICE WORK: real iPod hardware validation.**
   Start read-only: reread `docs/DEVICES.md` and the write contract at the top
   of `soundbox/sync.py`, resolve the exact mount/profile/filesystem, and verify
   detection before offering an export. Stock-iPod mode must remain preview-only;
@@ -139,7 +139,7 @@ For the live test count, trust `./check.sh` output—not any number written here
   the direct V5 recook resumable with its temporary rollback retained until
   the final full audit.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
-  V4 retains overflow cues beyond the eight visible slots.
+  V5 retains overflow cues beyond the eight visible slots.
 - **V4 ANALYSIS FOUNDATION SHIPPED.** SoundBox now owns checksummed per-track
   grid/cue/RGB/24-band/ultra-waveform records, refreshes read-only Rekordbox
   grid and cue metadata by exact fingerprint, imports valid Rekordbox analysis
@@ -404,13 +404,13 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
 
 - [x] **Rekordbox memory/hot-cue import:** read `djmdCue` from the temporary
       read-only DB snapshot, preserve position/type/label/loop/color and every
-      hot slot, use PCOB/PCO2 only as fallback, and sync V4 metadata without an
+      hot slot, use PCOB/PCO2 only as fallback, and sync canonical metadata without an
       audio recook. Never write cues or colors back to Rekordbox.
 - [x] Exact live-DB hot-slot decoding: preserve Rekordbox's reserved Kind=4
       gap (A/B/C=1/2/3, D–P=5–17), reject unknown values instead of guessing,
       and regression-pin all sixteen identities.
 - [x] Live cue precedence at track load: inject the read-only DB rows directly
-      into the deck so stale/missing V4 or ANLZ sidecars can never delay or
+      into the deck so stale/missing cache or ANLZ sidecars can never delay or
       override the authoritative hot/memory identities.
 - [x] Cue density/selection workshop: keep the waveform clean and place eight
       hot plus eight memory slots in a compact two-page panel.
@@ -430,9 +430,9 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
       reads DAT/PQTZ only, never EXT/2EX waveform/color sections.
 - [x] Later Rekordbox grid correction refresh: exact PQTZ-row fingerprints
       detect edits to the initial automatic grid and atomically replace only
-      V4 metadata on the next live-library refresh. Clean discovery scans stay
+      canonical metadata on the next live-library refresh. Clean discovery scans stay
       silent and never claim to be preparing when zero work exists.
-- [x] Canonical V4 persistence and precedence boundary: SoundBox-owned grid,
+- [x] Canonical persistence and precedence boundary: SoundBox-owned grid,
       every imported memory cue, RGB/24-band analysis, ultra contour, atomic
       user-data updates, and no Rekordbox runtime dependency.
 - [x] Export-field bridge for PQTZ, PCOB/PCO2, PWV5, and PWV7. It is pure and
@@ -504,9 +504,9 @@ USB sticks (Sonny performs on 4× CDJ-3000). Full plan + status + prototype:
   an accidental accept); merge-dialog rows stay pre-checked.
 - **Imported audio referenced in place** — never copied or re-tagged.
 - **Device filenames = SoundBox effective titles**, always.
-- **Rekordbox analysis is read-only.** Imported grids/waveforms seed V4;
-  live-DB cues refresh into V4 until SoundBox claims cue ownership. Rekordbox
-  files are never edited in place and SoundBox-owned edits affect only V4.
+- **Rekordbox analysis is read-only.** Imported grids/waveforms seed V5;
+  live-DB cues refresh into V5 until SoundBox claims cue ownership. Rekordbox
+  files are never edited in place and SoundBox-owned edits affect only V5.
 - **Load starts at the first valid imported beat, else `0:00`.** Double-click
   is the only browser load gesture and loads paused; Space only toggles the
   loaded deck; C is momentary CUE. Session CUE remains ephemeral until a

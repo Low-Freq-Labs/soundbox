@@ -14,9 +14,9 @@ documentation routes, build steps, or handoff facts change, update **both files
 in the same change**. Runtime-specific guidance must be clearly labeled and
 must not silently contradict the other file.
 
-At the start of an unfamiliar session, read this file and then the relevant
-documents below. Do not rely on a prior agent's memory when the repository can
-answer the question.
+At the start of every session, read this file and `docs/HANDOFF.md` before the
+relevant documents below. Do not rely on a prior agent's memory when the
+repository can answer the question.
 
 ## Sacred safety contract (NON-NEGOTIABLE)
 
@@ -39,6 +39,7 @@ answer the question.
 
 | Doc | What's in it |
 |-----|--------------|
+| `docs/HANDOFF.md` | Single current session-resume note: live state, unfinished work, exact next checks, validation, and rollback facts |
 | `docs/ROADMAP.md` | Current status, committed next work, phases, product decisions, and CDJ frontier |
 | `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and pending grid work |
 | `docs/DEVICES.md` | Rockbox/stock/dual-boot/generic layouts, capability boundaries, and validation |
@@ -61,6 +62,11 @@ rendering, clocks, transport behavior, analysis loading, or native code.
   and UX explorations in `new-ideas-7-22.md`.
 - Keep shipped behavior, future work, and historical validation clearly
   separated. Never leave a completed feature presented as a TODO.
+- On every **wrap up**, replace/update `docs/HANDOFF.md` with the single current
+  handoff. Keep it concise and operational rather than appending a session
+  diary: current branch/commit, installed/runtime state, unfinished work,
+  exact next checks, validation performed, and any rollback that must remain.
+  Remove facts that are no longer current.
 - Do not hard-code a "current" test count as evergreen truth; trust
   `./check.sh`. Dated validation records may include the observed count.
 

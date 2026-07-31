@@ -25,7 +25,8 @@ contract at the top of the file**) · `paths` (sanitizing, device paths,
 length budgets) · `playlists` (m3u8) · `report` · `metadata` (artist/title
 derivation, title-cleanup rules) · `artfetch` + `artencode` (cover art
 fetch + baseline-JPEG encode) · `manifest` (per-device drift) ·
-`track_analysis` (the sole V4 analysis format: storage, streaming RGB/grid
+`track_analysis` (canonical V5 storage plus read-only V4 compatibility,
+streaming RGB/grid
 analysis, and export eligibility) · `rekordbox_analysis` (read-only
 PQTZ/PCOB/PCO2/PWV5/PWV7 parser) · `device_profile` (read-only device
 classification and stock-iPod preview planning) · `backup` · `imports`
@@ -43,7 +44,7 @@ protocol.
 
 ## Player clocks
 
-The complete player handoff, including interaction semantics and committed
+The complete player reference, including interaction semantics and committed
 next work, is in `PLAYER.md`.
 
 Qt remains the application shell. Playback is native-only; Qt Multimedia is

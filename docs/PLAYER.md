@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-07-29. This is the player handoff: shipped behavior,
+Current as of 2026-07-30. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -72,15 +72,15 @@ Cue panel:
 - Existing cues are imported from `djmdCue` in the read-only live database
   snapshot. Hot cues retain every canonical slot (including I–P) and memory
   cues retain chronological order; the calm panel displays A–H / the first
-  eight memory cues while V4 and exporters keep the overflow.
+  eight memory cues while the canonical cache and exporters keep the overflow.
 - `djmdCue.Kind` has a reserved gap: A/B/C are 1/2/3 and D–P are 5–17.
   SoundBox translates that encoding explicitly; value 4 and unknown values
   are never guessed into a letter.
 - Labels, loops, positions, and verified color information are preserved.
   ANLZ PCOB/PCO2 remains a fallback when no live database cue source exists.
 - The loaded `Track.rekordbox_cues` rows are injected directly into the deck
-  and override V4/ANLZ sidecars. Exact cue identity therefore does not wait for
-  background waveform preparation; V4 still receives the same rows atomically
+  and override cache/ANLZ sidecars. Exact cue identity therefore does not wait
+  for background waveform preparation; V5 still receives the same rows atomically
   for long-term SoundBox ownership.
 - Populated slots emit separate press/release edges for gated playback. Empty
   slots are inert. No cue is written back.
@@ -320,10 +320,10 @@ correction globally made lossless color arrive seven rows late, so a kick
 could inherit the preceding clap/snare hue. `soundbox-rgb-filterbank-v2`
 versions this corrected timing contract.
 
-The zero-anchor contract has a one-time metadata-only migration for older V4
-records. It reads only the small read-only DAT/PQTZ grid, never EXT/2EX
-waveform/color sections. It then atomically replaces only the SoundBox V4
-manifest while preserving the compressed ultra waveform payload byte-for-byte.
+The zero-anchor contract has a one-time metadata-only migration for legacy grid
+provenance. It reads only the small read-only DAT/PQTZ grid, never EXT/2EX
+waveform/color sections. It atomically replaces only the canonical manifest
+while preserving the compressed waveform payload byte-for-byte.
 
 The background `WaveformFillWorker`:
 
@@ -394,10 +394,9 @@ The following renderer rules are measured invariants, not style preferences:
   the signed audio trace.
 - Pyramid levels remain song-anchored. Exact display pyramids retain peak
   geometry and amplitude-weighted color. The higher-rate signed detail uses
-  an in-memory integer
-  divisor ladder
-  (`1,2,3,4,5,6,8,9,13,...`). The dense ladder prevents a 4.2-cell physical
-  pixel from being rounded by an 8-cell max bin. Blending adjacent lattices
+  persisted integer divisor ladder
+  (`8,13,18,25,35,50,66,99,132,192,256`) covering every supported scale-1
+  and Retina-2 zoom footprint. Blending adjacent lattices
   made them beat against each other while moving, so every frame still selects
   exactly one song-anchored level. There is no alternate wide/close geometry
   shader. A second
@@ -417,7 +416,7 @@ The following renderer rules are measured invariants, not style preferences:
   with the visually measured `14 / 8 / 8.75` divisors; close rows use crisp
   cell ownership rather than cubic color gradients, and only PWV7 enters the
   layered 3BAND compositor.
-- `color_model` versions the persisted RGB analysis without changing the V4
+- `color_model` versions the persisted RGB analysis independently of the V5
   container schema. Old records remain playable while the background worker
   atomically replaces one track at a time; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
@@ -1346,21 +1345,20 @@ alone produced overfilled slabs. Outer-silhouette correlation remained above
 detect the obvious internal representation error.
 
 BLUE required a different data model. Filling positive and negative peaks back
-to zero cannot form Rekordbox's thin low-frequency trace. V4 therefore stores
-the signed minimum and maximum of every high-rate stereo-midpoint cell as
-little-endian int16. Metal renders each cell as a literal-pixel signed interval:
-oscillating material stays a line and dense/noisy material becomes a band. This
-requires one rolling cache migration. RGB now uses the same signed geometry as
-BLUE and differs only in its PWV5 color; exact geometry in either mode appears
-after that track receives its signed-range sections.
+to zero cannot form Rekordbox's thin low-frequency trace. V5 therefore stores
+the signed minimum/maximum extrema as little-endian int16 at the exact
+song-anchored renderer divisors. Metal renders each selected interval as a
+literal-pixel signed trace: oscillating material stays a line and dense/noisy
+material becomes a band. RGB uses the same signed geometry as BLUE and differs
+only in its PWV5 color.
 
 3BAND bypasses both audio-derived contours and uses its three native PWV7 layer
 heights directly. The stored blue-low/amber-mid/white-high display layers use
 `0.40/0.43/0.40` transfers, linear per-band edge reconstruction, and a measured
 membership palette including blue
 (`0/85/225`), amber (`255/166/0`), brown (`180/105/10`), cream
-(`245/235/215`), pale blue (`210/220/250`), and white. The source cache remains
-V4; imported rows are reused without recooking, while legacy SoundBox-derived
+(`245/235/215`), pale blue (`210/220/250`), and white. The canonical V5 cache
+reuses imported rows without recooking, while legacy SoundBox-derived
 rows are permuted in memory.
 
 `scripts/render_waveform_reference.py` is the visual acceptance engine. Its
@@ -2037,9 +2035,9 @@ Sonny's immediate live verdict was that the full zoom transition was “much
 better”; the bounded height ladder and exact ordinary-pause endpoint are the
 accepted checkpoint.
 
-### BLUE/RGB temporal-aliasing R&D handoff
+### BLUE/RGB temporal-aliasing R&D record
 
-The next player session starts here. Do not reopen the accepted 3BAND shape,
+The preserved R&D boundary starts here. Do not reopen the accepted 3BAND shape,
 BLUE/RGB height ladder, pause endpoint, palette, or paused desktop-reference
 edges unless new evidence directly implicates one of them. The sole unresolved
 visual defect is the static/wiggly/color-pulse impression while BLUE or RGB
@@ -2116,7 +2114,7 @@ No file I/O, image encoding, allocation, Python callback, or blocking wait runs
 on the display-link or audio callback. Capture is capped at 600 drawables and
 512 MiB; file writing happens only after playback stops and only under the
 explicit harness output directory. The harness opens source audio and the
-canonical V4 cache read-only, never writes AppData or Rekordbox, and walks
+canonical cache read-only, never writes AppData or Rekordbox, and walks
 BLUE/RGB/3BAND through 384/576/864/1152/1536 px/s from the same track position.
 Each segment exports exact BGRA submission-order pixels plus CSV timing
 metadata, then losslessly packs the pixels as FFV1 after the on-panel run.
