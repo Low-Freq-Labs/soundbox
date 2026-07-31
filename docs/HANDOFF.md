@@ -34,7 +34,11 @@ A recursive semantic comparison found exactly one difference:
 `settings.columns_state`, the Qt column-layout blob saved during the normal
 quit/start cycle. Artist/title overrides, aliases, hidden tracks, playlist
 removals, imports, and custom state are identical. The temporary pre-install
-backup has now been retired.
+backup has now been retired. After Sonny's accepted live zoom review and its
+normal settings writes, the wrap-up hash is
+`544488749ed040de34afe846f8879b7febdd26648917cf820b760548af137f01`
+with RGB mode and 48 px/s persisted; raw hashes are not evergreen when runtime
+UI settings change.
 
 The installed candidate removes the rejected carrier-neutral/background-bed
 and post-resolve coverage/RGB sharpening controls. Native zoom now snaps to
