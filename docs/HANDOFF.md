@@ -9,7 +9,7 @@ append a session diary.
 ## Repository and installed app
 
 - Branch: `main`, tracking `origin/main`.
-- Current implementation commit: `WRAP_COMMIT_PENDING` (`Suppress macOS accent
+- Current implementation commit: `2a4ef33` (`Suppress macOS accent
   picker for held CUE`). The prior remote commit is `708ea5e` (`Record Rekordbox
   6.8.7 compatibility`).
 - `/Applications/Soundbox.app` is the signed build from this exact source tree.
