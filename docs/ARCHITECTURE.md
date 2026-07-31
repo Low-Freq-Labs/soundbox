@@ -120,8 +120,11 @@ every supported zoom. Metal uploads those levels directly and still creates
 the compact amplitude-weighted RGB mips.
 Overview and scrolling lanes derive one footprint-matched ceiling LOD from
 source samples per physical pixel and select one song-anchored level; there is
-no adjacent-level blend. For the scrolling lane, a compute pass reconstructs
-height and premultiplied RGB onto a fixed global song-space attribute lattice.
+no adjacent-level blend. The native ABI snaps every requested zoom to the same
+thirteen canonical stops exposed by the UI, so renderer policy never depends
+on proximity to an unsupported scale. For the scrolling lane, a compute pass
+reconstructs height and premultiplied RGB onto a fixed global song-space
+attribute lattice.
 Keeping color premultiplied makes its final one-pixel integral phase-stable.
 Positive cubic reconstruction stabilizes 24–384 px/s. At 576–1536 px/s,
 BLUE/RGB signed min/max intervals use direct linear reconstruction with the
@@ -173,10 +176,10 @@ field are accumulated in premultiplied linear light; a hidden horizontal sample
 cannot tint a visible interval. The established continuous upper/lower boundary
 coverage is reapplied exactly after the color resolve, preserving silhouette
 geometry independently from color.
-The two fixed 64 and 184 px/s stops additionally apply one same-LOD
+The canonical 64–256 px/s midrange family applies one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
-integration. Its narrow zoom-space taper is zero at every neighboring stop;
-it changes neither mip selection nor the continuous close-detail path.
+integration. The 24–48 distant stops and 384–1536 close family bypass it; it
+changes neither mip selection nor the continuous close-detail path.
 Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
 hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:
@@ -209,21 +212,13 @@ record the selected divisor, signed-carrier lattice cells per physical
 pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
 carrier distinct from dropped presentation or camera sampling in later
 sessions.
-At close BLUE/RGB stops the default renderer preserves the detailed signed
-contour. A developer-only A/B surface can replace it with the already-loaded
-unsigned polarity peak as a symmetric carrier-neutral envelope, without
-recooking or writing caches. That experiment removes the source-polarity
-strobe but also removes essential waveform detail and failed live product
-acceptance. 3BAND bypasses the branch.
-The visual-acceptance candidate leaves those signed boundaries in place and
-adds no background bed. At only the five close stops from 384 through 1536
-px/s, it applies the selected 0.75 continuous coverage transfer to fractional
-BLUE/RGB edge pixels, fixing exact black, half coverage, and full foreground.
-RGB separately applies the selected 1.0 transfer only to the fractional
-coordinate between adjacent PWV5 endpoint colors; BLUE retains its continuous
-radial white/cyan/blue field. Every stop through 256 takes the prior exact
-compositor, and 3BAND bypasses both transfers at every zoom. Both developer
-rejection probes remain disabled.
+At close BLUE/RGB stops the renderer preserves the detailed signed contour and
+uses the exact continuous coverage/color integral directly. Rejected
+carrier-neutral, background-bed, coverage-sharpening, and RGB-transition
+experiments are absent from the production ABI and shader. They either removed
+accepted paused detail or steepened fractional pixels after the exact resolve,
+making the real signed carrier easier to perceive as a pulse. 3BAND retains its
+independent unsigned PWV7 geometry.
 Ordinary pause captures the same exact frame at the end of its gain fade and
 resumes from that fractional-millisecond position; the coarse Python transport
 poll is never the pause endpoint.

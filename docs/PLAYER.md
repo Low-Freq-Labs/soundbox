@@ -532,10 +532,10 @@ The following renderer rules are measured invariants, not style preferences:
   one-physical-pixel vertical coverage band at final compositing. In neither
   path may per-tap alpha be averaged or an already-rasterized edge be sampled
   again.
-- Composite coverage through a continuous cubic ease-out. This keeps
-  one-physical-pixel quiet passages vivid against the dark deck without
-  increasing their amplitude or adding a second envelope, while avoiding the
-  former nonzero visibility floor that made entering/leaving edge pixels flash.
+- The small overview alone composites coverage through a continuous cubic
+  ease-out so one-physical-pixel quiet passages remain visible. The scrolling
+  lane uses its exact geometric coverage directly; applying overview vividness
+  there made entering/leaving saturated edge pixels pulse.
 - Address audio detail and compact color with integer sample anchors plus local
   float phase. Never multiply a large absolute float time back into a sample
   index.
@@ -2312,13 +2312,47 @@ softened the straight-facet micro-detail before producing a worthwhile motion
 gain. The developer probe was removed without installing it. Close signed
 Hermite is therefore rejected, not pending.
 
+### Production renderer simplification on 2026-07-30
+
+A fresh code/history audit found that the rejected causal experiments had not
+stayed isolated from the product path. Carrier-neutral and background-bed
+controls remained in the production ABI and shader, while the later 0.75
+coverage and 1.0 RGB fractional-coordinate sharpening shipped enabled at the
+five close stops. Those transfers ran after the already proven exact
+continuous interval/color resolve. They did not change the signed carrier's
+geometry or timing; they steepened fractional pixels and could make that real
+carrier easier to perceive as pulsing/static.
+
+The simplified source removes all four visual experiment controls,
+native/Python ABI surfaces, harness flags, shader uniforms, and branches.
+BLUE/RGB now use the exact continuous signed-boundary coverage and exact
+premultiplied linear-light PWV5 integral directly. The detailed signed contour,
+four-pixel close mip decision, CoreAudio clock, and presentation prediction
+remain unchanged; 3BAND is untouched. The bounded exact-drawable trace remains
+as measurement infrastructure but no longer changes waveform reconstruction.
+Removing exported diagnostic symbols advances the candidate native deck ABI
+from 3 to 4 so an old Python wrapper cannot silently bind the changed surface.
+
+The audit also found that native zoom accepted arbitrary clamped values even
+though the UI and documentation promised thirteen fixed scales. Native now
+snaps to that same canonical sequence. This allows the former eight overlapping
+zoom tapers—including three close-stop entries dead behind a `<384` guard—to
+collapse into one explicit 64–256 midrange same-LOD reconstruction rule. The
+24–48 and 384–1536 families bypass it.
+
+The native build, 257 focused native/UI tests, and the six-image real-track
+BLUE/RGB/3BAND corpus pass. Full gates and installed-app live review are still
+required. Installation is intentionally deferred while the in-progress V5
+full-library recook and its required rollback remain active.
+
 ## Committed next player work
 
 See `ROADMAP.md` for sequencing.
 
-1. Continue close BLUE/RGB aliasing R&D under the now-explicit acceptance
-   boundary: preserve the detailed signed inner/outer contour and paused
-   identity. Whole-contour unsigned-envelope replacement is ruled out.
+1. Complete full validation and live installed-app review of the simplified
+   exact compositor after the V5 recook/rollback gate clears. Preserve the
+   detailed signed inner/outer contour and paused identity; whole-contour
+   unsigned-envelope replacement remains ruled out.
 2. Design the not-yet-shipped grid/cue editing UX on top of the V5 storage
    mutation boundary. It must never mutate Rekordbox analysis. Today a valid
    Rekordbox grid remains authoritative and only the no-grid fallback begins at

@@ -35,6 +35,10 @@ constexpr uint32_t kRingMask = kRingFrames - 1;
 constexpr uint32_t kDecodeChunk = 8192;
 constexpr uint32_t kStartThreshold = 4096;
 constexpr float kPixelsPerSecond = 92.0f;
+constexpr std::array<float, 13> kZoomLevels = {
+    24.0f, 32.0f, 48.0f, 64.0f, 92.0f, 128.0f, 184.0f,
+    256.0f, 384.0f, 576.0f, 864.0f, 1152.0f, 1536.0f,
+};
 constexpr float kOverviewHeight = 28.0f;
 constexpr float kRulerTop = 31.0f;
 constexpr float kZoomTop = 49.0f;
@@ -223,10 +227,6 @@ struct Uniforms {
     uint32_t waveAttributeValid;
     uint32_t threeBandActive;
     uint32_t waveformMode;
-    uint32_t carrierNeutralClose;
-    float stableGapBedOpacity;
-    float gapEdgeSharpness;
-    float rgbColorEdgeSharpness;
     uint32_t frameTraceMarkerActive;
     uint32_t frameTraceSequence;
 };
@@ -520,8 +520,14 @@ public:
     }
 
     float setZoom(float pixelsPerSecond) {
-        const float applied =
-            std::clamp(pixelsPerSecond, 24.0f, 1536.0f);
+        const auto nearest = std::min_element(
+            kZoomLevels.begin(),
+            kZoomLevels.end(),
+            [pixelsPerSecond](float left, float right) {
+                return std::abs(left - pixelsPerSecond)
+                    < std::abs(right - pixelsPerSecond);
+            });
+        const float applied = *nearest;
         zoomPixelsPerSecond_.store(
             applied, std::memory_order_release);
         requestDisplay();
@@ -1834,40 +1840,6 @@ public:
         return waveformMode_;
     }
 
-    bool setCarrierNeutralProbe(bool enabled) {
-        carrierNeutralClose_.store(enabled, std::memory_order_release);
-        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
-        requestDisplay();
-        return true;
-    }
-
-    bool setStableGapBedProbe(float opacity) {
-        stableGapBedOpacity_.store(
-            std::clamp(opacity, 0.0f, 1.0f),
-            std::memory_order_release);
-        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
-        requestDisplay();
-        return true;
-    }
-
-    bool setGapEdgeSharpnessProbe(float strength) {
-        gapEdgeSharpness_.store(
-            std::clamp(strength, 0.0f, 1.0f),
-            std::memory_order_release);
-        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
-        requestDisplay();
-        return true;
-    }
-
-    bool setRgbColorEdgeSharpnessProbe(float strength) {
-        rgbColorEdgeSharpness_.store(
-            std::clamp(strength, 0.0f, 1.0f),
-            std::memory_order_release);
-        waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
-        requestDisplay();
-        return true;
-    }
-
     bool setSpectralAnalysis(
         const uint8_t *,
         size_t,
@@ -2391,14 +2363,6 @@ public:
             uniforms.threeBandActive = threeBandActive_ ? 1u : 0u;
             uniforms.waveformMode =
                 displayWaveformActive_ ? waveformMode_ : 0u;
-            uniforms.carrierNeutralClose = carrierNeutralClose_.load(
-                std::memory_order_acquire) ? 1u : 0u;
-            uniforms.stableGapBedOpacity = stableGapBedOpacity_.load(
-                std::memory_order_acquire);
-            uniforms.gapEdgeSharpness = gapEdgeSharpness_.load(
-                std::memory_order_acquire);
-            uniforms.rgbColorEdgeSharpness =
-                rgbColorEdgeSharpness_.load(std::memory_order_acquire);
             waveBuffer = waveBuffer_;
             audioDetailBuffer = audioDetailBuffer_;
             gridBuffer = gridBuffer_;
@@ -3173,10 +3137,6 @@ struct Uniforms { float currentSeconds;
                   uint waveAttributeValid;
                   uint threeBandActive;
                   uint waveformMode;
-                  uint carrierNeutralClose;
-                  float stableGapBedOpacity;
-                  float gapEdgeSharpness;
-                  float rgbColorEdgeSharpness;
                   uint frameTraceMarkerActive;
                   uint frameTraceSequence;
                   };
@@ -3258,17 +3218,6 @@ vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     o.lineDistancePixels = 0.0;
     o.lineHalfWidthPixels = 0.0;
     return o;
-}
-
-inline float sharpen_gap_coverage(float coverage, float strength) {
-    // Keep exact black, half coverage, and full foreground fixed while making
-    // only the partial pixels on either side of the black cutout crisper.
-    // Two continuous smoothstep passes avoid the hard threshold that made
-    // older one-pixel edges crawl during subpixel motion.
-    const float value = saturate(coverage);
-    const float cubic = value * value * (3.0 - 2.0 * value);
-    const float sharper = cubic * cubic * (3.0 - 2.0 * cubic);
-    return mix(value, sharper, saturate(strength));
 }
 
 inline uint mip_divisor(uint level) {
@@ -3693,34 +3642,6 @@ inline WaveAttribute linear_attribute(
     return result;
 }
 
-inline float targeted_stop_filter(float pixelsPerSecond) {
-    // These fixed zoom stops are the levels still exposing a one-pixel
-    // sawtooth on the real stress passages. Taper narrowly around
-    // those exact stops so none of the neighboring levels—and especially no
-    // close-detail level—changes reconstruction.
-    const float at64 =
-        1.0 - smoothstep(0.0, 8.0, abs(pixelsPerSecond - 64.0));
-    const float at92 =
-        1.0 - smoothstep(0.0, 8.0, abs(pixelsPerSecond - 92.0));
-    const float at128 =
-        1.0 - smoothstep(0.0, 10.0, abs(pixelsPerSecond - 128.0));
-    const float at184 =
-        1.0 - smoothstep(0.0, 12.0, abs(pixelsPerSecond - 184.0));
-    const float at256 =
-        1.0 - smoothstep(0.0, 16.0, abs(pixelsPerSecond - 256.0));
-    const float at384 =
-        1.0 - smoothstep(0.0, 24.0, abs(pixelsPerSecond - 384.0));
-    const float at864 =
-        1.0 - smoothstep(0.0, 32.0, abs(pixelsPerSecond - 864.0));
-    const float at1152 =
-        1.0 - smoothstep(0.0, 48.0, abs(pixelsPerSecond - 1152.0));
-    return max(
-        max(max(at64, at92), at128),
-        max(
-            max(at184, at256),
-            max(at384, max(at864, at1152))));
-}
-
 kernel void wave_attribute_kernel(
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
@@ -3785,12 +3706,12 @@ kernel void wave_attribute_kernel(
         u.waveCurrentIndex,
         u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
         waveLevel);
-    // One symmetric physical-pixel prefilter is enough to remove the
-    // remaining 64/184 sawtooth without selecting a coarser mip. It samples
-    // the same B-spline and the same song-anchored LOD at +/- half a pixel;
-    // a [1 2 1] average is then enabled only by the fixed-stop weight above.
-    const float targetedFilter =
-        targeted_stop_filter(u.pixelsPerSecond);
+    // The renderer accepts only the thirteen canonical zoom levels. The
+    // midrange family uses one symmetric same-LOD [1, 2, 1] reconstruction;
+    // distant stops do not need it and close stops preserve linear facets.
+    const float midrangeFilter =
+        u.pixelsPerSecond >= 64.0 && u.pixelsPerSecond < 384.0
+        ? 1.0 : 0.0;
     const float filterSeconds =
         0.5 / max(1.0, u.pixelsPerSecond * scale);
     const float waveFilterOffset =
@@ -3811,7 +3732,7 @@ kernel void wave_attribute_kernel(
         u.waveCurrentIndex,
         waveLocal + waveFilterOffset,
         waveLevel);
-    const float waveFilter = targetedFilter
+    const float waveFilter = midrangeFilter
         * leftSmoothWave.valid * rightSmoothWave.valid;
     WaveTap stableWave = smoothWave;
     stableWave.height = mix(
@@ -3863,7 +3784,6 @@ kernel void wave_attribute_kernel(
         sharpWave.height, stableWave.height, stableKernel);
     float upperHeight = height;
     float lowerHeight = height;
-    float stableBedHeight = 0.0;
     // BLUE and RGB use close-resolution audio geometry together with their
     // authored PWV3/PWV5 amplitude and color. 3BAND remains three native
     // PWV7 layers and bypasses the audio contour.
@@ -3925,9 +3845,7 @@ kernel void wave_attribute_kernel(
         // reconstruction to minimum and maximum before they enter the fixed
         // song lattice. This removes undisplayable horizontal energy without
         // filtering the final pixels or changing neighboring zoom levels.
-        const float detailFilter = targeted_stop_filter(
-            u.pixelsPerSecond);
-        if (detailFilter > 0.0 && u.pixelsPerSecond < 384.0) {
+        if (midrangeFilter > 0.0) {
             const float detailPixel =
                 detailFootprint * 1.5;
             const EnvelopeTap leftDetail =
@@ -3974,13 +3892,13 @@ kernel void wave_attribute_kernel(
                         rightDetail.upper, rightDetail.lower,
                         rightDetail.minimum, rightDetail.maximum)) * 0.25;
                 sharpDetail.upper = mix(
-                    sharpDetail.upper, filtered.x, detailFilter);
+                    sharpDetail.upper, filtered.x, midrangeFilter);
                 sharpDetail.lower = mix(
-                    sharpDetail.lower, filtered.y, detailFilter);
+                    sharpDetail.lower, filtered.y, midrangeFilter);
                 sharpDetail.minimum = mix(
-                    sharpDetail.minimum, filtered.z, detailFilter);
+                    sharpDetail.minimum, filtered.z, midrangeFilter);
                 sharpDetail.maximum = mix(
-                    sharpDetail.maximum, filtered.w, detailFilter);
+                    sharpDetail.maximum, filtered.w, midrangeFilter);
             }
         }
         if (sharpDetail.valid > 0.0) {
@@ -4034,34 +3952,6 @@ kernel void wave_attribute_kernel(
             upperHeight = sharpDetail.maximum;
             lowerHeight = sharpDetail.minimum;
             height = max(abs(upperHeight), abs(lowerHeight));
-            if (u.pixelsPerSecond >= 384.0) {
-                // The neutral magnitude is retained only for diagnostic
-                // compositors. Replacing the signed contour with it removed
-                // too much detail. A separate low-opacity bed can instead sit
-                // behind the untouched signed interval, targeting the black
-                // gaps without erasing their sharp foreground boundaries.
-                const float neutralMagnitude = clamp(
-                    max(sharpDetail.upper, sharpDetail.lower), 0.0, 1.0);
-                stableBedHeight = clamp(
-                    neutralMagnitude
-                        + (levelHeightGain - 1.0)
-                            * neutralMagnitude * (1.0 - neutralMagnitude),
-                    0.0, 1.0);
-            }
-            if (u.carrierNeutralClose != 0
-                    && u.pixelsPerSecond >= 384.0) {
-                // The rejected close BLUE/RGB experiment folds the signed
-                // interval into one polarity-neutral magnitude at the same
-                // selected song-space mip. Positive/negative half-cycles can
-                // no longer swap sides at the bass fundamental; the visible
-                // information becomes the conventional symmetric amplitude
-                // envelope. The developer A/B setter can enable this
-                // experimental reconstruction without changing cache data;
-                // the detailed signed contour remains the product default.
-                upperHeight = stableBedHeight;
-                lowerHeight = -stableBedHeight;
-                height = stableBedHeight;
-            }
         }
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
@@ -4073,7 +3963,7 @@ kernel void wave_attribute_kernel(
     attributes[id].colorAndUpper =
         float4(color * height, upperHeight);
     attributes[id].lowerAndPadding =
-        float4(lowerHeight, stableBedHeight, 0.0, 0.0);
+        float4(lowerHeight, 0.0, 0.0, 0.0);
 }
 
 // Eight midpoint taps per physical pixel, at the footprint-matched LOD.
@@ -4297,7 +4187,7 @@ inline IntervalSurface resolve_interval_surface(
         thread const float *positions,
         uint count, float signedPosition,
         float heightScale, float antialias,
-        bool blueMode, float rgbColorEdgeSharpness) {
+        bool blueMode) {
     IntervalSurface result{0.0, float3(0.0)};
     if (count < 2 || count > kAttributeProfileCapacity) {
         return result;
@@ -4392,15 +4282,9 @@ inline IntervalSurface resolve_interval_surface(
                 // PWV5 color and signed coverage are both piecewise linear
                 // over this song-space segment. Integrate their product in
                 // linear light so a hidden tap cannot tint a visible one.
-                // The optional developer probe steepens only the fractional
-                // color coordinate. Coverage, interval boundaries, and the
-                // authored endpoint hues remain untouched.
-                const float colorCentroid = sharpen_gap_coverage(
-                    saturate(moments.firstMoment / moments.area),
-                    rgbColorEdgeSharpness);
                 result.premultipliedLinearColor +=
-                    mix(color0, color1, colorCentroid)
-                    * moments.area
+                    (color0 * moments.area
+                        + (color1 - color0) * moments.firstMoment)
                     * segmentSpan;
                 continue;
             }
@@ -4717,8 +4601,6 @@ fragment float4 wave_surface_fragment(
         float lowHeights[kAttributeProfileCapacity];
         float blueMinimums[kAttributeProfileCapacity];
         float blueMaximums[kAttributeProfileCapacity];
-        float stableBedMinimums[kAttributeProfileCapacity];
-        float stableBedMaximums[kAttributeProfileCapacity];
         float3 attributeColors[kAttributeProfileCapacity];
         float3 intervalEncodedColors[kAttributeProfileCapacity];
         float3 weightedColor = float3(0.0);
@@ -4740,10 +4622,6 @@ fragment float4 wave_surface_fragment(
             outerHeights[i] = outerHeight;
             blueMinimums[i] = lowerHeight;
             blueMaximums[i] = upperHeight;
-            const float stableBedHeight =
-                attribute.lowerAndPadding.y;
-            stableBedMinimums[i] = -stableBedHeight;
-            stableBedMaximums[i] = stableBedHeight;
             // In 3BAND the premultiplied RGB attributes are the three absolute
             // PWV7 layer heights. Do not derive ratios from one shared outer
             // silhouette: each Pioneer band reaches its own vertical extent.
@@ -4767,78 +4645,25 @@ fragment float4 wave_surface_fragment(
         if (u.waveformMode == 1 || u.waveformMode == 2) {
             const float signedPosition =
                 (waveCenter - yPoints) / max(heightScale, 1e-5);
-            const float closeRgbColorEdgeSharpness =
-                u.pixelsPerSecond >= 384.0
-                ? u.rgbColorEdgeSharpness : 0.0;
             IntervalSurface interval = resolve_interval_surface(
                 blueMinimums, blueMaximums, intervalEncodedColors,
                 profilePositions, profileCount,
                 signedPosition, heightScale, antialias,
-                u.waveformMode == 1,
-                closeRgbColorEdgeSharpness);
+                u.waveformMode == 1);
             const float acceptedCoverage = interval_profile_coverage(
                 blueMinimums, blueMaximums, profilePositions, profileCount,
                 signedPosition, heightScale, antialias, 1.0);
-            IntervalSurface bed{0.0, float3(0.0)};
-            float acceptedBedCoverage = 0.0;
-            if (u.stableGapBedOpacity > 0.0) {
-                bed = resolve_interval_surface(
-                    stableBedMinimums, stableBedMaximums,
-                    intervalEncodedColors,
-                    profilePositions, profileCount,
-                    signedPosition, heightScale, antialias,
-                    u.waveformMode == 1,
-                    closeRgbColorEdgeSharpness);
-                acceptedBedCoverage = interval_profile_coverage(
-                    stableBedMinimums, stableBedMaximums,
-                    profilePositions, profileCount,
-                    signedPosition, heightScale, antialias, 1.0);
-            }
-            if ((acceptedCoverage <= 0.0 || interval.coverage <= 0.0)
-                    && (acceptedBedCoverage <= 0.0
-                        || bed.coverage <= 0.0)) {
+            if (acceptedCoverage <= 0.0 || interval.coverage <= 0.0) {
                 discard_fragment();
             }
             // The continuous signed-boundary coverage is already visually
             // accepted. Preserve it bit-for-bit while using the joint resolve
             // only to condition color on the locally visible interval.
-            if (interval.coverage > 0.0 && acceptedCoverage > 0.0) {
-                interval.premultipliedLinearColor *=
-                    acceptedCoverage / interval.coverage;
-                interval.coverage = acceptedCoverage;
-                // The selected sharp treatment was judged only on the close
-                // family. Applying it to 48/64/92/128 made those intermediate
-                // stops harsh and was immediately rejected in the installed
-                // app. Keep every stop through 256 on the prior exact path.
-                const float closeGapEdgeSharpness =
-                    u.pixelsPerSecond >= 384.0
-                    ? u.gapEdgeSharpness : 0.0;
-                const float sharpenedCoverage = sharpen_gap_coverage(
-                    interval.coverage, closeGapEdgeSharpness);
-                interval.premultipliedLinearColor *=
-                    sharpenedCoverage / max(interval.coverage, 1e-6);
-                interval.coverage = sharpenedCoverage;
-            } else {
-                interval.coverage = 0.0;
-                interval.premultipliedLinearColor = float3(0.0);
-            }
-            if (bed.coverage > 0.0 && acceptedBedCoverage > 0.0) {
-                bed.premultipliedLinearColor *=
-                    acceptedBedCoverage / bed.coverage;
-                bed.coverage = acceptedBedCoverage;
-            } else {
-                bed.coverage = 0.0;
-                bed.premultipliedLinearColor = float3(0.0);
-            }
-            const float bedOpacity =
-                saturate(u.stableGapBedOpacity);
-            bed.coverage *= bedOpacity;
-            bed.premultipliedLinearColor *= bedOpacity;
-            const float3 backgroundWithBed =
-                background * (1.0 - bed.coverage)
-                    + bed.premultipliedLinearColor;
+            interval.premultipliedLinearColor *=
+                acceptedCoverage / interval.coverage;
+            interval.coverage = acceptedCoverage;
             return float4(
-                backgroundWithBed * (1.0 - interval.coverage)
+                background * (1.0 - interval.coverage)
                     + interval.premultipliedLinearColor,
                 1.0);
         }
@@ -5518,10 +5343,6 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     std::mutex frameTraceMutex_;
     std::shared_ptr<FrameTraceState> frameTrace_;
     std::atomic<bool> frameTraceArmed_{false};
-    std::atomic<bool> carrierNeutralClose_{false};
-    std::atomic<float> stableGapBedOpacity_{0.0f};
-    std::atomic<float> gapEdgeSharpness_{0.75f};
-    std::atomic<float> rgbColorEdgeSharpness_{1.0f};
     std::atomic<float> zoomPixelsPerSecond_{kPixelsPerSecond};
 
     AudioUnit audioUnit_ = nullptr;
@@ -5826,28 +5647,6 @@ int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode) {
 
 uint32_t sb_deck_waveform_mode(SBDeckRef deck) {
     return deck ? static_cast<SBDeck *>(deck)->waveformMode() : 0;
-}
-
-int sb_deck_set_carrier_neutral_probe(SBDeckRef deck, int enabled) {
-    return deck
-        && static_cast<SBDeck *>(deck)->setCarrierNeutralProbe(enabled != 0);
-}
-
-int sb_deck_set_stable_gap_bed_probe(SBDeckRef deck, float opacity) {
-    return deck
-        && static_cast<SBDeck *>(deck)->setStableGapBedProbe(opacity);
-}
-
-int sb_deck_set_gap_edge_sharpness_probe(SBDeckRef deck, float strength) {
-    return deck
-        && static_cast<SBDeck *>(deck)->setGapEdgeSharpnessProbe(strength);
-}
-
-int sb_deck_set_rgb_color_edge_sharpness_probe(
-        SBDeckRef deck, float strength) {
-    return deck
-        && static_cast<SBDeck *>(deck)->setRgbColorEdgeSharpnessProbe(
-            strength);
 }
 
 int sb_deck_set_spectral_analysis(

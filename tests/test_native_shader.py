@@ -367,20 +367,16 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("displayEnvelopeHeight", kernel)
         self.assertNotIn("authoredScale", kernel)
 
-    def test_only_64_and_184_receive_the_narrow_physical_pixel_filter(self):
-        helper = self.shader.split(
-            "inline float targeted_stop_filter", 1
-        )[1].split("\n}", 1)[0]
-        self.assertIn("abs(pixelsPerSecond - 64.0)", helper)
-        self.assertIn("abs(pixelsPerSecond - 184.0)", helper)
-        self.assertIn("smoothstep(0.0, 8.0", helper)
-        self.assertIn("smoothstep(0.0, 12.0", helper)
-
+    def test_canonical_midrange_uses_one_same_lod_filter(self):
         kernel = self.shader.split(
             "kernel void wave_attribute_kernel", 1
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
+        self.assertIn(
+            "u.pixelsPerSecond >= 64.0 && u.pixelsPerSecond < 384.0",
+            kernel)
+        self.assertNotIn("targeted_stop_filter", self.shader)
         self.assertIn(
             "0.5 / max(1.0, u.pixelsPerSecond * scale)", kernel)
         self.assertIn("waveLocal - waveFilterOffset", kernel)
@@ -390,23 +386,6 @@ class NativeWaveformShader(unittest.TestCase):
             "            + 2.0 * smoothWave.height\n"
             "            + rightSmoothWave.height", kernel)
         self.assertNotIn("detailFilterOffset", kernel)
-
-        def stop_weight(zoom):
-            def tapered(distance, radius):
-                t = min(1.0, max(0.0, distance / radius))
-                return 1.0 - t * t * (3.0 - 2.0 * t)
-            return max(
-                tapered(abs(zoom - 64.0), 8.0),
-                tapered(abs(zoom - 184.0), 12.0))
-
-        levels = (
-            24, 32, 48, 64, 92, 128, 184,
-            256, 384, 576, 864, 1152, 1536)
-        self.assertEqual(
-            [zoom for zoom in levels if stop_weight(zoom) > 0.0],
-            [64, 184])
-        self.assertEqual(stop_weight(64), 1.0)
-        self.assertEqual(stop_weight(184), 1.0)
 
     def test_close_kernel_is_interpolating_monotone_cubic(self):
         scalar = self.shader.split(
@@ -465,7 +444,7 @@ class NativeWaveformShader(unittest.TestCase):
             "        float4(color * height, upperHeight)", kernel)
         self.assertIn(
             "attributes[id].lowerAndPadding =\n"
-            "        float4(lowerHeight, stableBedHeight, 0.0, 0.0)", kernel)
+            "        float4(lowerHeight, 0.0, 0.0, 0.0)", kernel)
         self.assertNotIn("profile_coverage(", kernel)
         self.assertNotIn("vivid_wave_coverage(", kernel)
 
@@ -616,7 +595,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertEqual(fragment.count("saturate(coverage)"), 2)
         self.assertIn("interval_profile_coverage(", fragment)
         self.assertIn(
-            "backgroundWithBed * (1.0 - interval.coverage)\n"
+            "background * (1.0 - interval.coverage)\n"
             "                    + interval.premultipliedLinearColor",
             fragment,
         )
@@ -790,8 +769,7 @@ class NativeWaveformShader(unittest.TestCase):
             "u.audioDetailMipOffsets[detailLevel]", kernel)
         self.assertIn(
             "u.audioDetailMipCounts[detailLevel]", kernel)
-        self.assertIn(
-            "const float detailFilter = targeted_stop_filter(", kernel)
+        self.assertIn("if (midrangeFilter > 0.0)", kernel)
         self.assertIn("detailLocal - detailPixel", kernel)
         self.assertIn("detailLocal + detailPixel", kernel)
         self.assertNotIn("authoredPolarity", kernel)
@@ -825,7 +803,7 @@ class NativeWaveformShader(unittest.TestCase):
         )[0]
         self.assertIn(
             "if (u.waveformMode == 1 || u.waveformMode == 2)", fragment)
-        self.assertEqual(fragment.count("interval_profile_coverage("), 2)
+        self.assertEqual(fragment.count("interval_profile_coverage("), 1)
         self.assertIn(
             "IntervalSurface interval = resolve_interval_surface(", fragment)
         self.assertIn(
@@ -834,8 +812,7 @@ class NativeWaveformShader(unittest.TestCase):
             fragment,
         )
         self.assertIn(
-            "u.waveformMode == 1,\n"
-            "                closeRgbColorEdgeSharpness);",
+            "u.waveformMode == 1);",
             fragment)
         self.assertIn("const float acceptedCoverage =", fragment)
         self.assertIn(
@@ -855,8 +832,9 @@ class NativeWaveformShader(unittest.TestCase):
             resolve,
         )
         self.assertIn(
-            "mix(color0, color1, colorCentroid)\n"
-            "                    * moments.area",
+            "(color0 * moments.area\n"
+            "                        + (color1 - color0)"
+            " * moments.firstMoment)",
             resolve,
         )
         self.assertIn(
@@ -871,125 +849,15 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("rgbWaveSample(", native)
         self.assertIn("threeBandWaveSample(", native)
 
-    def test_carrier_neutral_probe_is_close_signed_mode_only(self):
-        kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
-        )[1].split(
-            "constant uint kIntegrationTaps", 1
-        )[0]
-        self.assertIn(
-            "if (u.carrierNeutralClose != 0\n"
-            "                    && u.pixelsPerSecond >= 384.0)", kernel)
-        self.assertIn(
-            "max(sharpDetail.upper, sharpDetail.lower)",
-            kernel)
-        self.assertIn("upperHeight = stableBedHeight;", kernel)
-        self.assertIn("lowerHeight = -stableBedHeight;", kernel)
-
-        fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
-        )[1].split(
-            "vertex Out grid_vertex", 1
-        )[0]
-        self.assertIn(
-            "blueMinimums, blueMaximums, intervalEncodedColors",
-            fragment)
-        self.assertNotIn("carrierNeutralClose", fragment)
-        self.assertIn(
-            "std::atomic<bool> carrierNeutralClose_{false};",
-            self.source)
-        self.assertIn(
-            "std::atomic<float> stableGapBedOpacity_{0.0f};",
-            self.source)
-        self.assertIn(
-            "std::atomic<float> gapEdgeSharpness_{0.75f};",
-            self.source)
-        self.assertIn(
-            "std::atomic<float> rgbColorEdgeSharpness_{1.0f};",
-            self.source)
-
-    def test_stable_gap_bed_preserves_signed_foreground_compositor(self):
-        kernel = self.shader.split(
-            "kernel void wave_attribute_kernel", 1
-        )[1].split(
-            "constant uint kIntegrationTaps", 1
-        )[0]
-        self.assertIn(
-            "float4(lowerHeight, stableBedHeight, 0.0, 0.0)",
-            kernel)
-
-        fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
-        )[1].split(
-            "vertex Out grid_vertex", 1
-        )[0]
-        self.assertIn(
-            "stableBedMinimums, stableBedMaximums",
-            fragment)
-        self.assertIn(
-            "backgroundWithBed * (1.0 - interval.coverage)",
-            fragment)
-        self.assertIn(
-            "+ interval.premultipliedLinearColor",
-            fragment)
-
-    def test_gap_edge_probe_sharpens_coverage_without_moving_boundaries(self):
-        helper = self.shader.split(
-            "inline float sharpen_gap_coverage", 1
-        )[1].split(
-            "inline float wave_height_at", 1
-        )[0]
-        self.assertIn(
-            "const float cubic = value * value * (3.0 - 2.0 * value)",
-            helper)
-        self.assertIn(
-            "return mix(value, sharper, saturate(strength))",
-            helper)
-
-        fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
-        )[1].split(
-            "vertex Out grid_vertex", 1
-        )[0]
-        self.assertIn(
-            "interval.coverage, closeGapEdgeSharpness",
-            fragment)
-        self.assertIn(
-            "sharpenedCoverage / max(interval.coverage, 1e-6)",
-            fragment)
-        self.assertNotIn(
-            "blueMinimums[i] = mix(", fragment)
-        self.assertNotIn(
-            "blueMaximums[i] = mix(", fragment)
-        self.assertIn(
-            "u.pixelsPerSecond >= 384.0\n"
-            "                    ? u.gapEdgeSharpness : 0.0",
-            fragment)
-
-    def test_rgb_color_edge_probe_changes_only_fractional_color_coordinate(self):
-        resolve = self.shader.split(
-            "inline IntervalSurface resolve_interval_surface", 1
-        )[1].split(
-            "inline WaveSurface integrated_wave_level", 1
-        )[0]
-        self.assertIn(
-            "const float colorCentroid = sharpen_gap_coverage(",
-            resolve)
-        self.assertIn(
-            "rgbColorEdgeSharpness", resolve)
-        self.assertIn(
-            "mix(color0, color1, colorCentroid)", resolve)
-        self.assertIn(
-            "if (!blueMode)", resolve)
-        fragment = self.shader.split(
-            "fragment float4 wave_surface_fragment", 1
-        )[1].split(
-            "vertex Out grid_vertex", 1
-        )[0]
-        self.assertIn(
-            "u.pixelsPerSecond >= 384.0\n"
-            "                ? u.rgbColorEdgeSharpness : 0.0",
-            fragment)
+    def test_rejected_visual_experiments_are_absent(self):
+        for symbol in (
+                "carrierNeutralClose",
+                "stableGapBedOpacity",
+                "gapEdgeSharpness",
+                "rgbColorEdgeSharpness",
+                "stableBedHeight",
+                "sharpen_gap_coverage"):
+            self.assertNotIn(symbol, self.source)
 
     def test_zoom_height_normalization_uses_only_available_headroom(self):
         def bounded_gain(value, gain):

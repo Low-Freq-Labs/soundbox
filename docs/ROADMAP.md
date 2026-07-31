@@ -4,7 +4,7 @@ Living to-do. Work top-down. The Rockbox iPod remains the hardware priority;
 player work may continue in parallel when it is isolated from export safety.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-07-29)
+## Current status (2026-07-30)
 
 - **CORE LIBRARY/EXPORT COMPLETE + CURATION MONTH COMPLETE.** Every track title
   cut/cleaned, every cover art eye-verified. Engine is mypy-clean,
@@ -15,7 +15,27 @@ For the live test count, trust `./check.sh` output—not any number written here
   grid, persistent zoom/jump controls, CUE/play/track navigation, precision
   scrub, clean gain ramps, and cache-first rapid loading. Full reference:
   `docs/PLAYER.md`.
-- **WAVEFORM REFINEMENT ACTIVE; FINAL-PULSE CANDIDATE INSTALLED.** BLUE
+- **PLAYER SIMPLIFICATION IN SOURCE; INSTALLED HANDOFF PENDING.** The paired
+  physical/GPU run named the residual BLUE/RGB pulse: a 41.209 Hz signed bass
+  carrier, not transport jitter, GPU lateness, random redraw, or chroma
+  breathing. The neutral envelope, background bed, 0.75 coverage sharpening,
+  and 1.0 RGB-transition experiments subsequently accumulated in the
+  production renderer even though the exact continuous coverage/color resolve
+  was already the stable baseline. The current source removes all four visual
+  experiment controls, their ABI/wrapper/script surfaces, and their shader
+  branches; BLUE/RGB now composite the exact interval integral directly. The
+  removed symbols advance the candidate native deck from ABI 3 to ABI 4.
+
+  Native zoom also snaps to the same thirteen canonical UI stops, collapsing
+  an eight-taper stop filter (including three dead close branches) into one
+  explicit 64–256 midrange rule. CoreAudio timing, direct target prediction,
+  close four-pixel mip selection, song-space attribute lattice, height ladder,
+  exact one-pixel integration, and 3BAND are unchanged. The focused native/UI
+  suite and six-image real-track corpus pass. Full gates and installed-app live
+  acceptance remain pending; do not replace the running app while the V5
+  library recook and its required rollback are still active. Full evidence:
+  `docs/PLAYER.md` → “Production renderer simplification on 2026-07-30.”
+- **HISTORICAL 2026-07-29 — FINAL-PULSE CANDIDATE.** BLUE
   and RGB now resolve signed-interval coverage and dependent color jointly in
   premultiplied linear light while preserving the already accepted continuous
   silhouette exactly. BLUE's white/cyan radial field no longer exhibits the
@@ -55,7 +75,7 @@ For the live test count, trust `./check.sh` output—not any number written here
   `library.json` byte-identical to its post-quit backup. Live acceptance
   confirms the bounded full-ladder transition is much better; height and pause
   are now the accepted checkpoint.
-- **CARRIER-NEUTRAL CLOSE RENDERER REJECTED; DETAIL RESTORED.** The paired
+- **HISTORICAL 2026-07-29 — CARRIER-NEUTRAL CLOSE RENDERER REJECTED.** The paired
   physical/GPU run names the residual BLUE/RGB pulse: the source's 41.209 Hz
   signed bass polarity dominates the exact drawables at 41.33 Hz and folds to
   about 18.9 Hz in the 60 fps phone recording. Presentation, GPU deadlines,

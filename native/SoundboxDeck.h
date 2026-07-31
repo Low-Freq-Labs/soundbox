@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SB_DECK_ABI_VERSION 3u
+#define SB_DECK_ABI_VERSION 4u
 
 typedef void *SBDeckRef;
 
@@ -127,11 +127,6 @@ int sb_deck_set_waveform_streams(
     double samples_per_second);
 int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode);
 uint32_t sb_deck_waveform_mode(SBDeckRef deck);
-int sb_deck_set_carrier_neutral_probe(SBDeckRef deck, int enabled);
-int sb_deck_set_stable_gap_bed_probe(SBDeckRef deck, float opacity);
-int sb_deck_set_gap_edge_sharpness_probe(SBDeckRef deck, float strength);
-int sb_deck_set_rgb_color_edge_sharpness_probe(
-    SBDeckRef deck, float strength);
 int sb_deck_set_spectral_analysis(
     SBDeckRef deck,
     const uint8_t *bands,

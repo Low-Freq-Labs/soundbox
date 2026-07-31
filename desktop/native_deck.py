@@ -25,6 +25,7 @@ _HOT_CUE_FALLBACKS = (
 )
 _MEMORY_CUE_RGB = (255, 52, 52)
 _WAVEFORM_MODES = {"BLUE": 1, "RGB": 2, "3BAND": 3}
+_NATIVE_ABI_VERSION = 4
 _NATIVE_GEOMETRY_EVENTS = tuple(
     event_type
     for event_type in (
@@ -178,7 +179,10 @@ def native_available() -> bool:
         lib = ctypes.CDLL(str(path))
         lib.sb_deck_abi_version.restype = ctypes.c_uint32
         lib.sb_deck_is_supported.restype = ctypes.c_int
-        return lib.sb_deck_abi_version() == 3 and bool(lib.sb_deck_is_supported())
+        return (
+            lib.sb_deck_abi_version() == _NATIVE_ABI_VERSION
+            and bool(lib.sb_deck_is_supported())
+        )
     except (OSError, AttributeError):
         return False
 
@@ -289,22 +293,6 @@ def _bind(path: Path):
     lib.sb_deck_set_waveform_mode.restype = ctypes.c_int
     lib.sb_deck_waveform_mode.argtypes = [handle]
     lib.sb_deck_waveform_mode.restype = ctypes.c_uint32
-    lib.sb_deck_set_carrier_neutral_probe.argtypes = [
-        handle, ctypes.c_int,
-    ]
-    lib.sb_deck_set_carrier_neutral_probe.restype = ctypes.c_int
-    lib.sb_deck_set_stable_gap_bed_probe.argtypes = [
-        handle, ctypes.c_float,
-    ]
-    lib.sb_deck_set_stable_gap_bed_probe.restype = ctypes.c_int
-    lib.sb_deck_set_gap_edge_sharpness_probe.argtypes = [
-        handle, ctypes.c_float,
-    ]
-    lib.sb_deck_set_gap_edge_sharpness_probe.restype = ctypes.c_int
-    lib.sb_deck_set_rgb_color_edge_sharpness_probe.argtypes = [
-        handle, ctypes.c_float,
-    ]
-    lib.sb_deck_set_rgb_color_edge_sharpness_probe.restype = ctypes.c_int
     lib.sb_deck_set_spectral_analysis.argtypes = [
         handle,
         ctypes.POINTER(ctypes.c_uint8),
@@ -577,7 +565,7 @@ class NativeDeckBackend(QObject):
         if path is None:
             raise RuntimeError("Native Soundbox deck library is unavailable")
         self._lib = _bind(path)
-        if self._lib.sb_deck_abi_version() != 3:
+        if self._lib.sb_deck_abi_version() != _NATIVE_ABI_VERSION:
             raise RuntimeError("Native Soundbox deck ABI mismatch")
         self._handle = self._lib.sb_deck_create(
             ctypes.c_void_p(int(host_widget.winId())))
@@ -866,26 +854,6 @@ class NativeDeckBackend(QObject):
         return next(
             name for name, encoded in _WAVEFORM_MODES.items()
             if encoded == value)
-
-    def diagnostic_set_carrier_neutral_probe(self, enabled: bool):
-        """Toggle the close carrier-neutral renderer for developer A/Bs."""
-        return bool(self._lib.sb_deck_set_carrier_neutral_probe(
-            self._handle, int(bool(enabled))))
-
-    def diagnostic_set_stable_gap_bed_probe(self, opacity: float):
-        """Place a stable neutral bed behind the untouched signed contour."""
-        return bool(self._lib.sb_deck_set_stable_gap_bed_probe(
-            self._handle, float(opacity)))
-
-    def diagnostic_set_gap_edge_sharpness_probe(self, strength: float):
-        """Sharpen only partial coverage around signed background gaps."""
-        return bool(self._lib.sb_deck_set_gap_edge_sharpness_probe(
-            self._handle, float(strength)))
-
-    def diagnostic_set_rgb_color_edge_sharpness_probe(self, strength: float):
-        """Sharpen fractional PWV5 hue transitions without moving geometry."""
-        return bool(self._lib.sb_deck_set_rgb_color_edge_sharpness_probe(
-            self._handle, float(strength)))
 
     @staticmethod
     def _screen_rgb(raw) -> tuple[int, int, int]:

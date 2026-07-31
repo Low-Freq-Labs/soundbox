@@ -322,20 +322,6 @@ def capture(args: argparse.Namespace):
 
     source, overview, detail = _load_record(
         args.cache_root.expanduser(), args.track_id)
-    if args.center_bandstop_strength > 0.0:
-        # Keep this developer-only transformation in memory. Importing the
-        # reference helper avoids duplicating a potentially divergent filter;
-        # neither harness writes the canonical V4 record.
-        from scripts.render_waveform_reference import (
-            _experimental_center_bandstop,
-        )
-        detail = {
-            **detail,
-            "_audio_detail": _experimental_center_bandstop(
-                detail["_audio_detail"],
-                args.center_bandstop_strength,
-            ),
-        }
     audio_detail_rate = float(
         detail.get("_audio_detail", {}).get("rate") or 0.0)
     app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -361,29 +347,10 @@ def capture(args: argparse.Namespace):
             "native decoder did not publish track duration")
         if not all(backend.set_complete_analysis(overview, detail, 1)):
             raise RuntimeError("native deck rejected the validated V4 record")
-        carrier_neutral = args.carrier_neutral_probe
-        if not backend.diagnostic_set_carrier_neutral_probe(carrier_neutral):
-            raise RuntimeError(
-                "native deck rejected the carrier reconstruction selection")
-        if not backend.diagnostic_set_stable_gap_bed_probe(
-                args.stable_gap_bed_opacity):
-            raise RuntimeError(
-                "native deck rejected the stable-gap bed selection")
-        if not backend.diagnostic_set_gap_edge_sharpness_probe(
-                args.gap_edge_sharpness):
-            raise RuntimeError(
-                "native deck rejected the gap-edge sharpness selection")
-        if not backend.diagnostic_set_rgb_color_edge_sharpness_probe(
-                args.rgb_color_edge_sharpness):
-            raise RuntimeError(
-                "native deck rejected the RGB color-edge selection")
         backend.sync_view_geometry()
 
-        probe_label = (
-            " [CARRIER-NEUTRAL]"
-            if carrier_neutral else " [SIGNED-CARRIER DEFAULT]")
         print(
-            f"READY{probe_label}: "
+            "READY [SIGNED-CARRIER]: "
             f"track={args.track_id} source={source.name!r}\n"
             "Camera target: 4K60 SDR/Rec.709, 1/240 shutter, fixed ISO/WB/"
             "focus, stabilization off, rigid landscape framing.\n"
@@ -535,12 +502,6 @@ def capture(args: argparse.Namespace):
             "track_id": args.track_id,
             "source_name": source.name,
             "audio_detail_samples_per_second": audio_detail_rate,
-            "carrier_neutral_enabled": carrier_neutral,
-            "carrier_neutral_probe": args.carrier_neutral_probe,
-            "center_bandstop_strength": args.center_bandstop_strength,
-            "stable_gap_bed_opacity": args.stable_gap_bed_opacity,
-            "gap_edge_sharpness": args.gap_edge_sharpness,
-            "rgb_color_edge_sharpness": args.rgb_color_edge_sharpness,
             "camera_fps_requested": args.camera_fps,
             "camera_protocol": {
                 "resolution": "4K preferred; 1080p acceptable",
@@ -603,43 +564,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keep-raw", action="store_true",
         help="retain frames.bgra instead of replacing it with lossless FFV1")
-    parser.add_argument(
-        "--carrier-neutral-probe", action="store_true",
-        help=(
-            "enable the rejected symmetric BLUE/RGB close envelope for a "
-            "developer A/B; the detailed signed contour is the default"))
-    parser.add_argument(
-        "--center-bandstop-strength",
-        type=float,
-        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
-        default=0.0,
-        help=(
-            "developer-only in-memory 30-55 Hz signed-center suppression; "
-            "preserves every interval half-width and never writes the cache"))
-    parser.add_argument(
-        "--stable-gap-bed-opacity",
-        type=float,
-        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
-        default=0.0,
-        help=(
-            "developer-only neutral bed behind the untouched signed contour; "
-            "targets pulsing black gaps without replacing foreground detail"))
-    parser.add_argument(
-        "--gap-edge-sharpness",
-        type=float,
-        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
-        default=0.75,
-        help=(
-            "continuous sharpening of partial pixels around black signed-"
-            "waveform gaps; accepted default 0.75, 0 restores the control"))
-    parser.add_argument(
-        "--rgb-color-edge-sharpness",
-        type=float,
-        choices=(0.0, 0.25, 0.5, 0.75, 1.0),
-        default=1.0,
-        help=(
-            "continuous sharpening of fractional PWV5 color transitions; "
-            "accepted default 1.0, never changes signed coverage/endpoints"))
     parser.add_argument(
         "--skip-calibration", action="store_true",
         help="omit the fixed-waveform 120 Hz camera phase calibration segment")

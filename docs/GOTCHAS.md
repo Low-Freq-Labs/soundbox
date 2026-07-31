@@ -383,22 +383,19 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   BLUE/RGB's phone-folded carrier falls below calibration and 3BAND control.
   The first physical review accepted its motion, but live use immediately
   rejected the lost detail. The signed contour therefore remains the close
-  BLUE/RGB product default for stopped and playing, while the neutral envelope
-  remains only a developer A/B probe. Keep 3BAND outside the branch and never
-  reintroduce a playing-only filter.
+  BLUE/RGB product default for stopped and playing. The neutral-envelope ABI
+  and shader branch were removed on 2026-07-30 after they served their causal
+  experiment. Keep 3BAND outside any replacement and never reintroduce a
+  playing-only filter.
 - **Do not fill a soft black gap to make it look sharp.** A low-opacity neutral
   bed behind the signed contour reduced binary negative-space carrier power,
   but live comparison preferred the untouched far-left BLUE control because
-  every bed made the result look filled. The accepted candidate instead
-  steepens only fractional coverage continuously: exact black, half coverage,
-  full foreground, signed boundaries, and endpoint colors stay fixed. Use
-  0.75 for BLUE/RGB signed coverage. RGB's discrete PWV5 transitions may use
-  the separate selected 1.0 fractional color-coordinate transfer; never apply
-  that RGB-only treatment to BLUE's continuous radial field. Both transfers
-  are accepted only at the five close stops (`384..1536`); applying them to the
-  full ladder made 48/64/92/128 visibly horrible. Hard-gate them off through
-  256, keep 3BAND exact, and regression-check all thirteen real UI zooms rather
-  than extrapolating from one close comparison.
+  every bed made the result look filled. Later 0.75 signed-coverage and 1.0 RGB
+  fractional-coordinate sharpening added contrast after the exact resolve and
+  made the remaining physical carrier easier to read as pulsing/static. The
+  2026-07-30 simplification removed the bed and both post-resolve transfers
+  from the ABI and shader. Keep the exact continuous interval/color integral,
+  keep 3BAND exact, and regression-check all thirteen real UI zooms.
 - **Never blend two mip levels' coverage. Pick one.** Levels are song-anchored
   maxima on power-of-two lattices, so level N quantizes every 2^N bins and
   N+1 every 2^(N+1). Blending scrolls both at the same speed with different
