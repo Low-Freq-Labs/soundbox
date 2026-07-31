@@ -4,85 +4,80 @@ Updated: 2026-07-30 (America/Chicago)
 
 This is the single current session-resume note. Read it immediately after
 `AGENTS.md` / `CLAUDE.md`. Replace stale facts here at every wrap-up; do not
-append a session diary. Dated implementation and validation history belongs in
-the relevant reference document.
+append a session diary.
 
 ## Repository and installed app
 
 - Branch: `main`, tracking `origin/main`.
-- Last completed implementation: `a7793f2` (`Simplify waveform renderer`);
-  this handoff update follows that implementation commit.
-- The signed player-renderer simplification is installed at
-  `/Applications/Soundbox.app` and running with native deck ABI 4.
-- Installed launch verification loaded 3,263 tracks / 83 playlists, activated
-  the native CoreAudio/Metal deck from the installed bundle, and scheduled zero
+- Last completed implementation: `61eb15d` (`Decouple library model from
+  rekordbox`); this handoff update follows that implementation commit.
+- The architecture change is source-only and has no user-visible behavior, so
+  the installed app was deliberately not replaced.
+- `/Applications/Soundbox.app` remains the accepted signed ABI-4 player build.
+  Its last installed verification loaded 3,263 tracks / 83 playlists,
+  activated the packaged CoreAudio/Metal deck, and scheduled zero unnecessary
   library-preparation work.
 
 ## Current state
 
-The direct full-library V5 waveform recook is complete. The full production
-audit reported 3,244 verified V5 records, zero playable V4, zero
-missing/invalid reachable analysis, 19 already-missing sources, and zero
-orphan V4/V5 records. The cache was about 12 GiB with zero stranded `.tmp`
-files and about 47 GiB free on the data volume.
+`soundbox.library` now owns the source-neutral `Track`, `Playlist`, and
+`Library` domain model. The read-only live rekordbox DB and XML modules are
+concrete adapters into it. Engine, sync, imports, instant-paint cache, desktop
+workers, UI orchestration, and tests import domain types from the neutral
+module rather than from an XML parser.
 
-Before install, `library.json` was SHA-256
-`198b46c6bcd71510ac965a82f97f51c28bef5f348d45038cdb1f03106dbb1c11`.
-After the old app quit and the new app launched it was
-`e6efdb75024a24badbc21e87597ad6bf6bb23b4c95d36305061a42eedc3b1ec2`.
-A recursive semantic comparison found exactly one difference:
-`settings.columns_state`, the Qt column-layout blob saved during the normal
-quit/start cycle. Artist/title overrides, aliases, hidden tracks, playlist
-removals, imports, and custom state are identical. The temporary pre-install
-backup has now been retired. After Sonny's accepted live zoom review and its
-normal settings writes, the wrap-up hash is
-`544488749ed040de34afe846f8879b7febdd26648917cf820b760548af137f01`
-with RGB mode and 48 px/s persisted; raw hashes are not evergreen when runtime
-UI settings change.
+The model exposes generic source identity, normalized cue rows, and an optional
+read-only source-analysis path. Rekordbox XML `KeyType=1` location playlists
+are normalized to canonical track IDs at the adapter edge. Compatibility
+properties/re-exports remain for XML-era callers, and schema-4 instant-paint
+snapshots are read and normalized without sacrificing first paint. No
+Serato/Traktor registry or speculative provider interface was added; a second
+real integration should establish only the interface its actual discovery,
+refresh, configuration, and analysis semantics require.
 
-The installed candidate removes the rejected carrier-neutral/background-bed
-and post-resolve coverage/RGB sharpening controls. Native zoom now snaps to
-the same thirteen UI stops, and the former overlapping stop tapers are one
-explicit 64–256 midrange rule. CoreAudio timing, close mip selection, signed
-detail, height normalization, exact coverage, and 3BAND are unchanged.
-Sonny accepted the installed simplification. The remaining softness growing
-with close zoom matches sample-and-hold display persistence: at Retina scale
-two and 120 Hz the lane advances from 6.4 physical pixels per refresh at
-384 px/s to 25.6 at 1536 px/s, while those stops already use the sharp direct
-linear path. Do not add coverage sharpening, motion blur, whole-pixel snapping,
-or a playing-only filter to compensate; each was either measured or directly
-implicated in the retired static/pulse/judder tradeoff.
+The architecture audit found one remaining general hotspot:
+`desktop/app.py` is 3,334 lines and `MainWindow` owns 170 methods. This is
+manageable, but it should be decomposed by real state/behavior ownership rather
+than split into cosmetic mixins. `desktop/player.py`,
+`soundbox/track_analysis.py`, and the native deck are also large, but their
+cache/waveform/realtime invariants are substantially more cohesive and should
+move only across tested protocol or data-format boundaries.
 
-## Exact next-session checks
+The installed player/cache state remains unchanged from the accepted prior
+handoff: the complete V5 audit passed, no V4 rollback remains, and no temporary
+install rollback remains. Do not revive the rejected player-renderer
+experiments without new physical evidence.
 
-1. The next committed product task is read-only-first real iPod hardware
-   validation per `docs/DEVICES.md` and the top-of-file contract in
+## Exact next-session work
+
+1. Start the staged `MainWindow` decomposition with the crown-jewel persistence
+   boundary. Characterize the current `library.json` load, corruption
+   recovery, rotating backup, and atomic-save behavior in focused tests, then
+   extract a UI-independent state store without changing the file schema or
+   recovery semantics.
+2. Continue only in separately validated stages: library load/refresh plus
+   row-cache coordination; playback/autoplay orchestration; then custom
+   playlists/imported-track operations. Keep `MainWindow` as widget/signal
+   composition. Do not combine this pass with another DJ-system integration or
+   merely redistribute methods among new mixins.
+3. The next committed product/device task remains read-only-first real iPod
+   hardware validation per `docs/DEVICES.md` and the top-of-file contract in
    `soundbox/sync.py`.
-2. If player motion is revisited, begin from new physical evidence and the
-   accepted exact renderer; do not revive the removed experiment controls.
 
-## Rollback
+## Validation and rollback
 
-No temporary rollback remains. The obsolete 236 MiB pre-V5 rollback was
-removed after the complete V5 audit passed. The 230 MiB player-simplification
-rollback, containing the previous ABI 3 app and pre-install `library.json`,
-was removed only after the installed ABI 4 app passed validation and Sonny
-accepted its live behavior.
+Architecture wrap-up validation on 2026-07-30:
 
-## Documentation status
+- `./check.sh` passed 565 tests with one expected platform skip.
+- `./check.sh --render` passed the same suite and hermetic offscreen render.
+- Native build, pyflakes, and mypy for the engine passed in both gates.
+- The source-neutral model, adapter normalization, schema-4 cache read, live-DB
+  mapping, sync, imports, and desktop integration have focused regression
+  coverage.
+- `git diff --check` passed before the implementation commit.
 
-Current-facing architecture, player, cache, cue, worker, storage, and roadmap
-language describes V5. Remaining V4 references are intentional: either the
-read-only compatibility contract or dated historical validation/R&D records.
-
-Player simplification validation on 2026-07-30:
-
-- `./check.sh` passed 560 tests with one expected platform skip.
-- `./check.sh --render` passed the same suite and hermetic render.
-- The six-image real-track BLUE/RGB/3BAND corpus rendered successfully.
-- The focused native/UI suite passed 257 tests with one expected skip.
-- The full V5 production audit passed exactly as recorded above.
-- `./build_app.sh`, pre-install and installed signature verification, safe
-  replacement, relaunch, ABI 4 verification, native-deck startup, real library
-  load, and zero-task preparation verification all passed.
-- The wrap-up reran both complete gates successfully before commit.
+No source audio, rekordbox data, device target, installed bundle, or
+`~/Library/Application Support/LowFreqLabs/Soundbox/` state was modified.
+This refactor needs no data rollback; schema-4 instant-paint caches remain
+readable and schema-5 is written only by the source/runtime that adopts this
+commit.
