@@ -35,6 +35,16 @@ ARGS=(
 
 ./.venv/bin/pyinstaller "${ARGS[@]}" soundbox_app.py
 
+# Declare the same bundle-local key used by the pre-Qt entrypoint. AppKit's
+# press-and-hold service must never claim C before Soundbox's momentary-CUE
+# handler. This does not alter the user's global accent-entry preference.
+/usr/libexec/PlistBuddy \
+  -c "Delete :ApplePressAndHoldEnabled" \
+  dist/Soundbox.app/Contents/Info.plist >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy \
+  -c "Add :ApplePressAndHoldEnabled bool false" \
+  dist/Soundbox.app/Contents/Info.plist
+
 # Re-sign the finished bundle with the stable self-signed identity so macOS remembers
 # TCC grants (USB + Desktop file access) across rebuilds instead of re-prompting.
 # Done here rather than via PyInstaller's --codesign-identity because PyInstaller adds

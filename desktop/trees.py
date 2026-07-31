@@ -104,8 +104,26 @@ class NoTypeAhead:
     browser view. Shortcuts (Space, ⌘R…) are unaffected: they resolve before
     the key ever reaches the view."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # QTableView enables the macOS text-input client even when its edit
+        # triggers are disabled.  Cocoa then treats a held letter as text and
+        # opens the accent-character picker before Qt's repeat KeyPress events
+        # reach the application filter.  Browser views do not accept text, so
+        # keep their native input-method client disabled.  A delegate-created
+        # QLineEdit is a separate widget and retains full IME support.
+        self.setAttribute(Qt.WA_InputMethodEnabled, False)
+
     def keyboardSearch(self, _search: str) -> None:
         pass
+
+    def currentChanged(self, current, previous) -> None:
+        # QAbstractItemView re-enables its input-method attribute whenever an
+        # editable model index becomes current, even when NoEditTriggers is in
+        # force. Reassert the browser contract after Qt updates the selection;
+        # explicit delegate editors still own their own text-input client.
+        super().currentChanged(current, previous)
+        self.setAttribute(Qt.WA_InputMethodEnabled, False)
 
 
 class ArtistsTree(NoTypeAhead, QTreeWidget):
@@ -473,4 +491,3 @@ class TrackTable(NoTypeAhead, QTableView):
                 e.acceptProposedAction()
                 return
         e.ignore()
-

@@ -556,9 +556,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         browsing = self._space_should_play(focus)
         if (ev.key() == Qt.Key_C and no_modifier and browsing
                 and ev.type() == QEvent.ShortcutOverride):
-            # Cocoa's press-and-hold text service asks for this override before
-            # it sends repeat key presses. Claiming it here prevents the
-            # ç/ć/č/ċ character panel from ever opening over the browser.
+            # Keep the key application-owned if a widget shortcut is added in
+            # the future. This event does not control Cocoa press-and-hold;
+            # the packaged bundle policy and NoTypeAhead boundary do that.
             ev.accept()
             return True
         if (ev.key() == Qt.Key_Space and no_modifier

@@ -36,10 +36,14 @@ Transport controls:
   glyph becomes PAUSE only with that purple transport state; decoder playback
   during an unlatched cue preview continues to show the PLAY glyph.
 - `C` is the dedicated keyboard equivalent of pressing/releasing CUE while a
-  browser surface has focus. SoundBox claims macOS's shortcut-override phase
-  and consumes repeat events, so holding C remains a clean momentary gate
-  instead of opening the system accent-character panel. Text fields and
-  Command-C retain normal behavior.
+  browser surface has focus. The packaged entrypoint disables Cocoa
+  press-and-hold for the Soundbox bundle before importing Qt; non-text browser
+  views also opt out of the macOS text-input client, and SoundBox consumes
+  repeat events. Holding C therefore remains a clean momentary gate instead of
+  opening the system accent-character panel, including on the first track load.
+  The setting is bundle-local, so other apps keep normal accent entry. Delegate
+  editors remain separate text widgets; text fields and Command-C retain normal
+  behavior apart from held-letter accent selection inside Soundbox.
 - Each loaded track has one orange, upward-arrow-only session deck-CUE marker
   in both the whole-track overview and scrolling waveform. It has no vertical
   stem through the audio. It initially follows the first-grid-beat load point.

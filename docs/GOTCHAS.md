@@ -37,6 +37,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `QAudioDecoder` for AAC/ALAC. Native-deck initialization failure must leave
   library management usable, disable player controls, and surface the exact
   diagnostic. Do not reintroduce an engine setting or silent fallback.
+- **A consumed Qt key event does not disable Cocoa press-and-hold text input.**
+  `QTableView` advertises a macOS text-input client even with edit triggers off,
+  and the first track-load transition can reach the native accent service before
+  repeat `QKeyEvent`s arrive. Keep `Qt.WA_InputMethodEnabled` false on every
+  `NoTypeAhead` browser view, but do not mistake that for the native boundary:
+  the packaged entrypoint must also set the bundle-local
+  `ApplePressAndHoldEnabled=false` default before importing Qt, and the bundle
+  plist declares the same policy. Delegate-created line editors remain separate
+  widgets with IME support. Never change the global macOS preference.
 - **Native player thread boundary:** no Python callback, Objective-C decode,
   allocation, file I/O, or blocking lock may enter `renderCallback`. Commands
   are atomics/generation-tagged; AVAudioFile runs only on the decode thread.

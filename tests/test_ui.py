@@ -2092,7 +2092,7 @@ class QtTrapAudit(unittest.TestCase):
             _win.player_bar._cue_release = real_release
             _win._cue_key_down = False
 
-    def test_c_claims_shortcut_override_and_swallows_native_repeats(self):
+    def test_c_claims_shortcut_override_and_swallows_repeat_keypresses(self):
         calls = []
         real_policy = _win._space_should_play
         real_press = _win.player_bar._cue_press
@@ -2118,6 +2118,35 @@ class QtTrapAudit(unittest.TestCase):
             _win.player_bar._cue_press = real_press
             _win.player_bar._cue_release = real_release
             _win._cue_key_down = False
+
+    def test_browser_views_do_not_offer_text_input_to_macos(self):
+        """A held C must not enter Cocoa's accent-character composition path.
+
+        ShortcutOverride alone cannot prevent that native input-method path;
+        the non-text browser widgets themselves must opt out. Inline delegate
+        editors remain real text widgets with IME support.
+        """
+        for view in (_win.table, _win.tree, _win.sb_tree, _win.device_tree,
+                     _win.artists_view):
+            self.assertFalse(
+                view.testAttribute(Qt.WA_InputMethodEnabled),
+                type(view).__name__,
+            )
+
+        from PySide6.QtGui import QStandardItem, QStandardItemModel
+        from PySide6.QtWidgets import QLineEdit, QStyleOptionViewItem
+        from desktop.trees import CellEditDelegate
+        edit_model = QStandardItemModel()
+        edit_model.appendRow(QStandardItem("editable"))
+        delegate = CellEditDelegate()
+        editor = delegate.createEditor(
+            _win.table.viewport(), QStyleOptionViewItem(),
+            edit_model.index(0, 0))
+        try:
+            self.assertIsInstance(editor, QLineEdit)
+            self.assertTrue(editor.testAttribute(Qt.WA_InputMethodEnabled))
+        finally:
+            editor.deleteLater()
 
     def test_command_c_is_not_stolen_by_cue_shortcut(self):
         calls = []
