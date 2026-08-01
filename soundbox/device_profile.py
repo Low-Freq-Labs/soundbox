@@ -1,8 +1,9 @@
 """Read-only removable-device classification and stock-iPod planning.
 
-Detection never creates, edits, or removes anything.  In particular, stock
-iPod database support is preview-only until SoundBox has a separately tested
-writer for Apple's model-specific database and hashing rules.
+Detection never creates, edits, or removes anything.  Stock write capability
+means only that the mounted model/database crosses the narrow, offline-tested
+engine allowlist; an actual sync still requires a complete dry-run and explicit
+commit through :mod:`soundbox.stock_ipod`.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import plistlib
+import struct
 
 
 FAT_FILESYSTEMS = frozenset({"msdos", "fat32", "fat"})
@@ -27,6 +29,7 @@ class DeviceProfile:
     stock_preview: bool
     stock_write: bool
     model: str = ""
+    library_persistent_id: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -64,6 +67,41 @@ def _read_model(root: Path) -> str:
     return ""
 
 
+def _stock_database_compatible(root: Path) -> bool:
+    """Bounded MA446 database probe: classic iTunesDB, checksum scheme zero."""
+    itunes = root / "iPod_Control" / "iTunes"
+    cdb = itunes / "iTunesCDB"
+    try:
+        if cdb.is_file() and cdb.stat().st_size:
+            return False
+    except OSError:
+        return False
+    database = itunes / "iTunesDB"
+    try:
+        with database.open("rb") as handle:
+            header = handle.read(0x32)
+    except OSError:
+        return False
+    return (
+        len(header) == 0x32
+        and header[:4] == b"mhbd"
+        and struct.unpack_from("<H", header, 0x30)[0] == 0
+    )
+
+
+def _stock_library_persistent_id(root: Path) -> int:
+    """Bounded stable identity field; unlike DatabaseID, writers preserve it."""
+    database = root / "iPod_Control" / "iTunes" / "iTunesDB"
+    try:
+        with database.open("rb") as handle:
+            header = handle.read(0x50)
+    except OSError:
+        return 0
+    if len(header) < 0x50 or header[:4] != b"mhbd":
+        return 0
+    return int(struct.unpack_from("<Q", header, 0x48)[0])
+
+
 def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
     """Classify one mounted volume using read-only, bounded probes."""
     base = Path(root)
@@ -84,6 +122,14 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
     else:
         kind, label = "generic_usb", "Generic USB"
     fat = fs in FAT_FILESYSTEMS
+    model = _read_model(base) if has_stock else ""
+    stock_write = False
+    # Firmware routing is destination-derived. Once Rockbox is installed its
+    # marker wins operationally: exports use the Rockbox filesystem path and
+    # the coexisting Apple database remains read-only.
+    if has_stock and not has_rockbox and fat and _stock_database_compatible(base):
+        from .stock_ipod import supports_stock_write
+        stock_write = supports_stock_write(model)
     return DeviceProfile(
         kind=kind,
         label=label,
@@ -92,8 +138,10 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
         has_stock_ipod=has_stock,
         rockbox_export=fat and kind != "stock_ipod",
         stock_preview=has_stock,
-        stock_write=False,
-        model=_read_model(base) if has_stock else "",
+        stock_write=stock_write,
+        model=model,
+        library_persistent_id=(
+            _stock_library_persistent_id(base) if has_stock else 0),
     )
 
 
@@ -112,14 +160,23 @@ def plan_stock_ipod_export(
     blockers = []
     if not profile.has_stock_ipod:
         blockers.append("No stock iPod_Control database was detected.")
-    blockers.append(
-        "SoundBox does not write iTunesDB yet; this preview makes no changes.")
+    if missing:
+        blockers.append(f"{missing} source track(s) are missing.")
+    unsupported = sum(
+        count for suffix, count in suffixes.items()
+        if suffix not in {".mp3", ".wav"})
+    if unsupported:
+        blockers.append(
+            f"{unsupported} track(s) are outside the initial MP3/WAV boundary.")
+    if not profile.stock_write:
+        blockers.append(
+            "This model/database is outside the validated MA446 write allowlist.")
     return {
         "device_kind": profile.kind,
         "model": profile.model,
         "track_count": sum(suffixes.values()),
         "missing_count": missing,
         "formats": dict(sorted(suffixes.items())),
-        "writable": False,
+        "writable": not blockers,
         "blockers": blockers,
     }

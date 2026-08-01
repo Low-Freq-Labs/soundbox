@@ -18,6 +18,7 @@ from PySide6.QtCore import QThread, Signal
 
 from soundbox import artfetch, engine, metadata, rekordbox_db
 from soundbox.library import Playlist
+from soundbox.stock_artwork import StockArtworkCache
 
 from .devices import device_profile, list_devices
 
@@ -291,6 +292,79 @@ class ArtFillWorker(QThread):
             self.progress.emit(i, total)
             time.sleep(self.DELAY)
         LOG.info("Art fill ended: %d fetched, %d failed", ok, err)
+
+
+class StockArtworkPrepWorker(QThread):
+    """Pre-render disposable MA446 artwork derivatives off the UI thread.
+
+    The curated JPEG cache remains canonical. Identical JPEG bytes converge on
+    one content-addressed RGB565 entry, so this pass is resumable and cheap on
+    every launch after the first.
+    """
+    progress = Signal(int, int)
+
+    def __init__(self, lib, art_cache, stock_cache: StockArtworkCache):
+        super().__init__()
+        self.lib = lib
+        self.art_cache = art_cache
+        self.stock_cache = stock_cache
+        self._stop = False
+        self._playback_active = threading.Event()
+
+    def stop(self):
+        self._stop = True
+
+    def set_playback_active(self, active: bool):
+        if active:
+            self._playback_active.set()
+        else:
+            self._playback_active.clear()
+
+    def _wait_for_playback(self):
+        while self._playback_active.is_set() and not self._stop:
+            time.sleep(0.05)
+
+    def run(self):
+        hidden = getattr(self.lib, "hidden_ids", set())
+        images: list[Path] = []
+        seen_paths: set[Path] = set()
+        for track in self.lib.tracks_by_id.values():
+            if track.track_id in hidden:
+                continue
+            image = self.art_cache.image_path(track.track_id)
+            if image is None:
+                continue
+            try:
+                canonical = image.resolve(strict=True)
+            except OSError:
+                continue
+            if canonical not in seen_paths:
+                seen_paths.add(canonical)
+                images.append(canonical)
+
+        total = len(images)
+        LOG.info("Stock artwork preparation: %d curated image(s)", total)
+        prepared = failed = 0
+        for index, image in enumerate(images, 1):
+            self._wait_for_playback()
+            if self._stop:
+                break
+            try:
+                # The low-priority whole-library pass validates manifests and
+                # exact payload sizes. A stock sync rehashes/rebuilds the small
+                # selected set before it can enter a device plan.
+                self.stock_cache.prepare(image, verify_cache=False)
+                prepared += 1
+            except Exception as exc:  # noqa: BLE001 — one bad JPEG cannot end the pass
+                failed += 1
+                if failed <= 3:
+                    LOG.warning("Stock artwork preparation failed for %s: %s", image, exc)
+            self.progress.emit(index, total)
+            time.sleep(0.01)
+        LOG.info(
+            "Stock artwork preparation ended: %d ready, %d failed",
+            prepared, failed,
+        )
 
 
 class WaveformFillWorker(QThread):

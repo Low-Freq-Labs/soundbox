@@ -1,7 +1,7 @@
 # SoundBox — orientation (start here)
 
-SoundBox is a native macOS music-library app that bridges **rekordbox →
-Rockbox iPods / USB players** and includes a high-refresh DJ-style player.
+SoundBox is a native macOS music-library app that bridges **rekordbox → stock
+or Rockbox iPods / USB players** and includes a high-refresh DJ-style player.
 Browse the live rekordbox library, curate it without ever touching it, and drag
 playlists onto a device with exact order, per-track cover art, and honest sync
 semantics. Built by Sonny (Low Freq Labs) with Claude and Codex.
@@ -27,6 +27,33 @@ repository can answer the question.
 - Source audio files are **never** modified, renamed, moved, or deleted.
 - Every export write lands **under an explicit device target**, guarded so the
   target can never overlap the source library.
+- `soundbox.stock_ipod` is the only stock-firmware path allowed below
+  `iPod_Control`. It is MA446/MP3/WAV-only until separately expanded, uses the
+  pinned Clickwheel database engine only as an offline renderer, validates the
+  rendered database and every artwork link, saves recovery material, copies
+  media/artwork atomically, and commits `iTunesDB` last. Curated baseline JPEGs
+  remain canonical; `stock_artwork/` under AppData is a disposable,
+  content-addressed MA446 RGB565 derivative cache. Never embed art into or
+  otherwise retag source audio. The connected layout selects the exporter:
+  stock-only uses the guarded stock planner; `/.rockbox/` uses the Rockbox
+  filesystem planner and leaves any coexisting stock database read-only.
+  A storage-efficient dual-library mode is approved only as future work: safe
+  tracks would be shared between iTunesDB and Rockbox while stock-unsafe tracks
+  remain Rockbox-only. Do not approximate that design with two independent
+  exporters or duplicate the collection.
+- Stock playlist deletion may remove regular user playlists and the exact Apple
+  **Videos** smart index only. Videos deletion removes no media; Music, Movies,
+  TV Shows, and Audiobooks remain immutable. On-The-Go is firmware-generated,
+  not an iTunesDB playlist.
+- `soundbox.stock_ipod_info` may parse stock identity, tracks, playlists, and
+  playback state for the device UI, but is strictly read-only. Remembered model
+  confirmation is keyed by library persistent ID + volume UUID; the ordinary
+  iTunesDB `DatabaseID` is rewrite-volatile and must never identify hardware.
+  On macOS, hardware serial/firmware may come from Apple's read-only classic-iPod
+  device record and USB/SCSI facts from IORegistry. Serial-derived model and
+  model-derived DAC must retain provenance in the immutable snapshot, though the
+  dashboard may show the concise component name; a SCSI transport revision is
+  never firmware. Ambiguous device records and model mappings fail closed.
 - Dry-run by default where the workflow supports it; ask before anything
   irreversible; never bulk-delete or orphan-clean without an explicit target
   and confirmation. Do not assume paths—resolve and verify them.
@@ -116,3 +143,7 @@ Moving/replacing the `.app` bundle must never touch
 - CDJ reference USB snapshots and large audio fixtures live in the local,
   git-ignored `soundbox-cdj-ref/` workspace at the project root; only prototype
   code under `research/cdj_export/` belongs in version control.
+- Stock/Rockbox iPod captures and oracle-sync media live in the local,
+  git-ignored `soundbox-ipod-ref/` workspace. Treat pristine captures as
+  read-only research/recovery fixtures; never restore one to hardware without
+  an explicit, separately reviewed recovery plan.

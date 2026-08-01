@@ -27,6 +27,7 @@ ARGS=(
   --collect-all PIL
   --collect-all soundfile
   --collect-all zstandard
+  --collect-submodules clickwheel.ipod
   --collect-submodules PySide6.QtMultimedia
   --add-binary "build/native/libsoundbox_deck.dylib:native"
 )

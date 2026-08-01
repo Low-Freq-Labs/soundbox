@@ -41,7 +41,8 @@ class DeviceBrowserMixin:
             return
         if any(_running(getattr(self, name, None)) for name in (
                 "export_worker", "_resync_worker", "_delete_worker",
-                "_eject_verify_worker")):
+                "_eject_verify_worker", "_stock_plan_worker",
+                "_stock_commit_worker", "_stock_view_worker")):
             QMessageBox.warning(
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")
@@ -99,8 +100,10 @@ class DeviceBrowserMixin:
             QTimer.singleShot(0, lambda d=dev: self._eject(d))
 
     def _eject_current(self):
-        idx = self.fs_view.rootIndex()
-        path = self.fs_model.filePath(idx)
+        path = getattr(self, "_current_device_path", "")
+        if not path:
+            idx = self.fs_view.rootIndex()
+            path = self.fs_model.filePath(idx)
         if path:
             self._eject(path)
 
@@ -108,7 +111,9 @@ class DeviceBrowserMixin:
         # Never race a live writer. Verification and flush are also threaded:
         # removable I/O on the UI thread can block for seconds under fskit.
         if any(_running(getattr(self, name, None)) for name in (
-                "export_worker", "_resync_worker", "_delete_worker")):
+                "export_worker", "_resync_worker", "_delete_worker",
+                "_stock_plan_worker", "_stock_commit_worker",
+                "_stock_view_worker")):
             QMessageBox.warning(
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")
@@ -146,6 +151,8 @@ class DeviceBrowserMixin:
 
         def succeeded():
             self._stop_pulse()
+            self._current_device_path = ""
+            self._stock_snapshot = None
             self.stack.setCurrentIndex(0)
             self._refresh_devices()
             self._flash_status("Ejected ✓")

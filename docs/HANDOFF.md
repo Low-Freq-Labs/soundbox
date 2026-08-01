@@ -2,78 +2,161 @@
 
 Updated: 2026-07-31 (America/Chicago)
 
-This is the single current session-resume note. Read it immediately after
-`AGENTS.md` / `CLAUDE.md`. Replace stale facts here at every wrap-up; do not
-append a session diary.
+Read this immediately after `AGENTS.md` / `CLAUDE.md`. This is the single
+current resume note, not a session diary.
 
 ## Repository and installed app
 
-- Branch: `main`, tracking `origin/main`.
-- Current implementation commit: `2a4ef33` (`Suppress macOS accent
-  picker for held CUE`). The prior remote commit is `708ea5e` (`Record Rekordbox
-  6.8.7 compatibility`).
-- `/Applications/Soundbox.app` is the signed build from this exact source tree.
-  Sonny accepted the physical first-track hold test: holding `C` remains a
-  momentary CUE gate and the macOS accent-character panel no longer appears.
-- The installed native deck is active. The real library loaded 3,263 tracks / 83
-  playlists and scheduled zero preparation work.
+- Branch: `main`. The 2026-07-31 wrap commit contains the completed and validated
+  stock-iPod/device/artwork work described below; start by checking the current
+  branch/status rather than relying on an older session hash.
+- `/Applications/Soundbox.app` is the self-signed build from this exact tree.
+  It includes the stock Device/Music/Playlists dashboard, artwork/metadata sync,
+  guarded checkbox multi-delete, Videos system-playlist deletion, nonredundant
+  detail tooltips, and destination-derived stock/Rockbox routing.
+- The installed app is running with the native CoreAudio/Metal deck active and
+  the real 3,263-track / 83-playlist curated library loaded.
+- The latest rollback artifacts are in
+  `/tmp/soundbox-playlist-id-install.z1xGIM/`:
+  `Soundbox-before-videos-delete.app` and
+  `library.before-videos-delete.json`. Earlier app/state snapshots remain in the
+  same directory. Curated state compared equal before/after the final install
+  when ordinary `settings.columns_state` was excluded.
 
-## Current state
+## Physical iPod state at wrap
 
-The held-C bug was a native AppKit boundary, not a missing Qt repeat-event
-filter. The existing shortcut override and repeat swallowing worked after the
-first track transition, but Cocoa could still claim the first held `C` for its
-press-and-hold text service.
+- Target: black Enhanced 5.5-generation iPod Video, MA446LL, stock firmware
+  1.3, Wolfson WM8758BG, FAT32, flash-modified to approximately 256 GB.
+- The iPod is **not mounted** at wrap. The app installation therefore made no
+  device write.
+- Last verified stock state: zero indexed tracks, zero regular user playlists,
+  no `Play Counts`, eleven SoundBox recovery points.
+- Last verified `iTunesDB` SHA-256:
+  `c235f57378793d1db96d3f5b059bdb01e1262e04b9b54375a2c78cce6770123c`.
+- Stock firmware still shows its built-in On-The-Go entry. On-The-Go is generated
+  by firmware and is not an iTunesDB playlist.
+- The Apple Videos smart index is still expected to exist physically. Its new
+  deletion feature is implemented and tested but has **not** yet been exercised
+  on the real iPod.
 
-The packaged entrypoint now writes the bundle-local
-`ApplePressAndHoldEnabled=false` preference before importing Qt, and the built
-app declares the same key in `Info.plist`. This changes only Soundbox; it does
-not alter the global macOS preference or other apps. The Qt-side defense remains:
-every non-text `NoTypeAhead` browser opts out of the input-method client and
-reasserts that state after editable model selections, while delegate-created
-line editors retain IME support. Search fields and Command-C keep normal
-behavior; held-letter accent selection is intentionally unavailable inside
-Soundbox because `C` is a deck control.
+## Stock support completed today
 
-The source-neutral library architecture and accepted ABI-4 player/cache state
-remain unchanged. Rekordbox 6.8.7 remains compatible with the read-only live-DB
-adapter. No source audio, Rekordbox data, analysis data, or device target was
-written.
+The MA446 path is a real recovery-first stock database implementation, not a
+folder-copy hack. `soundbox.stock_ipod` renders with pinned Clickwheel only in a
+temporary target, reparses and audits the result, writes recovery material,
+copies media/artwork atomically, and publishes `iTunesDB` last. It merges a
+matching `Play Counts`, preserves technical/rating/bookmark identity, and never
+retags or writes source audio.
 
-## Exact next-session work
+Destination compatibility is proven and destination-specific. Stock MA446
+accepts validated MP3 plus stereo PCM16/44.1-kHz WAV only. The real iPod
+reproducibly rebooted on `Hostage Situation - Loot`, a PCM24/44.1-kHz WAV, so
+stock plans now omit every unsafe encoding with title/reason previews. SoundBox
+curation vetoes are resolved before format filtering.
 
-1. Start the staged `MainWindow` decomposition with the crown-jewel persistence
-   boundary. Characterize `library.json` load, corruption recovery, rotating
-   backup, and atomic-save behavior, then extract a UI-independent state store
-   without changing schema or recovery semantics.
-2. Continue only in separately validated stages: library load/refresh plus row
-   cache coordination; playback/autoplay orchestration; then custom
-   playlists/imported-track operations. Keep `MainWindow` as widget/signal
-   composition rather than cosmetic mixins.
-3. The next committed product/device task remains read-only-first real iPod
-   hardware validation per `docs/DEVICES.md` and the top-of-file contract in
-   `soundbox/sync.py`.
+Physical acceptance completed:
 
-## Validation and rollback
+- Apple/Finder three-track oracle preserved exact order and byte-identical
+  media; GodLovesUgly, Scream Saver VIP, and Check It WIP played correctly.
+- SoundBox authored and committed stock databases recovery-first, content-reused
+  existing media, survived reconnects, and merged real play/skip deltas.
+- Curated artwork displayed through real ArtworkDB plus RGB565 100×100/200×200
+  ithmb payloads. The pre-generated cache contains 2,252 unique manifests / about
+  229 MB derived from 2,626 usable curated images.
+- Reused tracks received only authoritative SoundBox title/artist enrichment.
+  Stock Artists displayed the intended `GRiZ`, `DENNETT`, `Subtronics`, and
+  `Zeds Dead, Subtronics` indexes.
+- Rekordbox `GENERES / HOUSE` resolved to 8 effective entries; stock included 6
+  and omitted only `Loot` and `DONTTRUSTME`. Every included track played without
+  another firmware reboot.
+- Regular playlist deletion reference-counted only remaining regular user
+  playlists. `Collection` retains owned tracks; orphan media/artwork is removed;
+  loose pre-existing tracks are not swept. Physical deletion reached a clean
+  zero-track/zero-user-playlist state.
+- Checkbox multi-delete was physically accepted: two playlists were deleted in
+  one guarded operation.
+- Qt unsigned-64-bit Apple playlist IDs are carried as decimal strings, avoiding
+  both `Signal(int)` truncation and QVariant signed-64-bit overflow. Device page
+  refresh preserves the active Playlists tab.
 
-Validation on 2026-07-31:
+## Videos and other Apple system lists
 
-- `./check.sh` passed 569 tests with one expected platform skip; native build,
-  pyflakes, and mypy passed.
-- Seven focused macOS-default/CUE tests passed, covering packaged-only default
-  mutation, failure-safe launch, Qt shortcut ownership, repeat suppression,
-  browser input-method state, inline-editor IME support, and Command-C.
-- The signed installed bundle verifies and contains
-  `ApplePressAndHoldEnabled=false`; the live per-bundle default reads `0`.
-- Relaunch activated the packaged native dylib, loaded 3,263 tracks / 83
-  playlists, and scheduled zero preparation tasks.
-- The authoritative post-quit `library.json` remained byte-identical after
-  install/relaunch at SHA-256
-  `183e8413a705ebdeea34a4c3d728e727b2181d283c805590616120b6a41aec3c`.
-  All 3,244 analysis files and 3,125 art files remain present.
-- Sonny physically accepted held CUE on the first loaded track. This is the
-  acceptance signal that the synthetic Qt event tests could not supply.
+The installed Device → Playlists page now shows the exact Apple `Videos` smart
+index as a checkable `System playlist`. It is the only deletable Apple smart
+list. The core requires title `Videos`, smart status, and MHSD-5 type 0; its plan
+removes no track records or media and validates every retained smart rule.
+Music, Movies, TV Shows, and Audiobooks remain immutable.
 
-The temporary install rollback is retired after the accepted wrap-up. Recovery
-does not require a data migration: reverting the source/app bundle and deleting
-the Soundbox-only `ApplePressAndHoldEnabled` default restores prior behavior.
+On the next physical pass, the Videos confirmation must report zero track
+records and zero media files. Any other impact is a refusal condition.
+
+## Stock, Rockbox, and dual boot contract
+
+Stock and Rockbox are permanent first-class SoundBox targets. The connected
+layout chooses the exporter automatically:
+
+- stock `iPod_Control` without `/.rockbox/` → guarded MA446 stock rules;
+- `/.rockbox/` present → broad Rockbox filesystem rules, even when
+  `iPod_Control` coexists;
+- remembered MA446 identity cannot re-enable stock writes on a Rockbox layout.
+
+Current dual-boot behavior is intentionally Rockbox-only export with iTunesDB
+read-only. Rockbox `/Music` files are not automatically visible to stock
+firmware, so stock fallback cannot encounter unsupported Rockbox media.
+
+The approved future dual-library design is **single-copy**, not duplicate:
+
+- stock-safe files live once under `iPod_Control/Music/Fxx`, are indexed in
+  iTunesDB, and are referenced by Rockbox playlists;
+- stock-unsafe but Rockbox-supported files live once under `/Music` and never
+  enter iTunesDB;
+- unsupported-by-both files are omitted and reported;
+- one composite planner/manifest must coordinate ownership, artwork, deletion,
+  recovery, stock database publication, Rockbox playlists, and rollback.
+
+That composite planner is not implemented. Do not run the current stock and
+Rockbox exporters independently to imitate it, and do not duplicate the whole
+collection.
+
+## Exact next-session sequence
+
+1. Reconnect the stock iPod and open Device → Playlists.
+2. Confirm Videos appears as `System playlist`; check it and plan deletion.
+3. Proceed only if the read-only plan says one playlist, zero track records, and
+   zero media files. Commit, eject, boot stock firmware, verify Videos is gone,
+   then reconnect and confirm all other smart lists/database health remain.
+4. Capture the final clean stock state off-device and perform a read-only space
+   audit before Rockbox installation. The empty dashboard previously reported
+   roughly 261 MB used; identify recovery/Trash/system usage before deleting
+   anything.
+5. Begin Rockbox installation/physical export acceptance: preserve recovery
+   paths first, verify exact model/FAT32 target, install firmware, then test a
+   tiny playlist for playback, absolute m3u8 paths, order, and curated artwork
+   before attempting Collection scale.
+6. Keep the approved composite dual-library planner as a separate later feature.
+   Initial Rockbox hardware work continues to leave stock iTunesDB read-only.
+
+## Validation
+
+- `./check.sh` passes **606 tests** with one expected platform skip; pyflakes,
+  native build, and mypy pass.
+- Videos deletion has a hermetic real-shape smart-playlist test proving one
+  retained Music smart list, unchanged regular playlist/track/media, and refusal
+  to delete Music.
+- Device-profile coverage proves `/.rockbox/` wins even beside a valid writable
+  MA446 checksum-zero database.
+- UI coverage renders Videos as `System playlist`, sends exact decimal playlist
+  IDs, supports checkbox multi-delete, omits the old Artist column, preserves
+  the active page, and suppresses redundant visible-text tooltips.
+- The final signed app verifies, relaunches, reports `Ready`, and activates the
+  packaged native deck. `git diff --check` is clean.
+
+## Preserved fixtures and recovery
+
+- Git-ignored physical captures live under `soundbox-ipod-ref/`, including the
+  pristine stock baseline, Apple/Finder oracle, and SoundBox post-play reconnect.
+- On-device recovery points live below
+  `.soundbox/stock-ipod-recovery/` when mounted; do not prune them until a final
+  clean stock snapshot exists off-device.
+- App/state rollback root:
+  `/tmp/soundbox-playlist-id-install.z1xGIM/`.

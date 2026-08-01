@@ -269,6 +269,238 @@ class DeviceLabels(unittest.TestCase):
         self.assertIn("Filesystem", tip)
 
 
+class StockIpodUI(unittest.TestCase):
+    def test_stock_device_header_has_requested_tabs(self):
+        self.assertEqual(
+            [button.text() for button in _win.device_tab_buttons],
+            ["Device", "Music", "Playlists"],
+        )
+        for button in _win.device_tab_buttons:
+            button.setVisible(True)
+        try:
+            _win.device_tab_buttons[2].setChecked(True)
+            self.assertTrue(_win.device_tab_buttons[2].isChecked())
+            self.assertEqual(_win.stock_ipod_pages.stack.currentIndex(), 2)
+        finally:
+            for button in _win.device_tab_buttons:
+                button.setVisible(False)
+        self.assertGreaterEqual(
+            _win.status_label.width(),
+            _win.status_label.fontMetrics().horizontalAdvance(
+                "PLANNING STOCK IPOD PLAYLIST DELETE..."),
+        )
+
+    def test_stock_device_pages_render_snapshot(self):
+        from soundbox.stock_ipod_info import (
+            StockIpodPlaylistEntry, StockIpodPlaylistSnapshot,
+            StockIpodSnapshot, StockIpodTrackSnapshot,
+        )
+        track = StockIpodTrackSnapshot(
+            1, 2, "More Hype", "GRiZ", "", "", "WAV", 14_515_286,
+            82_286, 1411, 44_100, 1, 0, 0, 0, 0,
+            ":iPod_Control:Music:F05:SDMM.wav", 0, 0)
+        huge_playlist_id = 10_469_178_251_650_046_358
+        playlist = StockIpodPlaylistSnapshot(
+            huge_playlist_id, "testinggggg", "Playlist", False,
+            (StockIpodPlaylistEntry(2, "More Hype", "GRiZ"),))
+        second_playlist_id = 8_532_857_218_490_441_969
+        second_playlist = StockIpodPlaylistSnapshot(
+            second_playlist_id, "House", "Playlist", False,
+            (StockIpodPlaylistEntry(2, "More Hype", "GRiZ"),))
+        library_root = StockIpodPlaylistSnapshot(
+            1, "iPod", "Library", False,
+            (StockIpodPlaylistEntry(2, "More Hype", "GRiZ"),))
+        smart_playlist = StockIpodPlaylistSnapshot(
+            2, "Music", "Smart playlist", True, ())
+        apple_regular_alias = StockIpodPlaylistSnapshot(
+            4, "Videos", "Playlist", False, ())
+        apple_smart_playlist = StockIpodPlaylistSnapshot(
+            5, "Videos", "Smart playlist", True, ())
+        snapshot = StockIpodSnapshot(
+            Path("/Volumes/IPOD"), "IPOD", "UUID", "MS-DOS (FAT32)",
+            "USB", "disk4s2", True, 256_000_000_000, 255_000_000_000,
+            "MA446", "remembered confirmation", "iPod Video",
+            "5.5th generation", "identity", 4, 5, 0x75, 0, "abc", 14_515_286,
+            0, "No pending playback records", 2, (track,),
+            (library_root, playlist, second_playlist, smart_playlist,
+             apple_regular_alias, apple_smart_playlist),
+            serial_number="8M650V0HV9M",
+            serial_source="macOS iPod device record",
+            firmware_version="1.3",
+            firmware_source="macOS iPod device record",
+            transport_revision="1.62",
+            dac_name="Wolfson WM8758BG",
+            dac_source="verified MA446 hardware catalog",
+        )
+        _win.stock_ipod_pages.set_snapshot(snapshot)
+        pages = _win.stock_ipod_pages
+        self.assertEqual(pages.music_model.rowCount(), 1)
+        self.assertEqual(
+            pages.music_model.index(0, 1).data(), "GRiZ")
+        self.assertEqual(
+            [name for name, _getter in pages.music_model.COLUMNS],
+            ["Title", "Artist", "Format", "Size", "Time", "Plays", "Skips", "Pending"],
+        )
+        self.assertIs(
+            pages.detail_layout.itemAtPosition(0, 0).widget(),
+            pages.detail_trees["Identity"],
+        )
+        self.assertIs(
+            pages.detail_layout.itemAtPosition(0, 1).widget(),
+            pages.detail_trees["Storage"],
+        )
+        self.assertIs(
+            pages.detail_layout.itemAtPosition(1, 0).widget(),
+            pages.detail_trees["Database"],
+        )
+        self.assertIs(
+            pages.detail_layout.itemAtPosition(1, 1).widget(),
+            pages.detail_trees["SoundBox"],
+        )
+        self.assertEqual(
+            pages.detail_trees["Identity"].topLevelItem(0).text(0), "Name")
+        self.assertEqual(
+            pages.detail_trees["Storage"].topLevelItem(0).text(0), "Capacity")
+        for tree in pages.detail_trees.values():
+            for index in range(tree.topLevelItemCount()):
+                self.assertEqual(tree.topLevelItem(index).toolTip(1), "")
+        identity = {
+            pages.detail_trees["Identity"].topLevelItem(index).text(0):
+            pages.detail_trees["Identity"].topLevelItem(index).text(1)
+            for index in range(pages.detail_trees["Identity"].topLevelItemCount())
+        }
+        self.assertIn("1.3", identity["Firmware"])
+        self.assertEqual(identity["DAC / codec"], "Wolfson WM8758BG")
+        self.assertIn("8M650V0HV9M", identity["Serial number"])
+        self.assertIn("SCSI transport 1.62", identity["Connection"])
+        self.assertEqual(pages.playlist_tree.columnCount(), 3)
+        self.assertEqual(
+            [pages.playlist_tree.headerItem().text(index) for index in range(3)],
+            ["Playlist / Track", "Tracks", "Type"],
+        )
+        self.assertEqual(pages.playlist_tree.topLevelItemCount(), 3)
+        self.assertEqual(
+            pages.playlist_tree.topLevelItem(0).text(0),
+            "testinggggg")
+        self.assertEqual(
+            pages.playlist_tree.topLevelItem(0).data(0, Qt.UserRole),
+            str(huge_playlist_id))
+        self.assertEqual(
+            pages.playlist_tree.topLevelItem(0).child(0).text(0),
+            "1. More Hype")
+        self.assertEqual(pages.playlist_tree.topLevelItem(2).text(0), "Videos")
+        self.assertEqual(
+            pages.playlist_tree.topLevelItem(2).text(2), "System playlist")
+        from desktop.stock_device_view import StockIpodPages
+        standalone = StockIpodPages()
+        calls = []
+        standalone.delete_playlists_requested.connect(calls.append)
+        standalone.set_snapshot(snapshot)
+        self.assertFalse(standalone.delete_playlist_button.isEnabled())
+        standalone.playlist_tree.setCurrentItem(
+            standalone.playlist_tree.topLevelItem(0).child(0))
+        self.assertFalse(standalone.delete_playlist_button.isEnabled())
+        standalone.playlist_tree.topLevelItem(0).setCheckState(0, Qt.Checked)
+        self.assertTrue(standalone.delete_playlist_button.isEnabled())
+        self.assertEqual(
+            standalone.delete_playlist_button.text(),
+            "Delete checked playlist…",
+        )
+        standalone.playlist_tree.topLevelItem(1).setCheckState(0, Qt.Checked)
+        self.assertEqual(
+            standalone.delete_playlist_button.text(),
+            "Delete 2 checked playlists…",
+        )
+        standalone.delete_playlist_button.click()
+        self.assertEqual(calls, [(
+            (str(huge_playlist_id), "testinggggg"),
+            (str(second_playlist_id), "House"),
+        )])
+        standalone.playlist_tree.topLevelItem(0).setCheckState(0, Qt.Unchecked)
+        standalone.playlist_tree.topLevelItem(1).setCheckState(0, Qt.Unchecked)
+        standalone.playlist_tree.topLevelItem(2).setCheckState(0, Qt.Checked)
+        standalone.delete_playlist_button.click()
+        self.assertEqual(calls[-1], (("5", "Videos"),))
+        standalone.set_page(2)
+        standalone.set_loading(preserve_page=True)
+        self.assertEqual(standalone.stack.currentIndex(), 2)
+        standalone.set_snapshot(snapshot)
+        self.assertEqual(standalone.stack.currentIndex(), 2)
+        standalone.close()
+        pages._music_widths_applied = False
+        pages.set_page(1)
+        _app.processEvents()
+        from PySide6.QtWidgets import QHeaderView
+        self.assertEqual(
+            pages.music_table.horizontalHeader().sectionResizeMode(0),
+            QHeaderView.Stretch,
+        )
+        self.assertEqual(
+            pages.music_table.columnWidth(1), pages.MUSIC_FIXED_COLUMN_WIDTHS[0])
+        pages.set_page(0)
+
+    def test_confirmed_model_is_scoped_to_stable_device_identity(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from soundbox.device_profile import DeviceProfile
+
+        profile = DeviceProfile(
+            "stock_ipod", "Stock iPod", "msdos", False, True,
+            False, True, False, "", 0x400B739988A917E1)
+        old = _win.settings.get("stock_ipod_models")
+        try:
+            with mock.patch(
+                    "desktop.app.device_facts",
+                    return_value=SimpleNamespace(volume_uuid="FIXTURE-UUID")):
+                key = _win._stock_device_key("/Volumes/IPOD", profile)
+                _win._remember_stock_model(key, "MA446LL/A")
+                self.assertEqual(
+                    _win._stored_stock_model("/Volumes/IPOD", profile), "MA446")
+                self.assertIn("FIXTURE-UUID", key)
+                self.assertNotIn(str(profile.library_persistent_id), key)
+        finally:
+            _win.settings["stock_ipod_models"] = old if isinstance(old, dict) else {}
+
+    def test_drop_routes_selected_playlist_to_two_phase_stock_flow(self):
+        from types import SimpleNamespace
+
+        dev = "/Volumes/IPOD"
+        calls = []
+        old_profile = _win._device_profiles.get(dev)
+        real = _win._begin_stock_ipod_sync
+        _win._device_profiles[dev] = SimpleNamespace(
+            kind="stock_ipod", stock_preview=True, rockbox_export=False)
+        _win._begin_stock_ipod_sync = (
+            lambda device, playlists: calls.append((device, playlists)))
+        try:
+            _win._on_device_drop(dev, [("rb", "CRATES / SET ONE")])
+            self.assertEqual(calls[0][0], dev)
+            self.assertEqual([p.display_path for p in calls[0][1]],
+                             ["CRATES / SET ONE"])
+        finally:
+            _win._begin_stock_ipod_sync = real
+            if old_profile is None:
+                _win._device_profiles.pop(dev, None)
+            else:
+                _win._device_profiles[dev] = old_profile
+
+    def test_stock_commit_prompt_defaults_to_cancel(self):
+        source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
+        self.assertIn('"Commit stock iPod sync?"', source)
+        self.assertIn("QMessageBox.Cancel,\n        )", source)
+
+    def test_stock_playlist_delete_prompt_is_explicit_and_defaults_to_cancel(self):
+        source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
+        self.assertIn('"Delete stock iPod playlist?"', source)
+        self.assertIn("Only songs unused by every remaining user playlist", source)
+        self.assertIn("Deleted device media is not retained in recovery", source)
+        device_source = (
+            Path(__file__).parents[1] / "desktop" / "stock_device_view.py"
+        ).read_text()
+        self.assertIn("Delete checked playlists…", device_source)
+        self.assertIn("Delete this playlist from iPod…", device_source)
+
+
 if __name__ == "__main__":
     unittest.main()
 

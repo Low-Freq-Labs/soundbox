@@ -27,6 +27,7 @@ import os
 import random
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
@@ -76,13 +77,13 @@ def setup_logging() -> Path | None:
             pass
     return logpath
 
-from PySide6.QtCore import QEvent, QPointF, QProcess, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPointF, QProcess, QRect, QSize, Qt, QThread, QTimer
 from PySide6.QtGui import (
     QColor, QFontDatabase, QIcon, QKeySequence, QPainter, QPixmap, QPolygonF,
     QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QLineEdit,
+    QAbstractItemView, QApplication, QButtonGroup, QLineEdit,
     QFileDialog, QFileSystemModel, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
     QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget,
@@ -93,6 +94,17 @@ from PySide6.QtWidgets import (
 from soundbox import artfetch, engine, imports, libcache, metadata, paths, rekordbox_db
 from soundbox.device_profile import plan_stock_ipod_export
 from soundbox.library import Playlist
+from soundbox.stock_artwork import StockArtworkCache
+from soundbox.stock_ipod import (
+    StockIpodDeletePlan, StockIpodSyncPlan,
+    commit_stock_ipod_playlist_delete, commit_stock_ipod_sync,
+    normalize_model_number, plan_stock_ipod_playlist_delete,
+    plan_stock_ipod_sync, supports_stock_write,
+)
+from soundbox.stock_ipod_info import (
+    StockIpodSnapshot, confirmed_model_from_recovery,
+    read_stock_ipod_snapshot, stock_ipod_device_key,
+)
 from . import theme
 from .artpicker import ArtPickerDialog
 from .model import (
@@ -101,8 +113,9 @@ from .model import (
 from .player import PlayerBar
 
 from .device_browser import DeviceBrowserMixin
-from .devices import device_fs, human
+from .devices import device_facts, device_fs, human
 from .settings_page import SettingsPageMixin
+from .stock_device_view import StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
     CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
@@ -111,7 +124,8 @@ from .trees import (
 
 from .workers import (
     ArtFillWorker, DeleteWorker, DeviceScanWorker, ExportWorker,
-    RefreshWorker, ResyncWorker, WaveformFillWorker, _OneShotArt, _running,
+    RefreshWorker, ResyncWorker, StockArtworkPrepWorker, WaveformFillWorker,
+    _OneShotArt, _running,
 )
 
 
@@ -147,6 +161,7 @@ _DEFAULT_SETTINGS = {
     "waveform_zoom": 92.0,
     "waveform_mode": "3BAND",
     "autoplay_mode": "",
+    "stock_ipod_models": {},  # stable device identity -> confirmed model
 }
 
 _AUTOPLAY_MODES = {"up", "random", "down"}
@@ -179,6 +194,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._data_file = data_dir / "library.json"  # portable SoundBox library
         self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
         self.art_cache = artfetch.ArtCache(data_dir / "art")  # cover-art cache
+        self.stock_art_cache = StockArtworkCache(data_dir / "stock_artwork")
         # One-time Rockbox-safety sweep: any cached art that isn't baseline JPEG
         # (progressive/PNG shows BLANK on the iPod) is re-encoded. Flag-filed —
         # a no-op on every launch after the first, so it's fine on the main thread
@@ -188,6 +204,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             LOG.info("art cache sweep: %d checked, %d re-encoded to baseline JPEG", checked, fixed)
         self._art_worker: ArtFillWorker | None = None
         self._art_restart = False  # set by re-scan to restart the fill after it stops
+        self._stock_art_worker: StockArtworkPrepWorker | None = None
+        self._stock_art_rescan = False
         self._wf_fill_worker: WaveformFillWorker | None = None
         self._track_analysis_dir = data_dir / "track_analysis"
         self._preparing_library = False
@@ -210,10 +228,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._resync_worker: ResyncWorker | None = None
         self._dev_scan_worker: DeviceScanWorker | None = None
         self._delete_worker: DeleteWorker | None = None
+        self._stock_plan_worker = None
+        self._stock_commit_worker = None
+        self._stock_delete_plan_worker = None
+        self._stock_delete_commit_worker = None
+        self._stock_view_worker = None
         self._eject_verify_worker = None
         self._device_import_worker = None
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
         self._device_profiles: dict[str, object] = {}
+        self._current_device_path = ""
+        self._stock_snapshot: StockIpodSnapshot | None = None
         self._sync_playlists_cache: list[Playlist] | None = None
         # Autoplay owns a frozen snapshot of the view that supplied the
         # deliberately started track. Browsing elsewhere never mutates it.
@@ -1150,7 +1175,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_playback_active(self, active: bool):
         """Reserve CPU/UI time for the deck while audio is running."""
-        for worker in (self._wf_fill_worker, self._art_worker):
+        for worker in (
+                self._wf_fill_worker, self._art_worker, self._stock_art_worker):
             if worker is not None:
                 worker.set_playback_active(active)
         if not active:
@@ -1315,6 +1341,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dhh = QHBoxLayout(dhead); dhh.setContentsMargins(10, 0, 8, 0)
         self.dev_header = QLabel("Device"); self.dev_header.setObjectName("DeviceTitle")
         dhh.addWidget(self.dev_header, 1)
+        self.device_tab_group = QButtonGroup(self)
+        self.device_tab_group.setExclusive(True)
+        self.device_tab_buttons = []
+        for index, label in enumerate(("Device", "Music", "Playlists")):
+            button = QPushButton(label)
+            button.setObjectName("DeviceTab")
+            button.setCheckable(True)
+            button.setFixedHeight(26)
+            button.setVisible(False)
+            button.toggled.connect(
+                lambda checked, i=index: (
+                    self._set_stock_device_tab(i) if checked else None))
+            self.device_tab_group.addButton(button, index)
+            self.device_tab_buttons.append(button)
+            dhh.addWidget(button)
         eject_btn = QPushButton("⏏ Eject"); eject_btn.clicked.connect(self._eject_current)
         dhh.addWidget(eject_btn)
         dl.addWidget(dhead)
@@ -1339,7 +1380,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.fs_view.setColumnWidth(1, 90)
         self.fs_view.setColumnWidth(2, 120)
         self.fs_view.setColumnWidth(3, 150)
-        dl.addWidget(self.fs_view)
+        self.device_content_stack = QStackedWidget()
+        self.device_content_stack.addWidget(self.fs_view)
+        self.stock_ipod_pages = StockIpodPages()
+        self.stock_ipod_pages.confirm_model_requested.connect(
+            self._confirm_current_stock_model)
+        self.stock_ipod_pages.delete_playlists_requested.connect(
+            self._begin_stock_playlist_delete)
+        self.device_content_stack.addWidget(self.stock_ipod_pages)
+        dl.addWidget(self.device_content_stack)
         self.stack.addWidget(dpage)
 
         # page 2: Artists browser — folder rows per artist, songs on expand
@@ -1391,14 +1440,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # against the window edge.
         h = QHBoxLayout(bar); h.setContentsMargins(20, 6, 12, 6); h.setSpacing(8)
         self.status_label = QLabel("Ready")
-        # Fixed width (just fits the longest message) so animating dots don't
-        # shove the bar, but the gap to the bar stays tight.
+        # Fixed width (just fits the longest operation message) so animating
+        # dots do not shove the bar or clip long stock-iPod operations.
         fm = self.status_label.fontMetrics()
-        # Fits the longest status (animated word or art count) so nothing clips.
-        w = max(
-            fm.horizontalAdvance("Preparing your library..."),
-            fm.horizontalAdvance("Art 9999/9999"),
-        )
+        w = max(fm.horizontalAdvance(value) for value in (
+            "Preparing your library...",
+            "Art 9999/9999",
+            "PLANNING STOCK IPOD PLAYLIST DELETE...",
+            "DELETING STOCK IPOD PLAYLISTS...",
+            "Stock iPod playlists deleted ✓",
+        ))
         self.status_label.setFixedWidth(w + 8)
         h.addWidget(self.status_label)
         self.progress = QProgressBar()
@@ -1440,6 +1491,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _apply_loaded_library(self):
@@ -1582,6 +1634,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _on_refresh_fail(self, err):
@@ -1998,6 +2051,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             else:
                 self._reload_current_view()  # Collection view picks them up live
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+            QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
             QTimer.singleShot(500, self._maybe_fill_waveforms)
         elif skipped:
             QMessageBox.warning(
@@ -2310,11 +2364,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_devices_scanned(self, devs: list):
         """Apply a background device scan to the tree (main thread). devs is a list
         of (name, path, free, drift, read-only profile)."""
+        devs = [
+            (name, path, free, drift, self._effective_device_profile(path, profile))
+            for name, path, free, drift, profile in devs
+        ]
         self._drift_cache = {
             path: drift for _n, path, _f, drift, _profile in devs}
         self._device_profiles = {
             path: profile for _n, path, _f, _d, profile in devs}
         new_paths = [p for _n, p, _f, _d, _profile in devs]
+        if self._current_device_path and self._current_device_path not in new_paths:
+            self._current_device_path = ""
+            self._stock_snapshot = None
+            self.stack.setCurrentIndex(0)
         cur = [self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE)
                for i in range(self.device_tree.topLevelItemCount())]
         if new_paths != cur and QApplication.mouseButtons() & Qt.LeftButton:
@@ -2339,6 +2401,47 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             it.setToolTip(0, self._device_tip(path, free, profile))
             self.device_tree.addTopLevelItem(it)
 
+    def _stock_device_key(self, dev: str, profile=None) -> str:
+        profile = profile or self._device_profiles.get(dev)
+        library_id = int(
+            getattr(profile, "library_persistent_id", 0) or 0)
+        return stock_ipod_device_key(
+            device_facts(dev).volume_uuid, library_id)
+
+    def _stored_stock_model(self, dev: str, profile=None) -> str:
+        profile_model = normalize_model_number(
+            str(getattr(profile, "model", "") or ""))
+        if supports_stock_write(profile_model):
+            return profile_model
+        values = self.settings.get("stock_ipod_models")
+        if not isinstance(values, dict):
+            return ""
+        model = normalize_model_number(
+            str(values.get(self._stock_device_key(dev, profile)) or ""))
+        return model if supports_stock_write(model) else ""
+
+    def _effective_device_profile(self, dev: str, profile):
+        if getattr(profile, "kind", "") != "stock_ipod":
+            return profile
+        model = self._stored_stock_model(dev, profile)
+        if not model or model == getattr(profile, "model", ""):
+            return profile
+        if not hasattr(profile, "__dataclass_fields__"):
+            return profile
+        return replace(profile, model=model, stock_write=True)
+
+    def _remember_stock_model(self, identity_key: str, model: str):
+        model = normalize_model_number(model)
+        if not identity_key or not supports_stock_write(model):
+            return
+        raw = self.settings.get("stock_ipod_models")
+        values = dict(raw) if isinstance(raw, dict) else {}
+        if values.get(identity_key) == model:
+            return
+        values[identity_key] = model
+        self.settings["stock_ipod_models"] = values
+        self._save_state()
+
     def _device_tip(self, path: str, free, profile=None) -> str:
         fs = device_fs(path) or "unknown"
         tip = f"{path}\nFilesystem: {fs}   ·   {human(free)} free"
@@ -2346,8 +2449,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             tip += f"\nDetected layout: {profile.label}"
             if profile.model:
                 tip += f" ({profile.model})"
-            if profile.stock_preview and not profile.stock_write:
-                tip += "\nStock iPod export is preview-only; SoundBox will not edit iTunesDB."
+            if profile.has_rockbox and profile.rockbox_export:
+                tip += (
+                    "\nRockbox export rules are active; the coexisting stock "
+                    "database remains read-only.")
+            elif profile.stock_preview and not profile.stock_write:
+                tip += (
+                    "\nStock sync requires an MP3/WAV playlist dry-run and "
+                    "confirmed MA446 model number.")
+            elif profile.stock_write:
+                tip += "\nValidated MA446 stock-sync engine available (dry-run first)."
         if fs not in ("msdos", "fat32", "unknown"):
             tip += "\n⚠ Rockbox requires FAT32 — this device would need reformatting."
         return tip
@@ -2356,9 +2467,112 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dev = item.data(0, DEVPATH_ROLE)
         if dev:
             self._select_only(self.device_tree)
+            self._current_device_path = dev
             self.dev_header.setText(f"Device:  {Path(dev).name}   ({dev})")
             self.fs_view.setRootIndex(self.fs_model.setRootPath(dev))
+            profile = self._device_profiles.get(dev)
+            stock = bool(
+                profile is not None
+                and getattr(profile, "kind", "") == "stock_ipod")
+            for button in self.device_tab_buttons:
+                button.setVisible(stock)
+            if stock:
+                self.device_content_stack.setCurrentIndex(1)
+                self.stock_ipod_pages.set_loading()
+                self._set_stock_device_tab(0)
+                self._read_stock_device_view(dev, profile)
+            else:
+                self.device_content_stack.setCurrentIndex(0)
             self.stack.setCurrentIndex(1)
+
+    def _set_stock_device_tab(self, index: int):
+        if not self.device_tab_buttons:
+            return
+        index = max(0, min(2, int(index)))
+        self.device_tab_buttons[index].setChecked(True)
+        self.stock_ipod_pages.set_page(index)
+
+    def _read_stock_device_view(self, dev: str, profile=None):
+        if _running(self._stock_view_worker):
+            return
+        from .workers import OneShotTask
+        facts = device_facts(dev)
+        model = self._stored_stock_model(dev, profile)
+        worker = OneShotTask(lambda: read_stock_ipod_snapshot(
+            dev,
+            model_number=model,
+            volume_uuid=facts.volume_uuid,
+            filesystem=facts.filesystem_name or device_fs(dev),
+            protocol=facts.protocol,
+            device_identifier=facts.device_identifier,
+            writable=facts.writable,
+            capacity_bytes=facts.capacity_bytes,
+            free_bytes=0,  # refresh inside the worker; diskutil cache can be stale
+            serial_number=getattr(facts, "hardware_serial", ""),
+            serial_source=getattr(facts, "serial_source", ""),
+            usb_serial=getattr(facts, "usb_serial", ""),
+            firmware_version=getattr(facts, "firmware_version", ""),
+            firmware_source=getattr(facts, "firmware_source", ""),
+            transport_revision=getattr(facts, "transport_revision", ""),
+        ))
+        self._stock_view_worker = worker
+        worker.done.connect(
+            lambda result, device=dev: self._on_stock_device_view(device, result))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker("_stock_view_worker", ww))
+        worker.start()
+
+    def _on_stock_device_view(self, dev: str, result):
+        if dev != self._current_device_path:
+            return
+        if isinstance(result, Exception):
+            self._stock_snapshot = None
+            self.stock_ipod_pages.set_error(str(result))
+            return
+        if not isinstance(result, StockIpodSnapshot):
+            self._stock_snapshot = None
+            self.stock_ipod_pages.set_error("Unexpected stock-iPod snapshot")
+            return
+        self._stock_snapshot = result
+        if result.model:
+            self._remember_stock_model(result.identity_key, result.model)
+            profile = self._device_profiles.get(dev)
+            if profile is not None:
+                self._device_profiles[dev] = self._effective_device_profile(
+                    dev, profile)
+        self.stock_ipod_pages.set_snapshot(result)
+
+    def _confirm_current_stock_model(self):
+        dev = self._current_device_path
+        profile = self._device_profiles.get(dev)
+        if not dev or profile is None:
+            return
+        current = (
+            self._stock_snapshot.model if self._stock_snapshot is not None
+            else self._stored_stock_model(dev, profile))
+        model, ok = QInputDialog.getText(
+            self,
+            "Confirm stock iPod model",
+            "Enter the model number shown under Settings → About\n"
+            "(the current validated allowlist accepts MA446 only):",
+            text=current,
+        )
+        if not ok:
+            return
+        model = normalize_model_number(model)
+        if not supports_stock_write(model):
+            QMessageBox.warning(
+                self, "Model not validated",
+                f"{model or 'No model number'} is not in the current MA446 "
+                "stock-write allowlist. The saved confirmation was unchanged.")
+            return
+        identity_key = (
+            self._stock_snapshot.identity_key
+            if self._stock_snapshot is not None
+            else self._stock_device_key(dev, profile))
+        self._remember_stock_model(identity_key, model)
+        self.stock_ipod_pages.set_loading(preserve_page=True)
+        self._read_stock_device_view(dev, profile)
 
     def _device_menu(self, pos):
         item = self.device_tree.itemAt(pos)
@@ -2368,7 +2582,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu = QMenu(self)
         menu.addAction("Browse", lambda: self._on_device_click(item, 0))
         profile = self._device_profiles.get(dev)
-        if profile is not None and profile.stock_preview:
+        if profile is not None and profile.kind == "stock_ipod":
             menu.addAction(
                 "Preview stock iPod export…",
                 lambda: self._preview_stock_ipod(dev))
@@ -2397,6 +2611,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         profile = self._device_profiles.get(dev)
         if profile is None:
             return
+        profile = self._effective_device_profile(dev, profile)
         audio = (
             [str(t.path) for t in self.lib.tracks_by_id.values()]
             if self.lib is not None else []
@@ -2406,13 +2621,368 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             f"{suffix}: {count}"
             for suffix, count in plan["formats"].items()) or "none"
         QMessageBox.information(
-            self, "Stock iPod export preview",
+            self, "Stock iPod sync readiness",
             f"Device: {profile.label}"
             f"{f' ({profile.model})' if profile.model else ''}\n"
             f"Tracks visible to planner: {plan['track_count']}\n"
             f"Formats: {formats}\n\n"
-            "Preview only. SoundBox has not changed this device and will not "
-            "write iTunesDB until that exporter is independently validated.")
+            f"{'Ready for an explicit playlist dry-run.' if plan['writable'] else 'Not ready for a whole-library plan.'}\n"
+            f"{chr(10).join(plan['blockers']) if plan['blockers'] else 'Drop a small MP3/WAV playlist onto the iPod to plan it.'}\n\n"
+            "This readiness check made no changes.")
+
+    def _stock_write_model(self, dev: str, profile=None) -> str:
+        """Resolve the same fail-closed MA446 authority for every stock write."""
+        model = self._stored_stock_model(dev, profile)
+        if not supports_stock_write(model):
+            recovered = confirmed_model_from_recovery(dev)
+            if supports_stock_write(recovered):
+                model = recovered
+                self._remember_stock_model(
+                    self._stock_device_key(dev, profile), model)
+        if not supports_stock_write(model):
+            model, ok = QInputDialog.getText(
+                self,
+                "Confirm stock iPod model",
+                "Enter the model number shown under Settings → About\n"
+                "(the first write allowlist accepts MA446 only):",
+                text=model,
+            )
+            if not ok:
+                return ""
+        if not supports_stock_write(model):
+            QMessageBox.warning(
+                self,
+                "Model not validated",
+                f"{model or 'No model number'} is not in the initial MA446 "
+                "stock-write allowlist. No files were changed.",
+            )
+            return ""
+        model = normalize_model_number(model)
+        self._remember_stock_model(self._stock_device_key(dev, profile), model)
+        return model
+
+    def _begin_stock_ipod_sync(self, dev: str, playlists: list[Playlist]):
+        """Run the expensive, read-only database/media plan off the UI thread."""
+        if any(_running(getattr(self, name, None)) for name in (
+                "export_worker", "_resync_worker", "_stock_plan_worker",
+                "_stock_commit_worker", "_stock_delete_plan_worker",
+                "_stock_delete_commit_worker", "_stock_view_worker",
+                "_delete_worker")):
+            QMessageBox.warning(
+                self, "Device busy", "Wait for the current device operation.")
+            return
+        profile = self._device_profiles.get(dev)
+        model = self._stock_write_model(dev, profile)
+        if not model:
+            return
+        from .workers import OneShotTask
+        library = self.lib
+        worker = OneShotTask(lambda: plan_stock_ipod_sync(
+            library,
+            playlists,
+            dev,
+            model_number=model,
+            filesystem=device_fs(dev),
+            derive_artists=True,
+            artist_overrides=self.overrides,
+            title_overrides=self.titles,
+            art_cache=self.art_cache,
+            stock_art_cache=self.stock_art_cache,
+        ))
+        self._stock_plan_worker = worker
+        self._exporting = True
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("PLANNING STOCK IPOD")
+        worker.done.connect(
+            lambda result, d=dev: self._on_stock_ipod_plan(d, result))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker("_stock_plan_worker", ww))
+        worker.start()
+
+    def _on_stock_ipod_plan(self, dev: str, result):
+        self._exporting = False
+        self._stop_pulse()
+        self.status_label.setText("Ready")
+        if isinstance(result, Exception):
+            QMessageBox.warning(
+                self, "Stock iPod plan refused", f"{result}\n\nNo files were changed.")
+            self._refresh_devices()
+            return
+        if not isinstance(result, StockIpodSyncPlan):
+            QMessageBox.critical(self, "Stock iPod plan failed", "Unexpected plan result.")
+            return
+        summary = result.summary()
+        omission_preview = ""
+        if result.omissions:
+            shown = result.omissions[:6]
+            omission_preview = (
+                "\n\nOMITTED FOR STOCK-FIRMWARE SAFETY:\n"
+                + "\n".join(
+                    f"• {item.title}: {item.reason}" for item in shown)
+            )
+            if len(result.omissions) > len(shown):
+                omission_preview += (
+                    f"\n• …and {len(result.omissions) - len(shown)} more")
+        answer = QMessageBox.question(
+            self,
+            "Commit stock iPod sync?",
+            "The read-only plan passed every structural check.\n\n"
+            f"Model: {summary['model']}\n"
+            f"Playlists: {', '.join(summary['playlists'])}\n"
+            f"Playlist entries selected: {summary['selected_tracks']}\n"
+            f"Compatible entries included: {summary['source_tracks']}\n"
+            f"Incompatible entries omitted: {summary['omitted_tracks']}\n"
+            f"Already on iPod: {summary['reused_tracks']}\n"
+            f"Existing track metadata updated: {summary['metadata_updates']}\n"
+            f"New media files: {summary['new_tracks']} "
+            f"({human(summary['bytes_to_copy'])})\n"
+            f"Artwork: {summary['artwork_tracks']} track(s), "
+            f"{summary['unique_artwork']} unique "
+            f"({human(summary['artwork_bytes_to_copy'])})\n"
+            f"Final iPod library: {summary['final_tracks']} tracks\n"
+            f"Pending playback records merged: {summary['merged_play_count_entries']}"
+            f"{omission_preview}\n\n"
+            "Continue will copy new media, save recovery files, and atomically "
+            "replace iTunesDB last. Omissions apply only to this stock iPod; "
+            "Rockbox exports and source playlists remain unchanged.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            self._flash_status("Stock iPod plan cancelled — nothing written")
+            self._refresh_devices()
+            return
+        self._commit_stock_ipod_plan(dev, result)
+
+    def _commit_stock_ipod_plan(self, dev: str, plan: StockIpodSyncPlan):
+        from .workers import OneShotTask
+        worker = OneShotTask(lambda: commit_stock_ipod_sync(plan))
+        self._stock_commit_worker = worker
+        self._exporting = True
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("SYNCING STOCK IPOD")
+        worker.done.connect(
+            lambda result, d=dev: self._on_stock_ipod_commit(d, result))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker("_stock_commit_worker", ww))
+        worker.start()
+
+    def _on_stock_ipod_commit(self, dev: str, result):
+        self._exporting = False
+        self._stop_pulse()
+        self.status_label.setText("Ready")
+        if isinstance(result, Exception):
+            QMessageBox.critical(
+                self, "Stock iPod sync failed",
+                f"{result}\n\nSoundBox attempted an exact database/media rollback.")
+        else:
+            QMessageBox.information(
+                self,
+                "Stock iPod sync complete",
+                f"Copied {result.copied_tracks} new track(s); reused "
+                f"{result.reused_tracks}.\n\n"
+                f"Updated title/artist metadata for "
+                f"{result.metadata_updates} existing track(s).\n\n"
+                f"Linked artwork for {result.artwork_tracks} track(s) "
+                f"from {result.unique_artwork} unique image(s).\n\n"
+                f"Recovery files:\n{result.recovery_directory}\n\n"
+                "Eject from SoundBox before listening.",
+            )
+            self._flash_status("Stock iPod synced ✓")
+        self._refresh_devices()
+        if dev == self._current_device_path and not isinstance(result, Exception):
+            self.stock_ipod_pages.set_loading(preserve_page=True)
+            QTimer.singleShot(
+                0, lambda d=dev: self._read_stock_device_view(
+                    d, self._device_profiles.get(d)))
+
+    def _begin_stock_playlist_delete(self, selections):
+        """Plan deletion of the checked user playlists from the stock iPod."""
+        dev = self._current_device_path
+        if not dev or self._stock_snapshot is None:
+            return
+        identities: list[tuple[int, str]] = []
+        seen_ids: set[int] = set()
+        for raw in tuple(selections or ()):
+            if not isinstance(raw, (tuple, list)) or len(raw) != 2:
+                continue
+            playlist_id = str(raw[0] or "")
+            if not playlist_id.isdecimal() or int(playlist_id) <= 0:
+                continue
+            numeric_id = int(playlist_id)
+            if numeric_id in seen_ids:
+                continue
+            seen_ids.add(numeric_id)
+            identities.append((numeric_id, str(raw[1] or "Untitled playlist")))
+        if not identities:
+            return
+        if self._stock_snapshot.target != Path(dev).resolve():
+            QMessageBox.warning(
+                self, "Device changed", "Refresh the stock iPod before deleting.")
+            return
+        if any(_running(getattr(self, name, None)) for name in (
+                "export_worker", "_resync_worker", "_stock_plan_worker",
+                "_stock_commit_worker", "_stock_delete_plan_worker",
+                "_stock_delete_commit_worker", "_stock_view_worker",
+                "_delete_worker")):
+            QMessageBox.warning(
+                self, "Device busy", "Wait for the current device operation.")
+            return
+        profile = self._device_profiles.get(dev)
+        model = self._stock_write_model(dev, profile)
+        if not model:
+            return
+        from .workers import OneShotTask
+        worker = OneShotTask(lambda: plan_stock_ipod_playlist_delete(
+            dev,
+            [playlist_id for playlist_id, _title in identities],
+            model_number=model,
+            filesystem=device_fs(dev),
+            stock_art_cache=self.stock_art_cache,
+        ))
+        self._stock_delete_plan_worker = worker
+        self._exporting = True
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("PLANNING STOCK IPOD PLAYLIST DELETE")
+        worker.done.connect(
+            lambda result, d=dev, expected=tuple(identities):
+            self._on_stock_playlist_delete_plan(d, expected, result))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker(
+                "_stock_delete_plan_worker", ww))
+        worker.start()
+
+    def _on_stock_playlist_delete_plan(
+            self, dev: str, expected: tuple[tuple[int, str], ...], result):
+        self._exporting = False
+        self._stop_pulse()
+        self.status_label.setText("Ready")
+        if isinstance(result, Exception):
+            QMessageBox.warning(
+                self,
+                "Stock iPod delete refused",
+                f"{result}\n\nNo playlists, database records, or media files changed.",
+            )
+            self._refresh_devices()
+            return
+        if not isinstance(result, StockIpodDeletePlan):
+            QMessageBox.critical(
+                self, "Stock iPod delete failed", "Unexpected plan result.")
+            return
+        summary = result.summary()
+        planned_title = ", ".join(summary["playlists"])
+        expected_ids = tuple(playlist_id for playlist_id, _title in expected)
+        if tuple(result.playlist_ids) != expected_ids:
+            QMessageBox.warning(
+                self,
+                "Playlists changed",
+                "The selected playlist identities changed during planning. "
+                "Nothing was modified.",
+            )
+            return
+        multiple = len(result.playlist_names) != 1
+        retained_note = (
+            "No track records or media files will be removed."
+            if summary["deleted_track_records"] == 0
+            else "Only songs unused by every remaining user playlist will be removed."
+        )
+        answer = QMessageBox.question(
+            self,
+            "Delete stock iPod playlists?" if multiple
+            else "Delete stock iPod playlist?",
+            "The read-only deletion plan passed every structural check.\n\n"
+            f"{'Playlists' if multiple else 'Playlist'}: {planned_title}\n"
+            f"Track records becoming unused: {summary['deleted_track_records']}\n"
+            f"Media files deleted: {summary['deleted_media_files']} "
+            f"({human(summary['bytes_to_delete'])})\n"
+            f"Remaining user playlists: {summary['remaining_playlists']}\n"
+            f"Remaining iPod library: {summary['final_tracks']} tracks\n"
+            f"Pending playback records merged: "
+            f"{summary['merged_play_count_entries']}\n\n"
+            f"{retained_note}\n\n"
+            "Continue will save database/artwork recovery files, publish the "
+            "new iTunesDB, then delete the now-unreferenced device media. "
+            "Deleted device media is not retained in recovery because that "
+            "would not free space; the source library remains unchanged.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            self._flash_status("Stock iPod deletion cancelled — nothing written")
+            self._refresh_devices()
+            return
+        self._commit_stock_playlist_delete(dev, result)
+
+    def _commit_stock_playlist_delete(self, dev: str, plan: StockIpodDeletePlan):
+        from .workers import OneShotTask
+        worker = OneShotTask(lambda: commit_stock_ipod_playlist_delete(plan))
+        self._stock_delete_commit_worker = worker
+        self._exporting = True
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse(
+            "DELETING STOCK IPOD PLAYLISTS"
+            if len(plan.playlist_names) != 1
+            else "DELETING STOCK IPOD PLAYLIST")
+        worker.done.connect(
+            lambda result, d=dev: self._on_stock_playlist_delete_commit(d, result))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker(
+                "_stock_delete_commit_worker", ww))
+        worker.start()
+
+    def _on_stock_playlist_delete_commit(self, dev: str, result):
+        self._exporting = False
+        self._stop_pulse()
+        self.status_label.setText("Ready")
+        if isinstance(result, Exception):
+            QMessageBox.critical(
+                self,
+                "Stock iPod deletion failed",
+                f"{result}\n\nSoundBox attempted an exact database/artwork rollback.",
+            )
+        elif result.cleanup_failures:
+            multiple = len(result.playlists) != 1
+            QMessageBox.warning(
+                self,
+                "Playlists deleted; media cleanup incomplete" if multiple
+                else "Playlist deleted; media cleanup incomplete",
+                f"Deleted {'playlists' if multiple else 'playlist'}: "
+                f"{', '.join(result.playlists)}\n"
+                f"Removed {result.deleted_track_records} database track(s) and "
+                f"{result.deleted_media_files} media file(s).\n\n"
+                "The iPod database is consistent, but these unindexed files "
+                f"could not be removed:\n{chr(10).join(result.cleanup_failures)}\n\n"
+                f"Recovery files:\n{result.recovery_directory}",
+            )
+        else:
+            multiple = len(result.playlists) != 1
+            QMessageBox.information(
+                self,
+                "Stock iPod playlists deleted" if multiple
+                else "Stock iPod playlist deleted",
+                f"Deleted {'playlists' if multiple else 'playlist'}: "
+                f"{', '.join(result.playlists)}\n"
+                f"Removed {result.deleted_track_records} unused track record(s) "
+                f"and {result.deleted_media_files} media file(s) "
+                f"({human(result.deleted_bytes)}).\n\n"
+                f"Remaining: {result.remaining_playlists} user playlist(s), "
+                f"{result.remaining_tracks} track(s).\n\n"
+                f"Recovery files:\n{result.recovery_directory}\n\n"
+                "Eject from SoundBox before listening.",
+            )
+            self._flash_status(
+                "Stock iPod playlists deleted ✓" if multiple
+                else "Stock iPod playlist deleted ✓")
+        self._refresh_devices()
+        if dev == self._current_device_path and not isinstance(result, Exception):
+            self.stock_ipod_pages.set_loading(preserve_page=True)
+            QTimer.singleShot(
+                0, lambda d=dev: self._read_stock_device_view(
+                    d, self._device_profiles.get(d)))
 
     def _verify_device(self, dev: str, deep: bool = False):
         """Post-export sanity: every m3u8 entry on the device must resolve to a
@@ -2797,6 +3367,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         for tid in tids:
             self.art_cache.store_ok(tid, res)
         self.model.refresh_art(self.art_cache.status_kind)
+        QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
         self._flash_status(f"Art set on {len(tids)} ✓", 8)
 
     def _art_remove(self, tid):
@@ -2840,6 +3411,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 source_url=p.as_uri(), matched_title=p.name))
             self._flash_status("Art set ✓", 5)
             self.model.refresh_art(self.art_cache.status_kind)
+            QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
 
     def _run_oneshot(self, tid, fn):
         self.status_label.setText("Fetching…")
@@ -2868,6 +3440,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._flash_status("Fetch failed ✕", 8)
         elif res:
             self.art_cache.store_ok(tid, res)
+            QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
             self._flash_status("Art set ✓", 5)
         else:
             self._flash_status("No art found", 5)
@@ -2925,9 +3498,34 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if w is not None:
             w.deleteLater()
         self._art_worker = None
+        QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
         if getattr(self, "_art_restart", False):  # a re-scan asked to restart
             self._art_restart = False
             self._start_art_fill()
+
+    def _maybe_prepare_stock_artwork(self, rescan_if_running: bool = False):
+        """Warm the disposable stock-iPod art cache without blocking sync/UI."""
+        if self.lib is None:
+            return
+        if _running(self._stock_art_worker):
+            if rescan_if_running:
+                self._stock_art_rescan = True
+            return
+        worker = StockArtworkPrepWorker(
+            self.lib, self.art_cache, self.stock_art_cache)
+        self._stock_art_worker = worker
+        worker.set_playback_active(self.player_bar.is_playing())
+        worker.finished.connect(
+            lambda ww=worker: self._on_stock_artwork_finished(ww))
+        worker.start(QThread.LowPriority)
+
+    def _on_stock_artwork_finished(self, worker):
+        if self._stock_art_worker is worker:
+            self._stock_art_worker = None
+        worker.deleteLater()
+        if self._stock_art_rescan:
+            self._stock_art_rescan = False
+            QTimer.singleShot(0, self._maybe_prepare_stock_artwork)
 
     def _maybe_fill_waveforms(self):
         """Prepare every missing canonical V5 record off the UI thread."""
@@ -3132,18 +3730,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.information(self, "Open a library first",
                                    "Load your rekordbox library first (↻ on the REKORDBOX header).")
             return
-        profile = self._device_profiles.get(dev)
-        if profile is not None and not profile.rockbox_export:
-            if profile.stock_preview:
-                self._preview_stock_ipod(dev)
-            else:
-                QMessageBox.warning(
-                    self, "Export unavailable",
-                    "This volume is not a writable FAT32 Rockbox/generic USB "
-                    "target. No files were changed.")
-            return
         pls = self._resolve_jobs(items)
         if not pls:
+            return
+        profile = self._device_profiles.get(dev)
+        if profile is not None and profile.kind == "stock_ipod":
+            self._begin_stock_ipod_sync(dev, pls)
+            return
+        if profile is not None and not profile.rockbox_export:
+            QMessageBox.warning(
+                self, "Export unavailable",
+                "This volume is not a writable FAT32 Rockbox/generic USB "
+                "target. No files were changed.")
             return
         if self._exporting and self.export_worker is not None:
             self.export_worker.add(dev, pls)  # aggregate into the running export
@@ -3196,6 +3794,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         except Exception:  # noqa: BLE001 — never block shutdown
             pass
         self._art_restart = False  # don't let a pending re-scan restart during teardown
+        self._stock_art_rescan = False
         w = self.export_worker
         if _running(w):
             LOG.info("Shutdown during export — cancelling and waiting for worker")
@@ -3208,12 +3807,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._dev_scan_worker.wait(6000)  # read-only scan; let it finish
         if _running(getattr(self, "_delete_worker", None)):
             self._delete_worker.cancel(); self._delete_worker.wait(10000)
+        if _running(getattr(self, "_stock_plan_worker", None)):
+            self._stock_plan_worker.wait(30000)  # read-only hash/render; let it finish
+        if _running(getattr(self, "_stock_commit_worker", None)):
+            self._stock_commit_worker.wait(30000)  # never tear down a device commit
+        if _running(getattr(self, "_stock_delete_plan_worker", None)):
+            self._stock_delete_plan_worker.wait(30000)  # finish read-only delete plan
+        if _running(getattr(self, "_stock_delete_commit_worker", None)):
+            self._stock_delete_commit_worker.wait(30000)  # never tear down deletion
+        if _running(getattr(self, "_stock_view_worker", None)):
+            self._stock_view_worker.wait(15000)  # read-only DB/device-details scan
         if _running(getattr(self, "_eject_verify_worker", None)):
             self._eject_verify_worker.wait(15000)
         if _running(getattr(self, "_device_import_worker", None)):
             self._device_import_worker.wait(15000)
         if _running(self._art_worker):
             self._art_worker.stop(); self._art_worker.wait(6000)
+        if _running(self._stock_art_worker):
+            self._stock_art_worker.stop(); self._stock_art_worker.wait(10000)
         if _running(getattr(self, "_wf_fill_worker", None)):
             # QAudioDecoder tracks poll interruption during decode; the
             # between-files loop check catches libsndfile tracks.

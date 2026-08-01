@@ -82,6 +82,15 @@ QPushButton#AutoplayDown[active="true"] {{
                 border-bottom: 1px solid {BORDER}; }}
 #DeviceHeader {{ background: {PANEL2}; border-bottom: 1px solid {BORDER}; }}
 #DeviceTitle {{ color: {TEXT_HI}; background: transparent; }}
+QPushButton#DeviceTab {{
+    background: transparent; border: none; border-radius: 0;
+    border-bottom: 2px solid transparent; color: {TEXT_DIM};
+    padding: 3px 12px; font-size: 11px; font-weight: 700;
+}}
+QPushButton#DeviceTab:hover {{ color: {TEXT_HI}; border-bottom-color: {BORDER}; }}
+QPushButton#DeviceTab:checked {{
+    color: {TEXT_HI}; border-bottom-color: {PURPLE_LIGHT};
+}}
 
 QLineEdit, QComboBox {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 4px;
@@ -228,6 +237,13 @@ QTreeView::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px sol
                   border: none; selection-background-color: {PURPLE}; selection-color: white; }}
 #DeviceBrowser::item {{ padding: 3px 6px; color: {TEXT}; }}
 #DeviceBrowser::item:selected {{ background: {PURPLE}; color: white; }}
+#StockDeviceDetails, #StockDevicePlaylists, #StockDeviceMusic {{
+    background: {ROW}; alternate-background-color: {ROW_ALT}; border: none;
+    selection-background-color: {PURPLE}; selection-color: white;
+}}
+#StockDeviceDetails::item, #StockDevicePlaylists::item {{
+    padding: 2px 6px; color: {TEXT};
+}}
 
 /* track table */
 QTableView {{

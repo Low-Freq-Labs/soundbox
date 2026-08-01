@@ -143,14 +143,50 @@ For the live test count, trust `./check.sh` output—not any number written here
   developer probe was removed. Signed Hermite is now explicitly rejected.
   Full evidence ledger and acceptance:
   `docs/PLAYER.md` → “BLUE/RGB temporal-aliasing R&D record.”
-- **NEXT COMMITTED DEVICE WORK: real iPod hardware validation.**
-  Start read-only: reread `docs/DEVICES.md` and the write contract at the top
-  of `soundbox/sync.py`, resolve the exact mount/profile/filesystem, and verify
-  detection before offering an export. Stock-iPod mode must remain preview-only;
-  Rockbox/dual-boot writes may target only the explicitly confirmed FAT32
-  volume and begin dry-run. Validate playback, artwork, exact playlist order
-  and folder nesting, database refresh, full-library scale, verify, and eject.
-  Never erase, bulk-clean, touch `iPod_Control`, or guess the target.
+- **ACTIVE DEVICE WORK: real iPod hardware validation.**
+  On 2026-07-31 the real 256 GB flash-modded MA446LL iPod arrived running stock
+  1.3 firmware on FAT32. Read-only probing identified `/Volumes/IPOD` as a
+  stock-only iPod and preserved the complete pre-Finder Apple control/database
+  fixture with byte-for-byte verification before any Apple sync. Rekordbox had
+  automatically created a root `PIONEER` export tree on initial connection;
+  Sonny deleted it before inspection, leaving its small settings tree in the
+  volume Trash; inspection found no Rekordbox artifacts beneath `iPod_Control`.
+  Apple/Finder then produced and physically validated a three-track MP3/WAV
+  stock playlist in exact order. All media matched SoundBox-derived staging
+  hashes, no accidental media remained, GodLovesUgly played successfully through
+  the Wolfson DAC, and its sole play count was captured on reconnect. A pinned
+  Clickwheel 0.19.1 engine is now isolated behind SoundBox's MA446/MP3/WAV-only
+  two-phase adapter: it renders off-device, preserves Apple smart rules and
+  pending play counts, validates the final DB, saves recovery bytes, copies
+  media atomically, and commits `iTunesDB` last. Synthetic commit/rollback tests
+  and a zero-write real-fixture dry-run pass. The packaged app was installed
+  without curated-state or cache loss, and the first SoundBox-authored physical
+  commit completed on the MA446: all three existing tracks were content-reused,
+  no media bytes changed, the exact requested order and GodLovesUgly play count
+  reparsed from the live device, both recovery copies were created, and the iPod
+  ejected cleanly. Sonny then browsed, played, and skipped the SoundBox playlist
+  in stock firmware. The reconnect capture preserved the SoundBox database hash
+  and exact playlist order, recorded distinct play/skip deltas for all three
+  tracks, and passed another zero-write production plan before clean eject. The
+  first stock-hardware acceptance loop is complete. MA446 stock-art support
+  pre-generates content-addressed
+  100×100/200×200 RGB565 derivatives from the curated baseline JPEG cache,
+  builds and structurally audits ArtworkDB/ithmb off-device, and passes fixture
+  commit plus exact-artwork rollback tests. Physical artwork and normalized
+  metadata now display correctly on stock firmware. The eight-row HOUSE source
+  playlist resolved to six Collection-visible, stock-safe tracks; both incompatible
+  WAV files were reported and omitted, and all six accepted tracks played without
+  a crash. Checkbox multi-delete then removed two playlists and their now-unowned
+  media in one guarded commit, leaving zero indexed tracks and zero regular user
+  playlists. The clean reconnect retained all five Apple smart rules, no pending
+  Play Counts, eleven recovery points, and iTunesDB SHA-256
+  `c235f57378793d1db96d3f5b059bdb01e1262e04b9b54375a2c78cce6770123c`.
+  The exact Apple Videos smart index is now exposed as a narrowly deletable
+  System playlist in the installed build; that single physical delete/reconnect
+  check remains. On-The-Go is firmware-generated and absent from iTunesDB.
+  Current dual-boot routing stays fail-closed: a `.rockbox` installation selects
+  Rockbox export and leaves the stock database read-only. Never erase, bulk-clean,
+  or guess the target.
 - New frontier (2026-07-08): **CDJ USB export** → `docs/cdj-usb-export.md`.
 - **V5 BOUNDED WAVEFORM CACHE SHIPPED.** The canonical cache now
   persists only the exact signed min/max mip levels selected by every supported
@@ -337,10 +373,32 @@ For the live test count, trust `./check.sh` output—not any number written here
   track before the three retired cache directories were removed. The audit
   separately reports valid/playable V4 coverage and current ultra/RGB coverage,
   so safe legacy retirement never hides a still-running quality upgrade.
-- **DEVICE PROFILES SHIPPED.** Read-only probes distinguish Rockbox, stock iPod,
-  dual-boot, and generic USB layouts. FAT32 Rockbox/generic exports retain the
-  guarded existing workflow. Stock iPod support is an honest no-write preview
-  until an independently validated database writer exists. See `DEVICES.md`.
+- **DEVICE PROFILES + NARROW STOCK ENGINE SHIPPED AND INSTALLED.** Read-only probes
+  distinguish Rockbox, stock iPod, dual-boot, and generic USB layouts. FAT32
+  Rockbox/generic exports retain the guarded existing workflow. A stock-only
+  MA446 can enter the separate MP3/WAV dry-run/explicit-commit path; unknown
+  models, checksum families, and dual-boot stock databases fail closed. The
+  installed build completed its first guarded physical database commit,
+  stock-firmware playback/skip session, reconnect capture, recovery proof, and
+  second zero-write plan. `/.rockbox/` wins operational routing even beside a
+  valid MA446 database, so remembered stock identity cannot activate the wrong
+  exporter. The approved future dual-library mode is a new single-copy composite
+  planner, not current behavior. See `DEVICES.md`.
+- **STOCK IPOD DEVICE SURFACE SHIPPED IN SOURCE.** Selecting a stock-only iPod
+  now opens header-level Device, Music, and Playlists tabs populated by an
+  asynchronous read-only database snapshot. General identity/storage/database
+  health, indexed metadata, playback totals, recovery points, and exact ordered
+  user-created playlists are visible without exposing raw control folders; the
+  exact Videos smart index is also visible as a deletable System playlist while
+  the library root and all other built-in smart lists remain internal. MA446 confirmation
+  persists by library persistent ID + volume UUID and migrates from successful
+  SoundBox recovery evidence; rewrite-volatile DatabaseID is never trusted.
+- **STOCK IPOD HARDWARE IDENTITY SHIPPED IN SOURCE.** The macOS device probe now
+  separates Apple's cached stock firmware/hardware serial from IORegistry's USB
+  and SCSI transport facts. Guarded serial-suffix mapping independently confirms
+  MA446, whose hardware catalog entry presents the concise Wolfson WM8758BG name
+  while retaining model-derived provenance internally. Ambiguous records fail
+  closed instead of guessing.
 - **ROCKET-LOAD + RELIABILITY PASS SHIPPED.** Prepared V4 loads now stage
   manifest/packed overview/ultra detail off the UI thread, native buffer work is
   generation-guarded, track replacement clears every old renderer channel
@@ -353,7 +411,7 @@ For the live test count, trust `./check.sh` output—not any number written here
   SoundBox Media are included. Normal Sync never prunes unknown content. An
   explicitly confirmed whole-device erase removes all children and the
   manifest last, then verifies and normally ejects; stock/dual-boot iTunes
-  volumes remain read-only.
+  volumes remain protected from generic erase, prune, and manifest sync.
 
 ## Scorecard (~9.4/10, honest, not curved)
 
@@ -471,9 +529,56 @@ graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
       building the editor. Initial scope is player display/transport, not
       writing it into Rekordbox or CDJ analysis.
 
-### Phase 3 — iPod validation 🟨 (USB fixture validated; hardware still gated)
+### Phase 3 — iPod validation 🟨 (real stock hardware active; Rockbox still pending)
 Rockbox iPod ≈ a USB stick; getting music written + readable is 80% done. To
 validate on-device:
+- [x] Real MA446LL iPod mounted as a 256 GB FAT32 stock-only device; read-only
+      detection classified it correctly and withheld every SoundBox write.
+- [x] Complete pre-Finder `iPod_Control`/metadata fixture captured locally and
+      verified by relative path, size, and SHA-256 before the first sync.
+- [x] Apple/Finder generated a three-track MP3/WAV oracle from SoundBox-derived
+      inputs; exact playlist order, byte-identical media, stock playback, and
+      GodLovesUgly's sole post-play count were verified on real hardware.
+- [x] Pinned pure-Python iTunesDB dependency isolated behind a SoundBox-owned
+      MA446 adapter; synthetic plan/commit/stale-state/recovery tests and the
+      real three-track capture dry-run preserve order, play counts, existing
+      tracks/playlists, and Apple smart rules without fixture writes.
+- [x] Complete first SoundBox-authored one-playlist MA446 acceptance: explicit
+      approval, live dry-run, database-last commit, recovery proof, post-write
+      reparse, unchanged media hashes, stock-firmware display/play/skip, exact
+      playlist order, reconnect capture, play-count merge dry-run, and clean
+      eject all passed.
+- [x] Pre-generate deduplicated MA446 stock artwork from the canonical curated
+      JPEG cache; validate MHIT/MHII/MHNI/ithmb linkage and exact recovery in
+      hermetic plan/commit/failure transactions without retagging source audio.
+- [x] Complete real-MA446 artwork write/display/reconnect acceptance: curated
+      covers displayed in stock firmware, later reconnect/delete plans parsed
+      and compacted the linked artwork successfully, and source tags remained
+      untouched.
+- [x] Enrich selected content-reused stock records from authoritative SoundBox
+      title/artist metadata without recopying media or changing dbid, location,
+      technical fields, ratings, bookmarks, or playback history; the dry-run
+      reports the exact metadata-update count before commit. The preserved real
+      fixture renders the intended four-way artist index (`GRiZ`, `DENNETT`,
+      `Subtronics`, `Zeds Dead, Subtronics`) with three reused-record updates.
+- [x] Add explicit stock user-playlist deletion with a read-only impact plan,
+      regular-playlist reference counting, newly orphaned media deletion,
+      playback preservation, artwork compaction, stale-state refusal, and
+      database/artwork rollback. `Collection` retains every song it owns; the
+      master library and built-in smart playlists never make tracks immortal.
+- [x] Make audio compatibility destination-specific: stock MA446 plans omit and
+      explicitly report anything outside validated MP3 or stereo PCM16/44.1-kHz
+      WAV, while Rockbox/generic exports retain original high-resolution files.
+      Added after a 24-bit WAV reproducibly rebooted the physical stock iPod.
+- [x] Complete the physical HOUSE format-guard acceptance: all six included
+      safe tracks played without a firmware reboot; `Loot` and `DONTTRUSTME`
+      remained omitted.
+- [x] Complete real-MA446 playlist-delete/reconnect acceptance through a clean
+      zero-track/zero-user-playlist state, including two checked playlists
+      deleted successfully in one guarded operation.
+- [ ] Reconnect once and physically delete the Apple Videos system playlist.
+      The installed UI exposes it; the hermetic plan proves zero track/media
+      deletion and preserves every retained smart rule. On-The-Go is firmware UI.
 - [ ] Music writes to + reads from the real Rockbox iPod.
 - [ ] m3u8 works on-device (drive-root-absolute paths; expect maybe a tweak).
 - [ ] `cover.jpg`-per-folder renders (baseline-JPEG already enforced + cache
@@ -484,7 +589,12 @@ validate on-device:
 - [ ] Scale test (~2900 tracks) — no choke.
 - [x] Read-only layout classifier and capability boundary for Rockbox,
       stock-only, dual-boot, and generic USB.
-- [x] Stock-iPod compatibility preview that cannot write `iTunesDB`.
+- [x] Stock-iPod readiness preview plus a default-Cancel, two-phase MA446-only
+      playlist writer; every other stock profile remains read-only.
+- [ ] Build the approved storage-efficient dual-library composite planner only
+      after Rockbox hardware acceptance: one copy of each safe file shared by
+      iTunesDB and Rockbox, stock-unsafe files in Rockbox only, one unified
+      ownership manifest/rollback transaction, and no duplicate collection.
 - [x] Guarded FAT32 dummy-volume export/verify/eject with pre-existing hidden
       data preserved.
 
@@ -515,8 +625,9 @@ USB sticks (Sonny performs on 4× CDJ-3000). Full plan + status + prototype:
 **`docs/cdj-usb-export.md`**.
 
 ### Someday / v2
-- [ ] Native Apple/iTunesDB iPod writer, only after model/hash research,
-      fixture round-trips, and real-hardware validation.
+- [ ] Expand stock writing beyond MA446/MP3/WAV only after per-model hash/layout
+      research, fixture round-trips, artwork validation, and separate physical
+      acceptance. Do not generalize from the 5.5G result.
 
 ## Product decisions (don't re-litigate)
 
@@ -530,6 +641,17 @@ USB sticks (Sonny performs on 4× CDJ-3000). Full plan + status + prototype:
   an accidental accept); merge-dialog rows stay pre-checked.
 - **Imported audio referenced in place** — never copied or re-tagged.
 - **Device filenames = SoundBox effective titles**, always.
+- **The connected layout selects the exporter.** A stock-only supported iPod uses
+  the guarded stock adapter; any mounted `.rockbox` installation currently uses
+  Rockbox filesystem export and leaves iTunesDB read-only.
+- **Future dual-library support is single-copy and composite.** Stock-safe files
+  live once beneath `iPod_Control/Music`, are indexed in iTunesDB, and may also be
+  referenced by Rockbox playlists. Rockbox-only files live once beneath `/Music`
+  and never enter iTunesDB. One planner/manifest owns both sets. Do not implement
+  dual boot as two independent exporters or duplicate the full library.
+- **Apple Videos is the only deletable stock smart index.** It deletes no media.
+  Music, Movies, TV Shows, and Audiobooks remain protected; On-The-Go is generated
+  by firmware rather than stored in iTunesDB.
 - **Rekordbox analysis is read-only.** Imported grids/waveforms seed V5;
   live-DB cues refresh into V5 until SoundBox claims cue ownership. Rekordbox
   files are never edited in place and SoundBox-owned edits affect only V5.

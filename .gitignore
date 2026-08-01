@@ -14,3 +14,5 @@ dist/
 .DS_Store
 # local CDJ golden-reference snapshots and large audio fixtures
 /soundbox-cdj-ref/
+# local stock/Rockbox iPod golden-reference snapshots
+/soundbox-ipod-ref/

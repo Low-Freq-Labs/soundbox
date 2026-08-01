@@ -22,6 +22,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   replace or clear SoundBox AppData as part of an app install.
 
 ## Qt / PySide6 (these bite HARD)
+- **A tooltip must add information.** Never assign a cell's displayed string as
+  its tooltip just to repeat fully visible text on hover. Keep tooltips for icon
+  meaning, warnings, hidden diagnostics, or genuinely richer content.
+- **Classic-iPod playlist IDs are unsigned 64-bit values.** Never carry them in
+  a Qt `Signal(int, ...)` (signed 32-bit) or store the Python integer directly
+  in a `QVariant`/item role (signed 64-bit). Real Apple IDs exceed both ranges;
+  the former prevents delete slots from firing and the latter can abort a tree
+  render halfway through. Preserve the exact decimal string across every Qt
+  boundary and convert to Python `int` only at the stock-iPod engine call.
 - **QThread "destroyed while running" → SIGABRT.** Never let the last Python ref
   to a worker QThread drop *mid-run*. Slots on a worker's CUSTOM signals
   (`finished_all`/`done`/`failed`) run WHILE `run()` is still finishing — nulling
@@ -743,7 +752,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - rekordbox auto-writes a `PIONEER/` folder onto any USB it touches (not us —
   leave it alone).
 
-## Cover art (SoundCloud scrape + Rockbox rendering)
+## Cover art (SoundCloud scrape + Rockbox/stock rendering)
 - **Paste an ARTIST PROFILE URL into the art picker → you get the AVATAR**
   (og:image of a profile page IS the avatar; lands baseline-JPEG via `store_ok`).
 - SoundCloud deep extract 403s → use FLAT search `thumbnails` (t500x500) for
@@ -758,8 +767,29 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - Rockbox art search order in a track folder: `<trackname>.{jpg,bmp}` →
   `<albumtitle>.{jpg,bmp}` → `cover.{jpg,bmp}` → `folder.jpg`. We write per-track
   `cover.jpg` → matches. The theme/WPS must support album art or nothing shows.
+- **The curated baseline JPEG is canonical for both firmware paths.** Never
+  embed it into source audio to satisfy stock firmware. `stock_artwork/` under
+  AppData is disposable content-addressed RGB565: MA446 format 1028 is
+  100×100×2 bytes and 1029 is 200×200×2 bytes. Background preparation
+  pauses during playback; sync still verifies every payload hash.
+- **Stock artwork is four coupled layers:** MHIT (`mhiiLink`/count/size), one
+  per-track ArtworkDB MHII with a matching song dbid, MHNI format offsets, and
+  the two ithmb pixel files. Never update only one layer. Preserve replaced
+  ArtworkDB/ithmb bytes first, commit them atomically, validate all bounds, then
+  publish the linking iTunesDB last. Missing/incomplete old pixels fail closed.
 
 ## Rockbox / iPod (Phase 3 — hardware)
+- **The connected firmware profile selects the exporter.** `/.rockbox/` wins
+  operationally even when `iPod_Control` coexists: use Rockbox `/Music` and
+  `/Playlists`, apply no stock format filter, and keep iTunesDB read-only.
+  Root `/Music` files are not automatically visible to stock firmware. Do not
+  invent a shared-media dual-library mode without a separate validated design.
+- **Future dual-library means shared files, not two exports.** Stock-safe media
+  must live once under `iPod_Control/Music` and be referenced by both iTunesDB
+  and Rockbox playlists; stock-unsafe media must live once under `/Music` and
+  stay absent from iTunesDB. This requires a unified ownership graph. Running
+  current stock and Rockbox deletion/resync independently could orphan or delete
+  files still needed by the other firmware.
 - **iPod MUST be FAT32, NOT HFS+.** Rockbox does not support HFS+.
 - m3u8: UTF-8 **no BOM**; absolute-from-drive-root paths (`/Music/Artist/...`);
   Playlist Catalogue default dir = `/Playlists`.
@@ -767,10 +797,26 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   "Update now" after dumping files.
 - Device sync manifest lives at `<device>/.soundbox/manifest.json`.
 - Device detection is read-only and capability-based. See `DEVICES.md`.
-- A stock-only iPod is preview-only: never write `iTunesDB`, `iTunesCDB`,
-  `Library.itdb`, or files beneath `iPod_Control`. A dual-boot FAT32 iPod may
-  receive the Rockbox-style `/Music`, `/Playlists`, and `/.soundbox` export;
-  its stock database remains untouched.
+- `soundbox.stock_ipod` is the sole exception to the `iPod_Control` no-write
+  rule. Its first boundary is stock-only MA446 + checksum-zero `iTunesDB` +
+  MP3/WAV: Clickwheel renders only off-device, SoundBox reparses and audits the
+  database plus artwork linkage, archives recovery bytes, copies media/artwork
+  atomically, and commits the database last. Never pass the live mount to
+  Clickwheel's high-level copy/sync
+  helpers; they do not meet SoundBox's rollback, stale-state, play-count, or
+  smart-playlist contract. A dual-boot FAT32 iPod may receive the Rockbox-style
+  `/Music`, `/Playlists`, and `/.soundbox` export; its stock database remains
+  untouched.
+- **Apple Videos is the only deletable smart index.** It must match the exact
+  `Videos` title plus MHSD-5 type 0. Its deletion contributes zero media owners
+  or candidates and must preserve all remaining smart rules. Never generalize
+  this to Music, Movies, TV Shows, or Audiobooks. On-The-Go does not exist in
+  iTunesDB and cannot be deleted there.
+- **MHBD `DatabaseID` is not a device identity.** Apple and SoundBox database
+  rewrites legitimately replace it. The library persistent ID remained stable
+  across every captured generation; pair it with the macOS volume UUID when
+  remembering a confirmed model. `stock_ipod_info` owns read-only UI snapshots
+  and may merge `Play Counts` only in memory.
 - UNVALIDATED until hardware: theme renders cover.jpg; exact order/nesting holds;
   no choke at ~2900 tracks; DB refresh flow. (USB is a good proxy for everything
   EXCEPT on-device rendering/playback.)

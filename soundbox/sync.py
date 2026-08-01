@@ -117,6 +117,28 @@ class DeviceSession:
                 pass
             raise
 
+    def atomic_concat(self, sources: list[Path], destination: Path) -> None:
+        """Concatenate verified local payloads into one atomic device file."""
+        target = self.guard(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self.revalidate()
+        tmp = target.with_name(target.name + ".sbpart")
+        try:
+            with tmp.open("wb") as output:
+                for source in sources:
+                    with source.open("rb") as input_file:
+                        shutil.copyfileobj(input_file, output, 1024 * 1024)
+                output.flush()
+                os.fsync(output.fileno())
+            self.revalidate()
+            os.replace(tmp, target)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
 
 def _fmt_size(n: int) -> str:
     """Human bytes in decimal units (matches Finder), for space messages."""

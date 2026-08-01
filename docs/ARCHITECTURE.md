@@ -31,7 +31,10 @@ fetch + baseline-JPEG encode) · `manifest` (per-device drift) ·
 streaming RGB/grid
 analysis, and export eligibility) · `rekordbox_analysis` (read-only
 PQTZ/PCOB/PCO2/PWV5/PWV7 parser) · `device_profile` (read-only device
-classification and stock-iPod preview planning) · `backup` · `imports`
+classification and stock-iPod readiness planning) · `stock_ipod` (MA446-only
+two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
+(content-addressed MA446 RGB565 preparation and ArtworkDB/ithmb layout) ·
+`backup` · `imports`
 (imported-audio plane) · `libcache` (instant-paint snapshot).
 
 ## Source-adapter boundary
@@ -280,7 +283,51 @@ ownership, and completed generation. Tracks, covers, playlists, and the
 manifest use destination-filesystem temporaries plus atomic replacement.
 Regular sync repairs only manifest-owned corruption; Deep Verify rehashes every
 managed file. Pruning follows explicit ownership rows and never walks `/Music`
-as authority. Unknown content and stock-iPod databases remain untouched.
+as authority. Unknown content remains untouched. Stock iPod writes are a
+separate additive transaction: a pinned Clickwheel version renders only in a
+temporary tree; SoundBox validates the output, writes recovery bytes,
+atomically copies new media/artwork, and commits `iTunesDB` last. Curated
+baseline JPEGs remain the shared Rockbox/stock source of truth. A low-priority,
+playback-aware worker prepares content-addressed MA446 RGB565 100×100 and
+200×200 payloads under AppData ahead of sync. Planning deduplicates identical
+pixels into the two ithmb files, creates a per-track MHII link, and audits every
+MHIT→MHII→MHNI offset/size before confirmation. Recovery captures every
+replaced ArtworkDB/ithmb file; source media and tags are read-only. The writer
+is restricted to stock-only MA446, scheme-zero iTunesDB, and MP3/WAV.
+`device_profile` derives the export pipeline from the mounted layout: stock-only
+routes to that database planner, while a `/.rockbox/` marker routes to the
+Rockbox filesystem planner and prevents remembered MA446 identity from
+re-enabling stock writes. Coexisting dual-boot databases therefore remain
+untouched in the current implementation.
+
+The approved future dual-library architecture is a new composite planner, not
+two existing planners run back-to-back. It must place stock-safe media once
+under `iPod_Control/Music/Fxx`, index it in iTunesDB, and reference the same
+physical files from Rockbox playlists. Stock-unsafe but Rockbox-supported media
+lives once under `/Music` and is absent from iTunesDB. A unified manifest must
+own both path classes so deletion/resync cannot remove a file still referenced
+by the other firmware; prepared artwork, recovery, commit ordering, and rollback
+must also be coordinated as one transaction. This is design only, not shipped
+behavior.
+
+Stock device presentation is a separate read-only path. `stock_ipod_info`
+creates immutable identity/track/playlist snapshots, merges pending playback
+records only in memory, and exposes no mutation API. The desktop device page
+renders those snapshots as Device, Music, and Playlists tabs while the existing
+filesystem browser remains in place for Rockbox and generic USB targets. Model
+confirmation persists against the iPod library persistent ID plus macOS volume
+UUID; Apple/SoundBox rewrites may change the MHBD `DatabaseID`, so it is display
+information only and never a device key. On macOS, `desktop.devices` performs
+bounded IORegistry and classic-iPod preference probes: Apple's device record is
+the firmware/hardware-serial authority, serial suffixes may select a guarded
+model-catalog entry, and the verified model may identify the DAC. USB/SCSI
+revision remains separately labeled transport data. Every derived value carries
+provenance in the snapshot and ambiguous matches produce no value. The device page
+renders the DAC as a concise component name and filters its Playlists tab to
+regular user-created playlists plus the exact Apple Videos smart index. Videos
+is labeled `System playlist` and may enter the guarded delete planner without
+owning or deleting media. Music, Movies, TV Shows, and Audiobooks remain
+immutable; On-The-Go is firmware-generated and absent from iTunesDB.
 
 ## Data model
 
@@ -316,6 +363,8 @@ backups, corruption auto-recovery, one-click full `.zip` backup/restore
 closed window geometry, table columns, and Rekordbox/Soundbox/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
 the outer geometry before applying inner pane sizes.
+The sibling `stock_artwork/` directory is disposable derived data, not curated
+state: it can always be regenerated from the canonical baseline JPEG art cache.
 
 ## Build / install
 

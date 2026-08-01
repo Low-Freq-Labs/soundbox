@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import plistlib
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from soundbox.device_profile import DeviceProfile, inspect_device
@@ -39,6 +40,113 @@ _EXTERNAL_CACHE: dict[str, bool] = {}
 # so the sidebar warns the moment a non-FAT device mounts.
 _FS_CACHE: dict[str, str] = {}
 _PROFILE_CACHE: dict[str, DeviceProfile] = {}
+_INFO_CACHE: dict[str, dict] = {}
+_IPOD_FACTS_CACHE: dict[str, dict[str, str]] = {}
+
+
+@dataclass(frozen=True)
+class DeviceFacts:
+    volume_uuid: str = ""
+    protocol: str = ""
+    device_identifier: str = ""
+    filesystem_name: str = ""
+    media_type: str = ""
+    capacity_bytes: int = 0
+    free_bytes: int = 0
+    writable: bool = False
+    usb_serial: str = ""
+    hardware_serial: str = ""
+    serial_source: str = ""
+    firmware_version: str = ""
+    firmware_source: str = ""
+    transport_revision: str = ""
+
+
+def _ioreg_records(*args: str) -> list[dict]:
+    """Return a bounded IORegistry plist query, or no records on any failure."""
+    try:
+        result = subprocess.run(
+            ["ioreg", *args, "-a"], capture_output=True, timeout=3)
+        if result.returncode != 0 or len(result.stdout) > 8 * 1024 * 1024:
+            return []
+        value = plistlib.loads(result.stdout)
+    except Exception:
+        return []
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _classic_ipod_preferences(
+        usb_serial: str, preferences_path: Path | None = None) -> dict[str, str]:
+    """Read Finder's classic-iPod cache without confusing it with USB transport.
+
+    Apple stores the user-facing firmware and etched hardware serial here.  We
+    accept an exact device-ID match, or the sole classic-iPod record.  If several
+    historical iPods make the record ambiguous, we return nothing rather than
+    attach another device's identity.
+    """
+    path = preferences_path or (
+        Path.home() / "Library" / "Preferences" / "com.apple.iPod.plist")
+    try:
+        if not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+            return {}
+        value = plistlib.loads(path.read_bytes())
+    except Exception:
+        return {}
+    devices = value.get("Devices") if isinstance(value, dict) else None
+    if not isinstance(devices, dict):
+        return {}
+    candidates = [
+        (str(key), item) for key, item in devices.items()
+        if isinstance(item, dict)
+        and str(item.get("Device Class") or "").casefold() == "ipod"
+    ]
+    exact = [item for key, item in candidates if key == usb_serial]
+    if len(exact) == 1:
+        record = exact[0]
+    elif len(candidates) == 1:
+        record = candidates[0][1]
+    else:
+        return {}
+    return {
+        "hardware_serial": str(record.get("Serial Number") or ""),
+        "firmware_version": str(record.get("Firmware Version String") or ""),
+    }
+
+
+def _classic_ipod_facts(path: str) -> dict[str, str]:
+    """Read-only macOS hardware facts for an unambiguously connected iPod."""
+    cached = _IPOD_FACTS_CACHE.get(path)
+    if cached is not None:
+        return cached
+    usb_records = [
+        item for item in _ioreg_records("-p", "IOUSB", "-r", "-n", "iPod")
+        if int(item.get("idVendor") or 0) == 1452
+    ]
+    usb_serial = ""
+    if len(usb_records) == 1:
+        usb_serial = str(
+            usb_records[0].get("USB Serial Number")
+            or usb_records[0].get("kUSBSerialNumberString") or "")
+    scsi_records = [
+        item for item in _ioreg_records("-r", "-c", "IOSCSIPeripheralDeviceNub")
+        if str(item.get("Vendor Identification") or "").strip() == "Apple"
+        and str(item.get("Product Identification") or "").strip() == "iPod"
+    ]
+    transport_revision = ""
+    if len(scsi_records) == 1:
+        transport_revision = str(
+            scsi_records[0].get("Product Revision Level") or "").strip()
+    preferences = _classic_ipod_preferences(usb_serial)
+    facts = {
+        "usb_serial": usb_serial,
+        "hardware_serial": preferences.get("hardware_serial", ""),
+        "serial_source": "macOS iPod device record" if preferences.get("hardware_serial") else "",
+        "firmware_version": preferences.get("firmware_version", ""),
+        "firmware_source": "macOS iPod device record" if preferences.get("firmware_version") else "",
+        "transport_revision": transport_revision,
+    }
+    _IPOD_FACTS_CACHE[path] = facts
+    return facts
 
 
 def _is_external(path: Path) -> bool:
@@ -66,6 +174,7 @@ def _is_external(path: Path) -> bool:
                        or info.get("Ejectable") or info.get("RemovableMedia")))
     _EXTERNAL_CACHE[key] = result  # definitive answer from a good probe — safe to keep
     _FS_CACHE[key] = info.get("FilesystemType") or ""
+    _INFO_CACHE[key] = dict(info)
     return result
 
 
@@ -82,6 +191,37 @@ def device_profile(path) -> DeviceProfile:
         profile = inspect_device(key, device_fs(key))
         _PROFILE_CACHE[key] = profile
     return profile
+
+
+def device_facts(path) -> DeviceFacts:
+    """Stable display/identity facts from the successful diskutil probe."""
+    key = str(path)
+    if key not in _INFO_CACHE:
+        _is_external(Path(key))
+    info = _INFO_CACHE.get(key) or {}
+    ipod = (
+        _classic_ipod_facts(key)
+        if str(info.get("MediaType") or "").casefold() == "ipod"
+        else {}
+    )
+    return DeviceFacts(
+        volume_uuid=str(info.get("VolumeUUID") or ""),
+        protocol=str(info.get("BusProtocol") or ""),
+        device_identifier=str(info.get("DeviceIdentifier") or ""),
+        filesystem_name=str(
+            info.get("FilesystemUserVisibleName")
+            or info.get("FilesystemName") or ""),
+        media_type=str(info.get("MediaType") or ""),
+        capacity_bytes=int(info.get("VolumeSize") or info.get("TotalSize") or 0),
+        free_bytes=int(info.get("FreeSpace") or 0),
+        writable=bool(info.get("WritableVolume") or info.get("Writable")),
+        usb_serial=ipod.get("usb_serial", ""),
+        hardware_serial=ipod.get("hardware_serial", ""),
+        serial_source=ipod.get("serial_source", ""),
+        firmware_version=ipod.get("firmware_version", ""),
+        firmware_source=ipod.get("firmware_source", ""),
+        transport_revision=ipod.get("transport_revision", ""),
+    )
 
 
 def _external_volume_of(p):
@@ -124,6 +264,8 @@ def list_devices() -> list[tuple[str, str, int | None]]:
             _EXTERNAL_CACHE.pop(stale, None)
             _FS_CACHE.pop(stale, None)
             _PROFILE_CACHE.pop(stale, None)
+            _INFO_CACHE.pop(stale, None)
+            _IPOD_FACTS_CACHE.pop(stale, None)
         for d in sorted(vol.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue

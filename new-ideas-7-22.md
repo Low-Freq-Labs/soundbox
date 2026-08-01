@@ -16,6 +16,7 @@ Several ideas below already have an engine or first UI:
 | Artwork Dashboard | ART column, artist catalog, sticky blocks, rescan, and missing-art flow exist | One consolidated coverage dashboard |
 | Library Health | Missing-link repair, art state, playlist verification, and untracked filters exist separately | One intentionally designed health view/score |
 | Export Verification | Right-click **Verify export…** already re-reads playlists and files | Optional automatic pre-eject verification/summary |
+| Device Health | The stock-iPod Device tab now reports identity, model-derived DAC, firmware, transport, storage, database state, playback state, and recovery points | Battery/filesystem diagnostics and equivalent Rockbox health/version reporting |
 
 Do not rebuild the completed foundations. Workshop only the remaining UX with
 Sonny, and move an accepted slice into the roadmap before implementation.
@@ -70,14 +71,20 @@ Very similar to `rsync --dry-run`.
 
 ## 3. Device Health
 
-When a device connects, display useful information such as:
+The first destination-specific dashboard has shipped for supported stock iPods:
+Device, Music, and Playlists tabs expose Apple/macOS identity, guarded
+model/firmware/DAC provenance, storage, database health, playback state, recovery
+points, indexed music, and managed playlists. It also supports guarded regular
+playlist deletion plus the narrowly allowlisted Videos system index.
+
+The remaining broader device-health idea is to display, where the connected
+firmware can report it reliably:
 
 -   Battery percentage
--   Storage usage
 -   Filesystem health
 -   Rockbox version
--   Database status
--   Artwork cache status
+-   Rockbox database status
+-   Destination artwork/cache status
 
 A quick "everything looks good" dashboard before syncing.
 

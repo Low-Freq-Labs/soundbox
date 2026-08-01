@@ -1,6 +1,7 @@
 """Read-only device classification and stock-iPod planning."""
 
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 
@@ -42,6 +43,27 @@ class DeviceProfiles(unittest.TestCase):
         self.assertFalse(profile.stock_write)
         self.assertEqual(self._snapshot(root), before)
 
+    def test_rockbox_marker_wins_even_with_valid_writable_stock_database(self):
+        root = self._root()
+        (root / ".rockbox").mkdir()
+        itunes = root / "iPod_Control/iTunes"
+        device = root / "iPod_Control/Device"
+        itunes.mkdir(parents=True)
+        device.mkdir(parents=True)
+        header = bytearray(0x32)
+        header[:4] = b"mhbd"
+        struct.pack_into("<H", header, 0x30, 0)
+        (itunes / "iTunesDB").write_bytes(header)
+        (device / "SysInfo").write_text("ModelNumStr: MA446LL/A\n")
+        before = self._snapshot(root)
+
+        profile = inspect_device(root, "msdos")
+
+        self.assertEqual(profile.kind, "dual_boot")
+        self.assertTrue(profile.rockbox_export)
+        self.assertFalse(profile.stock_write)
+        self.assertEqual(self._snapshot(root), before)
+
     def test_stock_ipod_plan_is_explicitly_no_write(self):
         root = self._root()
         (root / "iPod_Control/iTunes").mkdir(parents=True)
@@ -64,3 +86,20 @@ class DeviceProfiles(unittest.TestCase):
         profile = inspect_device(root, "exfat")
         self.assertEqual(profile.kind, "generic_usb")
         self.assertFalse(profile.rockbox_export)
+
+    def test_ma446_zero_hash_database_crosses_narrow_write_allowlist(self):
+        root = self._root()
+        itunes = root / "iPod_Control/iTunes"
+        device = root / "iPod_Control/Device"
+        itunes.mkdir(parents=True)
+        device.mkdir(parents=True)
+        header = bytearray(0x32)
+        header[:4] = b"mhbd"
+        struct.pack_into("<H", header, 0x30, 0)
+        (itunes / "iTunesDB").write_bytes(header)
+        (device / "SysInfo").write_text("ModelNumStr: MA446LL/A\n")
+        before = self._snapshot(root)
+        profile = inspect_device(root, "msdos")
+        self.assertEqual(profile.model, "MA446LL/A")
+        self.assertTrue(profile.stock_write)
+        self.assertEqual(self._snapshot(root), before)
