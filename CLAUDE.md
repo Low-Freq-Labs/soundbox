@@ -39,8 +39,11 @@ repository can answer the question.
   filesystem planner and leaves any coexisting stock database read-only.
   A storage-efficient dual-library mode is approved only as future work: safe
   tracks would be shared between iTunesDB and Rockbox while stock-unsafe tracks
-  remain Rockbox-only. Do not approximate that design with two independent
-  exporters or duplicate the collection.
+  remain Rockbox-only. For the current MA446 boundary, stock-safe means a
+  validated MP3 or stereo PCM16/44.1-kHz WAV; that restriction applies only to
+  the iTunesDB-visible subset and must never filter the broader Rockbox library.
+  Unsupported-by-both media is omitted and reported. Do not approximate that
+  design with two independent exporters or duplicate the collection.
 - Stock playlist deletion may remove regular user playlists and the exact Apple
   **Videos** smart index only. Videos deletion removes no media; Music, Movies,
   TV Shows, and Audiobooks remain immutable. On-The-Go is firmware-generated,

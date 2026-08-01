@@ -4,7 +4,7 @@ Living to-do. Work top-down. The Rockbox iPod remains the hardware priority;
 player work may continue in parallel when it is isolated from export safety.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-07-30)
+## Current status (2026-07-31)
 
 - **CORE LIBRARY/EXPORT COMPLETE + CURATION MONTH COMPLETE.** Every track title
   cut/cleaned, every cover art eye-verified. Engine is mypy-clean,
@@ -384,7 +384,7 @@ For the live test count, trust `./check.sh` output—not any number written here
   valid MA446 database, so remembered stock identity cannot activate the wrong
   exporter. The approved future dual-library mode is a new single-copy composite
   planner, not current behavior. See `DEVICES.md`.
-- **STOCK IPOD DEVICE SURFACE SHIPPED IN SOURCE.** Selecting a stock-only iPod
+- **STOCK IPOD DEVICE SURFACE SHIPPED AND INSTALLED.** Selecting a stock-only iPod
   now opens header-level Device, Music, and Playlists tabs populated by an
   asynchronous read-only database snapshot. General identity/storage/database
   health, indexed metadata, playback totals, recovery points, and exact ordered
@@ -393,7 +393,7 @@ For the live test count, trust `./check.sh` output—not any number written here
   the library root and all other built-in smart lists remain internal. MA446 confirmation
   persists by library persistent ID + volume UUID and migrates from successful
   SoundBox recovery evidence; rewrite-volatile DatabaseID is never trusted.
-- **STOCK IPOD HARDWARE IDENTITY SHIPPED IN SOURCE.** The macOS device probe now
+- **STOCK IPOD HARDWARE IDENTITY SHIPPED AND INSTALLED.** The macOS device probe now
   separates Apple's cached stock firmware/hardware serial from IORegistry's USB
   and SCSI transport facts. Guarded serial-suffix mapping independently confirms
   MA446, whose hardware catalog entry presents the concise Wolfson WM8758BG name
@@ -583,7 +583,8 @@ validate on-device:
 - [ ] m3u8 works on-device (drive-root-absolute paths; expect maybe a tweak).
 - [ ] `cover.jpg`-per-folder renders (baseline-JPEG already enforced + cache
       migrated — pure on-device check; theme/WPS must support album art).
-- [ ] iPod is FAT32 (Rockbox does NOT support HFS+ — restore if needed).
+- [x] The real iPod is already verified FAT32; Rockbox does not support HFS+,
+      so no filesystem restore is currently required.
 - [ ] Rockbox DB refresh workflow after dumping files.
 - [ ] Exact playlist order + folder nesting hold.
 - [ ] Scale test (~2900 tracks) — no choke.
@@ -648,7 +649,9 @@ USB sticks (Sonny performs on 4× CDJ-3000). Full plan + status + prototype:
   live once beneath `iPod_Control/Music`, are indexed in iTunesDB, and may also be
   referenced by Rockbox playlists. Rockbox-only files live once beneath `/Music`
   and never enter iTunesDB. One planner/manifest owns both sets. Do not implement
-  dual boot as two independent exporters or duplicate the full library.
+  dual boot as two independent exporters or duplicate the full library. Apply
+  the current MA446 MP3/stereo-PCM16/44.1-kHz-WAV validator only to the stock
+  subset; capability decisions for the Rockbox set belong to its own profile.
 - **Apple Videos is the only deletable stock smart index.** It deletes no media.
   Music, Movies, TV Shows, and Audiobooks remain protected; On-The-Go is generated
   by firmware rather than stored in iTunesDB.

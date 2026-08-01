@@ -779,9 +779,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   publish the linking iTunesDB last. Missing/incomplete old pixels fail closed.
 
 ## Rockbox / iPod (Phase 3 — hardware)
-- **The connected firmware profile selects the exporter.** `/.rockbox/` wins
-  operationally even when `iPod_Control` coexists: use Rockbox `/Music` and
-  `/Playlists`, apply no stock format filter, and keep iTunesDB read-only.
+- **The mounted on-disk layout selects the exporter.** SoundBox does not know
+  which firmware the user last booted. `/.rockbox/` wins operationally even
+  when `iPod_Control` coexists: use Rockbox `/Music` and `/Playlists`, apply no
+  stock format filter, and keep iTunesDB read-only.
   Root `/Music` files are not automatically visible to stock firmware. Do not
   invent a shared-media dual-library mode without a separate validated design.
 - **Future dual-library means shared files, not two exports.** Stock-safe media
@@ -817,6 +818,6 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   across every captured generation; pair it with the macOS volume UUID when
   remembering a confirmed model. `stock_ipod_info` owns read-only UI snapshots
   and may merge `Play Counts` only in memory.
-- UNVALIDATED until hardware: theme renders cover.jpg; exact order/nesting holds;
-  no choke at ~2900 tracks; DB refresh flow. (USB is a good proxy for everything
-  EXCEPT on-device rendering/playback.)
+- **Rockbox hardware checks still unvalidated:** theme renders `cover.jpg`,
+  exact order/nesting holds, no choke at ~2,900 tracks, and the DB refresh flow.
+  USB is a good proxy for everything except on-device rendering/playback.

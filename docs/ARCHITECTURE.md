@@ -308,7 +308,10 @@ lives once under `/Music` and is absent from iTunesDB. A unified manifest must
 own both path classes so deletion/resync cannot remove a file still referenced
 by the other firmware; prepared artwork, recovery, commit ordering, and rollback
 must also be coordinated as one transaction. This is design only, not shipped
-behavior.
+behavior. Compatibility is evaluated against each destination profile: the
+current MA446-safe subset is validated MP3 plus stereo PCM16/44.1-kHz WAV, but
+that conservative stock rule must never filter files supported by Rockbox.
+Media unsupported by both profiles is omitted and reported.
 
 Stock device presentation is a separate read-only path. `stock_ipod_info`
 creates immutable identity/track/playlist snapshots, merges pending playback

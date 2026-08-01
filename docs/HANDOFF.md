@@ -100,17 +100,23 @@ layout chooses the exporter automatically:
   `iPod_Control` coexists;
 - remembered MA446 identity cannot re-enable stock writes on a Rockbox layout.
 
-Current dual-boot behavior is intentionally Rockbox-only export with iTunesDB
-read-only. Rockbox `/Music` files are not automatically visible to stock
-firmware, so stock fallback cannot encounter unsupported Rockbox media.
+Current dual-boot behavior intentionally uses only the Rockbox filesystem
+exporter and keeps iTunesDB read-only. Rockbox `/Music` files are not
+automatically visible to stock firmware, so stock fallback cannot encounter
+unsupported Rockbox media. This route is selected from the mounted on-disk
+layout, not from a guessed boot intention or a manual user mode switch.
 
 The approved future dual-library design is **single-copy**, not duplicate:
 
 - stock-safe files live once under `iPod_Control/Music/Fxx`, are indexed in
-  iTunesDB, and are referenced by Rockbox playlists;
+  iTunesDB, and are referenced by Rockbox playlists. For the current MA446
+  contract, safe means validated MP3 or stereo PCM16/44.1-kHz WAV;
 - stock-unsafe but Rockbox-supported files live once under `/Music` and never
   enter iTunesDB;
 - unsupported-by-both files are omitted and reported;
+- compatibility is evaluated per destination firmware: the conservative stock
+  validator controls only the iTunesDB subset and must never remove a file that
+  the connected Rockbox profile supports;
 - one composite planner/manifest must coordinate ownership, artwork, deletion,
   recovery, stock database publication, Rockbox playlists, and rollback.
 

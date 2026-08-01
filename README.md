@@ -148,7 +148,9 @@ future dual-library design is single-copy rather than duplicate: stock-safe
 files live once under `iPod_Control/Music`, are indexed by iTunesDB, and are
 referenced by Rockbox playlists; stock-unsafe but Rockbox-supported files live
 once under `/Music` and never enter iTunesDB. That composite planner/manifest is
-not implemented yet.
+not implemented yet. For the current MA446 contract, stock-safe means validated
+MP3 or stereo PCM16/44.1-kHz WAV. That stock filter governs only the iTunesDB
+subset; it must never shrink the Rockbox-compatible library.
 
 **Persistence.** Everything user-made lives in one portable
 `library.json` (overrides, playlists, imported records, hides, settings) at

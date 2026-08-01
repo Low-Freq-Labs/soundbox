@@ -16,8 +16,9 @@ does not make a device writable by itself.
 | Dual boot | Both layouts | Rockbox-style export on FAT32; never touch the stock database |
 | Generic USB | Neither layout | Use the same Rockbox-style folder/playlist export on FAT32 |
 
-The connected firmware profile selects the export contract automatically. A
-`/.rockbox/` marker wins operationally even when Apple's `iPod_Control` remains
+The mounted on-disk layout selects the export contract automatically; SoundBox
+does not guess which firmware the user most recently booted. A `/.rockbox/`
+marker wins operationally even when Apple's `iPod_Control` remains
 on disk: SoundBox exports the complete source formats through the Rockbox path
 and keeps the stock database read-only. Rockbox media under `/Music` is not
 automatically indexed by stock firmware, so an Apple fallback boot cannot
@@ -70,6 +71,12 @@ implementation intentionally does none of this: `/.rockbox/` wins, uses the
 ordinary Rockbox exporter, and leaves iTunesDB read-only. Never simulate the
 future mode by running the stock and Rockbox exporters independently or by
 copying all safe tracks twice.
+
+Compatibility belongs to the destination profile, not to a global SoundBox
+allowlist. The current MA446 stock validator controls only which tracks may
+enter iTunesDB; it must not suppress a stock-unsafe file from Rockbox when the
+Rockbox firmware supports it. Conversely, a file unsupported by both profiles
+is omitted once and reported honestly by the composite plan.
 
 ## Stock iPod layout
 
