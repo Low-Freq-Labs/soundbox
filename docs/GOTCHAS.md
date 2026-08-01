@@ -632,6 +632,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   must be flattened via `ch.isprintable()`.
 - `sanitize_component` turns ALL non-printables into `-` (they once split m3u8
   path lines on-device). Any new filename-ish surface must use it.
+- Device path sanitization is not metadata sanitization. Stock iTunesDB text and
+  the SoundBox UI preserve printable Unicode. FAT/Rockbox path components use
+  readable Latin transliteration (`CØSTA` → `COSTA`, not `C_STA`), retain
+  non-Latin scripts, remove decorative `*`/`?`, normalize compatibility
+  punctuation, and protect DOS names such as `CON`/`LPT1`.
 - Hypothesis tests are `derandomize=True` — deterministic; a failure is REAL.
 
 ## Offscreen UI tests can dirty the REAL config
@@ -639,6 +644,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   slot → `_save_state()` → WRITES the real `library.json`. For render/smoke
   tests, set state via `win.settings[...] = …` + `win._sync_settings_controls()`
   (blockSignals, NO save), or point AppDataLocation at a temp dir.
+- `setup_logging()` must honor `QStandardPaths` test mode too. Otherwise fixture
+  failures such as the intentional `boom` cases are appended to the production
+  `~/Library/Logs/Soundbox/soundbox.log` and corrupt later hardware log audits.
 - `desktop/_shot.py` is the SELF-CONTAINED reference render harness (synthetic
   lib + qttest sandbox): `PYTHONPATH=. .venv/bin/python -m desktop._shot`.
 - **A failed `open_library` pops a MODAL QMessageBox** → headless/offscreen
@@ -777,9 +785,30 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   pauses during playback; sync still verifies every payload hash.
 - **Stock artwork is four coupled layers:** MHIT (`mhiiLink`/count/size), one
   per-track ArtworkDB MHII with a matching song dbid, MHNI format offsets, and
-  the two ithmb pixel files. Never update only one layer. Preserve replaced
-  ArtworkDB/ithmb bytes first, commit them atomically, validate all bounds, then
-  publish the linking iTunesDB last. Missing/incomplete old pixels fail closed.
+  the two ithmb pixel files. Never update only one layer. Full replacement and
+  compaction preserve ArtworkDB/ithmb bytes first; incremental sync follows the
+  unreferenced-slot rule below. Validate all bounds, then publish the linking
+  iTunesDB last. Missing/incomplete old pixels fail closed.
+- **Incremental ithmb writes may touch only currently unreferenced slots.** Keep
+  image IDs stable, reuse free fixed-size holes before appending, and publish
+  ArtworkDB before iTunesDB. Hash free-slot pixels during the Mac-side plan and
+  relink an exact match without rewriting it; only a nonmatching free slot needs
+  a range write. Never overwrite the current track's live slot.
+  Failed range writes can leave harmless orphan pixels; a later plan rediscovers
+  them as free. Full playlist deletion remains the compaction path.
+- **The Mac stock shadow is acceleration, never authority.** It lives under
+  AppData `stock_ipod_state/`, keyed by library persistent ID + volume UUID, and
+  requires matching identity, model, iTunesDB, ArtworkDB, and ithmb facts.
+  Missing/mismatched state performs full reconciliation. Save it after device
+  commit; shadow-save failure must not roll back a healthy iPod.
+- **A valid stock shadow may still contain only a subset of source mappings.**
+  Playlist-scoped bootstrap must not classify a later-selected track as new
+  merely because its source key is absent from the shadow. Reconcile only the
+  missing candidates against live device media by size/suffix and exact content
+  hash before planning a copy. Likewise, compare prepared RGB565 payloads with
+  their current device slices when the local artwork cache key is absent. A
+  partial acceleration index must never turn an artwork-only edit into duplicate
+  audio or unchanged artwork writes.
 
 ## Rockbox / iPod (Phase 3 — hardware)
 - **The mounted on-disk layout selects the exporter.** SoundBox does not know
@@ -812,8 +841,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `/Music`, `/Playlists`, and `/.soundbox` export; its stock database remains
   untouched.
 - **Apple Videos is the only deletable smart index.** It must match the exact
-  `Videos` title plus MHSD-5 type 0. Its deletion contributes zero media owners
-  or candidates and must preserve all remaining smart rules. Never generalize
+  `Videos` title plus MHSD-5 type 0. A real Apple database can contain both an
+  ordinary-MHLP smart alias and the canonical MHSD-5 record with different
+  playlist IDs. Prefer the canonical record in the device snapshot and remove
+  both representations when that canonical ID is selected; otherwise the UI
+  can report success while the true index remains. Neither representation is a
+  media owner or candidate. Preserve all other smart rules and never generalize
   this to Music, Movies, TV Shows, or Audiobooks. On-The-Go does not exist in
   iTunesDB and cannot be deleted there.
 - **The stock Artists → artist → All level is firmware UI.** SoundBox supplies

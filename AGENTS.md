@@ -31,10 +31,17 @@ repository can answer the question.
   `iPod_Control`. It is MA446/MP3/WAV-only until separately expanded, uses the
   pinned Clickwheel database engine only as an offline renderer, validates the
   rendered database and every artwork link, saves recovery material, copies
-  media/artwork atomically, and commits `iTunesDB` last. Curated baseline JPEGs
-  remain canonical; `stock_artwork/` under AppData is a disposable,
-  content-addressed MA446 RGB565 derivative cache. Never embed art into or
-  otherwise retag source audio. The connected layout selects the exporter:
+  media/artwork safely, and commits `iTunesDB` last. A disposable Mac-side
+  `stock_ipod_state/` shadow may accelerate only an exact matching library
+  identity/database/artwork baseline; mismatch always falls back to full
+  reconciliation. A valid shadow can contain only playlist-scoped source
+  mappings; missing selected sources must be narrowly content-reconciled against
+  live media, never assumed new. Curated baseline JPEGs remain canonical;
+  `stock_artwork/` under AppData is a disposable, content-addressed MA446 RGB565
+  derivative cache. Incremental art writes may touch only currently
+  unreferenced fixed-size ithmb slots; pixel-identical free slots are relinked
+  without a write before publishing ArtworkDB and iTunesDB. Never embed art into
+  or otherwise retag source audio. The connected layout selects the exporter:
   stock-only uses the guarded stock planner; `/.rockbox/` uses the Rockbox
   filesystem planner and leaves any coexisting stock database read-only.
   A storage-efficient dual-library mode is approved only as future work: safe
@@ -45,9 +52,12 @@ repository can answer the question.
   Unsupported-by-both media is omitted and reported. Do not approximate that
   design with two independent exporters or duplicate the collection.
 - Stock playlist deletion may remove regular user playlists and the exact Apple
-  **Videos** smart index only. Videos deletion removes no media; Music, Movies,
-  TV Shows, and Audiobooks remain immutable. On-The-Go is firmware-generated,
-  not an iTunesDB playlist.
+  **Videos** smart index only. Apple databases may mirror that index in the
+  ordinary MHLP and canonical MHSD-5 datasets under different IDs; the device
+  UI must select the canonical ID and deletion must remove both matching
+  representations as one zero-media operation. Music, Movies, TV Shows, and
+  Audiobooks remain immutable. On-The-Go is firmware-generated, not an iTunesDB
+  playlist.
 - `soundbox.stock_ipod_info` may parse stock identity, tracks, playlists, and
   playback state for the device UI, but is strictly read-only. Remembered model
   confirmation is keyed by library persistent ID + volume UUID; the ordinary

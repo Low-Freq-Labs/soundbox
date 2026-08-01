@@ -303,11 +303,18 @@ class StockArtworkPrepWorker(QThread):
     """
     progress = Signal(int, int)
 
-    def __init__(self, lib, art_cache, stock_cache: StockArtworkCache):
+    def __init__(
+        self,
+        lib,
+        art_cache,
+        stock_cache: StockArtworkCache,
+        images: tuple[Path, ...] | None = None,
+    ):
         super().__init__()
         self.lib = lib
         self.art_cache = art_cache
         self.stock_cache = stock_cache
+        self.images = images
         self._stop = False
         self._playback_active = threading.Event()
 
@@ -325,22 +332,25 @@ class StockArtworkPrepWorker(QThread):
             time.sleep(0.05)
 
     def run(self):
-        hidden = getattr(self.lib, "hidden_ids", set())
-        images: list[Path] = []
-        seen_paths: set[Path] = set()
-        for track in self.lib.tracks_by_id.values():
-            if track.track_id in hidden:
-                continue
-            image = self.art_cache.image_path(track.track_id)
-            if image is None:
-                continue
-            try:
-                canonical = image.resolve(strict=True)
-            except OSError:
-                continue
-            if canonical not in seen_paths:
-                seen_paths.add(canonical)
-                images.append(canonical)
+        if self.images is not None:
+            images = list(dict.fromkeys(self.images))
+        else:
+            hidden = getattr(self.lib, "hidden_ids", set())
+            images = []
+            seen_paths: set[Path] = set()
+            for track in self.lib.tracks_by_id.values():
+                if track.track_id in hidden:
+                    continue
+                image = self.art_cache.image_path(track.track_id)
+                if image is None:
+                    continue
+                try:
+                    canonical = image.resolve(strict=True)
+                except OSError:
+                    continue
+                if canonical not in seen_paths:
+                    seen_paths.add(canonical)
+                    images.append(canonical)
 
         total = len(images)
         LOG.info("Stock artwork preparation: %d curated image(s)", total)
@@ -353,7 +363,8 @@ class StockArtworkPrepWorker(QThread):
                 # The low-priority whole-library pass validates manifests and
                 # exact payload sizes. A stock sync rehashes/rebuilds the small
                 # selected set before it can enter a device plan.
-                self.stock_cache.prepare(image, verify_cache=False)
+                self.stock_cache.prepare(
+                    image, verify_cache=False, save_index=False)
                 prepared += 1
             except Exception as exc:  # noqa: BLE001 — one bad JPEG cannot end the pass
                 failed += 1
@@ -361,6 +372,12 @@ class StockArtworkPrepWorker(QThread):
                     LOG.warning("Stock artwork preparation failed for %s: %s", image, exc)
             self.progress.emit(index, total)
             time.sleep(0.01)
+        try:
+            # One atomic index publication per batch keeps a full-library warm
+            # pass O(n), instead of rewriting a growing JSON file for every song.
+            self.stock_cache.flush_source_index()
+        except Exception as exc:  # noqa: BLE001 — derivatives remain disposable
+            LOG.warning("Stock artwork source index could not be saved: %s", exc)
         LOG.info(
             "Stock artwork preparation ended: %d ready, %d failed",
             prepared, failed,

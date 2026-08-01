@@ -30,6 +30,7 @@ from soundbox.stock_ipod import (
     StockIpodError,
     commit_stock_ipod_playlist_delete,
     commit_stock_ipod_sync,
+    inspect_stock_ipod_sync_status,
     plan_stock_ipod_playlist_delete,
     plan_stock_ipod_sync,
 )
@@ -39,7 +40,8 @@ from soundbox.stock_ipod_info import (
     read_stock_ipod_snapshot,
     stock_ipod_device_key,
 )
-from soundbox.stock_artwork import StockArtworkCache
+from soundbox.stock_artwork import StockArtworkCache, read_stock_artwork_slots
+from soundbox.stock_ipod_shadow import StockIpodShadowStore
 from soundbox.sync import DeviceSession
 
 
@@ -205,7 +207,9 @@ class StockIpodSync(unittest.TestCase):
             [existing],
             backup=False,
             force_checksum=ChecksumType.NONE,
-            playlists=[regular],
+            # Real Apple databases can mirror Videos in both the ordinary MHLP
+            # and canonical MHSD-5 datasets under different IDs.
+            playlists=[regular, smart("Videos", 405, 0)],
             smart_playlists=[
                 smart("Music", 303, 4),
                 smart("Videos", 404, 0),
@@ -433,6 +437,17 @@ class StockIpodSync(unittest.TestCase):
         videos = next(
             raw for raw in before["mhlp_smart"]
             if raw.get("Title") == "Videos")
+        aliases = [
+            raw for raw in before["mhlp"]
+            if raw.get("Title") == "Videos" and raw.get("isSmartPlaylist")
+        ]
+        self.assertEqual([int(raw["playlistID"]) for raw in aliases], [405])
+        snapshot = read_stock_ipod_snapshot(self.ipod)
+        displayed_videos = [
+            item for item in snapshot.playlists if item.title == "Videos"
+        ]
+        self.assertEqual(len(displayed_videos), 1)
+        self.assertEqual(displayed_videos[0].playlist_id, int(videos["playlistID"]))
 
         plan = plan_stock_ipod_playlist_delete(
             self.ipod,
@@ -651,6 +666,286 @@ class StockIpodSync(unittest.TestCase):
         self.assertTrue(all(int(track.get("mhiiLink") or 0) for track in tracks))
         self.assertTrue(all(int(track.get("artworkCount") or 0) == 1 for track in tracks))
         self.assertEqual(source_hashes, (_hash(self.existing_source), _hash(self.new_source)))
+
+    def test_shadow_fast_path_writes_only_changed_cover_slots(self):
+        # Separate canonical files with identical bytes initially exercise
+        # shared pixel offsets while allowing only one track to change later.
+        new_art = self.base / "curated-new.jpg"
+        shutil.copy2(self.art_cache.paths["old"], new_art)
+        self.art_cache.paths["new"] = new_art
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        common = {
+            "model_number": "MA446",
+            "filesystem": "msdos",
+            "art_cache": self.art_cache,
+            "stock_art_cache": self.stock_art_cache,
+            "identity_key": "stock-ipod-v1:fixture:0000000000000001",
+            "serial_number": "8M650V0HV9M",
+            "shadow_store": shadow_store,
+        }
+        first = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        first_result = commit_stock_ipod_sync(first)
+        self.assertTrue(first_result.shadow_updated)
+        _raw, first_slots, _files = read_stock_artwork_slots(
+            self.ipod / "iPod_Control/Artwork")
+        first_by_song = {slot.song_id: slot for slot in first_slots.values()}
+
+        unchanged = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        self.assertTrue(unchanged.shadow_fast_path)
+        self.assertEqual(len(unchanged.copies), 0)
+        self.assertEqual(unchanged.summary()["artwork_pixel_bytes"], 0)
+        self.assertFalse(unchanged.requires_commit)
+
+        Image.new("RGB", (300, 300), (5, 210, 80)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        changed = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        self.assertTrue(changed.shadow_fast_path)
+        self.assertIsNotNone(changed.rendered_artwork)
+        assert changed.rendered_artwork is not None
+        self.assertTrue(changed.rendered_artwork.incremental)
+        self.assertEqual(changed.summary()["artwork_pixel_bytes"], 100_000)
+        before_sizes = {
+            plan.relative_path.name: plan.before_size
+            for plan in changed.rendered_artwork.ithmb_files
+        }
+        result = commit_stock_ipod_sync(changed)
+        self.assertEqual(result.artwork_pixel_bytes, 100_000)
+        artwork = self.ipod / "iPod_Control/Artwork"
+        _raw, changed_slots, _files = read_stock_artwork_slots(artwork)
+        changed_by_song = {slot.song_id: slot for slot in changed_slots.values()}
+        new_dbid = first.copies[0].dbid
+        self.assertEqual(
+            changed_by_song[new_dbid].offsets,
+            first_by_song[new_dbid].offsets,
+        )
+        self.assertNotEqual(
+            changed_by_song[101].offsets,
+            first_by_song[101].offsets,
+        )
+        self.assertEqual(
+            (artwork / "F1028_1.ithmb").stat().st_size,
+            before_sizes["F1028_1.ithmb"] + 20_000,
+        )
+        self.assertEqual(
+            (artwork / "F1029_1.ithmb").stat().st_size,
+            before_sizes["F1029_1.ithmb"] + 80_000,
+        )
+
+        Image.new("RGB", (300, 300), (220, 40, 15)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        second_change = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        self.assertEqual(second_change.summary()["artwork_pixel_bytes"], 100_000)
+        commit_stock_ipod_sync(second_change)
+        Image.new("RGB", (300, 300), (15, 40, 220)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        third_change = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        second_sizes = {
+            path.name: path.stat().st_size for path in artwork.glob("F*.ithmb")
+        }
+        commit_stock_ipod_sync(third_change)
+        self.assertEqual(
+            {path.name: path.stat().st_size for path in artwork.glob("F*.ithmb")},
+            second_sizes,
+        )
+
+    def test_partial_shadow_reconciles_existing_audio_and_pixels(self):
+        # Seed a device containing both tracks/artwork without a Mac shadow.
+        commit_stock_ipod_sync(plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA446", filesystem="msdos",
+            art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
+        ))
+        only_new = Playlist("Only New", [], ["new"], pid="only-new")
+        only_old = Playlist("Only Old", [], ["old"], pid="only-old")
+        split_library = Library(
+            self.library.tracks_by_id, [only_new, only_old], self.sources)
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        common = {
+            "model_number": "MA446",
+            "filesystem": "msdos",
+            "art_cache": self.art_cache,
+            "stock_art_cache": self.stock_art_cache,
+            "identity_key": "stock-ipod-v1:fixture:partial",
+            "shadow_store": shadow_store,
+        }
+
+        # Bootstrap from only one playlist. The other track is live on-device,
+        # but intentionally absent from the new local source map.
+        commit_stock_ipod_sync(plan_stock_ipod_sync(
+            split_library, [only_new], self.ipod, **common))
+        shadow = shadow_store.load("stock-ipod-v1:fixture:partial")
+        self.assertIsNotNone(shadow)
+        assert shadow is not None
+        self.assertNotIn(str(self.existing_source.resolve()), shadow.sources)
+
+        # Selecting that older playlist must hash the narrow live candidate,
+        # reuse its media and prove its current pixels instead of duplicating
+        # audio or rewriting every previously unindexed cover.
+        reconciled = plan_stock_ipod_sync(
+            split_library, [only_old], self.ipod, **common)
+        self.assertTrue(reconciled.shadow_fast_path)
+        self.assertEqual(len(reconciled.copies), 0)
+        self.assertEqual(reconciled.reused_track_count, 1)
+        self.assertEqual(reconciled.summary()["artwork_pixel_bytes"], 0)
+
+        Image.new("RGB", (300, 300), (12, 190, 240)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        changed = plan_stock_ipod_sync(
+            split_library, [only_old], self.ipod, **common)
+        self.assertEqual(len(changed.copies), 0)
+        self.assertEqual(changed.summary()["artwork_pixel_bytes"], 100_000)
+
+    def test_incremental_art_reuses_matching_free_pixels_without_writing(self):
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        common = {
+            "model_number": "MA446",
+            "filesystem": "msdos",
+            "art_cache": self.art_cache,
+            "stock_art_cache": self.stock_art_cache,
+            "identity_key": "stock-ipod-v1:fixture:free-pixels",
+            "shadow_store": shadow_store,
+        }
+        original_pixels = self.art_cache.paths["old"].read_bytes()
+        first = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        commit_stock_ipod_sync(first)
+        artwork = self.ipod / "iPod_Control/Artwork"
+        _raw, first_slots, _files = read_stock_artwork_slots(artwork)
+        first_by_song = {slot.song_id: slot for slot in first_slots.values()}
+        original_offsets = first_by_song[101].offsets
+
+        Image.new("RGB", (300, 300), (5, 210, 80)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        changed = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        self.assertEqual(changed.summary()["artwork_pixel_bytes"], 100_000)
+        commit_stock_ipod_sync(changed)
+        before_pixels = {
+            path.name: path.read_bytes() for path in artwork.glob("F*.ithmb")}
+
+        # The first cover's old offsets are now free but retain their bytes.
+        # Reverting to that cover must relink ArtworkDB without rewriting them.
+        self.art_cache.paths["old"].write_bytes(original_pixels)
+        reverted = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        self.assertTrue(reverted.requires_commit)
+        self.assertIsNotNone(reverted.rendered_artwork)
+        assert reverted.rendered_artwork is not None
+        self.assertEqual(reverted.summary()["artwork_pixel_bytes"], 0)
+        self.assertEqual(reverted.rendered_artwork.range_writes, ())
+        reverted_slot = next(
+            slot for slot in reverted.rendered_artwork.slots
+            if slot.song_id == 101)
+        self.assertEqual(reverted_slot.offsets, original_offsets)
+        result = commit_stock_ipod_sync(reverted)
+        self.assertEqual(result.artwork_pixel_bytes, 0)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in artwork.glob("F*.ithmb")},
+            before_pixels,
+        )
+
+    def test_incremental_art_failure_leaves_published_database_and_art_valid(self):
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        common = {
+            "model_number": "MA446",
+            "filesystem": "msdos",
+            "art_cache": self.art_cache,
+            "stock_art_cache": self.stock_art_cache,
+            "identity_key": "stock-ipod-v1:fixture:0000000000000001",
+            "shadow_store": shadow_store,
+        }
+        commit_stock_ipod_sync(plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common))
+        Image.new("RGB", (300, 300), (30, 220, 10)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        database = self.ipod / "iPod_Control/iTunes/iTunesDB"
+        artwork_db = self.ipod / "iPod_Control/Artwork/ArtworkDB"
+        before_database = database.read_bytes()
+        before_artwork_db = artwork_db.read_bytes()
+        real_write = DeviceSession.write_verified_range
+        calls = 0
+
+        def fail_second_range(session, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("synthetic second-range failure")
+            return real_write(session, *args, **kwargs)
+
+        with mock.patch.object(
+                DeviceSession, "write_verified_range", fail_second_range):
+            with self.assertRaisesRegex(OSError, "second-range failure"):
+                commit_stock_ipod_sync(plan)
+        self.assertEqual(database.read_bytes(), before_database)
+        self.assertEqual(artwork_db.read_bytes(), before_artwork_db)
+        parsed = read_ipod(self.ipod)
+        self.assertEqual(len(get_ipod_tracks(parsed)), 2)
+        self.assertTrue(all(
+            int(track.get("mhiiLink") or 0) for track in get_ipod_tracks(parsed)))
+
+    def test_shadow_save_failure_does_not_rollback_healthy_device_commit(self):
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA446", filesystem="msdos",
+            identity_key="stock-ipod-v1:fixture",
+            shadow_store=shadow_store,
+        )
+        with mock.patch.object(
+                shadow_store, "save", side_effect=OSError("Mac disk full")):
+            result = commit_stock_ipod_sync(plan)
+        self.assertFalse(result.shadow_updated)
+        self.assertIn("Mac disk full", result.shadow_warning)
+        self.assertEqual(len(get_ipod_tracks(read_ipod(self.ipod))), 2)
+
+    def test_reconnect_shadow_status_is_read_only_and_detects_local_art(self):
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        identity = "stock-ipod-v1:fixture"
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA446", filesystem="msdos",
+            art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
+            identity_key=identity, shadow_store=shadow_store,
+        )
+        commit_stock_ipod_sync(plan)
+        before = self._snapshot(self.ipod)
+        status = inspect_stock_ipod_sync_status(
+            self.library, self.ipod,
+            identity_key=identity, model_number="MA446", serial_number="",
+            shadow_store=shadow_store,
+        )
+        self.assertEqual(status.state, "up_to_date")
+        without_custom = Library(
+            self.library.tracks_by_id, [], self.library.source)
+        phantom = inspect_stock_ipod_sync_status(
+            without_custom, self.ipod,
+            identity_key=identity, model_number="MA446", serial_number="",
+            shadow_store=shadow_store,
+        )
+        self.assertEqual(phantom.state, "local_changes")
+        custom_status = inspect_stock_ipod_sync_status(
+            without_custom, self.ipod,
+            identity_key=identity, model_number="MA446", serial_number="",
+            shadow_store=shadow_store,
+            extra_playlists=(self.playlist,),
+        )
+        self.assertEqual(custom_status.state, "up_to_date")
+        Image.new("RGB", (300, 300), (12, 34, 56)).save(
+            self.art_cache.paths["old"], "JPEG", quality=90)
+        changed = inspect_stock_ipod_sync_status(
+            self.library, self.ipod,
+            identity_key=identity, model_number="MA446", serial_number="",
+            shadow_store=shadow_store,
+        )
+        self.assertEqual(changed.state, "local_changes")
+        self.assertEqual(self._snapshot(self.ipod), before)
 
     def test_database_failure_rolls_back_new_artwork_files(self):
         plan = plan_stock_ipod_sync(

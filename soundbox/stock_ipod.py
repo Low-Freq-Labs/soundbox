@@ -54,13 +54,20 @@ from clickwheel.ipod.itunesdb_writer.mhod_spl_writer import (  # type: ignore[im
 from clickwheel.ipod.itunesdb_writer.mhyp_writer import PlaylistItemMeta  # type: ignore[import-untyped]
 from clickwheel.ipod.sync import _existing_track_to_trackinfo  # type: ignore[import-untyped]
 
+from . import manifest as device_manifest
 from . import metadata
 from .library import Library, Playlist, Track
 from .paths import is_within
 from .stock_artwork import (
     RenderedStockArtwork,
     StockArtworkCache,
+    render_incremental_stock_artwork,
     render_stock_artwork,
+)
+from .stock_ipod_shadow import (
+    StockIpodShadow,
+    StockIpodShadowStore,
+    StockIpodSyncStatus,
 )
 from .sync import DeviceSession, assert_target_safe
 
@@ -148,6 +155,18 @@ class StockIpodSyncPlan:
     existing_track_count: int = 0
     final_track_count: int = 0
     merged_play_count_entries: int = 0
+    identity_key: str = ""
+    serial_number: str = ""
+    shadow_fast_path: bool = False
+    shadow_reconcile_reason: str = ""
+    shadow_store: StockIpodShadowStore | None = field(
+        default=None, repr=False, compare=False)
+    shadow_sources: dict[str, dict[str, Any]] = field(
+        default_factory=dict, repr=False, compare=False)
+    shadow_artwork: dict[str, dict[str, Any]] = field(
+        default_factory=dict, repr=False, compare=False)
+    shadow_playlists: dict[str, dict[str, Any]] = field(
+        default_factory=dict, repr=False, compare=False)
 
     @property
     def bytes_to_copy(self) -> int:
@@ -156,6 +175,20 @@ class StockIpodSyncPlan:
     @property
     def artwork_bytes_to_copy(self) -> int:
         return self.rendered_artwork.bytes_to_copy if self.rendered_artwork else 0
+
+    @property
+    def database_changed(self) -> bool:
+        return hashlib.sha256(
+            self.rendered_database).hexdigest() != self.database_sha256_before
+
+    @property
+    def requires_commit(self) -> bool:
+        return bool(
+            self.copies
+            or self.play_counts_sha256_before is not None
+            or self.artwork_bytes_to_copy
+            or self.database_changed
+        )
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -174,6 +207,18 @@ class StockIpodSyncPlan:
             "unique_artwork": (
                 self.rendered_artwork.unique_images if self.rendered_artwork else 0),
             "artwork_bytes_to_copy": self.artwork_bytes_to_copy,
+            "artwork_pixel_bytes": (
+                sum(item.segment.size for item in self.rendered_artwork.range_writes)
+                if self.rendered_artwork and self.rendered_artwork.incremental else
+                sum(item.size for item in self.rendered_artwork.ithmb_files)
+                if self.rendered_artwork else 0
+            ),
+            "transaction_mode": (
+                "reconcile" if not self.shadow_fast_path
+                else "delta" if self.requires_commit else "no-op"
+            ),
+            "shadow_fast_path": self.shadow_fast_path,
+            "shadow_reconcile_reason": self.shadow_reconcile_reason,
             "existing_tracks": self.existing_track_count,
             "final_tracks": self.final_track_count,
             "merged_play_count_entries": self.merged_play_count_entries,
@@ -193,6 +238,9 @@ class StockIpodCommitResult:
     artwork_tracks: int = 0
     unique_artwork: int = 0
     metadata_updates: int = 0
+    artwork_pixel_bytes: int = 0
+    shadow_updated: bool = False
+    shadow_warning: str = ""
 
 
 @dataclass(frozen=True)
@@ -711,7 +759,146 @@ def _render_database(
         # A second parse proves that the final, patched bytes are structurally
         # readable before they are ever eligible for a device commit.
         parse_itunesdb(str(source))
-        return rendered
+    return rendered
+
+
+def _shadow_matches_live(
+    shadow: StockIpodShadow | None,
+    *,
+    root: Path,
+    identity_key: str,
+    model: str,
+    serial_number: str,
+    database_sha256: str,
+) -> tuple[bool, str]:
+    if shadow is None:
+        return False, "No committed Mac-side baseline"
+    if shadow.identity_key != identity_key or shadow.model != model:
+        return False, "Device identity or model differs from the baseline"
+    if (
+        shadow.serial_number and serial_number
+        and shadow.serial_number != serial_number
+    ):
+        return False, "Hardware serial differs from the baseline"
+    if shadow.database_sha256 != database_sha256:
+        return False, "iTunesDB changed since the last SoundBox commit"
+    artwork_dir = root / "iPod_Control" / "Artwork"
+    artwork_db = artwork_dir / "ArtworkDB"
+    if shadow.artwork_database_sha256:
+        if not artwork_db.is_file() or _sha256(artwork_db) != shadow.artwork_database_sha256:
+            return False, "ArtworkDB changed since the last SoundBox commit"
+    elif artwork_db.exists():
+        return False, "ArtworkDB appeared since the last SoundBox commit"
+    for name, row in shadow.ithmb.items():
+        path = artwork_dir / name
+        try:
+            stat = path.stat()
+        except OSError:
+            return False, f"{name} is missing"
+        if (
+            stat.st_size != int(row.get("size") or -1)
+            or stat.st_mtime_ns != int(row.get("mtime_ns") or -1)
+        ):
+            return False, f"{name} changed since the last SoundBox commit"
+    return True, ""
+
+
+def _source_hashes_with_shadow(
+    sources: list[Path],
+    shadow: StockIpodShadow | None,
+) -> dict[Path, str]:
+    rows = shadow.sources if shadow else {}
+    hashes: dict[Path, str] = {}
+    for source in sources:
+        stat = source.stat()
+        row = rows.get(str(source)) or {}
+        cached = str(row.get("sha256") or "")
+        if (
+            len(cached) == 64
+            and int(row.get("size") or -1) == stat.st_size
+            and int(row.get("mtime_ns") or -1) == stat.st_mtime_ns
+        ):
+            hashes[source] = cached
+        else:
+            hashes[source] = _sha256(source)
+    return hashes
+
+
+def inspect_stock_ipod_sync_status(
+    library: Library,
+    target: str | Path,
+    *,
+    identity_key: str,
+    model_number: str,
+    serial_number: str,
+    shadow_store: StockIpodShadowStore,
+    extra_playlists: tuple[Playlist, ...] = (),
+) -> StockIpodSyncStatus:
+    """Compare one mounted iPod with its Mac shadow without writing either."""
+    root = Path(target).expanduser().resolve(strict=True)
+    shadow = shadow_store.load(identity_key)
+    if shadow is None:
+        return StockIpodSyncStatus(
+            "untracked", "No committed Mac-side fast-sync baseline")
+    database = _db_path(root)
+    matches, reason = _shadow_matches_live(
+        shadow,
+        root=root,
+        identity_key=identity_key,
+        model=normalize_model_number(model_number),
+        serial_number=serial_number,
+        database_sha256=_sha256(database),
+    )
+    if not matches:
+        return StockIpodSyncStatus(
+            "reconcile_required", reason, committed_at=shadow.committed_at)
+
+    changed: set[str] = set()
+    drift = device_manifest.diff(
+        {"playlists": shadow.playlists}, library, extra=extra_playlists)
+    for rows in (drift.renamed, drift.moved, drift.changed, drift.removed):
+        changed.update(str(row[0]) for row in rows)
+    for source_text, row in shadow.sources.items():
+        track_id = str(row.get("track_id") or "")
+        track = library.tracks_by_id.get(track_id)
+        source = track.path if track is not None else Path(source_text)
+        try:
+            stat = source.resolve(strict=True).stat()
+        except OSError:
+            changed.add(f"source:{track_id or source_text}")
+            continue
+        if (
+            stat.st_size != int(row.get("size") or -1)
+            or stat.st_mtime_ns != int(row.get("mtime_ns") or -1)
+        ):
+            changed.add(f"source:{track_id or source_text}")
+    for row in shadow.artwork.values():
+        art_path = str(row.get("art_path") or "")
+        if not art_path:
+            continue
+        try:
+            stat = Path(art_path).stat()
+        except OSError:
+            changed.add(f"art:{row.get('track_id') or art_path}")
+            continue
+        if (
+            stat.st_size != int(row.get("art_size") or -1)
+            or stat.st_mtime_ns != int(row.get("art_mtime_ns") or -1)
+        ):
+            changed.add(f"art:{row.get('track_id') or art_path}")
+    pending = database.with_name("Play Counts").is_file()
+    if pending:
+        changed.add("play-counts")
+    if changed:
+        return StockIpodSyncStatus(
+            "local_changes",
+            f"{len(changed)} local or playback change(s) ready to plan",
+            len(changed),
+            shadow.committed_at,
+        )
+    return StockIpodSyncStatus(
+        "up_to_date", "Matches the last committed Mac-side baseline",
+        0, shadow.committed_at)
 
 
 def plan_stock_ipod_sync(
@@ -726,6 +913,9 @@ def plan_stock_ipod_sync(
     title_overrides: dict | None = None,
     art_cache: Any | None = None,
     stock_art_cache: StockArtworkCache | None = None,
+    identity_key: str = "",
+    serial_number: str = "",
+    shadow_store: StockIpodShadowStore | None = None,
 ) -> StockIpodSyncPlan:
     """Render and validate a complete stock-iPod sync without target writes."""
     root = Path(target).expanduser().resolve(strict=True)
@@ -783,6 +973,19 @@ def plan_stock_ipod_sync(
         raise StockIpodError(
             f"MA446 database unexpectedly requires checksum scheme {hashing_scheme}")
 
+    database_sha256 = hashlib.sha256(original).hexdigest()
+    shadow = shadow_store.load(identity_key) if shadow_store and identity_key else None
+    shadow_fast_path, shadow_reason = _shadow_matches_live(
+        shadow,
+        root=root,
+        identity_key=identity_key,
+        model=model,
+        serial_number=serial_number,
+        database_sha256=database_sha256,
+    )
+    if not shadow_fast_path:
+        shadow = None
+
     parsed = parse_itunesdb(str(database))
     parsed_tracks = get_ipod_tracks(parsed)
     play_counts_path = database.with_name("Play Counts")
@@ -816,19 +1019,67 @@ def plan_stock_ipod_sync(
                 occupied_paths.add(str(path.relative_to(root)).replace(
                     os.sep, "/").casefold())
 
-    source_hashes = {path: _sha256(path) for path in sources}
+    source_hashes = _source_hashes_with_shadow(sources, shadow)
+    desired_content_keys = {
+        (path.stat().st_size, path.suffix.lower(), source_hashes[path])
+        for path in sources
+    }
     existing_by_content: dict[tuple[int, str, str], int] = {}
     wanted_shapes = {
         (path.stat().st_size, path.suffix.lower()) for path in sources}
-    for raw in parsed_tracks:
-        location_path = _location_path(root, str(raw.get("location") or ""))
-        if location_path is None or not location_path.is_file():
-            continue
-        shape = (location_path.stat().st_size, location_path.suffix.lower())
-        if shape not in wanted_shapes:
-            continue
-        existing_by_content[(shape[0], shape[1], _sha256(location_path))] = int(
-            raw["dbid"])
+    if shadow is not None:
+        live_dbids = {int(raw.get("dbid") or 0) for raw in parsed_tracks}
+        for row in shadow.sources.values():
+            try:
+                dbid = int(row.get("dbid") or 0)
+                size = int(row.get("size") or -1)
+                suffix = str(row.get("suffix") or "").lower()
+                sha256 = str(row.get("sha256") or "")
+                relative = Path(str(row.get("device_path") or ""))
+                landed = root / relative
+                if (
+                    dbid in live_dbids and (size, suffix) in wanted_shapes
+                    and len(sha256) == 64 and landed.is_file()
+                    and landed.stat().st_size == size
+                ):
+                    existing_by_content[(size, suffix, sha256)] = dbid
+            except (OSError, TypeError, ValueError):
+                continue
+        # A valid shadow only knows local sources selected in earlier SoundBox
+        # syncs. A newly selected playlist may point at media that is already on
+        # the iPod but absent from that map. Reconcile just those unproven
+        # size/suffix candidates against live bytes before ever planning a copy.
+        # This preserves the fast path for known songs without duplicating an
+        # older playlist's audio after a partial shadow bootstrap.
+        unproven = desired_content_keys - set(existing_by_content)
+        unproven_shapes = {(size, suffix) for size, suffix, _sha256 in unproven}
+        for raw in parsed_tracks:
+            if not unproven:
+                break
+            location_path = _location_path(
+                root, str(raw.get("location") or ""))
+            if location_path is None or not location_path.is_file():
+                continue
+            shape = (
+                location_path.stat().st_size, location_path.suffix.lower())
+            if shape not in unproven_shapes:
+                continue
+            content_key = (shape[0], shape[1], _sha256(location_path))
+            if content_key in unproven:
+                existing_by_content[content_key] = int(raw["dbid"])
+                unproven.remove(content_key)
+                unproven_shapes = {
+                    (size, suffix) for size, suffix, _sha256 in unproven}
+    else:
+        for raw in parsed_tracks:
+            location_path = _location_path(root, str(raw.get("location") or ""))
+            if location_path is None or not location_path.is_file():
+                continue
+            shape = (location_path.stat().st_size, location_path.suffix.lower())
+            if shape not in wanted_shapes:
+                continue
+            existing_by_content[(shape[0], shape[1], _sha256(location_path))] = int(
+                raw["dbid"])
 
     source_to_dbid: dict[Path, int] = {}
     content_to_dbid: dict[tuple[int, str, str], int] = dict(existing_by_content)
@@ -940,15 +1191,22 @@ def plan_stock_ipod_sync(
             image_path = art_cache.image_path(track.track_id)
             if artwork_dbid and image_path is not None:
                 prepared_by_dbid[artwork_dbid] = stock_art_cache.prepare(image_path)
-    rendered_artwork = (
-        render_stock_artwork(
+    if stock_art_cache is None:
+        rendered_artwork = None
+    elif shadow is not None and (root / "iPod_Control/Artwork/ArtworkDB").is_file():
+        rendered_artwork = render_incremental_stock_artwork(
+            track_infos,
+            prepared_by_dbid,
+            existing_artwork_dir=root / "iPod_Control" / "Artwork",
+            known_artwork=shadow.artwork,
+        )
+    else:
+        rendered_artwork = render_stock_artwork(
             track_infos,
             prepared_by_dbid,
             cache=stock_art_cache,
             existing_artwork_dir=root / "iPod_Control" / "Artwork",
         )
-        if stock_art_cache is not None else None
-    )
     rendered = _render_database(
         original, track_infos, regular, smart, smart_raw,
         str(master_raw.get("Title") or "iPod"), capabilities)
@@ -1012,19 +1270,115 @@ def plan_stock_ipod_sync(
                     f"Rendered smart playlist changed {key} for "
                     f"{before.get('Title')!r}")
 
+    current_playlist_sequences = {
+        str(raw.get("Title") or ""): [
+            track_id_to_dbid.get(int(item.get("trackID") or 0), 0)
+            for item in (raw.get("items") or [])
+        ]
+        for raw in raw_regular
+    }
+    playlist_changed = any(
+        current_playlist_sequences.get(name) != expected
+        for name, expected in playlist_sequences.items()
+    )
+    artwork_changed = bool(
+        rendered_artwork and (
+            rendered_artwork.publish_artwork_db
+            or rendered_artwork.range_writes
+        )
+    )
+    if (
+        shadow_fast_path
+        and not copies
+        and not metadata_updates
+        and not playlist_changed
+        and not artwork_changed
+        and play_counts_hash is None
+    ):
+        # Clickwheel legitimately regenerates opaque database IDs/headers.  If
+        # the shadow proves every desired input is unchanged, retain Apple's
+        # exact bytes and make this a true zero-write plan.
+        rendered = original
+
     reused = sum(1 for source in sources if not any(
         item.source == source for item in copies))
     artwork_before: list[StockArtworkBefore] = []
-    if rendered_artwork is not None:
-        artwork_paths = [
-            Path("iPod_Control") / "Artwork" / "ArtworkDB",
-            *(item.relative_path for item in rendered_artwork.ithmb_files),
-        ]
+    if rendered_artwork is not None and (
+            rendered_artwork.publish_artwork_db or rendered_artwork.range_writes):
+        artwork_paths = [Path("iPod_Control") / "Artwork" / "ArtworkDB"]
+        if not rendered_artwork.incremental:
+            artwork_paths.extend(
+                item.relative_path for item in rendered_artwork.ithmb_files)
         for relative in artwork_paths:
             live = root / relative
             if live.is_file():
                 artwork_before.append(StockArtworkBefore(
                     relative, live.stat().st_size, _sha256(live)))
+
+    final_dbids = {int(info.dbid) for info in track_infos}
+    shadow_sources = {
+        key: dict(value) for key, value in (shadow.sources if shadow else {}).items()
+        if int(value.get("dbid") or 0) in final_dbids
+    }
+    info_by_dbid = {int(info.dbid): info for info in track_infos}
+    for source in sources:
+        stat = source.stat()
+        dbid = source_to_dbid[source]
+        location = str(info_by_dbid[dbid].location or "")
+        shadow_sources[str(source)] = {
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "sha256": source_hashes[source],
+            "suffix": source.suffix.lower(),
+            "dbid": dbid,
+            "device_path": location.lstrip(":").replace(":", "/"),
+            "track_id": first_track_for_source[source].track_id,
+        }
+    shadow_playlists = {
+        key: dict(value) for key, value in (shadow.playlists if shadow else {}).items()
+    }
+    for playlist in selected:
+        key = device_manifest.playlist_key(playlist)
+        shadow_playlists[key] = device_manifest.entry_for(
+            playlist,
+            getattr(library, "hidden_ids", frozenset()),
+            getattr(library, "removed_by_playlist", None),
+        )
+    track_id_by_dbid = {
+        source_to_dbid[source]: first_track_for_source[source].track_id
+        for source in sources
+    }
+    shadow_artwork: dict[str, dict[str, Any]] = {}
+    for slot in (rendered_artwork.slots if rendered_artwork else ()):
+        shadow_art_row: dict[str, Any] = dict(
+            (shadow.artwork if shadow else {}).get(str(slot.song_id)) or {})
+        shadow_art_row.update({
+            "image_id": slot.image_id,
+            "source_size": slot.source_size,
+            "cache_key": slot.cache_key,
+            "offsets": {str(key): value for key, value in slot.offsets},
+        })
+        local_art_track_id = track_id_by_dbid.get(slot.song_id, "")
+        image_path = (
+            art_cache.image_path(local_art_track_id)
+            if art_cache and local_art_track_id else None)
+        if image_path is not None:
+            try:
+                art_stat = image_path.stat()
+                shadow_art_row.update({
+                    "track_id": local_art_track_id,
+                    "art_path": str(image_path.resolve(strict=True)),
+                    "art_size": art_stat.st_size,
+                    "art_mtime_ns": art_stat.st_mtime_ns,
+                })
+            except OSError:
+                pass
+        shadow_artwork[str(slot.song_id)] = shadow_art_row
+    if not shadow_artwork and shadow is not None:
+        shadow_artwork = {
+            key: dict(value) for key, value in shadow.artwork.items()
+            if int(key) in final_dbids
+        }
     return StockIpodSyncPlan(
         target=root,
         model_number=model,
@@ -1043,6 +1397,14 @@ def plan_stock_ipod_sync(
         existing_track_count=len(parsed_tracks),
         final_track_count=len(track_infos),
         merged_play_count_entries=merged_entries,
+        identity_key=identity_key,
+        serial_number=serial_number,
+        shadow_fast_path=shadow_fast_path,
+        shadow_reconcile_reason=shadow_reason,
+        shadow_store=shadow_store,
+        shadow_sources=shadow_sources,
+        shadow_artwork=shadow_artwork,
+        shadow_playlists=shadow_playlists,
     )
 
 
@@ -1068,11 +1430,13 @@ def commit_stock_ipod_sync(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
         if destination.exists():
             raise StockIpodError(f"Planned destination is no longer free: {destination}")
     before_by_path = {item.relative_path: item for item in plan.artwork_before}
-    if plan.rendered_artwork is not None:
-        output_paths = [
-            Path("iPod_Control") / "Artwork" / "ArtworkDB",
-            *(item.relative_path for item in plan.rendered_artwork.ithmb_files),
-        ]
+    if plan.rendered_artwork is not None and (
+            plan.rendered_artwork.publish_artwork_db
+            or plan.rendered_artwork.range_writes):
+        output_paths = [Path("iPod_Control") / "Artwork" / "ArtworkDB"]
+        if not plan.rendered_artwork.incremental:
+            output_paths.extend(
+                item.relative_path for item in plan.rendered_artwork.ithmb_files)
         for relative in output_paths:
             live = session.guard(relative)
             before = before_by_path.get(relative)
@@ -1087,24 +1451,47 @@ def commit_stock_ipod_sync(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
             ):
                 raise StockIpodError(
                     f"Artwork file changed after dry-run: {relative}")
-        for ithmb in plan.rendered_artwork.ithmb_files:
-            digest = hashlib.sha256()
-            size = 0
-            for segment in ithmb.segments:
+        if plan.rendered_artwork.incremental:
+            for ithmb in plan.rendered_artwork.ithmb_files:
+                live = session.guard(ithmb.relative_path)
+                try:
+                    stat = live.stat()
+                except OSError as exc:
+                    raise StockIpodError(
+                        f"Artwork file disappeared after dry-run: {ithmb.relative_path}"
+                    ) from exc
                 if (
-                    not segment.path.is_file()
-                    or segment.path.stat().st_size != segment.size
-                    or _sha256(segment.path) != segment.sha256
+                    stat.st_size != ithmb.before_size
+                    or stat.st_mtime_ns != ithmb.before_mtime_ns
                 ):
                     raise StockIpodError(
-                        f"Prepared artwork changed after dry-run: {segment.path}")
-                size += segment.size
-                with segment.path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(chunk)
-            if size != ithmb.size or digest.hexdigest() != ithmb.sha256:
+                        f"Artwork file changed after dry-run: {ithmb.relative_path}")
+            segments = [item.segment for item in plan.rendered_artwork.range_writes]
+        else:
+            segments = [
+                segment for ithmb in plan.rendered_artwork.ithmb_files
+                for segment in ithmb.segments
+            ]
+        for segment in segments:
+            if (
+                not segment.path.is_file()
+                or segment.path.stat().st_size != segment.size
+                or _sha256(segment.path) != segment.sha256
+            ):
                 raise StockIpodError(
-                    f"Prepared artwork layout changed after dry-run: {ithmb.relative_path}")
+                    f"Prepared artwork changed after dry-run: {segment.path}")
+        if not plan.rendered_artwork.incremental:
+            for ithmb in plan.rendered_artwork.ithmb_files:
+                digest = hashlib.sha256()
+                size = 0
+                for segment in ithmb.segments:
+                    size += segment.size
+                    with segment.path.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                if size != ithmb.size or digest.hexdigest() != ithmb.sha256:
+                    raise StockIpodError(
+                        f"Prepared artwork layout changed after dry-run: {ithmb.relative_path}")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     recovery = Path(".soundbox") / "stock-ipod-recovery" / (
@@ -1140,6 +1527,30 @@ def commit_stock_ipod_sync(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
         session.atomic_copy(source, session.guard(destination))
     manifest = json.dumps(plan.summary(), indent=2, sort_keys=True).encode("utf-8") + b"\n"
     session.atomic_write(recovery / "plan.json", manifest)
+    if plan.rendered_artwork is not None and plan.rendered_artwork.incremental:
+        range_journal = {
+            "ithmb_before": {
+                item.relative_path.name: {
+                    "size": item.before_size,
+                    "mtime_ns": item.before_mtime_ns,
+                    "final_size": item.size,
+                }
+                for item in plan.rendered_artwork.ithmb_files
+            },
+            "writes": [
+                {
+                    "path": str(item.relative_path),
+                    "offset": item.offset,
+                    "size": item.segment.size,
+                    "sha256": item.segment.sha256,
+                }
+                for item in plan.rendered_artwork.range_writes
+            ],
+        }
+        session.atomic_write(
+            recovery / "artwork-ranges.json",
+            json.dumps(range_journal, indent=2, sort_keys=True).encode("utf-8") + b"\n",
+        )
 
     copied: list[Path] = []
     committed = False
@@ -1155,22 +1566,43 @@ def commit_stock_ipod_sync(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
         session.revalidate()
         if _sha256(database) != plan.database_sha256_before:
             raise StockIpodError("iTunesDB changed during media copy; aborting")
-        if plan.rendered_artwork is not None:
-            for ithmb in plan.rendered_artwork.ithmb_files:
-                destination = session.guard(ithmb.relative_path)
-                session.atomic_concat(
-                    [segment.path for segment in ithmb.segments], destination)
-                if destination.stat().st_size != ithmb.size or _sha256(
-                        destination) != ithmb.sha256:
-                    raise StockIpodError(
-                        f"Committed artwork failed verification: {destination}")
-            artwork_db = session.guard(
-                Path("iPod_Control") / "Artwork" / "ArtworkDB")
-            session.atomic_write(artwork_db, plan.rendered_artwork.artwork_db)
-            if _sha256(artwork_db) != hashlib.sha256(
-                    plan.rendered_artwork.artwork_db).hexdigest():
-                raise StockIpodError("Committed ArtworkDB failed verification")
-            artwork_committed = True
+        if plan.rendered_artwork is not None and (
+                plan.rendered_artwork.publish_artwork_db
+                or plan.rendered_artwork.range_writes):
+            if plan.rendered_artwork.incremental:
+                for write in sorted(
+                    plan.rendered_artwork.range_writes,
+                    key=lambda item: (str(item.relative_path), item.offset),
+                ):
+                    session.write_verified_range(
+                        write.segment.path,
+                        write.relative_path,
+                        offset=write.offset,
+                        size=write.segment.size,
+                        sha256=write.segment.sha256,
+                    )
+                for ithmb in plan.rendered_artwork.ithmb_files:
+                    if session.guard(ithmb.relative_path).stat().st_size != ithmb.size:
+                        raise StockIpodError(
+                            f"Incremental artwork size failed verification: "
+                            f"{ithmb.relative_path}")
+            else:
+                for ithmb in plan.rendered_artwork.ithmb_files:
+                    destination = session.guard(ithmb.relative_path)
+                    session.atomic_concat(
+                        [segment.path for segment in ithmb.segments], destination)
+                    if destination.stat().st_size != ithmb.size or _sha256(
+                            destination) != ithmb.sha256:
+                        raise StockIpodError(
+                            f"Committed artwork failed verification: {destination}")
+            if plan.rendered_artwork.publish_artwork_db:
+                artwork_db = session.guard(
+                    Path("iPod_Control") / "Artwork" / "ArtworkDB")
+                session.atomic_write(artwork_db, plan.rendered_artwork.artwork_db)
+                if _sha256(artwork_db) != hashlib.sha256(
+                        plan.rendered_artwork.artwork_db).hexdigest():
+                    raise StockIpodError("Committed ArtworkDB failed verification")
+                artwork_committed = True
         session.atomic_write(database, plan.rendered_database)
         committed = True
         if original_play_counts is not None:
@@ -1191,13 +1623,21 @@ def commit_stock_ipod_sync(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
                     session.atomic_write(play_counts, original_play_counts)
                 except Exception as rollback_exc:
                     rollback_failures.append(f"Play Counts: {rollback_exc}")
-        if artwork_committed or plan.rendered_artwork is not None:
-            output_paths = [
-                Path("iPod_Control") / "Artwork" / "ArtworkDB",
-                *(item.relative_path for item in (
-                    plan.rendered_artwork.ithmb_files
-                    if plan.rendered_artwork is not None else ())),
-            ]
+        if artwork_committed or (
+            plan.rendered_artwork is not None
+            and not plan.rendered_artwork.incremental
+            and (
+                plan.rendered_artwork.publish_artwork_db
+                or plan.rendered_artwork.range_writes
+            )
+        ):
+            output_paths = [Path("iPod_Control") / "Artwork" / "ArtworkDB"]
+            if (
+                plan.rendered_artwork is not None
+                and not plan.rendered_artwork.incremental
+            ):
+                output_paths.extend(
+                    item.relative_path for item in plan.rendered_artwork.ithmb_files)
             for relative in output_paths:
                 saved_before = before_by_path.get(relative)
                 destination = session.guard(relative)
@@ -1222,17 +1662,59 @@ def commit_stock_ipod_sync(plan: StockIpodSyncPlan) -> StockIpodCommitResult:
             ) from original_exc
         raise
 
+    database_after = hashlib.sha256(plan.rendered_database).hexdigest()
+    shadow_updated = False
+    shadow_warning = ""
+    if plan.shadow_store is not None and plan.identity_key:
+        try:
+            artwork_dir = plan.target / "iPod_Control" / "Artwork"
+            artwork_db = artwork_dir / "ArtworkDB"
+            artwork_sha = _sha256(artwork_db) if artwork_db.is_file() else ""
+            shadow_ithmb: dict[str, dict[str, int]] = {}
+            for format_id in (1028, 1029):
+                path = artwork_dir / f"F{format_id}_1.ithmb"
+                if path.is_file():
+                    stat = path.stat()
+                    shadow_ithmb[path.name] = {
+                        "size": stat.st_size,
+                        "mtime_ns": stat.st_mtime_ns,
+                    }
+            plan.shadow_store.committed(
+                identity_key=plan.identity_key,
+                model=plan.model_number,
+                serial_number=plan.serial_number,
+                database_sha256=database_after,
+                artwork_database_sha256=artwork_sha,
+                ithmb=shadow_ithmb,
+                sources=plan.shadow_sources,
+                artwork=plan.shadow_artwork,
+                playlists=plan.shadow_playlists,
+            )
+            shadow_updated = True
+        except Exception as exc:  # device commit is valid; cache can rebuild
+            shadow_warning = (
+                "The iPod commit succeeded, but its Mac-side fast-sync baseline "
+                f"could not be saved: {exc}")
+
     return StockIpodCommitResult(
         recovery_directory=recovery_abs,
         copied_tracks=len(copied),
         reused_tracks=plan.reused_track_count,
         playlists=plan.playlist_names,
-        database_sha256=hashlib.sha256(plan.rendered_database).hexdigest(),
+        database_sha256=database_after,
         artwork_tracks=(
             plan.rendered_artwork.linked_tracks if plan.rendered_artwork else 0),
         unique_artwork=(
             plan.rendered_artwork.unique_images if plan.rendered_artwork else 0),
         metadata_updates=len(plan.metadata_updates),
+        artwork_pixel_bytes=(
+            sum(item.segment.size for item in plan.rendered_artwork.range_writes)
+            if plan.rendered_artwork and plan.rendered_artwork.incremental else
+            sum(item.size for item in plan.rendered_artwork.ithmb_files)
+            if plan.rendered_artwork else 0
+        ),
+        shadow_updated=shadow_updated,
+        shadow_warning=shadow_warning,
     )
 
 
@@ -1309,9 +1791,6 @@ def plan_stock_ipod_playlist_delete(
         raw for raw in (parsed.get("mhlp") or [])
         if not raw.get("isMaster")
     ]
-    regular_by_id = {
-        int(raw.get("playlistID") or 0): raw for raw in raw_regular
-    }
     smart_raw = list(parsed.get("mhlp_smart") or [])
 
     def removable_system_playlist(raw: dict) -> bool:
@@ -1321,6 +1800,14 @@ def plan_stock_ipod_playlist_delete(
             and int(raw.get("mhsd5Type") or 0) == 0
         )
 
+    # Only genuine user playlists from the ordinary dataset are independently
+    # deletable.  Apple can also mirror Videos there as a smart alias with a
+    # different ID; that alias belongs to the canonical MHSD-5 Videos index and
+    # must never be mistaken for a user playlist.
+    regular_by_id = {
+        int(raw.get("playlistID") or 0): raw
+        for raw in raw_regular if not raw.get("isSmartPlaylist")
+    }
     removable_smart_by_id = {
         int(raw.get("playlistID") or 0): raw
         for raw in smart_raw if removable_system_playlist(raw)
@@ -1338,6 +1825,7 @@ def plan_stock_ipod_playlist_delete(
     selected_raw = [deletable_by_id[value] for value in requested_ids]
     selected_regular_ids = set(requested_ids) & set(regular_by_id)
     selected_smart_ids = set(requested_ids) & set(removable_smart_by_id)
+    deleting_videos_system_index = bool(selected_smart_ids)
     selected_regular_raw = [
         raw for raw in raw_regular
         if int(raw.get("playlistID") or 0) in selected_regular_ids
@@ -1345,6 +1833,9 @@ def plan_stock_ipod_playlist_delete(
     remaining_raw = [
         raw for raw in raw_regular
         if int(raw.get("playlistID") or 0) not in selected_regular_ids
+        and not (
+            deleting_videos_system_index and removable_system_playlist(raw)
+        )
     ]
     remaining_smart_raw = [
         raw for raw in smart_raw
@@ -1365,7 +1856,9 @@ def plan_stock_ipod_playlist_delete(
         return refs
 
     candidates = referenced_dbids(selected_regular_raw)
-    retained_refs = referenced_dbids(remaining_raw)
+    retained_refs = referenced_dbids([
+        raw for raw in remaining_raw if not raw.get("isSmartPlaylist")
+    ])
     deleted_dbids = candidates - retained_refs
     retained_raw_tracks = [
         raw for raw in parsed_tracks if int(raw.get("dbid") or 0) not in deleted_dbids
@@ -1541,7 +2034,8 @@ def plan_stock_ipod_playlist_delete(
         deleted_track_count=len(deleted_dbids),
         existing_track_count=len(parsed_tracks),
         final_track_count=len(retained_raw_tracks),
-        remaining_playlist_count=len(remaining_raw),
+        remaining_playlist_count=sum(
+            1 for raw in remaining_raw if not raw.get("isSmartPlaylist")),
         merged_play_count_entries=merged_entries,
     )
 

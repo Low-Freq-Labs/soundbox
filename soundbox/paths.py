@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
+import unicodedata
 from urllib.parse import unquote, urlparse
 
 
@@ -55,28 +57,69 @@ def decode_location(location: str) -> Path:
 
 # Characters illegal in FAT32/exFAT filenames (the iPod's filesystem).
 # Also covers ':' which macOS shows as '/' in Finder and '/' itself.
-_ILLEGAL = '<>:"/\\|?*'
-_ILLEGAL_TABLE = {ord(c): "-" for c in _ILLEGAL}
 _CONTROL_TABLE = {c: "-" for c in range(0x20)}  # control chars 0x00-0x1F
+_DOS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_LATIN_FALLBACKS = str.maketrans({
+    "Æ": "AE", "æ": "ae", "Œ": "OE", "œ": "oe",
+    "Ø": "O", "ø": "o", "Ł": "L", "ł": "l",
+    "Ð": "D", "ð": "d", "Đ": "D", "đ": "d",
+    "Þ": "TH", "þ": "th", "ß": "ss",
+    "Ǝ": "E", "ǝ": "e", "Ə": "E", "ə": "e",
+    "ı": "i", "Ħ": "H", "ħ": "h",
+})
+
+
+def _transliterate_latin(value: str) -> str:
+    """ASCII-fold Latin glyphs without destroying non-Latin names."""
+    out = []
+    for char in value.translate(_LATIN_FALLBACKS):
+        if ord(char) < 128 or "LATIN" not in unicodedata.name(char, ""):
+            out.append(char)
+            continue
+        decomposed = unicodedata.normalize("NFKD", char)
+        ascii_text = "".join(
+            item for item in decomposed
+            if ord(item) < 128 and item.isprintable()
+        )
+        out.append(ascii_text or char)
+    return "".join(out)
 
 
 def sanitize_component(name: str, max_len: int = 120) -> str:
     """Make a single path component safe for FAT32/exFAT (the iPod).
 
-    Replaces illegal characters with '-', strips control chars, trims trailing
-    dots/spaces (which FAT silently drops), and CLAMPS length — FAT32 caps a
-    component at 255 chars and Rockbox's total MAX_PATH is 260, so unbounded
-    names would fail on-device. Preserves Unicode. Returns a non-empty string
-    ('_' if everything was stripped).
+    Uses compatibility normalization and readable Latin transliteration, turns path
+    separators into readable dashes, removes decorative ``*``/``?`` rather
+    than leaving ugly placeholders, and protects DOS device names. Latin
+    lookalikes stay readable (``CØSTA`` becomes ``COSTA``, never ``C_STA``);
+    non-Latin names are preserved. The result is length-clamped for FAT32 and
+    Rockbox's 260-character MAX_PATH.
     """
-    cleaned = name.translate(_ILLEGAL_TABLE).translate(_CONTROL_TABLE)
+    cleaned = _transliterate_latin(unicodedata.normalize("NFKC", name or ""))
+    cleaned = cleaned.translate(_CONTROL_TABLE)
+    cleaned = cleaned.replace("<", "(").replace(">", ")").replace('"', "'")
+    cleaned = re.sub(r"\s*[/\\|]+\s*", " - ", cleaned)
+    cleaned = cleaned.replace(":", "-")
+    cleaned = cleaned.replace("?", "").replace("*", "")
     # Any remaining non-printable (Unicode line/paragraph separators \x85,
     # \u2028/\u2029, stray format chars) also becomes '-' — they'd break the
     # m3u8 (its path line would literally split) and confuse FAT tooling.
     cleaned = "".join(ch if ch.isprintable() else "-" for ch in cleaned)
-    cleaned = cleaned.rstrip(" .").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-")
+    if not cleaned:
+        return "_"
     if len(cleaned) > max_len:
         cleaned = cleaned[:max_len].rstrip(" .-_")
+    root, dot, suffix = cleaned.partition(".")
+    if root.upper() in _DOS_RESERVED:
+        if len(cleaned) < max_len:
+            cleaned = f"{root}-{dot}{suffix}"
+        else:
+            cleaned = f"{root[:-1]}-{dot}{suffix}"
     return cleaned or "_"
 
 

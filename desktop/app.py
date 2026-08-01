@@ -36,7 +36,7 @@ LOG = logging.getLogger("soundbox")
 
 
 def setup_logging() -> Path | None:
-    """Console + rotating-ish file log at ~/Library/Logs/Soundbox/soundbox.log."""
+    """Console + production file log; Qt test mode never touches the real log."""
     if LOG.handlers:
         return None
     LOG.setLevel(logging.INFO)
@@ -45,34 +45,39 @@ def setup_logging() -> Path | None:
     sh.setFormatter(fmt)
     LOG.addHandler(sh)
     logpath = None
-    try:
-        d = Path.home() / "Library" / "Logs" / "Soundbox"
-        d.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(d / "soundbox.log")
-        fh.setFormatter(fmt)
-        LOG.addHandler(fh)
-        logpath = d / "soundbox.log"
-    except OSError:
-        pass
+    log_dir = None
+    if not QStandardPaths.isTestModeEnabled():
+        try:
+            log_dir = Path.home() / "Library" / "Logs" / "Soundbox"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            fh = logging.FileHandler(log_dir / "soundbox.log")
+            fh.setFormatter(fmt)
+            LOG.addHandler(fh)
+            logpath = log_dir / "soundbox.log"
+        except OSError:
+            log_dir = None
 
     def _hook(t, v, tb):
         LOG.error("UNCAUGHT EXCEPTION", exc_info=(t, v, tb))
         sys.__excepthook__(t, v, tb)
 
     sys.excepthook = _hook
-    try:
-        # C-level crashes (Qt fatals, codec faults) dump Python stacks into the
-        # log too — otherwise a native abort leaves nothing to debug from.
-        import faulthandler
-        faulthandler.enable(open(d / "crash-stacks.log", "a"))
-    except OSError:
-        pass
+    if log_dir is not None:
+        try:
+            # C-level crashes (Qt fatals, codec faults) dump Python stacks into
+            # the log too — otherwise a native abort leaves nothing to debug.
+            import faulthandler
+            faulthandler.enable(open(log_dir / "crash-stacks.log", "a"))
+        except OSError:
+            pass
     # PACKAGED app (Finder launch): stderr goes NOWHERE, and PySide prints
     # swallowed slot exceptions to stderr — so a broken button clicks silently.
     # Route stderr into the log so every field failure leaves a trace.
-    if getattr(sys, "frozen", False):
+    if getattr(sys, "frozen", False) and log_dir is not None:
         try:
-            sys.stderr = sys.stdout = open(d / "soundbox.log", "a", buffering=1)
+            sys.stderr = sys.stdout = open(
+                log_dir / "soundbox.log", "a", buffering=1,
+            )
         except OSError:
             pass
     return logpath
@@ -98,6 +103,7 @@ from soundbox.stock_artwork import StockArtworkCache
 from soundbox.stock_ipod import (
     StockIpodDeletePlan, StockIpodSyncPlan,
     commit_stock_ipod_playlist_delete, commit_stock_ipod_sync,
+    inspect_stock_ipod_sync_status,
     normalize_model_number, plan_stock_ipod_playlist_delete,
     plan_stock_ipod_sync, supports_stock_write,
 )
@@ -105,6 +111,7 @@ from soundbox.stock_ipod_info import (
     StockIpodSnapshot, confirmed_model_from_recovery,
     read_stock_ipod_snapshot, stock_ipod_device_key,
 )
+from soundbox.stock_ipod_shadow import StockIpodShadowStore
 from . import theme
 from .artpicker import ArtPickerDialog
 from .model import (
@@ -195,6 +202,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
         self.art_cache = artfetch.ArtCache(data_dir / "art")  # cover-art cache
         self.stock_art_cache = StockArtworkCache(data_dir / "stock_artwork")
+        self.stock_ipod_shadow_store = StockIpodShadowStore(
+            data_dir / "stock_ipod_state")
         # One-time Rockbox-safety sweep: any cached art that isn't baseline JPEG
         # (progressive/PNG shows BLANK on the iPod) is re-encoded. Flag-filed —
         # a no-op on every launch after the first, so it's fine on the main thread
@@ -206,6 +215,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._art_restart = False  # set by re-scan to restart the fill after it stops
         self._stock_art_worker: StockArtworkPrepWorker | None = None
         self._stock_art_rescan = False
+        self._stock_art_pending: set[Path] = set()
         self._wf_fill_worker: WaveformFillWorker | None = None
         self._track_analysis_dir = data_dir / "track_analysis"
         self._preparing_library = False
@@ -2498,23 +2508,47 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         from .workers import OneShotTask
         facts = device_facts(dev)
         model = self._stored_stock_model(dev, profile)
-        worker = OneShotTask(lambda: read_stock_ipod_snapshot(
-            dev,
-            model_number=model,
-            volume_uuid=facts.volume_uuid,
-            filesystem=facts.filesystem_name or device_fs(dev),
-            protocol=facts.protocol,
-            device_identifier=facts.device_identifier,
-            writable=facts.writable,
-            capacity_bytes=facts.capacity_bytes,
-            free_bytes=0,  # refresh inside the worker; diskutil cache can be stale
-            serial_number=getattr(facts, "hardware_serial", ""),
-            serial_source=getattr(facts, "serial_source", ""),
-            usb_serial=getattr(facts, "usb_serial", ""),
-            firmware_version=getattr(facts, "firmware_version", ""),
-            firmware_source=getattr(facts, "firmware_source", ""),
-            transport_revision=getattr(facts, "transport_revision", ""),
-        ))
+        library = self.lib
+        extra_playlists = tuple(self._sync_playlists())
+
+        def read_snapshot():
+            snapshot = read_stock_ipod_snapshot(
+                dev,
+                model_number=model,
+                volume_uuid=facts.volume_uuid,
+                filesystem=facts.filesystem_name or device_fs(dev),
+                protocol=facts.protocol,
+                device_identifier=facts.device_identifier,
+                writable=facts.writable,
+                capacity_bytes=facts.capacity_bytes,
+                free_bytes=0,  # refresh inside worker; diskutil cache can be stale
+                serial_number=getattr(facts, "hardware_serial", ""),
+                serial_source=getattr(facts, "serial_source", ""),
+                usb_serial=getattr(facts, "usb_serial", ""),
+                firmware_version=getattr(facts, "firmware_version", ""),
+                firmware_source=getattr(facts, "firmware_source", ""),
+                transport_revision=getattr(facts, "transport_revision", ""),
+            )
+            if library is None or not snapshot.identity_key or not snapshot.model:
+                return snapshot
+            status = inspect_stock_ipod_sync_status(
+                library,
+                dev,
+                identity_key=snapshot.identity_key,
+                model_number=snapshot.model,
+                serial_number=snapshot.serial_number,
+                shadow_store=self.stock_ipod_shadow_store,
+                extra_playlists=extra_playlists,
+            )
+            return replace(
+                snapshot,
+                sync_state=status.state,
+                sync_detail=status.detail,
+                sync_local_changes=status.local_changes,
+                sync_committed_at=status.committed_at,
+            )
+
+        worker = OneShotTask(read_snapshot)
         self._stock_view_worker = worker
         worker.done.connect(
             lambda result, device=dev: self._on_stock_device_view(device, result))
@@ -2677,6 +2711,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         from .workers import OneShotTask
         library = self.lib
+        facts = device_facts(dev)
+        identity_key = self._stock_device_key(dev, profile)
         worker = OneShotTask(lambda: plan_stock_ipod_sync(
             library,
             playlists,
@@ -2688,6 +2724,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             title_overrides=self.titles,
             art_cache=self.art_cache,
             stock_art_cache=self.stock_art_cache,
+            identity_key=identity_key,
+            serial_number=getattr(facts, "hardware_serial", ""),
+            shadow_store=self.stock_ipod_shadow_store,
         ))
         self._stock_plan_worker = worker
         self._exporting = True
@@ -2713,6 +2752,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.critical(self, "Stock iPod plan failed", "Unexpected plan result.")
             return
         summary = result.summary()
+        if not result.requires_commit:
+            QMessageBox.information(
+                self,
+                "Stock iPod is up to date",
+                "The read-only comparison found no media, playlist, metadata, "
+                "artwork, or playback changes to publish.",
+            )
+            self._flash_status("Stock iPod already up to date ✓")
+            self._refresh_devices()
+            return
         omission_preview = ""
         if result.omissions:
             shown = result.omissions[:6]
@@ -2740,6 +2789,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             f"Artwork: {summary['artwork_tracks']} track(s), "
             f"{summary['unique_artwork']} unique "
             f"({human(summary['artwork_bytes_to_copy'])})\n"
+            f"Artwork pixels written: {human(summary['artwork_pixel_bytes'])}\n"
             f"Final iPod library: {summary['final_tracks']} tracks\n"
             f"Pending playback records merged: {summary['merged_play_count_entries']}"
             f"{omission_preview}\n\n"
@@ -2778,6 +2828,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self, "Stock iPod sync failed",
                 f"{result}\n\nSoundBox attempted an exact database/media rollback.")
         else:
+            warning = f"\n\n{result.shadow_warning}" if result.shadow_warning else ""
             QMessageBox.information(
                 self,
                 "Stock iPod sync complete",
@@ -2786,9 +2837,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 f"Updated title/artist metadata for "
                 f"{result.metadata_updates} existing track(s).\n\n"
                 f"Linked artwork for {result.artwork_tracks} track(s) "
-                f"from {result.unique_artwork} unique image(s).\n\n"
+                f"from {result.unique_artwork} unique image(s); wrote "
+                f"{human(result.artwork_pixel_bytes)} of pixels.\n\n"
                 f"Recovery files:\n{result.recovery_directory}\n\n"
-                "Eject from SoundBox before listening.",
+                f"Eject from SoundBox before listening.{warning}",
             )
             self._flash_status("Stock iPod synced ✓")
         self._refresh_devices()
@@ -3367,7 +3419,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         for tid in tids:
             self.art_cache.store_ok(tid, res)
         self.model.refresh_art(self.art_cache.status_kind)
-        QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
+        self._queue_stock_artwork(tids)
         self._flash_status(f"Art set on {len(tids)} ✓", 8)
 
     def _art_remove(self, tid):
@@ -3411,7 +3463,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 source_url=p.as_uri(), matched_title=p.name))
             self._flash_status("Art set ✓", 5)
             self.model.refresh_art(self.art_cache.status_kind)
-            QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
+            self._queue_stock_artwork((tid,))
 
     def _run_oneshot(self, tid, fn):
         self.status_label.setText("Fetching…")
@@ -3440,7 +3492,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._flash_status("Fetch failed ✕", 8)
         elif res:
             self.art_cache.store_ok(tid, res)
-            QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
+            self._queue_stock_artwork((tid,))
             self._flash_status("Art set ✓", 5)
         else:
             self._flash_status("No art found", 5)
@@ -3503,7 +3555,33 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._art_restart = False
             self._start_art_fill()
 
-    def _maybe_prepare_stock_artwork(self, rescan_if_running: bool = False):
+    def _queue_stock_artwork(self, track_ids):
+        if self.lib is None:
+            return
+        for track_id in track_ids:
+            image = self.art_cache.image_path(str(track_id))
+            if image is None:
+                continue
+            try:
+                self._stock_art_pending.add(image.resolve(strict=True))
+            except OSError:
+                continue
+        if not _running(self._stock_art_worker):
+            QTimer.singleShot(0, self._start_pending_stock_artwork)
+
+    def _start_pending_stock_artwork(self):
+        if not self._stock_art_pending or _running(self._stock_art_worker):
+            return
+        images = tuple(sorted(self._stock_art_pending, key=str))
+        self._stock_art_pending.clear()
+        self._maybe_prepare_stock_artwork(images=images)
+
+    def _maybe_prepare_stock_artwork(
+        self,
+        rescan_if_running: bool = False,
+        *,
+        images: tuple[Path, ...] | None = None,
+    ):
         """Warm the disposable stock-iPod art cache without blocking sync/UI."""
         if self.lib is None:
             return
@@ -3512,7 +3590,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._stock_art_rescan = True
             return
         worker = StockArtworkPrepWorker(
-            self.lib, self.art_cache, self.stock_art_cache)
+            self.lib, self.art_cache, self.stock_art_cache, images)
         self._stock_art_worker = worker
         worker.set_playback_active(self.player_bar.is_playing())
         worker.finished.connect(
@@ -3523,7 +3601,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._stock_art_worker is worker:
             self._stock_art_worker = None
         worker.deleteLater()
-        if self._stock_art_rescan:
+        if self._stock_art_pending:
+            QTimer.singleShot(0, self._start_pending_stock_artwork)
+        elif self._stock_art_rescan:
             self._stock_art_rescan = False
             QTimer.singleShot(0, self._maybe_prepare_stock_artwork)
 

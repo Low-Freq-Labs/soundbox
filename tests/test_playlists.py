@@ -32,7 +32,7 @@ class TestPaths(unittest.TestCase):
 
     def test_tree_mirrors_folders(self):
         p = tree_playlist_path(self.root, ["SETS", "HAMDI"], "HAMDI v4 ?")
-        self.assertEqual(p, Path("/V/Playlists/SETS/HAMDI/HAMDI v4 -.m3u8"))
+        self.assertEqual(p, Path("/V/Playlists/SETS/HAMDI/HAMDI v4.m3u8"))
 
     def test_flat_joins_with_dash(self):
         p = flat_playlist_path(self.root, ["SETS", "HAMDI"], "HAMDI v4")

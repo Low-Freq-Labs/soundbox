@@ -34,6 +34,7 @@ PQTZ/PCOB/PCO2/PWV5/PWV7 parser) · `device_profile` (read-only device
 classification and stock-iPod readiness planning) · `stock_ipod` (MA446-only
 two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
 (content-addressed MA446 RGB565 preparation and ArtworkDB/ithmb layout) ·
+`stock_ipod_shadow` (disposable Mac-side per-device delta baseline) ·
 `backup` · `imports`
 (imported-audio plane) · `libcache` (instant-paint snapshot).
 
@@ -289,10 +290,19 @@ temporary tree; SoundBox validates the output, writes recovery bytes,
 atomically copies new media/artwork, and commits `iTunesDB` last. Curated
 baseline JPEGs remain the shared Rockbox/stock source of truth. A low-priority,
 playback-aware worker prepares content-addressed MA446 RGB565 100×100 and
-200×200 payloads under AppData ahead of sync. Planning deduplicates identical
-pixels into the two ithmb files, creates a per-track MHII link, and audits every
-MHIT→MHII→MHNI offset/size before confirmation. Recovery captures every
-replaced ArtworkDB/ithmb file; source media and tags are read-only. The writer
+200×200 payloads under AppData ahead of sync. A locator index skips unchanged
+JPEGs, and manual art changes queue only affected tracks. Successful commits
+atomically publish a Mac-side `stock_ipod_state/` shadow keyed by library
+persistent ID plus volume UUID. Exact database/artwork fingerprints activate
+the fast path; mismatch performs full reconciliation. Because a valid shadow can
+be playlist-scoped, selected sources absent from its acceleration index are
+narrowly reconciled against size/suffix candidates in live device media using
+exact content hashes before any copy is planned. Incremental art preserves image
+IDs, compares current RGB565 slices when a local cache key is absent, writes only
+currently unreferenced fixed-size slots, and consumes a pixel-identical free slot
+without writing it before publishing ArtworkDB and iTunesDB.
+Planning still audits every MHIT→MHII→MHNI offset/size; source media and tags
+are read-only. The writer
 is restricted to stock-only MA446, scheme-zero iTunesDB, and MP3/WAV.
 `device_profile` derives the export pipeline from the mounted layout: stock-only
 routes to that database planner, while a `/.rockbox/` marker routes to the
@@ -329,8 +339,11 @@ provenance in the snapshot and ambiguous matches produce no value. The device pa
 renders the DAC as a concise component name and filters its Playlists tab to
 regular user-created playlists plus the exact Apple Videos smart index. Videos
 is labeled `System playlist` and may enter the guarded delete planner without
-owning or deleting media. Music, Movies, TV Shows, and Audiobooks remain
-immutable; On-The-Go is firmware-generated and absent from iTunesDB.
+owning or deleting media. When Apple mirrors Videos in both ordinary MHLP and
+canonical MHSD-5 datasets under different IDs, the snapshot exposes the
+canonical identity and the planner removes both representations together.
+Music, Movies, TV Shows, and Audiobooks remain immutable; On-The-Go is
+firmware-generated and absent from iTunesDB.
 
 ## Data model
 

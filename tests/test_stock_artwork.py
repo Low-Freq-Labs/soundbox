@@ -60,6 +60,20 @@ class StockArtwork(unittest.TestCase):
         self.assertEqual(victim.stat().st_size, 100 * 100 * 2)
         self.assertEqual(rebuilt.cache_key, prepared.cache_key)
 
+    def test_source_index_can_be_published_once_after_a_batch(self):
+        self.cache.prepare(self.image, verify_cache=False, save_index=False)
+        index = self.root / "cache" / "ma446-video-rgb565-v1" / "source-index.json"
+        self.assertFalse(index.exists())
+
+        self.cache.flush_source_index()
+
+        self.assertTrue(index.exists())
+        reopened = StockArtworkCache(self.root / "cache")
+        self.assertEqual(
+            reopened.prepare(self.image, verify_cache=False).cache_key,
+            self.cache.prepare(self.image, verify_cache=False).cache_key,
+        )
+
     def test_layout_deduplicates_pixels_but_links_every_track(self):
         prepared = self.cache.prepare(self.image)
         tracks = [self._track(101), self._track(202)]

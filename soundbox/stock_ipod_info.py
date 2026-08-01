@@ -106,6 +106,10 @@ class StockIpodSnapshot:
     transport_revision: str = ""
     dac_name: str = ""
     dac_source: str = ""
+    sync_state: str = "untracked"
+    sync_detail: str = "No committed Mac-side fast-sync baseline"
+    sync_local_changes: int = 0
+    sync_committed_at: str = ""
 
 
 _HARDWARE_CATALOG = {
@@ -194,11 +198,26 @@ def _playlist_snapshots(database: dict, tracks: list[dict]) -> tuple[StockIpodPl
     output: list[StockIpodPlaylistSnapshot] = []
     seen: set[tuple[int, str]] = set()
     seen_smart_titles: set[str] = set()
+    canonical_smart_titles = {
+        str(item.get("Title") or "").casefold()
+        for item in (database.get("mhlp_smart") or [])
+        if item.get("isSmartPlaylist")
+    }
     sources = ((database.get("mhlp") or [], "Playlist"),
                (database.get("mhlp_smart") or [], "Smart playlist"))
     for playlists, default_kind in sources:
         for raw in playlists:
             title = str(raw.get("Title") or "Untitled playlist")
+            # Apple can mirror one smart list in both the ordinary MHLP and
+            # canonical MHSD-5 datasets with different playlist IDs.  Expose
+            # only the canonical record so a managed action cannot target the
+            # alias while leaving the real system index untouched.
+            if (
+                default_kind == "Playlist"
+                and bool(raw.get("isSmartPlaylist"))
+                and title.casefold() in canonical_smart_titles
+            ):
+                continue
             playlist_id = int(raw.get("playlistID") or 0)
             marker = (playlist_id, title)
             if marker in seen:

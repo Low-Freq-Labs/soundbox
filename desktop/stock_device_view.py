@@ -272,16 +272,11 @@ class StockIpodPages(QWidget):
     def set_snapshot(self, snapshot: StockIpodSnapshot):
         self._clear_details()
         model_label = snapshot.model or "Not confirmed"
-        if snapshot.model_source:
-            model_label += f" · {snapshot.model_source}"
         firmware_label = snapshot.firmware_version or "Not reported"
-        if snapshot.firmware_source:
-            firmware_label += f" · {snapshot.firmware_source}"
         serial_label = snapshot.serial_number or "Not reported"
-        if snapshot.serial_source:
-            serial_label += f" · {snapshot.serial_source}"
-        # Keep catalog provenance on the immutable snapshot for validation and
-        # diagnostics, but the dashboard only needs the identified component.
+        # Keep identity/catalog provenance on the immutable snapshot for
+        # validation and diagnostics. The dashboard only needs the actual
+        # model, firmware, serial, and identified component values.
         dac_label = snapshot.dac_name or "Not identified"
         connection_label = snapshot.protocol or "Not reported"
         if snapshot.transport_revision:
@@ -296,6 +291,12 @@ class StockIpodPages(QWidget):
             if supports_stock_write(snapshot.model)
             else "Read-only until a validated model is confirmed"
         )
+        sync_labels = {
+            "up_to_date": "Up to date",
+            "local_changes": "Local changes ready",
+            "reconcile_required": "Reconciliation required",
+            "untracked": "Not yet tracked on this Mac",
+        }
         self._set_detail_rows("Identity", (
             ("Name", snapshot.volume_name),
             ("Family", snapshot.family),
@@ -330,6 +331,10 @@ class StockIpodPages(QWidget):
         ))
         self._set_detail_rows("SoundBox", (
             ("Stock sync", capability),
+            ("Sync state", sync_labels.get(snapshot.sync_state, snapshot.sync_state)),
+            ("Sync detail", snapshot.sync_detail),
+            ("Pending local changes", str(snapshot.sync_local_changes)),
+            ("Last committed", snapshot.sync_committed_at or "Never"),
             ("Supported audio", "MP3 · PCM16/44.1-kHz stereo WAV"),
             ("Commit policy", "Recovery first · media atomic · iTunesDB last"),
         ))

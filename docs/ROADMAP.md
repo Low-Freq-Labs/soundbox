@@ -4,7 +4,7 @@ Living to-do. Work top-down. The Rockbox iPod remains the hardware priority;
 player work may continue in parallel when it is isolated from export safety.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-07-31)
+## Current status (2026-08-01)
 
 - **CORE LIBRARY/EXPORT COMPLETE + CURATION MONTH COMPLETE.** Every track title
   cut/cleaned, every cover art eye-verified. Engine is mypy-clean,
@@ -181,12 +181,19 @@ For the live test count, trust `./check.sh` output—not any number written here
   playlists. The clean reconnect retained all five Apple smart rules, no pending
   Play Counts, eleven recovery points, and iTunesDB SHA-256
   `c235f57378793d1db96d3f5b059bdb01e1262e04b9b54375a2c78cce6770123c`.
-  The exact Apple Videos smart index is now exposed as a narrowly deletable
-  System playlist in the installed build; that single physical delete/reconnect
-  check remains. On-The-Go is firmware-generated and absent from iTunesDB.
+  The canonical Apple Videos smart index was subsequently deleted on hardware
+  with zero media loss and stayed absent through later syncs. Favorites,
+  SONNY.AIF, and Indie now produce a verified 100-track/100-file stock state.
+  A playlist-scoped-shadow defect that duplicated 18 existing SONNY files was
+  repaired recovery-first and closed with narrow exact-content reconciliation.
+  Real Spaceman cover churn then proved both the genuine 100,000-byte artwork
+  update and zero-write relinking of matching pixels left in free slots. The
+  final database/artwork/shadow audit passed and the iPod was cleanly unmounted
+  for one deliberate overnight stock-firmware soak before Rockbox installation.
   Current dual-boot routing stays fail-closed: a `.rockbox` installation selects
-  Rockbox export and leaves the stock database read-only. Never erase, bulk-clean,
-  or guess the target.
+  Rockbox export and leaves the stock database read-only. The later approved
+  dual-library is one composite, single-copy ownership plan—not two exporters
+  run independently. Never erase, bulk-clean, or guess the target.
 - New frontier (2026-07-08): **CDJ USB export** → `docs/cdj-usb-export.md`.
 - **V5 BOUNDED WAVEFORM CACHE SHIPPED.** The canonical cache now
   persists only the exact signed min/max mip levels selected by every supported
@@ -551,6 +558,14 @@ validate on-device:
 - [x] Pre-generate deduplicated MA446 stock artwork from the canonical curated
       JPEG cache; validate MHIT/MHII/MHNI/ithmb linkage and exact recovery in
       hermetic plan/commit/failure transactions without retagging source audio.
+- [x] Add a disposable Mac-side per-MA446 shadow and incremental artwork
+      transaction. Exact reconnect fingerprints enable true no-op plans and
+      proven media reuse. Playlist-scoped shadows narrowly reconcile missing
+      selected sources against exact live content instead of duplicating audio.
+      One changed cover writes only unreferenced 20 KB + 80 KB slots, relinks
+      pixel-identical free slots with zero range writes, reuses other freed holes
+      on later changes, and keeps the old database/artwork view valid through
+      injected mid-range failures. Both artwork paths passed real hardware.
 - [x] Complete real-MA446 artwork write/display/reconnect acceptance: curated
       covers displayed in stock firmware, later reconnect/delete plans parsed
       and compacted the linked artwork successfully, and source tags remained
@@ -576,9 +591,15 @@ validate on-device:
 - [x] Complete real-MA446 playlist-delete/reconnect acceptance through a clean
       zero-track/zero-user-playlist state, including two checked playlists
       deleted successfully in one guarded operation.
-- [ ] Reconnect once and physically delete the Apple Videos system playlist.
-      The installed UI exposes it; the hermetic plan proves zero track/media
-      deletion and preserves every retained smart rule. On-The-Go is firmware UI.
+- [x] Physically delete the Apple Videos system index. The first pass exposed a
+      real Apple shape with an ordinary-MHLP smart alias and canonical MHSD-5
+      record under different IDs; the corrected snapshot selects the canonical
+      ID and the planner removes both representations together. The retry kept
+      all 73 tracks/media files and every protected smart list. Later syncs still
+      parse no Videos representation. On-The-Go is firmware UI.
+- [ ] Complete the deliberate overnight stock-firmware soak, then reconnect
+      read-only and capture the final 100-track stock state off-device before
+      installing Rockbox.
 - [ ] Music writes to + reads from the real Rockbox iPod.
 - [ ] m3u8 works on-device (drive-root-absolute paths; expect maybe a tweak).
 - [ ] `cover.jpg`-per-folder renders (baseline-JPEG already enforced + cache

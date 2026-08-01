@@ -16,16 +16,30 @@ class TestDecode(unittest.TestCase):
 
 class TestSanitize(unittest.TestCase):
     def test_illegal_chars_replaced(self):
-        self.assertEqual(sanitize_component('a:b/c*d?"e'), "a-b-c-d--e")
+        self.assertEqual(sanitize_component('a:b/c*d?"e'), "a-b - cd'e")
 
     def test_trailing_dot_space_trimmed(self):
         self.assertEqual(sanitize_component("name. "), "name")
 
-    def test_unicode_preserved(self):
-        self.assertEqual(sanitize_component("Café Tröll"), "Café Tröll")
+    def test_latin_is_readably_transliterated_without_placeholders(self):
+        self.assertEqual(sanitize_component("Café Tröll"), "Cafe Troll")
+        self.assertEqual(sanitize_component("CØSTA ŁØVE"), "COSTA LOVE")
+        self.assertEqual(
+            sanitize_component("DÊTRE / Dr. Ushūu"), "DETRE - Dr. Ushuu")
+        self.assertEqual(sanitize_component("不明"), "不明")
 
-    def test_slashes_become_dashes(self):
-        self.assertEqual(sanitize_component("///"), "---")
+    def test_decorative_forbidden_characters_do_not_leave_placeholders(self):
+        self.assertEqual(sanitize_component("*** CHOPS ***"), "CHOPS")
+        self.assertEqual(sanitize_component("M?STIC & ROI*"), "MSTIC & ROI")
+        self.assertEqual(sanitize_component("///"), "_")
+
+    def test_compatibility_punctuation_and_reserved_names(self):
+        self.assertEqual(
+            sanitize_component("1931 HITS ARCHIVE： Minnie， Vol. 4²"),
+            "1931 HITS ARCHIVE- Minnie, Vol. 42",
+        )
+        self.assertEqual(sanitize_component("CON"), "CON-")
+        self.assertEqual(sanitize_component("LPT1.mix"), "LPT1-.mix")
 
     def test_never_empty(self):
         self.assertEqual(sanitize_component(""), "_")

@@ -2,12 +2,13 @@
 
 Hermetic by construction (see soundbox-gotchas):
   • QStandardPaths test mode BEFORE the app module loads — all saves land in
-    the qttest sandbox, never the real library.json / art cache.
+    the qttest sandbox, never the real library.json / art cache / app log.
   • rekordbox_db.db_available patched False — the live DB is never touched.
 One QApplication + one MainWindow for the module (Qt allows only one app).
 """
 
 import os
+import logging
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -66,6 +67,11 @@ class _FakeArt:
 
 
 class CollectionView(unittest.TestCase):
+    def test_test_mode_never_opens_the_production_log(self):
+        from desktop.app import LOG
+        self.assertFalse(any(isinstance(h, logging.FileHandler)
+                             for h in LOG.handlers))
+
     def test_pinned_first_with_count(self):
         it = _win.sb_tree.topLevelItem(0)
         self.assertIn("Collection", it.text(0))
@@ -319,7 +325,7 @@ class StockIpodUI(unittest.TestCase):
         snapshot = StockIpodSnapshot(
             Path("/Volumes/IPOD"), "IPOD", "UUID", "MS-DOS (FAT32)",
             "USB", "disk4s2", True, 256_000_000_000, 255_000_000_000,
-            "MA446", "remembered confirmation", "iPod Video",
+            "MA446", "serial suffix V9M", "iPod Video",
             "5.5th generation", "identity", 4, 5, 0x75, 0, "abc", 14_515_286,
             0, "No pending playback records", 2, (track,),
             (library_root, playlist, second_playlist, smart_playlist,
@@ -331,6 +337,10 @@ class StockIpodUI(unittest.TestCase):
             transport_revision="1.62",
             dac_name="Wolfson WM8758BG",
             dac_source="verified MA446 hardware catalog",
+            sync_state="local_changes",
+            sync_detail="1 curated cover changed",
+            sync_local_changes=1,
+            sync_committed_at="2026-08-01T03:55:00-05:00",
         )
         _win.stock_ipod_pages.set_snapshot(snapshot)
         pages = _win.stock_ipod_pages
@@ -369,10 +379,24 @@ class StockIpodUI(unittest.TestCase):
             pages.detail_trees["Identity"].topLevelItem(index).text(1)
             for index in range(pages.detail_trees["Identity"].topLevelItemCount())
         }
-        self.assertIn("1.3", identity["Firmware"])
+        self.assertEqual(identity["Model"], "MA446")
+        self.assertEqual(identity["Firmware"], "1.3")
         self.assertEqual(identity["DAC / codec"], "Wolfson WM8758BG")
-        self.assertIn("8M650V0HV9M", identity["Serial number"])
+        self.assertEqual(identity["Serial number"], "8M650V0HV9M")
+        self.assertNotIn("serial suffix", " ".join(identity.values()).casefold())
+        self.assertNotIn("macos ipod device record", " ".join(
+            identity.values()).casefold())
         self.assertIn("SCSI transport 1.62", identity["Connection"])
+        soundbox = {
+            pages.detail_trees["SoundBox"].topLevelItem(index).text(0):
+            pages.detail_trees["SoundBox"].topLevelItem(index).text(1)
+            for index in range(pages.detail_trees["SoundBox"].topLevelItemCount())
+        }
+        self.assertEqual(soundbox["Sync state"], "Local changes ready")
+        self.assertEqual(soundbox["Sync detail"], "1 curated cover changed")
+        self.assertEqual(soundbox["Pending local changes"], "1")
+        self.assertEqual(
+            soundbox["Last committed"], "2026-08-01T03:55:00-05:00")
         self.assertEqual(pages.playlist_tree.columnCount(), 3)
         self.assertEqual(
             [pages.playlist_tree.headerItem().text(index) for index in range(3)],

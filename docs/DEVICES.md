@@ -1,6 +1,6 @@
 # SoundBox device layouts
 
-Current as of 2026-07-31. Read this with `GOTCHAS.md` and the write contract at
+Current as of 2026-08-01. Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
 ## The simple model
@@ -33,6 +33,13 @@ Unknown or failed probes never grant extra capability.
 
 The current export is ordinary files, so it does not depend on the Rockbox
 tag database:
+
+Generated path components are FAT-safe without destroying the curated display
+metadata. SoundBox compatibility-normalizes punctuation, transliterates Latin
+lookalikes and accents to readable ASCII (`CØSTA` → `COSTA`), preserves
+non-Latin scripts, removes decorative FAT-forbidden `*`/`?`, and protects DOS
+reserved names. The SoundBox UI, stock iTunesDB text, and source tags remain
+unchanged.
 
 ```text
 /
@@ -118,12 +125,25 @@ and curated-away tracks do not appear misleadingly in the firmware-omission list
 
 Curated SoundBox JPEGs are also the stock-art source of truth. A background
 worker pre-renders MA446's RGB565 formats 1028 (100×100) and 1029 (200×200)
-into a content-addressed AppData cache, pausing during playback. Sync therefore
-only hashes/assembles prepared pixels: identical images occupy one segment in
+into a content-addressed AppData cache, pausing during playback. A source
+locator skips unchanged startup entries; one manual cover change queues only
+that JPEG. Initial reconciliation deduplicates identical images into one segment in
 each `F1028_1.ithmb`/`F1029_1.ithmb`, while ArtworkDB has the per-track MHII
 records stock firmware expects. SoundBox validates every iTunesDB MHIT link,
 ArtworkDB song ID, MHNI format/offset/size, and ithmb boundary before showing
 the confirmation. It never modifies tags or embeds images into source audio.
+
+Successful commits publish a disposable Mac-only `stock_ipod_state/` shadow,
+keyed by library persistent ID plus FAT volume UUID. Reconnect compares identity,
+the small iTunesDB/ArtworkDB hashes, and ithmb size/mtime without writing. Exact
+matches reuse proven media identity; mismatch performs full reconciliation. A
+true no-op creates no recovery point and shows no write confirmation.
+
+Fast-path RGB565 changes use only slots not referenced by the current ArtworkDB.
+Free holes are reused before append, existing image IDs stay stable, and the old
+firmware view therefore remains valid until database publication. One changed
+cover writes 20 KB + 80 KB of pixels rather than every ithmb byte. Playlist
+deletion remains the explicit full-compaction path.
 
 A stock drop is two-phase. The first background phase is a no-write plan and
 shows exact reused/new tracks and bytes. Because the real refurb has an empty
@@ -142,9 +162,10 @@ model from its own recovery plan. It deliberately does not use `DatabaseID`,
 which Apple changes during normal rewrites. The confirmation defaults to
 Cancel. Commit pins the mount and rechecks
 the database, pending play counts, every source hash, and every destination. It
-saves the original database/play-count bytes plus every replaced ArtworkDB and
-ithmb file under `.soundbox/stock-ipod-recovery/`, atomically copies new media,
-atomically replaces the artwork files, writes the validated iTunesDB last, and
+saves the original database/play-count bytes plus every replaced ArtworkDB and,
+for full compaction only, ithmb file under `.soundbox/stock-ipod-recovery/`.
+Incremental art records verified ranges and never overwrites a referenced slot.
+It atomically copies new media, publishes artwork, writes iTunesDB last, and
 archives consumed play counts. Failure restores the original database/artwork
 set and removes only the exact new media files from that transaction. An
 incomplete existing artwork set fails during the read-only plan instead of
@@ -169,9 +190,11 @@ published before orphan files are unlinked, and the Mac/source library is never
 modified. Deleted device media is intentionally not retained in on-device
 recovery because doing so would not reclaim storage; the confirmation says so
 and defaults to Cancel.
-Deleting Videos removes only that MHSD-5 smart-playlist record: it contributes
-no media candidates, leaves every track and regular playlist intact, and
-validates all retained Apple smart rules before the plan can commit.
+Deleting Videos removes the canonical MHSD-5 smart-playlist record plus any
+matching ordinary-MHLP smart alias Apple stored under a second ID. The device
+snapshot always exposes the canonical identity. Both representations contribute
+no media candidates, so the operation leaves every track and regular playlist
+intact and validates all retained Apple smart rules before it can commit.
 
 Clicking a stock-only iPod opens a read-only managed-device surface instead of
 the raw FAT folders. Header-level **Device**, **Music**, and **Playlists** tabs
@@ -264,10 +287,12 @@ A real Rockbox iPod still needs checks for playback, theme artwork, playlist
 order/folder nesting, database refresh, and full-library scale. The stock engine
 has completed SoundBox-authored write/play/reconnect recovery, visible artwork
 and metadata, destination-specific HOUSE playback without a reboot, full
-orphan cleanup, and two-playlist deletion in one guarded transaction. Physical
-Videos-system-list deletion is the sole remaining stock cleanup check. Other
-iPod models, checksum families, destructive reconciliation, the composite
-dual-library design above, and full-library scale remain future work.
+orphan cleanup, two-playlist deletion in one guarded transaction, and physical
+Videos-system-index deletion with zero track/media loss. A final overnight stock
+firmware soak and reconnect capture intentionally precede Rockbox installation.
+Other iPod models, checksum
+families, destructive reconciliation, the composite dual-library design above,
+and full-library scale remain future work.
 
 ## Real stock-hardware baseline (2026-07-31)
 
@@ -350,7 +375,30 @@ one successful guarded operation. The iPod is now a clean stock baseline with
 zero indexed tracks and zero regular user playlists; the last verified iTunesDB
 SHA-256 is
 `c235f57378793d1db96d3f5b059bdb01e1262e04b9b54375a2c78cce6770123c`,
-`Play Counts` is absent, and eleven recovery points remain. The device was not
-mounted at session wrap. Videos still exists as an Apple smart index until the
-new System-playlist deletion UI is exercised on hardware; On-The-Go is generated
-by firmware and is not present in iTunesDB.
+`Play Counts` is absent, and eleven recovery points remain. A later Favorites
+export added 73 safe tracks. The first Videos deletion attempt removed only
+Apple's ordinary-MHLP smart alias because the real database used a different ID
+for the canonical MHSD-5 record. The corrected snapshot now prefers the
+canonical ID and the planner removes both representations together. The
+2026-08-01 physical retry deleted canonical ID `6873052597665276463`, merged 26
+pending play-count entries, removed zero track records and zero media files,
+and preserved all 73 Favorites tracks plus Audiobooks, Movies, Music, and TV
+Shows. The resulting iTunesDB SHA-256 is
+`87bf84a025e18b52ee7991f424b461ee12ca7b32f414bab95132b3206fe644b0`,
+`Play Counts` is absent, and seventeen recovery points remain. Later syncs
+continued to parse no Videos record; the final overnight stock-firmware soak and
+post-soak reconnect capture remain. On-The-Go is generated by firmware and is
+not present in iTunesDB.
+
+The 2026-08-01 final stock pass subsequently reached 100 indexed tracks and
+exactly 100 physical media files totaling 2,681,783,526 bytes: Favorites 73,
+SONNY.AIF 19, and Indie 10, with no Videos or `Play Counts`. A partial-shadow
+failure that duplicated 18 SONNY files was repaired recovery-first; exact hashes
+proved every duplicate before removal. The corrected planner reuses selected
+device media missing from a playlist-scoped shadow. Two final Spaceman cover
+changes then proved both a genuine 100,000-byte RGB565 update and zero-write
+reuse of matching pixels left in free slots. The last verified iTunesDB SHA-256
+is `201655d4b65b5c95dd626640c2bcceca2b7bb7e481cf8fc86072771539c4ed9e`;
+ArtworkDB is `35150373971f15831fc9fbedfdbb1af8028d26efbffab3079aba1dc34a38b935`.
+Shadow generation 5 matched the complete state before a clean unmount for the
+overnight stock-firmware soak.

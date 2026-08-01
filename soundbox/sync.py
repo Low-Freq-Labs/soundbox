@@ -139,6 +139,40 @@ class DeviceSession:
                 pass
             raise
 
+    def write_verified_range(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        offset: int,
+        size: int,
+        sha256: str,
+    ) -> None:
+        """Write and verify one caller-proven unreferenced device-file range."""
+        target = self.guard(destination)
+        if offset < 0 or size < 0 or source.stat().st_size != size:
+            raise RuntimeError(f"Invalid range write for {target}")
+        self.revalidate()
+        current_size = target.stat().st_size
+        if offset > current_size:
+            raise RuntimeError(
+                f"Range write would create a hole in {target}: {offset}>{current_size}")
+        with source.open("rb") as input_file:
+            payload = input_file.read()
+        if len(payload) != size or hashlib.sha256(payload).hexdigest() != sha256:
+            raise RuntimeError(f"Range source changed before write: {source}")
+        with target.open("r+b") as handle:
+            handle.seek(offset)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        self.revalidate()
+        with target.open("rb") as handle:
+            handle.seek(offset)
+            landed = handle.read(size)
+        if len(landed) != size or hashlib.sha256(landed).hexdigest() != sha256:
+            raise RuntimeError(f"Range write failed verification: {target}@{offset}")
+
 
 def _fmt_size(n: int) -> str:
     """Human bytes in decimal units (matches Finder), for space messages."""
