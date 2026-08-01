@@ -8,8 +8,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   pipeline exit code is `tail`'s `0`, so a FAILING gate gets masked and the
   build/commit proceeds. (Real incident: a syntax-broken module shipped + got
   committed.) Run `./check.sh` bare (or `> file 2>&1; echo $?`), then build.
-- Project is under git (local `master`, no remote). Preserve the existing dirty
-  tree and inspect `git status` at handoff. Commit/push only when Sonny asks.
+- Project uses local `main`, tracking `origin/main` on the Low Freq Labs GitHub
+  repository. Preserve any existing dirty tree and inspect `git status` at
+  handoff. Do not commit or push unless Sonny explicitly asks; saying
+  **“wrap up”** is standing approval to validate, commit the intended completed
+  changes, and push the current branch.
   `dist/`, `build/`, `.venv/` are ignored.
 - **`AGENTS.md` and `CLAUDE.md` are synchronized runtime equivalents.** A shared
   rule changed in one must change in the other in the same edit. Shipped
@@ -813,6 +816,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   or candidates and must preserve all remaining smart rules. Never generalize
   this to Music, Movies, TV Shows, or Audiobooks. On-The-Go does not exist in
   iTunesDB and cannot be deleted there.
+- **The stock Artists → artist → All level is firmware UI.** SoundBox supplies
+  clean title/artist metadata and the intended artist indexes, but classic stock
+  firmware inserts its own `All` level before the songs. Do not corrupt album or
+  artist metadata trying to remove that accepted firmware navigation layer.
 - **MHBD `DatabaseID` is not a device identity.** Apple and SoundBox database
   rewrites legitimately replace it. The library persistent ID remained stable
   across every captured generation; pair it with the macOS volume UUID when

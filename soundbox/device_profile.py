@@ -124,9 +124,10 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
     fat = fs in FAT_FILESYSTEMS
     model = _read_model(base) if has_stock else ""
     stock_write = False
-    # Firmware routing is destination-derived. Once Rockbox is installed its
-    # marker wins operationally: exports use the Rockbox filesystem path and
-    # the coexisting Apple database remains read-only.
+    # Routing is derived from the mounted on-disk layout, not from a guessed
+    # last-booted firmware. Once Rockbox is installed its marker wins
+    # operationally: exports use the Rockbox filesystem path and the coexisting
+    # Apple database remains read-only.
     if has_stock and not has_rockbox and fat and _stock_database_compatible(base):
         from .stock_ipod import supports_stock_write
         stock_write = supports_stock_write(model)

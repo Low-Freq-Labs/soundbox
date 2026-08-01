@@ -192,6 +192,21 @@ Apple's local device record, serial-derived model, or model-derived hardware
 catalog. Parsing runs off the UI thread and eject refuses to race it.
 Rockbox and generic USB devices retain the existing filesystem browser.
 
+The stock dashboard layout is also intentional UI contract. Device details use
+a 2×2 grid—Identity beside Storage, Database beside SoundBox—to avoid needless
+vertical scrolling. Music shows exactly Title, Artist, Format, Size, Time,
+Plays, Skips, and Pending; Album and internal Location are omitted, and Title
+receives all additional window width. Playlists shows only Playlist/Track,
+Tracks, and Type; there is no Artist column, and Playlist/Track stretches. Long
+stock planning/commit status text must remain readable rather than being clipped.
+Redundant hover text is prohibited globally; a tooltip is reserved for hidden
+diagnostics or genuinely additional information.
+
+Classic stock firmware itself inserts an **All** level beneath each Artists
+entry before showing that artist's songs. SoundBox owns clean metadata and the
+artist index, not that firmware navigation layer; the accepted behavior must not
+be “fixed” by damaging album or artist fields.
+
 Research references:
 
 - [libgpod overview](https://sources.debian.org/src/libgpod/0.8.3-17/README.overview)

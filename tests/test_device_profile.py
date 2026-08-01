@@ -4,8 +4,11 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+import wave
 
 from soundbox.device_profile import inspect_device, plan_stock_ipod_export
+from soundbox.library import Library, Playlist, Track
+from soundbox import sync as sync_mod
 
 
 class DeviceProfiles(unittest.TestCase):
@@ -63,6 +66,46 @@ class DeviceProfiles(unittest.TestCase):
         self.assertTrue(profile.rockbox_export)
         self.assertFalse(profile.stock_write)
         self.assertEqual(self._snapshot(root), before)
+
+    def test_dual_boot_exports_stock_unsafe_wav_only_through_rockbox(self):
+        root = self._root()
+        target = root / "IPOD"
+        (target / ".rockbox").mkdir(parents=True)
+        itunes = target / "iPod_Control/iTunes"
+        itunes.mkdir(parents=True)
+        database = itunes / "iTunesDB"
+        database.write_bytes(b"sacred stock database")
+
+        source_dir = root / "library"
+        source_dir.mkdir()
+        source = source_dir / "Loot.wav"
+        with wave.open(str(source), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(3)  # PCM24: proven unsafe on the stock MA446.
+            output.setframerate(44_100)
+            output.writeframes(b"\0" * 6)
+        playlist = Playlist("HOUSE", [], ["1"], "house")
+        library = Library(
+            {"1": Track(
+                "1", "Loot", "Hostage Situation", source.as_uri(),
+                kind="WAV File")},
+            [playlist], source_dir / "library.xml", source_kind="fixture",
+        )
+
+        profile = inspect_device(target, "msdos")
+        self.assertEqual(profile.kind, "dual_boot")
+        self.assertTrue(profile.rockbox_export)
+        self.assertFalse(profile.stock_write)
+
+        sync_mod.run(library, [playlist], target, dry_run=False)
+
+        self.assertTrue(
+            (target / "Music/Hostage Situation/Loot/Loot.wav").is_file())
+        self.assertIn(
+            "/Music/Hostage Situation/Loot/Loot.wav",
+            (target / "Playlists/HOUSE.m3u8").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(database.read_bytes(), b"sacred stock database")
 
     def test_stock_ipod_plan_is_explicitly_no_write(self):
         root = self._root()
