@@ -1,6 +1,6 @@
 # SoundBox device layouts
 
-Current as of 2026-08-02. Read this with `GOTCHAS.md` and the write contract at
+Current as of 2026-08-03. Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
 ## The simple model
@@ -521,20 +521,19 @@ filesystem write; they are not edited or cleaned by SoundBox. Every
 nonvolatile pre-existing entry—including the full Pioneer tree in this
 fixture—is hash-compared before normal eject.
 
-## What remains hardware-gated
+## Remaining hardware boundaries
 
-A real Rockbox iPod has passed audio playback and external 500x500 theme artwork
-with the frozen track's controlled three-way A/B. It still needs checks for
-playlist order/folder nesting, database refresh, and full-library scale. The stock engine
-has completed SoundBox-authored write/play/reconnect recovery, visible artwork
-and metadata, destination-specific HOUSE playback without a reboot, full
-orphan cleanup, two-playlist deletion in one guarded transaction, and physical
-Videos-system-index deletion with zero track/media loss. A final overnight stock
-firmware soak and reconnect capture preceded Rockbox installation. Other iPod
-models, checksum families, destructive reconciliation, schema-2 ownership
-  migration and destructive composite reconciliation remain future work. The 2,746-track
-full-library composite dry-run now passes without a target write; physical
-full-library commit/playback remains pending.
+The MA446 path is physically accepted in both stock and dual-boot use: guarded
+stock database/artwork writes, playback/reconnect recovery, destination-specific
+format filtering, playlist/system-index deletion, Rockbox picture-free playback,
+theme-native external art, firmware-owned database refresh, full-Collection
+commit, incremental Sync, and exact visible playlist order have all run on the
+real device. Rockbox's non-recursive catalogue intentionally remains flat;
+zero-padded filenames carry the user-applied order while stock titles stay clean.
+
+Future hardware gates are different iPod models/checksum families and any
+separately designed schema-2 ownership migration. Those boundaries remain
+read-only/fail-closed; they do not block normal use of the validated MA446.
 
 ## Real stock-hardware baseline (2026-07-31)
 

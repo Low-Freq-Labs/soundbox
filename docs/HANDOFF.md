@@ -3,103 +3,63 @@
 Updated: 2026-08-03 (America/Chicago)
 
 Read this immediately after `AGENTS.md` / `CLAUDE.md`. This is the single
-current resume note, not a session diary.
+operational resume note; historical evidence stays in the roadmap/device docs.
 
-## Repository and runtime
+## Repository and installed runtime
 
-- Branch `main`, tracking `origin/main`; `bc79dd0` was the pre-session baseline.
-  This handoff accompanies the wrapped dual-iPod implementation/UI commit, with
-  no intentional residual worktree changes.
-- The installed source baseline passed bare `./check.sh`: 721 tests with four expected
-  skips, plus pyflakes, native build, and mypy. `./build_app.sh` passed and the
-  signature verified.
-- The fixed app is installed at `/Applications/Soundbox.app`, PID 53699. The
-  native CoreAudio/Metal deck is active; startup loaded 3,263 tracks / 83
-  playlists, scheduled zero library-preparation work, and verified 2,625 stock
-  artwork derivatives with zero failures.
-- The latest pre-quit `library.json` SHA-256 was
+- Branch `main` tracks `origin/main`. Dual-iPod implementation baseline
+  `acee4b6` (`Ship guarded dual-boot iPod sync`) is pushed; the documentation
+  audit that follows it contains no application behavior change.
+- The installed signed app is `/Applications/Soundbox.app`, last observed as
+  PID 53699. It activated the packaged CoreAudio/Metal deck, loaded 3,263 tracks
+  and 83 playlists, scheduled zero library-preparation work, and completed
+  2,625 stock-art derivatives with zero failures.
+- Bare `./check.sh` passed on 2026-08-03: pyflakes, native build, mypy, and 721
+  tests with four expected skips. `./build_app.sh` and strict signature
+  verification passed before installation.
+- Pre-install `library.json` SHA-256 was
   `6b55483ae55a9d98b2d42956281a077ed6513820d0238fd10186394c3a5c40be`;
-  the post-quit/relaunch hash is
+  post-relaunch SHA-256 was
   `2171dfee742db24877d06fb5282052dcf164f58ee8332aae81a94f5a46c29fcf`.
-  Sorted JSON comparison after excluding Qt's normal `columns_state` save found
-  every curated field identical.
-- The one active rollback is
-  `/private/tmp/soundbox-install-20260803-72RwQm/`; it contains the immediately
-  preceding installed app and `library.json.before`. The superseded rollback
-  was deleted after signature/startup validation, reclaiming about 235 MB while
-  preserving exactly one 235-MB rollback.
+  Sorted JSON excluding Qt's ordinary `settings.columns_state` save was
+  identical, so curated state is intact.
+- Preserve the one active rollback at
+  `/private/tmp/soundbox-install-20260803-72RwQm/` (preceding app plus
+  `library.json.before`, about 235 MB). Superseded install rollbacks were
+  removed after validation.
 
-## Newly installed order/delete follow-up
+## Accepted MA446 behavior
 
-- A physical Apply order → Delete attempt was falsely refused because deletion
-  compared schema-3's device-only `device_name` field as if it were canonical
-  playlist state. Retained validation now requires every canonical source-row
-  field while ignoring extra presentation fields.
-- A Sync button is always visible in the device header, and the context-menu
-  manual recheck remains enabled even when the latest drift count is zero.
-- The exact reorder-then-delete regression passes. Bare `./check.sh` passes 721
-  tests with four expected skips. The signed build is installed and its startup,
-  native deck, library state, zero preparation work, and 2,625 artwork
-  derivatives were verified. The iPod was not touched from Terminal.
+- The FAT32 MA446 dual layout uses only the schema-3 single-copy composite
+  planner. Stock-safe MP3/PCM16 WAV files are shared through `iPod_Control`;
+  broader Rockbox-supported media lives only under `/Music`.
+- Full Collection committed physically. Incremental export/Sync, metadata
+  repair, interruption recovery, reference-counted cleanup, theme-native
+  per-track art, and firmware-owned Rockbox database refresh are operational.
+- Stock firmware follows the applied playlist sequence. Rockbox's alphabetic
+  Playlist Catalogue now visibly follows the same order through numbered
+  Rockbox-only filenames (`01 - …`, `02 - …`); SoundBox rows and stock titles
+  remain unnumbered.
+- Explicit managed-playlist Delete is authoritative: it removes checked
+  identities, reconciles other available changes in the same transaction, and
+  retains unavailable unrelated playlists from their committed snapshots.
+- SoundBox manages only four Rockbox config policies: automatic tag-cache
+  update, title-from-tags playlist display, alphabetic playlist sorting, and a
+  minimum 10,000-entry playlist buffer. Rockbox remains sole writer of
+  `database_*.tcd`.
+- The physical device uses NightPod with a playlist-centric custom root menu and
+  a static bold artist line in its WPS. Those theme/menu files are user-owned:
+  SoundBox reads bounded WPS/SBS art dimensions but must preserve the files and
+  every unrelated `config.cfg` setting byte-for-byte.
 
-## Newly installed Rockbox order follow-up
+## Remaining boundaries
 
-- Physical validation proved the stock iTunesDB follows the applied manifest
-  order but Rockbox still presents the Playlist Catalogue alphabetically.
-- Source now uses alphabetic Rockbox catalogue sorting plus zero-padded,
-  Rockbox-only M3U8 filenames (`01 - NAME.m3u8`). Stock playlist titles and
-  SoundBox device rows remain clean; reorder renames only owned playlist files.
-- Focused dual/config tests and bare `./check.sh` (721 tests, four expected
-  skips) pass. The signed build is installed with native deck, curated state,
-  zero preparation work, and 2,625 artwork derivatives verified. Physical
-  acceptance now confirms Rockbox displays the zero-padded sequence.
-
-## Newly installed authoritative deletion follow-up
-
-- An explicit checked playlist deletion no longer refuses because another
-  managed playlist changed or disappeared. It reconciles available playlist
-  updates in the same transaction and reconstructs unavailable unrelated
-  playlists from their committed snapshots so they are retained.
-- A same-profile regression proves normal Sync migrates an unnumbered Rockbox
-  playlist to its numbered catalogue filename. Successful dual commits now log
-  the exact published Rockbox playlist paths for physical verification.
-- Bare `./check.sh` passes 721 tests with four expected skips. The signed build
-  is installed; startup loaded 3,263 tracks / 83 playlists, scheduled zero
-  preparation work, and completed 2,625 stock-art derivatives with zero failures.
-
-## Latest Error 6 incident
-
-- During a seven-playlist export, macOS returned `Errno 6` while the background
-  no-write planner hashed an existing stock media file in
-  `soundbox.stock_ipod._sha256`; no commit had begun and no device file was
-  intentionally changed.
-- The Mac-side stock shadow's last successful committed generation is 29 with
-  1,745 stock sources and these seven managed playlists: Collection (2,744),
-  SONNY.AIF (38), DUBSTEP (572), TEAROUT (40), HOUSE (8), BROSTEP (20), and
-  DEEP DUB (557). The failed batch did not publish a later manifest generation.
-- No terminal command mounted, ejected, read, or wrote the physical iPod.
-
-## Newly installed behavior
-
-- Additive stock planning excludes sources already proven by the composite
-  source→DBID/path/payload manifest from live content reconciliation. New or
-  otherwise unproven sources retain the narrow size/suffix/hash adoption path.
-  The regression test fails if an additive playlist re-hashes proven stock
-  media.
-- Playlists confirmed while another dual job is busy are coalesced into one
-  next guarded plan/commit batch. Drops arriving after that batch starts form
-  the following batch; per-drop confirmation and failure cancellation remain.
-- Device-facing playlist names use the rekordbox leaf (`DUBSTEP`) on both stock
-  and Rockbox. Folder context is added only when duplicate leaves require it;
-  the full hierarchy remains in the ownership manifest.
-- The Device Playlists page provides Move up, Move down, and Apply order. Apply
-  publishes clean stock iTunesDB titles and numbered Rockbox-only M3U8 files in
-  the same manifest sequence without duplicating media.
-
-## Remaining physical acceptance
-
-- No check blocks normal use. Stock firmware follows the applied manifest order,
-  and Rockbox now visibly follows the numbered M3U8 sequence after sync/restart.
-- On a future routine deletion, confirm the newly installed authoritative path
-  proceeds directly without the old Sync-first refusal. If another macOS USB
-  reset occurs, preserve the app log and retry only after a clean remount.
+- No outstanding check blocks normal use of this MA446. On the next routine
+  device deletion, physically confirm the new authoritative path no longer
+  presents the obsolete Sync-first refusal.
+- Other iPod models/checksum families and schema-2 ownership migration remain
+  separately hardware-gated and fail closed.
+- If macOS resets the USB transport, preserve
+  `~/Library/Logs/Soundbox/soundbox.log`, wait for a clean remount, and requeue
+  through SoundBox. Never inspect, mount, eject, or mutate the physical iPod
+  from development shell commands.

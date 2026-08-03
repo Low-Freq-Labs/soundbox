@@ -35,6 +35,10 @@ classification and stock-iPod readiness planning) · `stock_ipod` (MA446-only
 two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
 (content-addressed MA446 RGB565 preparation and ArtworkDB/ithmb layout) ·
 `stock_ipod_shadow` (disposable Mac-side per-device delta baseline) ·
+`stock_ipod_info` (strictly read-only stock/dual device snapshots) ·
+`dual_ipod` (schema-3 single-copy stock/Rockbox plan, rollback, and ownership) ·
+`rockbox_media` (verified picture-free/tag-normalized payload derivatives and
+theme-sized art) · `rockbox_config` (narrow lossless Rockbox setting management) ·
 `backup` · `imports`
 (imported-audio plane) · `libcache` (instant-paint snapshot).
 
@@ -304,30 +308,27 @@ without writing it before publishing ArtworkDB and iTunesDB.
 Planning still audits every MHIT→MHII→MHNI offset/size; source media and tags
 are read-only. The writer
 is restricted to stock-only MA446, scheme-zero iTunesDB, and MP3/WAV.
-`device_profile` derives the export pipeline from the mounted layout: stock-only
-routes to that database planner, while a `/.rockbox/` marker routes to the
-Rockbox filesystem planner and prevents remembered MA446 identity from
-re-enabling stock writes. Coexisting dual-boot databases therefore remain
-untouched in the current implementation.
-
-The approved future dual-library architecture is a new composite planner, not
-two existing planners run back-to-back. It must place stock-safe media once
-under `iPod_Control/Music/Fxx`, index it in iTunesDB, and reference the same
-physical files from Rockbox playlists. Stock-unsafe but Rockbox-supported media
-lives once under `/Music` and is absent from iTunesDB. A unified manifest must
-own both path classes so deletion/resync cannot remove a file still referenced
-by the other firmware; prepared artwork, recovery, commit ordering, and rollback
-must also be coordinated as one transaction. This is design only, not shipped
-behavior. Compatibility is evaluated against each destination profile: the
-current MA446-safe subset is validated MP3 plus stereo PCM16/44.1-kHz WAV, but
-that conservative stock rule must never filter files supported by Rockbox.
-Media unsupported by both profiles is omitted and reported.
+`device_profile` derives the export pipeline from the mounted layout. Stock-only
+MA446 routes to the guarded database planner; Rockbox-only/generic FAT32 routes
+to the filesystem planner; and a FAT32 MA446 containing both `.rockbox` and
+`iPod_Control` routes exclusively to `dual_ipod`. The shipped composite planner
+places stock-safe media once under `iPod_Control/Music/Fxx`, indexes it in
+iTunesDB, and references the same file from Rockbox playlists. Stock-unsafe but
+Rockbox-supported media lives once under `/Music`. Schema-3 ownership spans
+both path classes, so playlist reconciliation, reference-counted cleanup,
+prepared artwork, recovery, commit ordering, and rollback are one transaction,
+never two exporters run back-to-back. The MA446-safe subset is validated MP3
+plus stereo PCM16/44.1-kHz WAV; that conservative stock rule never filters a
+file supported by Rockbox. Media unsupported by both profiles is omitted and
+reported.
 
 Stock device presentation is a separate read-only path. `stock_ipod_info`
 creates immutable identity/track/playlist snapshots, merges pending playback
 records only in memory, and exposes no mutation API. The desktop device page
-renders those snapshots as Device, Music, and Playlists tabs while the existing
-filesystem browser remains in place for Rockbox and generic USB targets. Model
+renders them as Device, Songs, and Playlists tabs. On a schema-3 dual device,
+Songs and Playlists merge manifest ownership with the parsed iTunesDB and label
+each row Both, Stock, or Rockbox; the filesystem browser remains for Rockbox-only
+and generic USB targets. Model
 confirmation persists against the iPod library persistent ID plus macOS volume
 UUID; Apple/SoundBox rewrites may change the MHBD `DatabaseID`, so it is display
 information only and never a device key. On macOS, `desktop.devices` performs

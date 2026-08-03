@@ -4,7 +4,7 @@ Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root
 
 ## Resolution (what was actually done, and what was deliberately declined)
 
-### Follow-up: temporary install rollbacks (2026-08-02)
+### Follow-up: temporary install rollbacks (2026-08-03)
 
 A read-only audit after repeated iPod development installs found about 9.26 GiB
 under `/tmp/soundbox-*`, mostly superseded application rollback bundles. This is
@@ -12,11 +12,12 @@ the avoidable growth the user observed. It is separate from the 28 physical-iPod
 stock recovery points (about 51 MB total) and the bounded V5 analysis cache
 (about 11.6 GB for 3,244 records). No files were removed during the audit.
 
-The currently required app rollback is
-`/tmp/soundbox-rockbox-tags-install.xtpvZk/`. After the installed build and
-physical corrective sync are accepted, obtain explicit approval and remove only
-superseded `/tmp/soundbox-*` artifacts, preserving that one current rollback
-until the normal handoff permits retirement.
+Subsequent guarded installs retired the superseded bundles after signature,
+startup, and curated-state verification. The current handoff preserves exactly
+one immediate rollback at
+`/private/tmp/soundbox-install-20260803-72RwQm/` (about 235 MB), containing the
+preceding app and `library.json.before`; do not accumulate a new per-install
+trail around it.
 
 ### Follow-up: bounded V5 waveform cache (2026-07-30)
 
@@ -43,7 +44,8 @@ V4 grid/cue/provenance manifest. Only the 3,248 resolved `.sba4` files under
 signed ABI-3 app then relaunched, activated the native deck, loaded 3,263 tracks
 and 83 playlists, and began the direct resumable V5 recook. Early production
 records passed complete hashes and preserved their prior beat/cue rows exactly.
-The temporary rollback must remain until the full recook and audit finish.
+That temporary rollback remained until the full recook/audit completed and was
+then superseded by the single current install rollback recorded above.
 
 ### Follow-up: canonical V4 retirement (2026-07-24)
 
@@ -82,8 +84,8 @@ up again because the normal final layout save changed `columns_state`.
 - **Build outputs: deleted** `dist/` (412 MB) and `build/` (64 MB). Both are
   rebuildable with `./build_app.sh`; `/Applications/Soundbox.app` is the
   installed copy and was untouched.
-- **`.venv` (1.3 GB): kept** — the project is in active development (iPod
-  hardware phase pending). Revisit only if the project goes dormant.
+- **`.venv` (1.3 GB): kept** — the project remains in active development.
+  Revisit only if the project goes dormant.
 - **Live app data (art 229 MB / waveforms 16 MB / history 1 MB): kept** — the
   audit itself concluded these are useful caches, not the problem.
 - No storage-report/cleanup command was built; footprint after cleanup is small

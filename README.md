@@ -114,11 +114,12 @@ playback with a diagnostic while library management remains available.
 progress bar, FINALIZING sweep (AppleDouble scrub), free-space precheck,
 FAT32-safe names (length-budgeted artist/title), catalogue-visible flat
 `/Playlists` names for dual iPods, and UTF-8 no-BOM `.m3u8` in exact order with
-`# MISSING:` comments. Generic Rockbox/USB exports may additionally mirror the
-playlist tree for file-browser use.
+`# MISSING:` comments. Dual-iPod Rockbox filenames receive zero-padded order
+prefixes while SoundBox and stock-firmware titles stay clean. Generic
+Rockbox/USB exports may additionally mirror the playlist tree for file-browser use.
 A per-device ownership manifest tracks normalized paths, source identity,
 hashes, playlist membership, artwork, and completed generations. Playlist
-edits/reorders/deletes show as **⚠ N playlists out of date**; **Sync** resolves
+edits/reorders/deletes show as **⚠ Sync needed**; **Sync** resolves
 the diff, atomically repairs owned corruption, and prunes only explicitly owned
 paths. **Cancel is honest** —
 partial m3u8s are playable and flagged so the next Sync resumes. Right-click
@@ -195,10 +196,12 @@ only after the schema-3 manifest publishes successfully. Cleanup therefore does
 not depend on regenerating an older cover with the current multiview profile.
 Schema-2 migration remains disabled and fails closed.
 
-Composite sync also manages two narrow Rockbox settings: automatic tag-cache
-updates and playlist-viewer titles from tags. Every unrelated `config.cfg` line
-is preserved, and the config update participates in the same recovery-backed
-transaction. Rockbox itself remains the sole writer of its rebuildable
+Composite sync also manages four narrow Rockbox settings: automatic tag-cache
+updates, playlist-viewer titles from tags, alphabetic catalogue sorting, and a
+minimum 10,000-entry playlist buffer while preserving any larger user value.
+Every unrelated `config.cfg` line is preserved, and the config update
+participates in the same recovery-backed transaction. Rockbox itself remains
+the sole writer of its rebuildable
 `database_*.tcd` files; after eject, its next boot reconciles changed and removed
 tracks instead of SoundBox guessing at the binary cache format.
 

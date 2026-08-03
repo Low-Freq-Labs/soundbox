@@ -817,9 +817,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Embedded art outranks that external cover and is a low-memory risk.**
   The real `Take a Trip (DIRTYSNATCHA REMIX)` MP3 decoded cleanly but carried a
   3000×3000, 17,432,315-byte APIC. The track froze on Rockbox even though the
-  installed theme displayed no covers; Rockbox still parses ID3 metadata, but
-  the APIC is a hypothesis until original/picture-free/external-cover A/B
-  playback isolates it. Rockbox exports nevertheless strip picture
+  installed theme displayed no covers; controlled original/picture-free/
+  external-cover A/B playback isolated that APIC as the trigger. Rockbox
+  exports therefore strip picture
   records only from a plan-scoped device payload, verify MP3 frames/WAV data/
   AIFF SSND/MP4 mdat/FLAC frames plus technical properties unchanged, and clear
   large staging after the batch. Composite payloads also retain only the
@@ -878,8 +878,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   payload because that tag-size-dependent duration estimate changed.
 - **Let Rockbox own its binary tag cache.** SoundBox may atomically and
   recovery-safely enforce `tagcache_autoupdate: on`,
-  `playlist viewer track display: title from tags`, and a minimum
-  `max files in playlist: 10000` in `.rockbox/config.cfg`,
+  `playlist viewer track display: title from tags`, `sort playlists: alpha`,
+  and a minimum `max files in playlist: 10000` in `.rockbox/config.cfg`,
   preserving every unrelated line and the existing LF/CRLF style. Normalizing
   Rockbox's CRLF file to LF made an already-correct config look perpetually
   dirty. Preserve any playlist limit already above 10,000; higher limits consume
@@ -1005,13 +1005,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **iPod MUST be FAT32, NOT HFS+.** Rockbox does not support HFS+.
 - m3u8: UTF-8 **no BOM**; absolute-from-drive-root paths (`/Music/Artist/...`).
   The Playlist Catalogue default dir is `/Playlists` and it does not recurse:
-  dual sync must write direct children such as `GENRES - HOUSE.m3u8`, never
-  `/Playlists/GENRES/HOUSE.m3u8`. Keep folder hierarchy in the manifest and
-  stock playlist title instead.
-- Rockbox DB is OPTIONAL (playlists play via File Browser); DB mode needs
-  "Update now" after dumping files. A cache built before corrected tags can
-  retain stale titles even after files change; use Rockbox's full database
-  initialization workflow after a metadata-profile migration.
+  dual sync writes direct, zero-padded children such as `01 - HOUSE.m3u8`,
+  never `/Playlists/GENRES/HOUSE.m3u8`. Keep full hierarchy in the manifest;
+  stock/SoundBox titles use the concise leaf unless a collision needs context.
+- Rockbox DB is OPTIONAL (playlists play without it). Composite sync enables
+  Rockbox's own automatic update and reports restart pending; after dumping or
+  retagging files, restart Rockbox so its firmware-owned cache reconciles. Use
+  full database initialization only when an older cache is actually corrupt.
 - Device sync manifest lives at `<device>/.soundbox/manifest.json`.
 - **A USB remount can defeat rollback without corrupting the committed
   generation.** `DeviceSession` must reject the new mount identity; never cross
@@ -1061,8 +1061,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   across every captured generation; pair it with the macOS volume UUID when
   remembering a confirmed model. `stock_ipod_info` owns read-only UI snapshots
   and may merge `Play Counts` only in memory.
-- **Rockbox hardware checks still unvalidated:** exact playlist order,
-  no choke at full-library scale, and the DB refresh flow. The physical
+- **The validated MA446 Rockbox path has real hardware acceptance.** The
   original/picture-free/external-cover `Take a Trip` A/B proved the giant APIC
-  caused the freeze; both picture-free files played and external art rendered.
-  USB is a good proxy for everything except on-device rendering/playback.
+  caused the freeze; picture-free media, theme-native art, full-Collection
+  commit, firmware database refresh, and zero-padded playlist order all passed
+  on-device. Do not generalize that result to another iPod model, checksum
+  family, or schema-2 migration without a separate fixture and physical gate.

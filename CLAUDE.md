@@ -62,10 +62,11 @@ repository can answer the question.
   from the active WPS/SBS and retained across later theme changes, plus a
   lightweight dimensionless 160×160 fallback. The curated JPEG cache remains
   canonical and stock artwork is untouched. On a composite device, SoundBox may manage only
-  `.rockbox/config.cfg` values `tagcache_autoupdate: on` and
-  `playlist viewer track display: title from tags`, preserving every unrelated
-  line and the file's existing newline style. That write is baseline-verified,
-  recovery-backed, and atomic. Rockbox
+  `.rockbox/config.cfg` values `tagcache_autoupdate: on`,
+  `playlist viewer track display: title from tags`, `sort playlists: alpha`,
+  and a minimum `max files in playlist: 10000`, preserving a larger user limit,
+  every unrelated line, and the file's existing newline style. That write is
+  baseline-verified, recovery-backed, and atomic. Rockbox
   remains the only writer of `database_*.tcd`; SoundBox never manufactures or
   directly edits the binary tag cache. SoundBox may report that the index
   predates its latest manifest/config generation so a required Rockbox restart
@@ -128,9 +129,11 @@ repository can answer the question.
   closed on schema 3. Never approximate dual boot with independent exporters or
   a duplicate collection.
   Rockbox's Playlist Catalogue sees only direct playlist files under
-  `/Playlists`; composite sync must therefore keep every managed M3U8 at that
-  top level and encode any curated folder path into its filename. The manifest
-  and stock iTunesDB playlist title retain the original folder hierarchy.
+  `/Playlists` and sorts them alphabetically. Composite sync must therefore keep
+  every managed M3U8 at that top level and prefix only its Rockbox filename with
+  a zero-padded manifest sequence (`01 - NAME.m3u8`). SoundBox rows and stock
+  iTunesDB titles use the concise playlist leaf, adding folder context only to
+  disambiguate duplicate leaves; the manifest alone retains the full hierarchy.
 - Stock playlist deletion may remove regular user playlists and the exact Apple
   **Videos** smart index only. Apple databases may mirror that index in the
   ordinary MHLP and canonical MHSD-5 datasets under different IDs; the device
