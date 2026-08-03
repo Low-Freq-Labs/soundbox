@@ -8,15 +8,18 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 ## Repository and installed runtime
 
 - Branch `main` tracks `origin/main`. Dual-iPod implementation baseline
-  `acee4b6` (`Ship guarded dual-boot iPod sync`) is pushed; the documentation
-  audit that follows it contains no application behavior change.
+  `acee4b6` (`Ship guarded dual-boot iPod sync`) and documentation audit
+  `c0372c4` (`Align docs with shipped dual iPod workflow`) are pushed; the
+  documentation audit contains no application behavior change.
 - The installed signed app is `/Applications/Soundbox.app`, last observed as
   PID 53699. It activated the packaged CoreAudio/Metal deck, loaded 3,263 tracks
   and 83 playlists, scheduled zero library-preparation work, and completed
   2,625 stock-art derivatives with zero failures.
-- Bare `./check.sh` passed on 2026-08-03: pyflakes, native build, mypy, and 721
-  tests with four expected skips. `./build_app.sh` and strict signature
-  verification passed before installation.
+- `./check.sh --render` passed on 2026-08-03: pyflakes, native build, mypy, 721
+  tests with four expected skips, and the hermetic offscreen UI render.
+  `./build_app.sh` and strict signature verification passed before installation;
+  strict verification of both the installed app and packaged build passed again
+  during the final park-state audit.
 - Pre-install `library.json` SHA-256 was
   `6b55483ae55a9d98b2d42956281a077ed6513820d0238fd10186394c3a5c40be`;
   post-relaunch SHA-256 was
