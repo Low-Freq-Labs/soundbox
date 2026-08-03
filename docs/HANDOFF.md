@@ -20,6 +20,10 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   `./build_app.sh` and strict signature verification passed before installation;
   strict verification of both the installed app and packaged build passed again
   during the final park-state audit.
+- `AGENTS.md` and `CLAUDE.md` remain byte-identical and explicitly define
+  **wrap up** as the complete validation, documentation, install-if-needed,
+  commit/push, and clean-published-state sequence—not an intermediate progress
+  report.
 - Pre-install `library.json` SHA-256 was
   `6b55483ae55a9d98b2d42956281a077ed6513820d0238fd10186394c3a5c40be`;
   post-relaunch SHA-256 was

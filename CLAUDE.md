@@ -194,6 +194,16 @@ rendering, clocks, transport behavior, analysis loading, or native code.
   diary: current branch/commit, installed/runtime state, unfinished work,
   exact next checks, validation performed, and any rollback that must remain.
   Remove facts that are no longer current.
+- **“Wrap up” is a completion command, not a progress report.** Finish every
+  in-scope pending task that can be completed in the current session, update all
+  required documentation, run the required final validation, and—when the work
+  is user-facing—build, safely install, relaunch, and verify the real curated
+  runtime state. Then update `docs/HANDOFF.md`, commit and push the intended
+  completed changes, and verify the worktree is clean and the current branch is
+  published before saying the wrap-up is complete. Do not defer any of these
+  steps for Sonny to request again. If a genuine blocker prevents completion,
+  report the exact blocker and leave an operational handoff instead of claiming
+  the session is wrapped.
 - Do not hard-code a "current" test count as evergreen truth; trust
   `./check.sh`. Dated validation records may include the observed count.
 
