@@ -41,12 +41,13 @@ class DeviceProfiles(unittest.TestCase):
         before = self._snapshot(root)
         profile = inspect_device(root, "msdos")
         self.assertEqual(profile.kind, "dual_boot")
+        self.assertEqual(profile.label, "Dual Boot iPod")
         self.assertTrue(profile.rockbox_export)
         self.assertTrue(profile.stock_preview)
-        self.assertFalse(profile.stock_write)
+        self.assertFalse(profile.stock_write)  # fixture database is deliberately invalid
         self.assertEqual(self._snapshot(root), before)
 
-    def test_rockbox_marker_wins_even_with_valid_writable_stock_database(self):
+    def test_dual_boot_reports_compatible_stock_half_as_writable(self):
         root = self._root()
         (root / ".rockbox").mkdir()
         itunes = root / "iPod_Control/iTunes"
@@ -64,7 +65,7 @@ class DeviceProfiles(unittest.TestCase):
 
         self.assertEqual(profile.kind, "dual_boot")
         self.assertTrue(profile.rockbox_export)
-        self.assertFalse(profile.stock_write)
+        self.assertTrue(profile.stock_write)
         self.assertEqual(self._snapshot(root), before)
 
     def test_dual_boot_exports_stock_unsafe_wav_only_through_rockbox(self):

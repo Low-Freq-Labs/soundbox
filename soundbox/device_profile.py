@@ -114,7 +114,7 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
         or any((itunes / name).is_file() for name in _STOCK_DATABASES)
     )
     if has_rockbox and has_stock:
-        kind, label = "dual_boot", "Rockbox + stock iPod"
+        kind, label = "dual_boot", "Dual Boot iPod"
     elif has_rockbox:
         kind, label = "rockbox", "Rockbox"
     elif has_stock:
@@ -125,10 +125,9 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
     model = _read_model(base) if has_stock else ""
     stock_write = False
     # Routing is derived from the mounted on-disk layout, not from a guessed
-    # last-booted firmware. Once Rockbox is installed its marker wins
-    # operationally: exports use the Rockbox filesystem path and the coexisting
-    # Apple database remains read-only.
-    if has_stock and not has_rockbox and fat and _stock_database_compatible(base):
+    # last-booted firmware. Dual boot uses the separately guarded composite
+    # planner; this flag only describes whether the stock half is compatible.
+    if has_stock and fat and _stock_database_compatible(base):
         from .stock_ipod import supports_stock_write
         stock_write = supports_stock_write(model)
     return DeviceProfile(

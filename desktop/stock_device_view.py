@@ -1,6 +1,10 @@
-"""Read-only Device / Music / Playlists pages for classic stock iPods."""
+"""Read-only Device / Songs / Playlists pages for stock and dual iPods."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -20,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from soundbox.stock_ipod import supports_stock_write
 from soundbox.stock_ipod_info import StockIpodSnapshot
+from soundbox.manifest import composite_library_counts
 
 from .devices import human
 
@@ -53,8 +58,175 @@ def _managed_playlists(snapshot: StockIpodSnapshot):
     return (*regular, *videos)
 
 
+@dataclass(frozen=True)
+class CompositeDeviceData:
+    """Validated schema-3 metadata prepared by the device read worker."""
+
+    manifest: dict[str, Any]
+    playlist_entries: dict[str, tuple[str, ...]]
+    rockbox_settings_ready: bool = False
+    rockbox_database_files: int = 0
+    rockbox_database_refresh_pending: bool = False
+
+
+@dataclass(frozen=True)
+class DeviceSongRow:
+    title: str
+    artist: str
+    filetype: str
+    size: int
+    length_ms: int
+    play_count: int
+    skip_count: int
+    location: str
+    dbid: int
+    availability: str
+
+
+@dataclass(frozen=True)
+class DevicePlaylistRow:
+    identity: str
+    title: str
+    entries: tuple[DeviceSongRow, ...]
+    availability: str
+    managed: bool
+
+
+def _stock_device_path(location: str) -> str:
+    text = str(location or "").replace("\\", "/")
+    if text.startswith(":"):
+        return "/" + text.lstrip(":").replace(":", "/")
+    return "/" + text.lstrip("/")
+
+
+def _stock_song(track, availability: str = "Stock") -> DeviceSongRow:
+    return DeviceSongRow(
+        track.title,
+        track.artist,
+        track.filetype,
+        track.size,
+        track.length_ms,
+        track.play_count,
+        track.skip_count,
+        _stock_device_path(track.location),
+        track.dbid,
+        availability,
+    )
+
+
+def _composite_song_rows(
+        snapshot: StockIpodSnapshot,
+        composite: CompositeDeviceData | None,
+) -> tuple[DeviceSongRow, ...]:
+    if composite is None:
+        return tuple(_stock_song(track) for track in snapshot.tracks)
+    stock_by_dbid = {track.dbid: track for track in snapshot.tracks if track.dbid}
+    stock_by_path = {
+        _stock_device_path(track.location): track for track in snapshot.tracks}
+    claimed_dbids: set[int] = set()
+    output: list[DeviceSongRow] = []
+    for device_path, raw in composite.manifest["files"].items():
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "")
+        if kind not in {"shared-stock-media", "rockbox-media"}:
+            continue
+        dbid = int(raw.get("dbid") or 0)
+        stock_track = stock_by_dbid.get(dbid) or stock_by_path.get(device_path)
+        if stock_track is not None:
+            claimed_dbids.add(stock_track.dbid)
+            output.append(_stock_song(stock_track, "Both"))
+            continue
+        suffix = Path(str(device_path)).suffix.lstrip(".").upper()
+        output.append(DeviceSongRow(
+            str(raw.get("title") or Path(str(device_path)).stem),
+            str(raw.get("artist") or ""),
+            suffix,
+            int(raw.get("size") or 0),
+            0,
+            0,
+            0,
+            str(device_path),
+            dbid,
+            "Rockbox",
+        ))
+    output.extend(
+        _stock_song(track)
+        for track in snapshot.tracks
+        if track.dbid not in claimed_dbids
+    )
+    return tuple(sorted(
+        output,
+        key=lambda item: (
+            item.title.casefold(), item.artist.casefold(), item.location.casefold()),
+    ))
+
+
+def _composite_playlist_rows(
+        snapshot: StockIpodSnapshot,
+        composite: CompositeDeviceData | None,
+        songs: tuple[DeviceSongRow, ...],
+) -> tuple[DevicePlaylistRow, ...]:
+    if composite is None:
+        by_dbid = {item.dbid: item for item in songs if item.dbid}
+        return tuple(DevicePlaylistRow(
+            str(playlist.playlist_id),
+            playlist.title,
+            tuple(
+                by_dbid[entry.dbid] for entry in playlist.entries
+                if entry.dbid in by_dbid),
+            ("System playlist" if (
+                playlist.kind == "Smart playlist"
+                and playlist.title.casefold() == "videos") else "Stock"),
+            True,
+        ) for playlist in _managed_playlists(snapshot))
+
+    by_path = {item.location: item for item in songs}
+    stock_playlists = {
+        playlist.title: playlist
+        for playlist in _regular_user_playlists(snapshot)
+    }
+    output: list[DevicePlaylistRow] = []
+    playlist_rows = composite.manifest["playlists"]
+    order = composite.manifest.get("playlist_order")
+    if not isinstance(order, list):
+        order = list(playlist_rows)
+    for raw_key in order:
+        key = str(raw_key)
+        row = playlist_rows.get(key)
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("device_name") or " / ".join([
+            *map(str, row.get("folder_path") or []),
+            str(row.get("name") or "Untitled playlist"),
+        ]))
+        stock_playlist = stock_playlists.pop(title, None)
+        entries = tuple(
+            by_path[path] for path in composite.playlist_entries.get(key, ())
+            if path in by_path
+        )
+        output.append(DevicePlaylistRow(
+            f"managed:{key}",
+            title,
+            entries,
+            "Both" if stock_playlist is not None else "Rockbox",
+            True,
+        ))
+    stock_songs = {item.dbid: item for item in songs if item.dbid}
+    output.extend(DevicePlaylistRow(
+        "",
+        playlist.title,
+        tuple(
+            stock_songs[entry.dbid] for entry in playlist.entries
+            if entry.dbid in stock_songs),
+        "Stock",
+        False,
+    ) for playlist in stock_playlists.values())
+    return tuple(output)
+
+
 class StockMusicModel(QAbstractTableModel):
-    """Small immutable adapter over one parsed device snapshot."""
+    """Immutable adapter over the unified device-song view."""
 
     COLUMNS = (
         ("Title", lambda item: item.title),
@@ -64,18 +236,22 @@ class StockMusicModel(QAbstractTableModel):
         ("Time", lambda item: _duration(item.length_ms)),
         ("Plays", lambda item: str(item.play_count)),
         ("Skips", lambda item: str(item.skip_count)),
-        ("Pending", lambda item: (
-            f"+{item.pending_plays} play / +{item.pending_skips} skip"
-            if item.pending_plays or item.pending_skips else "—")),
+        ("Type", lambda item: item.availability),
     )
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.tracks = ()
 
-    def set_snapshot(self, snapshot: StockIpodSnapshot | None):
+    def set_snapshot(
+            self,
+            snapshot: StockIpodSnapshot | None,
+            composite: CompositeDeviceData | None = None,
+    ):
         self.beginResetModel()
-        self.tracks = snapshot.tracks if snapshot is not None else ()
+        self.tracks = (
+            _composite_song_rows(snapshot, composite)
+            if snapshot is not None else ())
         self.endResetModel()
 
     def rowCount(self, _parent=QModelIndex()):
@@ -115,6 +291,7 @@ class StockIpodPages(QWidget):
     # Preserve the exact decimal representation across the Qt boundary and
     # convert it back to a Python int only in the stock-iPod engine call.
     delete_playlists_requested = Signal(object)
+    playlist_order_requested = Signal(object)
     # Title stretches with the window; the remaining operational columns keep
     # predictable widths. Album and the internal device path intentionally stay
     # out of this view—the tooltip still exposes the path for diagnostics.
@@ -190,6 +367,8 @@ class StockIpodPages(QWidget):
         self.playlist_tree.setColumnWidth(2, 110)
         self.playlist_tree.itemChanged.connect(
             self._update_delete_playlist_button)
+        self.playlist_tree.currentItemChanged.connect(
+            self._update_playlist_order_buttons)
         playlist_layout.addWidget(self.playlist_tree)
         playlist_actions = QHBoxLayout()
         playlist_actions.setContentsMargins(12, 0, 12, 10)
@@ -198,10 +377,28 @@ class StockIpodPages(QWidget):
         self.delete_playlist_button.setEnabled(False)
         self.delete_playlist_button.clicked.connect(self._request_playlist_delete)
         playlist_actions.addWidget(self.delete_playlist_button)
+        self.move_playlist_up_button = QPushButton("Move up")
+        self.move_playlist_up_button.setObjectName("Ghost")
+        self.move_playlist_up_button.clicked.connect(
+            lambda: self._move_selected_playlist(-1))
+        playlist_actions.addWidget(self.move_playlist_up_button)
+        self.move_playlist_down_button = QPushButton("Move down")
+        self.move_playlist_down_button.setObjectName("Ghost")
+        self.move_playlist_down_button.clicked.connect(
+            lambda: self._move_selected_playlist(1))
+        playlist_actions.addWidget(self.move_playlist_down_button)
+        self.apply_playlist_order_button = QPushButton("Apply order…")
+        self.apply_playlist_order_button.setObjectName("Ghost")
+        self.apply_playlist_order_button.clicked.connect(
+            self._request_playlist_order)
+        playlist_actions.addWidget(self.apply_playlist_order_button)
         playlist_actions.addStretch(1)
         playlist_layout.addLayout(playlist_actions)
         self.stack.addWidget(playlist_page)
         self._playlist_delete_available = False
+        self._playlist_order_available = False
+        self._committed_playlist_order: tuple[str, ...] = ()
+        self._has_snapshot = False
 
     def set_page(self, index: int):
         index = max(0, min(2, int(index)))
@@ -249,27 +446,48 @@ class StockIpodPages(QWidget):
 
     def set_loading(self, *, preserve_page: bool = False):
         current_page = self.stack.currentIndex()
+        if preserve_page and self._has_snapshot:
+            # A refresh is not a new truth yet. Keep the complete last verified
+            # Device/Songs/Playlists snapshot visible until the worker can
+            # replace all three views atomically.
+            self.set_page(current_page)
+            return
         self._music_widths_applied = False
+        self._has_snapshot = False
         self.music_model.set_snapshot(None)
         self.playlist_tree.clear()
         self._playlist_delete_available = False
         self.delete_playlist_button.setEnabled(False)
+        self._playlist_order_available = False
+        self._committed_playlist_order = ()
+        self._update_playlist_order_buttons()
         self._clear_details()
-        QTreeWidgetItem(self.general_tree, ["Reading stock iPod…", "Read-only database scan"])
+        QTreeWidgetItem(self.general_tree, ["Reading iPod…", "Read-only database scan"])
         self.confirm_model_button.setVisible(False)
         self.set_page(current_page if preserve_page else 0)
 
-    def set_error(self, message: str):
+    def set_error(self, message: str, *, preserve_snapshot: bool = False):
+        if preserve_snapshot and self._has_snapshot:
+            return
+        self._has_snapshot = False
         self.music_model.set_snapshot(None)
         self.playlist_tree.clear()
         self._playlist_delete_available = False
         self.delete_playlist_button.setEnabled(False)
+        self._playlist_order_available = False
+        self._committed_playlist_order = ()
+        self._update_playlist_order_buttons()
         self._clear_details()
         QTreeWidgetItem(self.general_tree, ["Device details unavailable", str(message)])
         self.confirm_model_button.setVisible(False)
         self.set_page(0)
 
-    def set_snapshot(self, snapshot: StockIpodSnapshot):
+    def set_snapshot(
+            self,
+            snapshot: StockIpodSnapshot,
+            composite: CompositeDeviceData | None = None,
+    ):
+        self._has_snapshot = True
         self._clear_details()
         model_label = snapshot.model or "Not confirmed"
         firmware_label = snapshot.firmware_version or "Not reported"
@@ -283,9 +501,14 @@ class StockIpodPages(QWidget):
             connection_label += f" · SCSI transport {snapshot.transport_revision}"
         used = max(0, snapshot.capacity_bytes - snapshot.free_bytes)
         user_playlists = _regular_user_playlists(snapshot)
-        managed_playlists = _managed_playlists(snapshot)
         regular_count = len(user_playlists)
         smart_count = sum(1 for item in snapshot.playlists if item.kind == "Smart playlist")
+        composite_counts = (
+            composite_library_counts(composite.manifest)
+            if composite is not None else None)
+        song_rows = _composite_song_rows(snapshot, composite)
+        playlist_rows = _composite_playlist_rows(
+            snapshot, composite, song_rows)
         capability = (
             "Validated guarded MP3/WAV sync"
             if supports_stock_write(snapshot.model)
@@ -296,6 +519,7 @@ class StockIpodPages(QWidget):
             "local_changes": "Local changes ready",
             "reconcile_required": "Reconciliation required",
             "untracked": "Not yet tracked on this Mac",
+            "composite_untracked": "Not synced yet",
         }
         self._set_detail_rows("Identity", (
             ("Name", snapshot.volume_name),
@@ -319,16 +543,43 @@ class StockIpodPages(QWidget):
             ("Device", snapshot.device_identifier),
             ("Mount", str(snapshot.target)),
         ))
-        self._set_detail_rows("Database", (
-            ("Indexed tracks", str(len(snapshot.tracks))),
-            ("User playlists", str(regular_count)),
-            ("Smart playlists", str(smart_count)),
-            ("Version", f"0x{snapshot.database_version:X}"),
-            ("Checksum scheme", str(snapshot.checksum_scheme)),
-            ("Playback state", snapshot.playback_status),
-            ("Recovery points", str(snapshot.recovery_count)),
-            ("SHA-256", snapshot.database_sha256),
-        ))
+        database_header = self.detail_trees["Database"].headerItem()
+        database_header.setText(
+            0, "DUAL LIBRARY" if composite_counts else "DATABASE")
+        if composite_counts is None:
+            database_rows = (
+                ("Indexed tracks", str(len(snapshot.tracks))),
+                ("User playlists", str(regular_count)),
+                ("Smart playlists", str(smart_count)),
+                ("Version", f"0x{snapshot.database_version:X}"),
+                ("Checksum scheme", str(snapshot.checksum_scheme)),
+                ("Playback state", snapshot.playback_status),
+                ("Recovery points", str(snapshot.recovery_count)),
+                ("SHA-256", snapshot.database_sha256),
+            )
+        else:
+            database_rows = (
+                ("Managed tracks", str(composite_counts.managed_tracks)),
+                ("Stock-visible tracks", str(composite_counts.stock_visible_tracks)),
+                ("Rockbox-only tracks", str(composite_counts.rockbox_only_tracks)),
+                ("Managed playlists", str(composite_counts.managed_playlists)),
+                ("Rockbox database", (
+                    "Auto update on · Rockbox restart pending"
+                    if (
+                        composite.rockbox_settings_ready
+                        and composite.rockbox_database_refresh_pending
+                    ) else (
+                    f"Auto update on · {composite.rockbox_database_files} cache files"
+                    if composite.rockbox_settings_ready
+                    else "Auto update needs enabling"))),
+                ("iTunesDB", (
+                    f"0x{snapshot.database_version:X} · checksum "
+                    f"{snapshot.checksum_scheme}")),
+                ("Playback state", snapshot.playback_status),
+                ("Recovery points", str(snapshot.recovery_count)),
+                ("iTunesDB SHA-256", snapshot.database_sha256),
+            )
+        self._set_detail_rows("Database", database_rows)
         self._set_detail_rows("SoundBox", (
             ("Stock sync", capability),
             ("Sync state", sync_labels.get(snapshot.sync_state, snapshot.sync_state)),
@@ -342,34 +593,37 @@ class StockIpodPages(QWidget):
             "Change confirmed model…" if snapshot.model else "Confirm model…")
         self.confirm_model_button.setVisible(True)
 
-        self.music_model.set_snapshot(snapshot)
+        self.music_model.set_snapshot(snapshot, composite)
         self._playlist_delete_available = bool(
             snapshot.writable and supports_stock_write(snapshot.model))
         self.playlist_tree.clear()
-        for playlist in managed_playlists:
-            # Store as text: some real Apple IDs are larger than both Qt's
-            # signed int signal and QVariant's signed 64-bit integer range.
-            system_playlist = (
-                playlist.kind == "Smart playlist"
-                and playlist.title.casefold() == "videos")
-            count = "Dynamic" if playlist.dynamic else str(len(playlist.entries))
+        for playlist in playlist_rows:
             parent = QTreeWidgetItem(
                 self.playlist_tree,
-                [playlist.title, count,
-                 "System playlist" if system_playlist else playlist.kind],
+                [playlist.title, str(len(playlist.entries)),
+                 playlist.availability],
             )
-            # The first column is the roomy playlist/track title column. Keep
-            # deletion choice independent from row focus/expansion so several
-            # playlists can be selected without losing their checks.
-            parent.setData(0, Qt.UserRole, str(playlist.playlist_id))
-            parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable)
-            parent.setCheckState(0, Qt.Unchecked)
+            parent.setData(0, Qt.UserRole, playlist.identity)
+            if playlist.managed:
+                # Keep deletion choice independent from row focus/expansion so
+                # several managed playlists can be selected together.
+                parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable)
+                parent.setCheckState(0, Qt.Unchecked)
+            else:
+                parent.setFlags(parent.flags() & ~Qt.ItemIsUserCheckable)
             for index, entry in enumerate(playlist.entries, 1):
                 QTreeWidgetItem(
                     parent,
-                    [f"{index}. {entry.title}", "", ""],
+                    [f"{index}. {entry.title}", "", entry.availability],
                 )
+        self._playlist_order_available = bool(
+            composite is not None
+            and snapshot.writable
+            and supports_stock_write(snapshot.model)
+        )
+        self._committed_playlist_order = self._managed_playlist_order()
         self._update_delete_playlist_button()
+        self._update_playlist_order_buttons()
 
     def _selected_playlist_item(self) -> QTreeWidgetItem | None:
         item = self.playlist_tree.currentItem()
@@ -380,7 +634,10 @@ class StockIpodPages(QWidget):
     @staticmethod
     def _playlist_identity(item: QTreeWidgetItem) -> tuple[str, str] | None:
         playlist_id = str(item.data(0, Qt.UserRole) or "")
-        if not playlist_id.isdecimal() or int(playlist_id) <= 0:
+        managed = playlist_id.startswith("managed:") and bool(
+            playlist_id.removeprefix("managed:"))
+        stock = playlist_id.isdecimal() and int(playlist_id) > 0
+        if not managed and not stock:
             return None
         return playlist_id, item.text(0)
 
@@ -405,8 +662,79 @@ class StockIpodPages(QWidget):
             self._playlist_delete_available
             and count > 0)
 
+    def set_playlist_deletion_available(self, enabled: bool):
+        """Keep the dual-boot dashboard readable without bypassing ownership."""
+        self._playlist_delete_available = bool(
+            self._playlist_delete_available and enabled)
+        self._update_delete_playlist_button()
+
     def _request_playlist_delete(self):
         self._emit_playlist_delete(self._checked_playlist_items())
+
+    def _managed_playlist_order(self) -> tuple[str, ...]:
+        output: list[str] = []
+        for index in range(self.playlist_tree.topLevelItemCount()):
+            identity = str(
+                self.playlist_tree.topLevelItem(index).data(0, Qt.UserRole) or "")
+            if identity.startswith("managed:"):
+                output.append(identity.removeprefix("managed:"))
+        return tuple(output)
+
+    def _update_playlist_order_buttons(self, *_args):
+        item = self._selected_playlist_item()
+        identity = (
+            str(item.data(0, Qt.UserRole) or "") if item is not None else "")
+        managed = self._playlist_order_available and identity.startswith("managed:")
+        managed_items = [
+            self.playlist_tree.topLevelItem(index)
+            for index in range(self.playlist_tree.topLevelItemCount())
+            if str(self.playlist_tree.topLevelItem(index).data(
+                0, Qt.UserRole) or "").startswith("managed:")
+        ]
+        position = managed_items.index(item) if managed and item in managed_items else -1
+        self.move_playlist_up_button.setEnabled(managed and position > 0)
+        self.move_playlist_down_button.setEnabled(
+            managed and 0 <= position < len(managed_items) - 1)
+        self.apply_playlist_order_button.setEnabled(
+            self._playlist_order_available
+            and self._managed_playlist_order() != self._committed_playlist_order)
+
+    def _move_selected_playlist(self, direction: int):
+        item = self._selected_playlist_item()
+        if item is None or not self._playlist_order_available:
+            return
+        managed_items = [
+            self.playlist_tree.topLevelItem(index)
+            for index in range(self.playlist_tree.topLevelItemCount())
+            if str(self.playlist_tree.topLevelItem(index).data(
+                0, Qt.UserRole) or "").startswith("managed:")
+        ]
+        if item not in managed_items:
+            return
+        position = managed_items.index(item)
+        destination = position + (-1 if direction < 0 else 1)
+        if not 0 <= destination < len(managed_items):
+            return
+        absolute = self.playlist_tree.indexOfTopLevelItem(item)
+        target_absolute = self.playlist_tree.indexOfTopLevelItem(
+            managed_items[destination])
+        moved = self.playlist_tree.takeTopLevelItem(absolute)
+        if absolute < target_absolute:
+            target_absolute -= 1
+        insert_at = target_absolute if direction < 0 else target_absolute + 1
+        self.playlist_tree.insertTopLevelItem(insert_at, moved)
+        self.playlist_tree.setCurrentItem(moved)
+        self._update_playlist_order_buttons()
+
+    def _request_playlist_order(self):
+        order = self._managed_playlist_order()
+        if (
+            not self._playlist_order_available
+            or not order
+            or order == self._committed_playlist_order
+        ):
+            return
+        self.playlist_order_requested.emit(order)
 
     def _emit_playlist_delete(self, items: list[QTreeWidgetItem]):
         identities = tuple(

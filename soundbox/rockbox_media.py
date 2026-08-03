@@ -1,0 +1,1175 @@
+"""Disposable Rockbox-safe media and cover derivatives.
+
+The canonical curated JPEGs and source audio are read-only.  Rockbox prefers
+embedded artwork over a neighbouring external cover; very large embedded images
+can exhaust a classic iPod's memory even when the audio stream is healthy.
+This module therefore removes pictures only from a content-addressed Mac-side
+audio copy and gives Rockbox 8-bit paletted BMP covers with exact fast paths
+plus a dimensionless fallback for other themes.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import struct
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import mutagen
+from mutagen.flac import FLAC
+from mutagen.id3 import COMM, ID3, TIT2, TPE1, TXXX
+from mutagen.mp4 import MP4
+
+from . import artencode
+
+
+MEDIA_PROFILE = "rockbox-no-embedded-art-v1"
+# Rockbox must never choose a vendor comment, album, year, or stale secondary
+# tag as the visible title.  Every SoundBox-managed payload therefore carries
+# one canonical title/artist pair and no other user-facing metadata.  The
+# previous receipt-specific profile was narrower; keep its public name as an
+# alias so callers/tests can describe the migration without perpetuating two
+# policies for the same payload contract.
+NORMALIZED_MEDIA_PROFILE = "rockbox-soundbox-title-artist-only-v1"
+RECEIPT_SANITIZED_MEDIA_PROFILE = NORMALIZED_MEDIA_PROFILE
+_LEGACY_NORMALIZED_MEDIA_PROFILES = frozenset({
+    "rockbox-no-embedded-art-normalized-tags-v4",
+    "rockbox-no-embedded-art-normalized-tags-no-purchase-receipts-v1",
+})
+ART_PROFILE = "rockbox-paletted8-bmp-universal-v6"
+INTERRUPTED_VERIFY_SCHEMA = 1
+
+
+class RockboxMediaError(RuntimeError):
+    pass
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.sbpart")
+    try:
+        with tmp.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+class InterruptedFileVerifier:
+    """Resumable Mac-side proof for whole files left by a device remount.
+
+    The first encounter streams the full device file and records its exact
+    SHA-256. Later plans reuse that proof only while size, FAT timestamp, and a
+    small first/last-byte fingerprint still match. The cache is disposable and
+    scoped to the committed composite-manifest hash.
+    """
+
+    def __init__(self, root: str | Path, baseline_sha256: str):
+        baseline = str(baseline_sha256 or "").lower()
+        if len(baseline) != 64 or any(
+                char not in "0123456789abcdef" for char in baseline):
+            raise RockboxMediaError(
+                "Interrupted verification requires an exact manifest SHA-256")
+        self.path = (
+            Path(root) / "interrupted-verification" / f"{baseline}.json")
+        self.rows: dict[str, dict[str, Any]] = {}
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            if (
+                raw.get("schema") == INTERRUPTED_VERIFY_SCHEMA
+                and raw.get("baseline_sha256") == baseline
+                and isinstance(raw.get("files"), dict)
+            ):
+                self.rows = {
+                    str(key): dict(value)
+                    for key, value in raw["files"].items()
+                    if isinstance(value, dict)
+                }
+        except (OSError, ValueError, TypeError):
+            pass
+        self.baseline_sha256 = baseline
+
+    @staticmethod
+    def _edge_sha256(path: Path, size: int) -> str:
+        window = min(1024 * 1024, size)
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            digest.update(handle.read(window))
+            if size > window:
+                handle.seek(max(window, size - window))
+                digest.update(handle.read(window))
+        return digest.hexdigest()
+
+    def _save(self) -> None:
+        payload = {
+            "schema": INTERRUPTED_VERIFY_SCHEMA,
+            "baseline_sha256": self.baseline_sha256,
+            "files": self.rows,
+        }
+        _atomic_write(
+            self.path,
+            json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n",
+        )
+
+    def verify(
+            self,
+            live: Path,
+            *,
+            relative_path: Path,
+            size: int,
+            sha256: str,
+    ) -> bool:
+        if live.is_symlink() or not live.is_file():
+            return False
+        stat = live.stat()
+        if stat.st_size != size:
+            return False
+        key = "/" + str(relative_path).replace(os.sep, "/").lstrip("/")
+        row = self.rows.get(key)
+        if (
+            row is not None
+            and int(row.get("size") or -1) == size
+            and str(row.get("sha256") or "") == sha256
+            and int(row.get("mtime_ns") or -1) == stat.st_mtime_ns
+            and str(row.get("edge_sha256") or "")
+            == self._edge_sha256(live, size)
+        ):
+            return True
+        if _sha256(live) != sha256:
+            return False
+        self.rows[key] = {
+            "size": size,
+            "sha256": sha256,
+            "mtime_ns": stat.st_mtime_ns,
+            "edge_sha256": self._edge_sha256(live, size),
+        }
+        self._save()
+        return True
+
+
+def _embedded_picture_count(path: Path) -> int:
+    try:
+        audio = mutagen.File(path)
+    except Exception as exc:
+        raise RockboxMediaError(
+            f"Could not inspect embedded artwork in {path}: {exc}") from exc
+    if audio is None:
+        raise RockboxMediaError(f"Could not identify audio container: {path}")
+    count = len(getattr(audio, "pictures", ()) or ())
+    tags = getattr(audio, "tags", None)
+    if isinstance(tags, ID3):
+        count += len(tags.getall("APIC"))
+    elif tags is not None:
+        try:
+            count += len(tags.get("covr", ()) or ())
+        except (AttributeError, TypeError):
+            pass
+    return count
+
+
+def _technical_signature(path: Path) -> tuple[Any, ...]:
+    try:
+        audio = mutagen.File(path)
+        info = getattr(audio, "info", None)
+        if audio is None or info is None:
+            raise ValueError("no audio information")
+        # Mutagen estimates the duration of some CBR MP3s from the complete
+        # file size.  Replacing a large ID3 block with the canonical
+        # title/artist pair can therefore move that estimate by a few
+        # milliseconds even though every MPEG audio byte is identical.  The
+        # exact MP3 essence hash below is the stronger duration/content proof;
+        # keep the stable decoder properties here and do not make ID3 padding
+        # part of the audio contract.
+        length = (
+            None
+            if path.suffix.lower() == ".mp3"
+            else round(float(getattr(info, "length", 0.0) or 0.0), 4)
+        )
+        return (
+            type(audio).__name__,
+            length,
+            int(getattr(info, "sample_rate", 0) or 0),
+            int(getattr(info, "channels", 0) or 0),
+            int(getattr(info, "bits_per_sample", 0) or 0),
+        )
+    except Exception as exc:
+        raise RockboxMediaError(
+            f"Could not verify audio properties in {path}: {exc}") from exc
+
+
+def _hash_ranges(path: Path, ranges: list[tuple[int, int]]) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for offset, size in ranges:
+            digest.update(struct.pack(">Q", size))
+            handle.seek(offset)
+            remaining = size
+            while remaining:
+                chunk = handle.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise RockboxMediaError(
+                        f"Audio payload ended unexpectedly in {path}")
+                digest.update(chunk)
+                remaining -= len(chunk)
+    return digest.hexdigest()
+
+
+def _mp3_essence(path: Path) -> str:
+    size = path.stat().st_size
+    start = 0
+    with path.open("rb") as handle:
+        header = handle.read(10)
+        if header[:3] == b"ID3" and len(header) == 10:
+            raw = header[6:10]
+            if any(byte & 0x80 for byte in raw):
+                raise RockboxMediaError(f"Invalid ID3 size in {path}")
+            start = 10 + sum(byte << shift for byte, shift in zip(
+                raw, (21, 14, 7, 0), strict=True))
+            if header[5] & 0x10:  # ID3v2.4 footer
+                start += 10
+        end = size
+        if size >= 128:
+            handle.seek(-128, os.SEEK_END)
+            if handle.read(3) == b"TAG":
+                end -= 128
+    if start >= end:
+        raise RockboxMediaError(f"MP3 has no audio payload: {path}")
+    return _hash_ranges(path, [(start, end - start)])
+
+
+def _riff_essence(path: Path) -> str:
+    ranges: list[tuple[int, int]] = []
+    with path.open("rb") as handle:
+        header = handle.read(12)
+        if header[:4] not in {b"RIFF", b"RF64"} or header[8:12] != b"WAVE":
+            raise RockboxMediaError(f"Unsupported WAV layout: {path}")
+        while True:
+            chunk = handle.read(8)
+            if not chunk:
+                break
+            if len(chunk) != 8:
+                raise RockboxMediaError(f"Truncated WAV chunk header: {path}")
+            name, size = chunk[:4], struct.unpack("<I", chunk[4:])[0]
+            offset = handle.tell()
+            if name == b"data":
+                ranges.append((offset, size))
+            handle.seek(size + (size & 1), os.SEEK_CUR)
+    if not ranges:
+        raise RockboxMediaError(f"WAV has no data chunk: {path}")
+    return _hash_ranges(path, ranges)
+
+
+def _aiff_essence(path: Path) -> str:
+    ranges: list[tuple[int, int]] = []
+    with path.open("rb") as handle:
+        header = handle.read(12)
+        if header[:4] != b"FORM" or header[8:12] not in {b"AIFF", b"AIFC"}:
+            raise RockboxMediaError(f"Unsupported AIFF layout: {path}")
+        while True:
+            chunk = handle.read(8)
+            if not chunk:
+                break
+            if len(chunk) != 8:
+                raise RockboxMediaError(f"Truncated AIFF chunk header: {path}")
+            name, size = chunk[:4], struct.unpack(">I", chunk[4:])[0]
+            offset = handle.tell()
+            if name == b"SSND":
+                ranges.append((offset, size))
+            handle.seek(size + (size & 1), os.SEEK_CUR)
+    if not ranges:
+        raise RockboxMediaError(f"AIFF has no sound-data chunk: {path}")
+    return _hash_ranges(path, ranges)
+
+
+def _mp4_essence(path: Path) -> str:
+    ranges: list[tuple[int, int]] = []
+    total = path.stat().st_size
+    with path.open("rb") as handle:
+        while handle.tell() < total:
+            start = handle.tell()
+            header = handle.read(8)
+            if len(header) != 8:
+                raise RockboxMediaError(f"Truncated MP4 atom header: {path}")
+            size, name = struct.unpack(">I4s", header)
+            header_size = 8
+            if size == 1:
+                large = handle.read(8)
+                if len(large) != 8:
+                    raise RockboxMediaError(f"Truncated MP4 large atom: {path}")
+                size = struct.unpack(">Q", large)[0]
+                header_size = 16
+            elif size == 0:
+                size = total - start
+            if size < header_size or start + size > total:
+                raise RockboxMediaError(f"Invalid MP4 atom size in {path}")
+            if name == b"mdat":
+                ranges.append((start + header_size, size - header_size))
+            handle.seek(start + size)
+    if not ranges:
+        raise RockboxMediaError(f"MP4/M4A has no media-data atom: {path}")
+    return _hash_ranges(path, ranges)
+
+
+def _flac_essence(path: Path) -> str:
+    with path.open("rb") as handle:
+        if handle.read(4) != b"fLaC":
+            raise RockboxMediaError(f"Invalid FLAC header: {path}")
+        while True:
+            header = handle.read(4)
+            if len(header) != 4:
+                raise RockboxMediaError(f"Truncated FLAC metadata: {path}")
+            last = bool(header[0] & 0x80)
+            size = int.from_bytes(header[1:4], "big")
+            handle.seek(size, os.SEEK_CUR)
+            if last:
+                break
+        offset = handle.tell()
+    total = path.stat().st_size
+    return _hash_ranges(path, [(offset, total - offset)])
+
+
+def _audio_essence(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".mp3":
+        return _mp3_essence(path)
+    if suffix == ".wav":
+        return _riff_essence(path)
+    if suffix in {".aif", ".aiff"}:
+        return _aiff_essence(path)
+    if suffix in {".m4a", ".mp4"}:
+        return _mp4_essence(path)
+    if suffix == ".flac":
+        return _flac_essence(path)
+    raise RockboxMediaError(
+        f"Embedded-art removal is not verified for {suffix or 'this format'}: {path}")
+
+
+def _strip_embedded_pictures(path: Path) -> int:
+    audio = mutagen.File(path)
+    if audio is None:
+        raise RockboxMediaError(f"Could not identify audio container: {path}")
+    count = _embedded_picture_count(path)
+    if not count:
+        return 0
+    tags = getattr(audio, "tags", None)
+    if isinstance(audio, FLAC):
+        audio.clear_pictures()
+        audio.save()
+    elif isinstance(tags, ID3):
+        tags.delall("APIC")
+        audio.save()
+    elif isinstance(audio, MP4) and tags is not None:
+        if "covr" in tags:
+            del tags["covr"]
+        audio.save()
+    else:
+        raise RockboxMediaError(
+            f"Embedded-art removal is not implemented for {type(audio).__name__}: {path}")
+    return count
+
+
+def _riff_info_values(path: Path) -> tuple[str, str]:
+    """Read the RIFF INFO fields Rockbox actually uses for WAV metadata."""
+    found = {b"INAM": "", b"IART": ""}
+    with path.open("rb") as handle:
+        header = handle.read(12)
+        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise RockboxMediaError(f"Unsupported WAV metadata layout: {path}")
+        total = path.stat().st_size
+        while handle.tell() < total:
+            chunk_header = handle.read(8)
+            if not chunk_header:
+                break
+            if len(chunk_header) != 8:
+                raise RockboxMediaError(f"Truncated WAV chunk header: {path}")
+            kind, size = chunk_header[:4], struct.unpack("<I", chunk_header[4:])[0]
+            start = handle.tell()
+            end = start + size
+            if end > total:
+                raise RockboxMediaError(f"Invalid WAV chunk size: {path}")
+            if kind == b"LIST" and size >= 4 and handle.read(4) == b"INFO":
+                cursor = start + 4
+                while cursor + 8 <= end:
+                    handle.seek(cursor)
+                    subheader = handle.read(8)
+                    tag, subsize = subheader[:4], struct.unpack("<I", subheader[4:])[0]
+                    data_start = cursor + 8
+                    data_end = data_start + subsize
+                    if data_end > end:
+                        raise RockboxMediaError(f"Invalid WAV INFO chunk: {path}")
+                    if tag in found:
+                        raw = handle.read(subsize).rstrip(b"\0")
+                        found[tag] = raw.decode("utf-8", errors="replace")
+                    cursor = data_end + (subsize & 1)
+            handle.seek(end + (size & 1))
+    return found[b"INAM"], found[b"IART"]
+
+
+def _is_purchase_receipt(value: Any) -> bool:
+    """Recognize vendor receipt text that must not become player metadata."""
+    values = value if isinstance(value, (list, tuple)) else (value,)
+    for item in values:
+        if isinstance(item, bytes):
+            text = item.rstrip(b"\0").decode("utf-8", errors="replace")
+        else:
+            text = str(item or "")
+        if "purchased at beatport" in text.casefold():
+            return True
+    return False
+
+
+def _has_purchase_receipt(path: Path) -> bool:
+    """Inspect tag chunks only; audio payload bytes are never decoded."""
+    if path.suffix.lower() == ".wav":
+        total = path.stat().st_size
+        with path.open("rb") as handle:
+            header = handle.read(12)
+            if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+                raise RockboxMediaError(
+                    f"Unsupported WAV metadata layout: {path}")
+            while handle.tell() < total:
+                chunk_header = handle.read(8)
+                if not chunk_header:
+                    break
+                if len(chunk_header) != 8:
+                    raise RockboxMediaError(
+                        f"Truncated WAV chunk header: {path}")
+                kind, size = (
+                    chunk_header[:4],
+                    struct.unpack("<I", chunk_header[4:])[0],
+                )
+                start = handle.tell()
+                end = start + size
+                if end > total:
+                    raise RockboxMediaError(f"Invalid WAV chunk size: {path}")
+                if kind == b"LIST" and size >= 4 and handle.read(4) == b"INFO":
+                    cursor = start + 4
+                    while cursor + 8 <= end:
+                        handle.seek(cursor)
+                        subheader = handle.read(8)
+                        tag = subheader[:4]
+                        subsize = struct.unpack("<I", subheader[4:])[0]
+                        data_start = cursor + 8
+                        data_end = data_start + subsize
+                        if data_end > end:
+                            raise RockboxMediaError(
+                                f"Invalid WAV INFO chunk: {path}")
+                        if tag == b"ICMT" and _is_purchase_receipt(
+                                handle.read(subsize)):
+                            return True
+                        cursor = data_end + (subsize & 1)
+                handle.seek(end + (size & 1))
+        return False
+    audio = mutagen.File(path)
+    if audio is None:
+        raise RockboxMediaError(f"Could not identify audio container: {path}")
+    tags = getattr(audio, "tags", None)
+    return bool(
+        isinstance(tags, ID3)
+        and any(
+            isinstance(frame, (COMM, TXXX))
+            and _is_purchase_receipt(getattr(frame, "text", ()))
+            for frame in tags.values()
+        )
+    )
+
+
+def _riff_list_chunk(list_type: bytes, subchunks: list[bytes]) -> bytes:
+    body = list_type + b"".join(subchunks)
+    return b"LIST" + struct.pack("<I", len(body)) + body + (
+        b"\0" if len(body) & 1 else b"")
+
+
+def _riff_info_chunk(title: str, artist: str) -> bytes:
+    def field(tag: bytes, value: str) -> bytes:
+        data = value.encode("utf-8") + b"\0"
+        return tag + struct.pack("<I", len(data)) + data + (b"\0" if len(data) & 1 else b"")
+
+    return _riff_list_chunk(
+        b"INFO", [field(b"INAM", title), field(b"IART", artist)])
+
+
+def _copy_exact(source, destination, size: int, path: Path) -> None:
+    remaining = size
+    while remaining:
+        chunk = source.read(min(1024 * 1024, remaining))
+        if not chunk:
+            raise RockboxMediaError(f"WAV ended unexpectedly: {path}")
+        destination.write(chunk)
+        remaining -= len(chunk)
+
+
+def _write_riff_info(path: Path, title: str, artist: str) -> None:
+    """Write one canonical Rockbox-readable WAV title/artist pair.
+
+    RIFF files in the real library can contain several INFO lists plus embedded
+    ID3/BWF/XMP metadata.  Rockbox does not consistently choose the first title
+    across those containers on classic hardware.  The disposable derivative
+    retains audio/technical chunks but drops every known metadata container,
+    then inserts one small INFO list directly after ``fmt ``.
+    """
+    chunks: list[tuple[bytes, int, int]] = []
+    metadata_chunks = {
+        b"id3 ", b"ID3 ", b"bext", b"iXML", b"axml", b"XMP ", b"cart",
+        b"DISP",
+    }
+    total = path.stat().st_size
+    with path.open("rb") as source:
+        header = source.read(12)
+        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise RockboxMediaError(f"Unsupported WAV metadata layout: {path}")
+        while source.tell() < total:
+            offset = source.tell()
+            chunk_header = source.read(8)
+            if not chunk_header:
+                break
+            if len(chunk_header) != 8:
+                raise RockboxMediaError(f"Truncated WAV chunk header: {path}")
+            kind, size = chunk_header[:4], struct.unpack("<I", chunk_header[4:])[0]
+            padded = size + (size & 1)
+            if source.tell() + padded > total:
+                raise RockboxMediaError(f"Invalid WAV chunk size: {path}")
+            if kind == b"LIST":
+                body = source.read(size)
+                if not body.startswith(b"INFO"):
+                    chunks.append((kind, offset, 8 + padded))
+            elif kind not in metadata_chunks:
+                chunks.append((kind, offset, 8 + padded))
+            source.seek(offset + 8 + padded)
+    if not any(kind == b"fmt " for kind, _offset, _size in chunks):
+        raise RockboxMediaError(f"WAV has no format chunk: {path}")
+    if not any(kind == b"data" for kind, _offset, _size in chunks):
+        raise RockboxMediaError(f"WAV has no data chunk: {path}")
+
+    # Rockbox's WAV parser has a bounded metadata scan on classic hardware.
+    # Keep the only fields Rockbox may display in one small INFO list directly
+    # after fmt.  No competing album/year/comment/title container survives.
+    info = _riff_info_chunk(title, artist)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".riff", dir=path.parent)
+    os.close(fd)
+    temp = Path(temp_name)
+    try:
+        with path.open("rb") as source, temp.open("wb") as destination:
+            destination.write(b"RIFF\0\0\0\0WAVE")
+            inserted = False
+            for kind, offset, size in chunks:
+                source.seek(offset)
+                _copy_exact(source, destination, size, path)
+                if not inserted and kind == b"fmt ":
+                    destination.write(info)
+                    inserted = True
+            if not inserted:
+                destination.write(info)
+            final_size = destination.tell()
+            if final_size - 8 > 0xFFFFFFFF:
+                raise RockboxMediaError(f"WAV is too large for RIFF metadata: {path}")
+            destination.seek(4)
+            destination.write(struct.pack("<I", final_size - 8))
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _display_tags(path: Path) -> tuple[str, str]:
+    if path.suffix.lower() == ".wav":
+        return _riff_info_values(path)
+    audio = mutagen.File(path)
+    if audio is None:
+        raise RockboxMediaError(f"Could not identify audio container: {path}")
+    tags = getattr(audio, "tags", None)
+    if isinstance(tags, ID3):
+        titles = tags.getall("TIT2")
+        artists = tags.getall("TPE1")
+        return (
+            str(titles[0].text[0]) if titles and titles[0].text else "",
+            str(artists[0].text[0]) if artists and artists[0].text else "",
+        )
+    if isinstance(audio, MP4):
+        values = tags or {}
+        title = values.get("\xa9nam") or []
+        artist = values.get("\xa9ART") or []
+    else:
+        values = tags or {}
+        title = values.get("title") or values.get("TITLE") or []
+        artist = values.get("artist") or values.get("ARTIST") or []
+
+    def first(value) -> str:
+        if isinstance(value, (list, tuple)):
+            return str(value[0]) if value else ""
+        return str(value or "")
+
+    return first(title), first(artist)
+
+
+def _normalize_display_tags(path: Path, title: str, artist: str) -> None:
+    if path.suffix.lower() == ".wav":
+        _write_riff_info(path, title, artist)
+        return
+    audio = mutagen.File(path)
+    if audio is None:
+        raise RockboxMediaError(f"Could not identify audio container: {path}")
+    tags = getattr(audio, "tags", None)
+    if isinstance(tags, ID3) or path.suffix.lower() in {
+            ".mp3", ".wav", ".aif", ".aiff"}:
+        if tags is None:
+            try:
+                audio.add_tags()
+            except Exception as exc:
+                raise RockboxMediaError(
+                    f"Could not add Rockbox display tags to {path}: {exc}") from exc
+            tags = getattr(audio, "tags", None)
+        if not isinstance(tags, ID3):
+            raise RockboxMediaError(
+                f"Unsupported ID3 tag container for {path}: "
+                f"{type(tags).__name__}")
+        tags.clear()
+        tags.add(TIT2(encoding=3, text=[title]))
+        tags.add(TPE1(encoding=3, text=[artist]))
+        if path.suffix.lower() == ".mp3":
+            # v1=0 also removes a trailing ID3v1 title that could otherwise win
+            # over the canonical ID3v2 pair in Rockbox.
+            audio.save(v1=0)
+        else:
+            audio.save()
+    elif isinstance(audio, FLAC):
+        audio.clear()
+        audio["title"] = [title]
+        audio["artist"] = [artist]
+        audio.save()
+    elif isinstance(audio, MP4):
+        if tags is None:
+            audio.add_tags()
+        else:
+            tags.clear()
+        audio["\xa9nam"] = [title]
+        audio["\xa9ART"] = [artist]
+        audio.save()
+    else:
+        raise RockboxMediaError(
+            f"Rockbox display-tag normalization is not implemented for "
+            f"{type(audio).__name__}: {path}")
+
+
+@dataclass(frozen=True)
+class PreparedRockboxMedia:
+    source: Path
+    payload: Path
+    transformed: bool
+    removed_images: int
+    payload_size: int
+    payload_sha256: str
+    profile: str = MEDIA_PROFILE
+
+
+@dataclass(frozen=True)
+class PlannedRockboxMedia:
+    """Exact reproducible derivative contract without a retained payload.
+
+    Full-library planning must stay no-write with respect to the device without
+    retaining one Mac-side copy of every normalized track.  This record keeps
+    the canonical source baseline and the fully verified derivative identity;
+    commit may then rematerialize one payload at a time and require an exact
+    match before it is allowed onto the device.
+    """
+
+    source: Path
+    source_size: int
+    source_mtime_ns: int
+    source_ctime_ns: int
+    source_sha256: str
+    source_sha256_verified: bool
+    transformed: bool
+    removed_images: int
+    payload_size: int
+    payload_sha256: str
+    title: str | None
+    artist: str | None
+    profile: str
+
+
+class RockboxMediaCache:
+    """Plan-scoped audio staging with embedded pictures removed.
+
+    Entries are content-addressed so a crash or a multi-playlist batch can reuse
+    completed work, then ``clear`` discards the large derivative payloads.
+    """
+
+    def __init__(self, root: str | Path):
+        self.root = Path(root)
+
+    def prepare(
+            self,
+            source: str | Path,
+            *,
+            title: str | None = None,
+            artist: str | None = None,
+    ) -> PreparedRockboxMedia:
+        original = Path(source).expanduser().resolve(strict=True)
+        count = _embedded_picture_count(original)
+        normalize_tags = title is not None or artist is not None
+        if normalize_tags and (title is None or artist is None):
+            raise RockboxMediaError(
+                "Rockbox display metadata requires both title and artist")
+        profile = NORMALIZED_MEDIA_PROFILE if normalize_tags else MEDIA_PROFILE
+        if not count and not normalize_tags:
+            return PreparedRockboxMedia(
+                original, original, False, 0, original.stat().st_size,
+                "", profile)
+        source_hash = _sha256(original)
+        key = hashlib.sha256(json.dumps(
+            [profile, source_hash, title or "", artist or ""],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        entry = self.root / profile / key
+        payload = entry / original.name
+        manifest_path = entry / "manifest.json"
+        try:
+            row = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (
+                row.get("profile") == profile
+                and row.get("source_sha256") == source_hash
+                and int(row.get("removed_images") or 0) == count
+                and row.get("title") == (title or "")
+                and row.get("artist") == (artist or "")
+                and payload.is_file()
+                and payload.stat().st_size == int(row.get("payload_size") or -1)
+                and _sha256(payload) == row.get("payload_sha256")
+                and _embedded_picture_count(payload) == 0
+                and (
+                    not normalize_tags
+                    or _display_tags(payload) == (title, artist)
+                )
+                and _technical_signature(payload) == _technical_signature(original)
+                and _audio_essence(payload) == _audio_essence(original)
+            ):
+                return PreparedRockboxMedia(
+                    original, payload, True, count, payload.stat().st_size,
+                    str(row["payload_sha256"]), profile)
+        except (OSError, ValueError, TypeError, RockboxMediaError):
+            pass
+
+        entry.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{original.stem}.", suffix=original.suffix, dir=entry)
+        os.close(fd)
+        temp = Path(temp_name)
+        try:
+            shutil.copy2(original, temp)
+            before_technical = _technical_signature(original)
+            before_essence = _audio_essence(original)
+            removed = _strip_embedded_pictures(temp)
+            if normalize_tags:
+                assert title is not None and artist is not None
+                _normalize_display_tags(temp, title, artist)
+            if removed != count or _embedded_picture_count(temp):
+                raise RockboxMediaError(
+                    f"Embedded artwork remained after preparing {original}")
+            if _technical_signature(temp) != before_technical:
+                raise RockboxMediaError(
+                    f"Audio properties changed while preparing {original}")
+            if _audio_essence(temp) != before_essence:
+                raise RockboxMediaError(
+                    f"Audio payload changed while preparing {original}")
+            if normalize_tags and _display_tags(temp) != (title, artist):
+                raise RockboxMediaError(
+                    f"Rockbox display tags failed verification for {original}")
+            payload_hash = _sha256(temp)
+            os.replace(temp, payload)
+            row = {
+                "profile": profile,
+                "source_sha256": source_hash,
+                "source_size": original.stat().st_size,
+                "payload_sha256": payload_hash,
+                "payload_size": payload.stat().st_size,
+                "removed_images": removed,
+                "title": title or "",
+                "artist": artist or "",
+            }
+            _atomic_write(
+                manifest_path,
+                json.dumps(row, indent=2, sort_keys=True).encode("utf-8") + b"\n",
+            )
+            return PreparedRockboxMedia(
+                original, payload, True, removed, payload.stat().st_size,
+                payload_hash, profile)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def plan(
+            self,
+            source: str | Path,
+            *,
+            title: str | None = None,
+            artist: str | None = None,
+    ) -> PlannedRockboxMedia:
+        """Verify one exact derivative and discard its staged bytes.
+
+        The returned contract is sufficient to reproduce and verify the same
+        payload during commit while bounding Mac-side staging to one track.
+        """
+        prepared = self.prepare(source, title=title, artist=artist)
+        try:
+            source_stat = prepared.source.stat()
+            source_hash = _sha256(prepared.source)
+            payload_hash = prepared.payload_sha256 or source_hash
+            return PlannedRockboxMedia(
+                source=prepared.source,
+                source_size=source_stat.st_size,
+                source_mtime_ns=source_stat.st_mtime_ns,
+                source_ctime_ns=source_stat.st_ctime_ns,
+                source_sha256=source_hash,
+                source_sha256_verified=True,
+                transformed=prepared.transformed,
+                removed_images=prepared.removed_images,
+                payload_size=prepared.payload_size,
+                payload_sha256=payload_hash,
+                title=title,
+                artist=artist,
+                profile=prepared.profile,
+            )
+        finally:
+            self.discard(prepared)
+
+    def plan_from_committed(
+            self,
+            source: str | Path,
+            *,
+            title: str,
+            artist: str,
+            committed: dict[str, Any] | None,
+    ) -> PlannedRockboxMedia:
+        """Reuse an exact committed payload identity when its source is stable.
+
+        A legacy manifest is upgraded from its already-verified payload identity
+        without regenerating a full disposable audio copy.  Once the manifest
+        records an explicit derivative profile, later plans need only stat the
+        canonical source.  Reopening every managed audio file merely to
+        rediscover the already-committed tag policy made a Collection sync take
+        minutes before its confirmation dialog.  A source-stat or display-tag
+        change still falls back to the complete verified derivative plan.
+        """
+        original = Path(source).expanduser().resolve(strict=True)
+        if not isinstance(committed, dict):
+            return self.plan(original, title=title, artist=artist)
+        if (
+            str(committed.get("source") or "") != str(original)
+            or str(committed.get("title") or "") != title
+            or str(committed.get("artist") or "") != artist
+        ):
+            return self.plan(original, title=title, artist=artist)
+
+        try:
+            payload_size = int(committed.get("size") or -1)
+            payload_hash = str(committed.get("sha256") or "")
+        except (TypeError, ValueError):
+            return self.plan(original, title=title, artist=artist)
+        if (
+            payload_size < 0
+            or len(payload_hash) != 64
+            or any(char not in "0123456789abcdef" for char in payload_hash.lower())
+        ):
+            return self.plan(original, title=title, artist=artist)
+
+        stat = original.stat()
+        prior_size = committed.get("source_size")
+        prior_mtime = committed.get("source_mtime_ns")
+        prior_ctime = committed.get("source_ctime_ns")
+        prior_hash = str(committed.get("source_sha256") or "")
+        has_baseline = any(
+            value is not None
+            for value in (prior_size, prior_mtime, prior_ctime)
+        )
+        if has_baseline and (
+            int(prior_size or -1) != stat.st_size
+            or int(prior_mtime or -1) != stat.st_mtime_ns
+            or int(prior_ctime or -1) != stat.st_ctime_ns
+        ):
+            return self.plan(original, title=title, artist=artist)
+
+        committed_profile = str(committed.get("media_profile") or "")
+        if committed_profile != NORMALIZED_MEDIA_PROFILE:
+            # The old profiles retained album/year/comment fields.  They cannot
+            # prove Rockbox will expose the SoundBox title 1:1, so migrate once
+            # through the fully verified derivative path.
+            return self.plan(original, title=title, artist=artist)
+        desired_profile = NORMALIZED_MEDIA_PROFILE
+        if len(prior_hash) == 64 and bool(
+                committed.get("source_sha256_verified", True)):
+            source_hash = prior_hash
+            source_hash_verified = True
+        else:
+            source_hash = payload_hash
+            source_hash_verified = False
+
+        if "transformed" in committed:
+            transformed = bool(committed.get("transformed"))
+            removed_images = int(committed.get("removed_images") or 0)
+        else:
+            # Legacy rows have no transformation bit.  This inspection is part
+            # of their one-time baseline migration, never the steady-state path.
+            removed_images = _embedded_picture_count(original)
+            exact_tags = _display_tags(original) == (title, artist)
+            transformed = bool(
+                original.suffix.lower() == ".wav"
+                or removed_images > 0
+                or not exact_tags
+            )
+        if not transformed:
+            # A pass-through payload is the canonical source itself, so the
+            # committed payload digest is also an exact source digest.
+            source_hash = payload_hash
+            source_hash_verified = True
+        return PlannedRockboxMedia(
+            source=original,
+            source_size=stat.st_size,
+            source_mtime_ns=stat.st_mtime_ns,
+            source_ctime_ns=stat.st_ctime_ns,
+            source_sha256=source_hash,
+            source_sha256_verified=source_hash_verified,
+            transformed=transformed,
+            removed_images=removed_images,
+            payload_size=payload_size,
+            payload_sha256=payload_hash,
+            title=title,
+            artist=artist,
+            profile=desired_profile,
+        )
+
+    @staticmethod
+    def verify_source_stat(planned: PlannedRockboxMedia) -> None:
+        """Reject a source that changed while its incremental plan was open."""
+        try:
+            source = planned.source.resolve(strict=True)
+            stat = source.stat()
+        except OSError as exc:
+            raise RockboxMediaError(
+                f"Planned Rockbox source is unavailable: {planned.source}") from exc
+        if (
+            source != planned.source
+            or stat.st_size != planned.source_size
+            or stat.st_mtime_ns != planned.source_mtime_ns
+            or stat.st_ctime_ns != planned.source_ctime_ns
+        ):
+            raise RockboxMediaError(
+                f"Rockbox source changed after dry-run: {planned.source}")
+
+    def verify_source(self, planned: PlannedRockboxMedia) -> None:
+        """Fail if the canonical source changed after the no-write plan."""
+        try:
+            source = planned.source.resolve(strict=True)
+            stat = source.stat()
+        except OSError as exc:
+            raise RockboxMediaError(
+                f"Planned Rockbox source is unavailable: {planned.source}") from exc
+        if source != planned.source:
+            raise RockboxMediaError(
+                f"Planned Rockbox source identity changed: {planned.source}")
+        if (
+            stat.st_size != planned.source_size
+            or stat.st_mtime_ns != planned.source_mtime_ns
+            or stat.st_ctime_ns != planned.source_ctime_ns
+            or (
+                planned.source_sha256_verified
+                and _sha256(source) != planned.source_sha256
+            )
+        ):
+            raise RockboxMediaError(
+                f"Rockbox source changed after dry-run: {planned.source}")
+
+    def materialize(
+            self, planned: PlannedRockboxMedia,
+    ) -> PreparedRockboxMedia:
+        """Recreate one planned payload and require byte-exact agreement."""
+        self.verify_source(planned)
+        prepared = self.prepare(
+            planned.source, title=planned.title, artist=planned.artist)
+        payload_hash = prepared.payload_sha256 or planned.payload_sha256
+        if (
+            prepared.source != planned.source
+            or prepared.transformed != planned.transformed
+            or prepared.removed_images != planned.removed_images
+            or prepared.payload_size != planned.payload_size
+            or payload_hash != planned.payload_sha256
+            or prepared.profile != planned.profile
+        ):
+            self.discard(prepared)
+            raise RockboxMediaError(
+                f"Rockbox derivative changed after dry-run: {planned.source}")
+        return prepared
+
+    def discard(self, prepared: PreparedRockboxMedia) -> None:
+        """Discard one exact transformed entry without sweeping the cache."""
+        if not prepared.transformed:
+            return
+        profile_root = self.root / prepared.profile
+        entry = prepared.payload.parent
+        manifest_path = entry / "manifest.json"
+        if (
+            prepared.profile not in {
+                MEDIA_PROFILE,
+                NORMALIZED_MEDIA_PROFILE,
+                RECEIPT_SANITIZED_MEDIA_PROFILE,
+            }
+            or entry.parent != profile_root
+            or any(path.is_symlink() for path in (
+                self.root, profile_root, entry, prepared.payload, manifest_path))
+        ):
+            raise RockboxMediaError(
+                f"Refusing to discard unexpected Rockbox staging: {entry}")
+        prepared.payload.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+        try:
+            entry.rmdir()
+            profile_root.rmdir()
+            self.root.rmdir()
+        except OSError:
+            # Another exact entry may be active in a concurrent small export.
+            pass
+
+    def clear(self) -> None:
+        """Discard only this known disposable profile; never touch other state."""
+        for profile in (
+            MEDIA_PROFILE,
+            NORMALIZED_MEDIA_PROFILE,
+            *_LEGACY_NORMALIZED_MEDIA_PROFILES,
+        ):
+            profile_root = self.root / profile
+            if profile_root.is_symlink():
+                raise RockboxMediaError(
+                    f"Refusing to clear symlinked Rockbox staging: {profile_root}")
+            if profile_root.is_dir():
+                shutil.rmtree(profile_root)
+        try:
+            self.root.rmdir()
+        except OSError:
+            pass
+
+
+@dataclass(frozen=True)
+class PreparedRockboxArtwork:
+    source: Path
+    payload: Path
+    size: int
+    sha256: str
+    side: int
+    profile: str = ART_PROFILE
+
+
+class RockboxArtworkCache:
+    """Content-addressed 8-bit paletted BMP cover derivatives."""
+
+    def __init__(self, root: str | Path):
+        self.root = Path(root)
+        self._source_index_path = self.root / ART_PROFILE / "source-index.json"
+        try:
+            raw = json.loads(self._source_index_path.read_text(encoding="utf-8"))
+            self._source_index = raw if isinstance(raw, dict) else {}
+        except (OSError, ValueError):
+            self._source_index = {}
+        self._source_index_dirty = False
+
+    def _remember_source(
+            self, source: Path, stat: os.stat_result, sha256: str) -> None:
+        row = {
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns,
+            "source_sha256": sha256,
+        }
+        if self._source_index.get(str(source)) != row:
+            self._source_index[str(source)] = row
+            self._source_index_dirty = True
+
+    def flush_source_index(self) -> None:
+        if not self._source_index_dirty:
+            return
+        _atomic_write(
+            self._source_index_path,
+            json.dumps(
+                self._source_index, indent=2, sort_keys=True,
+            ).encode("utf-8") + b"\n",
+        )
+        self._source_index_dirty = False
+
+    def prepare(
+            self,
+            source: str | Path,
+            *,
+            side: int = artencode.ROCKBOX_COVER_SIDE,
+            verify_cache: bool = True,
+    ) -> PreparedRockboxArtwork:
+        if not isinstance(side, int) or not 1 <= side <= 240:
+            raise RockboxMediaError(f"Unsupported Rockbox cover side: {side}")
+        original = Path(source).expanduser().resolve(strict=True)
+        stat = original.stat()
+        indexed = self._source_index.get(str(original)) or {}
+        source_hash = str(indexed.get("source_sha256") or "")
+        if not (
+            len(source_hash) == 64
+            and int(indexed.get("size") or -1) == stat.st_size
+            and int(indexed.get("mtime_ns") or -1) == stat.st_mtime_ns
+            and int(indexed.get("ctime_ns") or -1) == stat.st_ctime_ns
+        ):
+            source_hash = _sha256(original)
+            self._remember_source(original, stat, source_hash)
+        key = hashlib.sha256(
+            f"{ART_PROFILE}\0{side}\0{source_hash}".encode("ascii")).hexdigest()
+        entry = self.root / ART_PROFILE / key
+        payload = entry / f"cover.{side}x{side}.bmp"
+        manifest_path = entry / "manifest.json"
+        try:
+            row = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (
+                row.get("profile") == ART_PROFILE
+                and int(row.get("side") or 0) == side
+                and row.get("source_sha256") == source_hash
+                and payload.is_file()
+                and payload.stat().st_size == int(row.get("size") or -1)
+                and (
+                    not verify_cache
+                    or _sha256(payload) == row.get("sha256")
+                )
+            ):
+                return PreparedRockboxArtwork(
+                    original, payload, payload.stat().st_size,
+                    str(row["sha256"]), side)
+        except (OSError, ValueError, TypeError):
+            pass
+        encoded = artencode.to_rockbox_cover(original.read_bytes(), side)
+        if encoded is None:
+            raise RockboxMediaError(f"Could not prepare Rockbox cover: {original}")
+        entry.mkdir(parents=True, exist_ok=True)
+        _atomic_write(payload, encoded)
+        payload_hash = hashlib.sha256(encoded).hexdigest()
+        row = {
+            "profile": ART_PROFILE,
+            "side": side,
+            "source_sha256": source_hash,
+            "size": len(encoded),
+            "sha256": payload_hash,
+        }
+        _atomic_write(
+            manifest_path,
+            json.dumps(row, indent=2, sort_keys=True).encode("utf-8") + b"\n",
+        )
+        return PreparedRockboxArtwork(
+            original, payload, len(encoded), payload_hash, side)

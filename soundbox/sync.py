@@ -16,18 +16,22 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, cast
 
+from . import artencode
 from . import playlists as pl_mod
 from . import metadata
 from . import manifest
+from . import rockbox_config
 from .library import Library, Playlist
 from .paths import device_music_path, is_within
 from .report import PlaylistReport, SyncReport
+from .rockbox_media import RockboxMediaError
 
 
 class NotEnoughSpace(RuntimeError):
@@ -191,6 +195,15 @@ class PlannedFile:
     target_path: Path
     size: int
     track_id: str = ""        # to look up this track's cover art
+    # Canonical library file when ``source`` is a disposable Rockbox-safe
+    # derivative.  Source audio itself is never modified.
+    original_source: Path | None = None
+    payload_profile: str = ""
+    removed_embedded_images: int = 0
+
+    @property
+    def canonical_source(self) -> Path:
+        return self.original_source or self.source
 
 
 def _dirs_up_to(start_dir: Path, root: Path) -> list[Path]:
@@ -442,6 +455,7 @@ def plan(
                     target_path=target / device_path.lstrip("/"),
                     size=src.stat().st_size,
                     track_id=track.track_id,
+                    original_source=src,
                 )
             entries.append(pl_mod.M3UEntry(device_path, track.artist, track.name))
         entries_by_pl[idx] = entries
@@ -484,6 +498,8 @@ def run(
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
     art_cache=None,
+    rockbox_media_cache=None,
+    rockbox_art_cache=None,
 ) -> SyncReport:
     """Execute (or simulate, if dry_run) the sync. All writes are under target.
 
@@ -492,13 +508,30 @@ def run(
     True the copy stops cleanly (files already copied are kept).
     """
     target = target.expanduser().resolve()
+    if manifest.has_composite_ownership(target):
+        raise RuntimeError(
+            "This device uses SoundBox composite dual-library ownership; "
+            "the Rockbox-only exporter is disabled for it.")
 
     files, entries_by_pl = plan(lib, selected, target, derive_artists=derive_artists,
                                 artist_overrides=artist_overrides,
                                 title_overrides=title_overrides)
-    assert_target_safe(target, [pf.source for pf in files.values()])
+    assert_target_safe(target, [pf.canonical_source for pf in files.values()])
+    # Prepare disposable Mac-side payloads before pinning or writing the device.
+    # A dry-run remains strictly write-free and reports the conservative original
+    # byte count.  Real exports strip embedded pictures only from these copies.
+    if not dry_run and rockbox_media_cache is not None:
+        for planned in files.values():
+            prepared = rockbox_media_cache.prepare(planned.canonical_source)
+            planned.source = prepared.payload
+            planned.size = prepared.payload_size
+            planned.payload_profile = prepared.profile
+            planned.removed_embedded_images = prepared.removed_images
     session = (
-        DeviceSession(target, [pf.source for pf in files.values()])
+        DeviceSession(
+            target,
+            [path for pf in files.values()
+             for path in (pf.canonical_source, pf.source)])
         if not dry_run else None)
     previous_manifest = manifest.load(target) if not dry_run else {}
     managed_files = {
@@ -506,6 +539,15 @@ def run(
         for path, row in (previous_manifest.get("files") or {}).items()
         if isinstance(row, dict)
     }
+    retained_art_sides = set(artencode.ROCKBOX_COVER_SIDES)
+    retained_art_sides.update(rockbox_config.theme_album_art_sides(target))
+    for device_path, row in managed_files.items():
+        if row.get("kind") != "artwork":
+            continue
+        match = re.search(r"\.([0-9]{1,3})x\1\.bmp$", device_path)
+        if match and 1 <= int(match.group(1)) <= 240:
+            retained_art_sides.add(int(match.group(1)))
+    exact_art_sides = tuple(sorted(retained_art_sides, reverse=True))
     selected_keys = {manifest.playlist_key(pl) for pl in selected}
     for row in managed_files.values():
         row["playlists"] = [
@@ -550,6 +592,9 @@ def run(
                         f"Delete some tracks from the device or export fewer playlists.")
 
     report = SyncReport(dry_run=dry_run)
+    report.sanitized_media = sum(
+        1 for planned in files.values()
+        if planned.removed_embedded_images)
     playlists_root = target / "Playlists"
     music_root = target / "Music"
 
@@ -576,9 +621,10 @@ def run(
         try:
             if session is not None:
                 session.guard(tgt)
-            source_stat = pf.source.stat()
+            source_stat = pf.canonical_source.stat()
             source_identity = (
-                f"{source_stat.st_size}:{source_stat.st_mtime_ns}")
+                f"{source_stat.st_size}:{source_stat.st_mtime_ns}"
+                f":{pf.payload_profile or 'original'}")
             previous = managed_files.get(device_path) or {}
             expected_hash = (
                 str(previous.get("sha256") or "")
@@ -620,7 +666,7 @@ def run(
                     "owned": (
                         bool(previous.get("owned", True))
                         if previous else not was_present),
-                    "source": str(pf.source.resolve()),
+                    "source": str(pf.canonical_source.resolve()),
                     "source_identity": source_identity,
                     "size": pf.size,
                     "sha256": expected_hash,
@@ -628,45 +674,60 @@ def run(
                 }
         except OSError as exc:
             global_errors.append(f"ERROR copying {pf.source} -> {tgt}: {exc}")
-        # Drop this track's cover.jpg into its folder (Rockbox reads it per-track).
+        # Keep exact fast paths and one theme-independent maximum-size fallback.
         if art_cache is not None and not dry_run and tgt.parent.is_dir():
-            img = art_cache.image_path(pf.track_id)
-            if img:
-                cover = tgt.parent / "cover.jpg"
-                cover_device_path = "/" + str(
-                    cover.relative_to(target)).replace(os.sep, "/")
+            canonical_img = art_cache.image_path(pf.track_id)
+            if canonical_img:
                 try:
-                    art_hash = _sha256(img)
-                    previous_art = managed_files.get(cover_device_path) or {}
-                    owned = bool(previous_art.get("owned", True))
-                    was_present = cover.exists()
-                    if (not cover.exists()
-                            or (previous_art and owned
-                                and _sha256(cover) != art_hash)):
-                        assert session is not None
-                        session.atomic_copy(img, cover)
-                        written_dirs.update(
-                            _dirs_up_to(tgt.parent, music_root))
-                    elif not previous_art and _sha256(cover) != art_hash:
-                        raise OSError(
-                            f"unowned artwork conflict at {cover}")
-                    art_stat = img.stat()
-                    managed_files[cover_device_path] = {
-                        "kind": "artwork",
-                        "owned": (
-                            bool(previous_art.get("owned", True))
-                            if previous_art else not was_present),
-                        "source": str(img.resolve()),
-                        "source_identity":
-                            f"{art_stat.st_size}:{art_stat.st_mtime_ns}",
-                        "size": art_stat.st_size,
-                        "sha256": art_hash,
-                        "playlists": sorted(
-                            memberships.get(device_path, ())),
-                    }
-                except OSError as exc:
+                    variants = (
+                        (
+                            *((side, f"cover.{side}x{side}.bmp")
+                              for side in exact_art_sides),
+                            (artencode.ROCKBOX_FALLBACK_SIDE, "cover.bmp"),
+                        )
+                        if rockbox_art_cache is not None
+                        else ((None, "cover.jpg"),)
+                    )
+                    for side, filename in variants:
+                        cover = tgt.parent / filename
+                        prepared_art = (
+                            rockbox_art_cache.prepare(canonical_img, side=side)
+                            if side is not None else None)
+                        cover_device_path = "/" + str(
+                            cover.relative_to(target)).replace(os.sep, "/")
+                        img = prepared_art.payload if prepared_art else canonical_img
+                        art_hash = _sha256(img)
+                        previous_art = managed_files.get(cover_device_path) or {}
+                        owned = bool(previous_art.get("owned", True))
+                        was_present = cover.exists()
+                        if (not cover.exists()
+                                or (previous_art and owned
+                                    and _sha256(cover) != art_hash)):
+                            assert session is not None
+                            session.atomic_copy(img, cover)
+                            written_dirs.update(
+                                _dirs_up_to(tgt.parent, music_root))
+                        elif not previous_art and _sha256(cover) != art_hash:
+                            raise OSError(
+                                f"unowned artwork conflict at {cover}")
+                        art_stat = canonical_img.stat()
+                        managed_files[cover_device_path] = {
+                            "kind": "artwork",
+                            "owned": (
+                                bool(previous_art.get("owned", True))
+                                if previous_art else not was_present),
+                            "source": str(canonical_img.resolve()),
+                            "source_identity":
+                                f"{art_stat.st_size}:{art_stat.st_mtime_ns}:"
+                                f"{prepared_art.profile if prepared_art else 'original'}",
+                            "size": img.stat().st_size,
+                            "sha256": art_hash,
+                            "playlists": sorted(
+                                memberships.get(device_path, ())),
+                        }
+                except (OSError, RockboxMediaError) as exc:
                     global_errors.append(
-                        f"ERROR writing artwork {img} -> {cover}: {exc}")
+                        f"ERROR writing artwork {canonical_img} -> {cover}: {exc}")
         if on_progress:
             on_progress(done, total, pf.source.name)
 
@@ -792,7 +853,7 @@ def run(
 def _prune_music(music_root: Path, keep_dirs: set[Path]) -> int:
     """Delete track folders under Music that no remaining playlist references. Only
     ever removes whole <Artist>/<Track>/ dirs strictly inside music_root (never
-    outside it), taking each track's cover.jpg with it. Returns folders removed."""
+    outside it), taking each track's external art with it. Returns folders removed."""
     if not music_root.is_dir():
         return 0
     removed = 0
@@ -890,6 +951,8 @@ def resync(
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
     art_cache=None,
+    rockbox_media_cache=None,
+    rockbox_art_cache=None,
     prune: bool = True,
     extra=None,
 ) -> SyncReport:
@@ -908,9 +971,9 @@ def resync(
     target = Path(target).expanduser()
     m = manifest.load(target)
     prev = m.get("playlists", {})
-    by_key = {manifest.playlist_key(p): p for p in list(lib.playlists) + list(extra or [])}
+    by_key = manifest.current_playlists_by_key(lib, extra)
 
-    wanted = [by_key[k] for k in prev if k in by_key]     # still exist -> current version
+    wanted = manifest.managed_current_playlists(m, lib, extra)
     removed_keys = [k for k in prev if k not in by_key]   # deleted in rekordbox
 
     drift = manifest.diff(m, lib, extra)
@@ -923,7 +986,9 @@ def resync(
     report = run(lib, to_export, target, layout="tree", dry_run=False,
                  on_progress=on_progress, should_cancel=should_cancel,
                  artist_overrides=artist_overrides, title_overrides=title_overrides,
-                 art_cache=art_cache)
+                 art_cache=art_cache,
+                 rockbox_media_cache=rockbox_media_cache,
+                 rockbox_art_cache=rockbox_art_cache)
 
     # 2) Stale playlists are removed below through manifest ownership only.
 

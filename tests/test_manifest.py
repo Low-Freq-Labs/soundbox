@@ -1,3 +1,5 @@
+import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,6 +67,127 @@ class TestManifest(unittest.TestCase):
         manifest.record_export(d, pls)
         dr = manifest.diff(manifest.load(d), lib_of(*pls))
         self.assertFalse(dr.any())
+
+    def test_old_rockbox_profile_drifts_each_playlist_once(self):
+        playlist = PL("1", "A", [], ["a"])
+        old = {"playlists": {
+            "1": manifest.entry_for(playlist),
+        }}
+        drift = manifest.diff(old, lib_of(playlist))
+        self.assertEqual(drift.changed, [("1", "A")])
+
+        current = {"playlists": {
+            "1": manifest.entry_for(
+                playlist,
+                export_profile=manifest.ROCKBOX_EXPORT_PROFILE),
+        }}
+        self.assertFalse(manifest.diff(current, lib_of(playlist)).any())
+
+    def test_load_composite_preserves_schema_three_ownership(self):
+        root = Path(tempfile.mkdtemp())
+        path = manifest.manifest_path(root)
+        path.parent.mkdir()
+        payload = {
+            "schema": manifest.COMPOSITE_SCHEMA,
+            "profile": manifest.COMPOSITE_EXPORT_PROFILE,
+            "playlists": {"1": {"name": "A"}},
+            "files": {"/Playlists/A.m3u8": {"owned": True}},
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        self.assertEqual(manifest.load_composite(root), payload)
+        self.assertEqual(manifest.load(root)["schema"], manifest.SCHEMA)
+
+    def test_load_composite_accepts_previous_profile_for_safe_migration(self):
+        root = Path(tempfile.mkdtemp())
+        path = manifest.manifest_path(root)
+        path.parent.mkdir()
+        legacy_profile = next(iter(manifest.LEGACY_COMPOSITE_EXPORT_PROFILES))
+        payload = {
+            "schema": manifest.COMPOSITE_SCHEMA,
+            "profile": legacy_profile,
+            "playlists": {"1": {"tracks": ["a", "b"]}},
+            "files": {
+                "/iPod_Control/Music/F00/A.mp3": {
+                    "kind": "shared-stock-media", "dbid": 10},
+                "/Music/B/B.flac": {"kind": "rockbox-media"},
+            },
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.assertEqual(manifest.load_composite(root), payload)
+        counts = manifest.composite_library_counts(payload)
+        self.assertEqual(counts.managed_tracks, 2)
+        self.assertEqual(counts.stock_visible_tracks, 1)
+        self.assertEqual(counts.rockbox_only_tracks, 1)
+
+    def test_composite_counts_union_tracks_and_split_stock_subset(self):
+        payload = {
+            "schema": manifest.COMPOSITE_SCHEMA,
+            "profile": manifest.COMPOSITE_EXPORT_PROFILE,
+            "playlists": {
+                "1": {"tracks": ["a", "b", "c"]},
+                "2": {"tracks": ["c", "d"]},
+            },
+            "files": {
+                "/iPod_Control/Music/F00/A.mp3": {
+                    "kind": "shared-stock-media", "dbid": 10},
+                "/iPod_Control/Music/F00/B.wav": {
+                    "kind": "shared-stock-media", "dbid": 20},
+                "/Music/C/C.flac": {"kind": "rockbox-media"},
+                "/Music/D/D.aiff": {"kind": "rockbox-media"},
+            },
+        }
+        counts = manifest.composite_library_counts(payload)
+        self.assertEqual(counts.managed_tracks, 4)
+        self.assertEqual(counts.stock_visible_tracks, 2)
+        self.assertEqual(counts.rockbox_only_tracks, 2)
+        self.assertEqual(counts.managed_playlists, 2)
+
+    def test_composite_playlist_entries_reads_only_verified_m3u_payload(self):
+        root = Path(tempfile.mkdtemp())
+        playlist = root / "Playlists/Set.m3u8"
+        playlist.parent.mkdir()
+        payload_bytes = (
+            b"#EXTM3U\n/iPod_Control/Music/F00/A.mp3\n"
+            b"/Music/B/B.flac\n"
+        )
+        playlist.write_bytes(payload_bytes)
+        payload = {
+            "schema": manifest.COMPOSITE_SCHEMA,
+            "profile": manifest.COMPOSITE_EXPORT_PROFILE,
+            "playlists": {"set": {"tracks": ["a", "b"]}},
+            "files": {
+                "/Playlists/Set.m3u8": {
+                    "kind": "playlist",
+                    "owned": True,
+                    "source": "set",
+                    "size": len(payload_bytes),
+                    "sha256": hashlib.sha256(payload_bytes).hexdigest(),
+                },
+            },
+        }
+        self.assertEqual(manifest.composite_playlist_entries(root, payload), {
+            "set": (
+                "/iPod_Control/Music/F00/A.mp3",
+                "/Music/B/B.flac",
+            ),
+        })
+        playlist.write_bytes(payload_bytes + b"/Music/C/C.wav\n")
+        with self.assertRaisesRegex(ValueError, "changed since"):
+            manifest.composite_playlist_entries(root, payload)
+
+    def test_managed_current_playlists_reuses_stable_identity_and_order(self):
+        one = PL("1", "One renamed", ["new"], ["a"])
+        two = PL("2", "Two", [], ["b"])
+        current = lib_of(two, one)
+        device = {
+            "playlist_order": ["1", "gone", "2"],
+            "playlists": {"1": {}, "gone": {}, "2": {}},
+        }
+        self.assertEqual(
+            manifest.managed_current_playlists(device, current),
+            [one, two],
+        )
 
 
 if __name__ == "__main__":

@@ -19,12 +19,55 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = 2
+COMPOSITE_SCHEMA = 3
+ROCKBOX_EXPORT_PROFILE = "rockbox-files-no-embedded-universal-bmp-v6"
+COMPOSITE_EXPORT_PROFILE = (
+    "dual-single-copy-no-embedded-universal-bmp-early-riffinfo-catalogue-v9")
+LEGACY_COMPOSITE_EXPORT_PROFILES = frozenset({
+    "dual-single-copy-no-embedded-rgb500-v1",
+    "dual-single-copy-no-embedded-rgb500-tags-v2",
+    "dual-single-copy-no-embedded-rgb160-tags-v3",
+    "dual-single-copy-no-embedded-rgb160-bmp-riffinfo-v4",
+    "dual-single-copy-no-embedded-multiview-bmp-riffinfo-v5",
+    "dual-single-copy-no-embedded-paletted8-bmp-riffinfo-v6",
+    "dual-single-copy-no-embedded-universal-bmp-riffinfo-v7",
+    "dual-single-copy-no-embedded-universal-bmp-early-riffinfo-v8",
+})
 _DIRNAME = ".soundbox"
 _FILENAME = "manifest.json"
 
 
+@dataclass(frozen=True)
+class CompositeLibraryCounts:
+    """User-facing counts from one validated schema-3 ownership manifest.
+
+    Rockbox playlists are the composite library authority; iTunesDB contains
+    only the stock-safe subset. Keeping both numbers explicit prevents a valid
+    stock-only count from masquerading as the size of the whole dual library.
+    """
+
+    managed_tracks: int
+    stock_visible_tracks: int
+    rockbox_only_tracks: int
+    managed_playlists: int
+
+
 def manifest_path(device_root) -> Path:
     return Path(device_root) / _DIRNAME / _FILENAME
+
+
+def has_composite_ownership(device_root) -> bool:
+    """Bounded read-only guard for the dual-library schema.
+
+    Older Rockbox-only export/resync code must never interpret schema 3 as an
+    empty schema-2 manifest and overwrite its cross-firmware ownership state.
+    """
+    try:
+        data = json.loads(
+            manifest_path(device_root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and int(data.get("schema") or 0) == COMPOSITE_SCHEMA
 
 
 def _empty() -> dict:
@@ -60,6 +103,105 @@ def load(device_root) -> dict:
     return data
 
 
+def load_composite(device_root) -> dict:
+    """Read and strictly validate a schema-3 composite ownership manifest."""
+    try:
+        data = json.loads(
+            manifest_path(device_root).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("Composite SoundBox manifest is unreadable") from exc
+    if (
+        not isinstance(data, dict)
+        or int(data.get("schema") or 0) != COMPOSITE_SCHEMA
+        or data.get("profile") not in (
+            {COMPOSITE_EXPORT_PROFILE} | LEGACY_COMPOSITE_EXPORT_PROFILES)
+        or not isinstance(data.get("playlists"), dict)
+        or not isinstance(data.get("files"), dict)
+    ):
+        raise ValueError("Composite SoundBox manifest is invalid")
+    return data
+
+
+def composite_library_counts(manifest: dict) -> CompositeLibraryCounts:
+    """Count managed tracks/playlists without reading or mutating media.
+
+    Schema 3 records the exact exported track IDs in each playlist and the
+    iTunesDB DBID on every shared stock-media row. Track IDs are unioned across
+    playlists, so a song used by several playlists is counted once.
+    """
+    if (
+        not isinstance(manifest, dict)
+        or int(manifest.get("schema") or 0) != COMPOSITE_SCHEMA
+        or manifest.get("profile") not in (
+            {COMPOSITE_EXPORT_PROFILE} | LEGACY_COMPOSITE_EXPORT_PROFILES)
+        or not isinstance(manifest.get("playlists"), dict)
+        or not isinstance(manifest.get("files"), dict)
+    ):
+        raise ValueError("Composite SoundBox manifest is invalid")
+    track_ids: set[str] = set()
+    for row in manifest["playlists"].values():
+        if not isinstance(row, dict) or not isinstance(row.get("tracks"), list):
+            raise ValueError("Composite playlist tracks are invalid")
+        track_ids.update(str(value) for value in row["tracks"] if str(value))
+    stock_dbids = {
+        int(row.get("dbid") or 0)
+        for row in manifest["files"].values()
+        if isinstance(row, dict)
+        and row.get("kind") == "shared-stock-media"
+        and int(row.get("dbid") or 0) > 0
+    }
+    stock_count = len(stock_dbids)
+    if stock_count > len(track_ids):
+        raise ValueError("Composite stock count exceeds managed track count")
+    return CompositeLibraryCounts(
+        managed_tracks=len(track_ids),
+        stock_visible_tracks=stock_count,
+        rockbox_only_tracks=len(track_ids) - stock_count,
+        managed_playlists=len(manifest["playlists"]),
+    )
+
+
+def composite_playlist_entries(
+        device_root, manifest: dict) -> dict[str, tuple[str, ...]]:
+    """Read verified managed M3U8 paths for the dual-library device view.
+
+    This deliberately reads only small manifest-owned playlist payloads. Audio
+    files are never opened while building the device dashboard.
+    """
+    composite_library_counts(manifest)  # strict schema/profile validation
+    root = Path(device_root).expanduser().resolve(strict=True)
+    output: dict[str, tuple[str, ...]] = {}
+    for raw_path, row in manifest["files"].items():
+        if not isinstance(row, dict) or row.get("kind") != "playlist":
+            continue
+        playlist_key_value = str(row.get("source") or "")
+        if not playlist_key_value or not bool(row.get("owned")):
+            raise ValueError("Composite playlist ownership is invalid")
+        path_text = str(raw_path or "").replace("\\", "/")
+        parts = [part for part in path_text.lstrip("/").split("/") if part]
+        if not parts or any(part in {".", ".."} for part in parts):
+            raise ValueError("Composite playlist path is invalid")
+        path = (root / Path(*parts)).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError("Composite playlist path escaped its device")
+        expected_size = int(row.get("size") or -1)
+        if expected_size < 0 or expected_size > 1024 * 1024:
+            raise ValueError("Composite playlist size is invalid")
+        payload = path.read_bytes()
+        if len(payload) != expected_size or hashlib.sha256(payload).hexdigest() != str(
+                row.get("sha256") or ""):
+            raise ValueError("Composite playlist changed since the last commit")
+        try:
+            text = payload.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Composite playlist is not valid UTF-8") from exc
+        output[playlist_key_value] = tuple(
+            line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    return output
+
+
 def save(device_root, manifest: dict) -> None:
     p = manifest_path(device_root)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +228,26 @@ def playlist_key(playlist) -> str:
     return playlist.pid or f"cust:{playlist.name}"
 
 
+def current_playlists_by_key(library, extra=None) -> dict:
+    """Index the current library using the manifest's stable identity rules."""
+    output = {}
+    for playlist in list(library.playlists) + list(extra or []):
+        key = playlist_key(playlist)
+        if key in output:
+            raise ValueError(f"Current library has duplicate playlist identity {key!r}")
+        output[key] = playlist
+    return output
+
+
+def managed_current_playlists(manifest: dict, library, extra=None) -> list:
+    """Current versions of managed playlists, preserving manifest order."""
+    by_key = current_playlists_by_key(library, extra)
+    order = manifest.get("playlist_order")
+    if not isinstance(order, list):
+        order = list(manifest.get("playlists") or {})
+    return [by_key[str(key)] for key in order if str(key) in by_key]
+
+
 def _excluded(playlist, hidden, removals) -> set:
     """Ids vetoed for THIS playlist: Collection deletes (global) + per-playlist
     removals. Two planes of data: rekordbox is king, SoundBox edits veto."""
@@ -106,9 +268,10 @@ def playlist_sig(playlist, hidden=frozenset(), removals=None) -> str:
     return h.hexdigest()[:16]
 
 
-def entry_for(playlist, hidden=frozenset(), removals=None) -> dict:
+def entry_for(playlist, hidden=frozenset(), removals=None, *,
+              export_profile: str | None = None) -> dict:
     ex = _excluded(playlist, hidden, removals)
-    return {
+    entry = {
         "pid": playlist.pid,
         "name": playlist.name,
         "folder_path": list(playlist.folder_path),
@@ -117,6 +280,9 @@ def entry_for(playlist, hidden=frozenset(), removals=None) -> dict:
         "tracks": [k for k in playlist.keys if k not in ex],
         "sig": playlist_sig(playlist, hidden, removals),
     }
+    if export_profile is not None:
+        entry["export_profile"] = export_profile
+    return entry
 
 
 def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
@@ -133,7 +299,9 @@ def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
     m = load(device_root)
     generation = int(m.get("generation") or 0) + 1
     for pl in playlists:
-        e = entry_for(pl, hidden, removals)
+        e = entry_for(
+            pl, hidden, removals,
+            export_profile=ROCKBOX_EXPORT_PROFILE)
         if playlist_key(pl) in inc:
             e["sig"] = "partial"
         m["playlists"][playlist_key(pl)] = e
@@ -167,7 +335,8 @@ class Drift:
         return len(keys)
 
 
-def diff(manifest: dict, library, extra=None) -> Drift:
+def diff(manifest: dict, library, extra=None, *,
+         expected_profile: str | None = ROCKBOX_EXPORT_PROFILE) -> Drift:
     """Compare a device manifest against the current library. Only inspects
     playlists that were previously synced (present in the manifest); brand-new
     playlists are added by the user dragging them, not treated as drift.
@@ -176,9 +345,7 @@ def diff(manifest: dict, library, extra=None) -> Drift:
     the user's custom SoundBox playlists, which are NOT in library.playlists. Without
     them a synced custom playlist would look 'removed' (phantom drift + a resync would
     delete it)."""
-    by_key = {}
-    for pl in list(library.playlists) + list(extra or []):
-        by_key[playlist_key(pl)] = pl
+    by_key = current_playlists_by_key(library, extra)
     hidden = set(getattr(library, "hidden_ids", ()) or ())
     removals = getattr(library, "removed_by_playlist", None)
     d = Drift()
@@ -192,6 +359,12 @@ def diff(manifest: dict, library, extra=None) -> Drift:
         if list(cur.folder_path) != list(e.get("folder_path", [])):
             d.moved.append((key, " / ".join(e.get("folder_path", [])),
                             " / ".join(cur.folder_path)))
-        if playlist_sig(cur, hidden, removals) != e.get("sig"):
+        if (
+            playlist_sig(cur, hidden, removals) != e.get("sig")
+            or (
+                expected_profile is not None
+                and e.get("export_profile") != expected_profile
+            )
+        ):
             d.changed.append((key, cur.name))
     return d

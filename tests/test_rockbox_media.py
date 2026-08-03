@@ -1,0 +1,566 @@
+"""Device-side Rockbox derivatives never modify source audio or curated art."""
+
+import hashlib
+import io
+import struct
+import tempfile
+import unittest
+import wave
+from pathlib import Path
+from unittest import mock
+
+from mutagen.id3 import APIC, COMM, ID3, TALB, TIT2, TPE1, TXXX
+from mutagen.mp3 import MP3
+from PIL import Image
+
+from soundbox.rockbox_media import (
+    InterruptedFileVerifier,
+    NORMALIZED_MEDIA_PROFILE,
+    RECEIPT_SANITIZED_MEDIA_PROFILE,
+    RockboxArtworkCache,
+    RockboxMediaError,
+    RockboxMediaCache,
+    _audio_essence,
+    _riff_info_values,
+    _technical_signature,
+)
+
+
+def _hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _tagged_mp3(path: Path) -> None:
+    # Repeated valid MPEG-1 Layer III frames keep this fixture hermetic; no
+    # encoder binary or copyrighted audio fixture is required.
+    frame = b"\xff\xfb\x90\x64" + b"\0" * 413
+    path.write_bytes(frame * 100)
+    tags = ID3()
+    tags.add(APIC(
+        mime="image/jpeg", type=3, desc="", data=b"oversized-art" * 1000))
+    tags.save(path)
+
+
+class InterruptedVerification(unittest.TestCase):
+    def test_exact_proof_is_persisted_and_reused_without_full_rehash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            live = root / "IPOD/Music/Artist/Track.wav"
+            live.parent.mkdir(parents=True)
+            live.write_bytes(b"device payload" * 200_000)
+            digest = _hash(live)
+            cache = root / "cache"
+            baseline = "a" * 64
+
+            first = InterruptedFileVerifier(cache, baseline)
+            self.assertTrue(first.verify(
+                live,
+                relative_path=Path("Music/Artist/Track.wav"),
+                size=live.stat().st_size,
+                sha256=digest,
+            ))
+            self.assertTrue(next(
+                (cache / "interrupted-verification").glob("*.json")).is_file())
+
+            resumed = InterruptedFileVerifier(cache, baseline)
+            with mock.patch(
+                    "soundbox.rockbox_media._sha256",
+                    side_effect=AssertionError("full hash should be cached")):
+                self.assertTrue(resumed.verify(
+                    live,
+                    relative_path=Path("Music/Artist/Track.wav"),
+                    size=live.stat().st_size,
+                    sha256=digest,
+                ))
+
+    def test_changed_file_does_not_reuse_cached_proof(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            live = root / "track.wav"
+            live.write_bytes(b"before" * 400_000)
+            size = live.stat().st_size
+            digest = _hash(live)
+            verifier = InterruptedFileVerifier(root / "cache", "b" * 64)
+            self.assertTrue(verifier.verify(
+                live, relative_path=Path("track.wav"), size=size, sha256=digest))
+            live.write_bytes(b"after!" * 400_000)
+            self.assertFalse(verifier.verify(
+                live, relative_path=Path("track.wav"), size=size, sha256=digest))
+
+
+class RockboxAudioDerivative(unittest.TestCase):
+    def test_mp3_technical_signature_ignores_tag_sized_duration_estimate(self):
+        class Info:
+            sample_rate = 44_100
+            channels = 2
+            bits_per_sample = 0
+
+            def __init__(self, length):
+                self.length = length
+
+        class FakeMP3:
+            def __init__(self, length):
+                self.info = Info(length)
+
+        source = Path("cbr.mp3")
+        with mock.patch(
+                "soundbox.rockbox_media.mutagen.File",
+                side_effect=(FakeMP3(152.1142), FakeMP3(152.1110))):
+            before = _technical_signature(source)
+            after = _technical_signature(source)
+
+        self.assertEqual(before, after)
+        self.assertIsNone(before[1])
+
+    def test_committed_derivative_reuses_exact_incremental_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "stable.wav"
+            with wave.open(str(source), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(b"\1\0\2\0" * 100)
+            cache = RockboxMediaCache(root / "cache")
+            first = cache.plan(source, title="Stable", artist="Fixture")
+            row = {
+                "source": str(source.resolve()),
+                "title": "Stable",
+                "artist": "Fixture",
+                "size": first.payload_size,
+                "sha256": first.payload_sha256,
+                "source_size": first.source_size,
+                "source_mtime_ns": first.source_mtime_ns,
+                "source_ctime_ns": first.source_ctime_ns,
+                "source_sha256": first.source_sha256,
+                "source_sha256_verified": True,
+                "media_profile": first.profile,
+                "transformed": first.transformed,
+            }
+
+            with mock.patch.object(
+                    cache, "plan", side_effect=AssertionError("no rebuild")), \
+                    mock.patch(
+                        "soundbox.rockbox_media._has_purchase_receipt",
+                        side_effect=AssertionError("no tag scan"),
+                    ), mock.patch(
+                        "soundbox.rockbox_media._embedded_picture_count",
+                        side_effect=AssertionError("no art scan"),
+                    ), mock.patch(
+                        "soundbox.rockbox_media._display_tags",
+                        side_effect=AssertionError("no display-tag scan"),
+                    ):
+                reused = cache.plan_from_committed(
+                    source,
+                    title="Stable",
+                    artist="Fixture",
+                    committed=row,
+                )
+
+            self.assertEqual(reused, first)
+
+    def test_legacy_manifest_migrates_through_canonical_derivative(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "legacy.wav"
+            with wave.open(str(source), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(b"\1\0\2\0" * 100)
+            cache = RockboxMediaCache(root / "cache")
+            committed = {
+                "source": str(source.resolve()),
+                "title": "Legacy",
+                "artist": "Fixture",
+                "size": 1234,
+                "sha256": "a" * 64,
+            }
+
+            migrated = cache.plan_from_committed(
+                source,
+                title="Legacy",
+                artist="Fixture",
+                committed=committed,
+            )
+
+            self.assertTrue(migrated.transformed)
+            self.assertTrue(migrated.source_sha256_verified)
+            self.assertEqual(migrated.profile, NORMALIZED_MEDIA_PROFILE)
+            self.assertNotEqual(migrated.payload_sha256, "a" * 64)
+
+    def test_bounded_plan_discards_payload_then_rematerializes_exactly(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "bounded.mp3"
+            _tagged_mp3(source)
+            cache = RockboxMediaCache(root / "cache")
+
+            planned = cache.plan(
+                source, title="Bounded title", artist="Bounded artist")
+
+            self.assertTrue(planned.transformed)
+            self.assertFalse(cache.root.exists())
+            self.assertEqual(_hash(source), planned.source_sha256)
+            prepared = cache.materialize(planned)
+            self.assertEqual(_hash(prepared.payload), planned.payload_sha256)
+            self.assertEqual(prepared.payload.stat().st_size, planned.payload_size)
+            cache.discard(prepared)
+            self.assertFalse(cache.root.exists())
+
+    def test_bounded_plan_refuses_changed_canonical_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "changed.mp3"
+            _tagged_mp3(source)
+            cache = RockboxMediaCache(root / "cache")
+            planned = cache.plan(
+                source, title="Before", artist="SoundBox")
+            source.write_bytes(source.read_bytes() + b"changed")
+
+            with self.assertRaisesRegex(
+                    RockboxMediaError, "source changed after dry-run"):
+                cache.materialize(planned)
+            self.assertFalse(cache.root.exists())
+
+    def test_embedded_art_is_removed_only_from_verified_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "Take a Trip.mp3"
+            _tagged_mp3(source)
+            source_hash = _hash(source)
+            source_audio = MP3(source)
+            self.assertEqual(len(source_audio.tags.getall("APIC")), 1)
+
+            cache = RockboxMediaCache(root / "cache")
+            prepared = cache.prepare(source)
+
+            self.assertTrue(prepared.transformed)
+            self.assertEqual(prepared.removed_images, 1)
+            self.assertNotEqual(prepared.payload, source)
+            self.assertEqual(_hash(source), source_hash)
+            self.assertEqual(len(MP3(source).tags.getall("APIC")), 1)
+            self.assertEqual(len(MP3(prepared.payload).tags.getall("APIC")), 0)
+            self.assertEqual(MP3(prepared.payload).info.sample_rate, 44_100)
+            self.assertEqual(_hash(prepared.payload), prepared.payload_sha256)
+
+            # Exact cache hit is stable and does not rewrite the source.
+            again = cache.prepare(source)
+            self.assertEqual(again, prepared)
+            self.assertEqual(_hash(source), source_hash)
+            cache.clear()
+            self.assertFalse((root / "cache").exists())
+
+    def test_audio_without_embedded_art_passes_through(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "plain.mp3"
+            frame = b"\xff\xfb\x90\x64" + b"\0" * 413
+            source.write_bytes(frame * 100)
+            prepared = RockboxMediaCache(root / "cache").prepare(source)
+            self.assertFalse(prepared.transformed)
+            self.assertEqual(prepared.payload, source.resolve())
+            self.assertFalse((root / "cache").exists())
+
+    def test_display_tags_are_normalized_only_in_verified_mp3_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "scrambled.mp3"
+            frame = b"\xff\xfb\x90\x64" + b"\0" * 413
+            source.write_bytes(frame * 100)
+            source_hash = _hash(source)
+
+            prepared = RockboxMediaCache(root / "cache").prepare(
+                source, title="Correct title", artist="Correct artist")
+
+            self.assertTrue(prepared.transformed)
+            self.assertEqual(_hash(source), source_hash)
+            self.assertIsNone(MP3(source).tags)
+            tags = MP3(prepared.payload).tags
+            self.assertEqual(tags.getall("TIT2")[0].text, ["Correct title"])
+            self.assertEqual(tags.getall("TPE1")[0].text, ["Correct artist"])
+            self.assertEqual(
+                _audio_essence(prepared.payload), _audio_essence(source))
+
+    def test_beatport_receipts_are_removed_only_from_rockbox_mp3_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "beatport.mp3"
+            frame = b"\xff\xfb\x90\x64" + b"\0" * 413
+            source.write_bytes(frame * 100)
+            tags = ID3()
+            tags.add(TIT2(encoding=3, text=["Wrong title"]))
+            tags.add(TPE1(encoding=3, text=["Wrong artist"]))
+            tags.add(TALB(encoding=3, text=["Real album"]))
+            tags.add(TXXX(
+                encoding=3,
+                desc="COMMENT",
+                text=["Purchased at Beatport.com"],
+            ))
+            tags.add(COMM(
+                encoding=3,
+                lang="eng",
+                desc="ID3v1 Comment",
+                text=["Purchased at Beatport"],
+            ))
+            tags.add(COMM(
+                encoding=3,
+                lang="eng",
+                desc="SoundBox fixture",
+                text=["Keep this real note"],
+            ))
+            tags.save(source)
+            source_hash = _hash(source)
+
+            prepared = RockboxMediaCache(root / "cache").prepare(
+                source, title="Correct title", artist="Correct artist")
+
+            self.assertEqual(_hash(source), source_hash)
+            payload_tags = MP3(prepared.payload).tags
+            self.assertEqual(payload_tags.getall("TIT2")[0].text, ["Correct title"])
+            self.assertEqual(payload_tags.getall("TPE1")[0].text, ["Correct artist"])
+            self.assertEqual(payload_tags.getall("TALB"), [])
+            self.assertEqual(
+                prepared.profile, RECEIPT_SANITIZED_MEDIA_PROFILE)
+            comments = [
+                str(text)
+                for item in payload_tags.getall("COMM")
+                for text in item.text
+            ]
+            user_text = [
+                str(text)
+                for item in payload_tags.getall("TXXX")
+                for text in item.text
+            ]
+            self.assertEqual(comments, [])
+            self.assertNotIn("Purchased at Beatport", " ".join(user_text))
+
+    def test_display_tags_are_normalized_in_wav_without_changing_pcm(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "untagged.wav"
+            with wave.open(str(source), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(b"\0\0\0\0" * 100)
+            source_hash = _hash(source)
+
+            prepared = RockboxMediaCache(root / "cache").prepare(
+                source, title="Visible WAV", artist="SoundBox")
+
+            self.assertTrue(prepared.transformed)
+            self.assertEqual(_hash(source), source_hash)
+            self.assertEqual(
+                _riff_info_values(prepared.payload),
+                ("Visible WAV", "SoundBox"),
+            )
+            # Rockbox decodes RIFF INFO using the configured codepage (UTF-8 by
+            # default); prove the payload is not merely carrying Mutagen ID3.
+            self.assertIn(b"LIST", prepared.payload.read_bytes())
+            self.assertIn(b"INAM", prepared.payload.read_bytes())
+
+    def test_wav_display_tags_replace_all_competing_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "opaque-info.wav"
+            with wave.open(str(source), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(b"\1\0\2\0" * 100)
+
+            original = source.read_bytes()
+            fmt_size = struct.unpack("<I", original[16:20])[0]
+            fmt_end = 20 + fmt_size + (fmt_size & 1)
+            opaque = b"NITR" + struct.pack("<I", 24_000) + b"x" * 24_000
+            old_info_body = b"INFO" + opaque
+            old_info = (
+                b"LIST" + struct.pack("<I", len(old_info_body))
+                + old_info_body
+            )
+            rebuilt = original[:fmt_end] + old_info + original[fmt_end:]
+            rebuilt = rebuilt[:4] + struct.pack("<I", len(rebuilt) - 8) + rebuilt[8:]
+            source.write_bytes(rebuilt)
+            source_hash = _hash(source)
+
+            prepared = RockboxMediaCache(root / "cache").prepare(
+                source, title="Visible early", artist="Noize Complaint")
+
+            payload = prepared.payload.read_bytes()
+            self.assertEqual(_hash(source), source_hash)
+            self.assertEqual(
+                _riff_info_values(prepared.payload),
+                ("Visible early", "Noize Complaint"),
+            )
+            self.assertLess(payload.index(b"INAM"), 256)
+            self.assertNotIn(b"NITR", payload)
+            self.assertNotIn(opaque, payload)
+            with wave.open(str(source), "rb") as before, wave.open(
+                    str(prepared.payload), "rb") as after:
+                self.assertEqual(before.getparams(), after.getparams())
+                self.assertEqual(before.readframes(100), after.readframes(100))
+
+    def test_beatport_receipt_is_removed_only_from_rockbox_wav_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "beatport.wav"
+            with wave.open(str(source), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(b"\1\0\2\0" * 100)
+
+            original = source.read_bytes()
+            fmt_size = struct.unpack("<I", original[16:20])[0]
+            fmt_end = 20 + fmt_size + (fmt_size & 1)
+
+            def info_field(tag: bytes, value: bytes) -> bytes:
+                data = value + b"\0"
+                return (
+                    tag + struct.pack("<I", len(data)) + data
+                    + (b"\0" if len(data) & 1 else b"")
+                )
+
+            fields = [
+                info_field(b"INAM", b"Wrong title"),
+                info_field(b"IART", b"Wrong artist"),
+                info_field(b"IPRD", b"Real album"),
+                info_field(b"ICMT", b"Purchased at Beatport.com"),
+            ]
+            body = b"INFO" + b"".join(fields)
+            old_info = b"LIST" + struct.pack("<I", len(body)) + body
+            rebuilt = original[:fmt_end] + old_info + original[fmt_end:]
+            rebuilt = rebuilt[:4] + struct.pack("<I", len(rebuilt) - 8) + rebuilt[8:]
+            source.write_bytes(rebuilt)
+            source_hash = _hash(source)
+
+            prepared = RockboxMediaCache(root / "cache").prepare(
+                source, title="Correct title", artist="Correct artist")
+
+            payload = prepared.payload.read_bytes()
+            self.assertEqual(_hash(source), source_hash)
+            self.assertEqual(
+                _riff_info_values(prepared.payload),
+                ("Correct title", "Correct artist"),
+            )
+            self.assertNotIn(b"Real album", payload)
+            self.assertNotIn(b"Purchased at Beatport", payload)
+
+    def test_wav_embedded_id3_and_year_cannot_compete_with_soundbox_title(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "competing.wav"
+            with wave.open(str(source), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(b"\1\0\2\0" * 100)
+
+            original = source.read_bytes()
+            fmt_size = struct.unpack("<I", original[16:20])[0]
+            fmt_end = 20 + fmt_size + (fmt_size & 1)
+            competing = ID3()
+            competing.add(TIT2(encoding=3, text=["2023"]))
+            competing.add(TPE1(encoding=3, text=["Wrong artist"]))
+            id3_buffer = io.BytesIO()
+            competing.save(id3_buffer)
+            id3_payload = id3_buffer.getvalue()
+            id3_chunk = (
+                b"id3 " + struct.pack("<I", len(id3_payload)) + id3_payload
+                + (b"\0" if len(id3_payload) & 1 else b"")
+            )
+            rebuilt = original[:fmt_end] + id3_chunk + original[fmt_end:]
+            rebuilt = rebuilt[:4] + struct.pack("<I", len(rebuilt) - 8) + rebuilt[8:]
+            source.write_bytes(rebuilt)
+            source_hash = _hash(source)
+
+            prepared = RockboxMediaCache(root / "cache").prepare(
+                source, title="Actual title", artist="Actual artist")
+
+            payload = prepared.payload.read_bytes()
+            self.assertEqual(_hash(source), source_hash)
+            self.assertEqual(
+                _riff_info_values(prepared.payload),
+                ("Actual title", "Actual artist"),
+            )
+            self.assertNotIn(b"2023", payload)
+            self.assertNotIn(b"Wrong artist", payload)
+
+
+class RockboxArtworkDerivative(unittest.TestCase):
+    def test_unmodified_cover_fast_path_uses_persisted_source_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "canonical.jpg"
+            buffer = io.BytesIO()
+            Image.new("RGB", (160, 160), (20, 40, 60)).save(
+                buffer, "JPEG", progressive=False)
+            source.write_bytes(buffer.getvalue())
+            cache = RockboxArtworkCache(root / "cache")
+            first = cache.prepare(source)
+            cache.flush_source_index()
+
+            with mock.patch(
+                    "soundbox.rockbox_media._sha256",
+                    side_effect=AssertionError("unchanged cover was rehashed")):
+                reused = RockboxArtworkCache(root / "cache").prepare(
+                    source, verify_cache=False)
+
+            self.assertEqual(reused, first)
+
+    def test_cover_is_exact_paletted_bmp_without_rewriting_canonical(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "canonical.jpg"
+            image = Image.new("L", (100, 100), 128)
+            buffer = io.BytesIO()
+            image.save(buffer, "JPEG", progressive=False)
+            source.write_bytes(buffer.getvalue())
+            source_hash = _hash(source)
+
+            prepared = RockboxArtworkCache(root / "cache").prepare(source)
+
+            self.assertEqual(_hash(source), source_hash)
+            with Image.open(prepared.payload) as output:
+                self.assertEqual(output.format, "BMP")
+                self.assertEqual(output.size, (160, 160))
+                self.assertEqual(output.mode, "P")
+            self.assertLess(prepared.size, 30_000)
+            self.assertEqual(
+                RockboxArtworkCache(root / "cache").prepare(source), prepared)
+            mini = RockboxArtworkCache(root / "cache").prepare(source, side=116)
+            with Image.open(mini.payload) as output:
+                self.assertEqual(output.format, "BMP")
+                self.assertEqual(output.size, (116, 116))
+                self.assertEqual(output.mode, "P")
+            self.assertLess(mini.size, 18_000)
+            self.assertNotEqual(mini.payload, prepared.payload)
+            custom = RockboxArtworkCache(root / "cache").prepare(
+                source, side=200)
+            with Image.open(custom.payload) as output:
+                self.assertEqual(output.format, "BMP")
+                self.assertEqual(output.size, (200, 200))
+                self.assertEqual(output.mode, "P")
+            self.assertLess(custom.size, 42_000)
+            self.assertNotEqual(custom.payload, prepared.payload)
+
+    def test_exact_jpeg_still_becomes_separate_rockbox_bmp(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "canonical.jpg"
+            buffer = io.BytesIO()
+            Image.new("RGB", (160, 160), (20, 40, 60)).save(
+                buffer, "JPEG", progressive=False)
+            source.write_bytes(buffer.getvalue())
+            source_hash = _hash(source)
+            prepared = RockboxArtworkCache(root / "cache").prepare(source)
+            self.assertNotEqual(prepared.payload, source.resolve())
+            self.assertEqual(_hash(source), source_hash)
+            with Image.open(prepared.payload) as output:
+                self.assertEqual(output.format, "BMP")
+                self.assertEqual(output.size, (160, 160))
+
+
+if __name__ == "__main__":
+    unittest.main()

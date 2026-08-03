@@ -136,7 +136,7 @@ def device_music_path(source: Path, artist: str, music_root: str = "Music",
     """Build the on-device (Rockbox) path for a copied track.
 
     Layout: /<music_root>/<Artist>/<Track>/<Track.ext> — every track gets its
-    OWN folder so Rockbox can show a per-track cover.jpg (works for all formats,
+    OWN folder so Rockbox can show per-track external art (works for all formats,
     including WAV). Artist and filename are sanitized for FAT32; the original
     extension is preserved. If name_override is given (a user title edit or an
     auto-tidied title), the stem becomes that instead of the source stem.
@@ -151,7 +151,7 @@ def device_music_path(source: Path, artist: str, music_root: str = "Music",
     stem = (name_override or "").strip() or source.stem
     stem = sanitize_component(stem, max_len=TITLE_MAX)
     filename = stem + source.suffix
-    # Each track gets its OWN folder so Rockbox can read a per-track cover.jpg
+    # Each track gets its OWN folder so Rockbox can read per-track external art
     # (works for every format, incl. WAV): /Music/<Artist>/<Track>/<Track.ext>
     return f"/{music_root}/{artist_dir}/{stem}/{filename}"
 

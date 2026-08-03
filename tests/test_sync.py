@@ -1,4 +1,5 @@
 import os
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest import mock
 from urllib.parse import quote
 
 from soundbox import manifest, rekordbox_xml, sync as sync_mod
+from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 
 
 def loc(p: Path) -> str:
@@ -64,6 +66,20 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.assertEqual(pr.found, 2)
         self.assertEqual(pr.missing, 1)
         self.assertEqual(rep.bytes_to_copy, 4 + 6)
+
+    def test_rockbox_only_export_refuses_composite_manifest(self):
+        manifest.save(self.target, {
+            "schema": manifest.COMPOSITE_SCHEMA,
+            "playlists": {},
+            "files": {},
+        })
+        before = manifest.manifest_path(self.target).read_bytes()
+
+        with self.assertRaisesRegex(RuntimeError, "composite dual-library"):
+            sync_mod.run(
+                self.lib, self.lib.playlists, self.target, dry_run=True)
+
+        self.assertEqual(manifest.manifest_path(self.target).read_bytes(), before)
 
     def test_sync_copies_and_writes_playlists(self):
         rep = sync_mod.run(self.lib, self.lib.playlists, self.target, layout="both", dry_run=False)
@@ -176,6 +192,75 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.assertEqual(cover.read_bytes(), b"\xff\xd8\xff\xe0JPEGDATA")
         # track "2" had no art → no cover
         self.assertFalse((self.target / "Music/Artist Y/Good Two/cover.jpg").exists())
+
+    def test_rockbox_derivatives_strip_embedded_art_and_standardize_cover(self):
+        from mutagen.id3 import APIC, ID3
+        from mutagen.mp3 import MP3
+        from PIL import Image
+
+        source = self.src / "tagged.mp3"
+        frame = b"\xff\xfb\x90\x64" + b"\0" * 413
+        source.write_bytes(frame * 100)
+        tags = ID3()
+        tags.add(APIC(
+            mime="image/jpeg", type=3, desc="", data=b"huge-cover" * 1000))
+        tags.save(source)
+        source_before = source.read_bytes()
+        xml = self.root / "tagged.xml"
+        write_xml(
+            xml, [("tagged", "Tagged", "Artist", source)], ["tagged"])
+        library = rekordbox_xml.load(xml)
+
+        canonical_art = self.root / "canonical.jpg"
+        buf = io.BytesIO()
+        Image.new("L", (100, 100), 128).save(
+            buf, "JPEG", progressive=False)
+        canonical_art.write_bytes(buf.getvalue())
+
+        class FakeArtCache:
+            def image_path(self, track_id):
+                return canonical_art if track_id == "tagged" else None
+
+        report = sync_mod.run(
+            library,
+            library.playlists,
+            self.target,
+            dry_run=False,
+            art_cache=FakeArtCache(),
+            rockbox_media_cache=RockboxMediaCache(self.root / "media-cache"),
+            rockbox_art_cache=RockboxArtworkCache(self.root / "art-cache"),
+        )
+
+        landed = self.target / "Music/Artist/Tagged/Tagged.mp3"
+        self.assertEqual(report.sanitized_media, 1)
+        self.assertEqual(source.read_bytes(), source_before)
+        self.assertEqual(len(MP3(source).tags.getall("APIC")), 1)
+        self.assertEqual(len(MP3(landed).tags.getall("APIC")), 0)
+        with Image.open(landed.parent / "cover.160x160.bmp") as image:
+            self.assertEqual(image.format, "BMP")
+            self.assertEqual(image.size, (160, 160))
+            self.assertEqual(image.mode, "P")
+        with Image.open(landed.parent / "cover.116x116.bmp") as image:
+            self.assertEqual(image.format, "BMP")
+            self.assertEqual(image.size, (116, 116))
+            self.assertEqual(image.mode, "P")
+        with Image.open(landed.parent / "cover.bmp") as image:
+            self.assertEqual(image.format, "BMP")
+            self.assertEqual(image.size, (160, 160))
+            self.assertEqual(image.mode, "P")
+
+        # A second export reuses both exact derivatives and the universal one.
+        again = sync_mod.run(
+            library,
+            library.playlists,
+            self.target,
+            dry_run=False,
+            art_cache=FakeArtCache(),
+            rockbox_media_cache=RockboxMediaCache(self.root / "media-cache"),
+            rockbox_art_cache=RockboxArtworkCache(self.root / "art-cache"),
+        )
+        self.assertEqual(again.playlists[0].copied, 0)
+        self.assertEqual(again.playlists[0].already_present, 1)
 
     def test_guard_refuses_target_inside_library(self):
         bad_target = self.src / "inside"

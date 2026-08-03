@@ -4,6 +4,20 @@ Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root
 
 ## Resolution (what was actually done, and what was deliberately declined)
 
+### Follow-up: temporary install rollbacks (2026-08-02)
+
+A read-only audit after repeated iPod development installs found about 9.26 GiB
+under `/tmp/soundbox-*`, mostly superseded application rollback bundles. This is
+the avoidable growth the user observed. It is separate from the 28 physical-iPod
+stock recovery points (about 51 MB total) and the bounded V5 analysis cache
+(about 11.6 GB for 3,244 records). No files were removed during the audit.
+
+The currently required app rollback is
+`/tmp/soundbox-rockbox-tags-install.xtpvZk/`. After the installed build and
+physical corrective sync are accepted, obtain explicit approval and remove only
+superseded `/tmp/soundbox-*` artifacts, preserving that one current rollback
+until the normal handoff permits retirement.
+
 ### Follow-up: bounded V5 waveform cache (2026-07-30)
 
 The July 28 V4 quality recook had grown `track_analysis/` to 40 GiB because it

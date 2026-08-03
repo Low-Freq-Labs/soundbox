@@ -19,8 +19,13 @@ from PySide6.QtCore import QThread, Signal
 from soundbox import artfetch, engine, metadata, rekordbox_db
 from soundbox.library import Playlist
 from soundbox.stock_artwork import StockArtworkCache
+from soundbox.stock_ipod import (
+    inspect_stock_ipod_sync_status, normalize_model_number,
+    supports_stock_write,
+)
+from soundbox.stock_ipod_info import stock_ipod_device_key
 
-from .devices import device_profile, list_devices
+from .devices import device_facts, device_profile, list_devices
 
 LOG = logging.getLogger("soundbox")
 
@@ -34,12 +39,15 @@ class ExportWorker(QThread):
     progress = Signal(int, int, str)
     finished_all = Signal(list)
 
-    def __init__(self, lib, overrides=None, titles=None, art_cache=None):
+    def __init__(self, lib, overrides=None, titles=None, art_cache=None,
+                 rockbox_media_cache=None, rockbox_art_cache=None):
         super().__init__()
         self.lib = lib
         self.overrides = overrides or {}
         self.titles = titles or {}
         self.art_cache = art_cache
+        self.rockbox_media_cache = rockbox_media_cache
+        self.rockbox_art_cache = rockbox_art_cache
         self._lock = threading.Lock()
         self._jobs: list[tuple[str, Playlist]] = []
         self._index = 0
@@ -83,7 +91,9 @@ class ExportWorker(QThread):
                         self.lib, [pl], device, dry_run=False, derive_artists=True,
                         on_progress=cb, should_cancel=lambda: self._stop, clean=False,
                         artist_overrides=self.overrides, title_overrides=self.titles,
-                        art_cache=self.art_cache)
+                        art_cache=self.art_cache,
+                        rockbox_media_cache=self.rockbox_media_cache,
+                        rockbox_art_cache=self.rockbox_art_cache)
                     self._reports.append((device, rep))
                 except Exception as exc:  # noqa: BLE001 - surface failure in report
                     self._reports.append((device, str(exc) or repr(exc)))
@@ -105,6 +115,11 @@ class ExportWorker(QThread):
                 engine.clean_device(dev, dev_dirs.get(dev))
             except Exception:  # noqa: BLE001
                 pass
+        if self.rockbox_media_cache is not None:
+            try:
+                self.rockbox_media_cache.clear()
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("Rockbox media staging cleanup failed: %s", exc)
         self.finished_all.emit(self._reports)
 
 
@@ -114,13 +129,16 @@ class ResyncWorker(QThread):
     progress = Signal(int, int, str)
     done = Signal(str, object)  # device, SyncReport | error string
 
-    def __init__(self, lib, device, overrides=None, titles=None, art_cache=None, extra=None):
+    def __init__(self, lib, device, overrides=None, titles=None, art_cache=None,
+                 rockbox_media_cache=None, rockbox_art_cache=None, extra=None):
         super().__init__()
         self.lib = lib
         self.device = device
         self.overrides = overrides or {}
         self.titles = titles or {}
         self.art_cache = art_cache
+        self.rockbox_media_cache = rockbox_media_cache
+        self.rockbox_art_cache = rockbox_art_cache
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
         self._stop = False
 
@@ -135,10 +153,19 @@ class ResyncWorker(QThread):
                 self.lib, self.device, on_progress=cb,
                 should_cancel=lambda: self._stop,
                 artist_overrides=self.overrides, title_overrides=self.titles,
-                art_cache=self.art_cache, extra=self.extra)
+                art_cache=self.art_cache,
+                rockbox_media_cache=self.rockbox_media_cache,
+                rockbox_art_cache=self.rockbox_art_cache,
+                extra=self.extra)
             self.done.emit(self.device, rep)
         except Exception as exc:  # noqa: BLE001 - surface, never crash the app
             self.done.emit(self.device, str(exc) or repr(exc))
+        finally:
+            if self.rockbox_media_cache is not None:
+                try:
+                    self.rockbox_media_cache.clear()
+                except Exception as exc:  # noqa: BLE001
+                    LOG.warning("Rockbox media staging cleanup failed: %s", exc)
 
 
 class RefreshWorker(QThread):
@@ -168,22 +195,63 @@ class DeviceScanWorker(QThread):
     """
     done = Signal(list)  # list[tuple[name, path, free, drift, profile]]
 
-    def __init__(self, lib, extra=None):
+    def __init__(self, lib, extra=None, *, artist_overrides=None,
+                 title_overrides=None, stock_shadow_store=None,
+                 stock_models=None):
         super().__init__()
         self.lib = lib
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
+        self.artist_overrides = dict(artist_overrides or {})
+        self.title_overrides = dict(title_overrides or {})
+        self.stock_shadow_store = stock_shadow_store
+        self.stock_models = dict(stock_models or {})
 
     def run(self):
         out = []
         for name, path, free in list_devices():
             drift = 0
+            profile = device_profile(path)
             if self.lib is not None:
                 try:
-                    dr = engine.device_drift(self.lib, path, self.extra)
+                    dr = engine.device_drift(
+                        self.lib,
+                        path,
+                        self.extra,
+                        artist_overrides=self.artist_overrides,
+                        title_overrides=self.title_overrides,
+                    )
                     drift = dr.count() if dr else 0
                 except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
                     drift = 0
-            out.append((name, path, free, drift, device_profile(path)))
+                if (
+                    not drift
+                    and profile.kind == "stock_ipod"
+                    and self.stock_shadow_store is not None
+                ):
+                    try:
+                        facts = device_facts(path)
+                        identity_key = stock_ipod_device_key(
+                            facts.volume_uuid,
+                            int(profile.library_persistent_id or 0),
+                        )
+                        model = normalize_model_number(
+                            profile.model
+                            or self.stock_models.get(identity_key, ""))
+                        if supports_stock_write(model):
+                            status = inspect_stock_ipod_sync_status(
+                                self.lib,
+                                path,
+                                identity_key=identity_key,
+                                model_number=model,
+                                serial_number=facts.hardware_serial,
+                                shadow_store=self.stock_shadow_store,
+                                extra_playlists=tuple(self.extra),
+                            )
+                            if status.state not in {"up_to_date", "untracked"}:
+                                drift = max(1, status.local_changes)
+                    except Exception:  # noqa: BLE001 - keep polling read-only
+                        drift = 0
+            out.append((name, path, free, drift, profile))
         self.done.emit(out)
 
 
@@ -769,14 +837,36 @@ class OneShotTask(QThread):
     beachball the app)."""
     done = Signal(object)
 
-    def __init__(self, fn):
+    def __init__(self, fn, *, log_label: str = ""):
         super().__init__()
         self.fn = fn
+        self.log_label = log_label
 
     def run(self):
         try:
             self.done.emit(self.fn())
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI
+            if self.log_label:
+                LOG.exception("%s failed", self.log_label)
+            self.done.emit(exc)
+
+
+class ProgressTask(QThread):
+    """Run one callable with a thread-safe, numeric progress callback."""
+    progress = Signal(int, int, str)
+    done = Signal(object)
+
+    def __init__(self, fn, *, log_label: str = ""):
+        super().__init__()
+        self.fn = fn
+        self.log_label = log_label
+
+    def run(self):
+        try:
+            self.done.emit(self.fn(self.progress.emit))
+        except Exception as exc:  # noqa: BLE001 — surfaced to the UI
+            if self.log_label:
+                LOG.exception("%s failed", self.log_label)
             self.done.emit(exc)
 
 

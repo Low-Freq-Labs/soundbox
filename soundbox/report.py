@@ -32,6 +32,9 @@ class SyncReport:
     dry_run: bool
     playlists: list[PlaylistReport] = field(default_factory=list)
     bytes_to_copy: int = 0
+    # Audio payloads copied from a verified derivative with embedded pictures
+    # removed; canonical source files remain byte-identical.
+    sanitized_media: int = 0
     # Folders actually written this run (copied-file dirs + playlist dirs). Lets the
     # AppleDouble scrub target only what we touched instead of the whole device.
     written_dirs: set = field(default_factory=set)
@@ -59,3 +62,7 @@ class SyncReport:
                 print("Errors / skipped     : none")
         verb = "would be copied" if self.dry_run else "copied"
         print(f"\nTotal data {verb}: {human(self.bytes_to_copy)}")
+        if self.sanitized_media:
+            print(
+                "Rockbox-safe audio copies: "
+                f"{self.sanitized_media} (embedded artwork removed)")

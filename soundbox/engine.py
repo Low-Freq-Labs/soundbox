@@ -101,6 +101,8 @@ def export_playlists(
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
     art_cache=None,
+    rockbox_media_cache=None,
+    rockbox_art_cache=None,
 ):
     """Export already-resolved Playlist objects (rekordbox OR custom SoundBox).
 
@@ -115,6 +117,8 @@ def export_playlists(
         on_progress=on_progress, should_cancel=should_cancel,
         artist_overrides=artist_overrides, title_overrides=title_overrides,
         art_cache=art_cache,
+        rockbox_media_cache=rockbox_media_cache,
+        rockbox_art_cache=rockbox_art_cache,
     )
     if not dry_run and clean:
         sync_mod.clean_applefiles(target, report.written_dirs)
@@ -129,10 +133,9 @@ def clean_device(target: str | Path, dirs=None) -> int:
 
 def _rockbox_art_advisory(target: Path) -> str | None:
     """Read-only check of the device's Rockbox art setting. SoundBox writes a
-    curated cover.jpg for EVERY track (the universal floor); Rockbox's default
-    lets embedded MP3/M4A art win where present — accepted by design (user
-    decision 2026-07-04). The ONLY state worth flagging is art turned fully
-    OFF, because then nothing shows at all."""
+    uniform external cover for every managed track and strips embedded pictures
+    only from its disposable device-side audio copy.  The only state worth
+    flagging is art turned fully off, because then nothing shows at all."""
     cfg = target / ".rockbox" / "config.cfg"
     if not cfg.is_file():
         return None
@@ -185,13 +188,32 @@ def verify_export(target: str | Path, *, deep: bool = False) -> dict:
     return res
 
 
-def device_drift(lib: Library, target: str | Path, extra=None):
+def device_drift(
+    lib: Library,
+    target: str | Path,
+    extra=None,
+    *,
+    artist_overrides: dict | None = None,
+    title_overrides: dict | None = None,
+):
     """How far a device has drifted from the current library since last sync
     (renamed/moved/changed/removed playlists). Read-only. None if no manifest.
 
     `extra` = custom SoundBox playlists (not in lib.playlists) so they aren't
     mis-counted as removed."""
-    m = manifest_mod.load(Path(target))
+    target_path = Path(target)
+    if manifest_mod.has_composite_ownership(target_path):
+        # Imported lazily: dual_ipod itself composes the lower-level engine
+        # modules, while this read-only route only needs its profile-aware diff.
+        from .dual_ipod import composite_device_drift
+        return composite_device_drift(
+            lib,
+            target_path,
+            extra,
+            artist_overrides=artist_overrides,
+            title_overrides=title_overrides,
+        )
+    m = manifest_mod.load(target_path)
     if not m.get("playlists"):
         return None
     return manifest_mod.diff(m, lib, extra)
@@ -206,6 +228,8 @@ def resync_device(
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
     art_cache=None,
+    rockbox_media_cache=None,
+    rockbox_art_cache=None,
     extra=None,
 ):
     """Bring a device in line with rekordbox (see sync.resync). Writes only under target.
@@ -214,4 +238,5 @@ def resync_device(
     return sync_mod.resync(
         lib, Path(target), on_progress=on_progress, should_cancel=should_cancel,
         artist_overrides=artist_overrides, title_overrides=title_overrides,
-        art_cache=art_cache, extra=extra)
+        art_cache=art_cache, rockbox_media_cache=rockbox_media_cache,
+        rockbox_art_cache=rockbox_art_cache, extra=extra)

@@ -2,8 +2,8 @@
 
 Rockbox renders BASELINE JPEG only — progressive/multi-scan JPEG and PNG are
 valid files that show BLANK on the iPod. Everything stored in the art cache
-(and therefore everything written to a device as cover.jpg) is normalized to
-baseline JPEG here. SoundCloud's CDN happens to serve baseline today, but
+(and therefore every canonical cached JPEG) is normalized to baseline JPEG
+here. SoundCloud's CDN happens to serve baseline today, but
 manual paste-URL / choose-file art can be anything, so this is enforced at
 the cache boundary rather than trusted.
 """
@@ -12,11 +12,17 @@ from __future__ import annotations
 
 import io
 
-# Rockbox screens are small (iPod Video = 320x240); cap huge manual images so
-# re-encodes stay light and covers load fast on-device. 500 matches SoundCloud's
-# t500x500, which already renders fine.
+# Canonical curated images remain at the established 500px ceiling.  The active
+# iPod Video AdwaitaPod Dark Simplified theme requests exact 160x160 playback
+# and 116x116 home-screen views.  Disposable Rockbox derivatives match both
+# viewports instead of asking the PortalPlayer target to decode unused pixels.
 MAX_SIDE = 500
 _QUALITY = 90
+ROCKBOX_COVER_SIDE = 160
+ROCKBOX_COVER_SIDES = (160, 116)
+ROCKBOX_FALLBACK_SIDE = 160
+ROCKBOX_ART_SIDES = tuple(dict.fromkeys(
+    (*ROCKBOX_COVER_SIDES, ROCKBOX_FALLBACK_SIDE)))
 
 _SOF_BASELINE = (0xC0, 0xC1)  # sequential DCT
 _SOF_PROGRESSIVE = (0xC2,)
@@ -81,3 +87,52 @@ def ensure_device_safe(data: bytes) -> bytes:
     if is_device_safe(data):
         return data
     return to_baseline_jpeg(data) or data
+
+
+def to_rockbox_cover(
+        data: bytes, side: int = ROCKBOX_COVER_SIDE) -> bytes | None:
+    """Return the canonical Rockbox cover derivative.
+
+    The curated cache remains the source of truth.  This always decodes and
+    re-encodes a separate exact-size 8-bit paletted bitmap so Rockbox never has
+    to handle a large, progressive, grayscale, CMYK, or oddly-sized source
+    image.  The installed theme uses this same uncompressed BMP representation;
+    it cuts device reads by roughly two thirds versus a 24-bit BMP while staying
+    CPU-cheap for the PortalPlayer target.  The exact-size filename used by the
+    exporter also lets Rockbox find it on its first album-art lookup pass.
+    Current curated artwork is square; non-square future input is centered on
+    a white square rather than cropped.
+    """
+    from PIL import Image, ImageOps
+
+    if not isinstance(side, int) or not 1 <= side <= 240:
+        raise ValueError(f"Unsupported Rockbox cover side: {side}")
+    try:
+        img: Image.Image = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception:
+        return None
+    if img.mode in ("RGBA", "LA", "P", "PA"):
+        rgba = img.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, (255, 255, 255))
+        flat.paste(rgba, mask=rgba.getchannel("A"))
+        img = flat
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail(
+        (side, side), Image.Resampling.LANCZOS)
+    img = ImageOps.pad(
+        img,
+        (side, side),
+        method=Image.Resampling.LANCZOS,
+        color=(255, 255, 255),
+        centering=(0.5, 0.5),
+    )
+    img = img.quantize(
+        colors=256,
+        method=Image.Quantize.MEDIANCUT,
+        dither=Image.Dither.FLOYDSTEINBERG,
+    )
+    out = io.BytesIO()
+    img.save(out, "BMP")
+    return out.getvalue()

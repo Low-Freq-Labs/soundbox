@@ -1,4 +1,4 @@
-"""Rockbox-safe cover art: baseline-JPEG detection, re-encode, cache normalization."""
+"""Canonical JPEG safety plus exact-size Rockbox BMP derivatives."""
 
 import io
 import json
@@ -60,6 +60,35 @@ class Reencode(unittest.TestCase):
     def test_ensure_converts_unsafe(self):
         out = artencode.ensure_device_safe(_img_bytes("PNG"))
         self.assertEqual(artencode.kind(out), "baseline")
+
+    def test_rockbox_cover_matches_active_theme_viewport(self):
+        from PIL import Image
+        source = _img_bytes("JPEG", size=(100, 80), mode="RGB")
+        out = artencode.to_rockbox_cover(source)
+        self.assertIsNotNone(out)
+        with Image.open(io.BytesIO(out)) as image:
+            self.assertEqual(image.format, "BMP")
+            self.assertEqual(image.size, (160, 160))
+            self.assertEqual(image.mode, "P")
+        self.assertLess(len(out), 30_000)
+        mini = artencode.to_rockbox_cover(source, 116)
+        self.assertIsNotNone(mini)
+        with Image.open(io.BytesIO(mini)) as image:
+            self.assertEqual(image.format, "BMP")
+            self.assertEqual(image.size, (116, 116))
+            self.assertEqual(image.mode, "P")
+        self.assertLess(len(mini), 18_000)
+        custom = artencode.to_rockbox_cover(source, 200)
+        self.assertIsNotNone(custom)
+        with Image.open(io.BytesIO(custom)) as image:
+            self.assertEqual(image.format, "BMP")
+            self.assertEqual(image.size, (200, 200))
+            self.assertEqual(image.mode, "P")
+        self.assertLess(len(custom), 42_000)
+
+    def test_rockbox_cover_rejects_unmanaged_viewport(self):
+        with self.assertRaises(ValueError):
+            artencode.to_rockbox_cover(_img_bytes("JPEG"), 500)
 
 
 class CacheNormalization(unittest.TestCase):

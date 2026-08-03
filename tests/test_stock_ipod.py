@@ -24,6 +24,7 @@ from clickwheel.ipod.itunesdb_writer import (
     TrackInfo,
     write_itunesdb,
 )
+from clickwheel.ipod.itunesdb_writer.mhyp_writer import write_mhyp
 
 from soundbox.library import Library, Playlist, Track
 from soundbox.stock_ipod import (
@@ -33,6 +34,7 @@ from soundbox.stock_ipod import (
     inspect_stock_ipod_sync_status,
     plan_stock_ipod_playlist_delete,
     plan_stock_ipod_sync,
+    rollback_committed_stock_ipod_sync,
 )
 from soundbox.stock_ipod_info import (
     confirmed_model_from_recovery,
@@ -66,6 +68,15 @@ def _wave24(path: Path, frames: int) -> None:
         out.setsampwidth(3)
         out.setframerate(44_100)
         out.writeframes(b"\x00\x01\x00\x00\x01\x00" * frames)
+
+
+class StockPlaylistCapacity(unittest.TestCase):
+    def test_pinned_renderer_serializes_ten_thousand_playlist_entries(self):
+        payload = write_mhyp("Ten Thousand", list(range(1, 10_001)))
+
+        self.assertEqual(payload[:4], b"mhyp")
+        self.assertEqual(struct.unpack_from("<I", payload, 0x10)[0], 10_000)
+        self.assertEqual(struct.unpack_from("<I", payload, 0x08)[0], len(payload))
 
 
 class _FixtureArtCache:
@@ -304,6 +315,131 @@ class StockIpodSync(unittest.TestCase):
             [101, plan.copies[0].dbid],
         )
 
+    def test_dual_boot_rewrites_existing_media_with_exact_recovery(self):
+        (self.ipod / ".rockbox").mkdir()
+        payload = self.base / "prepared" / "existing.wav"
+        _wave(payload, 442, 321)
+        original_device = self.ipod / "iPod_Control/Music/F00/AAAA.wav"
+        source_hash = _hash(self.existing_source)
+        device_hash = _hash(original_device)
+        before = self._snapshot(self.ipod)
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        identity = "stock-ipod-v1:dual-fixture"
+
+        plan = plan_stock_ipod_sync(
+            self.library,
+            [self.playlist],
+            self.ipod,
+            model_number="MA446",
+            filesystem="msdos",
+            media_payloads={self.existing_source.resolve(): payload.resolve()},
+            allow_dual_boot=True,
+            identity_key=identity,
+            shadow_store=shadow_store,
+        )
+
+        self.assertEqual(self._snapshot(self.ipod), before)
+        self.assertTrue(plan.dual_boot)
+        self.assertEqual(len(plan.rewrites), 1)
+        self.assertEqual(plan.rewrites[0].dbid, 101)
+        self.assertEqual(plan.rewrites[0].sha256_before, device_hash)
+        self.assertEqual(plan.rewrites[0].sha256, _hash(payload))
+        self.assertEqual(
+            plan.source_device_paths[str(self.existing_source.resolve())],
+            "/iPod_Control/Music/F00/AAAA.wav",
+        )
+
+        result = commit_stock_ipod_sync(plan)
+
+        self.assertEqual(result.rewritten_tracks, 1)
+        self.assertEqual(_hash(original_device), _hash(payload))
+        self.assertEqual(_hash(self.existing_source), source_hash)
+        saved = (
+            result.recovery_directory
+            / "media/iPod_Control/Music/F00/AAAA.wav.before")
+        self.assertTrue(saved.is_file())
+        self.assertEqual(_hash(saved), device_hash)
+        existing = next(
+            item for item in get_ipod_tracks(read_ipod(self.ipod))
+            if item["dbid"] == 101)
+        self.assertEqual(existing["size"], payload.stat().st_size)
+        self.assertEqual(existing["location"], ":iPod_Control:Music:F00:AAAA.wav")
+        shadow = shadow_store.load(identity)
+        self.assertIsNotNone(shadow)
+        assert shadow is not None
+        source_row = shadow.sources[str(self.existing_source.resolve())]
+        self.assertEqual(source_row["size"], payload.stat().st_size)
+        self.assertEqual(
+            source_row["source_size"], self.existing_source.stat().st_size)
+        status = inspect_stock_ipod_sync_status(
+            self.library, self.ipod,
+            identity_key=identity, model_number="MA446", serial_number="",
+            shadow_store=shadow_store,
+        )
+        self.assertEqual(status.state, "up_to_date")
+
+    def test_dual_boot_database_failure_restores_rewritten_media(self):
+        (self.ipod / ".rockbox").mkdir()
+        payload = self.base / "prepared" / "existing.wav"
+        _wave(payload, 441, 654)
+        original_device = self.ipod / "iPod_Control/Music/F00/AAAA.wav"
+        before_hash = _hash(original_device)
+        before_database = _hash(self.ipod / "iPod_Control/iTunes/iTunesDB")
+        plan = plan_stock_ipod_sync(
+            self.library,
+            [self.playlist],
+            self.ipod,
+            model_number="MA446",
+            filesystem="msdos",
+            media_payloads={self.existing_source.resolve(): payload.resolve()},
+            allow_dual_boot=True,
+        )
+        new_destination = self.ipod / plan.copies[0].relative_path
+        real_write = DeviceSession.atomic_write
+
+        def fail_live_database(session, destination, data):
+            destination = Path(destination)
+            if destination.name == "iTunesDB" and destination.parent.name == "iTunes":
+                raise OSError("injected database failure")
+            return real_write(session, destination, data)
+
+        with mock.patch.object(DeviceSession, "atomic_write", fail_live_database):
+            with self.assertRaisesRegex(OSError, "injected database failure"):
+                commit_stock_ipod_sync(plan)
+
+        self.assertEqual(_hash(original_device), before_hash)
+        self.assertEqual(
+            _hash(self.ipod / "iPod_Control/iTunes/iTunesDB"), before_database)
+        self.assertFalse(new_destination.exists())
+
+    def test_committed_dual_stock_phase_can_be_rolled_back_exactly(self):
+        (self.ipod / ".rockbox").mkdir()
+        payload = self.base / "prepared" / "existing.wav"
+        _wave(payload, 441, 777)
+        before = self._snapshot(self.ipod)
+        plan = plan_stock_ipod_sync(
+            self.library,
+            [self.playlist],
+            self.ipod,
+            model_number="MA446",
+            filesystem="msdos",
+            media_payloads={self.existing_source.resolve(): payload.resolve()},
+            allow_dual_boot=True,
+        )
+        result = commit_stock_ipod_sync(plan)
+        self.assertNotEqual(self._snapshot(self.ipod), before)
+
+        rollback_committed_stock_ipod_sync(plan, result)
+
+        # Recovery evidence deliberately remains, but every live stock path is
+        # restored and the newly allocated media file is gone.
+        for relative, contents in before:
+            path = self.ipod / relative
+            self.assertTrue(path.exists(), relative)
+            if contents is not None:
+                self.assertEqual(path.read_bytes(), contents, relative)
+        self.assertFalse((self.ipod / plan.copies[0].relative_path).exists())
+
     def test_selected_reused_track_gets_soundbox_title_and_artist_only(self):
         source_hash = _hash(self.existing_source)
         before = get_ipod_tracks(read_ipod(self.ipod))[0]
@@ -346,6 +482,57 @@ class StockIpodSync(unittest.TestCase):
             "rating", "bookmarkTime", "skipCount", "lastSkipped",
         ):
             self.assertEqual(track[key], before[key], key)
+
+    def test_distinct_identical_sources_keep_distinct_stock_records(self):
+        duplicate = self.sources / "alternate-existing.wav"
+        shutil.copy2(self.existing_source, duplicate)
+        alternate = Track(
+            "alternate", "Alternate Label", "Different Artist",
+            duplicate.as_uri(), total_time=1,
+        )
+        tracks = {
+            "old": self.library.tracks_by_id["old"],
+            "alternate": alternate,
+        }
+        playlist = Playlist(
+            "Distinct Identities", [], ["old", "alternate"], pid="distinct")
+        library = Library(tracks, [playlist], self.sources)
+
+        plan = plan_stock_ipod_sync(
+            library, [playlist], self.ipod,
+            model_number="MA446", filesystem="msdos",
+        )
+
+        self.assertEqual(plan.reused_track_count, 1)
+        self.assertEqual(len(plan.copies), 1)
+        self.assertEqual(plan.final_track_count, 2)
+        self.assertNotEqual(
+            plan.source_device_paths[str(self.existing_source.resolve())],
+            plan.source_device_paths[str(duplicate.resolve())],
+        )
+
+        commit_stock_ipod_sync(plan)
+        database = read_ipod(self.ipod)
+        by_dbid = {int(item["dbid"]): item for item in get_ipod_tracks(database)}
+        self.assertEqual(len(by_dbid), 2)
+        self.assertEqual(
+            {(item["title"], item["artist"]) for item in by_dbid.values()},
+            {
+                ("Existing", "Fixture Artist"),
+                ("Alternate Label", "Different Artist"),
+            },
+        )
+        output_by_id = {
+            int(item["trackID"]): int(item["dbid"])
+            for item in by_dbid.values()
+        }
+        rendered = next(
+            item for item in database["mhlp"]
+            if item.get("Title") == "Distinct Identities")
+        sequence = [
+            output_by_id[int(item["trackID"])] for item in rendered["items"]]
+        self.assertEqual(len(sequence), 2)
+        self.assertNotEqual(sequence[0], sequence[1])
 
     def test_playlist_delete_removes_only_newly_unreferenced_track_and_media(self):
         sync_plan = plan_stock_ipod_sync(
@@ -430,6 +617,127 @@ class StockIpodSync(unittest.TestCase):
             [raw.get("Title") for raw in after["mhlp"] if not raw.get("isMaster")],
             ["Keep Me"],
         )
+
+    def test_pre_composite_dual_playlist_delete_removes_orphan_media(self):
+        sync_plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA446", filesystem="msdos",
+            art_cache=self.art_cache,
+            stock_art_cache=self.stock_art_cache,
+        )
+        new_media = self.ipod / sync_plan.copies[0].relative_path
+        old_media = self.ipod / "iPod_Control/Music/F00/AAAA.wav"
+        source_hashes = {
+            self.existing_source: _hash(self.existing_source),
+            self.new_source: _hash(self.new_source),
+        }
+        commit_stock_ipod_sync(sync_plan)
+        (self.ipod / ".rockbox").mkdir()
+        before = read_ipod(self.ipod)
+        target = next(
+            raw for raw in before["mhlp"]
+            if raw.get("Title") == "SoundBox Test"
+        )
+        with self.assertRaisesRegex(StockIpodError, "pre-composite"):
+            plan_stock_ipod_playlist_delete(
+                self.ipod,
+                [int(target["playlistID"])],
+                model_number="MA446",
+                filesystem="msdos",
+                stock_art_cache=self.stock_art_cache,
+            )
+
+        plan = plan_stock_ipod_playlist_delete(
+            self.ipod,
+            [int(target["playlistID"])],
+            model_number="MA446",
+            filesystem="msdos",
+            stock_art_cache=self.stock_art_cache,
+            allow_dual_boot=True,
+        )
+        self.assertTrue(plan.dual_boot)
+        self.assertEqual(plan.deleted_track_count, 1)
+        self.assertEqual(plan.final_track_count, 1)
+        self.assertEqual(len(plan.media_deletes), 1)
+        self.assertIsNotNone(plan.rendered_artwork)
+        commit_stock_ipod_playlist_delete(plan)
+
+        after = read_ipod(self.ipod)
+        self.assertEqual(
+            [raw["dbid"] for raw in get_ipod_tracks(after)],
+            [101],
+        )
+        self.assertNotIn(
+            "SoundBox Test",
+            {raw.get("Title") for raw in after["mhlp"]},
+        )
+        self.assertTrue(old_media.is_file())
+        self.assertFalse(new_media.exists())
+        for source, digest in source_hashes.items():
+            self.assertEqual(_hash(source), digest)
+
+    def test_pre_composite_dual_repairs_empty_playlist_orphan_index(self):
+        capabilities = capabilities_for_family_gen("iPod Video", "5.5th Gen")
+        self.assertIsNotNone(capabilities)
+        existing_media = self.ipod / "iPod_Control/Music/F00/AAAA.wav"
+        existing = TrackInfo(
+            title="Existing",
+            artist="Fixture Artist",
+            location=":iPod_Control:Music:F00:AAAA.wav",
+            size=existing_media.stat().st_size,
+            length=10,
+            filetype="wav",
+            sample_rate=44_100,
+            dbid=101,
+        )
+        self.assertTrue(write_itunesdb(
+            str(self.ipod),
+            [existing],
+            backup=False,
+            force_checksum=ChecksumType.NONE,
+            playlists=[],
+            smart_playlists=[],
+            capabilities=capabilities,
+        ))
+        (self.ipod / ".rockbox").mkdir()
+        media_hash = _hash(existing_media)
+
+        plan = plan_stock_ipod_playlist_delete(
+            self.ipod,
+            [],
+            model_number="MA446",
+            filesystem="msdos",
+            allow_dual_boot=True,
+            repair_empty_playlist_index=True,
+        )
+
+        self.assertTrue(plan.repair_empty_playlist_index)
+        self.assertEqual(plan.playlist_ids, ())
+        self.assertEqual(plan.deleted_track_count, 1)
+        self.assertEqual(plan.existing_track_count, 1)
+        self.assertEqual(plan.final_track_count, 0)
+        self.assertEqual(plan.remaining_playlist_count, 0)
+        self.assertEqual(len(plan.media_deletes), 1)
+        self.assertIsNone(plan.rendered_artwork)
+
+        result = commit_stock_ipod_playlist_delete(plan)
+        self.assertEqual(result.deleted_track_records, 1)
+        self.assertEqual(result.deleted_media_files, 1)
+        self.assertEqual(get_ipod_tracks(read_ipod(self.ipod)), [])
+        self.assertFalse(existing_media.exists())
+        self.assertEqual(_hash(self.existing_source), media_hash)
+
+    def test_empty_playlist_orphan_index_repair_refuses_user_playlists(self):
+        (self.ipod / ".rockbox").mkdir()
+        with self.assertRaisesRegex(StockIpodError, "zero user playlists"):
+            plan_stock_ipod_playlist_delete(
+                self.ipod,
+                [],
+                model_number="MA446",
+                filesystem="msdos",
+                allow_dual_boot=True,
+                repair_empty_playlist_index=True,
+            )
 
     def test_videos_system_playlist_is_narrowly_deletable_without_media(self):
         self._rewrite_fixture_with_videos_smart_playlist()
@@ -799,6 +1107,80 @@ class StockIpodSync(unittest.TestCase):
             split_library, [only_old], self.ipod, **common)
         self.assertEqual(len(changed.copies), 0)
         self.assertEqual(changed.summary()["artwork_pixel_bytes"], 100_000)
+
+    def test_stock_sync_prunes_collection_delete_when_unreferenced(self):
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        identity_key = "stock-ipod-v1:fixture:collection-delete"
+        common = {
+            "model_number": "MA446",
+            "filesystem": "msdos",
+            "art_cache": self.art_cache,
+            "stock_art_cache": self.stock_art_cache,
+            "identity_key": identity_key,
+            "shadow_store": shadow_store,
+        }
+        first = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod, **common)
+        new_media = self.ipod / first.copies[0].relative_path
+        source_hash = _hash(self.new_source)
+        commit_stock_ipod_sync(first)
+        shadow = shadow_store.load(identity_key)
+        self.assertIsNotNone(shadow)
+        assert shadow is not None
+
+        self.library.hidden_ids.add("new")
+        managed_names = tuple(
+            " / ".join([
+                *map(str, row.get("folder_path") or []),
+                str(row.get("name") or ""),
+            ])
+            for row in shadow.playlists.values()
+        )
+        managed_track_rows = tuple(sorted({
+            (
+                int(row.get("dbid") or 0),
+                str(row.get("device_path") or ""),
+                str(row.get("sha256") or ""),
+            )
+            for row in shadow.sources.values()
+            if int(row.get("dbid") or 0) > 0
+        }))
+        bad_track_rows = tuple(
+            (dbid, path, "0" * 64 if dbid != 101 else digest)
+            for dbid, path, digest in managed_track_rows
+        )
+        with self.assertRaisesRegex(StockIpodError, "bytes changed"):
+            plan_stock_ipod_sync(
+                self.library,
+                [self.playlist],
+                self.ipod,
+                managed_playlist_names_before=managed_names,
+                managed_playlist_keys_before=tuple(shadow.playlists),
+                managed_track_rows_before=bad_track_rows,
+                **common,
+            )
+        plan = plan_stock_ipod_sync(
+            self.library,
+            [self.playlist],
+            self.ipod,
+            managed_playlist_names_before=managed_names,
+            managed_playlist_keys_before=tuple(shadow.playlists),
+            managed_track_rows_before=managed_track_rows,
+            **common,
+        )
+
+        self.assertEqual(plan.removed_track_count, 1)
+        self.assertEqual(len(plan.media_deletes), 1)
+        self.assertEqual(plan.final_track_count, 1)
+        result = commit_stock_ipod_sync(plan)
+        self.assertEqual(result.deleted_media_files, 1)
+        self.assertFalse(result.cleanup_failures)
+        self.assertFalse(new_media.exists())
+        self.assertEqual(_hash(self.new_source), source_hash)
+        self.assertEqual(
+            [raw["dbid"] for raw in get_ipod_tracks(read_ipod(self.ipod))],
+            [101],
+        )
 
     def test_incremental_art_reuses_matching_free_pixels_without_writing(self):
         shadow_store = StockIpodShadowStore(self.base / "stock-state")

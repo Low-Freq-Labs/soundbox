@@ -96,8 +96,16 @@ from PySide6.QtWidgets import (
 )
 
 
-from soundbox import artfetch, engine, imports, libcache, metadata, paths, rekordbox_db
+from soundbox import (
+    artfetch, engine, imports, libcache, manifest as device_manifest, metadata,
+    paths, rekordbox_db, rockbox_config,
+)
 from soundbox.device_profile import plan_stock_ipod_export
+from soundbox.dual_ipod import (
+    DualIpodSyncPlan,
+    commit_dual_ipod_sync,
+    plan_dual_ipod_sync,
+)
 from soundbox.library import Playlist
 from soundbox.stock_artwork import StockArtworkCache
 from soundbox.stock_ipod import (
@@ -112,6 +120,7 @@ from soundbox.stock_ipod_info import (
     read_stock_ipod_snapshot, stock_ipod_device_key,
 )
 from soundbox.stock_ipod_shadow import StockIpodShadowStore
+from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 from . import theme
 from .artpicker import ArtPickerDialog
 from .model import (
@@ -122,7 +131,7 @@ from .player import PlayerBar
 from .device_browser import DeviceBrowserMixin
 from .devices import device_facts, device_fs, human
 from .settings_page import SettingsPageMixin
-from .stock_device_view import StockIpodPages
+from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
     CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
@@ -202,6 +211,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
         self.art_cache = artfetch.ArtCache(data_dir / "art")  # cover-art cache
         self.stock_art_cache = StockArtworkCache(data_dir / "stock_artwork")
+        self.rockbox_media_cache = RockboxMediaCache(data_dir / "rockbox_media")
+        self.rockbox_art_cache = RockboxArtworkCache(
+            data_dir / "rockbox_artwork")
         self.stock_ipod_shadow_store = StockIpodShadowStore(
             data_dir / "stock_ipod_state")
         # One-time Rockbox-safety sweep: any cached art that isn't baseline JPEG
@@ -240,6 +252,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._delete_worker: DeleteWorker | None = None
         self._stock_plan_worker = None
         self._stock_commit_worker = None
+        self._dual_plan_worker = None
+        self._dual_commit_worker = None
+        self._dual_active_device = ""
+        self._dual_active_playlist_keys: set[str] = set()
+        self._dual_sync_queue: dict[str, list[Playlist]] = {}
+        self._dual_active_preconfirmed = False
+        self._dual_active_confirmed = False
+        self._dual_active_action = "sync"
+        self._dual_active_track_total = 0
+        self._dual_batch_keys: set[str] = set()
+        self._dual_batch_names: list[str] = []
+        self._dual_batch_total_tracks = 0
+        self._dual_batch_done_tracks = 0
+        self._dual_batch_results: list[tuple[DualIpodSyncPlan, object]] = []
         self._stock_delete_plan_worker = None
         self._stock_delete_commit_worker = None
         self._stock_view_worker = None
@@ -268,6 +294,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._warm_worker = None
         self._exporting = False
         self._deleting = False
+        self._pending_device_operation = None
         self._accordion_guard = False
         self._build_ui()
         QApplication.instance().installEventFilter(self)  # Space transport + C cue
@@ -1354,7 +1381,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.device_tab_group = QButtonGroup(self)
         self.device_tab_group.setExclusive(True)
         self.device_tab_buttons = []
-        for index, label in enumerate(("Device", "Music", "Playlists")):
+        for index, label in enumerate(("Device", "Songs", "Playlists")):
             button = QPushButton(label)
             button.setObjectName("DeviceTab")
             button.setCheckable(True)
@@ -1366,6 +1393,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.device_tab_group.addButton(button, index)
             self.device_tab_buttons.append(button)
             dhh.addWidget(button)
+        self.device_sync_btn = QPushButton("Sync")
+        self.device_sync_btn.clicked.connect(
+            lambda: self._sync_device(self._current_device_path))
+        dhh.addWidget(self.device_sync_btn)
         eject_btn = QPushButton("⏏ Eject"); eject_btn.clicked.connect(self._eject_current)
         dhh.addWidget(eject_btn)
         dl.addWidget(dhead)
@@ -1397,6 +1428,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._confirm_current_stock_model)
         self.stock_ipod_pages.delete_playlists_requested.connect(
             self._begin_stock_playlist_delete)
+        self.stock_ipod_pages.playlist_order_requested.connect(
+            self._apply_composite_playlist_order)
         self.device_content_stack.addWidget(self.stock_ipod_pages)
         dl.addWidget(self.device_content_stack)
         self.stack.addWidget(dpage)
@@ -1450,22 +1483,22 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # against the window edge.
         h = QHBoxLayout(bar); h.setContentsMargins(20, 6, 12, 6); h.setSpacing(8)
         self.status_label = QLabel("Ready")
-        # Fixed width (just fits the longest operation message) so animating
-        # dots do not shove the bar or clip long stock-iPod operations.
+        # Reserve only the current operation's animated dots.  A single global
+        # width for every possible flash message left a huge dead gap before
+        # the iPod count and progress bar.
         fm = self.status_label.fontMetrics()
-        w = max(fm.horizontalAdvance(value) for value in (
-            "Preparing your library...",
-            "Art 9999/9999",
-            "PLANNING STOCK IPOD PLAYLIST DELETE...",
-            "DELETING STOCK IPOD PLAYLISTS...",
-            "Stock iPod playlists deleted ✓",
-        ))
-        self.status_label.setFixedWidth(w + 8)
+        self.status_label.setFixedWidth(fm.horizontalAdvance("Ready") + 8)
         h.addWidget(self.status_label)
+        self.status_count_label = QLabel("")
+        self.status_count_label.setAlignment(Qt.AlignCenter)
+        self.status_count_label.setFixedWidth(
+            fm.horizontalAdvance("9999/9999") + 8)
+        self.status_count_label.setVisible(False)
+        h.addWidget(self.status_count_label)
         self.progress = QProgressBar()
         self.progress.setMinimum(0)
         self.progress.setValue(0)
-        self.progress.setFixedWidth(260)
+        self.progress.setFixedWidth(208)
         self.progress.setTextVisible(True)
         self.progress.setFormat("%p%")
         self.progress.setVisible(False)
@@ -1728,7 +1761,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._scan_worker = w
         w.done.connect(self._on_merge_scan)
         w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
-        self._start_pulse("SCANNING")
+        self._start_pulse("Scanning")
         w.start()
 
     def _on_merge_scan(self, res):
@@ -2337,11 +2370,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self, name: str, free, drift: int, fs: str = "",
             profile=None) -> str:
         # When a device is out of sync, HIDE the "GB free" so the full
-        # "⚠ N playlist(s) out of date" fits (it was getting truncated). Free space
+        # "⚠ Sync needed" state fits (it was getting truncated). Free space
         # returns once everything is synced again.
         if drift:
-            word = "playlist" if drift == 1 else "playlists"
-            return f"⛃  {name}    ⚠ {drift} {word} out of date"
+            return f"⛃  {name}    ⚠ Sync needed"
         if fs and fs not in ("msdos", "fat32"):
             # Rockbox runs on FAT32 only — flag HFS+/exFAT devices immediately.
             return f"⛃  {name}    ⚠ {fs.upper()} (not FAT32)"
@@ -2365,11 +2397,48 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if _running(getattr(self, "_dev_scan_worker", None)):
             return
-        w = DeviceScanWorker(self.lib, self._sync_playlists())
+        raw_models = self.settings.get("stock_ipod_models")
+        w = DeviceScanWorker(
+            self.lib,
+            self._sync_playlists(),
+            artist_overrides=self.overrides,
+            title_overrides=self.titles,
+            stock_shadow_store=self.stock_ipod_shadow_store,
+            stock_models=(raw_models if isinstance(raw_models, dict) else {}),
+        )
         self._dev_scan_worker = w
         w.done.connect(self._on_devices_scanned)
         w.finished.connect(lambda ww=w: self._finish_worker("_dev_scan_worker", ww))
         w.start()
+
+    def _defer_device_operation_until_scan_finishes(self, callback) -> bool:
+        """Serialize a device operation behind an already-running poll.
+
+        Setting ``_exporting`` immediately prevents the three-second timer from
+        launching another scan in the gap between this worker finishing and the
+        requested operation starting.
+        """
+        worker = getattr(self, "_dev_scan_worker", None)
+        if not _running(worker):
+            return False
+        if self._pending_device_operation is not None:
+            return True
+        self._pending_device_operation = callback
+        self._exporting = True
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("Waiting for iPod")
+
+        def resume():
+            if self._pending_device_operation is not callback:
+                return
+            self._pending_device_operation = None
+            self._exporting = False
+            self._stop_pulse()
+            callback()
+
+        worker.finished.connect(resume)
+        return True
 
     def _on_devices_scanned(self, devs: list):
         """Apply a background device scan to the tree (main thread). devs is a list
@@ -2460,9 +2529,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if profile.model:
                 tip += f" ({profile.model})"
             if profile.has_rockbox and profile.rockbox_export:
-                tip += (
-                    "\nRockbox export rules are active; the coexisting stock "
-                    "database remains read-only.")
+                if profile.kind == "dual_boot":
+                    tip += (
+                        "\nComposite single-copy dual sync is available: "
+                        "stock-safe media is shared with Rockbox.")
+                else:
+                    tip += "\nRockbox filesystem export rules are active."
             elif profile.stock_preview and not profile.stock_write:
                 tip += (
                     "\nStock sync requires an MP3/WAV playlist dry-run and "
@@ -2483,13 +2555,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             profile = self._device_profiles.get(dev)
             stock = bool(
                 profile is not None
-                and getattr(profile, "kind", "") == "stock_ipod")
+                and getattr(profile, "has_stock_ipod", False))
             for button in self.device_tab_buttons:
                 button.setVisible(stock)
+            for button, label in zip(
+                    self.device_tab_buttons,
+                    ("Device", "Songs", "Playlists"),
+                    strict=True):
+                button.setText(label)
             if stock:
                 self.device_content_stack.setCurrentIndex(1)
-                self.stock_ipod_pages.set_loading()
-                self._set_stock_device_tab(0)
+                preserve_snapshot = bool(
+                    self._stock_snapshot is not None
+                    and self._stock_snapshot.target == Path(dev).resolve())
+                self.stock_ipod_pages.set_loading(
+                    preserve_page=preserve_snapshot)
+                if not preserve_snapshot:
+                    self._set_stock_device_tab(0)
                 self._read_stock_device_view(dev, profile)
             else:
                 self.device_content_stack.setCurrentIndex(0)
@@ -2502,14 +2584,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.device_tab_buttons[index].setChecked(True)
         self.stock_ipod_pages.set_page(index)
 
-    def _read_stock_device_view(self, dev: str, profile=None):
+    def _read_stock_device_view(
+            self, dev: str, profile=None, *, after_finished=None):
         if _running(self._stock_view_worker):
+            if after_finished is not None:
+                self._stock_view_worker.finished.connect(after_finished)
             return
         from .workers import OneShotTask
         facts = device_facts(dev)
         model = self._stored_stock_model(dev, profile)
         library = self.lib
         extra_playlists = tuple(self._sync_playlists())
+        artist_overrides = dict(self.overrides)
+        title_overrides = dict(self.titles)
 
         def read_snapshot():
             snapshot = read_stock_ipod_snapshot(
@@ -2529,8 +2616,38 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 firmware_source=getattr(facts, "firmware_source", ""),
                 transport_revision=getattr(facts, "transport_revision", ""),
             )
+            composite_data: CompositeDeviceData | None = None
+            composite_path = device_manifest.manifest_path(dev)
+            if (
+                getattr(profile, "kind", "") == "dual_boot"
+                and composite_path.is_file()
+            ):
+                composite_manifest = device_manifest.load_composite(dev)
+                device_manifest.composite_library_counts(composite_manifest)
+                composite_data = CompositeDeviceData(
+                    composite_manifest,
+                    device_manifest.composite_playlist_entries(
+                        dev, composite_manifest),
+                    rockbox_config.settings_ready(dev),
+                    rockbox_config.database_file_count(dev),
+                    rockbox_config.database_refresh_pending(dev),
+                )
             if library is None or not snapshot.identity_key or not snapshot.model:
-                return snapshot
+                return snapshot, composite_data
+            pre_composite_dual = bool(
+                getattr(profile, "kind", "") == "dual_boot"
+                and not device_manifest.manifest_path(dev).exists())
+            if pre_composite_dual:
+                return replace(
+                    snapshot,
+                    sync_state="composite_untracked",
+                    sync_detail=(
+                        "No composite playlist baseline yet; drag a playlist "
+                        "onto this iPod to establish one"
+                    ),
+                    sync_local_changes=0,
+                    sync_committed_at="",
+                ), composite_data
             status = inspect_stock_ipod_sync_status(
                 library,
                 dev,
@@ -2540,13 +2657,31 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 shadow_store=self.stock_ipod_shadow_store,
                 extra_playlists=extra_playlists,
             )
+            if composite_data is not None:
+                drift = engine.device_drift(
+                    library,
+                    dev,
+                    list(extra_playlists),
+                    artist_overrides=artist_overrides,
+                    title_overrides=title_overrides,
+                )
+                if drift is not None and drift.any():
+                    count = drift.count()
+                    return replace(
+                        snapshot,
+                        sync_state="local_changes",
+                        sync_detail=(
+                            f"{count} managed playlist change(s) ready to sync"),
+                        sync_local_changes=count,
+                        sync_committed_at=status.committed_at,
+                    ), composite_data
             return replace(
                 snapshot,
                 sync_state=status.state,
                 sync_detail=status.detail,
                 sync_local_changes=status.local_changes,
                 sync_committed_at=status.committed_at,
-            )
+            ), composite_data
 
         worker = OneShotTask(read_snapshot)
         self._stock_view_worker = worker
@@ -2554,18 +2689,69 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             lambda result, device=dev: self._on_stock_device_view(device, result))
         worker.finished.connect(
             lambda ww=worker: self._finish_worker("_stock_view_worker", ww))
+        if after_finished is not None:
+            worker.finished.connect(after_finished)
         worker.start()
+
+    def _refresh_device_surfaces(self, dev: str):
+        """Refresh an open iPod snapshot, then its sidebar state, in series."""
+        profile = self._device_profiles.get(dev)
+        if (
+            dev != self._current_device_path
+            or profile is None
+            or not getattr(profile, "has_stock_ipod", False)
+        ):
+            self._refresh_devices()
+            return
+        self._exporting = True
+        self.stock_ipod_pages.set_loading(preserve_page=True)
+
+        def finish_refresh():
+            self._exporting = False
+            self._refresh_devices()
+
+        self._read_stock_device_view(
+            dev, profile, after_finished=finish_refresh)
 
     def _on_stock_device_view(self, dev: str, result):
         if dev != self._current_device_path:
             return
         if isinstance(result, Exception):
-            self._stock_snapshot = None
-            self.stock_ipod_pages.set_error(str(result))
+            preserve_snapshot = bool(
+                self._stock_snapshot is not None
+                and self._stock_snapshot.target == Path(dev).resolve())
+            if not preserve_snapshot:
+                self._stock_snapshot = None
+            self.stock_ipod_pages.set_error(
+                str(result), preserve_snapshot=preserve_snapshot)
+            if preserve_snapshot:
+                self._flash_status(
+                    "iPod refresh failed — showing last verified state")
             return
+        composite_data = None
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], StockIpodSnapshot)
+            and (
+                result[1] is None
+                or isinstance(result[1], CompositeDeviceData)
+            )
+        ):
+            result, composite_data = result
         if not isinstance(result, StockIpodSnapshot):
-            self._stock_snapshot = None
-            self.stock_ipod_pages.set_error("Unexpected stock-iPod snapshot")
+            preserve_snapshot = bool(
+                self._stock_snapshot is not None
+                and self._stock_snapshot.target == Path(dev).resolve())
+            if not preserve_snapshot:
+                self._stock_snapshot = None
+            self.stock_ipod_pages.set_error(
+                "Unexpected stock-iPod snapshot",
+                preserve_snapshot=preserve_snapshot,
+            )
+            if preserve_snapshot:
+                self._flash_status(
+                    "iPod refresh failed — showing last verified state")
             return
         self._stock_snapshot = result
         if result.model:
@@ -2574,7 +2760,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if profile is not None:
                 self._device_profiles[dev] = self._effective_device_profile(
                     dev, profile)
-        self.stock_ipod_pages.set_snapshot(result)
+        self.stock_ipod_pages.set_snapshot(result, composite_data)
+        profile = self._device_profiles.get(dev)
+        pre_composite_dual = bool(
+            getattr(profile, "kind", "") == "dual_boot"
+            and not (Path(dev) / ".soundbox" / "manifest.json").exists())
+        self.stock_ipod_pages.set_playlist_deletion_available(
+            getattr(profile, "kind", "") == "stock_ipod"
+            or pre_composite_dual
+            or getattr(profile, "kind", "") == "dual_boot")
 
     def _confirm_current_stock_model(self):
         dev = self._current_device_path
@@ -2631,12 +2825,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 lambda: self._erase_device(dev))
         n = self._drift_cache.get(dev, 0)  # ≤3s-fresh from the background scan
         if n:
-            word = "playlist" if n == 1 else "playlists"
-            menu.addAction(f"Sync — {n} {word} out of date",
+            word = "change" if n == 1 else "changes"
+            menu.addAction(f"Sync — {n} {word} pending",
                            lambda: self._sync_device(dev))
         else:
-            act = menu.addAction("Sync (up to date)")
-            act.setEnabled(False)
+            menu.addAction("Sync (check again)", lambda: self._sync_device(dev))
         menu.addAction("Eject", lambda: self._eject(dev))
         menu.exec(self.device_tree.mapToGlobal(pos))
 
@@ -2695,12 +2888,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._remember_stock_model(self._stock_device_key(dev, profile), model)
         return model
 
-    def _begin_stock_ipod_sync(self, dev: str, playlists: list[Playlist]):
+    def _begin_stock_ipod_sync(
+            self, dev: str, playlists: list[Playlist], *, reconcile: bool = False):
         """Run the expensive, read-only database/media plan off the UI thread."""
         if any(_running(getattr(self, name, None)) for name in (
                 "export_worker", "_resync_worker", "_stock_plan_worker",
                 "_stock_commit_worker", "_stock_delete_plan_worker",
                 "_stock_delete_commit_worker", "_stock_view_worker",
+                "_dual_plan_worker", "_dual_commit_worker",
                 "_delete_worker")):
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
@@ -2713,6 +2908,28 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         library = self.lib
         facts = device_facts(dev)
         identity_key = self._stock_device_key(dev, profile)
+        shadow = (
+            self.stock_ipod_shadow_store.load(identity_key)
+            if reconcile else None)
+        managed_names_before = tuple(
+            " / ".join([
+                *map(str, row.get("folder_path") or []),
+                str(row.get("name") or ""),
+            ])
+            for row in ((shadow.playlists if shadow else {}) or {}).values()
+            if isinstance(row, dict)
+        )
+        managed_keys_before = tuple(
+            str(key) for key in ((shadow.playlists if shadow else {}) or {}))
+        managed_track_rows_before = tuple(sorted({
+            (
+                int(row.get("dbid") or 0),
+                str(row.get("device_path") or ""),
+                str(row.get("sha256") or ""),
+            )
+            for row in ((shadow.sources if shadow else {}) or {}).values()
+            if isinstance(row, dict) and int(row.get("dbid") or 0) > 0
+        }))
         worker = OneShotTask(lambda: plan_stock_ipod_sync(
             library,
             playlists,
@@ -2727,12 +2944,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             identity_key=identity_key,
             serial_number=getattr(facts, "hardware_serial", ""),
             shadow_store=self.stock_ipod_shadow_store,
+            managed_playlist_names_before=managed_names_before,
+            managed_playlist_keys_before=managed_keys_before,
+            managed_track_rows_before=managed_track_rows_before,
         ))
         self._stock_plan_worker = worker
         self._exporting = True
         self.progress.setVisible(False)
         self.cancel_btn.setVisible(False)
-        self._start_pulse("PLANNING STOCK IPOD")
+        self._start_pulse("Planning iPod")
         worker.done.connect(
             lambda result, d=dev: self._on_stock_ipod_plan(d, result))
         worker.finished.connect(
@@ -2759,7 +2979,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "The read-only comparison found no media, playlist, metadata, "
                 "artwork, or playback changes to publish.",
             )
-            self._flash_status("Stock iPod already up to date ✓")
+            self._flash_status("iPod up to date")
             self._refresh_devices()
             return
         omission_preview = ""
@@ -2786,6 +3006,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             f"Existing track metadata updated: {summary['metadata_updates']}\n"
             f"New media files: {summary['new_tracks']} "
             f"({human(summary['bytes_to_copy'])})\n"
+            f"Unused tracks removed: {summary['removed_tracks']}\n"
+            f"Device media removed: {summary['media_files_to_delete']} "
+            f"({human(summary['bytes_to_delete'])})\n"
             f"Artwork: {summary['artwork_tracks']} track(s), "
             f"{summary['unique_artwork']} unique "
             f"({human(summary['artwork_bytes_to_copy'])})\n"
@@ -2800,7 +3023,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
-            self._flash_status("Stock iPod plan cancelled — nothing written")
+            self._flash_status("iPod sync cancelled — nothing written")
             self._refresh_devices()
             return
         self._commit_stock_ipod_plan(dev, result)
@@ -2812,7 +3035,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._exporting = True
         self.progress.setVisible(False)
         self.cancel_btn.setVisible(False)
-        self._start_pulse("SYNCING STOCK IPOD")
+        self._start_pulse("Syncing iPod")
         worker.done.connect(
             lambda result, d=dev: self._on_stock_ipod_commit(d, result))
         worker.finished.connect(
@@ -2828,7 +3051,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self, "Stock iPod sync failed",
                 f"{result}\n\nSoundBox attempted an exact database/media rollback.")
         else:
-            warning = f"\n\n{result.shadow_warning}" if result.shadow_warning else ""
+            warning_parts = []
+            if result.shadow_warning:
+                warning_parts.append(result.shadow_warning)
+            if result.cleanup_failures:
+                warning_parts.append(
+                    "Some now-unindexed device files could not be removed:\n"
+                    + "\n".join(result.cleanup_failures))
+            warning = (
+                "\n\n" + "\n\n".join(warning_parts)
+                if warning_parts else "")
             QMessageBox.information(
                 self,
                 "Stock iPod sync complete",
@@ -2836,28 +3068,615 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 f"{result.reused_tracks}.\n\n"
                 f"Updated title/artist metadata for "
                 f"{result.metadata_updates} existing track(s).\n\n"
+                f"Removed {result.deleted_media_files} unused media file(s) "
+                f"({human(result.deleted_bytes)}).\n\n"
                 f"Linked artwork for {result.artwork_tracks} track(s) "
                 f"from {result.unique_artwork} unique image(s); wrote "
                 f"{human(result.artwork_pixel_bytes)} of pixels.\n\n"
                 f"Recovery files:\n{result.recovery_directory}\n\n"
                 f"Eject from SoundBox before listening.{warning}",
             )
-            self._flash_status("Stock iPod synced ✓")
-        self._refresh_devices()
-        if dev == self._current_device_path and not isinstance(result, Exception):
-            self.stock_ipod_pages.set_loading(preserve_page=True)
-            QTimer.singleShot(
-                0, lambda d=dev: self._read_stock_device_view(
-                    d, self._device_profiles.get(d)))
+            self._flash_status("iPod synced")
+        if isinstance(result, Exception):
+            self._refresh_devices()
+        else:
+            self._refresh_device_surfaces(dev)
+
+    def _begin_dual_ipod_sync(
+            self,
+            dev: str,
+            playlists: list[Playlist],
+            *,
+            reconcile: bool = False,
+            respect_selected_order: bool = False,
+            preconfirmed: bool = False,
+            confirmed: bool = False,
+            action: str = "sync",
+            expected_playlist_rows: dict[str, dict] | None = None,
+    ):
+        """Build the composite stock/Rockbox plan without target writes."""
+        if any(_running(getattr(self, name, None)) for name in (
+                "export_worker", "_resync_worker", "_stock_plan_worker",
+                "_stock_commit_worker", "_dual_plan_worker",
+                "_dual_commit_worker", "_stock_view_worker",
+                "_delete_worker")):
+            QMessageBox.warning(
+                self, "Device busy", "Wait for the current device operation.")
+            return
+        if self._pending_device_operation is not None:
+            QMessageBox.warning(
+                self, "Device busy", "Wait for the current device operation.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._begin_dual_ipod_sync(
+                    dev,
+                    playlists,
+                    reconcile=reconcile,
+                    respect_selected_order=respect_selected_order,
+                    preconfirmed=preconfirmed,
+                    confirmed=confirmed,
+                    action=action,
+                    expected_playlist_rows=expected_playlist_rows,
+                )):
+            return
+        profile = self._device_profiles.get(dev)
+        model = self._stock_write_model(dev, profile)
+        if not model:
+            return
+        self._dual_active_device = dev
+        self._dual_active_playlist_keys = {
+            device_manifest.playlist_key(playlist) for playlist in playlists}
+        self._dual_active_preconfirmed = preconfirmed
+        self._dual_active_confirmed = confirmed
+        self._dual_active_action = action
+        self._dual_active_track_total = sum(
+            len(self.lib.resolve(playlist)) for playlist in playlists)
+        from .workers import ProgressTask
+        library = self.lib
+        facts = device_facts(dev)
+        identity_key = self._stock_device_key(dev, profile)
+        worker = ProgressTask(
+            lambda callback: plan_dual_ipod_sync(
+                library,
+                playlists,
+                dev,
+                model_number=model,
+                filesystem=device_fs(dev),
+                rockbox_media_cache=self.rockbox_media_cache,
+                rockbox_art_cache=self.rockbox_art_cache,
+                derive_artists=True,
+                artist_overrides=self.overrides,
+                title_overrides=self.titles,
+                art_cache=self.art_cache,
+                stock_art_cache=self.stock_art_cache,
+                stock_shadow_store=self.stock_ipod_shadow_store,
+                identity_key=identity_key,
+                serial_number=getattr(facts, "hardware_serial", ""),
+                reconcile=reconcile,
+                respect_selected_order=respect_selected_order,
+                on_progress=callback,
+                expected_playlist_rows=expected_playlist_rows,
+            ),
+            log_label="Dual iPod planning",
+        )
+        self._dual_plan_worker = worker
+        self._exporting = True
+        self.progress.setRange(0, 1000)
+        if preconfirmed and self._dual_batch_total_tracks > 0:
+            self.progress.setValue(round(
+                1000 * self._dual_batch_done_tracks
+                / self._dual_batch_total_tracks))
+        else:
+            self.progress.setValue(0)
+        self.progress.setFormat("%p%")
+        self.progress.setVisible(True)
+        self._set_status_count()
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("Planning iPod")
+        worker.progress.connect(self._on_dual_ipod_plan_progress)
+        worker.done.connect(
+            lambda result, d=dev: self._on_dual_ipod_plan(d, result))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker("_dual_plan_worker", ww))
+        worker.start()
+
+    def _on_dual_ipod_plan_progress(
+            self, done: int, total: int, _label: str):
+        """Map planning into the first 30% of this operation's bar segment."""
+        total = max(1, int(total))
+        done = max(0, min(int(done), total))
+        fraction = done / total
+        if self._dual_active_preconfirmed and self._dual_batch_total_tracks > 0:
+            completed = self._dual_batch_done_tracks
+            active = self._dual_active_track_total
+            value = round(1000 * (
+                completed + active * 0.30 * fraction
+            ) / self._dual_batch_total_tracks)
+        else:
+            value = round(300 * fraction)
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(max(self.progress.value(), value))
+        self.progress.setVisible(True)
+        # The plan and write callbacks count different work. Keeping the track
+        # counter hidden here avoids a misleading backwards jump at commit.
+        self._start_pulse("Planning iPod")
+
+    def _on_dual_ipod_plan(self, dev: str, result):
+        self._stop_pulse()
+        self.status_label.setText("Ready")
+        if isinstance(result, Exception):
+            was_preconfirmed = self._dual_active_preconfirmed
+            self._exporting = False
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_preconfirmed = False
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            self._dual_active_track_total = 0
+            self.progress.setVisible(False)
+            self._set_status_count()
+            try:
+                self.rockbox_media_cache.clear()
+            except Exception:
+                pass
+            if was_preconfirmed:
+                self._dual_sync_queue.pop(dev, None)
+                self._reset_dual_batch()
+            QMessageBox.warning(
+                self,
+                "Dual iPod plan refused",
+                f"{result}\n\nNo device files were changed."
+                + (" Remaining queued jobs were cancelled."
+                   if was_preconfirmed else ""),
+            )
+            self._refresh_devices()
+            return
+        if not isinstance(result, DualIpodSyncPlan):
+            was_preconfirmed = self._dual_active_preconfirmed
+            self._exporting = False
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_preconfirmed = False
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            self._dual_active_track_total = 0
+            self.progress.setVisible(False)
+            self._set_status_count()
+            if was_preconfirmed:
+                self._dual_sync_queue.pop(dev, None)
+                self._reset_dual_batch()
+            QMessageBox.critical(
+                self, "Dual iPod plan failed", "Unexpected plan result.")
+            return
+        summary = result.summary()
+        if not result.requires_commit:
+            if self._dual_active_preconfirmed:
+                self._dual_batch_done_tracks = min(
+                    self._dual_batch_total_tracks,
+                    self._dual_batch_done_tracks
+                    + self._dual_active_track_total,
+                )
+                self._dual_batch_results.append((result, None))
+                self._dual_active_device = ""
+                self._dual_active_playlist_keys.clear()
+                self._dual_active_preconfirmed = False
+                self._dual_active_confirmed = False
+                self._dual_active_action = "sync"
+                self._dual_active_track_total = 0
+                self._start_next_confirmed_dual_job(dev)
+                return
+            self._exporting = False
+            action = self._dual_active_action
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            self.progress.setValue(1000)
+            self.progress.setVisible(False)
+            self._set_status_count()
+            try:
+                self.rockbox_media_cache.clear()
+            except Exception:
+                pass
+            QMessageBox.information(
+                self,
+                "Nothing to delete" if action == "delete" else "iPod is up to date",
+                (
+                    "The selected playlists are already absent and no managed "
+                    "media became unreferenced."
+                    if action == "delete" else
+                    "The no-write plan found no stock database, media, artwork, "
+                    "playlist, or ownership-manifest changes."
+                ),
+            )
+            self._flash_status(
+                "Nothing to delete" if action == "delete" else "iPod up to date")
+            self._refresh_devices()
+            queued = self._dual_sync_queue.pop(dev, [])
+            if queued:
+                worker = self._dual_plan_worker
+
+                def start_queued():
+                    QTimer.singleShot(
+                        0, lambda: self._begin_dual_ipod_sync(dev, queued))
+
+                if worker is not None:
+                    worker.finished.connect(start_queued)
+                else:
+                    start_queued()
+            return
+        if self._dual_active_preconfirmed:
+            self._commit_dual_ipod_plan(dev, result)
+            return
+        if self._dual_active_confirmed:
+            self._commit_dual_ipod_plan(dev, result)
+            return
+        omission_lines = []
+        for item in list(result.missing[:3]) + list(result.unsupported[:3]):
+            omission_lines.append(f"• {item.title}: {item.reason}")
+        omissions = (
+            "\n\nOmitted:\n" + "\n".join(omission_lines)
+            if omission_lines else "")
+        added_audio = (
+            len(result.stock.copies)
+            + sum(1 for item in result.media_copies if item.kind == "rockbox-media")
+        )
+        updated_audio = (
+            len(result.stock.rewrites)
+            + sum(1 for item in result.file_rewrites if item.kind == "rockbox-media")
+        )
+        removed_audio = summary["orphan_media_files"]
+        recovered_audio = (
+            summary["recovered_stock_tracks"]
+            + summary["recovered_rockbox_media_files"]
+        )
+        recovered_line = (
+            f"Recovery candidates: {recovered_audio} "
+            f"({human(summary['recovered_rockbox_bytes'])})\n"
+            if recovered_audio else ""
+        )
+        playlist_word = "playlist" if summary["rockbox_playlists"] == 1 else "playlists"
+        answer = QMessageBox.question(
+            self,
+            "Sync iPod?",
+            "Ready to sync iPod.\n\n"
+            f"{summary['stock_safe_sources'] + summary['rockbox_only_sources']} songs\n"
+            f"• {summary['stock_safe_sources']} Both\n"
+            f"• {summary['rockbox_only_sources']} Rockbox only\n\n"
+            f"{summary['rockbox_playlists']} {playlist_word}\n"
+            f"{recovered_line}"
+            f"Audio changes: {added_audio} add · {updated_audio} update · "
+            f"{removed_audio} remove\n"
+            f"Playlist files updated: {summary['rockbox_playlist_writes']}\n"
+            f"Rockbox database auto-update: "
+            f"{'enable' if summary['rockbox_settings_updated'] else 'on'}\n"
+            f"Unreferenced files removed: "
+            f"{summary['orphan_media_files'] + summary['orphan_artwork_files'] + summary['rockbox_clutter_files']} "
+            f"({human(summary['orphan_bytes_to_delete'])})"
+            f"{omissions}\n\n"
+            "SoundBox will update both libraries safely. Source files remain "
+            "unchanged. Continue?",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            self._exporting = False
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            try:
+                self.rockbox_media_cache.clear()
+            except Exception:
+                pass
+            self._flash_status("iPod sync cancelled — nothing written")
+            self._refresh_devices()
+            return
+        self._commit_dual_ipod_plan(dev, result)
+
+    def _commit_dual_ipod_plan(self, dev: str, plan: DualIpodSyncPlan):
+        from .workers import ProgressTask
+        worker = ProgressTask(
+            lambda callback: commit_dual_ipod_sync(
+                plan, on_progress=callback),
+            log_label="Dual iPod commit",
+        )
+        self._dual_commit_worker = worker
+        self._exporting = True
+        total = plan.progress_total
+        self.progress.setRange(0, 1000)
+        if self._dual_active_preconfirmed and self._dual_batch_total_tracks > 0:
+            initial = round(1000 * (
+                self._dual_batch_done_tracks
+                + self._dual_active_track_total * 0.30
+            ) / self._dual_batch_total_tracks)
+        else:
+            initial = 300
+        self.progress.setValue(max(self.progress.value(), initial))
+        self.progress.setFormat("%p%")
+        self.progress.setVisible(True)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse(
+            "Syncing iPod",
+            keep_count=(
+                self._dual_batch_total_tracks > 0
+                if self._dual_active_preconfirmed else total > 0),
+        )
+        self._set_status_count(
+            self._dual_batch_done_tracks
+            if self._dual_active_preconfirmed else 0,
+            self._dual_batch_total_tracks
+            if self._dual_active_preconfirmed else total,
+        )
+        worker.progress.connect(self._on_dual_ipod_progress)
+        worker.done.connect(
+            lambda result, d=dev, p=plan: self._on_dual_ipod_commit(
+                d, result, p))
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker("_dual_commit_worker", ww))
+        worker.start()
+
+    def _on_dual_ipod_progress(self, done: int, total: int, _label: str):
+        total = max(0, total)
+        done = max(0, min(done, total))
+        if self._dual_active_preconfirmed:
+            current = (
+                self._dual_active_track_total * done // max(1, total))
+            batch_done = min(
+                self._dual_batch_total_tracks,
+                self._dual_batch_done_tracks + current,
+            )
+            self._start_pulse(
+                "Syncing iPod", keep_count=self._dual_batch_total_tracks > 0)
+            self._set_status_count(
+                batch_done, self._dual_batch_total_tracks)
+            value = round(1000 * (
+                self._dual_batch_done_tracks
+                + self._dual_active_track_total * (
+                    0.30 + 0.70 * done / max(1, total))
+            ) / max(1, self._dual_batch_total_tracks))
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(max(self.progress.value(), value))
+            self.progress.setVisible(True)
+            return
+        self._start_pulse("Syncing iPod", keep_count=total > 0)
+        self._set_status_count(done, total)
+        value = round(300 + 700 * done / max(1, total))
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(max(self.progress.value(), value))
+        self.progress.setVisible(True)
+
+    def _on_dual_ipod_commit(
+            self, dev: str, result, plan: DualIpodSyncPlan | None = None):
+        self._exporting = False
+        self._stop_pulse()
+        self.status_label.setText("Ready")
+        try:
+            self.rockbox_media_cache.clear()
+        except Exception as exc:
+            LOG.warning("Rockbox media staging cleanup failed: %s", exc)
+        if not isinstance(result, Exception) and plan is not None:
+            playlist_paths = ", ".join(
+                str(item.relative_path)
+                for item in getattr(plan, "playlists", ()))
+            LOG.info(
+                "Dual iPod generation %d committed; Rockbox playlists: %s",
+                int(getattr(plan, "generation", 0)),
+                playlist_paths or "none",
+            )
+        if self._dual_active_preconfirmed:
+            if isinstance(result, Exception):
+                self.progress.setVisible(False)
+                self._set_status_count()
+                self._show_dual_ipod_failure(result)
+                self._dual_active_device = ""
+                self._dual_active_playlist_keys.clear()
+                self._dual_active_preconfirmed = False
+                self._dual_active_confirmed = False
+                self._dual_active_action = "sync"
+                self._dual_active_track_total = 0
+                self._dual_sync_queue.pop(dev, None)
+                self._reset_dual_batch()
+                self._refresh_devices()
+                return
+            if plan is not None:
+                self._dual_batch_results.append((plan, result))
+            self._dual_batch_done_tracks = min(
+                self._dual_batch_total_tracks,
+                self._dual_batch_done_tracks + self._dual_active_track_total,
+            )
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(round(
+                1000 * self._dual_batch_done_tracks
+                / max(1, self._dual_batch_total_tracks)))
+            self._set_status_count(
+                self._dual_batch_done_tracks,
+                self._dual_batch_total_tracks,
+            )
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_preconfirmed = False
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            self._dual_active_track_total = 0
+            self._start_next_confirmed_dual_job(dev)
+            return
+        action = self._dual_active_action
+        self.progress.setValue(1000)
+        self.progress.setVisible(False)
+        if isinstance(result, Exception):
+            self._show_dual_ipod_failure(result)
+        else:
+            cleanup_warning = (
+                "\n\nSome now-unreferenced files could not be removed:\n"
+                + "\n".join(result.cleanup_failures)
+                if result.cleanup_failures else "")
+            QMessageBox.information(
+                self,
+                "iPod deletion complete"
+                if action == "delete" else "iPod sync complete",
+                f"Stock: copied {result.stock.copied_tracks}, sanitized "
+                f"{result.stock.rewritten_tracks}, reused "
+                f"{result.stock.reused_tracks}, recovered "
+                f"{result.stock.recovered_tracks}.\n\n"
+                f"Rockbox: copied {result.copied_media} media file(s), "
+                f"recovered {result.recovered_media} completed media file(s), "
+                f"{result.copied_artwork} cover(s), and "
+                f"{result.playlists} playlist(s).\n\n"
+                f"Removed {result.deleted_orphans} unreferenced device file(s) "
+                f"({human(result.deleted_orphan_bytes)})."
+                f"{cleanup_warning}\n\n"
+                f"Recovery files:\n{result.stock.recovery_directory}\n\n"
+                "Eject from SoundBox before listening.",
+            )
+            self._flash_status("iPod synced")
+        if isinstance(result, Exception):
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            self._refresh_devices()
+        else:
+            self._refresh_device_surfaces(dev)
+            queued = self._dual_sync_queue.pop(dev, [])
+            if queued:
+                worker = self._dual_commit_worker
+
+                def start_queued():
+                    self._dual_active_device = ""
+                    self._dual_active_playlist_keys.clear()
+                    self._dual_active_confirmed = False
+                    self._dual_active_action = "sync"
+                    QTimer.singleShot(
+                        0, lambda: self._start_confirmed_dual_jobs(dev, queued))
+
+                if worker is not None:
+                    worker.finished.connect(start_queued)
+                else:
+                    start_queued()
+            else:
+                self._dual_active_device = ""
+                self._dual_active_playlist_keys.clear()
+                self._dual_active_confirmed = False
+                self._dual_active_action = "sync"
+
+    def _show_dual_ipod_failure(self, result) -> None:
+        interrupted = "Device target changed or was remounted" in str(result)
+        detail = (
+            "The committed iPod library was left at its last verified "
+            "generation. Completed whole-file copies may remain unowned; "
+            "re-queue the same playlist and SoundBox will verify and reuse "
+            "them automatically."
+            if interrupted else
+            "SoundBox attempted the coordinated stock/Rockbox rollback. "
+            "The next device scan will report any remaining recovery state."
+        )
+        QMessageBox.critical(
+            self,
+            "Dual iPod sync failed",
+            f"{result}\n\n{detail}",
+        )
+
+    def _reset_dual_batch(self) -> None:
+        self._dual_batch_keys.clear()
+        self._dual_batch_names.clear()
+        self._dual_batch_total_tracks = 0
+        self._dual_batch_done_tracks = 0
+        self._dual_batch_results.clear()
+
+    def _start_next_confirmed_dual_job(self, dev: str) -> None:
+        queued = self._dual_sync_queue.get(dev, [])
+        if queued:
+            # Coalesce everything confirmed while the preceding job was busy.
+            # Planning each queued playlist as a separate generation repeatedly
+            # reparsed the same iTunesDB and revalidated the same device media;
+            # on classic iPods that extra sustained USB traffic can provoke a
+            # transport reset. A later drop can still form the next batch if it
+            # arrives after this combined plan starts.
+            next_playlists = list(queued)
+            self._dual_sync_queue[dev] = []
+            worker = (
+                self._dual_commit_worker
+                if _running(self._dual_commit_worker)
+                else self._dual_plan_worker
+            )
+
+            def start_next():
+                QTimer.singleShot(
+                    0,
+                    lambda: self._begin_dual_ipod_sync(
+                        dev, next_playlists, preconfirmed=True),
+                )
+
+            if worker is not None and _running(worker):
+                worker.finished.connect(start_next)
+            else:
+                start_next()
+            return
+
+        self._dual_sync_queue.pop(dev, None)
+        self._exporting = False
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(1000)
+        self.progress.setVisible(False)
+        self._set_status_count()
+        committed = [
+            result for _plan, result in self._dual_batch_results
+            if result is not None
+        ]
+        copied = sum(
+            result.stock.copied_tracks + result.copied_media
+            for result in committed)
+        refreshed = sum(
+            result.stock.rewritten_tracks for result in committed)
+        removed = sum(result.deleted_orphans for result in committed)
+        playlist_names = "\n".join(
+            f"• {name}" for name in self._dual_batch_names)
+        QMessageBox.information(
+            self,
+            "iPod queue complete",
+            f"{len(self._dual_batch_names)} playlist job"
+            f"{'s' if len(self._dual_batch_names) != 1 else ''} complete\n"
+            f"{self._dual_batch_total_tracks} queued track entries\n\n"
+            f"{playlist_names}\n\n"
+            f"Media copied: {copied}\n"
+            f"Media metadata refreshed: {refreshed}\n"
+            f"Unreferenced files removed: {removed}\n\n"
+            "Device, Songs, and Playlists are refreshing from the committed "
+            "device state. Eject from SoundBox before listening.",
+        )
+        self._flash_status("iPod synced")
+        self._refresh_device_surfaces(dev)
+        self._reset_dual_batch()
 
     def _begin_stock_playlist_delete(self, selections):
         """Plan deletion of the checked user playlists from the stock iPod."""
         dev = self._current_device_path
         if not dev or self._stock_snapshot is None:
             return
+        profile = self._device_profiles.get(dev)
+        dual_boot = getattr(profile, "kind", "") == "dual_boot"
+        pre_composite_dual = bool(
+            dual_boot
+            and not (Path(dev) / ".soundbox" / "manifest.json").exists())
+        raw_selections = tuple(selections or ())
+        if dual_boot and not pre_composite_dual:
+            managed_keys: list[str] = []
+            for raw in raw_selections:
+                if not isinstance(raw, (tuple, list)) or len(raw) != 2:
+                    continue
+                identity = str(raw[0] or "")
+                if identity.startswith("managed:"):
+                    key = identity.removeprefix("managed:")
+                    if key and key not in managed_keys:
+                        managed_keys.append(key)
+            if managed_keys:
+                self._begin_composite_playlist_delete(
+                    dev, tuple(managed_keys))
+            return
         identities: list[tuple[int, str]] = []
         seen_ids: set[int] = set()
-        for raw in tuple(selections or ()):
+        for raw in raw_selections:
             if not isinstance(raw, (tuple, list)) or len(raw) != 2:
                 continue
             playlist_id = str(raw[0] or "")
@@ -2878,6 +3697,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "export_worker", "_resync_worker", "_stock_plan_worker",
                 "_stock_commit_worker", "_stock_delete_plan_worker",
                 "_stock_delete_commit_worker", "_stock_view_worker",
+                "_dual_plan_worker", "_dual_commit_worker",
                 "_delete_worker")):
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
@@ -2893,12 +3713,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             model_number=model,
             filesystem=device_fs(dev),
             stock_art_cache=self.stock_art_cache,
+            allow_dual_boot=pre_composite_dual,
         ))
         self._stock_delete_plan_worker = worker
         self._exporting = True
         self.progress.setVisible(False)
         self.cancel_btn.setVisible(False)
-        self._start_pulse("PLANNING STOCK IPOD PLAYLIST DELETE")
+        self._start_pulse("Planning iPod")
         worker.done.connect(
             lambda result, d=dev, expected=tuple(identities):
             self._on_stock_playlist_delete_plan(d, expected, result))
@@ -2906,6 +3727,161 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             lambda ww=worker: self._finish_worker(
                 "_stock_delete_plan_worker", ww))
         worker.start()
+
+    def _apply_composite_playlist_order(self, requested_keys) -> None:
+        """Publish the Device-tab sequence to iTunesDB and Rockbox together."""
+        dev = self._current_device_path
+        profile = self._device_profiles.get(dev)
+        if (
+            not dev
+            or self.lib is None
+            or getattr(profile, "kind", "") != "dual_boot"
+        ):
+            return
+        try:
+            manifest = device_manifest.load_composite(dev)
+            rows = manifest.get("playlists") or {}
+            order = tuple(str(key) for key in requested_keys if str(key))
+            if len(order) != len(set(order)) or set(order) != set(rows):
+                raise ValueError(
+                    "Playlist order no longer matches the committed iPod state")
+            current = device_manifest.current_playlists_by_key(
+                self.lib, self._sync_playlists())
+            playlists = [current[key] for key in order]
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Playlist order unavailable",
+                f"{exc}\n\nNo device files were changed.",
+            )
+            self._refresh_device_surfaces(dev)
+            return
+        answer = QMessageBox.question(
+            self,
+            "Apply iPod playlist order?",
+            f"Apply this order to {len(playlists)} playlists in both the stock "
+            "iPod library and Rockbox Playlist Catalogue?\n\n"
+            "SoundBox will keep the visible playlist names unchanged and will "
+            "not duplicate any songs.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._begin_dual_ipod_sync(
+            dev,
+            playlists,
+            reconcile=True,
+            respect_selected_order=True,
+            confirmed=True,
+            action="order",
+        )
+
+    def _begin_composite_playlist_delete(
+            self,
+            dev: str,
+            selected_keys: tuple[str, ...],
+            *,
+            confirmed: bool = False,
+    ):
+        """Remove checked schema-3 playlists through the unified planner."""
+        try:
+            current_manifest = device_manifest.load_composite(dev)
+            prior = current_manifest.get("playlists") or {}
+            order = current_manifest.get("playlist_order")
+            if not isinstance(order, list):
+                order = list(prior)
+            selected = {str(key) for key in selected_keys if str(key)}
+            unknown = selected - {str(key) for key in prior}
+            if unknown:
+                raise ValueError(
+                    f"Selected playlist is not schema-3 managed: "
+                    f"{sorted(unknown)[0]}")
+            removed_keys = selected
+            selected_names = []
+            for key in order:
+                if str(key) not in removed_keys:
+                    continue
+                row = prior.get(str(key)) or {}
+                if isinstance(row, dict):
+                    parts = [
+                        *map(str, row.get("folder_path") or []),
+                        str(row.get("name") or "Untitled playlist"),
+                    ]
+                    selected_names.append(" / ".join(filter(None, parts)))
+            if not confirmed:
+                multiple = len(selected_names) != 1
+                shown = "\n".join(
+                    f"• {name}" for name in selected_names[:8])
+                if len(selected_names) > 8:
+                    shown += f"\n• …and {len(selected_names) - 8} more"
+                answer = QMessageBox.question(
+                    self,
+                    "Delete iPod playlists?"
+                    if multiple else "Delete iPod playlist?",
+                    f"Delete the selected playlist"
+                    f"{'s' if multiple else ''} from {Path(dev).name}?\n\n"
+                    f"{shown}\n\n"
+                    "Songs unused by every remaining managed playlist will "
+                    "also be removed from both the stock and Rockbox "
+                    "libraries. Any other managed playlist changes will be "
+                    "reconciled in this same operation. Planning and writing "
+                    "will appear as one continuous operation. Source files "
+                    "remain unchanged.",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if answer != QMessageBox.Yes:
+                    self._flash_status(
+                        "iPod deletion cancelled — nothing written")
+                    return
+            current_by_key = {
+                device_manifest.playlist_key(playlist): playlist
+                for playlist in self._sync_playlists()
+            }
+            remaining: list[Playlist] = []
+            for raw_key in order:
+                key = str(raw_key)
+                if key in removed_keys:
+                    continue
+                playlist = current_by_key.get(key)
+                if playlist is None:
+                    row = prior.get(key)
+                    if not isinstance(row, dict):
+                        raise ValueError(
+                            f"Managed playlist snapshot is invalid: {key}")
+                    tracks = row.get("tracks")
+                    folder = row.get("folder_path")
+                    if (
+                        not isinstance(tracks, list)
+                        or not isinstance(folder, list)
+                    ):
+                        raise ValueError(
+                            f"Managed playlist snapshot is invalid: {key}")
+                    playlist = Playlist(
+                        str(row.get("name") or ""),
+                        [str(part) for part in folder],
+                        [str(track_id) for track_id in tracks],
+                        pid=str(row.get("pid") or ""),
+                    )
+                    if device_manifest.playlist_key(playlist) != key:
+                        raise ValueError(
+                            f"Managed playlist identity is invalid: {key}")
+                remaining.append(playlist)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "iPod playlist deletion refused",
+                f"{exc}\n\nNo device files were changed.",
+            )
+            return
+        self._begin_dual_ipod_sync(
+            dev,
+            remaining,
+            reconcile=True,
+            confirmed=True,
+            action="delete",
+        )
 
     def _on_stock_playlist_delete_plan(
             self, dev: str, expected: tuple[tuple[int, str], ...], result):
@@ -2941,6 +3917,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if summary["deleted_track_records"] == 0
             else "Only songs unused by every remaining user playlist will be removed."
         )
+        commit_note = (
+            "Continue will save database/artwork recovery files, publish the "
+            "new iTunesDB, then delete the now-unreferenced device media. "
+            "Deleted device media is not retained in recovery because that "
+            "would not free space; the source library remains unchanged."
+        )
         answer = QMessageBox.question(
             self,
             "Delete stock iPod playlists?" if multiple
@@ -2955,15 +3937,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             f"Pending playback records merged: "
             f"{summary['merged_play_count_entries']}\n\n"
             f"{retained_note}\n\n"
-            "Continue will save database/artwork recovery files, publish the "
-            "new iTunesDB, then delete the now-unreferenced device media. "
-            "Deleted device media is not retained in recovery because that "
-            "would not free space; the source library remains unchanged.",
+            f"{commit_note}",
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
-            self._flash_status("Stock iPod deletion cancelled — nothing written")
+            self._flash_status("iPod deletion cancelled — nothing written")
             self._refresh_devices()
             return
         self._commit_stock_playlist_delete(dev, result)
@@ -2975,10 +3954,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._exporting = True
         self.progress.setVisible(False)
         self.cancel_btn.setVisible(False)
-        self._start_pulse(
-            "DELETING STOCK IPOD PLAYLISTS"
-            if len(plan.playlist_names) != 1
-            else "DELETING STOCK IPOD PLAYLIST")
+        self._start_pulse("Syncing iPod")
         worker.done.connect(
             lambda result, d=dev: self._on_stock_playlist_delete_commit(d, result))
         worker.finished.connect(
@@ -3027,14 +4003,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "Eject from SoundBox before listening.",
             )
             self._flash_status(
-                "Stock iPod playlists deleted ✓" if multiple
-                else "Stock iPod playlist deleted ✓")
-        self._refresh_devices()
-        if dev == self._current_device_path and not isinstance(result, Exception):
-            self.stock_ipod_pages.set_loading(preserve_page=True)
-            QTimer.singleShot(
-                0, lambda d=dev: self._read_stock_device_view(
-                    d, self._device_profiles.get(d)))
+                "iPod playlists deleted" if multiple
+                else "iPod playlist deleted")
+        if isinstance(result, Exception):
+            self._refresh_devices()
+        else:
+            self._refresh_device_surfaces(dev)
 
     def _verify_device(self, dev: str, deep: bool = False):
         """Post-export sanity: every m3u8 entry on the device must resolve to a
@@ -3046,7 +4020,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._scan_worker = w
         w.done.connect(lambda res, d=dev: self._on_verify_done(d, res))
         w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
-        self._start_pulse("VERIFYING")
+        self._start_pulse("Verifying")
         w.start()
 
     def _on_verify_done(self, dev: str, res):
@@ -3082,14 +4056,81 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 f"heals this (or re-export the affected playlists)."
                 f"{integrity}{extra}")
 
+    def _confirm_ipod_sync(self, dev: str) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "Sync iPod?",
+            f"Sync the managed library on {Path(dev).name} now?\n\n"
+            "SoundBox will compare the current playlists and metadata, then "
+            "apply only the required stock/Rockbox changes. Planning and "
+            "writing will appear as one continuous operation. Source files "
+            "remain unchanged.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        return answer == QMessageBox.Yes
+
     def _sync_device(self, dev: str):
         if self.lib is None or not dev:
+            return
+        profile = self._device_profiles.get(dev)
+        if profile is not None and profile.kind == "stock_ipod":
+            identity_key = self._stock_device_key(dev, profile)
+            shadow = self.stock_ipod_shadow_store.load(identity_key)
+            if shadow is None:
+                QMessageBox.information(
+                    self,
+                    "Stock Sync baseline unavailable",
+                    "Drag a playlist onto this iPod once to establish its "
+                    "guarded stock-sync baseline.",
+                )
+                return
+            try:
+                playlists = device_manifest.managed_current_playlists(
+                    {"playlists": shadow.playlists},
+                    self.lib,
+                    self._sync_playlists(),
+                )
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    "Stock Sync unavailable",
+                    f"{exc}\n\nNo device files were changed.",
+                )
+                return
+            self._begin_stock_ipod_sync(dev, playlists, reconcile=True)
+            return
+        if profile is not None and profile.kind == "dual_boot":
+            if not self._confirm_ipod_sync(dev):
+                self._flash_status("iPod sync cancelled — nothing written")
+                return
+            try:
+                composite_manifest = device_manifest.load_composite(dev)
+                playlists = device_manifest.managed_current_playlists(
+                    composite_manifest, self.lib, self._sync_playlists())
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    "Composite Sync unavailable",
+                    f"{exc}\n\nNo device files were changed. Drag a playlist "
+                    "onto this iPod to establish composite ownership first.",
+                )
+                return
+            self._begin_dual_ipod_sync(
+                dev,
+                playlists,
+                reconcile=True,
+                confirmed=True,
+                action="sync",
+            )
             return
         if self._resync_worker is not None and self._resync_worker.isRunning():
             return
         LOG.info("Sync device: %s", dev)
-        w = ResyncWorker(self.lib, dev, self.overrides, self.titles, self.art_cache,
-                         self._sync_playlists())
+        w = ResyncWorker(
+            self.lib, dev, self.overrides, self.titles, self.art_cache,
+            self.rockbox_media_cache, self.rockbox_art_cache,
+            self._sync_playlists())
         self._resync_worker = w
         w.done.connect(self._on_resync_done)
         w.finished.connect(lambda ww=w: self._finish_worker("_resync_worker", ww))
@@ -3098,7 +4139,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # bar only flashed 27→100 and lied). Animated "SYNCING…" reads honestly, like
         # DELETE.
         self.progress.setVisible(False)
-        self._start_pulse("SYNCING")
+        self._start_pulse("Syncing")
         w.start()
 
     def _on_resync_done(self, dev: str, rep):
@@ -3805,6 +4846,91 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     pls.append(pl)
         return pls
 
+    @staticmethod
+    def _merge_device_playlists(*groups: list[Playlist]) -> list[Playlist]:
+        """Stable playlist union; a later snapshot replaces the same identity."""
+        order: list[str] = []
+        by_key: dict[str, Playlist] = {}
+        for group in groups:
+            for playlist in group:
+                key = device_manifest.playlist_key(playlist)
+                if key not in by_key:
+                    order.append(key)
+                by_key[key] = playlist
+        return [by_key[key] for key in order]
+
+    def _queue_dual_ipod_playlists(
+            self, dev: str, playlists: list[Playlist]) -> int:
+        """Queue already-confirmed dual-iPod jobs without touching the active plan."""
+        queued = self._dual_sync_queue.get(dev, [])
+        before = {
+            device_manifest.playlist_key(playlist) for playlist in queued}
+        active = (
+            self._dual_active_playlist_keys
+            if self._dual_active_device == dev else set()
+        )
+        additions = [
+            playlist for playlist in playlists
+            if device_manifest.playlist_key(playlist)
+            not in before | active | self._dual_batch_keys
+        ]
+        self._dual_sync_queue[dev] = self._merge_device_playlists(
+            queued, additions)
+        if additions:
+            for playlist in additions:
+                key = device_manifest.playlist_key(playlist)
+                self._dual_batch_keys.add(key)
+                self._dual_batch_names.append(playlist.display_path)
+                self._dual_batch_total_tracks += len(self.lib.resolve(playlist))
+            if self._dual_active_preconfirmed:
+                self.progress.setRange(
+                    0, max(1, self._dual_batch_total_tracks))
+                self.progress.setValue(self._dual_batch_done_tracks)
+                self.progress.setVisible(True)
+                self._set_status_count(
+                    self._dual_batch_done_tracks,
+                    self._dual_batch_total_tracks,
+                )
+            total = len(self._dual_sync_queue[dev])
+            self._flash_status(
+                f"Queued {total} iPod playlist"
+                f"{'s' if total != 1 else ''}")
+        return len(additions)
+
+    def _confirm_dual_ipod_drop(
+            self, dev: str, playlist: Playlist) -> bool:
+        tracks = len(self.lib.resolve(playlist))
+        answer = QMessageBox.question(
+            self,
+            "Add playlist to iPod?",
+            f"Add “{playlist.display_path}” to {Path(dev).name}?\n\n"
+            f"{tracks} track{'s' if tracks != 1 else ''}\n\n"
+            "Yes queues this playlist for a guarded stock/Rockbox plan and "
+            "sync. Updating an existing playlist also removes tracks that it "
+            "no longer references unless another managed playlist still uses "
+            "them. Source files remain unchanged.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        return answer == QMessageBox.Yes
+
+    def _start_confirmed_dual_jobs(
+            self, dev: str, playlists: list[Playlist]) -> None:
+        """Start one confirmed job and retain the rest in FIFO order."""
+        jobs = self._merge_device_playlists(playlists)
+        if not jobs:
+            return
+        self._dual_batch_keys = {
+            device_manifest.playlist_key(playlist) for playlist in jobs}
+        self._dual_batch_names = [playlist.display_path for playlist in jobs]
+        self._dual_batch_total_tracks = sum(
+            len(self.lib.resolve(playlist)) for playlist in jobs)
+        self._dual_batch_done_tracks = 0
+        self._dual_batch_results = []
+        self._dual_sync_queue[dev] = list(jobs[1:])
+        self._begin_dual_ipod_sync(
+            dev, [jobs[0]], preconfirmed=True)
+
     def _on_device_drop(self, dev: str, items: list[tuple[str, str]]):
         if self.lib is None:
             QMessageBox.information(self, "Open a library first",
@@ -3817,6 +4943,26 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if profile is not None and profile.kind == "stock_ipod":
             self._begin_stock_ipod_sync(dev, pls)
             return
+        if profile is not None and profile.kind == "dual_boot":
+            confirmed = [
+                playlist for playlist in pls
+                if self._confirm_dual_ipod_drop(dev, playlist)
+            ]
+            if not confirmed:
+                return
+            dual_busy = any(_running(getattr(self, name, None)) for name in (
+                "_dual_plan_worker", "_dual_commit_worker"))
+            if (
+                dual_busy
+                or self._dual_active_device
+                or self._pending_device_operation is not None
+            ):
+                self._queue_dual_ipod_playlists(dev, confirmed)
+                return
+            queued = self._dual_sync_queue.pop(dev, [])
+            self._start_confirmed_dual_jobs(
+                dev, self._merge_device_playlists(queued, confirmed))
+            return
         if profile is not None and not profile.rockbox_export:
             QMessageBox.warning(
                 self, "Export unavailable",
@@ -3827,7 +4973,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.export_worker.add(dev, pls)  # aggregate into the running export
             return
         LOG.info("Export: %d playlist(s) -> %s", len(pls), dev)
-        w = ExportWorker(self.lib, self.overrides, self.titles, self.art_cache)
+        w = ExportWorker(
+            self.lib, self.overrides, self.titles, self.art_cache,
+            self.rockbox_media_cache, self.rockbox_art_cache)
         self.export_worker = w
         self._exporting = True
         w.progress.connect(self._on_progress)
@@ -3839,7 +4987,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         est = sum(max(1, len(self.lib.resolve(p))) for p in pls)
         self.progress.setRange(0, est)
         self.progress.setValue(0)
-        self._start_pulse("EXPORTING")  # animated dots from the first frame
+        self._start_pulse("Exporting")  # animated dots from the first frame
         self.progress.setVisible(True)
         self.cancel_btn.setVisible(True)
         w.add(dev, pls)
@@ -3891,6 +5039,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._stock_plan_worker.wait(30000)  # read-only hash/render; let it finish
         if _running(getattr(self, "_stock_commit_worker", None)):
             self._stock_commit_worker.wait(30000)  # never tear down a device commit
+        if _running(getattr(self, "_dual_plan_worker", None)):
+            self._dual_plan_worker.wait(30000)  # local staging + read-only render
+        if _running(getattr(self, "_dual_commit_worker", None)):
+            self._dual_commit_worker.wait(30000)  # never tear down composite commit
         if _running(getattr(self, "_stock_delete_plan_worker", None)):
             self._stock_delete_plan_worker.wait(30000)  # finish read-only delete plan
         if _running(getattr(self, "_stock_delete_commit_worker", None)):
@@ -3940,17 +5092,34 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if total and done >= total:
             # Files copied; engine is scrubbing the device. Solid 100% bar +
             # animated "FINALIZING…" so it's clearly working, not frozen.
-            self._start_pulse("FINALIZING")
+            self._start_pulse("Finalizing")
         else:
             # Animate "EXPORTING…" alongside the % bar (idempotent — the same-word
             # guard keeps the dots from resetting on every tick).
-            self._start_pulse("EXPORTING")
+            self._start_pulse("Exporting")
 
-    def _start_pulse(self, word: str):
+    def _set_status_count(
+            self, done: int | None = None, total: int | None = None):
+        visible = (
+            done is not None and total is not None and int(total) > 0)
+        if not visible:
+            self.status_count_label.clear()
+            self.status_count_label.setVisible(False)
+            return
+        total = max(1, int(total))
+        done = max(0, min(int(done), total))
+        self.status_count_label.setText(f"{done}/{total}")
+        self.status_count_label.setVisible(True)
+
+    def _start_pulse(self, word: str, *, keep_count: bool = False):
+        if not keep_count:
+            self._set_status_count()
         if self._pulse_word == word and self._pulse_timer.isActive():
             return  # already animating this word — don't reset the dots
         self._pulse_word = word
         self._pulse_dots = 0
+        self.status_label.setFixedWidth(
+            self.status_label.fontMetrics().horizontalAdvance(word + "...") + 8)
         self.status_label.setText(word)
         self._pulse_timer.start()
 
@@ -3958,6 +5127,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._pulse_timer.isActive():
             self._pulse_timer.stop()
         self._pulse_word = None
+        self._set_status_count()
 
     def _pulse_tick(self):
         self._pulse_dots = (self._pulse_dots + 1) % 4
@@ -3965,6 +5135,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _flash_status(self, msg: str, seconds: int = 15):
         """Show a transient status that auto-clears to Ready (if not replaced)."""
+        self._set_status_count()
+        self.status_label.setFixedWidth(
+            self.status_label.fontMetrics().horizontalAdvance(msg) + 8)
         self.status_label.setText(msg)
         QTimer.singleShot(
             seconds * 1000,

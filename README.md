@@ -65,8 +65,14 @@ than no art), resumable and scoped to new tracks only. Manual per-track
 picker (search results, image file, or URL — an artist profile URL yields
 the avatar), an **Artist Pictures catalog** for avatar-wearing artists, and
 per-track blocking ("Remove cover art" is sticky). Everything in the cache is
-normalized to **baseline JPEG** — the only flavor older Rockbox renders — and
-exported as `cover.jpg` per Rockbox track folder. In parallel, a low-priority
+normalized to **baseline JPEG** as canonical app state. The Rockbox exporter
+derives 8-bit paletted BMPs per track: baseline 160×160/116×116 fast paths,
+exact square sizes discovered from the active WPS/SBS, and a lightweight
+dimensionless 160×160 fallback. Exact sizes are retained as themes change. All
+are siblings of the audio file. The exporter also
+removes embedded pictures only from its verified device-side audio copy, so a
+huge source APIC cannot outrank the curated cover or exhaust a classic iPod.
+Source audio and canonical curated JPEGs remain byte-identical. In parallel, a low-priority
 worker pre-generates content-addressed MA446 RGB565 derivatives for stock iPods.
 Stock sync assembles those prepared pixels into `F1028_1.ithmb` (100×100),
 `F1029_1.ithmb` (200×200), and a validated `ArtworkDB`; identical curated
@@ -106,8 +112,10 @@ playback with a diagnostic while library management remains available.
 
 **Devices & sync.** Drop = export: threaded copy with one aggregating
 progress bar, FINALIZING sweep (AppleDouble scrub), free-space precheck,
-FAT32-safe names (length-budgeted artist/title), tree + flat `/Playlists`
-layout, UTF-8 no-BOM `.m3u8` in exact order with `# MISSING:` comments.
+FAT32-safe names (length-budgeted artist/title), catalogue-visible flat
+`/Playlists` names for dual iPods, and UTF-8 no-BOM `.m3u8` in exact order with
+`# MISSING:` comments. Generic Rockbox/USB exports may additionally mirror the
+playlist tree for file-browser use.
 A per-device ownership manifest tracks normalized paths, source identity,
 hashes, playlist membership, artwork, and completed generations. Playlist
 edits/reorders/deletes show as **⚠ N playlists out of date**; **Sync** resolves
@@ -123,9 +131,9 @@ recovery archive, atomic media/artwork copies, and `iTunesDB` committed last.
 Its confirmation reports linked tracks, unique images, and artwork bytes. Other
 stock models remain read-only. The connected layout chooses the destination
 rules automatically: stock-only devices use the conservative database path;
-`/.rockbox/` devices receive the broader Rockbox filesystem export while any
-coexisting stock database remains read-only.
-Selecting a stock-only iPod opens Device, Music, and Playlists tabs backed by a
+Rockbox-only/generic FAT32 devices use the broader filesystem path; and a FAT32
+MA446 containing both layouts enters the composite single-copy workflow below.
+Selecting a stock or dual-boot iPod opens Device, Songs, and Playlists tabs backed by a
 read-only database snapshot rather than exposing its internal FAT folders. A
 confirmed model is remembered per persistent iPod-library/volume identity. On
 macOS the Device dashboard also separates Apple-reported firmware and hardware
@@ -142,15 +150,75 @@ for rename, new folder, delete, and assign-artist. Non-FAT32 filesystems get
 flagged immediately (Rockbox
 requirement).
 
-Current dual-boot operation is deliberately fail-closed: Rockbox receives the
-full Rockbox-compatible library and stock iTunesDB is untouched. The approved
-future dual-library design is single-copy rather than duplicate: stock-safe
-files live once under `iPod_Control/Music`, are indexed by iTunesDB, and are
-referenced by Rockbox playlists; stock-unsafe but Rockbox-supported files live
-once under `/Music` and never enter iTunesDB. That composite planner/manifest is
-not implemented yet. For the current MA446 contract, stock-safe means validated
-MP3 or stereo PCM16/44.1-kHz WAV. That stock filter governs only the iTunesDB
-subset; it must never shrink the Rockbox-compatible library.
+Dual-boot sync is deliberately single-copy. A complete no-write
+plan classifies each selected source: validated MA446-safe MP3 or stereo
+PCM16/44.1-kHz WAV lives once under `iPod_Control/Music`, is indexed by iTunesDB,
+and is referenced by Rockbox; stock-unsafe but Rockbox-supported media lives
+once under `/Music`; unsupported-by-both and missing sources are reported.
+Every shared or Rockbox-only payload gets its own sibling
+`filename.160x160.bmp`, `filename.116x116.bmp`, and universal `filename.bmp`, so
+tracks sharing a folder cannot steal one another's artwork. Those Rockbox-only derivatives use the
+theme-native uncompressed 8-bit paletted BMP representation, reducing device
+reads by roughly two thirds versus 24-bit BMP while leaving canonical JPEGs and
+stock-iPod artwork unchanged.
+SoundBox asks before expensive planning begins, archives exact stock recovery,
+publishes the
+Apple database before Rockbox playlists, and writes one schema-3 ownership
+manifest last. A later-phase failure rolls back the committed stock phase,
+restores managed Rockbox rewrites, and removes only files created by that plan.
+Existing schema-3 audio is not streamed during planning: SoundBox validates its
+ownership/path/size baseline, verifies the exact desired Mac-side derivative,
+then replaces one file at a time with a transient same-volume rollback rename.
+Old managed-audio bytes are discarded after success; unowned paths are untouched.
+If USB remounts mid-generation, the last committed library remains authoritative.
+Re-queueing the playlist verifies and adopts only exact completed leftovers;
+Mac-side proof journaling makes that verification resumable too. Additional
+playlist drops made while a dual-iPod sync is running are queued and deduplicated,
+then planned against the newly committed media instead of recopied.
+Sync, playlist export, and managed-playlist deletion all follow the same visible
+contract: immediate Yes/No, background Planning, guarded device writes, then one
+completion. Planning occupies the first 30% of the same progress bar and commit
+the remaining 70%, so the bar never disappears or jumps backward between phases
+or queued playlist jobs.
+The first generation requires a device without an existing SoundBox manifest;
+later playlist drops accumulate safely, and an identical repeat is zero-write.
+Thereafter the normal Sync action uses the same stable playlist identities and
+composite planner to reconcile rekordbox renames, moves, order, membership, and
+removal across both firmware views. Effective title/artist is also part of that
+baseline, so a metadata edit marks the device Sync needed and repairs both the
+stock database and Rockbox-visible payload metadata. Removed playlist files are recovery-backed;
+media and artwork are removed only when no remaining managed playlist references
+them. Managed audio requires an ownership/path/size baseline, while art and
+playlists retain live hash checks. Orphans are renamed into transient same-volume
+recovery and restored exactly on failure; the temporary bytes are discarded
+only after the schema-3 manifest publishes successfully. Cleanup therefore does
+not depend on regenerating an older cover with the current multiview profile.
+Schema-2 migration remains disabled and fails closed.
+
+Composite sync also manages two narrow Rockbox settings: automatic tag-cache
+updates and playlist-viewer titles from tags. Every unrelated `config.cfg` line
+is preserved, and the config update participates in the same recovery-backed
+transaction. Rockbox itself remains the sole writer of its rebuildable
+`database_*.tcd` files; after eject, its next boot reconciles changed and removed
+tracks instead of SoundBox guessing at the binary cache format.
+
+On a schema-3 dual device, **Songs** and **Playlists** are unified views rather
+than stock-only tabs. Their Type column reports `Both`, `Stock`, or `Rockbox`
+from the validated ownership manifest and parsed iTunesDB. Playlist expansion
+keeps the verified M3U8 order and labels every child track the same way. Apple
+smart indexes remain protected internal state and are not presented as managed
+dual-library metrics or playlists. `Syncing iPod...` remains animated while a
+separate `#/#` counts
+audio files actually copied, replaced, or removed; commits with no audio work
+hide that counter. Successful sync/deletion refreshes the open Device, Songs,
+and Playlists snapshot before the sidebar free-space/drift scan, so navigating
+away and back is never required. The status label reserves only the active
+animation width, keeping the count beside it. Approval is intentionally concise
+and precedes the expensive exact plan; completion reports the result without
+exposing the transaction's internal checklist.
+Before that first composite generation, deleting old stock playlists removes
+their now-unreferenced iTunesDB records and linked device media after the guarded
+database commit. Source-library audio and unrelated Rockbox paths stay untouched.
 
 **Persistence.** Everything user-made lives in one portable
 `library.json` (overrides, playlists, imported records, hides, settings) at
@@ -168,8 +236,9 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
 - Every write lands **under an explicit export target** (the device), guarded
   so a target can never overlap the source library.
 - Writes below `iPod_Control` go only through the guarded MA446 stock adapter.
-  A mounted `.rockbox` currently selects Rockbox export and keeps iTunesDB
-  read-only; the future dual-library planner must remain single-copy.
+  On a dual layout, only the composite planner may coordinate that adapter with
+  Rockbox media/playlists and schema-3 ownership; independent exporters are
+  forbidden.
 - Full contract with per-write commentary: top of `soundbox/sync.py`.
 
 ## Layout
