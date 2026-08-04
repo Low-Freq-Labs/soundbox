@@ -16,16 +16,17 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   `/Applications/Soundbox.app`, last observed as PID 11083. It activated the
   packaged CoreAudio/Metal deck and loaded the current live rekordbox snapshot:
   3,414 tracks and 81 playlists.
-- `./check.sh` passed on 2026-08-03: pyflakes, native build, mypy, and 738 tests
+- `./check.sh` passed on 2026-08-04: pyflakes, native build, mypy, and 738 tests
   with four expected skips.
   `./build_app.sh` passed; strict signature verification passed for both the
   packaged and installed app.
-- rekordbox remained open throughout installation and verification. SoundBox
-  warned that it was running, used its read-only temp snapshot normally, and
-  neither stopped nor wrote to rekordbox. The first installed launch found and
-  completed 20 background tasks without loading tracks: 13 stale waveform
-  records, one grid refresh, and six cue refreshes. The recurring 60-second
-  pass then caught one additional live grid change, proving the watcher rearmed.
+- rekordbox remained open throughout the initial 2026-08-03 installation and
+  verification. SoundBox warned that it was running, used its read-only temp
+  snapshot normally, and neither stopped nor wrote to rekordbox. The first
+  installed launch found and completed 20 background tasks without loading
+  tracks: 13 stale waveform records, one grid refresh, and six cue refreshes.
+  The recurring 60-second pass then caught one additional live grid change,
+  proving the watcher rearmed.
   The final 2026-08-04 wrap-up relaunch scheduled zero analysis/grid/cue tasks
   and zero art fetches.
 - `AGENTS.md` and `CLAUDE.md` remain byte-identical and explicitly define

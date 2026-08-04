@@ -209,6 +209,14 @@ For the live test count, trust `./check.sh` output—not any number written here
   signed ABI-3 native deck plus the 3,263-track/83-playlist library, and left
   the direct V5 recook resumable with its temporary rollback retained until
   the final full audit.
+- **CONTINUOUS NEW-TRACK PREPARATION SHIPPED.** Newly detected rekordbox tracks
+  and audio imported directly into SoundBox enter the same canonical V5 cooker
+  immediately. Successful source loads/imports also arm a serialized 60-second
+  source-identity recheck: it reads only stats and small manifests, never full
+  waveform payloads, and recooks only a track whose container changed after its
+  first pass. The installed 2026-08-03 repair automatically found 13 such stale
+  new-track records without loading them; the final 2026-08-04 wrap-up launch
+  and recurring pass both reported zero pending work.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
   V5 retains overflow cues beyond the eight visible slots.
 - **V4 ANALYSIS FOUNDATION SHIPPED.** SoundBox now owns checksummed per-track
