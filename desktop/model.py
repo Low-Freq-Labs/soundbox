@@ -75,7 +75,7 @@ _ART_TIP = {"cover": "Cover art found",
 _ART_RANK = {"cover": 0, "avatar": 1, "miss": 2, "blocked": 3, "": 4}
 
 _CAMELOT = re.compile(r"^\s*(\d{1,2})\s*([ABab])\s*$")
-_DURATION = re.compile(r"^\s*(\d+):(\d{2})\s*$")
+_DURATION = re.compile(r"^\s*(?:(\d+):)?(\d+):(\d{2})\s*$")
 
 
 def row_display_value(row: dict, key: str):
@@ -89,8 +89,8 @@ def row_display_value(row: dict, key: str):
 
 
 def _sort_value(key: str, row: dict):
-    """Type-aware sort key: numbers as numbers, M:SS as seconds, Camelot keys on
-    the wheel (2A < 10A), art by usefulness; empties always group together."""
+    """Type-aware sort key: numbers as numbers, M:SS/H:MM:SS as seconds,
+    Camelot keys on the wheel (2A < 10A), art by usefulness; empties group."""
     v = row.get(key) or ""
     if key == "art":
         return (0, _ART_RANK.get(v, 4))
@@ -104,7 +104,10 @@ def _sort_value(key: str, row: dict):
             return (1, 0)
     if key == "time":
         m = _DURATION.match(s)
-        return (0, int(m.group(1)) * 60 + int(m.group(2))) if m else (1, 0)
+        if m:
+            hours = int(m.group(1) or 0)
+            return (0, hours * 3600 + int(m.group(2)) * 60 + int(m.group(3)))
+        return (1, 0)
     if key == "key":
         m = _CAMELOT.match(s)
         if m:

@@ -88,7 +88,7 @@ class SettingsPageMixin:
         cols.setAlignment(Qt.AlignTop)
         cols.addStretch(1)  # stretches both sides center the two columns
 
-        # RIGHT column (added second) — the GRAVEYARD: every Collection-deleted track (and
+        # RIGHT column (added second) — the GRAVEYARD: every Collection-removed track (and
         # per-playlist removal), with its date. Sort either column to find the
         # oldest/newest; right-click (or double-click) to resurrect.
         left = QWidget(); left.setFixedWidth(440)  # both date + track stay visible
@@ -97,7 +97,7 @@ class SettingsPageMixin:
         gl.addWidget(self._settings_section("GRAVEYARD"))
         self._grave = QTreeWidget()
         self._grave.setObjectName("Graveyard")
-        self._grave.setHeaderLabels(["Track", "Deleted"])
+        self._grave.setHeaderLabels(["Track", "Removed"])
         self._grave.setRootIsDecorated(False)
         self._grave.setAlternatingRowColors(True)
         self._grave.setSortingEnabled(True)  # click headers: oldest/newest first
@@ -109,7 +109,7 @@ class SettingsPageMixin:
         self._grave.customContextMenuRequested.connect(self._grave_menu)
         self._grave.itemDoubleClicked.connect(lambda *_: self._grave_restore_selected())
         gl.addWidget(self._grave)
-        gsub = QLabel("Tracks deleted from Collection (and removed from playlists) "
+        gsub = QLabel("Tracks removed from Collection (and removed from playlists) "
                       "rest here — rekordbox and disk untouched. Double-click or "
                       "right-click to restore.")
         gsub.setObjectName("SettingsSub"); gsub.setWordWrap(True)
@@ -132,10 +132,10 @@ class SettingsPageMixin:
         self._word_edit.returnPressed.connect(self._add_drop_word)
         gl.addWidget(self._word_edit)
         rsub = QLabel("Junk auto-dropped from titles everywhere (table, player, "
-                      "iPod filenames). Words drop only from the END of a title "
-                      "or a whole (bracket) — never mid-title. Advanced? Type a "
-                      "regex — it runs as-is, like the built-ins. Manual renames "
-                      "always win.")
+                      "iPod filenames). Your words and phrases require an exact "
+                      "match at the END of a title or as a whole (bracketed tag) "
+                      "— never mid-title. Advanced? Type a regex — it runs as-is, "
+                      "like the built-ins. Manual renames always win.")
         rsub.setObjectName("SettingsSub"); rsub.setWordWrap(True)
         gl.addWidget(rsub)
         self._refresh_title_rules()
@@ -187,7 +187,8 @@ class SettingsPageMixin:
         self._chk_hide = QCheckBox(); self._chk_hide.toggled.connect(self._on_hide_toggled)
         bl.addWidget(self._settings_row(
             "Hide cue and placeholder tracks", self._chk_hide,
-            "Skips rekordbox cue markers and stubs — never real tracks."))
+            "Skips rekordbox cue markers and stubs. Direct SoundBox imports "
+            "are always exempt."))
 
         self._chk_nokey = QCheckBox(); self._chk_nokey.toggled.connect(self._on_sub_toggled)
         self._row_nokey = self._settings_row("Also hide keyless entries", self._chk_nokey,
@@ -393,7 +394,10 @@ class SettingsPageMixin:
 
     def _refresh_title_rules(self):
         g = self._rules
-        off = set(self.settings.get("title_rules_off") or [])
+        normalized = metadata.normalize_title_rules_off(
+            self.settings.get("title_rules_off"))
+        self.settings["title_rules_off"] = normalized
+        off = set(normalized)
         g.blockSignals(True)
         g.clear()
         for rid, label, _pat in metadata.BUILTIN_TITLE_RULES:
@@ -402,7 +406,7 @@ class SettingsPageMixin:
             it.setCheckState(0, Qt.Unchecked if rid in off else Qt.Checked)
             g.addTopLevelItem(it)
         for w in self.settings.get("title_words") or []:
-            label = (f"Drop “{w}”  (yours)" if metadata.is_plain_word(w)
+            label = (f"Drop “{w}”  (yours)" if metadata.is_literal_drop(w)
                      else f"Pattern  {w}  (yours, regex)")
             it = QTreeWidgetItem([label])
             it.setData(0, _GRAVE_ROLE, ("word", w))
@@ -425,9 +429,10 @@ class SettingsPageMixin:
         self._apply_and_refresh()
 
     def _add_drop_word(self):
-        """Plain words get the safe end/bracket semantics; anything with regex
-        syntax runs as a raw case-insensitive regex (power users) — validated
-        HERE so a typo'd pattern is rejected loudly, never silently ignored."""
+        """Plain words get safe end/bracket semantics and an exact plain tag
+        like ``(Original Mix)`` keeps its brackets literal. Other regex syntax
+        runs as a raw case-insensitive regex (power users) — validated HERE so
+        a typo'd pattern is rejected loudly, never silently ignored."""
         w = self._word_edit.text().strip()
         if not w:
             return

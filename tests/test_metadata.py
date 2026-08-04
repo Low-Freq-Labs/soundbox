@@ -294,22 +294,28 @@ class TidyTitle(unittest.TestCase):
 
     def test_bracketed_junk_anywhere(self):
         self.assertEqual(self._t("DESIGNER (FINAL_)"), "DESIGNER")
-        self.assertEqual(self._t("R28D MASTER(FINAL)"), "R28D MASTER")  # lone master kept
+        self.assertEqual(self._t("R28D MASTER(FINAL)"), "R28D")
         self.assertEqual(self._t("Ewokz - Run It Up (4)"), "Ewokz - Run It Up")
 
     def test_leading_patterns(self):
         self.assertEqual(self._t("4A - 140 - CRASH TEST"), "CRASH TEST")
 
-    def test_dialed_back_to_top_trash_only(self):
-        # Sonny 2026-07-02: years/master/wip/mN/durations stay MANUAL.
+    def test_dialed_back_to_high_confidence_metadata(self):
+        # Years/WIP/durations stay MANUAL; exact edge mixdown markers now drop.
         self.assertEqual(self._t("AG yonkers flip 2021"), "AG yonkers flip 2021")
         self.assertEqual(self._t("(3.40) KHOLD - CLOUT CHASER"),
                          "(3.40) KHOLD - CLOUT CHASER")
-        self.assertEqual(self._t("HIDE FINAL M2"), "HIDE FINAL M2")
-        self.assertEqual(self._t("Tough Love Mastered"), "Tough Love Mastered")
+        self.assertEqual(self._t("HIDE FINAL M2"), "HIDE")
+        self.assertEqual(self._t("Tough Love Mastered"), "Tough Love")
 
     def test_protected_real_titles(self):
-        self.assertEqual(self._t("Darkness Master"), "Darkness Master")
+        self.assertEqual(self._t("Mastermind"), "Mastermind")
+        self.assertEqual(self._t("Los Master Plus - Rockstar"),
+                         "Los Master Plus - Rockstar")
+        self.assertEqual(self._t("DEMON MASTER (BVSTA REMIX)"),
+                         "DEMON MASTER (BVSTA REMIX)")
+        self.assertEqual(self._t("Pull It (KAIMEN MASTER)"),
+                         "Pull It (KAIMEN MASTER)")
         self.assertEqual(self._t("Finally Moving"), "Finally Moving")
         self.assertEqual(self._t("THE SEARCH (FULL PLAYABLE)"),
                          "THE SEARCH (FULL PLAYABLE)")   # full/playable never touched
@@ -323,6 +329,43 @@ class TidyTitle(unittest.TestCase):
     def test_bpm_key_bracket_group(self):
         self.assertEqual(self._t("RIGHT NOW (FINAL) [140 BPM _ D# MINOR]"),
                          "RIGHT NOW")
+
+    def test_consolidated_version_rule_handles_copy_and_edge_forms(self):
+        self.assertEqual(self._t("TRACK v2.3 (1)"), "TRACK")
+        self.assertEqual(self._t("TRACK [V3]"), "TRACK")
+        self.assertEqual(self._t("TRACK {v12}"), "TRACK")
+        self.assertEqual(self._t("TRACK (Remix-v4)"), "TRACK (Remix)")
+        self.assertEqual(self._t("TRACK - V7 [Artist Edit]"),
+                         "TRACK [Artist Edit]")
+        self.assertEqual(self._t("Stormy Weather (1943)"),
+                         "Stormy Weather (1943)")
+        self.assertEqual(self._t("TRACK [2025]"), "TRACK [2025]")
+
+    def test_consolidated_mixdown_rule_is_edge_scoped(self):
+        self.assertEqual(self._t("TRACK FINAL V4 MASTER"), "TRACK")
+        self.assertEqual(self._t("TRACK (FINAL MASTER v3)"), "TRACK")
+        self.assertEqual(self._t("TRACK MASTER694 (2)"), "TRACK")
+        self.assertEqual(self._t("TRACK Master 2"), "TRACK")
+        self.assertEqual(self._t("TRACK MSTR V3 mp3"), "TRACK")
+        self.assertEqual(self._t("TRACK (Master) wav"), "TRACK")
+        self.assertEqual(self._t("TRACK MASTER-v1-16bit-41K"), "TRACK")
+
+    def test_render_rule_is_exact_and_trailing(self):
+        self.assertEqual(self._t("TRACK (320)v.1"), "TRACK")
+        self.assertEqual(self._t("TRACK FINAL WAV"), "TRACK")
+        self.assertEqual(self._t("TRACK (mp3)"), "TRACK")
+        self.assertEqual(self._t("TRACK (16bit 44.1Khz SQ)"), "TRACK")
+        self.assertEqual(self._t("16 BIT - IN THE DEATH CAR"),
+                         "16 BIT - IN THE DEATH CAR")
+
+    def test_consolidated_bpm_key_rule_covers_position_and_spelling(self):
+        self.assertEqual(self._t("4A - 140 - TRACK"), "TRACK")
+        self.assertEqual(self._t("145 - 2A - TRACK"), "TRACK")
+        self.assertEqual(self._t("TRACK 142bpm"), "TRACK")
+        self.assertEqual(self._t("TRACK {140/150 BPM}"), "TRACK")
+        self.assertEqual(self._t("TRACK [4A]"), "TRACK")
+        self.assertEqual(self._t("TRACK (140)"), "TRACK")
+        self.assertEqual(self._t("TRACK 140 4A"), "TRACK")
 
     def test_junk_list_is_customizable(self):
         from soundbox.metadata import tidy_title
@@ -338,12 +381,65 @@ class TidyTitle(unittest.TestCase):
         self.assertEqual(tidy_title("TRACK xx123", [r"x{2}\d+"]), "TRACK")
         self.assertEqual(tidy_title("TRACK ok", ["([bad"]), "TRACK ok")
 
+    def test_exact_plain_bracket_entry_drops_the_whole_tag(self):
+        from soundbox.metadata import tidy_title
+        # This common UI entry is an exact literal tag, not a regex group that
+        # removes only its words and leaves a visible trailing ().
+        pattern = r"(Original Mix)"
+        self.assertEqual(tidy_title("LOUD (Original Mix)", [pattern]), "LOUD")
+        self.assertEqual(
+            tidy_title("Let It Go (feat. Micah Martin) (Original Mix)", [pattern]),
+            "Let It Go (feat. Micah Martin)",
+        )
+        self.assertEqual(tidy_title("LOUD Original Mix", [pattern]),
+                         "LOUD Original Mix")
+        self.assertEqual(tidy_title("LOUD [Original Mix]", [pattern]),
+                         "LOUD [Original Mix]")
+        self.assertEqual(tidy_title("LOUD {Original Mix}", [pattern]),
+                         "LOUD {Original Mix}")
+        self.assertEqual(tidy_title("LOUD (My Original Mix)", [pattern]),
+                         "LOUD (My Original Mix)")
+        self.assertEqual(tidy_title("LOUD (Original Mix Extended)", [pattern]),
+                         "LOUD (Original Mix Extended)")
+        self.assertEqual(tidy_title("LOUD (Original Mix_)", [pattern]),
+                         "LOUD (Original Mix_)")
+        self.assertEqual(tidy_title("LOUD ()", [pattern]), "LOUD ()")
+
+    def test_plain_custom_entry_requires_an_exact_unit(self):
+        from soundbox.metadata import tidy_title
+        pattern = "Original Mix"
+        self.assertEqual(tidy_title("LOUD Original Mix", [pattern]), "LOUD")
+        self.assertEqual(tidy_title("LOUD (Original Mix)", [pattern]), "LOUD")
+        self.assertEqual(tidy_title("LOUD [Original Mix]", [pattern]), "LOUD")
+        self.assertEqual(tidy_title("LOUD {Original Mix}", [pattern]), "LOUD")
+        self.assertEqual(tidy_title("LOUD (Original Mix Extended)", [pattern]),
+                         "LOUD (Original Mix Extended)")
+        self.assertEqual(tidy_title("LOUD (Original Mix_)", [pattern]),
+                         "LOUD (Original Mix_)")
+        self.assertEqual(tidy_title("LOUD (Original Mix]", [pattern]),
+                         "LOUD (Original Mix]")
+
+    def test_curly_custom_tag_is_also_an_exact_literal(self):
+        from soundbox.metadata import tidy_title
+        self.assertEqual(tidy_title("LOUD {Original Mix}", ["{Original Mix}"]),
+                         "LOUD")
+        self.assertEqual(tidy_title("LOUD (Original Mix)", ["{Original Mix}"]),
+                         "LOUD (Original Mix)")
+
     def test_defaults_visible_and_used_when_none(self):
-        from soundbox.metadata import DEFAULT_TITLE_JUNK, tidy_title
-        self.assertIn("final", DEFAULT_TITLE_JUNK)
+        from soundbox.metadata import (
+            BUILTIN_TITLE_RULES, DEFAULT_TITLE_JUNK, tidy_title,
+        )
+        self.assertEqual(len(DEFAULT_TITLE_JUNK), len(BUILTIN_TITLE_RULES))
         self.assertEqual(tidy_title("GUTTER FINAL v2", None), "GUTTER")
         self.assertEqual(tidy_title("GUTTER FINAL v2", list(DEFAULT_TITLE_JUNK)),
                          "GUTTER")
+
+    def test_legacy_disabled_rule_ids_migrate_conservatively(self):
+        from soundbox.metadata import normalize_title_rules_off
+        self.assertEqual(normalize_title_rules_off(["final"]), ["mixdown"])
+        self.assertEqual(normalize_title_rules_off(["verbrack"]), ["version"])
+        self.assertEqual(normalize_title_rules_off(["bpmword"]), ["bpmkey"])
 
 
 class ArtistAliases(unittest.TestCase):

@@ -53,8 +53,11 @@ class Track:
 
     @property
     def duration_str(self) -> str:
-        """Duration as M:SS for display."""
-        minutes, seconds = divmod(int(self.total_time or 0), 60)
+        """Duration as M:SS, promoting long audio to H:MM:SS."""
+        hours, remainder = divmod(max(0, int(self.total_time or 0)), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes}:{seconds:02d}"
 
     @property

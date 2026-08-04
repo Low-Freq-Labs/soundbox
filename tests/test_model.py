@@ -47,6 +47,12 @@ class SortBehavior(unittest.TestCase):
         m.sort(_col("time"), Qt.AscendingOrder)
         self.assertEqual(self._titles(m), ["Charlie", "delta", "Bravo", "alpha"])
 
+    def test_sort_time_understands_hour_format(self):
+        self.assertEqual(_sort_value("time", {"time": "1:30:00"}),
+                         _sort_value("time", {"time": "90:00"}))
+        self.assertLess(_sort_value("time", {"time": "59:59"}),
+                        _sort_value("time", {"time": "1:00:00"}))
+
     def test_sort_key_camelot_wheel(self):
         m = TrackModel(_rows())
         m.sort(_col("key"), Qt.AscendingOrder)  # 2A < 2B < 9B < 10A (not lexical)

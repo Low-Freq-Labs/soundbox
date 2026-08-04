@@ -333,6 +333,11 @@ while preserving the compressed waveform payload byte-for-byte.
 The background `WaveformFillWorker`:
 
 - scans the library incrementally;
+- starts for both newly detected rekordbox tracks and direct SoundBox imports,
+  then rechecks source identities every 60 seconds after the preceding pass
+  completes; the recurring scan reads only source stats and small manifests,
+  so a late tag/container rewrite recooks only its stale track and never waits
+  for that track to be loaded;
 - keeps the currently loaded track in a persistent foreground-critical lane;
   that track bypasses playback, interaction, Low Power Mode, and bulk battery
   deferral, and its completed canonical color/detail hot-loads into the deck;

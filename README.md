@@ -31,7 +31,12 @@ Refresh any time. On top of the rekordbox mirror, SoundBox keeps its own
 plane: **import audio files directly** (drag from Finder onto a SoundBox
 playlist or Collection, or right-click → Import Audio Files…). Imported files
 are referenced in place — never copied or re-tagged — and become first-class
-tracks: edits, art, waveforms, export. Reorganized your files on disk?
+tracks: container-derived duration (including ALAC/AAC, displayed as H:MM:SS
+for hour-plus sets), edits, art, waveforms, export. Direct imports are always
+exempt from the rekordbox cue/placeholder filter. New rekordbox tracks and
+direct SoundBox imports enter the same background waveform cooker immediately;
+lightweight source-identity rechecks recook only a file that changes later.
+Reorganized your files on disk?
 Right-click → **Fix Missing Links…** relocates them (filename + size match,
 never guesses; folder-picker fallback).
 
@@ -53,11 +58,12 @@ Every override teaches the artist deriver (trusted-name gating for reversed
 "Title - Artist" flips, collab-aware splitting, Unknown rescue from titles).
 Batch tools: **Suggest artist merges…** (fuzzy spelling dedup with in-dialog
 Unmerge), **Suggest artists for Unknowns…**, named **Title Cleanup** rules
-(built-ins by name + custom words or validated regex), neat-title
-edge-artist stripping. Deletes are two-plane: **Delete from Collection**
-(global hide, restorable from the dated **Graveyard** in Settings) vs
-**Remove from Playlist** (per-playlist veto). Both drift synced devices;
-rekordbox never changes.
+(four intent-based defaults for mixdown, version/copy, BPM/key, and render/file
+tags + exact custom words/bracket tags or validated regex), neat-title edge-artist
+stripping. Removal has two explicit scopes: playlist menus offer
+both **Remove from Playlist** (only that playlist) and **Remove from Collection**
+(global hide, restorable from the dated **Graveyard** in Settings); Collection
+offers only the latter. Both drift synced devices; rekordbox never changes.
 
 **Cover art.** Background auto-fetch with an accuracy-first matcher (real
 title match → track cover, else artist avatar; wrong art is treated as worse

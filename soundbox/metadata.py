@@ -311,31 +311,105 @@ def neat_title(name: str, artist: str) -> str:
     return out if len(out) >= 2 else name
 
 
-# --- Display-grade junk. DELIBERATELY TINY (product decision: only the "top
-# top top" trash auto-drops; years/master/mastered/wip/mN/durations can be real
-# title content or wanted context — those stay MANUAL. He KEPT "Darkness
-# Master", "Finally Moving", "(FULL PLAYABLE)", "[FULL]", "2021".) ---
+# --- Display-grade junk. DELIBERATELY TINY: only high-confidence production
+# markers auto-drop. Years, WIP/draft labels, durations, format notes, and other
+# ambiguous text stay MANUAL. Mixdown markers are edge-scoped so names such as
+# "Los Master Plus" and mid-title uses survive. ---
 # --- Display/export title junk — NAMED, user-toggleable rules (Settings →
 # TITLE CLEANUP). Nothing hard-coded away from the user: each built-in shows by
 # NAME with a checkbox; custom plain words can be added. A plain word drops only
 # from the END of a title or as a whole-(bracket)-group — never mid-title, so
 # "The Final Countdown" survives "final". ---
-BUILTIN_TITLE_RULES = (
-    # (id, human name, pattern — plain word OR regex)
-    ("final",    "Trailing “FINAL”",                 "final"),
-    ("keybpm",   "Key/BPM prefix  (4A - 140 - …)",   r"^\s*\d{1,2}[abAB]\s*-\s*1\d{2}\s*-\s*"),
-    ("bpmbrack", "[BPM / key] bracket tags",         r"[\[(][^\[\]()]*\bbpm\b[^\[\]()]*[\])]"),
-    ("verbrack", "Copy/version brackets  (1) [V3]",  r"[\[(]\s*(?:v\d+(?:\.\d+)?|\d+)[\s_]*[\])]"),
-    ("vnum",     "Version tags  v1 / v2.3",          r"\bv\.?\d+(?:\.\d+)?\b"),
-    ("mastern",  "Mixdown stamps  MASTER694",        r"\bmaster\d+\b"),
-    ("bpmword",  "BPM tags  150bpm",                 r"\b\d{2,3}\s?bpm\b"),
-    ("tailbpm",  "Trailing BPM / key tokens",        r"(?:\s+(?:1\d{2}|\d{1,2}[abAB]))+\s*$"),
+_MIXDOWN_TOKEN = (
+    r"(?:final|master(?:ed)?(?:\s*(?:v?\d+|update))?|"
+    r"mstr(?:\s*\d+)?|m\d+)"
 )
+_MIXDOWN_GROUP = (
+    rf"(?:\(\s*{_MIXDOWN_TOKEN}(?:[\s_-]+{_MIXDOWN_TOKEN})*[\s_]*\)|"
+    rf"\[\s*{_MIXDOWN_TOKEN}(?:[\s_-]+{_MIXDOWN_TOKEN})*[\s_]*\]|"
+    rf"\{{\s*{_MIXDOWN_TOKEN}(?:[\s_-]+{_MIXDOWN_TOKEN})*[\s_]*\}})"
+)
+_MIXDOWN_PATTERN = (
+    rf"(?:{_MIXDOWN_GROUP}|(?<!\w){_MIXDOWN_TOKEN}"
+    rf"(?:[\s_-]+{_MIXDOWN_TOKEN})*\s*$)"
+)
+
+_VERSION_TOKEN = r"v\s*\.?\s*\d+(?:\.\d+)?"
+_VERSION_PATTERN = (
+    # Copy suffixes in this library are single-digit Finder/browser duplicates.
+    # Larger bracketed numbers are years, BPM, or bitrate—not versions.
+    rf"(?:\(\s*(?:{_VERSION_TOKEN}|[1-9])[\s_]*\)|"
+    rf"\[\s*(?:{_VERSION_TOKEN}|[1-9])[\s_]*\]|"
+    rf"\{{\s*(?:{_VERSION_TOKEN}|[1-9])[\s_]*\}}|"
+    # Consume a punctuation separator with a version so `.v3`, `-v4` inside a
+    # meaningful bracket, and ` - V7 [credit]` do not leave punctuation shells.
+    rf"(?:\s*[-_.]\s*)?\b{_VERSION_TOKEN}\b)"
+)
+
+_CAMELOT_TOKEN = r"\d{1,2}[ab]"
+_BPM_NUMBER = r"\d{2,3}(?:\.\d+)?"
+_BPM_WORD = rf"{_BPM_NUMBER}\s*bpm"
+_BPM_KEY_PATTERN = (
+    # Exact leading "4A - 140 -" and "145 - 2A -" metadata prefixes.
+    rf"(?:^\s*(?:(?:{_CAMELOT_TOKEN})\s*-\s*(?:{_BPM_NUMBER})|"
+    rf"(?:{_BPM_NUMBER})\s*-\s*(?:{_CAMELOT_TOKEN}))\s*-\s*|"
+    # Whole paired bracket groups containing BPM data, plus key-only groups.
+    rf"\([^()\[\]{{}}]*\bbpm\b[^()\[\]{{}}]*\)|"
+    rf"\[[^()\[\]{{}}]*\bbpm\b[^()\[\]{{}}]*\]|"
+    rf"\{{[^()\[\]{{}}]*\bbpm\b[^()\[\]{{}}]*\}}|"
+    rf"\(\s*{_CAMELOT_TOKEN}\s*\)|\[\s*{_CAMELOT_TOKEN}\s*\]|"
+    rf"\{{\s*{_CAMELOT_TOKEN}\s*\}}|"
+    # A bare 1xx in brackets is BPM metadata; 320/years remain untouched.
+    r"\(\s*1\d{2}\s*\)|\[\s*1\d{2}\s*\]|\{\s*1\d{2}\s*\}|"
+    # Explicit "150bpm" anywhere, or bare trailing BPM/Camelot tokens.
+    rf"(?<!\w){_BPM_WORD}(?!\w)|"
+    rf"(?:\s+(?:1\d{{2}}|{_CAMELOT_TOKEN}))+\s*$)"
+)
+
+_SAMPLE_RATE = r"(?:41|44(?:\.1)?|48)\s*k(?:hz)?"
+_BIT_DEPTH = rf"(?:16|24)\s*bit(?:[\s_-]+{_SAMPLE_RATE}(?:[\s_-]+sq)?)?"
+_RENDER_TOKEN = (
+    rf"(?:mp3|wav|aiff?|flac|{_BIT_DEPTH}|"
+    rf"(?:128|192|256|320)(?:\s*kbps)?)"
+)
+_RENDER_PATTERN = (
+    rf"(?:\(\s*{_RENDER_TOKEN}\s*\)|\[\s*{_RENDER_TOKEN}\s*\]|"
+    rf"\{{\s*{_RENDER_TOKEN}\s*\}}|(?:[\s._-]+){_RENDER_TOKEN}\s*$)"
+)
+
+BUILTIN_TITLE_RULES = (
+    # (id, concise user-facing name, case-insensitive regex)
+    ("mixdown", "Mixdown markers  FINAL / MASTER / M#", _MIXDOWN_PATTERN),
+    ("version", "Copy/version tags  (1) [V3] v2.3", _VERSION_PATTERN),
+    ("bpmkey", "BPM/key tags  #bpm / [BPM-key] / 4A - 140 - …",
+     _BPM_KEY_PATTERN),
+    ("render", "Render/file tags  (320) 24bit WAV MP3", _RENDER_PATTERN),
+)
+
+# Users may have disabled one of the old implementation-shaped rows. Merging
+# rows must never silently re-enable cleanup, so any disabled legacy component
+# conservatively disables its new combined rule.
+_LEGACY_TITLE_RULES = {
+    "mixdown": {"final", "mastern"},
+    "version": {"verbrack", "vnum"},
+    "bpmkey": {"keybpm", "bpmbrack", "bpmword", "tailbpm"},
+}
+
+
+def normalize_title_rules_off(rules_off=()) -> list[str]:
+    """Migrate disabled IDs from the former eight-row cleanup UI."""
+    off = set(rules_off or ())
+    for current, legacy in _LEGACY_TITLE_RULES.items():
+        if off & legacy:
+            off.add(current)
+        off.difference_update(legacy)
+    known = {rid for rid, _name, _pattern in BUILTIN_TITLE_RULES}
+    return sorted(off & known)
 
 
 def junk_patterns(rules_off=(), words=()) -> list:
     """The effective pattern list from the user's rule toggles + custom words."""
-    off = set(rules_off or ())
+    off = set(normalize_title_rules_off(rules_off))
     pats = [pat for rid, _name, pat in BUILTIN_TITLE_RULES if rid not in off]
     return pats + [w.strip() for w in (words or ()) if w and w.strip()]
 
@@ -345,20 +419,43 @@ DEFAULT_TITLE_JUNK = tuple(junk_patterns())
 _PLAIN_WORD = re.compile(r"[\w\s'&.!$+-]+$")
 
 
+def _literal_bracket_entry(entry: str) -> tuple[str, str, str] | None:
+    """A user-friendly exact bracket tag such as ``(Original Mix)``.
+
+    Parentheses normally mean regex grouping.  When they contain only a plain
+    phrase, though, the settings UI's natural reading is an exact bracketed tag.
+    Preserve actual regex syntax such as ``(mix|edit)`` for power users.
+    """
+    e = (entry or "").strip()
+    if len(e) < 3 or (e[0], e[-1]) not in (
+        ("(", ")"), ("[", "]"), ("{", "}"),
+    ):
+        return None
+    inner = e[1:-1].strip()
+    if not inner or not _PLAIN_WORD.fullmatch(inner):
+        return None
+    return e[0], inner, e[-1]
+
+
 def is_plain_word(entry: str) -> bool:
     """True if a user entry is a plain word/phrase (gets safe end/bracket
     semantics); False means it will run as a raw regex."""
     return bool(_PLAIN_WORD.fullmatch((entry or "").strip()))
 
 
+def is_literal_drop(entry: str) -> bool:
+    """True for a safe plain phrase or an exact plain bracketed tag."""
+    return is_plain_word(entry) or _literal_bracket_entry(entry) is not None
+
+
 def valid_pattern(entry: str) -> bool:
-    """Can this user entry actually be used? Plain words always can; a regex
+    """Can this user entry actually be used? Literal drops always can; a regex
     entry must compile (invalid ones are rejected AT ENTRY so the user knows,
     instead of being silently skipped later)."""
     e = (entry or "").strip()
     if not e:
         return False
-    if is_plain_word(e):
+    if is_literal_drop(e):
         return True
     try:
         re.compile(e, re.IGNORECASE)
@@ -377,9 +474,17 @@ def _compiled_junk(junk: tuple):
         e = (entry or "").strip()
         if not e:
             continue
-        if _PLAIN_WORD.fullmatch(e):     # plain word/phrase → safe semantics
+        bracketed = _literal_bracket_entry(e)
+        if bracketed:                    # exact literal tag, incl. its brackets
+            opening, phrase, closing = bracketed
+            w = re.escape(phrase).replace(r"\ ", r"\s+")
+            pat = (rf"{re.escape(opening)}\s*{w}\s*"
+                   rf"{re.escape(closing)}")
+        elif _PLAIN_WORD.fullmatch(e):   # plain word/phrase → safe semantics
             w = re.escape(e).replace(r"\ ", r"\s+")
-            pat = rf"(?:\s+{w})+\s*$|[\[(]\s*{w}[\s_]*[\])]"
+            pat = (rf"(?:\s+{w})+\s*$|"
+                   rf"(?:\(\s*{w}\s*\)|\[\s*{w}\s*\]|"
+                   rf"\{{\s*{w}\s*\}})")
         else:                            # raw regex (power users)
             pat = e
         try:
@@ -401,6 +506,7 @@ def tidy_title(name: str, junk=None) -> str:
         for rx in res:
             s = rx.sub(" ", s)
         s = re.sub(r"\s{2,}", " ", s).strip()
+        s = re.sub(r"\s+([)\]}])", r"\1", s)
         if s == before:
             break
     out = s.strip(" -–—_")

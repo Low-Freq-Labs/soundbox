@@ -4,6 +4,8 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from soundbox import imports
 from soundbox.library import Library, Playlist, Track
@@ -47,6 +49,19 @@ class Probe(unittest.TestCase):
         self.assertEqual(rec["time"], 0)
         self.assertEqual(rec["size"], 0)
 
+    def test_alac_aac_uses_container_metadata_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "set.m4a"
+            path.write_bytes(b"container fixture")
+            audio = SimpleNamespace(info=SimpleNamespace(length=6839.75))
+            with (
+                mock.patch("soundfile.info", side_effect=RuntimeError("unsupported")),
+                mock.patch("mutagen.File", return_value=audio),
+            ):
+                rec = imports.probe(path)
+        self.assertEqual(rec["time"], 6839)
+        self.assertEqual(rec["size"], len(b"container fixture"))
+
 
 class MakeTrack(unittest.TestCase):
     def test_path_round_trips_through_uri(self):
@@ -58,6 +73,7 @@ class MakeTrack(unittest.TestCase):
         self.assertEqual(t.name, p.stem)  # title = filename stem
         self.assertTrue(t.imported)
         self.assertEqual(t.total_time, 5400)
+        self.assertEqual(t.duration_str, "1:30:00")
         self.assertEqual(t.date_added, "2026-07-06")
 
     def test_never_swept_as_untracked(self):
@@ -87,6 +103,21 @@ class Inject(unittest.TestCase):
         lib.hide_untracked = True  # would sweep any keyless no-BPM rekordbox row
         pl = Playlist("LIVE", [], keys=["sb-a", "1"])
         self.assertEqual([t.track_id for t in lib.resolve(pl)], ["sb-a", "1"])
+
+    def test_backfills_existing_zero_time_record_before_injection(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "existing.m4a"
+            path.write_bytes(b"old imported record")
+            imported = {"sb-a": {"path": str(path), "time": 0, "size": 0}}
+            audio = SimpleNamespace(info=SimpleNamespace(length=3594.9))
+            with (
+                mock.patch("soundfile.info", side_effect=RuntimeError("unsupported")),
+                mock.patch("mutagen.File", return_value=audio),
+            ):
+                changed = imports.inject(self._lib(), imported)
+            self.assertEqual(changed, 1)
+            self.assertEqual(imported["sb-a"]["time"], 3594)
+            self.assertEqual(imported["sb-a"]["size"], len(b"old imported record"))
 
 
 

@@ -588,6 +588,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   a strong-ref set (`_wf_pending`), never a single `self.x` reassignment;
   every result is track-generation guarded; `shutdown_waveforms()`
   interrupts + waits all.
+- **A new track can change after its first background cook.** Rekordbox/tag
+  tools may finish rewriting a newly landed container minutes later; direct
+  SoundBox imports can also be replaced in place. One refresh-time waveform
+  pass therefore is not enough. Successful source loads/imports arm the
+  single-shot 60-second identity recheck, which rearms only after the previous
+  worker finishes. `is_ready` uses size + mtime identity and recooks only stale
+  records; the scan must stay manifest-only and must not inflate waveform
+  payloads or overlap workers.
 - **Track replacement is an atomic renderer boundary.** Call native
   `begin_track(generation)` before setting the source. It clears overview,
   detail/mips, grid, imported cues, and session CUE together. Packed overview
@@ -698,10 +706,23 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   classes, not the failing test.
 
 ## Metadata / veto plumbing
+- Direct-import duration probing must keep both paths: libsndfile handles the
+  ordinary WAV/AIFF/FLAC headers cheaply, while Mutagen supplies ALAC/AAC MP4
+  container duration. `imports.inject` backfills legacy zero-time records and
+  the app persists a repair once. `Track.imported` is the non-negotiable
+  exemption from rekordbox cue/placeholder hiding; unknown duration must never
+  make a real direct import disappear.
 - Title pipeline order: effective ARTIST is computed from the RAW/overridden name
   FIRST, then `effective_title = override | tidy(neat(name, artist), junk)`. Junk
   rules: `metadata.BUILTIN_TITLE_RULES` + user words; `Library.title_junk=None`
-  means defaults.
+  means defaults. The defaults are four intent groups (mixdown, copy/version,
+  BPM/key, render/file), not separate rows for regex position or spelling.
+  `normalize_title_rules_off` conservatively migrates the former eight IDs. A
+  custom plain bracket tag such as `(Original Mix)` is one exact literal tag,
+  including its bracket type; it does not match bare text, longer content, or
+  unrelated empty brackets. Other custom plain words/phrases likewise match
+  only as a complete trailing unit or complete paired-bracket contents. Raw
+  regex remains the explicitly advanced, run-as-written escape hatch.
 - `manifest._excluded(pl, hidden, removals)` is the single source of veto truth
   for sig/entry/diff/prune — any new "don't export this track" feature must flow
   through it or devices won't drift.

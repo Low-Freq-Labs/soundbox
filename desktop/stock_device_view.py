@@ -31,7 +31,10 @@ from .devices import human
 
 def _duration(milliseconds: int) -> str:
     seconds = max(0, int(milliseconds)) // 1000
-    return f"{seconds // 60}:{seconds % 60:02d}"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return (f"{hours}:{minutes:02d}:{seconds:02d}"
+            if hours else f"{minutes}:{seconds:02d}")
 
 
 def _regular_user_playlists(snapshot: StockIpodSnapshot):

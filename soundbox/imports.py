@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 import uuid
 import hashlib
+import math
 import os
 import shutil
 from datetime import date, datetime
@@ -109,16 +110,35 @@ def copy_from_device(
     return copied
 
 
-def probe(path: Path) -> dict:
-    """Build the library.json record for a file: path + import date + what
-    metadata we can read cheaply (duration via the soundfile header, size).
-    Never raises — an unreadable header (e.g. ALAC/.m4a) just means time 0."""
-    secs = 0
+def duration_seconds(path: Path) -> int:
+    """Read container duration without decoding or modifying the source.
+
+    libsndfile is the cheap first path for WAV/AIFF/FLAC and the formats it can
+    identify. Mutagen supplies container metadata for ALAC/AAC MP4 files (and
+    is also a safe fallback for another supported header libsndfile rejects).
+    """
+    duration = 0.0
     try:
         import soundfile as sf
-        secs = int(sf.info(str(path)).duration)
-    except Exception:  # header soundfile can't parse — duration stays unknown
+        duration = float(sf.info(str(path)).duration or 0.0)
+    except Exception:  # noqa: BLE001 - fallback handles unsupported containers
         pass
+    if not math.isfinite(duration) or duration <= 0:
+        try:
+            import mutagen
+            audio = mutagen.File(path)
+            info = getattr(audio, "info", None)
+            duration = float(getattr(info, "length", 0.0) or 0.0)
+        except Exception:  # noqa: BLE001 - an unreadable file stays unknown
+            duration = 0.0
+    return int(duration) if math.isfinite(duration) and duration > 0 else 0
+
+
+def probe(path: Path) -> dict:
+    """Build the library.json record for a file: path + import date + what
+    metadata we can read cheaply (container duration and size). Never raises;
+    an actually unreadable header simply keeps an unknown duration."""
+    secs = duration_seconds(path)
     try:
         size = path.stat().st_size
     except OSError:
@@ -150,11 +170,46 @@ def make_track(tid: str, rec: dict) -> Track:
                  imported=True)
 
 
-def inject(lib: Library, imported: dict) -> None:
+def refresh_metadata(imported: dict) -> int:
+    """Backfill missing duration/size in existing imported records in place.
+
+    Older ALAC/AAC records have ``time: 0`` because the original probe used
+    only libsndfile. Read headers only for missing values; source audio remains
+    byte-identical. Returns the number of records changed so the app can persist
+    the repair once.
+    """
+    changed = 0
+    for rec in imported.values():
+        path = Path(str(rec.get("path", "")))
+        if not path.is_file():
+            continue
+        repaired = False
+        if int(rec.get("time", 0) or 0) <= 0:
+            secs = duration_seconds(path)
+            if secs > 0:
+                rec["time"] = secs
+                repaired = True
+        if int(rec.get("size", 0) or 0) <= 0:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            if size > 0:
+                rec["size"] = size
+                repaired = True
+        if repaired:
+            changed += 1
+    return changed
+
+
+def inject(lib: Library, imported: dict) -> int:
     """Merge the imported tracks into a (re)loaded Library. Idempotent — safe
-    to call after every rekordbox refresh."""
+    to call after every rekordbox refresh. Missing legacy metadata is repaired
+    from read-only source headers before Track rows are built."""
+    changed = refresh_metadata(imported)
     for tid, rec in imported.items():
         lib.tracks_by_id[tid] = make_track(tid, rec)
+    return changed
 
 
 # ---- Fix Links: relocate imported files the user moved on disk ----

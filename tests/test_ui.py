@@ -1626,6 +1626,58 @@ class DeletedTracks(unittest.TestCase):
             _win._reload_current_view()  # don't leave the table stale for later tests
 
 
+class TrackRemovalMenu(unittest.TestCase):
+    def _menu(self, ids):
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(_win)
+        _win._add_track_removal_actions(menu, ids)
+        return menu
+
+    def tearDown(self):
+        _win.custom.pop("MENU TEST", None)
+        _win._refresh_custom()
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+
+    def test_rekordbox_playlist_offers_both_scopes_and_routes_them(self):
+        item = _win._find_tree_item("CRATES / SET ONE")
+        _win.tree.setCurrentItem(item)
+        _app.processEvents()
+        with (
+            mock.patch.object(_win, "_remove_from_rb_playlist") as playlist_remove,
+            mock.patch.object(_win, "_delete_tracks") as collection_remove,
+        ):
+            menu = self._menu(["1"])
+            actions = menu.actions()
+            self.assertEqual([a.text() for a in actions], [
+                "Remove from Playlist", "Remove from Collection"])
+            actions[0].trigger()
+            actions[1].trigger()
+            playlist_remove.assert_called_once_with("CRATES / SET ONE", ["1"])
+            collection_remove.assert_called_once_with(["1"])
+
+    def test_soundbox_playlist_offers_both_scopes(self):
+        from desktop.trees import CUSTOM_ROLE
+        _win.custom["MENU TEST"] = ["1", "2"]
+        _win._refresh_custom()
+        item = next(
+            _win.sb_tree.topLevelItem(i)
+            for i in range(_win.sb_tree.topLevelItemCount())
+            if _win.sb_tree.topLevelItem(i).data(0, CUSTOM_ROLE) == "MENU TEST")
+        _win.sb_tree.setCurrentItem(item)
+        _app.processEvents()
+        self.assertEqual([a.text() for a in self._menu(["1", "2"]).actions()], [
+            "Remove 2 tracks from Playlist",
+            "Remove 2 tracks from Collection",
+        ])
+
+    def test_collection_offers_only_collection_scope(self):
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        _app.processEvents()
+        self.assertEqual([a.text() for a in self._menu(["1"]).actions()], [
+            "Remove from Collection"])
+
+
 class BackupWorker(unittest.TestCase):
     def _run(self, fn):
         from desktop.workers import OneShotTask
@@ -1724,9 +1776,9 @@ class TitleJunkSetting(unittest.TestCase):
     def test_unchecking_a_rule_disables_it(self):
         from soundbox.metadata import tidy_title
         _win._refresh_title_rules()
-        it = _win._rules.topLevelItem(0)  # "Trailing FINAL"
+        it = _win._rules.topLevelItem(0)  # combined mixdown markers
         it.setCheckState(0, Qt.Unchecked)  # fires _on_rule_toggled
-        self.assertIn("final", _win.settings["title_rules_off"])
+        self.assertIn("mixdown", _win.settings["title_rules_off"])
         self.assertEqual(tidy_title("GUTTER FINAL", _win._title_junk()),
                          "GUTTER FINAL")   # rule off → kept
         self.assertEqual(tidy_title("GUTTER v2", _win._title_junk()), "GUTTER")
@@ -1764,6 +1816,19 @@ class TitleJunkSetting(unittest.TestCase):
             QMessageBox.warning = real
         self.assertEqual(hits, [1])
         self.assertNotIn("([bad", _win.settings["title_words"])
+
+    def test_plain_bracket_tag_is_labeled_and_applied_as_exact_drop(self):
+        from soundbox.metadata import tidy_title
+        _win._word_edit.setText("(Original Mix)")
+        _win._add_drop_word()
+        labels = [_win._rules.topLevelItem(i).text(0)
+                  for i in range(_win._rules.topLevelItemCount())]
+        self.assertIn("Drop “(Original Mix)”  (yours)", labels)
+        self.assertEqual(tidy_title("LOUD (Original Mix)", _win._title_junk()),
+                         "LOUD")
+        self.assertEqual(tidy_title("LOUD (Original Mix Extended)",
+                                    _win._title_junk()),
+                         "LOUD (Original Mix Extended)")
 
 
 class ColumnPersistence(unittest.TestCase):
@@ -4252,6 +4317,9 @@ class ImportedFiles(unittest.TestCase):
         self.f2.write_bytes(b"x")
         self._saved_imported = dict(_win.imported)
         self._saved_custom = dict(_win.custom)
+        self._saved_waveform_rechecks = _win._waveform_rechecks_enabled
+        _win._waveform_rechecks_enabled = False
+        _win._waveform_recheck_timer.stop()
         _win.imported = {}
 
     def tearDown(self):
@@ -4262,6 +4330,10 @@ class ImportedFiles(unittest.TestCase):
         _win._refresh_custom()
         _win._reload_current_view()  # later classes must not see imported rows
         _win._save_state()
+        _win._waveform_recheck_timer.stop()
+        _win._waveform_rechecks_enabled = self._saved_waveform_rechecks
+        if self._saved_waveform_rechecks:
+            _win._schedule_waveform_recheck()
         self._td.cleanup()
 
     def test_import_joins_collection(self):
@@ -4273,6 +4345,8 @@ class ImportedFiles(unittest.TestCase):
         for tid in _win.imported:
             self.assertTrue(tid.startswith("sb-"))
             self.assertIn(tid, _win.lib.tracks_by_id)
+        self.assertTrue(_win._waveform_rechecks_enabled)
+        self.assertTrue(_win._waveform_recheck_timer.isActive())
 
     def test_reimport_reuses_id(self):
         _win._import_files([str(self.f1)])
@@ -4319,6 +4393,9 @@ class FixLinksUI(unittest.TestCase):
         self.old = Path(self._td.name) / "Mersiv Sound Haven 2021.m4a"
         self.old.write_bytes(b"x")
         self._saved = dict(_win.imported)
+        self._saved_waveform_rechecks = _win._waveform_rechecks_enabled
+        _win._waveform_rechecks_enabled = False
+        _win._waveform_recheck_timer.stop()
         _win.imported = {}
         _win._import_files([str(self.old)])
         (self.tid,) = _win.imported
@@ -4333,6 +4410,10 @@ class FixLinksUI(unittest.TestCase):
         _win._refresh_custom()
         _win._reload_current_view()
         _win._save_state()
+        _win._waveform_recheck_timer.stop()
+        _win._waveform_rechecks_enabled = self._saved_waveform_rechecks
+        if self._saved_waveform_rechecks:
+            _win._schedule_waveform_recheck()
         self._td.cleanup()
 
     def test_missing_then_relink_heals_library(self):
@@ -4344,6 +4425,7 @@ class FixLinksUI(unittest.TestCase):
         _win._apply_relinks(found)
         self.assertEqual(imports.missing(_win.imported), {})
         self.assertEqual(_win.lib.tracks_by_id[self.tid].path, self.new)
+        self.assertTrue(_win._waveform_rechecks_enabled)
 
     def test_fix_links_noop_when_nothing_missing(self):
         _win._apply_relinks({})
@@ -4603,6 +4685,57 @@ class WaveformFill(unittest.TestCase):
             sum(got["_audio_detail"]["mip_counts"]), 500)
         self.assertEqual(Path(self.paths[0]).read_bytes(), before)
 
+    def test_late_source_rewrite_is_detected_and_recooked(self):
+        import math
+        import struct
+        import tempfile
+        import wave
+        from pathlib import Path
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+        from soundbox.library import Library, Track
+
+        with tempfile.TemporaryDirectory(prefix="sb-wf-rewrite-") as td:
+            source = Path(td) / "new-track.wav"
+
+            def write_tone(seconds):
+                rate = 8000
+                with wave.open(str(source), "wb") as handle:
+                    handle.setnchannels(1)
+                    handle.setsampwidth(2)
+                    handle.setframerate(rate)
+                    handle.writeframes(b"".join(
+                        struct.pack(
+                            "<h", int(0.5 * 32767 * math.sin(
+                                2 * math.pi * 220 * frame / rate)))
+                        for frame in range(rate * seconds)))
+
+            write_tone(1)
+            lib = Library(
+                tracks_by_id={
+                    "new": Track(
+                        "new", "New", "A", source.as_uri(), bpm="140.00")},
+                playlists=[], source="synthetic")
+            canonical = Path(td) / "analysis"
+            WaveformFillWorker(lib, canonical).run()
+            self.assertTrue(track_analysis.is_ready(
+                canonical, "new", source))
+
+            # Rekordbox/tag tools may finish rewriting a newly landed container
+            # after SoundBox's first cook. Its identity must become stale.
+            write_tone(2)
+            self.assertFalse(track_analysis.is_ready(
+                canonical, "new", source))
+            totals = []
+            worker = WaveformFillWorker(lib, canonical)
+            worker.tasks_ready.connect(totals.append)
+            worker.run()
+            self.assertEqual(totals, [1])
+            self.assertTrue(track_analysis.is_ready(
+                canonical, "new", source))
+            self.assertTrue(track_analysis.verify_complete(
+                canonical, "new", source))
+
     def test_worker_has_safe_stack_and_metadata_only_cue_refresh(self):
         from pathlib import Path
         from unittest.mock import patch
@@ -4802,6 +4935,23 @@ class WaveformFill(unittest.TestCase):
         finally:
             _win._track_analysis_dir = real_dir
             _win.lib = saved_lib
+
+    def test_recurring_recheck_timer_is_bounded_and_single_shot(self):
+        from desktop.app import _WAVEFORM_RECHECK_MS
+
+        saved = _win._waveform_rechecks_enabled
+        _win._waveform_recheck_timer.stop()
+        try:
+            _win._waveform_rechecks_enabled = True
+            _win._schedule_waveform_recheck()
+            self.assertTrue(_win._waveform_recheck_timer.isSingleShot())
+            self.assertEqual(
+                _win._waveform_recheck_timer.interval(),
+                _WAVEFORM_RECHECK_MS)
+            self.assertTrue(_win._waveform_recheck_timer.isActive())
+        finally:
+            _win._waveform_recheck_timer.stop()
+            _win._waveform_rechecks_enabled = saved
 
 
 class CollectionLandedOrder(unittest.TestCase):

@@ -182,6 +182,13 @@ _DEFAULT_SETTINGS = {
 
 _AUTOPLAY_MODES = {"up", "random", "down"}
 
+# New rekordbox files can be detected and cooked before rekordbox (or another
+# tag editor) finishes its last container rewrite. Direct SoundBox imports can
+# likewise be replaced in place after they land. The cheap V5 readiness scan
+# reads only source stats and small manifests, so keep revalidating the loaded
+# library without inflating waveform payloads. Only changed tracks recook.
+_WAVEFORM_RECHECK_MS = 60_000
+
 
 def _autoplay_arrow_icon(direction: int) -> QIcon:
     """Small Retina-sharp triangle matching the deck's Play glyph."""
@@ -311,6 +318,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._warm_timer.setSingleShot(True)
         self._warm_timer.setInterval(120)
         self._warm_timer.timeout.connect(self._do_warm)
+        # A successful source load/import arms a recurring identity scan. It is
+        # single-shot and rearmed only after the previous worker has finished,
+        # so scans never overlap and a large cook cannot create a timer storm.
+        self._waveform_rechecks_enabled = False
+        self._waveform_recheck_timer = QTimer(self)
+        self._waveform_recheck_timer.setSingleShot(True)
+        self._waveform_recheck_timer.setInterval(_WAVEFORM_RECHECK_MS)
+        self._waveform_recheck_timer.timeout.connect(self._maybe_fill_waveforms)
         # Devices are recognized on launch and as they're plugged in — no XML needed.
         self._refresh_devices()
         self._dev_timer = QTimer(self)
@@ -342,6 +357,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._last_xml = data.get("last_xml") or ""
         # User settings (extensible — this is the runway for future toggles).
         self.settings = {**_DEFAULT_SETTINGS, **(data.get("settings") or {})}
+        self.settings["title_rules_off"] = metadata.normalize_title_rules_off(
+            self.settings.get("title_rules_off"))
         self.settings.pop("title_junk", None)  # v1 raw-pattern list — superseded
         self.settings.pop("deck_engine", None)  # retired Qt playback preference
         # Geometry must land before the splitter sizes. Restoring the panes into
@@ -1533,6 +1550,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._refresh_devices()
         self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
+        self._arm_waveform_rechecks()
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
         QTimer.singleShot(500, self._maybe_fill_waveforms)
@@ -1549,7 +1567,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._landed_cache.clear()
         self._sync_playlists_cache = None
         sb_cur = self.sb_tree.currentItem()  # selection BEFORE the rebuild
-        imports.inject(self.lib, self.imported)  # livesets rejoin the pool
+        repaired = imports.inject(self.lib, self.imported)  # livesets rejoin the pool
+        if repaired:
+            LOG.info("Repaired duration/size metadata for %d imported track(s)",
+                     repaired)
+            self._save_state()
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
@@ -1676,6 +1698,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                  lib.track_count, len(lib.playlists))
         self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
+        self._arm_waveform_rechecks()
         QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
         QTimer.singleShot(500, self._maybe_fill_waveforms)
@@ -2093,6 +2116,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._on_tracks_dropped(playlist, ids)  # dupe-guarded add
             else:
                 self._reload_current_view()  # Collection view picks them up live
+            self._arm_waveform_rechecks()
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
             QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
             QTimer.singleShot(500, self._maybe_fill_waveforms)
@@ -2156,6 +2180,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._refresh_custom()
                 self._reload_current_view()
             self._save_state()
+            self._arm_waveform_rechecks()
+            QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _move_custom(self, name: str, idx: int):
         """Drag-to-reorder: move a SoundBox playlist to position `idx` in the
@@ -4235,9 +4261,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self.art_cache.image_path(tid):
             menu.addAction("Remove cover art", lambda: self._art_remove(tid))
         menu.addSeparator()
-        # Two different verbs on purpose: in COLLECTION, "Delete" kills the
-        # track everywhere in SoundBox; in a PLAYLIST view, "Remove" only takes it
-        # out of THAT playlist and Collection keeps it. rekordbox never changes.
+        # Playlist views expose both scopes: remove only from the current
+        # playlist, or remove globally from SoundBox's Collection. Collection
+        # and other derived all-track views expose only the global action.
+        self._add_track_removal_actions(menu, ids)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _add_track_removal_actions(self, menu: QMenu, ids: list[str]):
+        """Add the scope-explicit reversible removal actions for this view.
+
+        rekordbox playlists receive a SoundBox-side veto only; custom playlists
+        are edited directly. Collection removal hides the track from every
+        SoundBox view/export but never writes rekordbox or touches source audio.
+        """
+        n = len(ids)
         rb_cur = self.tree.currentItem()
         rb_path = rb_cur.data(0, PATH_ROLE) if rb_cur is not None else None
         sb_cur = self.sb_tree.currentItem()
@@ -4250,11 +4287,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             menu.addAction("Remove from Playlist" if n == 1
                            else f"Remove {n} tracks from Playlist",
                            lambda: self._remove_from_custom(cust_name, ids))
-        else:  # Collection (or any all-tracks context)
-            menu.addAction("Delete from Collection" if n == 1
-                           else f"Delete {n} tracks from Collection",
-                           lambda: self._delete_tracks(ids))
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        menu.addAction("Remove from Collection" if n == 1
+                       else f"Remove {n} tracks from Collection",
+                       lambda: self._delete_tracks(ids))
 
     def _remove_from_rb_playlist(self, display_path: str, ids: list[str]):
         """Take tracks out of ONE rekordbox playlist, SoundBox-side only (a veto
@@ -4352,22 +4387,22 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._flash_status("Copied ✓", 5)
 
     def _delete_tracks(self, ids: list[str]):
-        """Delete from SOUNDBOX ONLY — never rekordbox, never the file on disk.
-        The track just stops appearing in views and exports; restorable from
-        Settings — so a library cleanup pass is always reversible."""
+        """Remove from SOUNDBOX ONLY — never rekordbox or the file on disk.
+        The track stops appearing in every view/export and remains restorable
+        from Settings, so a library cleanup pass is always reversible."""
         n = len(ids)
         if QMessageBox.question(
-                self, "Delete from SoundBox",
-                f"Remove {n} track{'s' if n > 1 else ''} from SoundBox?\n\n"
-                "rekordbox and the files on disk are NOT touched — SoundBox just "
-                "stops showing and exporting them. Restore anytime in Settings."
+                self, "Remove from Collection",
+                f"Remove {n} track{'s' if n > 1 else ''} from Collection?\n\n"
+                "This hides them from every SoundBox view and export. rekordbox "
+                "and the files on disk are NOT touched. Restore anytime in Settings."
         ) != QMessageBox.Yes:
             return
         stamp = time.strftime("%Y-%m-%d %H:%M")  # minute precision — same-day deletes sort truthfully
         self.hidden.update(ids)
         for i in ids:
             self.hidden_dates.setdefault(i, stamp)
-        self._after_track_edit(f"Deleted {n} ✓")
+        self._after_track_edit(f"Removed {n} from Collection ✓")
 
     def _restore_hidden(self):
         n = len(self.hidden) + sum(len(v) for v in self.removals.values())
@@ -4648,8 +4683,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._stock_art_rescan = False
             QTimer.singleShot(0, self._maybe_prepare_stock_artwork)
 
+    def _arm_waveform_rechecks(self):
+        """Keep a loaded source under cheap identity watch between refreshes."""
+        self._waveform_rechecks_enabled = True
+        if (not _running(self._wf_fill_worker)
+                and not self._waveform_recheck_timer.isActive()):
+            self._waveform_recheck_timer.start()
+
+    def _schedule_waveform_recheck(self):
+        if (self._waveform_rechecks_enabled and self.lib is not None
+                and not self._waveform_recheck_timer.isActive()):
+            self._waveform_recheck_timer.start()
+
     def _maybe_fill_waveforms(self):
-        """Prepare every missing canonical V5 record off the UI thread."""
+        """Prepare and continuously revalidate canonical V5 records."""
         if self.lib is None:
             return
         if _running(self._wf_fill_worker):
@@ -4658,6 +4705,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # guarantee one fresh scan after it finishes.
             self._waveform_rescan_pending = True
             return
+        # This may be the periodic timer itself or an immediate source-refresh
+        # request. Either way, the next interval starts only after this pass.
+        self._waveform_recheck_timer.stop()
         w = WaveformFillWorker(self.lib, self._track_analysis_dir)
         self._wf_fill_worker = w
         w.set_playback_active(self.player_bar.is_playing())
@@ -4718,6 +4768,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if getattr(self, "_waveform_rescan_pending", False):
             self._waveform_rescan_pending = False
             QTimer.singleShot(0, self._maybe_fill_waveforms)
+        else:
+            self._schedule_waveform_recheck()
 
     def _stop_art_fill(self):
         if self._art_worker is not None and self._art_worker.isRunning():
@@ -5013,8 +5065,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def shutdown(self):
         """Stop background work BEFORE Qt tears down — prevents the crash where
         the app quits while a worker thread is still running."""
+        self._waveform_rechecks_enabled = False
         for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
-                  getattr(self, "_warm_timer", None)):
+                  getattr(self, "_warm_timer", None),
+                  getattr(self, "_waveform_recheck_timer", None)):
             if t is not None:
                 t.stop()
         try:

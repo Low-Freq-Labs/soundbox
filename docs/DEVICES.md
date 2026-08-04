@@ -341,12 +341,14 @@ are stereo PCM16/44.1-kHz. A read-only full-library audit found 722 PCM24/44.1,
 166 PCM24/48, 57 float WAVs, and additional high-rate WAV variants, so unsafe
 files may never be treated as isolated exceptions.
 
-SoundBox curation is resolved before that destination check. **Delete from
+SoundBox curation is resolved before that destination check. **Remove from
 Collection** is a global export veto and **Remove from Playlist** is a veto for
-that stable playlist ID; neither track reaches stock format inspection, artwork,
-copy planning, or iTunesDB rendering. Consequently, the stock confirmation's
-selected count is the effective SoundBox playlist—not raw Rekordbox membership—
-and curated-away tracks do not appear misleadingly in the firmware-omission list.
+that stable playlist ID. Playlist menus expose both scopes; Collection exposes
+only its global scope. Neither curated-away track reaches stock format inspection,
+artwork, copy planning, or iTunesDB rendering. Consequently, the stock
+confirmation's selected count is the effective SoundBox playlist—not raw
+Rekordbox membership—and curated-away tracks do not appear misleadingly in the
+firmware-omission list.
 
 Curated SoundBox JPEGs are also the stock-art source of truth. A background
 worker pre-renders MA446's RGB565 formats 1028 (100×100) and 1029 (200×200)

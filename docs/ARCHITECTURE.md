@@ -130,6 +130,11 @@ and exact signed-range renderer mips derived from an approximately
 6144-window/s analysis. Each section is
 independently Zstandard-compressed and SHA-256 verified inside one atomic
 per-track container. Source identity invalidates only the changed track.
+Every successful rekordbox/XML load and direct SoundBox import arms a recurring
+small-manifest/source-stat scan. It starts only after the previous waveform
+worker finishes, so new audio cooks immediately and a later container/tag
+rewrite recooks that one stale record without overlapping workers or reading
+the full cache payload.
 Current high-rate geometry is versioned as
 `soundbox-polarity-range-mips-i16-v5`. V5 stores little-endian signed minimum
 and maximum extrema at the exact song-anchored divisors selected by the
@@ -355,6 +360,12 @@ firmware-generated and absent from iTunesDB.
   title/artist overrides, custom playlists, and deletes/removals that act as
   *vetoes* over the mirror. Both planes drift synced devices; rekordbox is never
   changed.
+- **Imported duration is source-header metadata.** `soundbox.imports` uses
+  libsndfile first and Mutagen's container metadata fallback for ALAC/AAC;
+  legacy zero-time records are backfilled and persisted on load. Canonical
+  duration remains integer seconds; tables render hour-plus audio as H:MM:SS.
+  Imported tracks remain categorically exempt from rekordbox cue/placeholder
+  hiding, even if a damaged file still has unknown duration.
 - **Playlist identity = rekordbox `pid`** (`DjmdPlaylist.ID`), stable across
   rename/move → it is the device-sync identity. Rename/move = same pid (syncs);
   a genuinely new playlist = new pid = fresh export.
