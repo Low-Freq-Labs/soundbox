@@ -2734,25 +2734,63 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             worker.finished.connect(after_finished)
         worker.start()
 
-    def _refresh_device_surfaces(self, dev: str):
-        """Refresh an open iPod snapshot, then its sidebar state, in series."""
+    def _refresh_device_surfaces(
+            self, dev: str, *, after_finished=None):
+        """Refresh an open iPod snapshot, then its sidebar state, in series.
+
+        A post-write completion callback runs only after both reads finish, so
+        a success dialog never claims the iPod is done while Eject still has to
+        wait for SoundBox's own finalization worker.
+        """
         profile = self._device_profiles.get(dev)
         if (
             dev != self._current_device_path
             or profile is None
             or not getattr(profile, "has_stock_ipod", False)
         ):
-            self._refresh_devices()
+            self._finish_device_surface_refresh(after_finished)
             return
         self._exporting = True
         self.stock_ipod_pages.set_loading(preserve_page=True)
 
         def finish_refresh():
-            self._exporting = False
-            self._refresh_devices()
+            self._finish_device_surface_refresh(after_finished)
 
         self._read_stock_device_view(
             dev, profile, after_finished=finish_refresh)
+
+    def _finish_device_surface_refresh(self, after_finished=None):
+        """Run the sidebar scan and optionally wait for its worker as well."""
+        self._exporting = False
+        self._refresh_devices()
+        if after_finished is None:
+            return
+        worker = getattr(self, "_dev_scan_worker", None)
+        if not _running(worker):
+            after_finished()
+            return
+        self._exporting = True
+
+        def finish_sidebar():
+            self._exporting = False
+            after_finished()
+
+        worker.finished.connect(finish_sidebar)
+
+    def _finalize_ipod_operation(self, dev: str, on_complete) -> None:
+        """Finish every post-write read before presenting success to the user."""
+        self._exporting = True
+        self.progress.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("Finalizing iPod")
+
+        def finish():
+            self._exporting = False
+            self._stop_pulse()
+            self.status_label.setText("Ready")
+            on_complete()
+
+        self._refresh_device_surfaces(dev, after_finished=finish)
 
     def _on_stock_device_view(self, dev: str, result):
         if dev != self._current_device_path:
@@ -3102,26 +3140,27 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             warning = (
                 "\n\n" + "\n\n".join(warning_parts)
                 if warning_parts else "")
-            QMessageBox.information(
-                self,
-                "Stock iPod sync complete",
-                f"Copied {result.copied_tracks} new track(s); reused "
-                f"{result.reused_tracks}.\n\n"
-                f"Updated title/artist metadata for "
-                f"{result.metadata_updates} existing track(s).\n\n"
-                f"Removed {result.deleted_media_files} unused media file(s) "
-                f"({human(result.deleted_bytes)}).\n\n"
-                f"Linked artwork for {result.artwork_tracks} track(s) "
-                f"from {result.unique_artwork} unique image(s); wrote "
-                f"{human(result.artwork_pixel_bytes)} of pixels.\n\n"
-                f"Recovery files:\n{result.recovery_directory}\n\n"
-                f"Eject from SoundBox before listening.{warning}",
-            )
-            self._flash_status("iPod synced")
+            def complete():
+                QMessageBox.information(
+                    self,
+                    "Stock iPod sync complete",
+                    f"Copied {result.copied_tracks} new track(s); reused "
+                    f"{result.reused_tracks}.\n\n"
+                    f"Updated title/artist metadata for "
+                    f"{result.metadata_updates} existing track(s).\n\n"
+                    f"Removed {result.deleted_media_files} unused media file(s) "
+                    f"({human(result.deleted_bytes)}).\n\n"
+                    f"Linked artwork for {result.artwork_tracks} track(s) "
+                    f"from {result.unique_artwork} unique image(s); wrote "
+                    f"{human(result.artwork_pixel_bytes)} of pixels.\n\n"
+                    f"Recovery files:\n{result.recovery_directory}\n\n"
+                    f"Eject from SoundBox before listening.{warning}",
+                )
+                self._flash_status("iPod synced")
+
+            self._finalize_ipod_operation(dev, complete)
         if isinstance(result, Exception):
             self._refresh_devices()
-        else:
-            self._refresh_device_surfaces(dev)
 
     def _begin_dual_ipod_sync(
             self,
@@ -3592,26 +3631,31 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "addition(s)."
                 if adopted_additions else ""
             )
-            QMessageBox.information(
-                self,
-                "iPod deletion complete"
-                if action == "delete" else "iPod sync complete",
-                f"Stock: copied {result.stock.copied_tracks}, sanitized "
-                f"{result.stock.rewritten_tracks}, reused "
-                f"{result.stock.reused_tracks}, recovered "
-                f"{result.stock.recovered_tracks}.\n\n"
-                f"Rockbox: copied {result.copied_media} media file(s), "
-                f"recovered {result.recovered_media} completed media file(s), "
-                f"{result.copied_artwork} cover(s), and "
-                f"{result.playlists} playlist(s).\n\n"
-                f"Removed {result.deleted_orphans} unreferenced device file(s) "
-                f"({human(result.deleted_orphan_bytes)})."
-                f"{adopted_note}"
-                f"{cleanup_warning}\n\n"
-                f"Recovery files:\n{result.stock.recovery_directory}\n\n"
-                "Eject from SoundBox before listening.",
-            )
-            self._flash_status("iPod synced")
+            def complete():
+                QMessageBox.information(
+                    self,
+                    "iPod deletion complete"
+                    if action == "delete" else "iPod sync complete",
+                    f"Stock: copied {result.stock.copied_tracks}, sanitized "
+                    f"{result.stock.rewritten_tracks}, reused "
+                    f"{result.stock.reused_tracks}, recovered "
+                    f"{result.stock.recovered_tracks}.\n\n"
+                    f"Rockbox: copied {result.copied_media} media file(s), "
+                    f"recovered {result.recovered_media} completed media file(s), "
+                    f"{result.copied_artwork} cover(s), and "
+                    f"{result.playlists} playlist(s).\n\n"
+                    f"Removed {result.deleted_orphans} unreferenced device file(s) "
+                    f"({human(result.deleted_orphan_bytes)})."
+                    f"{adopted_note}"
+                    f"{cleanup_warning}\n\n"
+                    f"Recovery files:\n{result.stock.recovery_directory}\n\n"
+                    "Eject is ready when you dismiss this message.",
+                )
+                self._flash_status("iPod synced")
+                self._dual_active_device = ""
+                self._dual_active_playlist_keys.clear()
+                self._dual_active_confirmed = False
+                self._dual_active_action = "sync"
         if isinstance(result, Exception):
             self._dual_active_device = ""
             self._dual_active_playlist_keys.clear()
@@ -3619,7 +3663,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._dual_active_action = "sync"
             self._refresh_devices()
         else:
-            self._refresh_device_surfaces(dev)
             queued = self._dual_sync_queue.pop(dev, [])
             if queued:
                 worker = self._dual_commit_worker
@@ -3637,10 +3680,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 else:
                     start_queued()
             else:
-                self._dual_active_device = ""
-                self._dual_active_playlist_keys.clear()
-                self._dual_active_confirmed = False
-                self._dual_active_action = "sync"
+                self._finalize_ipod_operation(dev, complete)
 
     def _persist_rockbox_playlist_additions(
             self, plan: DualIpodSyncPlan) -> int:
@@ -3755,22 +3795,26 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         removed = sum(result.deleted_orphans for result in committed)
         playlist_names = "\n".join(
             f"• {name}" for name in self._dual_batch_names)
-        QMessageBox.information(
-            self,
-            "iPod queue complete",
-            f"{len(self._dual_batch_names)} playlist job"
-            f"{'s' if len(self._dual_batch_names) != 1 else ''} complete\n"
-            f"{self._dual_batch_total_tracks} queued track entries\n\n"
-            f"{playlist_names}\n\n"
-            f"Media copied: {copied}\n"
-            f"Media metadata refreshed: {refreshed}\n"
-            f"Unreferenced files removed: {removed}\n\n"
-            "Device, Songs, and Playlists are refreshing from the committed "
-            "device state. Eject from SoundBox before listening.",
-        )
-        self._flash_status("iPod synced")
-        self._refresh_device_surfaces(dev)
-        self._reset_dual_batch()
+        job_count = len(self._dual_batch_names)
+        track_count = self._dual_batch_total_tracks
+
+        def complete():
+            QMessageBox.information(
+                self,
+                "iPod queue complete",
+                f"{job_count} playlist job"
+                f"{'s' if job_count != 1 else ''} complete\n"
+                f"{track_count} queued track entries\n\n"
+                f"{playlist_names}\n\n"
+                f"Media copied: {copied}\n"
+                f"Media metadata refreshed: {refreshed}\n"
+                f"Unreferenced files removed: {removed}\n\n"
+                "Eject is ready when you dismiss this message.",
+            )
+            self._flash_status("iPod synced")
+            self._reset_dual_batch()
+
+        self._finalize_ipod_operation(dev, complete)
 
     def _begin_stock_playlist_delete(self, selections):
         """Plan deletion of the checked user playlists from the stock iPod."""
@@ -4095,43 +4139,46 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "Stock iPod deletion failed",
                 f"{result}\n\nSoundBox attempted an exact database/artwork rollback.",
             )
-        elif result.cleanup_failures:
-            multiple = len(result.playlists) != 1
-            QMessageBox.warning(
-                self,
-                "Playlists deleted; media cleanup incomplete" if multiple
-                else "Playlist deleted; media cleanup incomplete",
-                f"Deleted {'playlists' if multiple else 'playlist'}: "
-                f"{', '.join(result.playlists)}\n"
-                f"Removed {result.deleted_track_records} database track(s) and "
-                f"{result.deleted_media_files} media file(s).\n\n"
-                "The iPod database is consistent, but these unindexed files "
-                f"could not be removed:\n{chr(10).join(result.cleanup_failures)}\n\n"
-                f"Recovery files:\n{result.recovery_directory}",
-            )
         else:
             multiple = len(result.playlists) != 1
-            QMessageBox.information(
-                self,
-                "Stock iPod playlists deleted" if multiple
-                else "Stock iPod playlist deleted",
-                f"Deleted {'playlists' if multiple else 'playlist'}: "
-                f"{', '.join(result.playlists)}\n"
-                f"Removed {result.deleted_track_records} unused track record(s) "
-                f"and {result.deleted_media_files} media file(s) "
-                f"({human(result.deleted_bytes)}).\n\n"
-                f"Remaining: {result.remaining_playlists} user playlist(s), "
-                f"{result.remaining_tracks} track(s).\n\n"
-                f"Recovery files:\n{result.recovery_directory}\n\n"
-                "Eject from SoundBox before listening.",
-            )
-            self._flash_status(
-                "iPod playlists deleted" if multiple
-                else "iPod playlist deleted")
+            def complete():
+                if result.cleanup_failures:
+                    QMessageBox.warning(
+                        self,
+                        "Playlists deleted; media cleanup incomplete" if multiple
+                        else "Playlist deleted; media cleanup incomplete",
+                        f"Deleted {'playlists' if multiple else 'playlist'}: "
+                        f"{', '.join(result.playlists)}\n"
+                        f"Removed {result.deleted_track_records} database "
+                        f"track(s) and {result.deleted_media_files} media file(s).\n\n"
+                        "The iPod database is consistent, but these unindexed "
+                        f"files could not be removed:\n"
+                        f"{chr(10).join(result.cleanup_failures)}\n\n"
+                        f"Recovery files:\n{result.recovery_directory}\n\n"
+                        "Eject is ready when you dismiss this message.",
+                    )
+                else:
+                    QMessageBox.information(
+                        self,
+                        "Stock iPod playlists deleted" if multiple
+                        else "Stock iPod playlist deleted",
+                        f"Deleted {'playlists' if multiple else 'playlist'}: "
+                        f"{', '.join(result.playlists)}\n"
+                        f"Removed {result.deleted_track_records} unused track "
+                        f"record(s) and {result.deleted_media_files} media file(s) "
+                        f"({human(result.deleted_bytes)}).\n\n"
+                        f"Remaining: {result.remaining_playlists} user playlist(s), "
+                        f"{result.remaining_tracks} track(s).\n\n"
+                        f"Recovery files:\n{result.recovery_directory}\n\n"
+                        "Eject is ready when you dismiss this message.",
+                    )
+                self._flash_status(
+                    "iPod playlists deleted" if multiple
+                    else "iPod playlist deleted")
+
+            self._finalize_ipod_operation(dev, complete)
         if isinstance(result, Exception):
             self._refresh_devices()
-        else:
-            self._refresh_device_surfaces(dev)
 
     def _verify_device(self, dev: str, deep: bool = False):
         """Post-export sanity: every m3u8 entry on the device must resolve to a

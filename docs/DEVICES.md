@@ -255,8 +255,11 @@ During commit, animated `Syncing iPod...` status is followed by a separate
 replaced, or removed; a 37-track sync-to-zero therefore advances 0/37 through
 37/37, while a database/playlist-only commit hides the inapplicable counter
 instead of showing 0/0. After a successful commit, the selected Device, Songs,
-and Playlists snapshot refreshes before the sidebar free-space/drift scan, so
-all displayed surfaces update without a navigation round trip. The status text
+and Playlists snapshot refreshes before the sidebar free-space/drift scan under
+an explicit `Finalizing iPod...` state. The completion dialog appears only after
+both workers finish, so Eject is immediately available when the dialog is
+dismissed and all displayed surfaces update without a navigation round trip.
+The status text
 reserves only its current animation width, and the confirmation shows the
 Both/Rockbox split plus concise add/update/remove totals.
 

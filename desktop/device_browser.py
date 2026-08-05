@@ -113,7 +113,7 @@ class DeviceBrowserMixin:
         if any(_running(getattr(self, name, None)) for name in (
                 "export_worker", "_resync_worker", "_delete_worker",
                 "_stock_plan_worker", "_stock_commit_worker",
-                "_stock_view_worker")):
+                "_stock_view_worker", "_dev_scan_worker")):
             QMessageBox.warning(
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")

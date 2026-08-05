@@ -56,6 +56,12 @@ For the live test count, trust `./check.sh` output—not any number written here
   reconciler now normalizes that exact volume-root form, while changed M3U8
   contents are withheld as untrusted without hiding the device's valid
   identity/database details.
+- **IPOD COMPLETION NOW MEANS EJECT-READY.** Stock and composite Sync/Delete,
+  including queued composite jobs, keep a visible `Finalizing iPod...` state
+  while the committed Device/Songs/Playlists snapshot and sidebar drift/free-
+  space scan run in series. Their completion dialog is now the terminal event,
+  not the trigger for another hidden worker; Eject is immediately available
+  after OK.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,

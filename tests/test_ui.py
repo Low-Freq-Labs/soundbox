@@ -573,6 +573,7 @@ class StockIpodUI(unittest.TestCase):
         old_profile = _win._device_profiles.get(dev)
         old_reader = _win._read_stock_device_view
         old_refresh = _win._refresh_devices
+        old_scan_worker = _win._dev_scan_worker
         old_exporting = _win._exporting
         events = []
 
@@ -588,12 +589,15 @@ class StockIpodUI(unittest.TestCase):
             _win._device_profiles[dev] = profile
             _win._read_stock_device_view = read
             _win._refresh_devices = lambda: events.append(("sidebar",))
+            _win._dev_scan_worker = None
 
-            _win._refresh_device_surfaces(dev)
+            _win._refresh_device_surfaces(
+                dev, after_finished=lambda: events.append(("complete",)))
 
             self.assertEqual(events, [
                 ("snapshot", dev, profile),
                 ("sidebar",),
+                ("complete",),
             ])
             self.assertFalse(_win._exporting)
         finally:
@@ -604,6 +608,53 @@ class StockIpodUI(unittest.TestCase):
                 _win._device_profiles[dev] = old_profile
             _win._read_stock_device_view = old_reader
             _win._refresh_devices = old_refresh
+            _win._dev_scan_worker = old_scan_worker
+            _win._exporting = old_exporting
+
+    def test_device_finalization_waits_for_sidebar_worker(self):
+        class FakeSignal:
+            def __init__(self):
+                self.slots = []
+
+            def connect(self, slot):
+                self.slots.append(slot)
+
+            def emit(self):
+                for slot in tuple(self.slots):
+                    slot()
+
+        class FakeWorker:
+            def __init__(self):
+                self.running = True
+                self.finished = FakeSignal()
+
+            def isRunning(self):
+                return self.running
+
+        old_refresh = _win._refresh_devices
+        old_worker = _win._dev_scan_worker
+        old_exporting = _win._exporting
+        worker = FakeWorker()
+        completed = []
+        try:
+            def refresh():
+                _win._dev_scan_worker = worker
+
+            _win._refresh_devices = refresh
+            _win._finish_device_surface_refresh(
+                lambda: completed.append("complete"))
+
+            self.assertTrue(_win._exporting)
+            self.assertEqual(completed, [])
+
+            worker.running = False
+            worker.finished.emit()
+
+            self.assertFalse(_win._exporting)
+            self.assertEqual(completed, ["complete"])
+        finally:
+            _win._refresh_devices = old_refresh
+            _win._dev_scan_worker = old_worker
             _win._exporting = old_exporting
 
     def test_failed_refresh_keeps_last_verified_ipod_snapshot(self):
@@ -1290,6 +1341,69 @@ class StockIpodUI(unittest.TestCase):
             _win._dual_active_track_total = 0
             _win._reset_dual_batch()
 
+    def test_dual_completion_dialog_waits_for_device_finalization(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from PySide6.QtWidgets import QMessageBox
+
+        dev = "/Volumes/IPOD"
+        old_refresh = _win._refresh_device_surfaces
+        old_clear = _win.rockbox_media_cache.clear
+        old_action = _win._dual_active_action
+        callbacks = []
+
+        def refresh(device, *, after_finished=None):
+            self.assertEqual(device, dev)
+            self.assertIsNotNone(after_finished)
+            callbacks.append(after_finished)
+
+        result = SimpleNamespace(
+            stock=SimpleNamespace(
+                copied_tracks=0,
+                rewritten_tracks=0,
+                reused_tracks=3,
+                recovered_tracks=0,
+                recovery_directory=Path("/Volumes/IPOD/.soundbox/recovery"),
+            ),
+            copied_media=0,
+            recovered_media=0,
+            copied_artwork=0,
+            playlists=1,
+            deleted_orphans=0,
+            deleted_orphan_bytes=0,
+            cleanup_failures=(),
+        )
+        plan = SimpleNamespace(
+            playlist_additions=(), playlists=(), generation=50)
+        try:
+            _win._refresh_device_surfaces = refresh
+            _win.rockbox_media_cache.clear = lambda: None
+            _win._dual_active_action = "sync"
+            _win._dual_sync_queue.pop(dev, None)
+
+            with mock.patch.object(QMessageBox, "information") as information:
+                _win._on_dual_ipod_commit(dev, result, plan)
+                information.assert_not_called()
+                self.assertTrue(_win._exporting)
+                self.assertEqual(len(callbacks), 1)
+
+                callbacks[0]()
+
+                information.assert_called_once()
+                self.assertIn(
+                    "Eject is ready",
+                    information.call_args.args[2],
+                )
+                self.assertFalse(_win._exporting)
+        finally:
+            _win._stop_pulse()
+            _win._refresh_device_surfaces = old_refresh
+            _win.rockbox_media_cache.clear = old_clear
+            _win._dual_active_action = old_action
+            _win._dual_active_device = ""
+            _win._dual_active_playlist_keys.clear()
+            _win._dual_sync_queue.pop(dev, None)
+
     def test_next_confirmed_dual_job_coalesces_every_waiting_playlist(self):
         from unittest import mock
         from PySide6.QtCore import QTimer
@@ -1362,7 +1476,12 @@ class StockIpodUI(unittest.TestCase):
                 (SimpleNamespace(), result_one),
                 (SimpleNamespace(), result_two),
             ]
-            _win._refresh_device_surfaces = refresh_calls.append
+            def refresh(device, *, after_finished=None):
+                refresh_calls.append(device)
+                self.assertIsNotNone(after_finished)
+                after_finished()
+
+            _win._refresh_device_surfaces = refresh
             _win._flash_status = flash_calls.append
 
             with mock.patch.object(QMessageBox, "information") as information:

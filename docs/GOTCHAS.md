@@ -903,7 +903,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   verified Device/Songs/Playlists snapshot visible through planning, commit,
   deletion, and the post-write read. Replace the three surfaces atomically only
   when that read succeeds; on a transient read failure, retain the snapshot and
-  label it as the last verified state.
+  label it as the last verified state. A successful commit is not user-complete
+  until that snapshot refresh and the following sidebar free-space/drift scan
+  both finish. Show `Finalizing iPod...` during those reads and delay the success
+  dialog until Eject is actually available; never make dismissing an alleged
+  completion dialog start another blocking device worker.
 - **An explicit managed-playlist Delete is authoritative.** Do not force a
   separate Sync merely because a different schema-3 playlist changed or is no
   longer available from the current source. Reconcile other available managed
