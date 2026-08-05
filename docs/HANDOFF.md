@@ -15,7 +15,9 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   lifecycle now holds periodic polling after the completed finalization scan so
   Eject remains independent of dashboard work. The current wrap also makes the
   top-level `/PIONEER` tree an enforced rekordbox/CDJ boundary throughout path
-  guards, manifests, drift/count helpers, and filesystem-browser actions.
+  guards, manifests, drift/count helpers, and filesystem-browser actions. The
+  implementation is published as `4d32232`; this handoff is its final runtime
+  record on the same published branch.
 - The freshly signed app from that working tree is installed at
   `/Applications/Soundbox.app`, last observed as PID 56989. Its executable
   SHA-256 matches `dist/Soundbox.app` at
