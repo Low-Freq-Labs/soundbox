@@ -9,16 +9,17 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 
 - Branch `main` contains the completed Rockbox managed-playlist adoption plus
   the physical-test fixes for Rockbox's `/<HDD0>/...` path spelling and the
-  drift-tolerant device dashboard. Completion dialogs now follow, rather than
-  trigger, post-write finalization so OK means Eject-ready; the wrap-up tip is
-  published to `origin/main`.
+  drift-tolerant device dashboard. Completion dialogs follow, rather than
+  trigger, post-write finalization so OK means Eject-ready. Named bracketed
+  transformation credits now consistently outrank original-artist tags; the
+  wrap-up tip is published to `origin/main`.
 - The freshly signed app from that working tree is installed at
-  `/Applications/Soundbox.app`, last observed as PID 41041. Its executable
+  `/Applications/Soundbox.app`, last observed as PID 43399. Its executable
   SHA-256 matches `dist/Soundbox.app` at
-  `1b380a892c06ec944058095bb9012e0c49be5d1550a9b428304102c1fad19190`.
+  `78e757bede10ea13d3757b959cbc73fb028e0b5a0f98b2c7606fa527b51916e0`.
   The packaged CoreAudio/Metal deck activated and the live read-only rekordbox
   snapshot loaded 3,414 tracks and 81 playlists.
-- Bare `./check.sh` passed on 2026-08-04: pyflakes, native build, mypy, and 758
+- Bare `./check.sh` passed on 2026-08-04: pyflakes, native build, mypy, and 761
   tests with four expected skips. `./build_app.sh` passed; strict signature
   verification passed for both the packaged and installed app.
 - rekordbox remained open throughout the initial 2026-08-03 installation and
@@ -35,31 +36,45 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   **wrap up** as the complete validation, documentation, install-if-needed,
   commit/push, and clean-published-state sequence—not an intermediate progress
   report.
-- The finalization pre-install `library.json` SHA-256 was
-  `ea63ad1267141eb5eaf81ab6a59c55966340f3f817732aa3e8aac56ae27b1f10`;
-  relaunch rewrote only normal `settings.columns_state` serialization, yielding
-  `cd52184419d4d7b9794499bef026dae5b9ebc622e0afbb1a16ef73f8780ff4ca`.
+- The remixer-precedence install preserved `library.json` byte-for-byte at
+  SHA-256 `cd52184419d4d7b9794499bef026dae5b9ebc622e0afbb1a16ef73f8780ff4ca`;
+  a parsed comparison excluding normal `settings.columns_state` serialization
+  was also identical.
   Current curated state remains 84 direct imports, 1,048 title overrides, 462
   artist overrides, 10 custom playlists containing 682 references, 513 hidden
   tracks, one playlist-removal overlay, and no pending playlist-addition
   overlay. Physical composite generation 50 committed successfully before this
-  source-only finalization installation; installation did not touch the iPod.
+  source-only metadata installation; installation did not touch the iPod.
   The real-cover index stayed byte-identical across installation at SHA-256
   `5628df19b4c549fcc12e35e419da8ed11d30234921451d31f9295a7f2ed44b8b`:
   3,270 images, 131 misses, and 47 sticky blocks. These newer counts reflect
   Sonny's live curation before installation and are authoritative.
-- The immediate rollback is
-  `/private/tmp/soundbox-ipod-finalization-ns2pH8/`: it contains the prior
-  accepted app (executable SHA-256
-  `d1a844ec18f2b11ae64895e368326c972527f0775494d604c4835e2759fe065d`)
-  and exact pre-install `library.json`. Also preserve
-  `/private/tmp/soundbox-rockbox-hdd0-fix-kGTHuB/`,
-  `/private/tmp/soundbox-rockbox-playlist-sync-gdX0jj/`, and
-  `/private/tmp/soundbox-wrapup-default-covers-JgSkX1/`, which contains the
-  preceding managed-default app/state recovery set. Four older obsolete rollbacks remain
+- The immediate rollback is `/private/tmp/soundbox-remix-artist-ivY5Qt/`: it
+  contains the prior accepted app (executable SHA-256
+  `1b380a892c06ec944058095bb9012e0c49be5d1550a9b428304102c1fad19190`)
+  and exact pre-install `library.json`. Four older obsolete rollbacks remain
   recoverably in Trash (`Soundbox.app-wrong-heading-20260804` plus the three
   `soundbox-install-*-superseded` directories); permanently deleting them still
   requires Sonny's explicit confirmation.
+
+## Effective remix artist derivation
+
+- An explicit named bracket credit such as `(WHALES REMIX)`, `[Zubah Remix]`,
+  or `(KVN FLIP)` now becomes the effective artist before SoundBox considers
+  the original-artist tag. This makes tagged edits behave like the already-good
+  untagged `Zeds Dead - Collapse (DENNETT remix)` case. A manual SoundBox artist
+  override still wins absolutely.
+- Bare/generic labels such as `(Remix)`, `(Official Remix)`, `(Radio Edit)`, and
+  `(Original Mix)` cannot replace the tag. The existing last-transformation rule
+  and registry casing/canonicalization remain intact.
+- A read-only audit of the current 3,414-track cache found 93 unoverridden tagged
+  edits affected across 40 credited remixers/editors: 46 are WHALES. The exact
+  screenshot rows `DON'T CHA`, `ROCK THAT BODY`, and `WHITE WINE & ADDERALL`
+  now render as `WHALES` in the installed app's effective-row path.
+- Effective artist participates in the composite schema-3 baseline. Generation
+  50 therefore remains the physical baseline, and the device may honestly show
+  **Sync needed** until these metadata changes are reconciled. No device sync or
+  write was performed during this installation.
 
 ## Legacy cover audit and prevention
 

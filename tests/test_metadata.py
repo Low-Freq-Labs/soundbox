@@ -6,9 +6,23 @@ from soundbox.metadata import (
 
 
 class TestDeriveArtist(unittest.TestCase):
-    def test_tag_wins_over_everything(self):
-        # Baked-in rekordbox Artist tag is trusted, even with an editor in parens.
-        self.assertEqual(derive_artist("Song (XOTIX flip)", "Real Artist"), ("Real Artist", TAG))
+    def test_named_editor_wins_over_original_artist_tag(self):
+        self.assertEqual(
+            derive_artist("Song (XOTIX flip)", "Real Artist"), ("XOTIX", NAME))
+
+    def test_named_remixer_wins_over_original_artist_tag(self):
+        self.assertEqual(
+            derive_artist("DON'T CHA (WHALES REMIX)", "THE PUSSYCAT DOLLS"),
+            ("WHALES", NAME),
+        )
+
+    def test_generic_transform_descriptors_do_not_override_tag(self):
+        for descriptor in ("Remix", "Official Remix", "Radio Edit", "Original Mix"):
+            with self.subTest(descriptor=descriptor):
+                self.assertEqual(
+                    derive_artist(f"Song ({descriptor})", "Real Artist"),
+                    ("Real Artist", TAG),
+                )
 
     def test_editor_flip(self):
         self.assertEqual(derive_artist("$UICIDEBOY$ - Song (XOTIX flip)", ""), ("XOTIX", NAME))
@@ -56,6 +70,16 @@ class TestEffectiveArtist(unittest.TestCase):
 
     def test_blank_override_ignored(self):
         self.assertEqual(effective_artist("1", "A - B", "", {"1": "  "}), "A")
+
+    def test_registry_canonicalizes_named_remixer_that_overrides_tag(self):
+        registry = build_registry(["WHALES", "Whales"], ["THE PUSSYCAT DOLLS"])
+        self.assertEqual(
+            effective_artist(
+                "1", "DON'T CHA (Whales Remix)", "THE PUSSYCAT DOLLS",
+                registry=registry,
+            ),
+            "WHALES",
+        )
 
 
 class TestArtistRegistry(unittest.TestCase):

@@ -4,12 +4,14 @@ This NEVER modifies source files or tags. It only computes a display/foldering
 value from data already in the rekordbox XML.
 
 Artist derivation strategy, in priority order:
-  1. The rekordbox Artist tag, if set — that's baked-in metadata, treat as truth.
-  2. EDITOR/REMIXER in brackets — for untagged DJ edits the artist you care about
+  1. A named EDITOR/REMIXER in brackets — for DJ edits the artist you care about
      is the person who flipped/remixed it, which sits in (parens) or [brackets]
      right before a transformation word (flip, remix, bootleg, edit, VIP, mashup…).
+     This explicit credit outranks an original-artist tag, so tagged and untagged
+     copies of the same edit resolve consistently.
      If there are several (a VIP of a remix), the LAST one wins — the most recent
      transformation (ZEYDAX VIP of a POLKLYPZ remix → ZEYDAX).
+  2. The rekordbox Artist tag, if set.
   3. "Artist - Title" → the part before the first ' - ' (original artist).
   3.5 DJ hyphen styles ("CALCIUM- GUTTER", "Arbityr -Badboy", "ABYSS_-_FEINT",
      single-token "Adele-Fire…") — conservative; hyphenated artists (JAY-Z,
@@ -236,6 +238,7 @@ _GENERIC = {
     "radio", "clean", "dirty", "short", "extended", "club", "original",
     "instrumental", "acapella", "intro", "outro", "album", "single", "main",
     "explicit", "quick", "rough", "final", "master", "vocal", "dub", "re",
+    "official",
 }
 
 
@@ -567,11 +570,10 @@ def derive_artist(name: str, artist_tag: str) -> tuple[str, str]:
     """Return (artist, origin). See module docstring for strategy."""
     n = (name or "").strip()
 
-    # 1) rekordbox Artist tag — baked-in metadata, trust it.
-    if artist_tag and artist_tag.strip():
-        return artist_tag.strip(), TAG
-
-    # 2) Editor/remixer in brackets — take the LAST valid one (most recent edit).
+    # 1) An explicit editor/remixer credit outranks the original-artist tag.
+    # Take the LAST valid one (the most recent edit). This makes a tagged
+    # "DON'T CHA (WHALES REMIX)" behave like an otherwise-identical untagged
+    # edit instead of silently reverting to THE PUSSYCAT DOLLS.
     for cand in reversed(_EDITOR_RE.findall(n)):
         cand = cand.strip(" -–—|")
         words = cand.split()
@@ -580,6 +582,10 @@ def derive_artist(name: str, artist_tag: str) -> tuple[str, str]:
         cand = " ".join(words)
         if _ok(cand):
             return cand, NAME
+
+    # 2) No named transformation credit: keep the source artist tag.
+    if artist_tag and artist_tag.strip():
+        return artist_tag.strip(), TAG
 
     # 3) "Artist - Title" → before the first ' - '
     if " - " in n:

@@ -543,7 +543,8 @@ drift UI ("⚠ N out of date" badge → Sync). Sonny's rename-v#/move workflow
 Scoped FINALIZING (clean only written dirs); diff-driven resync; configurable
 cue/placeholder hiding; cover-art workshop (accuracy-first matcher, ART column,
 manual picker, artist/title derivation incl. trusted-gated reversed flip,
-filename-stem fallback, alias/merge window, uploader-consensus suggester);
+filename-stem fallback, named bracketed remix credits that consistently outrank
+original-artist tags, alias/merge window, uploader-consensus suggester);
 app.py split into modules; UI-layer tests; rotating + full .zip backup/restore;
 graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
 

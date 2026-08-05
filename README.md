@@ -56,6 +56,9 @@ never guesses; folder-picker fallback).
 per-track overrides that rename files on the device — sources untouched.
 Every override teaches the artist deriver (trusted-name gating for reversed
 "Title - Artist" flips, collab-aware splitting, Unknown rescue from titles).
+An explicit named transformation credit such as `(WHALES REMIX)` becomes the
+effective artist even when the source tag still names the original performer;
+generic labels such as `(Radio Edit)` leave that tag alone.
 Batch tools: **Suggest artist merges…** (fuzzy spelling dedup with in-dialog
 Unmerge), **Suggest artists for Unknowns…**, named **Title Cleanup** rules
 (four intent-based defaults for mixdown, version/copy, BPM/key, and render/file
