@@ -260,7 +260,7 @@ def playlist_sig(playlist, hidden=frozenset(), removals=None) -> str:
     exported playlist changes the sig → the device shows drift → Sync heals it."""
     ex = _excluded(playlist, hidden, removals)
     h = hashlib.sha1()
-    for k in playlist.keys:
+    for k in playlist.effective_keys:
         if k in ex:
             continue
         h.update(k.encode("utf-8"))
@@ -277,7 +277,7 @@ def entry_for(playlist, hidden=frozenset(), removals=None, *,
         "folder_path": list(playlist.folder_path),
         # Effective tracks — what actually went to the device (resolve() skips
         # vetoed ids on export, so the manifest must describe the same reality).
-        "tracks": [k for k in playlist.keys if k not in ex],
+        "tracks": [k for k in playlist.effective_keys if k not in ex],
         "sig": playlist_sig(playlist, hidden, removals),
     }
     if export_profile is not None:

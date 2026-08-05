@@ -102,7 +102,19 @@ repository can answer the question.
   journaled in disposable Mac-side state so verification itself resumes after
   another remount. Later playlist drops accumulate through new schema-3 generations,
   reuse exact managed payloads, source-authoritative repairs, and become true
-  no-ops when unchanged. Generic Sync
+  no-ops when unchanged. Generic Sync also recognizes append-only edits that
+  Rockbox made to an owned M3U8. The frequent device poll uses only the bounded
+  playlist-size baseline to surface the standard Sync-needed state; confirmed
+  planning reads the changed small M3U8 and accepts only device paths that map
+  unambiguously to existing schema-3 managed media. A genuinely new membership
+  is persisted as a SoundBox-owned append layer without writing rekordbox, then
+  reconciled into both firmware views. An appended track already present in
+  that playlist is not adopted twice: the transaction recovery-backs the M3U8
+  and drops only the new duplicate. Pre-existing intentional duplicates are
+  not guessed away. Unknown/unowned paths are never imported
+  automatically, and deletion/reorder edits fail closed. The proven app-side
+  membership is saved before device writes so a failed device phase remains an
+  honest retry. Generic Sync
   must route schema 3 back through that same composite planner: stable playlist
   IDs drive rename/move/order/membership/removal drift, old Rockbox playlist
   files are deleted only with exact recovery, and matching iTunesDB playlists

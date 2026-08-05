@@ -293,6 +293,115 @@ class DualIpodSyncTests(unittest.TestCase):
 
         self.assertFalse(plan.requires_commit)
 
+    def test_recognized_rockbox_append_becomes_sync_and_is_adopted_once(self):
+        second = Playlist(
+            "Device Picks", [], ["unsafe"], pid="device-picks")
+        self.library.playlists.append(second)
+        commit_dual_ipod_sync(self._plan(selected=[self.playlist, second]))
+        manifest = device_manifest.load_composite(self.ipod)
+        playlist_path = next(
+            self.ipod / device_path.lstrip("/")
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "playlist"
+            and row.get("source") == "device-picks"
+        )
+        safe_device_path = next(
+            device_path
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "shared-stock-media"
+            and row.get("source") == str(self.safe.resolve())
+        )
+        with playlist_path.open("a", encoding="utf-8") as output:
+            output.write(safe_device_path + "\n")
+
+        drift = engine.device_drift(self.library, self.ipod)
+        self.assertIsNotNone(drift)
+        self.assertEqual(drift.count(), 1)
+        self.assertEqual(drift.changed[0][0], "device-picks")
+
+        plan = self._plan(
+            selected=[self.playlist, second],
+            reconcile=True,
+            adoptable_playlist_keys={"dual-test", "device-picks"},
+        )
+        self.assertEqual(
+            plan.playlist_additions,
+            (dual_ipod.DualPlaylistAddition("device-picks", ("safe",)),),
+        )
+        self.assertFalse(plan.media_copies)
+        device_write = next(
+            item for item in plan.playlists
+            if item.playlist_key == "device-picks")
+        self.assertFalse(device_write.changed)
+        commit_dual_ipod_sync(plan)
+
+        updated = device_manifest.load_composite(self.ipod)
+        self.assertEqual(
+            updated["playlists"]["device-picks"]["tracks"],
+            ["unsafe", "safe"],
+        )
+        second.added_keys = ["safe"]
+        self.assertFalse(engine.device_drift(self.library, self.ipod).any())
+
+    def test_duplicate_rockbox_append_is_removed_without_app_addition(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        playlist_path = next(
+            self.ipod / device_path.lstrip("/")
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "playlist"
+            and row.get("source") == "dual-test"
+        )
+        safe_device_path = next(
+            device_path
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "shared-stock-media"
+            and row.get("source") == str(self.safe.resolve())
+        )
+        with playlist_path.open("a", encoding="utf-8") as output:
+            output.write(safe_device_path + "\n")
+
+        drift = engine.device_drift(self.library, self.ipod)
+        self.assertEqual(drift.count(), 1)
+        plan = self._plan(
+            reconcile=True,
+            adoptable_playlist_keys={"dual-test"},
+        )
+        self.assertFalse(plan.playlist_additions)
+        playlist_write = plan.playlists[0]
+        self.assertTrue(playlist_write.changed)
+        self.assertEqual(
+            playlist_write.payload.decode("utf-8").count(safe_device_path),
+            1,
+        )
+        commit_dual_ipod_sync(plan)
+        self.assertEqual(
+            playlist_path.read_text(encoding="utf-8").count(safe_device_path),
+            1,
+        )
+        self.assertFalse(engine.device_drift(self.library, self.ipod).any())
+
+    def test_unrecognized_rockbox_append_does_not_import(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        playlist_path = next(
+            self.ipod / device_path.lstrip("/")
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "playlist"
+        )
+        with playlist_path.open("a", encoding="utf-8") as output:
+            output.write("/Music/Unknown/New Song.wav\n")
+
+        self.assertEqual(engine.device_drift(
+            self.library, self.ipod).count(), 1)
+        with self.assertRaisesRegex(
+                dual_ipod.DualIpodError,
+                "automatic device imports are not enabled"):
+            self._plan(
+                reconcile=True,
+                adoptable_playlist_keys={"dual-test"},
+            )
+
     def test_committed_noop_plan_does_not_hash_unchanged_device_artwork(self):
         commit_dual_ipod_sync(self._plan())
         real_verify = dual_ipod._verify_owned_before

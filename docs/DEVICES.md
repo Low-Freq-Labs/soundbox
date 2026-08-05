@@ -281,7 +281,18 @@ playlist. Once schema 3 exists, the ordinary Sync affordance uses the original
 manifest stable-ID/signature/drift machinery and routes back through this same
 composite planner. Rename, folder move, order/membership change, SoundBox veto,
 and source-playlist removal reconcile the Rockbox m3u8 and matching iTunesDB
-playlist together. Superseded/removed m3u8 files have exact recovery; orphaned
+playlist together. A size change to an owned Rockbox M3U8 also surfaces the
+ordinary Sync-needed state. Confirmed planning then reads that bounded playlist
+and accepts only append-only paths that resolve to existing schema-3 managed
+media. A new membership is saved in SoundBox's playlist state (as an append
+overlay for a read-only rekordbox playlist) and published to both firmware
+views without recopying audio. If Rockbox appended a track already in the
+playlist, Sync removes only that newly appended duplicate; older intentional
+duplicates remain untouched. Unknown/unowned paths are not imported, and
+device-side deletion/reorder edits remain a closed conflict. The proven local
+membership is persisted before target writes, so a failed device phase remains
+a truthful retry against the still-present/restored Rockbox append.
+Superseded/removed m3u8 files have exact recovery; orphaned
 track/media/art bytes are removed only when no remaining managed playlist uses
 them. Schema-3 media cleanup requires its committed ownership/path/size baseline
 while art and playlists being rewritten or deleted retain exact live-byte

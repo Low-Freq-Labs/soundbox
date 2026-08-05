@@ -1,8 +1,8 @@
 """Full-library backup & restore (the "thorough" backup, in-app).
 
 A backup is one .zip holding everything SoundBox knows that isn't rekordbox:
-    library.json   title/artist overrides, custom playlists, deletes/removals,
-                   settings — the crown jewels.
+    library.json   title/artist overrides, custom/source playlist additions,
+                   deletes/removals, settings — the crown jewels.
     backups/       the rotating library.json history.
     art/           the whole cover-art cache (index + one image per TrackID).
     README.txt     what this is + how to restore by hand.
@@ -27,7 +27,8 @@ _ITEMS = ("library.json", "backups", "art")
 _README = """SoundBox full backup — {date}
 =================================
 library.json   your portable SoundBox library: title/artist overrides, custom
-               playlists, deletes/removals, settings. Keyed by rekordbox
+               playlists, Rockbox-adopted membership, deletes/removals,
+               settings. Keyed by rekordbox
                TrackID — the crown jewels.
 backups/       rotating history of library.json (earlier states).
 art/           the whole cover-art cache (index.json + one image per TrackID +

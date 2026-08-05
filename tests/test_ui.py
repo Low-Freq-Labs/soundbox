@@ -7,6 +7,7 @@ Hermetic by construction (see soundbox-gotchas):
 One QApplication + one MainWindow for the module (Qt allows only one app).
 """
 
+import json
 import os
 import logging
 from pathlib import Path
@@ -286,6 +287,33 @@ class DeviceLabels(unittest.TestCase):
         label = _win._device_label(
             "IPOD", 5_000_000_000, 0, "msdos", profile)
         self.assertIn("IPOD · Dual Boot iPod", label)
+
+    def test_committed_rockbox_addition_persists_source_playlist_overlay(self):
+        from types import SimpleNamespace
+        from soundbox.dual_ipod import DualPlaylistAddition
+
+        playlist = _win.lib.playlists[0]
+        old_pid = playlist.pid
+        old_additions = dict(_win.playlist_additions)
+        playlist.pid = "fixture-source"
+        _win.playlist_additions = {}
+        try:
+            count = _win._persist_rockbox_playlist_additions(SimpleNamespace(
+                playlist_additions=(DualPlaylistAddition(
+                    "fixture-source", ("2",)),),
+            ))
+            self.assertEqual(count, 1)
+            self.assertEqual(_win.playlist_additions, {"fixture-source": ["2"]})
+            self.assertEqual(playlist.added_keys, ["2"])
+            saved = json.loads(
+                _win._data_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                saved["playlist_additions"], {"fixture-source": ["2"]})
+        finally:
+            playlist.pid = old_pid
+            _win.playlist_additions = old_additions
+            _win._apply_settings_to_lib()
+            _win._save_state()
 
 
 class StockIpodUI(unittest.TestCase):

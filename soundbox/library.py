@@ -135,6 +135,14 @@ class Playlist:
     keys: list[str] = field(default_factory=list)
     # Stable source playlist ID. Empty when a source cannot provide one.
     pid: str = ""
+    # SoundBox-owned append layer for read-only source playlists.  The provider
+    # remains untouched; recognized additions made in a managed Rockbox
+    # playlist are published here only after the coordinated device commit.
+    added_keys: list[str] = field(default_factory=list)
+
+    @property
+    def effective_keys(self) -> list[str]:
+        return [*self.keys, *self.added_keys]
 
     @property
     def display_path(self) -> str:
@@ -172,7 +180,7 @@ class Library:
         """Resolve a playlist in exact order, applying SoundBox-side filters."""
         out: list[Track] = []
         removed = self.removed_by_playlist.get(playlist.pid or "", ())
-        for key in playlist.keys:
+        for key in playlist.effective_keys:
             track = self.tracks_by_id.get(key)
             if track is None or key in self.hidden_ids or key in removed:
                 continue

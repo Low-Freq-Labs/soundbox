@@ -37,12 +37,12 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     total_missing = 0
     for pl in lib.playlists:
         resolved = lib.resolve(pl)
-        missing = len(pl.keys) - len(resolved)
-        total_refs += len(pl.keys)
+        missing = len(pl.effective_keys) - len(resolved)
+        total_refs += len(pl.effective_keys)
         total_resolved += len(resolved)
         total_missing += missing
         flag = f"  [!! {missing} unresolved key(s)]" if missing else ""
-        print(f"{pl.display_path}  ({len(pl.keys)} tracks){flag}")
+        print(f"{pl.display_path}  ({len(pl.effective_keys)} tracks){flag}")
 
     print("-" * 60)
     print(

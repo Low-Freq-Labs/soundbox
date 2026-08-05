@@ -23,6 +23,17 @@ class TestManifest(unittest.TestCase):
         self.assertNotEqual(manifest.playlist_sig(a), manifest.playlist_sig(b))
         self.assertEqual(manifest.playlist_sig(a), manifest.playlist_sig(PL("1", "Set", [], ["t1", "t2", "t3"])))
 
+    def test_sig_and_snapshot_include_soundbox_append_layer(self):
+        playlist = PL("1", "Set", [], ["source"])
+        baseline = manifest.playlist_sig(playlist)
+        playlist.added_keys = ["rockbox"]
+
+        self.assertNotEqual(manifest.playlist_sig(playlist), baseline)
+        self.assertEqual(
+            manifest.entry_for(playlist)["tracks"],
+            ["source", "rockbox"],
+        )
+
     def test_key_prefers_pid_then_custom(self):
         self.assertEqual(manifest.playlist_key(PL("42", "X", [], [])), "42")
         self.assertEqual(manifest.playlist_key(PL("", "MyMix", [], [])), "cust:MyMix")

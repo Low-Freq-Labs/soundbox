@@ -43,6 +43,15 @@ For the live test count, trust `./check.sh` output—not any number written here
   track IDs at the edge, and V4 instant-paint snapshots remain readable.
   There is deliberately no speculative Serato/Traktor registry before a
   second real source establishes the necessary interface.
+- **ROCKBOX-SIDE PLAYLIST APPENDS IMPLEMENTED.** A schema-3 connection now
+  reports ordinary Sync-needed drift when Rockbox changes an owned M3U8 size.
+  Confirmed Sync accepts only append-only, already-managed device paths, saves
+  genuinely new membership into SoundBox without writing rekordbox, and
+  reconciles the same playlist into stock firmware without recopying audio. An
+  accidental appended duplicate is recovery-backed and removed from the M3U8;
+  pre-existing duplicates remain deliberate. Unknown device songs are not
+  imported and no destination is guessed; deletion/reorder edits remain
+  fail-closed pending a separate product decision.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,

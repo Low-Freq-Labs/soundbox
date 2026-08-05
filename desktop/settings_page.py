@@ -38,6 +38,9 @@ class SettingsPageMixin:
             self.lib.hidden_ids = set(self.hidden)  # deleted-from-SoundBox tracks
             self.lib.removed_by_playlist = {k: set(v)
                                             for k, v in self.removals.items() if v}
+            for playlist in self.lib.playlists:
+                playlist.added_keys = list(
+                    self.playlist_additions.get(playlist.pid, ()))
             self.lib.title_junk = self._title_junk()
             # The default-photo pool is balanced only across tracks that can
             # actually appear or export. Graveyard tracks stay out of its

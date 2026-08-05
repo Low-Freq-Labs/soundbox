@@ -59,6 +59,7 @@ ROCKBOX_SUPPORTED_SUFFIXES = frozenset({
 _PLAYLIST_ORDER_EPOCH = 946_684_800  # 2000-01-01 UTC; representable by FAT32
 _PLAYLIST_ORDER_STEP = 4             # wider than FAT's two-second granularity
 _PLAYLIST_MTIME_TOLERANCE = 2.1
+_MAX_MANAGED_PLAYLIST_BYTES = 1024 * 1024
 
 
 class DualIpodError(RuntimeError):
@@ -249,6 +250,14 @@ class DualPlaylistWrite:
 
 
 @dataclass(frozen=True)
+class DualPlaylistAddition:
+    """Recognized Rockbox membership to persist after a successful commit."""
+
+    playlist_key: str
+    track_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DualIpodSyncPlan:
     target: Path
     stock: StockIpodSyncPlan
@@ -264,6 +273,7 @@ class DualIpodSyncPlan:
     manifest_payload: bytes = field(repr=False)
     manifest_payload_before: bytes | None = field(default=None, repr=False)
     manifest_sha256_before: str | None = None
+    playlist_additions: tuple[DualPlaylistAddition, ...] = ()
     missing: tuple[DualOmission, ...] = ()
     unsupported: tuple[DualOmission, ...] = ()
     stock_safe_sources: int = 0
@@ -551,6 +561,15 @@ def composite_device_drift(
         if current_entry.get("metadata_sig") != raw.get("metadata_sig"):
             drift.changed.append((str(key), playlist.name))
             changed_keys.add(str(key))
+    for key in _changed_managed_playlist_keys(root, manifest):
+        if key in changed_keys:
+            continue
+        playlist_row = (manifest.get("playlists") or {}).get(key) or {}
+        drift.changed.append((
+            key,
+            str(playlist_row.get("name") or "Rockbox playlist"),
+        ))
+        changed_keys.add(key)
     baseline_upgrade_needed = False
     for raw in (manifest.get("files") or {}).values():
         if (
@@ -626,6 +645,237 @@ def _relative_manifest_path(device_path: str) -> Path:
     if not parts or any(part in {".", ".."} for part in parts):
         raise DualIpodError(f"Manifest path is unsafe: {device_path!r}")
     return Path(*parts)
+
+
+def _managed_playlist_rows(
+    manifest: dict[str, Any],
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """Index the one owned M3U8 row allowed for each playlist identity."""
+    output: dict[str, tuple[str, dict[str, Any]]] = {}
+    for device_path, raw in (manifest.get("files") or {}).items():
+        if not isinstance(raw, dict) or raw.get("kind") != "playlist":
+            continue
+        identity = str(raw.get("source") or "")
+        if not identity or identity in output or not bool(raw.get("owned")):
+            raise DualIpodError(
+                f"Composite manifest has ambiguous playlist ownership for "
+                f"{identity!r}")
+        if identity not in (manifest.get("playlists") or {}):
+            raise DualIpodError(
+                f"Composite playlist ownership has no snapshot: {identity!r}")
+        _relative_manifest_path(str(device_path))
+        output[identity] = (str(device_path), raw)
+    return output
+
+
+def _changed_managed_playlist_keys(
+    root: Path,
+    manifest: dict[str, Any],
+) -> set[str]:
+    """Find bounded M3U8 size drift without repeatedly hashing every playlist.
+
+    Rockbox's catalogue append writes at least one new path line, so its size is
+    sufficient for the frequent connection poll.  The confirmed planner later
+    reads and hashes only changed small payloads before accepting anything.
+    """
+    changed: set[str] = set()
+    for identity, (device_path, row) in _managed_playlist_rows(manifest).items():
+        live = root / _relative_manifest_path(device_path)
+        try:
+            if live.is_symlink() or not live.is_file():
+                changed.add(identity)
+                continue
+            size = live.stat().st_size
+            expected = int(row.get("size") or -1)
+        except (OSError, TypeError, ValueError):
+            changed.add(identity)
+            continue
+        if size != expected:
+            changed.add(identity)
+    return changed
+
+
+def _read_managed_m3u8(payload: bytes, *, playlist_key: str) -> list[str]:
+    if len(payload) > _MAX_MANAGED_PLAYLIST_BYTES:
+        raise DualIpodError(
+            f"Rockbox playlist is too large to reconcile safely: {playlist_key}")
+    try:
+        text = payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise DualIpodError(
+            f"Rockbox playlist is not valid UTF-8: {playlist_key}") from exc
+    output: list[str] = []
+    for raw in text.splitlines():
+        value = raw.strip().replace("\\", "/")
+        if not value or value.startswith("#"):
+            continue
+        if not value.startswith("/"):
+            raise DualIpodError(
+                f"Rockbox playlist contains a non-absolute path: {playlist_key}")
+        parts = [part for part in value.split("/") if part]
+        if not parts or any(part in {".", ".."} for part in parts):
+            raise DualIpodError(
+                f"Rockbox playlist contains an unsafe path: {playlist_key}")
+        output.append("/" + "/".join(parts))
+    return output
+
+
+def _merge_recognized_rockbox_additions(
+    library: Library,
+    playlists: list[Playlist],
+    root: Path,
+    manifest: dict[str, Any],
+    *,
+    adoptable_playlist_keys: set[str],
+) -> tuple[
+    tuple[DualPlaylistAddition, ...],
+    dict[str, tuple[Path, int, str]],
+]:
+    """Adopt only append-only, manifest-owned Rockbox playlist additions.
+
+    Unknown paths are deliberately not imports.  Appended duplicates are
+    omitted from the desired playlist, causing the ordinary transaction to
+    rewrite the M3U8 back to one occurrence.  The returned exact live baselines
+    authorize only these already-parsed playlist files for this plan.
+    """
+    by_key = {
+        legacy_manifest.playlist_key(playlist): playlist
+        for playlist in playlists
+    }
+    track_by_source: dict[str, str | None] = {}
+    available_track_ids: set[str] = set()
+    for track_id, track in library.tracks_by_id.items():
+        try:
+            source = str(track.path.resolve(strict=False))
+        except OSError:
+            source = str(track.path)
+        if source in track_by_source:
+            track_by_source[source] = None
+        else:
+            track_by_source[source] = track_id
+        try:
+            if (
+                track.path.is_file()
+                and track.path.suffix.lower() in ROCKBOX_SUPPORTED_SUFFIXES
+            ):
+                available_track_ids.add(track_id)
+        except OSError:
+            pass
+
+    track_by_device_path: dict[str, str] = {}
+    for device_path, raw in (manifest.get("files") or {}).items():
+        if (
+            not isinstance(raw, dict)
+            or raw.get("kind") not in {"shared-stock-media", "rockbox-media"}
+            or not bool(raw.get("owned"))
+        ):
+            continue
+        normalized = "/" + "/".join(
+            _relative_manifest_path(str(device_path)).parts)
+        source_text = str(raw.get("source") or "")
+        try:
+            source = str(Path(source_text).resolve(strict=False))
+        except OSError:
+            source = source_text
+        mapped_track_id = track_by_source.get(source)
+        if mapped_track_id:
+            key = normalized.casefold()
+            previous = track_by_device_path.get(key)
+            if previous is not None and previous != mapped_track_id:
+                raise DualIpodError(
+                    f"Composite media path maps to two library tracks: {normalized}")
+            track_by_device_path[key] = mapped_track_id
+
+    additions: list[DualPlaylistAddition] = []
+    approved: dict[str, tuple[Path, int, str]] = {}
+    hidden = set(getattr(library, "hidden_ids", ()) or ())
+    removals = getattr(library, "removed_by_playlist", {}) or {}
+    for identity, (device_path, row) in _managed_playlist_rows(manifest).items():
+        relative = _relative_manifest_path(device_path)
+        live = root / relative
+        try:
+            if live.is_symlink() or not live.is_file():
+                raise DualIpodError(
+                    f"Managed Rockbox playlist is missing: {device_path}")
+            size = live.stat().st_size
+            if size > _MAX_MANAGED_PLAYLIST_BYTES:
+                raise DualIpodError(
+                    f"Rockbox playlist is too large to reconcile safely: {identity}")
+            payload = live.read_bytes()
+        except OSError as exc:
+            raise DualIpodError(
+                f"Could not read managed Rockbox playlist: {device_path}") from exc
+        digest = hashlib.sha256(payload).hexdigest()
+        try:
+            expected_size = int(row.get("size") or -1)
+        except (TypeError, ValueError) as exc:
+            raise DualIpodError(
+                f"Composite playlist baseline is invalid: {identity}") from exc
+        expected_hash = str(row.get("sha256") or "")
+        if size == expected_size and digest == expected_hash:
+            continue
+
+        playlist = by_key.get(identity)
+        snapshot = (manifest.get("playlists") or {}).get(identity)
+        if playlist is None:
+            # Reconcile is authoritatively deleting this managed identity.  Its
+            # exact current M3U8 is recovery-backed; no line is imported and no
+            # unowned media path gains cleanup authority.
+            approved[identity] = (relative, size, digest)
+            continue
+        if not isinstance(snapshot, dict):
+            raise DualIpodError(
+                f"Changed Rockbox playlist is unavailable in SoundBox: {identity}")
+        baseline = snapshot.get("tracks")
+        if not isinstance(baseline, list):
+            raise DualIpodError(
+                f"Composite playlist snapshot is invalid: {identity}")
+        baseline_ids = [str(track_id) for track_id in baseline]
+        actual_ids: list[str] = []
+        for path in _read_managed_m3u8(payload, playlist_key=identity):
+            mapped_track_id = track_by_device_path.get(path.casefold())
+            if not mapped_track_id:
+                raise DualIpodError(
+                    "Rockbox playlist contains an unrecognized song; automatic "
+                    f"device imports are not enabled: {path}")
+            actual_ids.append(mapped_track_id)
+        if actual_ids[:len(baseline_ids)] != baseline_ids:
+            raise DualIpodError(
+                "Rockbox playlist changed by deletion or reordering; only "
+                f"recognized appended songs can sync automatically: {identity}")
+
+        appended = actual_ids[len(baseline_ids):]
+        if not appended:
+            raise DualIpodError(
+                f"Rockbox playlist changed outside SoundBox: {identity}")
+        present = set(playlist.keys)
+        present.update(baseline_ids)
+        accepted: list[str] = []
+        removed = set(removals.get(playlist.pid or "", ()))
+        for track_id in appended:
+            # A slow double-add is harmless: the device write is approved, but
+            # the duplicate is not added to the desired/app-side membership.
+            if track_id in present:
+                continue
+            if track_id not in available_track_ids:
+                raise DualIpodError(
+                    "Rockbox playlist addition maps to a currently unavailable "
+                    f"source file: {track_id}")
+            if track_id in hidden or track_id in removed:
+                raise DualIpodError(
+                    "Rockbox addition conflicts with a SoundBox removal; restore "
+                    f"the song first: {track_id}")
+            accepted.append(track_id)
+            present.add(track_id)
+        if accepted:
+            if identity not in adoptable_playlist_keys:
+                raise DualIpodError(
+                    "Rockbox additions cannot be adopted into this derived "
+                    f"SoundBox view: {identity}")
+            playlist.keys.extend(accepted)
+            additions.append(DualPlaylistAddition(identity, tuple(accepted)))
+        approved[identity] = (relative, size, digest)
+    return tuple(additions), approved
 
 
 def _combined_playlists(
@@ -937,6 +1187,7 @@ def _playlist_writes(
     existing: dict[str, Any] | None,
     *,
     reconcile: bool = False,
+    approved_external: dict[str, tuple[Path, int, str]] | None = None,
 ) -> tuple[list[DualPlaylistWrite], list[DualFileDelete]]:
     output: list[DualPlaylistWrite] = []
     used: dict[str, str] = {}
@@ -944,16 +1195,8 @@ def _playlist_writes(
         existing is not None
         and existing.get("profile") != DUAL_EXPORT_PROFILE
     )
-    prior_by_key: dict[str, tuple[str, dict[str, Any]]] = {}
-    for device_path, raw in ((existing or {}).get("files") or {}).items():
-        if not isinstance(raw, dict) or raw.get("kind") != "playlist":
-            continue
-        identity = str(raw.get("source") or "")
-        if not identity or identity in prior_by_key:
-            raise DualIpodError(
-                f"Composite manifest has ambiguous playlist ownership for {identity!r}")
-        _relative_manifest_path(str(device_path))
-        prior_by_key[identity] = (str(device_path), raw)
+    prior_by_key = _managed_playlist_rows(existing or {})
+    approved_external = approved_external or {}
     order_width = max(2, len(str(len(selected))))
     for index, (playlist, device_name) in enumerate(zip(
             selected, device_names, strict=True)):
@@ -988,8 +1231,15 @@ def _playlist_writes(
         mtime_before: float | None = None
         order_changed = True
         if prior is not None:
-            relative_before, size_before, hash_before = _verify_owned_before(
-                target, prior[0], prior[1])
+            approved_before = approved_external.get(identity)
+            if approved_before is None:
+                relative_before, size_before, hash_before = _verify_owned_before(
+                    target, prior[0], prior[1])
+            else:
+                relative_before, size_before, hash_before = approved_before
+                if relative_before != _relative_manifest_path(prior[0]):
+                    raise DualIpodError(
+                        f"Approved Rockbox playlist path changed: {identity}")
             mtime_before = (target / relative_before).stat().st_mtime
             if relative_before != relative:
                 if live.exists():
@@ -1029,8 +1279,15 @@ def _playlist_writes(
         ):
             continue
         if desired_by_identity.get(identity) != _relative_manifest_path(device_path):
-            prior_relative, size, digest = _verify_owned_before(
-                target, device_path, row)
+            approved_before = approved_external.get(identity)
+            if approved_before is None:
+                prior_relative, size, digest = _verify_owned_before(
+                    target, device_path, row)
+            else:
+                prior_relative, size, digest = approved_before
+                if prior_relative != _relative_manifest_path(device_path):
+                    raise DualIpodError(
+                        f"Approved Rockbox playlist path changed: {identity}")
             deletes.append(DualFileDelete(
                 prior_relative, size, digest, "playlist"))
     return output, deletes
@@ -1057,6 +1314,7 @@ def plan_dual_ipod_sync(
     respect_selected_order: bool = False,
     on_progress: Callable[[int, int, str], None] | None = None,
     expected_playlist_rows: dict[str, dict[str, Any]] | None = None,
+    adoptable_playlist_keys: set[str] | None = None,
 ) -> DualIpodSyncPlan:
     """Build an exact, no-target-write composite plan."""
     root = Path(target).expanduser().resolve(strict=True)
@@ -1082,6 +1340,18 @@ def plan_dual_ipod_sync(
         respect_selected_order=respect_selected_order,
     )
     effective, missing, unsupported = _filtered_playlists(library, combined)
+    playlist_additions: tuple[DualPlaylistAddition, ...] = ()
+    approved_external_playlists: dict[str, tuple[Path, int, str]] = {}
+    if reconcile and existing_manifest is not None and adoptable_playlist_keys is not None:
+        playlist_additions, approved_external_playlists = (
+            _merge_recognized_rockbox_additions(
+                library,
+                effective,
+                root,
+                existing_manifest,
+                adoptable_playlist_keys=set(adoptable_playlist_keys),
+            )
+        )
     device_playlist_names = _device_playlist_names(effective)
     unique_sources: dict[Path, Any] = {}
     display_by_source: dict[Path, tuple[str, str]] = {}
@@ -1488,6 +1758,7 @@ def plan_dual_ipod_sync(
         entries,
         existing_manifest,
         reconcile=reconcile,
+        approved_external=approved_external_playlists,
     )
     planning_done += 1
     emit_planning("Playlists")
@@ -1674,6 +1945,7 @@ def plan_dual_ipod_sync(
         playlists=tuple(playlist_writes),
         media_plans=tuple(planned_media.values()),
         config_update=config_update,
+        playlist_additions=playlist_additions,
         manifest_payload=manifest_payload,
         manifest_payload_before=existing_payload,
         manifest_sha256_before=manifest_hash_before,

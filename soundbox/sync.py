@@ -935,7 +935,7 @@ def _dropped_tracks(prev: dict, by_key: dict, changed: list,
     for key, _name in changed:
         old = set(prev.get(key, {}).get("tracks", []))
         cur = by_key.get(key)
-        new = (set(cur.keys) - manifest._excluded(cur, hidden, removals)
+        new = (set(cur.effective_keys) - manifest._excluded(cur, hidden, removals)
                if cur is not None else set())
         if old - new:
             return True

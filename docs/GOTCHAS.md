@@ -912,6 +912,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   than silently deleted. Validate malformed identities/snapshots and keep all
   ordinary manifest-last rollback guards. Schema-3 presentation fields such as
   `device_name` are not a reason to refuse the user's checked deletion.
+- **Rockbox playlist appends are incoming membership, not media imports.** The
+  three-second poll may use the owned M3U8 size because a catalogue append must
+  add a path line; do not hash every unchanged playlist on every tick. Confirmed
+  planning reads/hashes only bounded managed M3U8 payloads and may authorize an
+  external baseline only when the committed track sequence is an exact prefix
+  and every appended path maps through schema-3 ownership to one current source
+  track. Persist a genuinely new membership before device writes. If the track
+  was already present, approve the exact live bytes for recovery but omit the
+  appended occurrence from the desired payload, so Sync removes the accidental
+  duplicate. Preserve duplicates that predate this Rockbox edit. Unknown paths
+  are not imports; deletion/reorder edits and SoundBox-removal conflicts fail
+  closed.
 - **Rockbox payload metadata has one authority.** Some purchased MP3s store
   `Purchased at Beatport.com` in `TXXX:COMMENT`/`COMM`; WAVs may have several
   INFO/ID3/BWF containers containing receipts, years, albums, or stale titles.

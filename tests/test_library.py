@@ -44,6 +44,23 @@ class LibraryBoundaryTests(unittest.TestCase):
         self.assertEqual(lib.source_kind, "test-adapter")
         self.assertEqual(lib.source_xml, lib.source)  # compatibility alias
 
+    def test_source_playlist_resolves_soundbox_append_layer_in_order(self):
+        tracks = {
+            key: Track(key, key, "", f"file://localhost/tmp/{key}.wav")
+            for key in ("source", "rockbox")
+        }
+        playlist = Playlist(
+            "Read Only", [], ["source"], pid="stable",
+            added_keys=["rockbox"],
+        )
+        lib = Library(tracks, [playlist], source="fixture")
+
+        self.assertEqual(playlist.keys, ["source"])
+        self.assertEqual(
+            [track.track_id for track in lib.resolve(playlist)],
+            ["source", "rockbox"],
+        )
+
 
 class RekordboxXmlAdapterTests(unittest.TestCase):
     def test_location_key_playlists_are_normalized_to_track_ids(self):

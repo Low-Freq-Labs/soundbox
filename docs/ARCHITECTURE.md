@@ -326,7 +326,12 @@ prepared artwork, recovery, commit ordering, and rollback are one transaction,
 never two exporters run back-to-back. The MA446-safe subset is validated MP3
 plus stereo PCM16/44.1-kHz WAV; that conservative stock rule never filters a
 file supported by Rockbox. Media unsupported by both profiles is omitted and
-reported.
+reported. Schema-3 playlist reconciliation also performs a bounded reverse
+identity lookup for append-only Rockbox M3U8 edits: device path → owned media
+row → canonical source → current `Track.track_id`. Proven new membership enters
+the portable SoundBox state as a source-playlist append overlay before the
+device transaction; duplicate appends instead produce only an M3U8 rewrite.
+Unknown paths never create tracks or choose an import destination.
 
 Stock device presentation is a separate read-only path. `stock_ipod_info`
 creates immutable identity/track/playlist snapshots, merges pending playback

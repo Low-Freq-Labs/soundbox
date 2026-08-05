@@ -249,6 +249,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.hidden: set[str] = set()        # deleted-from-SoundBox track ids
         self.hidden_dates: dict[str, str] = {}   # tid -> "YYYY-MM-DD" (graveyard)
         self.removals: dict[str, dict] = {}  # pid -> {tid: removed-date}
+        # Stable source-playlist pid -> recognized tracks appended in Rockbox.
+        # This is a SoundBox overlay only; rekordbox remains read-only.
+        self.playlist_additions: dict[str, list[str]] = {}
         self.aliases: dict[str, str] = {}    # artist merges: variant -> target
         self.settings: dict = dict(_DEFAULT_SETTINGS)
         self.export_worker: ExportWorker | None = None
@@ -354,6 +357,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.hidden = set(self.hidden_dates)
         self.removals = {pid: ({i: "" for i in v} if isinstance(v, list) else dict(v))
                          for pid, v in (data.get("playlist_removals") or {}).items()}
+        self.playlist_additions = {
+            str(pid): [str(track_id) for track_id in values]
+            for pid, values in (data.get("playlist_additions") or {}).items()
+            if str(pid) and isinstance(values, list)
+        }
         self.aliases = data.get("artist_aliases") or {}
         self._last_xml = data.get("last_xml") or ""
         # User settings (extensible — this is the runway for future toggles).
@@ -453,7 +461,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         except OSError:
             pass  # a backup hiccup must never block the real save
 
-    def _save_state(self):
+    def _save_state(self) -> bool:
         """Write the portable SoundBox library (overrides + custom playlists)."""
         self._sync_playlists_cache = None
         self._backup_state()  # snapshot the previous good state first
@@ -469,13 +477,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "title_overrides": self.titles,
                 "hidden_tracks": {i: self.hidden_dates.get(i, "") for i in sorted(self.hidden)},
                 "playlist_removals": {k: dict(v) for k, v in self.removals.items() if v},
+                "playlist_additions": {
+                    k: list(v) for k, v in self.playlist_additions.items() if v
+                },
                 "artist_aliases": self.aliases,
                 "last_xml": self._last_xml,
                 "settings": self.settings,
             }, indent=2), encoding="utf-8")
             os.replace(tmp, self._data_file)
+            return True
         except OSError as exc:
             LOG.error("Could not save library.json: %s", exc)
+            return False
 
     # ---------- settings ----------
 
@@ -3161,6 +3174,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         library = self.lib
         facts = device_facts(dev)
         identity_key = self._stock_device_key(dev, profile)
+        adoptable_playlist_keys = (
+            {
+                playlist.pid
+                for playlist in library.playlists
+                if playlist.pid
+            }
+            | {f"cust:{name}" for name in self.custom}
+        )
         worker = ProgressTask(
             lambda callback: plan_dual_ipod_sync(
                 library,
@@ -3182,6 +3203,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 respect_selected_order=respect_selected_order,
                 on_progress=callback,
                 expected_playlist_rows=expected_playlist_rows,
+                adoptable_playlist_keys=adoptable_playlist_keys,
             ),
             log_label="Dual iPod planning",
         )
@@ -3402,6 +3424,25 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _commit_dual_ipod_plan(self, dev: str, plan: DualIpodSyncPlan):
         from .workers import ProgressTask
+        try:
+            self._persist_rockbox_playlist_additions(plan)
+        except RuntimeError as exc:
+            self._exporting = False
+            self._dual_active_device = ""
+            self._dual_active_playlist_keys.clear()
+            self._dual_active_preconfirmed = False
+            self._dual_active_confirmed = False
+            self._dual_active_action = "sync"
+            self._dual_active_track_total = 0
+            self.progress.setVisible(False)
+            self._set_status_count()
+            QMessageBox.critical(
+                self,
+                "Could not save playlist update",
+                f"{exc}\n\nNo device files were changed.",
+            )
+            self._refresh_devices()
+            return
         worker = ProgressTask(
             lambda callback: commit_dual_ipod_sync(
                 plan, on_progress=callback),
@@ -3481,6 +3522,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.rockbox_media_cache.clear()
         except Exception as exc:
             LOG.warning("Rockbox media staging cleanup failed: %s", exc)
+        adopted_additions = (
+            sum(
+                len(item.track_ids)
+                for item in getattr(plan, "playlist_additions", ())
+            )
+            if plan is not None else 0
+        )
         if not isinstance(result, Exception) and plan is not None:
             playlist_paths = ", ".join(
                 str(item.relative_path)
@@ -3537,6 +3585,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "\n\nSome now-unreferenced files could not be removed:\n"
                 + "\n".join(result.cleanup_failures)
                 if result.cleanup_failures else "")
+            adopted_note = (
+                f"\n\nAdopted {adopted_additions} Rockbox playlist "
+                "addition(s)."
+                if adopted_additions else ""
+            )
             QMessageBox.information(
                 self,
                 "iPod deletion complete"
@@ -3551,6 +3604,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 f"{result.playlists} playlist(s).\n\n"
                 f"Removed {result.deleted_orphans} unreferenced device file(s) "
                 f"({human(result.deleted_orphan_bytes)})."
+                f"{adopted_note}"
                 f"{cleanup_warning}\n\n"
                 f"Recovery files:\n{result.stock.recovery_directory}\n\n"
                 "Eject from SoundBox before listening.",
@@ -3585,6 +3639,47 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._dual_active_playlist_keys.clear()
                 self._dual_active_confirmed = False
                 self._dual_active_action = "sync"
+
+    def _persist_rockbox_playlist_additions(
+            self, plan: DualIpodSyncPlan) -> int:
+        """Durably adopt proven membership before the coordinated device write.
+
+        If the device phase fails, Rockbox's original append is restored or
+        remains live and the saved SoundBox membership makes the next Sync a
+        truthful retry instead of losing the user's on-device choice.
+        """
+        added = 0
+        for item in plan.playlist_additions:
+            identity = str(item.playlist_key)
+            if identity.startswith("cust:"):
+                name = identity.removeprefix("cust:")
+                bag = self.custom.get(name)
+                if bag is None:
+                    LOG.error(
+                        "Committed Rockbox additions lost custom playlist: %s",
+                        identity,
+                    )
+                    continue
+            else:
+                bag = self.playlist_additions.setdefault(identity, [])
+            for track_id in item.track_ids:
+                if track_id in bag:
+                    continue
+                bag.append(track_id)
+                added += 1
+        if not added:
+            return 0
+        if not self._save_state():
+            raise RuntimeError(
+                "SoundBox could not save the recognized Rockbox playlist "
+                "addition to library.json"
+            )
+        self._apply_settings_to_lib()
+        self._refresh_custom()
+        if self.lib is not None:
+            self._populate_tree(engine.summary(self.lib))
+            self._reload_current_view()
+        return added
 
     def _show_dual_ipod_failure(self, result) -> None:
         interrupted = "Device target changed or was remounted" in str(result)
