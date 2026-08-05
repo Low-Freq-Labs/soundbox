@@ -907,7 +907,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   until that snapshot refresh and the following sidebar free-space/drift scan
   both finish. Show `Finalizing iPod...` during those reads and delay the success
   dialog until Eject is actually available; never make dismissing an alleged
-  completion dialog start another blocking device worker.
+  completion dialog start another blocking device worker. `QMessageBox` runs a
+  nested event loop, so `_exporting` must remain true until the modal returns;
+  clearing it before `exec()` lets the recurring three-second poll launch under
+  the dialog. Read-only sidebar/dashboard workers are disposable housekeeping:
+  Eject cancels or ignores their late results and must not show Device busy for
+  them. Continue to block every writer, publishable planner, and device import,
+  and keep polling suppressed through verification/unmount outcome.
 - **An explicit managed-playlist Delete is authoritative.** Do not force a
   separate Sync merely because a different schema-3 playlist changed or is no
   longer available from the current source. Reconcile other available managed

@@ -205,10 +205,22 @@ class DeviceScanWorker(QThread):
         self.title_overrides = dict(title_overrides or {})
         self.stock_shadow_store = stock_shadow_store
         self.stock_models = dict(stock_models or {})
+        self._stop = threading.Event()
+
+    def cancel(self):
+        """Discard this read-only poll as soon as its current filesystem call
+        returns. Eject never waits for sidebar housekeeping."""
+        self._stop.set()
+        self.requestInterruption()
+
+    def _cancelled(self) -> bool:
+        return self._stop.is_set() or self.isInterruptionRequested()
 
     def run(self):
         out = []
         for name, path, free in list_devices():
+            if self._cancelled():
+                return
             drift = 0
             profile = device_profile(path)
             if self.lib is not None:
@@ -251,7 +263,11 @@ class DeviceScanWorker(QThread):
                                 drift = max(1, status.local_changes)
                     except Exception:  # noqa: BLE001 - keep polling read-only
                         drift = 0
+            if self._cancelled():
+                return
             out.append((name, path, free, drift, profile))
+        if self._cancelled():
+            return
         self.done.emit(out)
 
 

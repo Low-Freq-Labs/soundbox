@@ -60,8 +60,11 @@ For the live test count, trust `./check.sh` output—not any number written here
   including queued composite jobs, keep a visible `Finalizing iPod...` state
   while the committed Device/Songs/Playlists snapshot and sidebar drift/free-
   space scan run in series. Their completion dialog is now the terminal event,
-  not the trigger for another hidden worker; Eject is immediately available
-  after OK.
+  not the trigger for another hidden worker: periodic polling remains suppressed
+  throughout the dialog's nested event loop. If the user waits long enough for
+  later read-only sidebar/dashboard housekeeping to begin, Eject cancels or
+  ignores that disposable work and proceeds on the first click. Only a real
+  writer, publishable plan, or device import may retain the busy refusal.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,

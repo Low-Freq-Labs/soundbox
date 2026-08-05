@@ -26,6 +26,18 @@ LOG = logging.getLogger("soundbox")
 
 
 class DeviceBrowserMixin:
+    # Eject must serialize behind anything that can write, publish a plan, or
+    # copy from the selected device. The sidebar poll and stock dashboard read
+    # are deliberately absent: they are disposable housekeeping, not a reason
+    # to reject Eject after a completed sync.
+    _EJECT_BLOCKING_WORKERS = (
+        "export_worker", "_resync_worker", "_delete_worker",
+        "_stock_plan_worker", "_stock_commit_worker",
+        "_dual_plan_worker", "_dual_commit_worker",
+        "_stock_delete_plan_worker", "_stock_delete_commit_worker",
+        "_device_import_worker",
+    )
+
     def _erase_device(self, dev: str):
         """Explicitly erase every child of one selected writable volume."""
         volume = _external_volume_of(dev)
@@ -108,18 +120,25 @@ class DeviceBrowserMixin:
             self._eject(path)
 
     def _eject(self, dev: str):
-        # Never race a live writer. Verification and flush are also threaded:
-        # removable I/O on the UI thread can block for seconds under fskit.
-        if any(_running(getattr(self, name, None)) for name in (
-                "export_worker", "_resync_worker", "_delete_worker",
-                "_stock_plan_worker", "_stock_commit_worker",
-                "_stock_view_worker", "_dev_scan_worker")):
+        # Never race a writer, a publishable plan, or a device import. Read-only
+        # dashboard/sidebar housekeeping is cancelled or allowed to drain in
+        # the background; late results are ignored while eject owns the device.
+        if (
+            any(_running(getattr(self, name, None))
+                for name in self._EJECT_BLOCKING_WORKERS)
+            or getattr(self, "_pending_device_operation", None) is not None
+        ):
             QMessageBox.warning(
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")
             return
         if _running(getattr(self, "_eject_verify_worker", None)):
             return
+        scan = getattr(self, "_dev_scan_worker", None)
+        if _running(scan) and hasattr(scan, "cancel"):
+            scan.cancel()
+        self._ejecting_device = dev
+        self._exporting = True  # suppress every new periodic poll until outcome
         self._start_pulse("Verifying")
 
         def verify():
@@ -135,12 +154,14 @@ class DeviceBrowserMixin:
 
     def _after_eject_verify(self, dev: str, result):
         if isinstance(result, Exception):
+            self._finish_eject_attempt(dev)
             self._stop_pulse()
             QMessageBox.warning(self, "Eject verification failed", str(result))
             return
         problems = list(result.get("missing") or [])
         problems.extend(result.get("managed_issues") or [])
         if problems:
+            self._finish_eject_attempt(dev)
             self._stop_pulse()
             QMessageBox.warning(
                 self, "Device needs repair",
@@ -151,6 +172,7 @@ class DeviceBrowserMixin:
 
         def succeeded():
             self._stop_pulse()
+            self._finish_eject_attempt(dev)
             self._current_device_path = ""
             self._stock_snapshot = None
             self.stack.setCurrentIndex(0)
@@ -165,6 +187,7 @@ class DeviceBrowserMixin:
 
         def gave_up(p):
             self._stop_pulse()
+            self._finish_eject_attempt(dev)
             err = bytes(p.readAllStandardError()).decode(errors="replace")
             QMessageBox.warning(self, "Eject failed",
                                 err or "Could not eject. Close any app using the device.")
@@ -181,6 +204,11 @@ class DeviceBrowserMixin:
             run(["unmount", "force", dev], gave_up)
 
         run(["eject", dev], try_force)
+
+    def _finish_eject_attempt(self, dev: str):
+        if getattr(self, "_ejecting_device", "") == dev:
+            self._ejecting_device = ""
+        self._exporting = False
 
     # ---------- device browser management ----------
     def _browser_menu(self, pos):

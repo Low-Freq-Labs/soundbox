@@ -281,6 +281,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._stock_delete_commit_worker = None
         self._stock_view_worker = None
         self._eject_verify_worker = None
+        self._ejecting_device = ""
         self._device_import_worker = None
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
         self._device_profiles: dict[str, object] = {}
@@ -2785,15 +2786,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._start_pulse("Finalizing iPod")
 
         def finish():
-            self._exporting = False
             self._stop_pulse()
             self.status_label.setText("Ready")
-            on_complete()
+            # QMessageBox runs a nested Qt event loop. Keep polling suppressed
+            # through that loop or the three-second timer can launch a fresh,
+            # slow device scan while the user is still reading "Eject ready".
+            try:
+                on_complete()
+            finally:
+                self._exporting = False
 
         self._refresh_device_surfaces(dev, after_finished=finish)
 
     def _on_stock_device_view(self, dev: str, result):
-        if dev != self._current_device_path:
+        if (
+            dev != self._current_device_path
+            or dev == getattr(self, "_ejecting_device", "")
+        ):
             return
         if isinstance(result, Exception):
             preserve_snapshot = bool(

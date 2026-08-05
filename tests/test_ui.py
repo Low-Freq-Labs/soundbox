@@ -657,6 +657,113 @@ class StockIpodUI(unittest.TestCase):
             _win._dev_scan_worker = old_worker
             _win._exporting = old_exporting
 
+    def test_finalization_suppresses_poll_through_success_dialog(self):
+        old_refresh = _win._refresh_device_surfaces
+        old_exporting = _win._exporting
+        exporting_during_dialog = []
+
+        def refresh(_dev, *, after_finished=None):
+            self.assertIsNotNone(after_finished)
+            after_finished()
+
+        try:
+            _win._refresh_device_surfaces = refresh
+            _win._finalize_ipod_operation(
+                "/Volumes/IPOD",
+                lambda: exporting_during_dialog.append(_win._exporting),
+            )
+            self.assertEqual(exporting_during_dialog, [True])
+            self.assertFalse(_win._exporting)
+        finally:
+            _win._stop_pulse()
+            _win._refresh_device_surfaces = old_refresh
+            _win._exporting = old_exporting
+
+    def test_eject_cancels_housekeeping_instead_of_refusing(self):
+        class FakeSignal:
+            def __init__(self):
+                self.slots = []
+
+            def connect(self, slot):
+                self.slots.append(slot)
+
+        class FakeScan:
+            def __init__(self):
+                self.cancelled = False
+
+            def isRunning(self):
+                return True
+
+            def cancel(self):
+                self.cancelled = True
+
+        class FakeView:
+            def isRunning(self):
+                return True
+
+        class FakeTask:
+            def __init__(self, fn):
+                self.fn = fn
+                self.done = FakeSignal()
+                self.finished = FakeSignal()
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def isRunning(self):
+                return self.started
+
+        old_scan = _win._dev_scan_worker
+        old_view = _win._stock_view_worker
+        old_verify = _win._eject_verify_worker
+        old_exporting = _win._exporting
+        old_ejecting = _win._ejecting_device
+        scan = FakeScan()
+        try:
+            _win._dev_scan_worker = scan
+            _win._stock_view_worker = FakeView()
+            _win._eject_verify_worker = None
+            _win._exporting = False
+            _win._ejecting_device = ""
+            with (
+                mock.patch("desktop.device_browser.OneShotTask", FakeTask),
+                mock.patch("desktop.device_browser.QMessageBox.warning") as warning,
+            ):
+                _win._eject("/Volumes/IPOD")
+
+            warning.assert_not_called()
+            self.assertTrue(scan.cancelled)
+            self.assertTrue(_win._eject_verify_worker.started)
+            self.assertTrue(_win._exporting)
+            self.assertEqual(_win._ejecting_device, "/Volumes/IPOD")
+        finally:
+            _win._stop_pulse()
+            _win._dev_scan_worker = old_scan
+            _win._stock_view_worker = old_view
+            _win._eject_verify_worker = old_verify
+            _win._exporting = old_exporting
+            _win._ejecting_device = old_ejecting
+
+    def test_eject_still_refuses_live_composite_writer(self):
+        class FakeWriter:
+            def isRunning(self):
+                return True
+
+        old_worker = _win._dual_commit_worker
+        old_pending = _win._pending_device_operation
+        try:
+            _win._dual_commit_worker = FakeWriter()
+            _win._pending_device_operation = None
+            with mock.patch(
+                    "desktop.device_browser.QMessageBox.warning") as warning:
+                _win._eject("/Volumes/IPOD")
+            warning.assert_called_once()
+            self.assertIn("operation to finish", warning.call_args.args[2])
+        finally:
+            _win._dual_commit_worker = old_worker
+            _win._pending_device_operation = old_pending
+
     def test_failed_refresh_keeps_last_verified_ipod_snapshot(self):
         from types import SimpleNamespace
 
@@ -1701,6 +1808,19 @@ class StockIpodUI(unittest.TestCase):
             drift_call.kwargs["artist_overrides"], {"1": "Edited artist"})
         self.assertEqual(
             drift_call.kwargs["title_overrides"], {"1": "Edited title"})
+
+    def test_cancelled_device_scan_publishes_no_stale_result(self):
+        from desktop.workers import DeviceScanWorker
+
+        worker = DeviceScanWorker(_win.lib, [])
+        results = []
+        worker.done.connect(results.append)
+        worker.cancel()
+        with mock.patch(
+                "desktop.workers.list_devices",
+                return_value=[("IPOD", "/Volumes/IPOD", 1000)]):
+            worker.run()
+        self.assertEqual(results, [])
 
     def test_stock_commit_prompt_defaults_to_cancel(self):
         source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
