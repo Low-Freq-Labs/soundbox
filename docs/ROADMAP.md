@@ -51,7 +51,11 @@ For the live test count, trust `./check.sh` output—not any number written here
   accidental appended duplicate is recovery-backed and removed from the M3U8;
   pre-existing duplicates remain deliberate. Unknown device songs are not
   imported and no destination is guessed; deletion/reorder edits remain
-  fail-closed pending a separate product decision.
+  fail-closed pending a separate product decision. Physical testing exposed
+  Rockbox's `/<HDD0>/...` serialization and a dashboard coupling bug; the
+  reconciler now normalizes that exact volume-root form, while changed M3U8
+  contents are withheld as untrusted without hiding the device's valid
+  identity/database details.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,

@@ -245,7 +245,11 @@ classic iPod's USB transport without weakening any planned mutation.
 The dual device dashboard treats the schema-3 manifest as the library authority:
 it reports total managed tracks, the stock-visible subset, and the Rockbox-only
 remainder separately. Songs and Playlists unify the manifest and iTunesDB views
-and label each managed row by firmware visibility.
+and label each managed row by firmware visibility. A live managed M3U8 that no
+longer matches its committed hash does not invalidate the read-only stock
+identity/database snapshot: Device details remain available, the affected
+playlist is labeled `Sync needed`, and its changed entries stay hidden until the
+confirmed composite planner validates them.
 During commit, animated `Syncing iPod...` status is followed by a separate
 `#/#` field and percentage bar. The count covers audio files actually copied,
 replaced, or removed; a 37-track sync-to-zero therefore advances 0/37 through

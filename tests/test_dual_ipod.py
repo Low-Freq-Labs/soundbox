@@ -312,7 +312,7 @@ class DualIpodSyncTests(unittest.TestCase):
             and row.get("source") == str(self.safe.resolve())
         )
         with playlist_path.open("a", encoding="utf-8") as output:
-            output.write(safe_device_path + "\n")
+            output.write("/<HDD0>" + safe_device_path + "\n")
 
         drift = engine.device_drift(self.library, self.ipod)
         self.assertIsNotNone(drift)
@@ -332,7 +332,9 @@ class DualIpodSyncTests(unittest.TestCase):
         device_write = next(
             item for item in plan.playlists
             if item.playlist_key == "device-picks")
-        self.assertFalse(device_write.changed)
+        # Rockbox's volume-qualified spelling is recognized as the same owned
+        # media path, then normalized back to SoundBox's canonical M3U8 form.
+        self.assertTrue(device_write.changed)
         commit_dual_ipod_sync(plan)
 
         updated = device_manifest.load_composite(self.ipod)
@@ -359,7 +361,7 @@ class DualIpodSyncTests(unittest.TestCase):
             and row.get("source") == str(self.safe.resolve())
         )
         with playlist_path.open("a", encoding="utf-8") as output:
-            output.write(safe_device_path + "\n")
+            output.write("/<HDD0>" + safe_device_path + "\n")
 
         drift = engine.device_drift(self.library, self.ipod)
         self.assertEqual(drift.count(), 1)
@@ -397,6 +399,30 @@ class DualIpodSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 dual_ipod.DualIpodError,
                 "automatic device imports are not enabled"):
+            self._plan(
+                reconcile=True,
+                adoptable_playlist_keys={"dual-test"},
+            )
+
+    def test_nonprimary_rockbox_volume_does_not_acquire_ownership(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        playlist_path = next(
+            self.ipod / device_path.lstrip("/")
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "playlist"
+        )
+        safe_device_path = next(
+            device_path
+            for device_path, row in manifest["files"].items()
+            if row.get("kind") == "shared-stock-media"
+            and row.get("source") == str(self.safe.resolve())
+        )
+        with playlist_path.open("a", encoding="utf-8") as output:
+            output.write("/<HDD1>" + safe_device_path + "\n")
+
+        with self.assertRaisesRegex(
+                dual_ipod.DualIpodError, "unrecognized song"):
             self._plan(
                 reconcile=True,
                 adoptable_playlist_keys={"dual-test"},

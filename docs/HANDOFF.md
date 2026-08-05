@@ -7,16 +7,17 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 
 ## Repository and installed runtime
 
-- Branch `main` contains the completed Rockbox managed-playlist adoption
-  implementation, documentation, and regression coverage at its current tip;
-  the wrap-up commit is published to `origin/main`.
+- Branch `main` contains the completed Rockbox managed-playlist adoption plus
+  the physical-test fixes for Rockbox's `/<HDD0>/...` path spelling and the
+  drift-tolerant device dashboard; the wrap-up tip is published to
+  `origin/main`.
 - The freshly signed app from that working tree is installed at
-  `/Applications/Soundbox.app`, last observed as PID 30307. Its executable
+  `/Applications/Soundbox.app`, last observed as PID 37239. Its executable
   SHA-256 matches `dist/Soundbox.app` at
-  `1207d98257bb42dfc19ffa5d581efb45d318ca89e6673b14f3de3d67b734bb54`.
+  `d1a844ec18f2b11ae64895e368326c972527f0775494d604c4835e2759fe065d`.
   The packaged CoreAudio/Metal deck activated and the live read-only rekordbox
   snapshot loaded 3,414 tracks and 81 playlists.
-- Bare `./check.sh` passed on 2026-08-04: pyflakes, native build, mypy, and 755
+- Bare `./check.sh` passed on 2026-08-04: pyflakes, native build, mypy, and 756
   tests with four expected skips. `./build_app.sh` passed; strict signature
   verification passed for both the packaged and installed app.
 - rekordbox remained open throughout the initial 2026-08-03 installation and
@@ -36,7 +37,7 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 - The Rockbox-playlist pre-install `library.json` SHA-256 was
   `9feb4e2ee89784a5fafa8ea118f96ae10fd0147a8238f827c51742938c3dfd6c`;
   relaunch rewrote it to
-  `7afe7b2d06417e37bc13c85626df7a75158786702a814291d0e05af3adc92d28`.
+  `e9fb7fd33888ee40d3a7c6dfab01d4feefe8e2adcc467ab323e12e3b76045b58`.
   A sorted parsed comparison found only the new empty `playlist_additions`
   state and normal `settings.columns_state` serialization. Current curated
   state remains 84 direct imports, 1,047 title overrides, 462 artist overrides,
@@ -47,9 +48,12 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   3,270 images, 131 misses, and 47 sticky blocks. These newer counts reflect
   Sonny's live curation before installation and are authoritative.
 - The immediate rollback is
-  `/private/tmp/soundbox-rockbox-playlist-sync-gdX0jj/`: it contains the prior
-  app (executable SHA-256 `efebf8999a55dc330f760581919b8c1d92f3d08970188482207601a779cce0dd`)
-  and exact pre-install `library.json`. Also preserve
+  `/private/tmp/soundbox-rockbox-hdd0-fix-kGTHuB/`: it contains the prior
+  accepted app (executable SHA-256
+  `1207d98257bb42dfc19ffa5d581efb45d318ca89e6673b14f3de3d67b734bb54`),
+  the short-lived first fix build, and exact pre-install `library.json` at
+  SHA-256 `7afe7b2d06417e37bc13c85626df7a75158786702a814291d0e05af3adc92d28`.
+  Also preserve `/private/tmp/soundbox-rockbox-playlist-sync-gdX0jj/` and
   `/private/tmp/soundbox-wrapup-default-covers-JgSkX1/`, which contains the
   preceding managed-default app/state recovery set. Four older obsolete rollbacks remain
   recoverably in Trash (`Soundbox.app-wrong-heading-20260804` plus the three
@@ -191,7 +195,11 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   existing member are removed; intentional duplicates already present in the
   committed prefix remain intact. Unknown/unowned paths are not imported and
   fail closed without a device write. Device-side deletion, reorder, or edits
-  to the committed prefix also fail closed.
+  to the committed prefix also fail closed. Rockbox's observed primary-volume
+  `/<HDD0>/...` spelling is normalized before ownership lookup; no other volume
+  token is aliased. A changed M3U8 no longer hides separately valid device
+  identity/database details: only that playlist is labeled Sync needed, and
+  its live entries remain untrusted until confirmed planning.
 - SoundBox manages only four Rockbox config policies: automatic tag-cache
   update, title-from-tags playlist display, alphabetic playlist sorting, and a
   minimum 10,000-entry playlist buffer. Rockbox remains sole writer of
@@ -206,11 +214,12 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 - No outstanding check blocks normal use of this MA446. On the next routine
   device deletion, physically confirm the new authoritative path no longer
   presents the obsolete Sync-first refusal.
-- The managed Rockbox append path has complete fixture coverage but still needs
-  one physical confirmation: append a recognized managed song in Rockbox,
-  reconnect, confirm **Sync needed**, review/confirm Sync, and verify both
-  firmware playlist views. Repeat with that song appended twice and verify only
-  the new duplicate is removed. No physical Sync was run during installation.
+- The first physical append test correctly surfaced **Sync needed** but exposed
+  Rockbox's `/<HDD0>/...` serialization and the dashboard coupling bug before
+  any device write. The installed fix has complete fixture coverage and still
+  needs the immediate physical retry: review/confirm Sync, verify the recognized
+  song is adopted in SoundBox and both firmware playlist views, then repeat an
+  appended duplicate and verify only the new duplicate is removed.
 - Rockbox Track ReplayGain remains intentionally unimplemented. Rockbox reads
   gain/peak tags from MP3 and other tagged containers but its current WAV
   metadata parser does not expose ReplayGain; an MP3-only SoundBox feature was

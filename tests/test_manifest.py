@@ -184,6 +184,9 @@ class TestManifest(unittest.TestCase):
             ),
         })
         playlist.write_bytes(payload_bytes + b"/Music/C/C.wav\n")
+        status = manifest.composite_playlist_status(root, payload)
+        self.assertEqual(status.entries, {})
+        self.assertEqual(status.changed_keys, frozenset({"set"}))
         with self.assertRaisesRegex(ValueError, "changed since"):
             manifest.composite_playlist_entries(root, payload)
 

@@ -2663,13 +2663,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             ):
                 composite_manifest = device_manifest.load_composite(dev)
                 device_manifest.composite_library_counts(composite_manifest)
+                playlist_status = device_manifest.composite_playlist_status(
+                    dev, composite_manifest)
                 composite_data = CompositeDeviceData(
                     composite_manifest,
-                    device_manifest.composite_playlist_entries(
-                        dev, composite_manifest),
+                    playlist_status.entries,
                     rockbox_config.settings_ready(dev),
                     rockbox_config.database_file_count(dev),
                     rockbox_config.database_refresh_pending(dev),
+                    playlist_status.changed_keys,
                 )
             if library is None or not snapshot.identity_key or not snapshot.model:
                 return snapshot, composite_data

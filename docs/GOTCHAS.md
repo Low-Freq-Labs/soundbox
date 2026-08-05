@@ -923,7 +923,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   appended occurrence from the desired payload, so Sync removes the accidental
   duplicate. Preserve duplicates that predate this Rockbox edit. Unknown paths
   are not imports; deletion/reorder edits and SoundBox-removal conflicts fail
-  closed.
+  closed. Rockbox may serialize primary-volume entries as `/<HDD0>/...`; strip
+  only that exact leading HDD0 token before schema-3 ownership lookup and
+  canonical M3U8 regeneration. Expected playlist drift must not erase the
+  separately valid read-only device identity/database dashboard: show the
+  affected playlist as Sync needed, but never present its changed entries as
+  trusted before confirmed planning.
 - **Rockbox payload metadata has one authority.** Some purchased MP3s store
   `Purchased at Beatport.com` in `TXXX:COMMENT`/`COMM`; WAVs may have several
   INFO/ID3/BWF containers containing receipts, years, albums, or stale titles.

@@ -70,6 +70,7 @@ class CompositeDeviceData:
     rockbox_settings_ready: bool = False
     rockbox_database_files: int = 0
     rockbox_database_refresh_pending: bool = False
+    changed_playlist_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -204,15 +205,16 @@ def _composite_playlist_rows(
             str(row.get("name") or "Untitled playlist"),
         ]))
         stock_playlist = stock_playlists.pop(title, None)
-        entries = tuple(
+        changed = key in composite.changed_playlist_keys
+        entries = () if changed else tuple(
             by_path[path] for path in composite.playlist_entries.get(key, ())
-            if path in by_path
-        )
+            if path in by_path)
         output.append(DevicePlaylistRow(
             f"managed:{key}",
             title,
             entries,
-            "Both" if stock_playlist is not None else "Rockbox",
+            "Sync needed" if changed else (
+                "Both" if stock_playlist is not None else "Rockbox"),
             True,
         ))
     stock_songs = {item.dbid: item for item in songs if item.dbid}

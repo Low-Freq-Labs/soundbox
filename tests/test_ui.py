@@ -889,6 +889,24 @@ class StockIpodUI(unittest.TestCase):
             pending_database["Rockbox database"],
             "Auto update on · Rockbox restart pending",
         )
+        drifted = StockIpodPages()
+        drifted.set_snapshot(
+            snapshot,
+            CompositeDeviceData(
+                composite_manifest,
+                {"rockbox": ("/Music/Fixture/Unsafe/Unsafe.wav",)},
+                True,
+                9,
+                False,
+                frozenset({"managed"}),
+            ),
+        )
+        self.assertEqual(
+            drifted.general_tree.topLevelItem(0).text(0), "Name")
+        self.assertEqual(
+            drifted.playlist_tree.topLevelItem(0).text(2), "Sync needed")
+        self.assertEqual(
+            drifted.playlist_tree.topLevelItem(0).childCount(), 0)
         dual_calls = []
         dual.delete_playlists_requested.connect(dual_calls.append)
         dual.playlist_tree.topLevelItem(0).setCheckState(0, Qt.Checked)

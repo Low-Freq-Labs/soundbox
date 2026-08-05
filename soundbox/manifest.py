@@ -52,6 +52,14 @@ class CompositeLibraryCounts:
     managed_playlists: int
 
 
+@dataclass(frozen=True)
+class CompositePlaylistStatus:
+    """Verified dashboard entries plus identities whose live M3U8 drifted."""
+
+    entries: dict[str, tuple[str, ...]]
+    changed_keys: frozenset[str]
+
+
 def manifest_path(device_root) -> Path:
     return Path(device_root) / _DIRNAME / _FILENAME
 
@@ -161,16 +169,20 @@ def composite_library_counts(manifest: dict) -> CompositeLibraryCounts:
     )
 
 
-def composite_playlist_entries(
-        device_root, manifest: dict) -> dict[str, tuple[str, ...]]:
-    """Read verified managed M3U8 paths for the dual-library device view.
+def composite_playlist_status(
+        device_root, manifest: dict) -> CompositePlaylistStatus:
+    """Read only unchanged managed M3U8 paths for the device dashboard.
 
     This deliberately reads only small manifest-owned playlist payloads. Audio
-    files are never opened while building the device dashboard.
+    files are never opened while building the device dashboard. Expected live
+    drift is reported separately so it cannot erase otherwise valid stock
+    identity/details, and changed playlist contents remain untrusted until the
+    confirmed composite planner validates them.
     """
     composite_library_counts(manifest)  # strict schema/profile validation
     root = Path(device_root).expanduser().resolve(strict=True)
     output: dict[str, tuple[str, ...]] = {}
+    changed: set[str] = set()
     for raw_path, row in manifest["files"].items():
         if not isinstance(row, dict) or row.get("kind") != "playlist":
             continue
@@ -181,16 +193,32 @@ def composite_playlist_entries(
         parts = [part for part in path_text.lstrip("/").split("/") if part]
         if not parts or any(part in {".", ".."} for part in parts):
             raise ValueError("Composite playlist path is invalid")
-        path = (root / Path(*parts)).resolve(strict=True)
-        if not path.is_relative_to(root) or not path.is_file():
+        candidate = root / Path(*parts)
+        try:
+            path = candidate.resolve(strict=True)
+        except OSError:
+            changed.add(playlist_key_value)
+            continue
+        if not path.is_relative_to(root):
             raise ValueError("Composite playlist path escaped its device")
+        if candidate.is_symlink() or not path.is_file():
+            changed.add(playlist_key_value)
+            continue
         expected_size = int(row.get("size") or -1)
         if expected_size < 0 or expected_size > 1024 * 1024:
             raise ValueError("Composite playlist size is invalid")
-        payload = path.read_bytes()
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                changed.add(playlist_key_value)
+                continue
+            payload = path.read_bytes()
+        except OSError:
+            changed.add(playlist_key_value)
+            continue
         if len(payload) != expected_size or hashlib.sha256(payload).hexdigest() != str(
                 row.get("sha256") or ""):
-            raise ValueError("Composite playlist changed since the last commit")
+            changed.add(playlist_key_value)
+            continue
         try:
             text = payload.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
@@ -199,7 +227,16 @@ def composite_playlist_entries(
             line.strip() for line in text.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         )
-    return output
+    return CompositePlaylistStatus(output, frozenset(changed))
+
+
+def composite_playlist_entries(
+        device_root, manifest: dict) -> dict[str, tuple[str, ...]]:
+    """Read verified managed M3U8 paths, rejecting any live drift."""
+    status = composite_playlist_status(device_root, manifest)
+    if status.changed_keys:
+        raise ValueError("Composite playlist changed since the last commit")
+    return status.entries
 
 
 def save(device_root, manifest: dict) -> None:

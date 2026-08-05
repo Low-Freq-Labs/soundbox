@@ -716,6 +716,17 @@ def _read_managed_m3u8(payload: bytes, *, playlist_key: str) -> list[str]:
         if not parts or any(part in {".", ".."} for part in parts):
             raise DualIpodError(
                 f"Rockbox playlist contains an unsafe path: {playlist_key}")
+        # Rockbox's playlist editor can serialize a path on the primary disk
+        # as /<HDD0>/..., while SoundBox's ownership manifest stores the same
+        # volume-rooted path as /....  Strip only that leading Rockbox volume
+        # token; an angle-bracket component anywhere else remains an ordinary
+        # unmatched path and therefore cannot acquire ownership.
+        volume = parts[0]
+        if volume.casefold() == "<hdd0>":
+            parts = parts[1:]
+            if not parts:
+                raise DualIpodError(
+                    f"Rockbox playlist contains an unsafe path: {playlist_key}")
         output.append("/" + "/".join(parts))
     return output
 
