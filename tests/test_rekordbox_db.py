@@ -2,15 +2,21 @@
 (no real master.db needed — the logic is pure over row objects):
   • track order inside a playlist = DjmdSongPlaylist.TrackNo, never ContentID
   • sidebar tree order = Seq per folder level, depth-first from 'root'
-  • smart playlists (Attribute 4) come from get_playlist_contents
-  • rb_local_deleted rows are skipped everywhere (tracks, nodes, membership)
+  • smart playlists (Attribute 4) are computed, with active My Tag endpoints
+  • rb_local_deleted rows are skipped everywhere (tracks, nodes, membership,
+    tag definitions, and tag associations)
   • cloud nodes (Attribute -128) are skipped
 """
 
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from soundbox.rekordbox_db import (
-    _hot_cue_slot, _read_cues, _read_playlists, _read_tracks,
+    _copy_stable_snapshot, _hot_cue_slot, _read_cues, _read_playlists, _read_tracks,
+    _smart_playlist_contents,
 )
 
 
@@ -93,6 +99,67 @@ class SacredOrder(unittest.TestCase):
         (pl,) = _read_playlists(db)
         self.assertEqual(pl.keys, ["7", "3"])
 
+    def test_mytag_smart_playlist_requires_active_association(self):
+        class Query:
+            def __init__(self):
+                self.clause = None
+
+            def filter(self, clause):
+                self.clause = clause
+                return self
+
+        class DB:
+            def __init__(self):
+                self.query_result = Query()
+
+            def query(self, _entity):
+                return self.query_result
+
+        db = DB()
+        playlist = Row(SmartList=(
+            '<NODE Id="1" LogicalOperator="1" AutomaticUpdate="0">'
+            '<CONDITION PropertyName="myTag" Operator="8" ValueUnit="" '
+            'ValueLeft="-2019392369" ValueRight=""/>'
+            '</NODE>'
+        ))
+        result = _smart_playlist_contents(db, playlist)
+        self.assertIs(result, db.query_result)
+        sql = str(result.clause.compile(compile_kwargs={"literal_binds": True}))
+        self.assertIn('"djmdSongMyTag".rb_local_deleted', sql)
+        self.assertIn('"djmdMyTag".rb_local_deleted', sql)
+        self.assertIn('"djmdContent".rb_local_deleted', sql)
+        self.assertIn('coalesce', sql.lower())
+        self.assertIn("2275574927", sql)  # signed XML ID restored losslessly
+
+    def test_mytag_not_contains_checks_absence_of_active_association(self):
+        class Query:
+            def __init__(self):
+                self.clause = None
+
+            def filter(self, clause):
+                self.clause = clause
+                return self
+
+        class DB:
+            def __init__(self):
+                self.query_result = Query()
+
+            def query(self, _entity):
+                return self.query_result
+
+        db = DB()
+        playlist = Row(SmartList=(
+            '<NODE Id="1" LogicalOperator="1" AutomaticUpdate="0">'
+            '<CONDITION PropertyName="myTag" Operator="9" ValueUnit="" '
+            'ValueLeft="1039281992" ValueRight=""/>'
+            '</NODE>'
+        ))
+        result = _smart_playlist_contents(db, playlist)
+        sql = str(result.clause.compile(compile_kwargs={"literal_binds": True}))
+        self.assertIn("NOT ((EXISTS", sql)
+        self.assertIn('"djmdMyTag".rb_local_deleted', sql)
+        self.assertIn('"djmdSongMyTag".rb_local_deleted', sql)
+
     def test_soft_deleted_and_cloud_skipped(self):
         db = FakeDB(nodes=[
             _node("10", "KEEP", seq=1),
@@ -103,6 +170,68 @@ class SacredOrder(unittest.TestCase):
         self.assertEqual([p.name for p in out], ["KEEP"])
         self.assertEqual(out[0].keys, ["1"])  # deleted membership row skipped
 
+    def test_memberships_of_inactive_tracks_are_skipped(self):
+        db = FakeDB(nodes=[_node("10", "KEEP")],
+                    members=[_member("10", "1", 1), _member("10", "2", 2)])
+        out = _read_playlists(db, {"1"})
+        self.assertEqual(out[0].keys, ["1"])
+
+    def test_inactive_smart_results_are_skipped(self):
+        db = FakeDB(nodes=[_node("s1", "SMART", attr=4)],
+                    smart={"s1": [Row(ID="1"), Row(ID="2")]})
+        out = _read_playlists(db, {"1"})
+        self.assertEqual(out[0].keys, ["1"])
+
+    def test_duplicate_track_numbers_fail_closed(self):
+        db = FakeDB(nodes=[_node("10", "BROKEN")], members=[
+            _member("10", "1", 1), _member("10", "2", 1),
+        ])
+        with self.assertRaisesRegex(ValueError, "duplicate TrackNo"):
+            _read_playlists(db)
+
+    def test_deleted_playlist_history_is_not_validated_as_live(self):
+        db = FakeDB(nodes=[_node("10", "GONE", deleted=1)], members=[
+            _member("10", "1", 1), _member("10", "2", 1),
+        ])
+        self.assertEqual(_read_playlists(db), [])
+
+    def test_duplicate_sibling_sequences_fail_closed(self):
+        db = FakeDB(nodes=[
+            _node("10", "ONE", seq=1), _node("11", "TWO", seq=1),
+        ])
+        with self.assertRaisesRegex(ValueError, "duplicate sequences"):
+            _read_playlists(db)
+
+    def test_orphaned_active_playlist_fails_closed(self):
+        db = FakeDB(nodes=[_node("10", "ORPHAN", parent="missing")])
+        with self.assertRaisesRegex(ValueError, "no active parent folder"):
+            _read_playlists(db)
+
+    def test_unknown_active_playlist_type_fails_closed(self):
+        db = FakeDB(nodes=[_node("10", "MYSTERY", attr=99)])
+        with self.assertRaisesRegex(ValueError, "Unknown active rekordbox playlist type"):
+            _read_playlists(db)
+
+    def test_duplicate_display_paths_fail_closed(self):
+        db = FakeDB(nodes=[
+            _node("10", "SAME", seq=1),
+            _node("11", "SAME", seq=2),
+        ])
+        with self.assertRaisesRegex(ValueError, "duplicate display paths"):
+            _read_playlists(db)
+
+    def test_unverified_smart_field_fails_instead_of_loading_every_track(self):
+        node = _node("s1", "GROUPING", attr=4)
+        node.SmartList = (
+            '<NODE Id="1" LogicalOperator="1" AutomaticUpdate="0">'
+            '<CONDITION PropertyName="grouping" Operator="1" ValueUnit="" '
+            'ValueLeft="x" ValueRight=""/>'
+            '</NODE>'
+        )
+        db = FakeDB(nodes=[node])
+        with self.assertRaisesRegex(RuntimeError, "Could not evaluate rekordbox"):
+            _read_playlists(db)
+
 
 class TrackMapping(unittest.TestCase):
     def _track(self, **kw):
@@ -111,7 +240,7 @@ class TrackMapping(unittest.TestCase):
                     AnalysisDataPath="/PIONEER/USBANLZ/x/ANLZ0000.DAT",
                     BPM=14567, Key=Named("Gm"), Length=200,
                     DateCreated="2026-01-02 03:04", Genre=Named("Dub"),
-                    FileSize=9, BitRate=1411, Rating=0)
+                    FileSize=9, BitRate=1411, Rating=0, ReleaseYear=2026)
         base.update(kw)
         return Row(**base)
 
@@ -121,6 +250,7 @@ class TrackMapping(unittest.TestCase):
         self.assertEqual(t.bpm, "145.67")           # rekordbox stores BPM*100
         self.assertEqual(t.key, "6A")               # Gm → Camelot
         self.assertEqual(t.date_added, "2026-01-02")
+        self.assertEqual(t.year, "2026")
         self.assertIn("Track%20%28VIP%29.wav", t.location_uri)  # percent-encoded
         self.assertEqual(str(t.path), "/Users/x/My Music/Track (VIP).wav")
         self.assertTrue(t.source_analysis_path.endswith(
@@ -198,6 +328,75 @@ class CueMapping(unittest.TestCase):
              for slot in range(8)],
         )
 
+
+class StableSnapshot(unittest.TestCase):
+    def test_copies_main_and_wal_but_never_live_shm(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "master.db"
+            destination = root / "copy" / "master.db"
+            destination.parent.mkdir()
+            source.write_bytes(b"main")
+            source.with_name("master.db-wal").write_bytes(b"wal")
+            source.with_name("master.db-shm").write_bytes(b"live locks")
+            _copy_stable_snapshot(source, destination)
+            self.assertEqual(destination.read_bytes(), b"main")
+            self.assertEqual(
+                destination.with_name("master.db-wal").read_bytes(), b"wal")
+            self.assertFalse(destination.with_name("master.db-shm").exists())
+
+    def test_retries_when_source_changes_during_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "master.db"
+            destination = root / "copy.db"
+            source.write_bytes(b"first")
+            original = shutil.copy2
+            main_copies = 0
+
+            def changing_copy(src, dst):
+                nonlocal main_copies
+                result = original(src, dst)
+                if Path(src) == source:
+                    main_copies += 1
+                    if main_copies == 1:
+                        source.write_bytes(b"second")
+                return result
+
+            with mock.patch(
+                    "soundbox.rekordbox_db.shutil.copy2",
+                    side_effect=changing_copy):
+                _copy_stable_snapshot(source, destination, retries=2)
+            self.assertEqual(main_copies, 2)
+            self.assertEqual(destination.read_bytes(), b"second")
+
+    def test_retries_when_wal_disappears_mid_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "master.db"
+            wal = root / "master.db-wal"
+            destination = root / "copy.db"
+            source.write_bytes(b"main")
+            wal.write_bytes(b"old wal")
+            original = shutil.copy2
+            wal_attempts = 0
+
+            def checkpointing_copy(src, dst):
+                nonlocal wal_attempts
+                if Path(src) == wal:
+                    wal_attempts += 1
+                    if wal_attempts == 1:
+                        wal.unlink()
+                        raise FileNotFoundError(wal)
+                return original(src, dst)
+
+            with mock.patch(
+                    "soundbox.rekordbox_db.shutil.copy2",
+                    side_effect=checkpointing_copy):
+                _copy_stable_snapshot(source, destination, retries=2)
+            self.assertEqual(wal_attempts, 1)
+            self.assertEqual(destination.read_bytes(), b"main")
+            self.assertFalse(destination.with_name("copy.db-wal").exists())
 
 if __name__ == "__main__":
     unittest.main()

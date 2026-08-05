@@ -1,6 +1,6 @@
 # SoundBox device layouts
 
-Current as of 2026-08-03. Read this with `GOTCHAS.md` and the write contract at
+Current as of 2026-08-05. Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
 ## The simple model
@@ -26,6 +26,19 @@ shared subset enters Apple's database.
 
 Non-FAT volumes remain browseable but do not accept the Rockbox-style drop.
 Unknown or failed probes never grant extra capability.
+
+Connection presentation is deliberately progressive but read-only. A
+filesystem notification starts the scan immediately. Every new removable row
+waits for bounded external/layout verification and the discovery thread's real
+`finished` boundary. A stock/dual iPod does
+not appear yet: the lower-left status reads `Loading iPod...` while SoundBox
+preloads the immutable Device/Songs/Playlists snapshot and completes its
+follow-up drift pass. Only then does the ready, clickable row publish, making a
+second click-time device read structurally impossible. The periodic three-second
+scan is only a recovery path for a missed mount event or failed preload.
+Dashboard and drift readers never overlap on classic USB, and a remount under
+the same volume name is detected by a changed filesystem device token and fully
+reprobed before any cached snapshot can be reused.
 
 ## Rockbox layout
 
@@ -190,9 +203,11 @@ that cancellation; SoundBox never surprises the user by reviving an old write
 after a later drop.
 
 The planner emits bounded media, retained-playlist, stock-library, Rockbox,
-artwork, playlist, and ownership stages. Planning maps to the first 30% of the
-same operation bar and commit maps to the remaining 70%; the displayed value is
-monotonic across the phase transition and across queued jobs. The phase-local
+artwork, playlist, and ownership stages. Planning maps to 0–15%, guarded device
+work maps to 15–80%, and required dashboard/sidebar/drift finalization owns
+80–100%. The displayed value is monotonic across every phase transition and
+queued job; it cannot reach 100% while a SoundBox worker still owns the target.
+The phase-local
 `#/#` remains hidden during planning because planner units and committed audio
 units are intentionally different; it appears for actual audio mutation work.
 
@@ -270,8 +285,10 @@ replaced, or removed; a 37-track sync-to-zero therefore advances 0/37 through
 instead of showing 0/0. After a successful commit, the selected Device, Songs,
 and Playlists snapshot refreshes before the sidebar free-space/drift scan under
 an explicit `Finalizing iPod...` state. The completion dialog appears only after
-both workers finish. Polling remains suppressed while that modal dialog is open,
-then stays paused under an explicit eject-ready latch after OK. Eject therefore
+both workers finish and their owning attributes are cleared. At that terminal
+boundary SoundBox installs an eject-ready latch, releases operation ownership,
+enables Eject, and only then opens the completion dialog. The latch suppresses
+polling throughout the modal and after OK. Eject therefore
 does not cancel or complete dashboard work—the finalization scanner is already
 done. A new explicit device action releases the hold and refreshes normally.
 An up-to-date/no-write Sync and an already-absent playlist Delete use this same
@@ -546,7 +563,11 @@ separately validated `iTunesDB` implementation.
 - Eject flushes and rereads managed references after writers finish, requests
   normal macOS eject, and asks before any force-unmount. It begins only after
   finalization has completed every dashboard/sidebar read, and suppresses new
-  polling through verification and the unmount outcome.
+  polling through verification and the unmount outcome. If only the recurring
+  read-only poll is active, Eject queues behind its `finished` boundary instead
+  of displaying a device-busy warning. All true planners, writers, deletes,
+  imports, and required reads keep Eject and Sync visibly disabled until their
+  owning worker attributes are cleared.
 
 Unknown devices also expose a threaded import action. Selected audio or M3U8
 entries copy in exact playlist order to

@@ -8,10 +8,12 @@ last ref in a custom-signal slot GC's the thread mid-run → SIGABRT.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import shutil
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -25,7 +27,9 @@ from soundbox.stock_ipod import (
 )
 from soundbox.stock_ipod_info import stock_ipod_device_key
 
-from .devices import device_facts, device_profile, list_devices
+from .devices import (
+    device_facts, device_profile, list_devices, refresh_device_mount,
+)
 
 LOG = logging.getLogger("soundbox")
 
@@ -55,6 +59,7 @@ class ExportWorker(QThread):
         self._base_done = 0
         self._stop = False
         self._reports: list[tuple[str, object]] = []
+        self.result: list[tuple[str, object]] | None = None
 
     def add(self, device: str, playlists: list[Playlist]):
         with self._lock:
@@ -120,6 +125,7 @@ class ExportWorker(QThread):
                 self.rockbox_media_cache.clear()
             except Exception as exc:  # noqa: BLE001
                 LOG.warning("Rockbox media staging cleanup failed: %s", exc)
+        self.result = self._reports
         self.finished_all.emit(self._reports)
 
 
@@ -141,6 +147,7 @@ class ResyncWorker(QThread):
         self.rockbox_art_cache = rockbox_art_cache
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
         self._stop = False
+        self.result = None
 
     def cancel(self):
         self._stop = True
@@ -157,9 +164,11 @@ class ResyncWorker(QThread):
                 rockbox_media_cache=self.rockbox_media_cache,
                 rockbox_art_cache=self.rockbox_art_cache,
                 extra=self.extra)
+            self.result = rep
             self.done.emit(self.device, rep)
         except Exception as exc:  # noqa: BLE001 - surface, never crash the app
-            self.done.emit(self.device, str(exc) or repr(exc))
+            self.result = str(exc) or repr(exc)
+            self.done.emit(self.device, self.result)
         finally:
             if self.rockbox_media_cache is not None:
                 try:
@@ -191,13 +200,17 @@ class DeviceScanWorker(QThread):
     when the user is copying/clearing files in Finder. Doing it on the main-thread
     timer beachballs the whole app (rainbow wheel) and freezes the FINALIZING
     animation. Running it here keeps the UI responsive no matter what is hammering
-    the disk; results are applied on the main thread via `done`.
+    the disk; results are published only from the main-thread `finished` boundary.
     """
+    # `discovered` is the fast verified-mount phase used to begin hidden iPod
+    # preload/status ownership. No clickable row is published until `finished`.
+    discovered = Signal(list)  # list[tuple[name, path, free, profile]]
     done = Signal(list)  # list[tuple[name, path, free, drift, profile]]
 
     def __init__(self, lib, extra=None, *, artist_overrides=None,
                  title_overrides=None, stock_shadow_store=None,
-                 stock_models=None):
+                 stock_models=None, known_paths=None,
+                 known_mount_tokens=None):
         super().__init__()
         self.lib = lib
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
@@ -205,13 +218,74 @@ class DeviceScanWorker(QThread):
         self.title_overrides = dict(title_overrides or {})
         self.stock_shadow_store = stock_shadow_store
         self.stock_models = dict(stock_models or {})
+        self.known_paths = {str(path) for path in (known_paths or ())}
+        self.known_mount_tokens = {
+            str(path): int(token)
+            for path, token in (known_mount_tokens or {}).items()
+        }
+        self.mount_tokens: dict[str, int] = {}
+        self.new_paths: tuple[str, ...] = ()
+        self.results: list = []
+
+    def _effective_profile(self, path: str, profile):
+        """Apply a remembered stock model off the UI thread."""
+        if not getattr(profile, "has_stock_ipod", False):
+            return profile
+        model = normalize_model_number(getattr(profile, "model", ""))
+        if supports_stock_write(model):
+            return profile
+        facts = device_facts(path)
+        identity_key = stock_ipod_device_key(
+            facts.volume_uuid,
+            int(getattr(profile, "library_persistent_id", 0) or 0),
+        )
+        model = normalize_model_number(self.stock_models.get(identity_key, ""))
+        if not supports_stock_write(model):
+            return profile
+        return replace(profile, model=model, stock_write=True)
 
     def run(self):
+        started = time.monotonic()
+        devices = list_devices()
+        verified_devices = []
+        for name, path, free in devices:
+            try:
+                self.mount_tokens[path] = int(os.stat(path).st_dev)
+            except OSError:
+                self.mount_tokens[path] = 0
+            known_token = self.known_mount_tokens.get(path, 0)
+            if (known_token and self.mount_tokens[path]
+                    and self.mount_tokens[path] != known_token):
+                if not refresh_device_mount(path):
+                    continue
+            verified_devices.append((name, path, free))
+        devices = verified_devices
+        raw_profiles = [
+            (name, path, free, device_profile(path))
+            for name, path, free in devices
+        ]
+        self.new_paths = tuple(
+            path for _name, path, _free, _profile in raw_profiles
+            if (
+                path not in self.known_paths
+                or (
+                    self.known_mount_tokens.get(path)
+                    and self.mount_tokens.get(path)
+                    != self.known_mount_tokens[path]
+                )
+            ))
+        self.discovered.emit(raw_profiles)
+        if self.new_paths:
+            LOG.info(
+                "Device discovery detected %d new mount(s) in %.2fs",
+                len(self.new_paths), time.monotonic() - started)
         out = []
-        for name, path, free in list_devices():
+        for name, path, free, raw_profile in raw_profiles:
             drift = 0
-            profile = device_profile(path)
-            if self.lib is not None:
+            profile = self._effective_profile(path, raw_profile)
+            # First connection prioritizes the useful full dashboard preload.
+            # The follow-up scan computes drift after that serialized read.
+            if self.lib is not None and path not in self.new_paths:
                 try:
                     dr = engine.device_drift(
                         self.lib,
@@ -252,6 +326,12 @@ class DeviceScanWorker(QThread):
                     except Exception:  # noqa: BLE001 - keep polling read-only
                         drift = 0
             out.append((name, path, free, drift, profile))
+        LOG.info(
+            "Device scan completed for %d mount(s) in %.2fs",
+            len(out), time.monotonic() - started)
+        # MainWindow publishes this only from QThread.finished, after scan
+        # ownership is cleared. `done` remains available to direct worker tests.
+        self.results = out
         self.done.emit(out)
 
 
@@ -268,6 +348,7 @@ class DeleteWorker(QThread):
         super().__init__()
         self.paths = paths
         self._stop = False
+        self.result: list[str] | None = None
 
     def cancel(self):
         self._stop = True
@@ -286,6 +367,7 @@ class DeleteWorker(QThread):
             except OSError as exc:
                 errors.append(f"{path.name}: {exc}")
             self.progress.emit(i, total, path.name)
+        self.result = errors
         self.done.emit(errors)
 
 
@@ -844,14 +926,16 @@ class OneShotTask(QThread):
         super().__init__()
         self.fn = fn
         self.log_label = log_label
+        self.result = None
 
     def run(self):
         try:
-            self.done.emit(self.fn())
+            self.result = self.fn()
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI
             if self.log_label:
                 LOG.exception("%s failed", self.log_label)
-            self.done.emit(exc)
+            self.result = exc
+        self.done.emit(self.result)
 
 
 class ProgressTask(QThread):
@@ -863,14 +947,16 @@ class ProgressTask(QThread):
         super().__init__()
         self.fn = fn
         self.log_label = log_label
+        self.result = None
 
     def run(self):
         try:
-            self.done.emit(self.fn(self.progress.emit))
+            self.result = self.fn(self.progress.emit)
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI
             if self.log_label:
                 LOG.exception("%s failed", self.log_label)
-            self.done.emit(exc)
+            self.result = exc
+        self.done.emit(self.result)
 
 
 class _OneShotArt(QThread):

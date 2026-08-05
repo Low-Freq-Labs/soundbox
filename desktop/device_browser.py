@@ -13,7 +13,7 @@ import os
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
 from soundbox import engine, imports as import_mod, sync as sync_mod
@@ -22,7 +22,7 @@ from soundbox.paths import sanitize_component
 from .devices import (
     _external_volume_of, _in_external_product_tree, _on_external_device,
 )
-from .workers import DeleteWorker, OneShotTask, _running
+from .workers import DeleteWorker, OneShotTask
 
 LOG = logging.getLogger("soundbox")
 
@@ -37,7 +37,8 @@ class DeviceBrowserMixin:
         "_stock_plan_worker", "_stock_commit_worker",
         "_dual_plan_worker", "_dual_commit_worker",
         "_stock_delete_plan_worker", "_stock_delete_commit_worker",
-        "_device_import_worker", "_stock_view_worker", "_dev_scan_worker",
+        "_device_import_worker", "_device_verify_worker",
+        "_stock_view_worker", "_dev_scan_worker",
     )
 
     def _erase_device(self, dev: str):
@@ -53,13 +54,13 @@ class DeviceBrowserMixin:
                 self, "Stock iPod is read-only",
                 "SoundBox will not erase an iTunes/stock-iPod volume.")
             return
-        if any(_running(getattr(self, name, None)) for name in (
-                "export_worker", "_resync_worker", "_delete_worker",
-                "_eject_verify_worker", "_stock_plan_worker",
-                "_stock_commit_worker", "_stock_view_worker")):
+        if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._erase_device(dev)):
             return
         name = volume.name
         answer = QMessageBox.question(
@@ -86,8 +87,6 @@ class DeviceBrowserMixin:
         worker = OneShotTask(
             lambda: sync_mod.erase_device_contents(volume, sources))
         self._delete_worker = worker
-        worker.done.connect(
-            lambda result, d=str(volume): self._on_erase_device_done(d, result))
         worker.finished.connect(
             lambda w=worker, d=str(volume):
             self._finish_erase_device_worker(w, d))
@@ -106,7 +105,9 @@ class DeviceBrowserMixin:
         self._flash_status("Device erased ✓")
 
     def _finish_erase_device_worker(self, worker, dev: str):
+        result = getattr(worker, "result", None)
         self._finish_worker("_delete_worker", worker)
+        self._on_erase_device_done(dev, result)
         if getattr(self, "_erase_eject_pending", None) == dev:
             self._erase_eject_pending = None
             # Start only after QThread has fully returned and our busy guard no
@@ -125,8 +126,34 @@ class DeviceBrowserMixin:
     def _eject(self, dev: str):
         # Never race device work. Finalization owns and finishes its dashboard
         # scan before success; Eject does not cancel or complete that work.
+        scan = getattr(self, "_dev_scan_worker", None)
+        other_blockers = tuple(
+            name for name in self._EJECT_BLOCKING_WORKERS
+            if name != "_dev_scan_worker"
+        )
         if (
-            any(_running(getattr(self, name, None))
+            scan is not None
+            and not any(getattr(self, name, None) is not None
+                        for name in other_blockers)
+            and getattr(self, "_pending_device_operation", None) is None
+        ):
+            # A recurring read-only health poll is not a user operation. Queue
+            # Eject behind its actual QThread.finished boundary and suppress a
+            # replacement poll; never punish a click with a busy modal.
+            self._exporting = True
+            self._start_pulse("Waiting to eject")
+
+            def resume():
+                def after_finished_slots():
+                    self._exporting = False
+                    self._eject(dev)
+
+                QTimer.singleShot(0, after_finished_slots)
+
+            scan.finished.connect(resume)
+            return
+        if (
+            any(getattr(self, name, None) is not None
                 for name in self._EJECT_BLOCKING_WORKERS)
             or getattr(self, "_pending_device_operation", None) is not None
         ):
@@ -134,7 +161,7 @@ class DeviceBrowserMixin:
                 self, "Device busy",
                 "Wait for the current SoundBox device operation to finish.")
             return
-        if _running(getattr(self, "_eject_verify_worker", None)):
+        if getattr(self, "_eject_verify_worker", None) is not None:
             return
         self._exporting = True  # suppress every new periodic poll until outcome
         self._start_pulse("Verifying")
@@ -145,9 +172,10 @@ class DeviceBrowserMixin:
 
         w = OneShotTask(verify)
         self._eject_verify_worker = w
-        w.done.connect(lambda result, d=dev: self._after_eject_verify(d, result))
         w.finished.connect(
-            lambda ww=w: self._finish_worker("_eject_verify_worker", ww))
+            lambda ww=w, d=dev: self._finish_device_result_worker(
+                "_eject_verify_worker", ww,
+                lambda result: self._after_eject_verify(d, result)))
         w.start()
 
     def _after_eject_verify(self, dev: str, result):
@@ -189,7 +217,7 @@ class DeviceBrowserMixin:
             err = bytes(p.readAllStandardError()).decode(errors="replace")
             QMessageBox.warning(self, "Eject failed",
                                 err or "Could not eject. Close any app using the device.")
-            self.status_label.setText("Ready")
+            self._set_status_text("Ready")
 
         def try_force(_p):
             if QMessageBox.question(
@@ -207,6 +235,7 @@ class DeviceBrowserMixin:
         if getattr(self, "_eject_ready_device", "") == dev:
             self._eject_ready_device = ""
         self._exporting = False
+        self._update_device_action_state()
 
     # ---------- device browser management ----------
     def _browser_menu(self, pos):
@@ -253,16 +282,20 @@ class DeviceBrowserMixin:
     def _import_device_paths(self, paths: list[Path]):
         if (not paths
                 or any(_external_volume_of(path) is None for path in paths)
-                or any(_in_external_product_tree(path) for path in paths)
-                or _running(getattr(self, "_device_import_worker", None))):
+                or any(_in_external_product_tree(path) for path in paths)):
+            return
+        if self._device_operation_owned():
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._import_device_paths(paths)):
             return
         self._release_eject_ready()
         self._start_pulse("IMPORTING")
         w = OneShotTask(lambda: import_mod.copy_from_device(paths))
         self._device_import_worker = w
-        w.done.connect(self._on_device_imported)
         w.finished.connect(
-            lambda ww=w: self._finish_worker("_device_import_worker", ww))
+            lambda ww=w: self._finish_device_result_worker(
+                "_device_import_worker", ww, self._on_device_imported))
         w.start()
 
     def _on_device_imported(self, result):
@@ -327,33 +360,60 @@ class DeviceBrowserMixin:
             QMessageBox.critical(self, "Refused",
                                  "Will only delete files inside an external device.")
             return
+        if self._device_operation_owned():
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._delete_paths(paths)):
+            return
         n = len(paths)
         preview = "\n".join(p.name for p in paths[:12]) + ("\n…" if n > 12 else "")
         if QMessageBox.question(self, "Delete",
                                 f"Permanently delete {n} item(s)?\n\n{preview}") != QMessageBox.Yes:
             return
-        if _running(self._delete_worker):
-            return  # a delete is already in progress
         self._release_eject_ready()
+        volume = _external_volume_of(paths[0])
+        dev = str(volume) if volume is not None else ""
         w = DeleteWorker(paths)
         self._delete_worker = w
         self._deleting = True  # owns the status label so bg art status doesn't fight it
-        w.done.connect(self._on_delete_done)
-        w.finished.connect(lambda ww=w: self._finish_worker("_delete_worker", ww))
-        # NO progress bar for delete: it's usually a few folders where each rmtree is
-        # one big opaque step — the bar just sat at 0% then jumped to 100%. The animated
-        # "DELETING…" label reads as clearly-working without a lying %.
-        self.progress.setVisible(False)
+        w.progress.connect(self._on_device_delete_progress)
+        w.finished.connect(
+            lambda ww=w, d=dev: self._finish_device_result_worker(
+                "_delete_worker", ww,
+                lambda result: self._on_delete_done(d, result)))
+        # Path/target validation and explicit confirmation are the delete plan.
+        self._set_device_progress(150)
         self._start_pulse("DELETING")
         w.start()
 
-    def _on_delete_done(self, errors: list):
+    def _on_device_delete_progress(self, done: int, total: int, _label: str):
+        value = round(
+            150 + 650 * min(max(0, done), max(1, total)) / max(1, total))
+        self._set_device_progress(max(self.progress.value(), value))
+
+    def _on_delete_done(self, dev: str, errors: list):
         self._deleting = False
         self._stop_pulse()
-        self.progress.setVisible(False)
-        self._flash_status("Deleted ✓")
-        self._refresh_devices()  # update free space + drift badge
-        if self.stack.currentIndex() == 1:  # refresh the open browser view
-            self.fs_view.setRootIndex(self.fs_model.setRootPath(self.fs_model.rootPath()))
-        if errors:
-            QMessageBox.critical(self, "Delete failed", "\n".join(errors[:10]))
+        self._set_device_progress(800)
+
+        def complete():
+            if self.stack.currentIndex() == 1:
+                self.fs_view.setRootIndex(
+                    self.fs_model.setRootPath(self.fs_model.rootPath()))
+            if errors:
+                self._set_status_text("Delete failed")
+                QMessageBox.critical(
+                    self, "Delete failed", "\n".join(errors[:10]))
+            else:
+                self._flash_status("Deleted ✓")
+
+        if dev:
+            self._finalize_ipod_operation(
+                dev, complete,
+                terminal_text="Delete failed" if errors else "Complete ✓")
+        else:
+            self.progress.setVisible(False)
+            complete()

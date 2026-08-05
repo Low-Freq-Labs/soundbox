@@ -82,7 +82,10 @@ def setup_logging() -> Path | None:
             pass
     return logpath
 
-from PySide6.QtCore import QEvent, QPointF, QProcess, QRect, QSize, Qt, QThread, QTimer
+from PySide6.QtCore import (
+    QEvent, QFileSystemWatcher, QPointF, QProcess, QRect, QSize, Qt, QThread,
+    QTimer,
+)
 from PySide6.QtGui import (
     QColor, QFontDatabase, QIcon, QKeySequence, QPainter, QPixmap, QPolygonF,
     QShortcut,
@@ -258,6 +261,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._backup_worker = None  # OneShotTask for backup zip / restore
         self._default_photo_worker = None  # managed pool image normalization
         self._refresh_worker: RefreshWorker | None = None
+        self._refresh_pending = False
+        self._libcache_worker = None
+        self._libcache_pending = None
+        self._shutting_down = False
         self._resync_worker: ResyncWorker | None = None
         self._dev_scan_worker: DeviceScanWorker | None = None
         self._delete_worker: DeleteWorker | None = None
@@ -280,11 +287,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._stock_delete_plan_worker = None
         self._stock_delete_commit_worker = None
         self._stock_view_worker = None
+        self._stock_view_device = ""
+        self._stock_view_pending: dict[str, object] = {}
+        self._stock_view_callbacks: dict[str, list] = {}
+        self._stock_view_cache: dict[
+            str, tuple[StockIpodSnapshot, CompositeDeviceData | None]] = {}
+        self._stock_view_warming: set[str] = set()
+        self._device_rescan_after_stock_view = False
         self._eject_verify_worker = None
         self._eject_ready_device = ""
         self._device_import_worker = None
+        self._device_verify_worker = None
+        self._device_finalization_error: Exception | None = None
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
         self._device_profiles: dict[str, object] = {}
+        self._device_mount_tokens: dict[str, int] = {}
         self._current_device_path = ""
         self._stock_snapshot: StockIpodSnapshot | None = None
         self._sync_playlists_cache: list[Playlist] | None = None
@@ -336,6 +353,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._dev_timer = QTimer(self)
         self._dev_timer.timeout.connect(self._poll_devices)
         self._dev_timer.start(3000)
+        # Finder learns about a mount from the filesystem event immediately;
+        # SoundBox used to wait for the next three-second poll before even
+        # beginning its read. Keep the poll as recovery, but debounce /Volumes
+        # notifications into an immediate background discovery pass.
+        self._volume_refresh_timer = QTimer(self)
+        self._volume_refresh_timer.setSingleShot(True)
+        self._volume_refresh_timer.setInterval(150)
+        self._volume_refresh_timer.timeout.connect(self._refresh_devices)
+        self._volume_watcher = QFileSystemWatcher(self)
+        if (not QStandardPaths.isTestModeEnabled()
+                and Path("/Volumes").is_dir()):
+            self._volume_watcher.addPath("/Volumes")
+            self._volume_watcher.directoryChanged.connect(
+                lambda _path: self._volume_refresh_timer.start())
         self._load_state()  # restore custom playlists + last-opened XML
         self.table.setFocus()  # open browsing (transport keys, arrows), not typing
 
@@ -1428,8 +1459,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.device_sync_btn.clicked.connect(
             lambda: self._sync_device(self._current_device_path))
         dhh.addWidget(self.device_sync_btn)
-        eject_btn = QPushButton("⏏ Eject"); eject_btn.clicked.connect(self._eject_current)
-        dhh.addWidget(eject_btn)
+        self.eject_btn = QPushButton("⏏ Eject")
+        self.eject_btn.clicked.connect(self._eject_current)
+        self.eject_btn.setEnabled(False)
+        dhh.addWidget(self.eject_btn)
         dl.addWidget(dhead)
         self.fs_model = QFileSystemModel()
         self.fs_model.setReadOnly(False)  # allow in-place rename on disk
@@ -1615,13 +1648,43 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         stays instant; the snapshot is always taken right after a fresh load."""
         if self.lib is None:
             return
+        if self._libcache_worker is not None:
+            # Keep only the newest authoritative library. Serializing an older
+            # refresh after a newer one could otherwise leave stale instant
+            # paint on the next launch even though the live UI was correct.
+            # Ownership (not isRunning) is the gate: after run() returns there
+            # is a short interval before Qt delivers ``finished``.
+            self._libcache_pending = self.lib
+            return
+        self._start_library_cache(self.lib)
+
+    def _start_library_cache(self, lib):
         from .workers import OneShotTask
-        lib, path = self.lib, self._libcache_path
-        w = OneShotTask(lambda: libcache.dump(lib, path))
+        path = self._libcache_path
+        w = OneShotTask(lambda: libcache.dump(lib, path),
+                        log_label="Library snapshot cache")
+        self._libcache_worker = w
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
-        w.finished.connect(lambda ww=w: self._finish_oneshot(ww))
+        w.done.connect(self._on_library_cache_done)
+        w.finished.connect(lambda ww=w: self._finish_library_cache(ww))
         w.start()
+
+    def _on_library_cache_done(self, result):
+        if isinstance(result, Exception):
+            LOG.warning("Library snapshot cache failed: %s", result)
+
+    def _finish_library_cache(self, w):
+        current = self._libcache_worker is w
+        if current:
+            self._libcache_worker = None
+        self._finish_oneshot(w)
+        if not current:
+            return
+        pending = self._libcache_pending
+        self._libcache_pending = None
+        if pending is not None and not self._shutting_down:
+            self._start_library_cache(pending)
 
     def _find_tree_item(self, path: str):
         """Locate a playlist tree item by its display path (PATH_ROLE)."""
@@ -1693,15 +1756,31 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     # ---------- live rekordbox refresh ----------
     def _refresh_rekordbox(self):
-        if self._refresh_worker is not None and self._refresh_worker.isRunning():
+        if self._refresh_worker is not None:
+            # A click during the snapshot is a request for a newer point in
+            # time, not a no-op. Coalesce repeated clicks into one immediate
+            # follow-up read when the current worker's finished callback lands.
+            # The worker may have returned while that callback is still queued,
+            # so ownership—not isRunning()—is the serialization boundary.
+            self._refresh_pending = True
             return
         self._start_pulse("Loading")
         w = RefreshWorker()
         self._refresh_worker = w
         w.done.connect(self._on_refresh_done)
         w.failed.connect(self._on_refresh_fail)
-        w.finished.connect(lambda ww=w: self._finish_worker("_refresh_worker", ww))
+        w.finished.connect(lambda ww=w: self._finish_refresh_worker(ww))
         w.start()
+
+    def _finish_refresh_worker(self, w):
+        current = self._refresh_worker is w
+        self._finish_worker("_refresh_worker", w)
+        if not current:
+            return
+        pending = self._refresh_pending
+        self._refresh_pending = False
+        if pending and not self._shutting_down:
+            QTimer.singleShot(0, self._refresh_rekordbox)
 
     def _on_refresh_done(self, lib):
         self._stop_pulse()
@@ -1719,7 +1798,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_refresh_fail(self, err):
         self._stop_pulse()
-        self.status_label.setText("Ready")
+        self._set_status_text("Ready")
         LOG.error("rekordbox refresh failed: %s", err)
         QMessageBox.warning(
             self, "Couldn't read rekordbox",
@@ -1803,7 +1882,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_merge_scan(self, res):
         self._stop_pulse()
-        self.status_label.setText("Ready")
+        self._set_status_text("Ready")
         if isinstance(res, Exception):
             QMessageBox.warning(self, "Scan failed", str(res))
             return
@@ -2443,9 +2522,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         player = getattr(self, "player_bar", None)
         if not force and player is not None and player.is_playing():
             return
-        if _running(getattr(self, "_dev_scan_worker", None)):
+        if self._dev_scan_worker is not None:
+            return
+        # A complete stock dashboard read hashes/parses iTunesDB. Never race a
+        # sidebar drift reader against it on classic USB; the recurring poll is
+        # the fallback and preloading explicitly requests a scan when finished.
+        if self._stock_view_worker is not None:
             return
         raw_models = self.settings.get("stock_ipod_models")
+        known_paths = {
+            str(self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE))
+            for i in range(self.device_tree.topLevelItemCount())
+        } | set(self._stock_view_cache)
         w = DeviceScanWorker(
             self.lib,
             self._sync_playlists(),
@@ -2453,10 +2541,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             title_overrides=self.titles,
             stock_shadow_store=self.stock_ipod_shadow_store,
             stock_models=(raw_models if isinstance(raw_models, dict) else {}),
+            known_paths=known_paths,
+            known_mount_tokens=dict(self._device_mount_tokens),
         )
         self._dev_scan_worker = w
-        w.done.connect(self._on_devices_scanned)
-        w.finished.connect(lambda ww=w: self._finish_worker("_dev_scan_worker", ww))
+        w.discovered.connect(self._on_devices_discovered)
+        w.finished.connect(lambda ww=w: self._finish_device_scan_worker(ww))
         w.start()
 
     def _poll_devices(self):
@@ -2467,9 +2557,124 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         self._refresh_devices()
 
+    def _device_operation_owned(self) -> bool:
+        """Whether a real device transaction still owns interactive actions.
+
+        The recurring read-only drift poll is excluded: Eject serializes behind
+        it instead of surprising the user with a busy warning. Every mutating,
+        planning, dashboard, import, delete, or eject worker remains an owner
+        until its built-in QThread.finished cleanup clears the attribute.
+        """
+        owners = tuple(
+            name for name in self._EJECT_BLOCKING_WORKERS
+            if name != "_dev_scan_worker"
+        ) + ("_eject_verify_worker",)
+        return bool(
+            self._stock_view_warming
+            or self._stock_view_pending
+            or self._pending_device_operation is not None
+            or self._exporting
+            or self._deleting
+            or any(getattr(self, name, None) is not None for name in owners)
+        )
+
+    def _update_device_action_state(self) -> None:
+        """Make device action availability match actual transaction ownership."""
+        busy = self._device_operation_owned()
+        ready = bool(self._current_device_path) and not busy
+        for button in (
+                getattr(self, "eject_btn", None),
+                getattr(self, "device_sync_btn", None)):
+            if button is not None:
+                button.setEnabled(ready)
+                button.setToolTip(
+                    "" if ready else (
+                        "SoundBox is finishing the current device operation"
+                        if busy else "Select a ready device first"))
+
     def _release_eject_ready(self) -> None:
         """Release a completed operation's scan hold for new device work."""
         self._eject_ready_device = ""
+        self._update_device_action_state()
+
+    def _on_devices_discovered(self, devs: list):
+        """Begin connection handling without publishing a clickable row.
+
+        Stock/dual iPods immediately take ownership of the lower-left loading
+        state and remain absent until their complete dashboard preload plus
+        follow-up drift scan. Generic mounts also wait for QThread.finished;
+        no new row may be clicked while its discovery worker still exists.
+        """
+        if QApplication.mouseButtons() & Qt.LeftButton:
+            return
+        current = {
+            str(self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE))
+            for i in range(self.device_tree.topLevelItemCount())
+        }
+        mount_tokens = dict(getattr(
+            self._dev_scan_worker, "mount_tokens", {}))
+        for name, path, free, profile in devs:
+            token = int(mount_tokens.get(path, 0) or 0)
+            previous_token = self._device_mount_tokens.get(path, 0)
+            remounted = bool(
+                token and previous_token and token != previous_token)
+            if remounted:
+                self._stock_view_cache.pop(path, None)
+            if token:
+                self._device_mount_tokens[path] = token
+            stock = bool(getattr(profile, "has_stock_ipod", False))
+            if stock and path not in self._stock_view_cache:
+                self._stock_view_warming.add(path)
+            if stock and path in self._stock_view_warming:
+                self._start_ipod_loading_status()
+                # A same-name remount can replace a formerly ready row. Remove
+                # it immediately so no stale dashboard can be clicked during
+                # the short gap before the completed scan rebuilds the tree.
+                for index in range(self.device_tree.topLevelItemCount() - 1, -1, -1):
+                    item = self.device_tree.topLevelItem(index)
+                    if item is not None and item.data(0, DEVPATH_ROLE) == path:
+                        self.device_tree.takeTopLevelItem(index)
+                current.discard(path)
+                if self._current_device_path == path:
+                    self._current_device_path = ""
+                    self._stock_snapshot = None
+                    self.stack.setCurrentIndex(0)
+                self._device_profiles[path] = profile
+                self._drift_cache.setdefault(path, 0)
+
+    def _finish_device_scan_worker(self, worker):
+        if self._dev_scan_worker is not worker:
+            self._finish_worker("_dev_scan_worker", worker)
+            return
+        new_paths = tuple(getattr(worker, "new_paths", ()))
+        results = getattr(worker, "results", None)
+        mount_tokens = dict(getattr(worker, "mount_tokens", {}))
+        # Clear ownership before publishing any clickable row. A result emitted
+        # from run() is not enough: QThread.finished is the actual boundary that
+        # Eject and every other device operation use.
+        self._finish_worker("_dev_scan_worker", worker)
+        if results is not None:
+            self._on_devices_scanned(results, mount_tokens=mount_tokens)
+        # Useful dashboard data outranks another drift pass. Queue a full,
+        # immutable read for each newly connected stock-capable device; the
+        # stock-view queue remains single-flight across classic USB.
+        queued = False
+        for path in new_paths:
+            profile = self._device_profiles.get(path)
+            if (profile is None
+                    or not getattr(profile, "has_stock_ipod", False)
+                    or path in self._stock_view_cache):
+                continue
+            self._stock_view_warming.add(path)
+            self._start_ipod_loading_status()
+            self._read_stock_device_view(path, profile)
+            queued = True
+        if queued:
+            self._device_rescan_after_stock_view = True
+        elif self._stock_view_pending and self._stock_view_worker is None:
+            next_dev = next(iter(self._stock_view_pending))
+            profile = self._stock_view_pending.pop(next_dev)
+            self._read_stock_device_view(next_dev, profile)
 
     def _defer_device_operation_until_scan_finishes(self, callback) -> bool:
         """Serialize a device operation behind an already-running poll.
@@ -2479,7 +2684,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         requested operation starting.
         """
         worker = getattr(self, "_dev_scan_worker", None)
-        if not _running(worker):
+        if worker is None:
             return False
         if self._pending_device_operation is not None:
             return True
@@ -2500,45 +2705,79 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         worker.finished.connect(resume)
         return True
 
-    def _on_devices_scanned(self, devs: list):
+    def _on_devices_scanned(self, devs: list, *, mount_tokens=None):
         """Apply a background device scan to the tree (main thread). devs is a list
         of (name, path, free, drift, read-only profile)."""
-        devs = [
-            (name, path, free, drift, self._effective_device_profile(path, profile))
-            for name, path, free, drift, profile in devs
-        ]
         self._drift_cache = {
             path: drift for _n, path, _f, drift, _profile in devs}
         self._device_profiles = {
             path: profile for _n, path, _f, _d, profile in devs}
-        new_paths = [p for _n, p, _f, _d, _profile in devs]
-        if self._current_device_path and self._current_device_path not in new_paths:
+        all_paths = [p for _n, p, _f, _d, _profile in devs]
+        if mount_tokens is None:
+            mount_tokens = dict(getattr(
+                self._dev_scan_worker, "mount_tokens", {}))
+        for path in all_paths:
+            token = int(mount_tokens.get(path, 0) or 0)
+            if token:
+                self._device_mount_tokens[path] = token
+        stale_stock_paths = (
+            set(self._stock_view_cache)
+            | set(self._stock_view_warming)
+        ) - set(all_paths)
+        for stale in stale_stock_paths:
+            self._stock_view_cache.pop(stale, None)
+            self._stock_view_warming.discard(stale)
+        for stale in set(self._device_mount_tokens) - set(all_paths):
+            self._device_mount_tokens.pop(stale, None)
+        # A successful preload remains hidden through its follow-up drift pass.
+        # This slot is that pass's completed result, so those iPods can now be
+        # published with an already-cached dashboard and a verified drift label.
+        ready_paths = {
+            path for path in self._stock_view_warming
+            if path in self._stock_view_cache and path in all_paths
+        }
+        self._stock_view_warming.difference_update(ready_paths)
+        visible_devs = [
+            row for row in devs
+            if (
+                not getattr(row[4], "has_stock_ipod", False)
+                or (
+                    row[1] in self._stock_view_cache
+                    and row[1] not in self._stock_view_warming
+                )
+            )
+        ]
+        visible_paths = [row[1] for row in visible_devs]
+        if (self._current_device_path
+                and self._current_device_path not in visible_paths):
             self._current_device_path = ""
             self._stock_snapshot = None
             self.stack.setCurrentIndex(0)
         cur = [self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE)
                for i in range(self.device_tree.topLevelItemCount())]
-        if new_paths != cur and QApplication.mouseButtons() & Qt.LeftButton:
+        if visible_paths != cur and QApplication.mouseButtons() & Qt.LeftButton:
             # A device appeared/vanished DURING a drag (button held): rebuilding
             # the tree now would yank the drop target out from under the drag.
             # Skip this tick; the 3s poll redelivers right after the drop.
             return
-        if new_paths == cur:
+        if visible_paths == cur:
             # Same devices — refresh label in place (don't disrupt an in-flight drag).
-            for i, (name, path, free, drift, profile) in enumerate(devs):
+            for i, (name, path, free, drift, profile) in enumerate(visible_devs):
                 it = self.device_tree.topLevelItem(i)
                 if it is not None:
                     it.setText(0, self._device_label(
                         name, free, drift, device_fs(path), profile))
                     it.setToolTip(0, self._device_tip(path, free, profile))
+            self._finish_ipod_loading_status()
             return
         self.device_tree.clear()
-        for name, path, free, drift, profile in devs:
+        for name, path, free, drift, profile in visible_devs:
             it = QTreeWidgetItem([self._device_label(
                 name, free, drift, device_fs(path), profile)])
             it.setData(0, DEVPATH_ROLE, path)
             it.setToolTip(0, self._device_tip(path, free, profile))
             self.device_tree.addTopLevelItem(it)
+        self._finish_ipod_loading_status()
 
     def _stock_device_key(self, dev: str, profile=None) -> str:
         profile = profile or self._device_profiles.get(dev)
@@ -2625,17 +2864,25 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 button.setText(label)
             if stock:
                 self.device_content_stack.setCurrentIndex(1)
-                preserve_snapshot = bool(
-                    self._stock_snapshot is not None
-                    and self._stock_snapshot.target == Path(dev).resolve())
-                self.stock_ipod_pages.set_loading(
-                    preserve_page=preserve_snapshot)
-                if not preserve_snapshot:
-                    self._set_stock_device_tab(0)
-                self._read_stock_device_view(dev, profile)
+                cached = self._stock_view_cache.get(dev)
+                if cached is not None:
+                    # Connection-time preload already paid for the complete
+                    # iTunesDB/dashboard read. Selecting the row is presentation
+                    # only—no second removable-volume pass.
+                    self._on_stock_device_view(dev, cached)
+                else:
+                    preserve_snapshot = bool(
+                        self._stock_snapshot is not None
+                        and self._stock_snapshot.target == Path(dev).resolve())
+                    self.stock_ipod_pages.set_loading(
+                        preserve_page=preserve_snapshot)
+                    if not preserve_snapshot:
+                        self._set_stock_device_tab(0)
+                    self._read_stock_device_view(dev, profile)
             else:
                 self.device_content_stack.setCurrentIndex(0)
             self.stack.setCurrentIndex(1)
+            self._update_device_action_state()
 
     def _set_stock_device_tab(self, index: int):
         if not self.device_tab_buttons:
@@ -2646,10 +2893,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _read_stock_device_view(
             self, dev: str, profile=None, *, after_finished=None):
-        if _running(self._stock_view_worker):
-            if after_finished is not None:
-                self._stock_view_worker.finished.connect(after_finished)
+        if after_finished is not None:
+            self._stock_view_callbacks.setdefault(dev, []).append(after_finished)
+        if (self._stock_view_worker is not None
+                or self._dev_scan_worker is not None):
+            self._stock_view_pending[dev] = profile
             return
+        self._stock_view_pending.pop(dev, None)
         from .workers import OneShotTask
         facts = device_facts(dev)
         model = self._stored_stock_model(dev, profile)
@@ -2747,16 +2997,41 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
         worker = OneShotTask(read_snapshot)
         self._stock_view_worker = worker
-        worker.done.connect(
-            lambda result, device=dev: self._on_stock_device_view(device, result))
+        self._stock_view_device = dev
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker("_stock_view_worker", ww))
-        if after_finished is not None:
-            worker.finished.connect(after_finished)
+            lambda ww=worker: self._finish_stock_device_view_worker(ww))
         worker.start()
 
+    def _finish_stock_device_view_worker(self, worker):
+        if self._stock_view_worker is not worker:
+            self._finish_worker("_stock_view_worker", worker)
+            return
+        dev = self._stock_view_device
+        self._stock_view_device = ""
+        result = getattr(worker, "result", None)
+        self._finish_worker("_stock_view_worker", worker)
+        if isinstance(result, Exception) and self._exporting:
+            self._device_finalization_error = result
+        self._on_stock_device_view(dev, result)
+        callbacks = self._stock_view_callbacks.pop(dev, [])
+        for callback in callbacks:
+            callback()
+        if self._stock_view_pending and not self._shutting_down:
+            next_dev = next(iter(self._stock_view_pending))
+            profile = self._stock_view_pending.pop(next_dev)
+            QTimer.singleShot(
+                0,
+                lambda device=next_dev, value=profile:
+                self._read_stock_device_view(device, value),
+            )
+            return
+        if self._device_rescan_after_stock_view and not self._shutting_down:
+            self._device_rescan_after_stock_view = False
+            QTimer.singleShot(0, self._refresh_devices)
+
     def _refresh_device_surfaces(
-            self, dev: str, *, after_finished=None):
+            self, dev: str, *, after_finished=None,
+            surface_progress: int = 900):
         """Refresh an open iPod snapshot, then its sidebar state, in series.
 
         A post-write completion callback runs only after both reads finish, so
@@ -2769,18 +3044,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             or profile is None
             or not getattr(profile, "has_stock_ipod", False)
         ):
-            self._finish_device_surface_refresh(after_finished)
+            self._set_device_progress(surface_progress)
+            self._finish_device_surface_refresh(
+                after_finished, expected_dev=dev)
             return
         self._exporting = True
         self.stock_ipod_pages.set_loading(preserve_page=True)
 
         def finish_refresh():
-            self._finish_device_surface_refresh(after_finished)
+            self._set_device_progress(surface_progress)
+            self._finish_device_surface_refresh(
+                after_finished, expected_dev=dev)
 
         self._read_stock_device_view(
             dev, profile, after_finished=finish_refresh)
 
-    def _finish_device_surface_refresh(self, after_finished=None):
+    def _finish_device_surface_refresh(
+            self, after_finished=None, *, expected_dev: str = ""):
         """Run the sidebar scan and optionally wait for its worker as well."""
         self._exporting = False
         # A new completed operation supersedes any earlier hold and must always
@@ -2790,26 +3070,64 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         worker = getattr(self, "_dev_scan_worker", None)
         if not _running(worker):
+            if expected_dev and expected_dev not in self._device_profiles:
+                self._device_finalization_error = RuntimeError(
+                    f"{Path(expected_dev).name} disconnected during finalization")
             after_finished()
             return
         self._exporting = True
 
         def finish_sidebar():
             self._exporting = False
+            if expected_dev and expected_dev not in self._device_profiles:
+                self._device_finalization_error = RuntimeError(
+                    f"{Path(expected_dev).name} disconnected during finalization")
             after_finished()
 
         worker.finished.connect(finish_sidebar)
 
-    def _finalize_ipod_operation(self, dev: str, on_complete) -> None:
+    def _start_ipod_loading_status(self) -> None:
+        """Own the lower-left status while an iPod is not yet clickable."""
+        self._update_device_action_state()
+        self._start_pulse("Loading iPod")
+
+    def _finish_ipod_loading_status(self) -> None:
+        """Return to Ready only after every warming iPod is publishable."""
+        if self._stock_view_warming or self._pulse_word != "Loading iPod":
+            return
+        self._stop_pulse(force=True)
+        self._set_status_text("Ready", force=True)
+        self._update_device_action_state()
+
+    def _fail_initial_ipod_preload(self, dev: str) -> None:
+        """Keep a failed initial read hidden and let the next poll retry it."""
+        if dev not in self._stock_view_warming:
+            return
+        self._stock_view_warming.discard(dev)
+        # Do not immediately recurse through preload -> rescan -> preload on a
+        # persistently unreadable iPod. The existing three-second poll retries.
+        self._device_rescan_after_stock_view = False
+        if not self._stock_view_warming and self._pulse_word == "Loading iPod":
+            self._stop_pulse(force=True)
+            self._flash_status("iPod load failed — retrying", 3)
+        self._update_device_action_state()
+
+    def _finalize_ipod_operation(
+            self, dev: str, on_complete, *, terminal_text: str = "Complete ✓") -> None:
         """Finish every post-write read before presenting success to the user."""
         self._exporting = True
-        self.progress.setVisible(False)
+        self._device_finalization_error = None
+        self._set_device_progress(max(800, self.progress.value()))
         self.cancel_btn.setVisible(False)
         self._start_pulse("Finalizing iPod")
 
         def finish():
-            self._stop_pulse()
-            self.status_label.setText("Ready")
+            self._set_device_progress(1000)
+            self._stop_pulse(force=True)
+            finalization_error = self._device_finalization_error
+            final_text = (
+                "Final refresh failed" if finalization_error else terminal_text)
+            self._set_status_text(final_text, force=True)
             # The committed dashboard/sidebar scan just finished. Freeze that
             # verified state through the success dialog and until Eject; the
             # recurring timer must not launch another scan in between.
@@ -2817,17 +3135,107 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # QMessageBox runs a nested Qt event loop. Keep polling suppressed
             # through that loop or the three-second timer can launch a fresh,
             # slow device scan while the user is still reading "Eject ready".
+            self._exporting = False
+            self._update_device_action_state()
             try:
-                on_complete()
+                if finalization_error is not None:
+                    QMessageBox.warning(
+                        self,
+                        "Device finalization failed",
+                        "The device operation has stopped, but SoundBox could "
+                        "not complete its required final dashboard/sidebar "
+                        f"refresh:\n\n{finalization_error}\n\n"
+                        "Eject is available; reconnect before another write.",
+                    )
+                else:
+                    on_complete()
             finally:
-                self._exporting = False
+                self.progress.setVisible(False)
+                self._update_device_action_state()
 
         self._refresh_device_surfaces(dev, after_finished=finish)
 
-    def _on_stock_device_view(self, dev: str, result):
-        if dev != self._current_device_path:
+    def _finalize_device_operations(
+            self, devices, on_complete, *,
+            terminal_text: str = "Complete ✓") -> None:
+        """Finalize every distinct target before one multi-device result.
+
+        ExportWorker can accept another drop while it is active, including a
+        different target. The transaction is therefore not terminal until each
+        touched volume has completed its own dashboard/sidebar refresh.
+        """
+        ordered = tuple(dict.fromkeys(str(dev) for dev in devices if dev))
+        if not ordered:
+            self.progress.setVisible(False)
+            on_complete()
             return
+        if len(ordered) == 1:
+            self._finalize_ipod_operation(
+                ordered[0], on_complete, terminal_text=terminal_text)
+            return
+
+        self._exporting = True
+        self._device_finalization_error = None
+        self._set_device_progress(max(800, self.progress.value()))
+        self.cancel_btn.setVisible(False)
+        self._start_pulse("Finalizing devices")
+
+        def finish_all():
+            self._set_device_progress(1000)
+            self._stop_pulse(force=True)
+            finalization_error = self._device_finalization_error
+            final_text = (
+                "Final refresh failed" if finalization_error else terminal_text)
+            self._set_status_text(final_text, force=True)
+            hold = (
+                self._current_device_path
+                if self._current_device_path in ordered else ordered[-1])
+            self._eject_ready_device = hold
+            self._exporting = False
+            self._update_device_action_state()
+            try:
+                if finalization_error is not None:
+                    QMessageBox.warning(
+                        self,
+                        "Device finalization failed",
+                        "The device operation has stopped, but SoundBox could "
+                        "not complete every required final dashboard/sidebar "
+                        f"refresh:\n\n{finalization_error}\n\n"
+                        "Eject is available; reconnect before another write.",
+                    )
+                else:
+                    on_complete()
+            finally:
+                self.progress.setVisible(False)
+                self._update_device_action_state()
+
+        def finalize_at(index: int):
+            if index >= len(ordered):
+                finish_all()
+                return
+            start = 800 + round(200 * index / len(ordered))
+            end = 800 + round(200 * (index + 1) / len(ordered))
+            self._exporting = True
+            self._set_device_progress(max(start, self.progress.value()))
+
+            def finish_one():
+                self._set_device_progress(end)
+                finalize_at(index + 1)
+
+            self._refresh_device_surfaces(
+                ordered[index],
+                surface_progress=start + (end - start) // 2,
+                after_finished=finish_one,
+            )
+
+        finalize_at(0)
+
+    def _on_stock_device_view(self, dev: str, result):
         if isinstance(result, Exception):
+            self._fail_initial_ipod_preload(dev)
+            if dev != self._current_device_path:
+                LOG.warning("iPod dashboard preload failed for %s: %s", dev, result)
+                return
             preserve_snapshot = bool(
                 self._stock_snapshot is not None
                 and self._stock_snapshot.target == Path(dev).resolve())
@@ -2851,6 +3259,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         ):
             result, composite_data = result
         if not isinstance(result, StockIpodSnapshot):
+            self._fail_initial_ipod_preload(dev)
+            if dev != self._current_device_path:
+                LOG.warning("Unexpected iPod dashboard preload result for %s", dev)
+                return
             preserve_snapshot = bool(
                 self._stock_snapshot is not None
                 and self._stock_snapshot.target == Path(dev).resolve())
@@ -2863,6 +3275,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if preserve_snapshot:
                 self._flash_status(
                     "iPod refresh failed — showing last verified state")
+            return
+        self._stock_view_cache[dev] = (result, composite_data)
+        if dev != self._current_device_path:
+            LOG.info(
+                "iPod dashboard preloaded: %s (%d tracks, %d playlists)",
+                dev, len(result.tracks), len(result.playlists))
             return
         self._stock_snapshot = result
         if result.model:
@@ -2920,28 +3338,38 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dev = item.data(0, DEVPATH_ROLE)
         menu = QMenu(self)
         menu.addAction("Browse", lambda: self._on_device_click(item, 0))
+        busy = self._device_operation_owned()
         profile = self._device_profiles.get(dev)
         if profile is not None and profile.kind == "stock_ipod":
-            menu.addAction(
+            action = menu.addAction(
                 "Preview stock iPod export…",
                 lambda: self._preview_stock_ipod(dev))
-        menu.addAction("Verify export…", lambda: self._verify_device(dev))
-        menu.addAction(
+            action.setEnabled(not busy)
+        action = menu.addAction(
+            "Verify export…", lambda: self._verify_device(dev))
+        action.setEnabled(not busy)
+        action = menu.addAction(
             "Deep Verify managed files…",
             lambda: self._verify_device(dev, deep=True))
+        action.setEnabled(not busy)
         if profile is not None and not profile.has_stock_ipod:
             menu.addSeparator()
-            menu.addAction(
+            action = menu.addAction(
                 "Erase all files from device…",
                 lambda: self._erase_device(dev))
+            action.setEnabled(not busy)
         n = self._drift_cache.get(dev, 0)  # ≤3s-fresh from the background scan
         if n:
             word = "change" if n == 1 else "changes"
-            menu.addAction(f"Sync — {n} {word} pending",
-                           lambda: self._sync_device(dev))
+            sync_action = menu.addAction(
+                f"Sync — {n} {word} pending",
+                lambda: self._sync_device(dev))
         else:
-            menu.addAction("Sync (check again)", lambda: self._sync_device(dev))
-        menu.addAction("Eject", lambda: self._eject(dev))
+            sync_action = menu.addAction(
+                "Sync (check again)", lambda: self._sync_device(dev))
+        sync_action.setEnabled(not busy)
+        eject_action = menu.addAction("Eject", lambda: self._eject(dev))
+        eject_action.setEnabled(not busy)
         menu.exec(self.device_tree.mapToGlobal(pos))
 
     def _preview_stock_ipod(self, dev: str):
@@ -3002,14 +3430,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _begin_stock_ipod_sync(
             self, dev: str, playlists: list[Playlist], *, reconcile: bool = False):
         """Run the expensive, read-only database/media plan off the UI thread."""
-        if any(_running(getattr(self, name, None)) for name in (
-                "export_worker", "_resync_worker", "_stock_plan_worker",
-                "_stock_commit_worker", "_stock_delete_plan_worker",
-                "_stock_delete_commit_worker", "_stock_view_worker",
-                "_dual_plan_worker", "_dual_commit_worker",
-                "_delete_worker")):
+        if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._begin_stock_ipod_sync(
+                    dev, playlists, reconcile=reconcile)):
             return
         profile = self._device_profiles.get(dev)
         model = self._stock_write_model(dev, profile)
@@ -3062,27 +3489,30 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         ))
         self._stock_plan_worker = worker
         self._exporting = True
-        self.progress.setVisible(False)
+        self._set_device_progress(0)
         self.cancel_btn.setVisible(False)
         self._start_pulse("Planning iPod")
-        worker.done.connect(
-            lambda result, d=dev: self._on_stock_ipod_plan(d, result))
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker("_stock_plan_worker", ww))
+            lambda ww=worker, d=dev: self._finish_device_result_worker(
+                "_stock_plan_worker", ww,
+                lambda result: self._on_stock_ipod_plan(d, result)))
         worker.start()
 
     def _on_stock_ipod_plan(self, dev: str, result):
         self._exporting = False
         self._stop_pulse()
-        self.status_label.setText("Ready")
         if isinstance(result, Exception):
+            self.progress.setVisible(False)
+            self._set_status_text("Ready")
             QMessageBox.warning(
                 self, "Stock iPod plan refused", f"{result}\n\nNo files were changed.")
             self._refresh_devices()
             return
         if not isinstance(result, StockIpodSyncPlan):
+            self.progress.setVisible(False)
             QMessageBox.critical(self, "Stock iPod plan failed", "Unexpected plan result.")
             return
+        self._set_device_progress(150)
         summary = result.summary()
         if not result.requires_commit:
             def complete():
@@ -3137,6 +3567,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
+            self.progress.setVisible(False)
             self._flash_status("iPod sync cancelled — nothing written")
             self._refresh_devices()
             return
@@ -3147,24 +3578,26 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         worker = OneShotTask(lambda: commit_stock_ipod_sync(plan))
         self._stock_commit_worker = worker
         self._exporting = True
-        self.progress.setVisible(False)
+        self._set_device_progress(max(150, self.progress.value()))
         self.cancel_btn.setVisible(False)
         self._start_pulse("Syncing iPod")
-        worker.done.connect(
-            lambda result, d=dev: self._on_stock_ipod_commit(d, result))
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker("_stock_commit_worker", ww))
+            lambda ww=worker, d=dev: self._finish_device_result_worker(
+                "_stock_commit_worker", ww,
+                lambda result: self._on_stock_ipod_commit(d, result)))
         worker.start()
 
     def _on_stock_ipod_commit(self, dev: str, result):
         self._exporting = False
         self._stop_pulse()
-        self.status_label.setText("Ready")
         if isinstance(result, Exception):
+            self.progress.setVisible(False)
+            self._set_status_text("Ready")
             QMessageBox.critical(
                 self, "Stock iPod sync failed",
                 f"{result}\n\nSoundBox attempted an exact database/media rollback.")
         else:
+            self._set_device_progress(800)
             warning_parts = []
             if result.shadow_warning:
                 warning_parts.append(result.shadow_warning)
@@ -3210,15 +3643,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             expected_playlist_rows: dict[str, dict] | None = None,
     ):
         """Build the composite stock/Rockbox plan without target writes."""
-        if any(_running(getattr(self, name, None)) for name in (
-                "export_worker", "_resync_worker", "_stock_plan_worker",
-                "_stock_commit_worker", "_dual_plan_worker",
-                "_dual_commit_worker", "_stock_view_worker",
-                "_delete_worker")):
-            QMessageBox.warning(
-                self, "Device busy", "Wait for the current device operation.")
-            return
-        if self._pending_device_operation is not None:
+        if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
             return
@@ -3289,7 +3714,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.progress.setRange(0, 1000)
         if preconfirmed and self._dual_batch_total_tracks > 0:
             self.progress.setValue(round(
-                1000 * self._dual_batch_done_tracks
+                800 * self._dual_batch_done_tracks
                 / self._dual_batch_total_tracks))
         else:
             self.progress.setValue(0)
@@ -3299,26 +3724,26 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.cancel_btn.setVisible(False)
         self._start_pulse("Planning iPod")
         worker.progress.connect(self._on_dual_ipod_plan_progress)
-        worker.done.connect(
-            lambda result, d=dev: self._on_dual_ipod_plan(d, result))
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker("_dual_plan_worker", ww))
+            lambda ww=worker, d=dev: self._finish_device_result_worker(
+                "_dual_plan_worker", ww,
+                lambda result: self._on_dual_ipod_plan(d, result)))
         worker.start()
 
     def _on_dual_ipod_plan_progress(
             self, done: int, total: int, _label: str):
-        """Map planning into the first 30% of this operation's bar segment."""
+        """Map read-only planning into the first 15% of the transaction."""
         total = max(1, int(total))
         done = max(0, min(int(done), total))
         fraction = done / total
         if self._dual_active_preconfirmed and self._dual_batch_total_tracks > 0:
             completed = self._dual_batch_done_tracks
             active = self._dual_active_track_total
-            value = round(1000 * (
-                completed + active * 0.30 * fraction
+            value = round(800 * (
+                completed + active * 0.15 * fraction
             ) / self._dual_batch_total_tracks)
         else:
-            value = round(300 * fraction)
+            value = round(150 * fraction)
         self.progress.setRange(0, 1000)
         self.progress.setValue(max(self.progress.value(), value))
         self.progress.setVisible(True)
@@ -3328,7 +3753,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_dual_ipod_plan(self, dev: str, result):
         self._stop_pulse()
-        self.status_label.setText("Ready")
         if isinstance(result, Exception):
             was_preconfirmed = self._dual_active_preconfirmed
             self._exporting = False
@@ -3373,6 +3797,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.critical(
                 self, "Dual iPod plan failed", "Unexpected plan result.")
             return
+        self._set_device_progress(max(150, self.progress.value()))
         summary = result.summary()
         if not result.requires_commit:
             if self._dual_active_preconfirmed:
@@ -3396,8 +3821,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._dual_active_playlist_keys.clear()
             self._dual_active_confirmed = False
             self._dual_active_action = "sync"
-            self.progress.setValue(1000)
-            self.progress.setVisible(False)
+            self._set_device_progress(150)
             self._set_status_count()
             try:
                 self.rockbox_media_cache.clear()
@@ -3533,12 +3957,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         total = plan.progress_total
         self.progress.setRange(0, 1000)
         if self._dual_active_preconfirmed and self._dual_batch_total_tracks > 0:
-            initial = round(1000 * (
+            initial = round(800 * (
                 self._dual_batch_done_tracks
-                + self._dual_active_track_total * 0.30
+                + self._dual_active_track_total * 0.15
             ) / self._dual_batch_total_tracks)
         else:
-            initial = 300
+            initial = 150
         self.progress.setValue(max(self.progress.value(), initial))
         self.progress.setFormat("%p%")
         self.progress.setVisible(True)
@@ -3556,11 +3980,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if self._dual_active_preconfirmed else total,
         )
         worker.progress.connect(self._on_dual_ipod_progress)
-        worker.done.connect(
-            lambda result, d=dev, p=plan: self._on_dual_ipod_commit(
-                d, result, p))
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker("_dual_commit_worker", ww))
+            lambda ww=worker, d=dev, p=plan:
+            self._finish_device_result_worker(
+                "_dual_commit_worker", ww,
+                lambda result: self._on_dual_ipod_commit(d, result, p)))
         worker.start()
 
     def _on_dual_ipod_progress(self, done: int, total: int, _label: str):
@@ -3578,9 +4002,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._set_status_count(
                 batch_done, self._dual_batch_total_tracks)
             value = round(1000 * (
-                self._dual_batch_done_tracks
+                0.8 * self._dual_batch_done_tracks
                 + self._dual_active_track_total * (
-                    0.30 + 0.70 * done / max(1, total))
+                    0.12 + 0.52 * done / max(1, total))
             ) / max(1, self._dual_batch_total_tracks))
             self.progress.setRange(0, 1000)
             self.progress.setValue(max(self.progress.value(), value))
@@ -3588,7 +4012,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         self._start_pulse("Syncing iPod", keep_count=total > 0)
         self._set_status_count(done, total)
-        value = round(300 + 700 * done / max(1, total))
+        value = round(150 + 650 * done / max(1, total))
         self.progress.setRange(0, 1000)
         self.progress.setValue(max(self.progress.value(), value))
         self.progress.setVisible(True)
@@ -3597,7 +4021,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self, dev: str, result, plan: DualIpodSyncPlan | None = None):
         self._exporting = False
         self._stop_pulse()
-        self.status_label.setText("Ready")
         try:
             self.rockbox_media_cache.clear()
         except Exception as exc:
@@ -3641,7 +4064,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             )
             self.progress.setRange(0, 1000)
             self.progress.setValue(round(
-                1000 * self._dual_batch_done_tracks
+                800 * self._dual_batch_done_tracks
                 / max(1, self._dual_batch_total_tracks)))
             self._set_status_count(
                 self._dual_batch_done_tracks,
@@ -3656,11 +4079,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_next_confirmed_dual_job(dev)
             return
         action = self._dual_active_action
-        self.progress.setValue(1000)
-        self.progress.setVisible(False)
         if isinstance(result, Exception):
+            self.progress.setVisible(False)
+            self._set_status_text("Ready")
             self._show_dual_ipod_failure(result)
         else:
+            self._set_device_progress(800)
             cleanup_warning = (
                 "\n\nSome now-unreferenced files could not be removed:\n"
                 + "\n".join(result.cleanup_failures)
@@ -3818,9 +4242,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
         self._dual_sync_queue.pop(dev, None)
         self._exporting = False
-        self.progress.setRange(0, 1000)
-        self.progress.setValue(1000)
-        self.progress.setVisible(False)
+        self._set_device_progress(800)
         self._set_status_count()
         committed = [
             result for _plan, result in self._dual_batch_results
@@ -3899,14 +4321,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.warning(
                 self, "Device changed", "Refresh the stock iPod before deleting.")
             return
-        if any(_running(getattr(self, name, None)) for name in (
-                "export_worker", "_resync_worker", "_stock_plan_worker",
-                "_stock_commit_worker", "_stock_delete_plan_worker",
-                "_stock_delete_commit_worker", "_stock_view_worker",
-                "_dual_plan_worker", "_dual_commit_worker",
-                "_delete_worker")):
+        if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._begin_stock_playlist_delete(raw_selections)):
             return
         profile = self._device_profiles.get(dev)
         model = self._stock_write_model(dev, profile)
@@ -3924,15 +4344,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         ))
         self._stock_delete_plan_worker = worker
         self._exporting = True
-        self.progress.setVisible(False)
+        self._set_device_progress(0)
         self.cancel_btn.setVisible(False)
         self._start_pulse("Planning iPod")
-        worker.done.connect(
-            lambda result, d=dev, expected=tuple(identities):
-            self._on_stock_playlist_delete_plan(d, expected, result))
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker(
-                "_stock_delete_plan_worker", ww))
+            lambda ww=worker, d=dev, expected=tuple(identities):
+            self._finish_device_result_worker(
+                "_stock_delete_plan_worker", ww,
+                lambda result: self._on_stock_playlist_delete_plan(
+                    d, expected, result)))
         worker.start()
 
     def _apply_composite_playlist_order(self, requested_keys) -> None:
@@ -4094,8 +4514,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self, dev: str, expected: tuple[tuple[int, str], ...], result):
         self._exporting = False
         self._stop_pulse()
-        self.status_label.setText("Ready")
         if isinstance(result, Exception):
+            self.progress.setVisible(False)
+            self._set_status_text("Ready")
             QMessageBox.warning(
                 self,
                 "Stock iPod delete refused",
@@ -4104,9 +4525,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._refresh_devices()
             return
         if not isinstance(result, StockIpodDeletePlan):
+            self.progress.setVisible(False)
             QMessageBox.critical(
                 self, "Stock iPod delete failed", "Unexpected plan result.")
             return
+        self._set_device_progress(150)
         summary = result.summary()
         planned_title = ", ".join(summary["playlists"])
         expected_ids = tuple(playlist_id for playlist_id, _title in expected)
@@ -4149,6 +4572,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
+            self.progress.setVisible(False)
             self._flash_status("iPod deletion cancelled — nothing written")
             self._refresh_devices()
             return
@@ -4159,27 +4583,28 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         worker = OneShotTask(lambda: commit_stock_ipod_playlist_delete(plan))
         self._stock_delete_commit_worker = worker
         self._exporting = True
-        self.progress.setVisible(False)
+        self._set_device_progress(max(150, self.progress.value()))
         self.cancel_btn.setVisible(False)
         self._start_pulse("Syncing iPod")
-        worker.done.connect(
-            lambda result, d=dev: self._on_stock_playlist_delete_commit(d, result))
         worker.finished.connect(
-            lambda ww=worker: self._finish_worker(
-                "_stock_delete_commit_worker", ww))
+            lambda ww=worker, d=dev: self._finish_device_result_worker(
+                "_stock_delete_commit_worker", ww,
+                lambda result: self._on_stock_playlist_delete_commit(d, result)))
         worker.start()
 
     def _on_stock_playlist_delete_commit(self, dev: str, result):
         self._exporting = False
         self._stop_pulse()
-        self.status_label.setText("Ready")
         if isinstance(result, Exception):
+            self.progress.setVisible(False)
+            self._set_status_text("Ready")
             QMessageBox.critical(
                 self,
                 "Stock iPod deletion failed",
                 f"{result}\n\nSoundBox attempted an exact database/artwork rollback.",
             )
         else:
+            self._set_device_progress(800)
             multiple = len(result.playlists) != 1
             def complete():
                 if result.cleanup_failures:
@@ -4224,19 +4649,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         """Post-export sanity: every m3u8 entry on the device must resolve to a
         real file. Walks the USB, so it runs OFF the UI thread."""
         from .workers import OneShotTask
-        if _running(getattr(self, "_scan_worker", None)):
+        if getattr(self, "_device_verify_worker", None) is not None:
             return
         self._release_eject_ready()
         w = OneShotTask(lambda: engine.verify_export(dev, deep=deep))
-        self._scan_worker = w
-        w.done.connect(lambda res, d=dev: self._on_verify_done(d, res))
-        w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
+        self._device_verify_worker = w
+        w.finished.connect(
+            lambda ww=w, d=dev: self._finish_device_result_worker(
+                "_device_verify_worker", ww,
+                lambda result: self._on_verify_done(d, result)))
         self._start_pulse("Verifying")
         w.start()
 
     def _on_verify_done(self, dev: str, res):
         self._stop_pulse()
-        self.status_label.setText("Ready")
+        self._set_status_text("Ready")
         if isinstance(res, Exception):
             QMessageBox.warning(self, "Verify failed", str(res))
             return
@@ -4335,7 +4762,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 action="sync",
             )
             return
-        if self._resync_worker is not None and self._resync_worker.isRunning():
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._sync_device(dev)):
+            return
+        if self._device_operation_owned():
+            QMessageBox.warning(
+                self, "Device busy", "Wait for the current device operation.")
             return
         self._release_eject_ready()
         LOG.info("Sync device: %s", dev)
@@ -4344,30 +4776,44 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.rockbox_media_cache, self.rockbox_art_cache,
             self._sync_playlists())
         self._resync_worker = w
-        w.done.connect(self._on_resync_done)
-        w.finished.connect(lambda ww=w: self._finish_worker("_resync_worker", ww))
+        w.progress.connect(self._on_resync_progress)
+        w.finished.connect(
+            lambda ww=w, d=dev: self._finish_device_result_worker(
+                "_resync_worker", ww,
+                lambda result: self._on_resync_done(d, result)))
         self._exporting = True  # pauses the device poll + keeps bg art status quiet
-        # NO % bar: a diff-driven sync is fast and usually just rewrites an m3u8 (the
-        # bar only flashed 27→100 and lied). Animated "SYNCING…" reads honestly, like
-        # DELETE.
-        self.progress.setVisible(False)
+        # Even a fast diff-driven sync uses the shared transaction meter: work
+        # may reach 80%, while final reads and ownership release retain 80–100%.
+        self._set_device_progress(0)
         self._start_pulse("Syncing")
         w.start()
 
     def _on_resync_done(self, dev: str, rep):
         self._exporting = False
         self._stop_pulse()
-        self.progress.setVisible(False)
-        self._refresh_devices()  # updates free space + clears the drift badge
-        if isinstance(rep, str):
-            LOG.error("Sync failed for %s: %s", dev, rep)
-            self.status_label.setText("Sync failed")
-            QMessageBox.warning(self, "Sync failed", rep)
-        else:
-            LOG.info("Sync complete: %s", dev)
-            self._flash_status("Synced ✓", 8)
-            if self.stack.currentIndex() == 1:  # refresh browser if open
-                self.fs_view.setRootIndex(self.fs_model.setRootPath(self.fs_model.rootPath()))
+        self._set_device_progress(800)
+
+        def complete():
+            if isinstance(rep, str):
+                LOG.error("Sync failed for %s: %s", dev, rep)
+                self._set_status_text("Sync failed")
+                QMessageBox.warning(self, "Sync failed", rep)
+            else:
+                LOG.info("Sync complete: %s", dev)
+                self._flash_status("Synced ✓", 8)
+                if self.stack.currentIndex() == 1:
+                    self.fs_view.setRootIndex(
+                        self.fs_model.setRootPath(self.fs_model.rootPath()))
+
+        self._finalize_ipod_operation(
+            dev, complete,
+            terminal_text="Sync failed" if isinstance(rep, str) else "Complete ✓")
+
+    def _on_resync_progress(self, done: int, total: int, _label: str):
+        value = round(
+            150 + 650 * min(max(0, done), max(1, total)) / max(1, total))
+        self._set_device_progress(max(self.progress.value(), value))
+        self._start_pulse("Syncing")
 
     # ---------- columns ----------
     def _apply_default_columns(self):
@@ -4805,7 +5251,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._queue_stock_artwork((tid,))
 
     def _run_oneshot(self, tid, fn):
-        self.status_label.setText("Fetching…")
+        self._set_status_text("Fetching…")
         w = _OneShotArt(tid, fn)
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
@@ -4997,7 +5443,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         self._stop_pulse()
         suffix = " · Eco" if self._prep_power_policy == "battery" else ""
-        self.status_label.setText(f"Prep {done}/{total}{suffix}")
+        self._set_status_text(f"Prep {done}/{total}{suffix}")
 
     def _on_analysis_power_policy(self, policy: str):
         self._prep_power_policy = policy
@@ -5006,9 +5452,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         self._stop_pulse()
         if policy == "low-power":
-            self.status_label.setText("Prep paused · Low Power")
+            self._set_status_text("Prep paused · Low Power")
         elif policy == "battery":
-            self.status_label.setText("Preparing · Battery Eco")
+            self._set_status_text("Preparing · Battery Eco")
         else:
             self._start_pulse("Preparing your library")
 
@@ -5017,7 +5463,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if paused:
             self._stop_pulse()
-            self.status_label.setText(
+            self._set_status_text(
                 f"Analysis paused — {free_bytes / 1024 ** 3:.1f} GiB free")
         elif self._preparing_library:
             self._start_pulse("Preparing your library")
@@ -5027,7 +5473,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._preparing_library = False
         if not self._exporting and not self._cancelling and not self._deleting:
             self._stop_pulse()
-            self.status_label.setText("Ready")
+            self._set_status_text("Ready")
         if getattr(self, "_waveform_rescan_pending", False):
             self._waveform_rescan_pending = False
             QTimer.singleShot(0, self._maybe_fill_waveforms)
@@ -5039,7 +5485,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._art_worker.stop()
             # Clear the stale "Art N/M" ticker (unless a device op owns the label).
             if not self._exporting and not self._cancelling and not self._deleting:
-                self.status_label.setText("Ready")
+                self._set_status_text("Ready")
 
     def _on_art_progress(self, done, total):
         if not self.player_bar.is_playing():
@@ -5050,7 +5496,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if done >= total:
                 self._flash_status("Art done ✓", 6)
             else:
-                self.status_label.setText(f"Art {done}/{total}")  # ticks every fetch
+                self._set_status_text(f"Art {done}/{total}")  # ticks every fetch
 
     def _header_menu(self, pos):
         menu = QMenu(self)
@@ -5287,6 +5733,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._exporting and self.export_worker is not None:
             self.export_worker.add(dev, pls)  # aggregate into the running export
             return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._on_device_drop(dev, items)):
+            return
+        if self._device_operation_owned():
+            QMessageBox.warning(
+                self, "Device busy", "Wait for the current device operation.")
+            return
         self._release_eject_ready()
         LOG.info("Export: %d playlist(s) -> %s", len(pls), dev)
         w = ExportWorker(
@@ -5295,14 +5748,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.export_worker = w
         self._exporting = True
         w.progress.connect(self._on_progress)
-        w.finished_all.connect(self._on_export_done)
-        # Drop our ref only on `finished` (after run() fully returns, on the main
-        # thread) — NOT in _on_export_done, which runs mid-run via finished_all.
-        w.finished.connect(lambda ww=w: self._finish_worker("export_worker", ww))
+        w.finished.connect(
+            lambda ww=w: self._finish_device_result_worker(
+                "export_worker", ww, self._on_export_done))
         # Always start the bar at a truthful 0% before any files are processed.
-        est = sum(max(1, len(self.lib.resolve(p))) for p in pls)
-        self.progress.setRange(0, est)
-        self.progress.setValue(0)
+        self._set_device_progress(0)
         self._start_pulse("Exporting")  # animated dots from the first frame
         self.progress.setVisible(True)
         self.cancel_btn.setVisible(True)
@@ -5325,13 +5775,28 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             w.deleteLater()
         except RuntimeError:
             pass  # already gone
+        self._update_device_action_state()
+
+    def _finish_device_result_worker(self, attr: str, worker, callback) -> None:
+        """Clear QThread ownership before exposing a device result to the UI."""
+        current = getattr(self, attr, None) is worker
+        result = getattr(worker, "result", None)
+        self._finish_worker(attr, worker)
+        if current and not self._shutting_down:
+            callback(result)
 
     def shutdown(self):
         """Stop background work BEFORE Qt tears down — prevents the crash where
         the app quits while a worker thread is still running."""
+        self._shutting_down = True
+        self._refresh_pending = False
+        self._libcache_pending = None
+        self._stock_view_pending.clear()
+        self._device_rescan_after_stock_view = False
         self._waveform_rechecks_enabled = False
         for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
                   getattr(self, "_warm_timer", None),
+                  getattr(self, "_volume_refresh_timer", None),
                   getattr(self, "_waveform_recheck_timer", None)):
             if t is not None:
                 t.stop()
@@ -5371,6 +5836,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._eject_verify_worker.wait(15000)
         if _running(getattr(self, "_device_import_worker", None)):
             self._device_import_worker.wait(15000)
+        if _running(getattr(self, "_device_verify_worker", None)):
+            self._device_verify_worker.wait(15000)
         if _running(self._art_worker):
             self._art_worker.stop(); self._art_worker.wait(6000)
         if _running(self._stock_art_worker):
@@ -5405,13 +5872,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_progress(self, done: int, total: int, label: str):
         self.progress.setVisible(True)
         self.cancel_btn.setVisible(True)
-        self.progress.setRange(0, max(1, total))
-        self.progress.setValue(min(done, total))
+        value = round(
+            150 + 650 * min(max(0, done), max(1, total)) / max(1, total))
+        self._set_device_progress(max(self.progress.value(), value))
         if self._cancelling:
             return  # keep the animated "Cancelling…" status
         if total and done >= total:
-            # Files copied; engine is scrubbing the device. Solid 100% bar +
-            # animated "FINALIZING…" so it's clearly working, not frozen.
+            # Files copied; the engine is scrubbing the device. This is the
+            # 80% work boundary, not completion; dashboard/sidebar release owns
+            # the final 20% before the bar can reach 100%.
             self._start_pulse("Finalizing")
         else:
             # Animate "EXPORTING…" alongside the % bar (idempotent — the same-word
@@ -5431,10 +5900,35 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.status_count_label.setText(f"{done}/{total}")
         self.status_count_label.setVisible(True)
 
+    def _set_device_progress(self, value: int) -> None:
+        """Publish truthful transaction progress; 1000 is terminal only."""
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(max(0, min(1000, int(value))))
+        self.progress.setFormat("%p%")
+        self.progress.setVisible(True)
+
+    def _set_status_text(self, text: str, *, force: bool = False) -> bool:
+        """Set lower-left status without stealing an initial iPod transaction.
+
+        Device visibility is gated on the same warming set. While it is nonempty,
+        every unrelated background completion/progress message is lower priority
+        than the truthful `Loading iPod...` state.
+        """
+        if not force and self._stock_view_warming:
+            self._start_ipod_loading_status()
+            return False
+        self.status_label.setText(text)
+        self._update_device_action_state()
+        return True
+
     def _start_pulse(self, word: str, *, keep_count: bool = False):
+        if self._stock_view_warming and word != "Loading iPod":
+            self._start_ipod_loading_status()
+            return
         if not keep_count:
             self._set_status_count()
         if self._pulse_word == word and self._pulse_timer.isActive():
+            self._update_device_action_state()
             return  # already animating this word — don't reset the dots
         self._pulse_word = word
         self._pulse_dots = 0
@@ -5442,12 +5936,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.status_label.fontMetrics().horizontalAdvance(word + "...") + 8)
         self.status_label.setText(word)
         self._pulse_timer.start()
+        self._update_device_action_state()
 
-    def _stop_pulse(self):
+    def _stop_pulse(self, *, force: bool = False):
+        if (not force and self._stock_view_warming
+                and self._pulse_word == "Loading iPod"):
+            return
         if self._pulse_timer.isActive():
             self._pulse_timer.stop()
         self._pulse_word = None
         self._set_status_count()
+        self._update_device_action_state()
 
     def _pulse_tick(self):
         self._pulse_dots = (self._pulse_dots + 1) % 4
@@ -5456,23 +5955,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _flash_status(self, msg: str, seconds: int = 15):
         """Show a transient status that auto-clears to Ready (if not replaced)."""
         self._set_status_count()
+        if not self._set_status_text(msg):
+            return
         self.status_label.setFixedWidth(
             self.status_label.fontMetrics().horizontalAdvance(msg) + 8)
-        self.status_label.setText(msg)
         QTimer.singleShot(
             seconds * 1000,
-            lambda: self.status_label.setText("Ready") if self.status_label.text() == msg else None,
+            lambda: self._set_status_text("Ready")
+            if self.status_label.text() == msg else None,
         )
 
     def _on_export_done(self, reports: list):
         cancelled = self._cancelling
         self._cancelling = False
         self._exporting = False
-        # NOTE: don't null self.export_worker here — this runs mid-run (finished_all).
-        # _finish_worker (on the thread's `finished`) drops the ref safely.
         self._stop_pulse()
         self.cancel_btn.setVisible(False)
-        self.progress.setVisible(False)
+        self._set_device_progress(800)
         issues = []
         for dev, rep in reports:
             if isinstance(rep, str):
@@ -5481,17 +5980,23 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             for pr in rep.playlists:
                 if pr.missing or pr.conflicts or pr.errors:
                     issues.append(f"{pr.name}: {pr.missing} missing · {pr.conflicts} conflicts")
-        if cancelled:
-            self._flash_status("Cancelled")  # auto-clears in 15s like Ejected
-        else:
-            self.status_label.setText("Complete ✓")  # sticks (fits the tight label)
-        self._refresh_devices()  # update free space right away
         LOG.info("Export finished: %d job report(s), %d issue(s)", len(reports), len(issues))
-        if self.stack.currentIndex() == 1:  # refresh browser if open
-            self.fs_view.setRootIndex(self.fs_model.setRootPath(self.fs_model.rootPath()))
-        if issues:
-            QMessageBox.information(self, "Export finished — with notes",
-                                   "Done, but note:\n\n" + "\n".join(issues[:20]))
+        devices = [dev for dev, _rep in reports if dev and dev != "(worker)"]
+
+        def complete():
+            if cancelled:
+                self._flash_status("Cancelled")
+            else:
+                self._set_status_text("Complete ✓")
+            if self.stack.currentIndex() == 1:
+                self.fs_view.setRootIndex(
+                    self.fs_model.setRootPath(self.fs_model.rootPath()))
+            if issues:
+                QMessageBox.information(
+                    self, "Export finished — with notes",
+                    "Done, but note:\n\n" + "\n".join(issues[:20]))
+
+        self._finalize_device_operations(devices, complete)
 
 
 def make_app() -> QApplication:

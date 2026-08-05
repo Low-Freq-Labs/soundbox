@@ -339,7 +339,27 @@ records only in memory, and exposes no mutation API. The desktop device page
 renders them as Device, Songs, and Playlists tabs. On a schema-3 dual device,
 Songs and Playlists merge manifest ownership with the parsed iTunesDB and label
 each row Both, Stock, or Rockbox; the filesystem browser remains for Rockbox-only
-and generic USB targets. Model
+and generic USB targets. Connection handling is phased: a `/Volumes` filesystem
+event starts verified discovery immediately. Every new volume waits for the
+discovery QThread's actual `finished` boundary before its row can publish; a
+stock/dual iPod additionally remains absent from the sidebar
+while the lower-left status reads `Loading iPod...`; its dashboard snapshot
+preloads in the background and the normal drift scan follows. Only that
+completed scan publishes the clickable iPod row. Those removable-volume readers
+are serialized, and the visibility gate therefore guarantees that a click
+consumes the verified in-memory snapshot without touching the device again. The
+three-second timer remains only as missed-event recovery and failed-preload
+retry.
+
+Device transactions share one UI ownership contract. Custom result signals may
+record a worker result, but only `QThread.finished` clears the owning attribute
+and may advance the UI. Planning maps to 0–15%, device mutation/verification to
+15–80%, and post-operation dashboard, sidebar/drift, and ownership release to
+80–100%. `100%`, a completion dialog, enabled Eject/Sync controls, and a newly
+clickable row are therefore all terminal states. A failed required final read
+shows a final-refresh failure instead of running the success callback.
+Preloads are scoped to path plus the mount root's filesystem device token, so a
+same-name remount invalidates and reprobes path-keyed disk/profile facts. Model
 confirmation persists against the iPod library persistent ID plus macOS volume
 UUID; Apple/SoundBox rewrites may change the MHBD `DatabaseID`, so it is display
 information only and never a device key. On macOS, `desktop.devices` performs
@@ -361,6 +381,25 @@ firmware-generated and absent from iTunesDB.
 
 - **Reads the LIVE rekordbox DB** (`~/Library/Pioneer/rekordbox/master.db`) via
   a read-only temp copy through `pyrekordbox`; XML export is a fallback.
+- **The temp snapshot is a verified DB/WAL pair.** SoundBox copies only
+  `master.db` and its WAL, compares both source identities before and after,
+  and retries a concurrent checkpoint/update. SQLite's process-local SHM is
+  never copied. A database that remains busy fails visibly instead of yielding
+  a mixed-time library.
+- **Smart playlists mirror active rekordbox state.** Rekordbox retains removed
+  My Tag associations as soft-deleted history, so the adapter requires the tag
+  definition, association, and content to all be active while preserving
+  compound ALL/ANY rules. Historical tags and deleted songs can never
+  resurrect a playlist membership.
+- **Playlist reads fail closed on structural ambiguity.** Active node types,
+  parents, sibling `Seq`, membership `TrackNo`, stable IDs, and display paths
+  are validated before publishing a library. Normal playlists use exact
+  `TrackNo`; smart playlists use their stored criteria; unreachable or
+  unverified structures make refresh fail visibly rather than return a
+  plausible partial tree.
+- **Refresh results are monotonic.** A refresh click during an active database
+  read queues one immediate follow-up snapshot, and instant-paint cache writes
+  are serialized so an older result can never overwrite a newer result on disk.
 - **Two planes.** rekordbox is king (the mirror); SoundBox keeps its own plane
   on top: imported audio (referenced in place, never copied), per-track
   title/artist overrides, custom playlists, and deletes/removals that act as

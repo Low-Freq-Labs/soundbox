@@ -225,6 +225,23 @@ def device_facts(path) -> DeviceFacts:
     )
 
 
+def refresh_device_mount(path) -> bool:
+    """Forget path-keyed facts after a proven same-name remount and reprobe.
+
+    A volume can disappear and return between two polls under the same
+    ``/Volumes`` name. Its filesystem device token proves that this is a new
+    mount; retaining the former profile/UUID/model cache would attach the old
+    device's identity to it.
+    """
+    key = str(path)
+    _EXTERNAL_CACHE.pop(key, None)
+    _FS_CACHE.pop(key, None)
+    _PROFILE_CACHE.pop(key, None)
+    _INFO_CACHE.pop(key, None)
+    _IPOD_FACTS_CACHE.pop(key, None)
+    return _is_external(Path(key))
+
+
 def _external_volume_of(p):
     """The external/ejectable volume that p lives on (or IS), else None. Resolves
     symlinks first, so a link out of the device can't sneak past. Rejects system

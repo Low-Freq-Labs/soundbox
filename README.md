@@ -27,7 +27,8 @@ cover art, honest sync semantics.
 
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
 temp snapshot — rekordbox can stay open) or an XML export as fallback; ↻
-Refresh any time. On top of the rekordbox mirror, SoundBox keeps its own
+Refresh any time. Smart playlists follow active rekordbox My Tags; removed-tag
+history is ignored. On top of the rekordbox mirror, SoundBox keeps its own
 plane: **import audio files directly** (drag from Finder onto a SoundBox
 playlist or Collection, or right-click → Import Audio Files…). Imported files
 are referenced in place — never copied or re-tagged — and become first-class
@@ -204,9 +205,11 @@ playlist drops made while a dual-iPod sync is running are queued and deduplicate
 then planned against the newly committed media instead of recopied.
 Sync, playlist export, and managed-playlist deletion all follow the same visible
 contract: immediate Yes/No, background Planning, guarded device writes, then one
-completion. Planning occupies the first 30% of the same progress bar and commit
-the remaining 70%, so the bar never disappears or jumps backward between phases
-or queued playlist jobs.
+completion. Planning occupies 0–15% of the same progress bar, guarded device work
+occupies 15–80%, and required dashboard/sidebar/drift finalization owns 80–100%.
+The bar never disappears or jumps backward between phases or queued playlist
+jobs, and 100% means every SoundBox worker has released the target and Eject is
+actually available.
 The first generation requires a device without an existing SoundBox manifest;
 later playlist drops accumulate safely, and an identical repeat is zero-write.
 Thereafter the normal Sync action uses the same stable playlist identities and

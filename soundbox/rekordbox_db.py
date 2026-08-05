@@ -1,9 +1,9 @@
 """Read the LIVE rekordbox database (read-only) into our Library model.
 
-SAFETY: never touches the live master.db. It copies the DB (+ -wal/-shm) to a
-temp file and reads the COPY read-only via pyrekordbox — same read-only posture
-as the XML import, just sourced from a live snapshot instead of a manual export.
-Never writes to rekordbox.
+SAFETY: never touches the live master.db. It copies a stable DB + WAL pair to a
+temp directory (never the process-local SHM file) and reads only that disposable
+copy via pyrekordbox — the same posture as the XML import, sourced from a live
+snapshot instead of a manual export. Never writes to rekordbox.
 
 Normalizes into the same source-neutral `Library` model as the XML adapter, so
 the UI, export, and overrides work unchanged. rekordbox content IDs == XML
@@ -56,17 +56,15 @@ def load_live() -> Library:
     tmp = Path(tempfile.mkdtemp(prefix="soundbox_rb_"))
     copy = tmp / "master.db"
     try:
-        # READ-ONLY snapshot: copy the live files; never open the originals.
-        shutil.copy2(REKORDBOX_DB, copy)
-        for ext in ("-wal", "-shm"):
-            extra = REKORDBOX_DB.with_name(REKORDBOX_DB.name + ext)
-            if extra.is_file():
-                shutil.copy2(extra, copy.with_name(copy.name + ext))
+        # READ-ONLY snapshot: copy stable database/WAL bytes; never open the
+        # originals. The SHM file is process-local lock/index state and must not
+        # be carried into the disposable reader.
+        _copy_stable_snapshot(REKORDBOX_DB, copy)
 
         db = Rekordbox6Database(path=str(copy))
         try:
             tracks_by_id = _read_tracks(db)
-            playlists = _read_playlists(db)
+            playlists = _read_playlists(db, set(tracks_by_id))
         finally:
             try:
                 db.close()
@@ -85,6 +83,51 @@ def load_live() -> Library:
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _snapshot_identity(path: Path) -> tuple[int, int, int, int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size,
+            stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _copy_stable_snapshot(source: Path, destination: Path, retries: int = 5) -> None:
+    """Copy a consistent main DB + WAL pair without opening the live database.
+
+    A checkpoint can rewrite ``master.db`` while the old implementation copied
+    it and then copy a reset WAL, producing a mixed-time snapshot. Capture both
+    file identities before and after each attempt and accept only a fully quiet
+    interval. A busy rekordbox session therefore causes a bounded honest retry
+    instead of a plausible stale/partial library.
+    """
+    wal = source.with_name(source.name + "-wal")
+    destination_wal = destination.with_name(destination.name + "-wal")
+    for _attempt in range(max(1, retries)):
+        before = (_snapshot_identity(source), _snapshot_identity(wal))
+        if before[0] is None:
+            raise FileNotFoundError(f"rekordbox database not found: {source}")
+        try:
+            shutil.copy2(source, destination)
+            if before[1] is not None:
+                shutil.copy2(wal, destination_wal)
+            elif destination_wal.exists():
+                destination_wal.unlink()
+        except FileNotFoundError:
+            # A WAL checkpoint may remove/reset the WAL after ``before`` but
+            # before copy2 opens it. That is an unstable interval, not a hard
+            # missing-database failure; retry the complete pair.
+            if destination_wal.exists():
+                destination_wal.unlink()
+            continue
+        after = (_snapshot_identity(source), _snapshot_identity(wal))
+        if before == after:
+            return
+    raise RuntimeError(
+        "rekordbox database kept changing while SoundBox took its read-only "
+        "snapshot; wait a moment and refresh again")
 
 
 def _deleted(row) -> bool:
@@ -127,6 +170,7 @@ def _read_tracks(db) -> dict[str, Track]:
             size=int(c.FileSize or 0),
             bitrate=str(c.BitRate or ""),
             rating=str(c.Rating or ""),
+            year=str(c.ReleaseYear or ""),
             source_analysis_path=str(resolve_dat_path(
                 REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
             source_cues=cues_by_track.get(str(c.ID), []),
@@ -230,30 +274,143 @@ def _read_cues(db) -> dict[str, list[dict]]:
     return grouped
 
 
-def _read_playlists(db) -> list[Playlist]:
-    from pyrekordbox.db6.tables import DjmdSongPlaylist
+def _smart_playlist_contents(db, playlist):
+    """Return smart-playlist rows without resurrecting removed My Tags.
 
-    # SACRED ORDER: a playlist's track order is DjmdSongPlaylist.TrackNo — NOT the
-    # order get_playlist_contents returns (that comes back sorted by ContentID).
-    # Load all membership rows once, group by playlist, sort each by TrackNo.
-    tracks_by_pl: dict[str, list] = {}
-    for sp in db.query(DjmdSongPlaylist).all():
-        if _deleted(sp):
+    Rekordbox keeps removed ``djmdSongMyTag`` associations as soft-deleted
+    history.  pyrekordbox 0.4.4's My Tag smart-list predicate does not filter
+    that flag, so a removed tag continues to satisfy ``contains`` (and can
+    incorrectly defeat ``not contains``).  Rebuild only playlists containing a
+    My Tag condition, retaining pyrekordbox's predicates for every other
+    condition and requiring the association itself to be active.
+    """
+    from pyrekordbox.db6.smartlist import (
+        LogicalOperator, Operator, Property, SmartList,
+    )
+    from pyrekordbox.db6.tables import DjmdContent, DjmdMyTag, DjmdSongMyTag
+    from sqlalchemy import and_, exists, func, not_, or_
+
+    source = getattr(playlist, "SmartList", "") or ""
+    if not source:  # compatibility with older/mocked pyrekordbox rows
+        return db.get_playlist_contents(playlist)
+    smartlist = SmartList()
+    smartlist.parse(source)
+    if smartlist.logical_operator not in (
+            LogicalOperator.ALL, LogicalOperator.ANY):
+        raise ValueError(
+            f"Unknown smart-playlist logical operator: {smartlist.logical_operator}")
+    if not smartlist.conditions:
+        raise ValueError("Smart playlist has no conditions")
+    unsupported = [
+        cond.property for cond in smartlist.conditions
+        if cond.property in (Property.GROUPING, Property.MIX_NAME)
+    ]
+    if unsupported:
+        # pyrekordbox maps Grouping to ColorID and has no Mix Name mapping. A
+        # guessed query is worse than an explicit refresh failure because it
+        # can silently publish the wrong playlist to a device.
+        raise ValueError(
+            "Unverified rekordbox smart-playlist field(s): "
+            + ", ".join(unsupported))
+    if not any(cond.property == Property.MYTAG for cond in smartlist.conditions):
+        return db.get_playlist_contents(playlist)
+
+    clauses = []
+    for cond in smartlist.conditions:
+        if cond.property != Property.MYTAG:
+            single = SmartList(logical_operator=LogicalOperator.ALL)
+            single.conditions = [cond]
+            clauses.append(single.filter_clause())
             continue
-        tracks_by_pl.setdefault(str(sp.PlaylistID), []).append(sp)
-    for rows in tracks_by_pl.values():
-        rows.sort(key=lambda r: (r.TrackNo if r.TrackNo is not None else 0))
+
+        tag_id = int(cond.value_left)
+        if tag_id < 0:  # rekordbox stores unsigned IDs as signed XML values
+            tag_id += 2**32
+        active_tag = exists().where(
+            DjmdMyTag.ID == str(tag_id),
+            func.coalesce(DjmdMyTag.rb_local_deleted, 0) == 0,
+        )
+        active_link = and_(
+            active_tag,
+            exists().where(
+                DjmdSongMyTag.ContentID == DjmdContent.ID,
+                DjmdSongMyTag.MyTagID == str(tag_id),
+                func.coalesce(DjmdSongMyTag.rb_local_deleted, 0) == 0,
+            ),
+        )
+        if cond.operator == Operator.CONTAINS:
+            clauses.append(active_link)
+        elif cond.operator == Operator.NOT_CONTAINS:
+            clauses.append(not_(active_link))
+        else:
+            raise ValueError(f"Unsupported My Tag operator: {cond.operator}")
+
+    combine = and_ if smartlist.logical_operator == LogicalOperator.ALL else or_
+    return db.query(DjmdContent).filter(and_(
+        func.coalesce(DjmdContent.rb_local_deleted, 0) == 0,
+        combine(*clauses),
+    ))
+
+
+def _read_playlists(
+        db, active_track_ids: set[str] | None = None) -> list[Playlist]:
+    from pyrekordbox.db6.tables import DjmdSongPlaylist
 
     # Group nodes by parent and sort by Seq so we match rekordbox's exact order.
     children: dict[str, list] = {}
+    active_nodes = {}
     for p in db.get_playlist():
         if _deleted(p):  # skip rekordbox-deleted playlists/folders
             continue
-        children.setdefault(str(p.ParentID), []).append(p)
+        if p.Attribute not in (0, 1, 4, -128):
+            raise ValueError(
+                f"Unknown active rekordbox playlist type {p.Attribute} for {p.Name!r}")
+        active_nodes[str(p.ID)] = p
+        if p.Attribute != -128:  # cloud is not part of SoundBox's visible tree
+            children.setdefault(str(p.ParentID), []).append(p)
     for kids in children.values():
+        sequences = [p.Seq for p in kids]
+        if any(sequence is None for sequence in sequences):
+            raise ValueError("Active rekordbox playlist node has no sequence")
+        if len(sequences) != len(set(sequences)):
+            raise ValueError("Active rekordbox sibling nodes have duplicate sequences")
         kids.sort(key=lambda n: (n.Seq if n.Seq is not None else 0))
 
+    for p in active_nodes.values():
+        if p.Attribute == -128 or str(p.ParentID) == "root":
+            continue
+        parent = active_nodes.get(str(p.ParentID))
+        if parent is None or parent.Attribute != 1:
+            raise ValueError(
+                f"Active rekordbox playlist {p.Name!r} has no active parent folder")
+
+    # SACRED ORDER: a normal playlist's order is DjmdSongPlaylist.TrackNo — NOT
+    # the order get_playlist_contents returns (which is ContentID-based). Only
+    # rows whose playlist endpoint is an active normal node participate. Deleted
+    # playlists keep historical active membership rows; validating those would
+    # let invisible history break an otherwise valid refresh.
+    normal_ids = {
+        node_id for node_id, node in active_nodes.items() if node.Attribute == 0
+    }
+    tracks_by_pl: dict[str, list] = {}
+    for sp in db.query(DjmdSongPlaylist).all():
+        playlist_id = str(sp.PlaylistID)
+        if _deleted(sp) or playlist_id not in normal_ids:
+            continue
+        if (active_track_ids is not None
+                and str(sp.ContentID) not in active_track_ids):
+            continue
+        tracks_by_pl.setdefault(playlist_id, []).append(sp)
+    for rows in tracks_by_pl.values():
+        track_numbers = [r.TrackNo for r in rows]
+        if any(number is None for number in track_numbers):
+            raise ValueError("Active rekordbox playlist membership has no TrackNo")
+        if len(track_numbers) != len(set(track_numbers)):
+            raise ValueError("Active rekordbox playlist has duplicate TrackNo values")
+        rows.sort(key=lambda r: (r.TrackNo if r.TrackNo is not None else 0))
+
     playlists: list[Playlist] = []
+    visited: set[str] = set()
 
     def walk(parent_id: str, path: list[str]):
         for p in children.get(parent_id, []):
@@ -263,14 +420,36 @@ def _read_playlists(db) -> list[Playlist]:
                 keys = [str(sp.ContentID) for sp in tracks_by_pl.get(str(p.ID), [])]
                 playlists.append(Playlist(
                     name=p.Name, folder_path=list(path), keys=keys, pid=str(p.ID)))
+                visited.add(str(p.ID))
             elif p.Attribute == 4:  # SMART/dynamic playlist → contents are computed
                 try:                # from the tag/filter criteria, not a membership table
-                    keys = [str(s.ID) for s in db.get_playlist_contents(p)]
-                except Exception:  # noqa: BLE001
-                    keys = []
+                    keys = [str(s.ID) for s in _smart_playlist_contents(db, p)]
+                except Exception as exc:  # noqa: BLE001 - add playlist identity
+                    raise RuntimeError(
+                        f"Could not evaluate rekordbox smart playlist "
+                        f"{' / '.join(path + [p.Name])!r}: {exc}") from exc
+                if active_track_ids is not None:
+                    keys = [key for key in keys if key in active_track_ids]
                 playlists.append(Playlist(
                     name=p.Name, folder_path=list(path), keys=keys, pid=str(p.ID)))
+                visited.add(str(p.ID))
             # else: skip special nodes (e.g. Attribute -128 = cloud)
 
     walk("root", [])
+    expected = {
+        node_id for node_id, node in active_nodes.items()
+        if node.Attribute in (0, 4)
+    }
+    if visited != expected:
+        missing = sorted(expected - visited)
+        raise ValueError(
+            f"Active rekordbox playlists are unreachable from root: {missing}")
+    pids = [playlist.pid for playlist in playlists]
+    if len(pids) != len(set(pids)):
+        raise ValueError("Active rekordbox playlists contain duplicate stable IDs")
+    display_paths = [playlist.display_path for playlist in playlists]
+    if len(display_paths) != len(set(display_paths)):
+        raise ValueError(
+            "Active rekordbox playlists contain duplicate display paths; "
+            "SoundBox cannot safely select them by name")
     return playlists

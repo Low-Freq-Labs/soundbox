@@ -41,6 +41,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   drop the ref only on the built-in `finished` signal via
   `MainWindow._finish_worker(attr, w)` (main thread, after `run()` returns). Used
   for export/refresh/resync workers + `PlayerBar._wf`. Don't regress it.
+- **A custom worker result signal is not a device-completion boundary.** `done`,
+  `finished_all`, and similar signals are emitted inside `run()`; the QThread and
+  its UI ownership still exist. Device workers store their result, consume it
+  only from the built-in `finished` signal, clear the owning attribute first,
+  and then enter UI result/finalization handling. Newly connected rows, Eject,
+  Sync, success dialogs, and 100% progress must all follow that same boundary.
 - Accessing a `deleteLater()`'d worker raises `RuntimeError: Internal C++ object
   already deleted`. Guard with the `_running(w)` helper.
 - `shutdown()` (from `closeEvent` + `app.aboutToQuit`) must stop/wait every
@@ -568,6 +574,21 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   free-space/drift scan from that worker's `finished` signal. Starting both
   readers together adds avoidable USB contention and leaves the visible
   snapshot stale until the user navigates away and back.
+- **Connection discovery, dashboard preload, and drift are ordered UX phases.**
+  A debounced `/Volumes` watcher begins detection without waiting for the
+  three-second recovery poll. No new generic or iPod row publishes before the
+  discovery QThread has cleared ownership. Never publish a stock/dual iPod's sidebar
+  row as a loading affordance. Keep it absent and put `Loading iPod...` in the
+  lower-left status while the genuinely new mount skips first-pass drift,
+  preloads the complete immutable Device/Songs/Playlists snapshot exactly once,
+  and then runs the normal drift scan. The completed follow-up scan is the sole
+  visibility gate. Thus every clickable iPod already has a cached snapshot and
+  clicking it is presentation-only; it must never parse/hash iTunesDB again. A
+  failed initial read remains hidden and retries through the bounded poll rather
+  than entering an immediate worker loop. Sidebar and stock-dashboard readers
+  remain strictly single-flight. Bind path-keyed caches to the mount root's
+  `st_dev`, and clear/reprobe every disk/profile/identity cache when the same
+  `/Volumes` name returns with a different token.
 - **A stock shadow source row describes two files.** `size`/`sha256` belong to
   the verified device payload; `source_size`/`mtime_ns` describe the canonical
   Mac source. Picture removal changes payload size without changing the source.
@@ -800,9 +821,30 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **SMART playlists (Attribute 4) have ZERO `DjmdSongPlaylist` rows** (computed) →
   for them use `get_playlist_contents()`. Attribute: 0=normal, 1=folder, 4=smart,
   -128=cloud(skip).
-- `rb_local_deleted` truthy = soft-deleted → skip (tracks AND playlists).
-- Collection has ~5244 tracks but only ~2940 are in playlists; load only
-  playlist-referenced tracks.
+- **Removed My Tags remain as soft-deleted `djmdSongMyTag` history.**
+  `pyrekordbox 0.4.4` does not include `rb_local_deleted` in its My Tag
+  smart-list predicate, so calling `get_playlist_contents()` directly
+  resurrects old genre memberships and also breaks `not contains`. SoundBox
+  rebuilds any smart-list predicate containing `myTag`, preserves
+  pyrekordbox's other condition clauses and ALL/ANY operator, and requires the
+  tag definition, association, and content to be active. `Jump Bros!` was the
+  proving row: Trap remained active while its historical DnB link was deleted.
+- **A snapshot is `master.db` plus its matching WAL, never `-shm`.** Copying a
+  main file and a WAL across a rekordbox checkpoint can mix two points in time.
+  Compare device/inode/size/mtime/ctime for both before and after the copy and
+  retry the whole pair when either changes or the WAL disappears. SHM contains
+  process-local locks/index state and must be reconstructed for the copy.
+- `rb_local_deleted` truthy = soft-deleted. Apply it at every visible endpoint:
+  content, playlist nodes, ordinary membership rows, My Tag definitions, and
+  My Tag associations. Filtering only the parent row is insufficient.
+- The rekordbox Collection is larger than its playlist-referenced set;
+  SoundBox intentionally loads only tracks reached from an active normal or
+  smart playlist because it is a playlist exporter. A newly tagged/added track
+  enters on the same refresh; a track removed from every playlist leaves.
+- Validate `Attribute`, parent folders, sibling `Seq`, membership `TrackNo`,
+  reachability, stable IDs, and unique display paths before accepting a tree.
+  Keep exact `TrackNo` order. An ambiguity or an unverified smart field must
+  fail refresh visibly, never degrade to an empty/all-tracks playlist.
 - **`DjmdPlaylist.ID` is STABLE across rename + move** → the device-sync identity.
 - **"Date added" = `content.created_at` (the DB row's real timestamp, time-of-day
   precision), NOT `DateCreated`.** `DateCreated` is a stale tag/metadata date that
@@ -910,15 +952,21 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   both finish. Show `Finalizing iPod...` during those reads and delay the success
   dialog until Eject is actually available; never make dismissing an alleged
   completion dialog start another blocking device worker. `QMessageBox` runs a
-  nested event loop, so `_exporting` must remain true until the modal returns;
-  clearing it before `exec()` lets the recurring three-second poll launch under
-  the dialog. After the final scan completes, retain an explicit eject-ready
-  latch that pauses recurring polling until Eject or a new explicit device
-  action. Do not make Eject cancel, adopt, or finish dashboard work: no such work
+  nested event loop, so install the explicit eject-ready latch before releasing
+  `_exporting` and opening the modal; that latch pauses recurring polling until
+  Eject or a new explicit device action while leaving Eject genuinely enabled.
+  Do not make Eject cancel, adopt, or finish dashboard work: no such work
   may remain at the success boundary. Keep Eject fail-closed if any device read,
   writer, planner, or import really is active, and suppress polling through
   verification/unmount outcome. A no-write/up-to-date plan is still a completed
   Sync or Delete and must pass through the same final scan/latch before its OK.
+- **Device progress is a transaction meter, not a copy meter.** Planning owns
+  0–15%, guarded device work owns 15–80%, and final dashboard/sidebar/drift reads
+  plus worker-ownership release own 80–100%. Keep it monotonic across queued
+  batches and multiple targets. Never publish 100%, `Complete`, a success modal,
+  or enabled Eject/Sync while any required worker attribute remains owned. A
+  failed required final read is terminal but not successful: retain Eject,
+  report `Final refresh failed`, and suppress the success callback.
 - **An explicit managed-playlist Delete is authoritative.** Do not force a
   separate Sync merely because a different schema-3 playlist changed or is no
   longer available from the current source. Reconcile other available managed

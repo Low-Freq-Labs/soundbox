@@ -567,12 +567,18 @@ class StockIpodUI(unittest.TestCase):
 
             _win._on_dual_ipod_plan_progress(2, 4, "planning")
             planned_value = _win.progress.value()
-            self.assertEqual(planned_value, 150)
+            self.assertEqual(planned_value, 75)
             self.assertEqual(_win.status_label.text(), "Planning iPod")
+
+            _win._on_dual_ipod_plan_progress(4, 4, "planned")
+            self.assertEqual(_win.progress.value(), 150)
 
             _win._on_dual_ipod_progress(1, 4, "writing")
             self.assertGreater(_win.progress.value(), planned_value)
             self.assertEqual(_win.status_label.text(), "Syncing iPod")
+
+            _win._on_dual_ipod_progress(4, 4, "written")
+            self.assertEqual(_win.progress.value(), 800)
         finally:
             _win._dual_active_preconfirmed = old_preconfirmed
             _win._stop_pulse()
@@ -580,6 +586,27 @@ class StockIpodUI(unittest.TestCase):
             _win.progress.setValue(old_value)
             _win.progress.setVisible(False)
             _win.status_label.setText("Ready")
+
+    def test_generic_work_reserves_final_twenty_percent(self):
+        old_value = _win.progress.value()
+        try:
+            _win.progress.setValue(0)
+            _win._on_progress(0, 4, "planned")
+            self.assertEqual(_win.progress.value(), 150)
+            _win._on_progress(2, 4, "copying")
+            self.assertEqual(_win.progress.value(), 475)
+            _win._on_progress(4, 4, "written")
+            self.assertEqual(_win.progress.value(), 800)
+
+            # Growing an active export queue must never move the bar backward.
+            _win._on_progress(1, 8, "new queued work")
+            self.assertEqual(_win.progress.value(), 800)
+        finally:
+            _win._stop_pulse(force=True)
+            _win.cancel_btn.setVisible(False)
+            _win.progress.setValue(old_value)
+            _win.progress.setVisible(False)
+            _win._set_status_text("Ready", force=True)
 
     def test_success_refreshes_open_ipod_before_sidebar_scan(self):
         from types import SimpleNamespace
@@ -693,7 +720,8 @@ class StockIpodUI(unittest.TestCase):
                     _win._exporting, _win._eject_ready_device)),
             )
             self.assertEqual(
-                exporting_during_dialog, [(True, "/Volumes/IPOD")])
+                exporting_during_dialog, [(False, "/Volumes/IPOD")])
+            self.assertEqual(_win.progress.value(), 1000)
             self.assertFalse(_win._exporting)
             self.assertEqual(_win._eject_ready_device, "/Volumes/IPOD")
         finally:
@@ -701,6 +729,64 @@ class StockIpodUI(unittest.TestCase):
             _win._refresh_device_surfaces = old_refresh
             _win._exporting = old_exporting
             _win._eject_ready_device = old_ready
+
+    def test_failed_final_refresh_never_runs_success_callback(self):
+        old_refresh = _win._refresh_device_surfaces
+        old_exporting = _win._exporting
+        old_ready = _win._eject_ready_device
+        callbacks = []
+
+        def refresh(_dev, *, after_finished=None):
+            _win._device_finalization_error = RuntimeError("dashboard unreadable")
+            self.assertIsNotNone(after_finished)
+            after_finished()
+
+        try:
+            _win._refresh_device_surfaces = refresh
+            with mock.patch("desktop.app.QMessageBox.warning") as warning:
+                _win._finalize_ipod_operation(
+                    "/Volumes/IPOD", lambda: callbacks.append("success"))
+            self.assertEqual(callbacks, [])
+            warning.assert_called_once()
+            self.assertEqual(_win.status_label.text(), "Final refresh failed")
+            self.assertEqual(_win._eject_ready_device, "/Volumes/IPOD")
+            self.assertFalse(_win._exporting)
+        finally:
+            _win._stop_pulse(force=True)
+            _win._refresh_device_surfaces = old_refresh
+            _win._exporting = old_exporting
+            _win._eject_ready_device = old_ready
+            _win._device_finalization_error = None
+
+    def test_multi_device_export_finalizes_every_target_before_done(self):
+        old_refresh = _win._refresh_device_surfaces
+        old_exporting = _win._exporting
+        old_ready = _win._eject_ready_device
+        events = []
+
+        def refresh(device, *, after_finished=None, surface_progress=900):
+            events.append(("refresh", device, surface_progress))
+            self.assertIsNotNone(after_finished)
+            after_finished()
+
+        try:
+            _win._refresh_device_surfaces = refresh
+            _win._finalize_device_operations(
+                ["/Volumes/A", "/Volumes/B", "/Volumes/A"],
+                lambda: events.append(("done", _win.progress.value())),
+            )
+            self.assertEqual(events, [
+                ("refresh", "/Volumes/A", 850),
+                ("refresh", "/Volumes/B", 950),
+                ("done", 1000),
+            ])
+            self.assertFalse(_win._exporting)
+        finally:
+            _win._stop_pulse(force=True)
+            _win._refresh_device_surfaces = old_refresh
+            _win._exporting = old_exporting
+            _win._eject_ready_device = old_ready
+            _win._device_finalization_error = None
 
     def test_clean_stock_sync_finalizes_before_up_to_date_dialog(self):
         class CleanPlan:
@@ -817,24 +903,44 @@ class StockIpodUI(unittest.TestCase):
             _win._eject_ready_device = old_ready
             _win._dev_scan_worker = old_worker
 
-    def test_eject_does_not_absorb_unfinished_housekeeping(self):
+    def test_eject_queues_behind_read_only_poll_without_busy_modal(self):
+        class FakeSignal:
+            def __init__(self):
+                self.slots = []
+
+            def connect(self, slot):
+                self.slots.append(slot)
+
         class FakeScan:
+            def __init__(self):
+                self.finished = FakeSignal()
+
             def isRunning(self):
                 return True
 
         old_scan = _win._dev_scan_worker
         old_verify = _win._eject_verify_worker
+        old_exporting = _win._exporting
+        old_pulse_word = _win._pulse_word
         try:
-            _win._dev_scan_worker = FakeScan()
+            scan = FakeScan()
+            _win._dev_scan_worker = scan
             _win._eject_verify_worker = None
             with mock.patch(
                     "desktop.device_browser.QMessageBox.warning") as warning:
                 _win._eject("/Volumes/IPOD")
-            warning.assert_called_once()
+            warning.assert_not_called()
             self.assertIsNone(_win._eject_verify_worker)
+            self.assertTrue(_win._exporting)
+            self.assertEqual(_win._pulse_word, "Waiting to eject")
+            self.assertEqual(len(scan.finished.slots), 1)
         finally:
+            _win._stop_pulse(force=True)
             _win._dev_scan_worker = old_scan
             _win._eject_verify_worker = old_verify
+            _win._exporting = old_exporting
+            _win._pulse_word = old_pulse_word
+            _win._update_device_action_state()
 
     def test_eject_still_refuses_live_composite_writer(self):
         class FakeWriter:
@@ -916,6 +1022,403 @@ class StockIpodUI(unittest.TestCase):
                 _win._device_profiles.pop(dev, None)
             else:
                 _win._device_profiles[dev] = old_profile
+
+    def test_device_click_uses_preloaded_dashboard_without_another_read(self):
+        from types import SimpleNamespace
+
+        dev = "/Volumes/PRELOADED-IPOD"
+        old_profile = _win._device_profiles.get(dev)
+        old_cache = _win._stock_view_cache.get(dev)
+        old_current = _win._current_device_path
+        old_apply = _win._on_stock_device_view
+        old_read = _win._read_stock_device_view
+        applied = []
+        reads = []
+
+        class _Item:
+            @staticmethod
+            def data(_column, _role):
+                return dev
+
+        cached = (object(), None)
+        try:
+            _win._device_profiles[dev] = SimpleNamespace(
+                kind="dual_boot", has_stock_ipod=True)
+            _win._stock_view_cache[dev] = cached
+            _win._on_stock_device_view = (
+                lambda device, result: applied.append((device, result)))
+            _win._read_stock_device_view = (
+                lambda *args, **kwargs: reads.append((args, kwargs)))
+            _win._on_device_click(_Item(), 0)
+            self.assertEqual(applied, [(dev, cached)])
+            self.assertEqual(reads, [])
+        finally:
+            _win._on_stock_device_view = old_apply
+            _win._read_stock_device_view = old_read
+            _win._current_device_path = old_current
+            if old_profile is None:
+                _win._device_profiles.pop(dev, None)
+            else:
+                _win._device_profiles[dev] = old_profile
+            if old_cache is None:
+                _win._stock_view_cache.pop(dev, None)
+            else:
+                _win._stock_view_cache[dev] = old_cache
+
+    def test_background_dashboard_result_is_cached_before_click(self):
+        dev = "/Volumes/PRELOAD-CACHE"
+        old_current = _win._current_device_path
+        old_cache = _win._stock_view_cache.get(dev)
+
+        class Snapshot:
+            tracks = (1, 2)
+            playlists = (1,)
+
+        snapshot = Snapshot()
+        try:
+            _win._current_device_path = ""
+            with mock.patch("desktop.app.StockIpodSnapshot", Snapshot):
+                _win._on_stock_device_view(dev, (snapshot, None))
+            self.assertEqual(_win._stock_view_cache[dev], (snapshot, None))
+        finally:
+            _win._current_device_path = old_current
+            if old_cache is None:
+                _win._stock_view_cache.pop(dev, None)
+            else:
+                _win._stock_view_cache[dev] = old_cache
+
+    def test_new_ipod_stays_hidden_while_lower_status_loads(self):
+        from types import SimpleNamespace
+
+        dev = "/Volumes/HIDDEN-UNTIL-READY"
+        old_worker = _win._dev_scan_worker
+        old_profile = _win._device_profiles.get(dev)
+        old_drift = _win._drift_cache.get(dev)
+        old_current = _win._current_device_path
+        old_status = _win.status_label.text()
+        old_pulse_word = _win._pulse_word
+        old_warming = set(_win._stock_view_warming)
+        old_cache = _win._stock_view_cache.get(dev)
+        _win.device_tree.clear()
+        profile = SimpleNamespace(has_stock_ipod=True)
+        try:
+            _win._dev_scan_worker = SimpleNamespace(mount_tokens={dev: 17})
+            _win._stock_view_cache.pop(dev, None)
+            _win._stock_view_warming.discard(dev)
+            _win._on_devices_discovered([
+                ("HIDDEN-UNTIL-READY", dev, 1000, profile)])
+
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+            self.assertIn(dev, _win._stock_view_warming)
+            self.assertEqual(_win._pulse_word, "Loading iPod")
+            self.assertTrue(_win.status_label.text().startswith("Loading iPod"))
+        finally:
+            _win._stop_pulse()
+            _win.status_label.setText(old_status)
+            _win._pulse_word = old_pulse_word
+            _win._stock_view_warming = old_warming
+            _win._dev_scan_worker = old_worker
+            _win._current_device_path = old_current
+            if old_profile is None:
+                _win._device_profiles.pop(dev, None)
+            else:
+                _win._device_profiles[dev] = old_profile
+            if old_drift is None:
+                _win._drift_cache.pop(dev, None)
+            else:
+                _win._drift_cache[dev] = old_drift
+            if old_cache is None:
+                _win._stock_view_cache.pop(dev, None)
+            else:
+                _win._stock_view_cache[dev] = old_cache
+            _win.device_tree.clear()
+
+    def test_ipod_row_publishes_only_after_preload_and_followup_scan(self):
+        from types import SimpleNamespace
+        from desktop.trees import DEVPATH_ROLE
+
+        dev = "/Volumes/PUBLISH-AFTER-PRELOAD"
+        old_worker = _win._dev_scan_worker
+        old_profiles = dict(_win._device_profiles)
+        old_drift = dict(_win._drift_cache)
+        old_tokens = dict(_win._device_mount_tokens)
+        old_warming = set(_win._stock_view_warming)
+        old_cache = dict(_win._stock_view_cache)
+        old_current = _win._current_device_path
+        old_status = _win.status_label.text()
+        profile = SimpleNamespace(
+            has_stock_ipod=True, kind="dual_boot", label="Dual iPod")
+        rows = [("PUBLISH-AFTER-PRELOAD", dev, 1000, 3, profile)]
+        _win.device_tree.clear()
+        try:
+            _win._dev_scan_worker = SimpleNamespace(mount_tokens={dev: 23})
+            _win._stock_view_cache.pop(dev, None)
+            _win._stock_view_warming = {dev}
+            _win._start_ipod_loading_status()
+            with (
+                mock.patch("desktop.app.device_fs", return_value="fat32"),
+                mock.patch.object(_win, "_device_tip", return_value="ready"),
+            ):
+                _win._on_devices_scanned(rows)
+                self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+
+                # The immutable preload exists, but the row remains hidden
+                # until this completed scan publishes its verified drift state.
+                _win._stock_view_cache[dev] = (object(), None)
+                _win._on_devices_scanned(rows)
+
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
+            item = _win.device_tree.topLevelItem(0)
+            self.assertEqual(item.data(0, DEVPATH_ROLE), dev)
+            self.assertIn("Sync needed", item.text(0))
+            self.assertNotIn(dev, _win._stock_view_warming)
+            self.assertEqual(_win.status_label.text(), "Ready")
+            self.assertIsNone(_win._pulse_word)
+        finally:
+            _win._stop_pulse()
+            _win.status_label.setText(old_status)
+            _win._device_profiles = old_profiles
+            _win._drift_cache = old_drift
+            _win._device_mount_tokens = old_tokens
+            _win._stock_view_warming = old_warming
+            _win._stock_view_cache = old_cache
+            _win._current_device_path = old_current
+            _win._dev_scan_worker = old_worker
+            _win.device_tree.clear()
+
+    def test_finished_scan_clears_ownership_before_publishing_row(self):
+        from types import SimpleNamespace
+
+        dev = "/Volumes/PUBLISH-AFTER-THREAD"
+        old_worker = _win._dev_scan_worker
+        old_apply = _win._on_devices_scanned
+        calls = []
+
+        class Worker:
+            new_paths = ()
+            mount_tokens = {dev: 41}
+            results = [("PUBLISH-AFTER-THREAD", dev, 1000, 0,
+                        SimpleNamespace(has_stock_ipod=False))]
+
+            @staticmethod
+            def deleteLater():
+                pass
+
+        worker = Worker()
+        try:
+            _win._dev_scan_worker = worker
+
+            def apply(results, *, mount_tokens=None):
+                calls.append((results, mount_tokens, _win._dev_scan_worker))
+
+            _win._on_devices_scanned = apply
+            _win._finish_device_scan_worker(worker)
+
+            self.assertIsNone(_win._dev_scan_worker)
+            self.assertEqual(calls[0][0], worker.results)
+            self.assertEqual(calls[0][1], worker.mount_tokens)
+            self.assertIsNone(calls[0][2])
+        finally:
+            _win._on_devices_scanned = old_apply
+            _win._dev_scan_worker = old_worker
+
+    def test_generic_row_also_waits_for_scan_thread_finished(self):
+        from types import SimpleNamespace
+
+        dev = "/Volumes/GENERIC-WAITS"
+        old_worker = _win._dev_scan_worker
+        old_profiles = dict(_win._device_profiles)
+        old_drift = dict(_win._drift_cache)
+        old_tokens = dict(_win._device_mount_tokens)
+        old_current = _win._current_device_path
+        profile = SimpleNamespace(
+            has_stock_ipod=False, kind="generic", label="Generic USB")
+        _win.device_tree.clear()
+        try:
+            _win._dev_scan_worker = SimpleNamespace(mount_tokens={dev: 51})
+            _win._on_devices_discovered([
+                ("GENERIC-WAITS", dev, 1000, profile)])
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+
+            with (
+                mock.patch("desktop.app.device_fs", return_value="fat32"),
+                mock.patch.object(_win, "_device_tip", return_value="ready"),
+            ):
+                _win._dev_scan_worker = None
+                _win._on_devices_scanned([
+                    ("GENERIC-WAITS", dev, 1000, 0, profile)],
+                    mount_tokens={dev: 51},
+                )
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
+        finally:
+            _win._dev_scan_worker = old_worker
+            _win._device_profiles = old_profiles
+            _win._drift_cache = old_drift
+            _win._device_mount_tokens = old_tokens
+            _win._current_device_path = old_current
+            _win.device_tree.clear()
+
+    def test_device_result_callback_runs_after_worker_ownership_clears(self):
+        class Worker:
+            result = "complete"
+
+            @staticmethod
+            def deleteLater():
+                pass
+
+        old_worker = _win._resync_worker
+        old_exporting = _win._exporting
+        calls = []
+        worker = Worker()
+        try:
+            _win._resync_worker = worker
+            _win._exporting = False
+            _win._finish_device_result_worker(
+                "_resync_worker", worker,
+                lambda result: calls.append((result, _win._resync_worker)))
+            self.assertEqual(calls, [("complete", None)])
+        finally:
+            _win._resync_worker = old_worker
+            _win._exporting = old_exporting
+            _win._update_device_action_state()
+
+    def test_library_prep_cannot_flicker_ipod_loading_to_ready(self):
+        dev = "/Volumes/STATUS-OWNED-IPOD"
+        old_worker = _win._wf_fill_worker
+        old_schedule = _win._schedule_waveform_recheck
+        old_preparing = _win._preparing_library
+        old_warming = set(_win._stock_view_warming)
+        old_status = _win.status_label.text()
+
+        class Worker:
+            @staticmethod
+            def deleteLater():
+                pass
+
+        worker = Worker()
+        try:
+            _win._wf_fill_worker = worker
+            _win._schedule_waveform_recheck = lambda: None
+            _win._preparing_library = True
+            _win._stock_view_warming = {dev}
+            _win._start_ipod_loading_status()
+
+            _win._on_library_prep_finished(worker)
+
+            self.assertEqual(_win._pulse_word, "Loading iPod")
+            self.assertTrue(_win._pulse_timer.isActive())
+            self.assertTrue(_win.status_label.text().startswith("Loading iPod"))
+        finally:
+            _win._stock_view_warming.clear()
+            _win._stop_pulse(force=True)
+            _win.status_label.setText(old_status)
+            _win._stock_view_warming = old_warming
+            _win._wf_fill_worker = old_worker
+            _win._schedule_waveform_recheck = old_schedule
+            _win._preparing_library = old_preparing
+
+    def test_failed_initial_preload_never_publishes_partial_ipod(self):
+        dev = "/Volumes/FAILED-PRELOAD"
+        old_current = _win._current_device_path
+        old_status = _win.status_label.text()
+        old_warming = set(_win._stock_view_warming)
+        old_cache = dict(_win._stock_view_cache)
+        old_rescan = _win._device_rescan_after_stock_view
+        _win.device_tree.clear()
+        try:
+            _win._current_device_path = ""
+            _win._stock_view_cache.pop(dev, None)
+            _win._stock_view_warming = {dev}
+            _win._device_rescan_after_stock_view = True
+            _win._start_ipod_loading_status()
+
+            _win._on_stock_device_view(dev, RuntimeError("unreadable"))
+
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+            self.assertNotIn(dev, _win._stock_view_cache)
+            self.assertNotIn(dev, _win._stock_view_warming)
+            self.assertFalse(_win._device_rescan_after_stock_view)
+            self.assertEqual(_win.status_label.text(),
+                             "iPod load failed — retrying")
+        finally:
+            _win._stop_pulse()
+            _win.status_label.setText(old_status)
+            _win._stock_view_warming = old_warming
+            _win._stock_view_cache = old_cache
+            _win._device_rescan_after_stock_view = old_rescan
+            _win._current_device_path = old_current
+            _win.device_tree.clear()
+
+    def test_finished_discovery_starts_new_ipod_preload(self):
+        from types import SimpleNamespace
+
+        dev = "/Volumes/NEW-IPOD"
+        old_worker = _win._dev_scan_worker
+        old_profile = _win._device_profiles.get(dev)
+        old_cache = _win._stock_view_cache.get(dev)
+        old_reader = _win._read_stock_device_view
+        old_rescan = _win._device_rescan_after_stock_view
+        old_warming = set(_win._stock_view_warming)
+        calls = []
+
+        class Worker:
+            new_paths = (dev,)
+
+            @staticmethod
+            def deleteLater():
+                pass
+
+        worker = Worker()
+        profile = SimpleNamespace(has_stock_ipod=True)
+        try:
+            _win._dev_scan_worker = worker
+            _win._device_profiles[dev] = profile
+            _win._stock_view_cache.pop(dev, None)
+            _win._read_stock_device_view = (
+                lambda device, value: calls.append((device, value)))
+            _win._device_rescan_after_stock_view = False
+            _win._finish_device_scan_worker(worker)
+            self.assertIsNone(_win._dev_scan_worker)
+            self.assertEqual(calls, [(dev, profile)])
+            self.assertTrue(_win._device_rescan_after_stock_view)
+        finally:
+            _win._dev_scan_worker = old_worker
+            _win._read_stock_device_view = old_reader
+            _win._device_rescan_after_stock_view = old_rescan
+            _win._stock_view_warming = old_warming
+            _win._stop_pulse(force=True)
+            if old_profile is None:
+                _win._device_profiles.pop(dev, None)
+            else:
+                _win._device_profiles[dev] = old_profile
+            if old_cache is None:
+                _win._stock_view_cache.pop(dev, None)
+            else:
+                _win._stock_view_cache[dev] = old_cache
+
+    def test_dashboard_read_waits_for_sidebar_reader(self):
+        dev = "/Volumes/SERIALIZED-IPOD"
+        old_scan = _win._dev_scan_worker
+        old_view = _win._stock_view_worker
+        old_pending = dict(_win._stock_view_pending)
+        old_callbacks = dict(_win._stock_view_callbacks)
+        scan = object()
+        profile = object()
+        try:
+            _win._dev_scan_worker = scan
+            _win._stock_view_worker = None
+            _win._stock_view_pending.clear()
+            _win._stock_view_callbacks.clear()
+            _win._read_stock_device_view(dev, profile)
+            self.assertIsNone(_win._stock_view_worker)
+            self.assertIs(_win._stock_view_pending[dev], profile)
+        finally:
+            _win._dev_scan_worker = old_scan
+            _win._stock_view_worker = old_view
+            _win._stock_view_pending.clear()
+            _win._stock_view_pending.update(old_pending)
+            _win._stock_view_callbacks.clear()
+            _win._stock_view_callbacks.update(old_callbacks)
 
     def test_stock_device_pages_render_snapshot(self):
         from soundbox.stock_ipod_info import (
@@ -1875,6 +2378,7 @@ class StockIpodUI(unittest.TestCase):
             title_overrides={"1": "Edited title"},
             stock_shadow_store=object(),
             stock_models={identity: "MA446"},
+            known_paths={"/Volumes/IPOD"},
         )
         results = []
         worker.done.connect(results.append)
@@ -1899,6 +2403,58 @@ class StockIpodUI(unittest.TestCase):
             drift_call.kwargs["artist_overrides"], {"1": "Edited artist"})
         self.assertEqual(
             drift_call.kwargs["title_overrides"], {"1": "Edited title"})
+
+    def test_new_device_scan_publishes_before_deferring_drift(self):
+        from types import SimpleNamespace
+        from desktop.workers import DeviceScanWorker
+
+        profile = SimpleNamespace(
+            kind="dual_boot", model="MA446", has_stock_ipod=True)
+        worker = DeviceScanWorker(_win.lib, [], known_paths=set())
+        discovered = []
+        completed = []
+        worker.discovered.connect(discovered.append)
+        worker.done.connect(completed.append)
+        with (
+            mock.patch("desktop.workers.list_devices", return_value=[
+                ("IPOD", "/Volumes/IPOD", 1000)]),
+            mock.patch("desktop.workers.device_profile", return_value=profile),
+            mock.patch("desktop.workers.engine.device_drift") as drift,
+        ):
+            worker.run()
+        self.assertEqual(discovered[0], [
+            ("IPOD", "/Volumes/IPOD", 1000, profile)])
+        self.assertEqual(completed[0][0][3], 0)
+        self.assertEqual(worker.new_paths, ("/Volumes/IPOD",))
+        drift.assert_not_called()
+
+    def test_same_name_new_mount_token_is_a_new_connection(self):
+        from types import SimpleNamespace
+        from desktop.workers import DeviceScanWorker
+
+        profile = SimpleNamespace(
+            kind="dual_boot", model="MA446", has_stock_ipod=True)
+        worker = DeviceScanWorker(
+            _win.lib,
+            [],
+            known_paths={"/Volumes/IPOD"},
+            known_mount_tokens={"/Volumes/IPOD": 88},
+        )
+        with (
+            mock.patch("desktop.workers.list_devices", return_value=[
+                ("IPOD", "/Volumes/IPOD", 1000)]),
+            mock.patch("desktop.workers.os.stat",
+                       return_value=SimpleNamespace(st_dev=99)),
+            mock.patch("desktop.workers.refresh_device_mount",
+                       return_value=True) as refresh_mount,
+            mock.patch("desktop.workers.device_profile", return_value=profile),
+            mock.patch("desktop.workers.engine.device_drift") as drift,
+        ):
+            worker.run()
+        self.assertEqual(worker.mount_tokens, {"/Volumes/IPOD": 99})
+        self.assertEqual(worker.new_paths, ("/Volumes/IPOD",))
+        refresh_mount.assert_called_once_with("/Volumes/IPOD")
+        drift.assert_not_called()
 
     def test_stock_commit_prompt_defaults_to_cancel(self):
         source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
@@ -5482,6 +6038,79 @@ class LibraryInstantPaint(unittest.TestCase):
                 self.assertEqual(set(got.tracks_by_id), set(_win.lib.tracks_by_id))
             finally:
                 _win._libcache_path = saved
+
+    def test_newer_library_waits_behind_active_cache_write(self):
+        class OwnedWorker:
+            pass
+
+        saved_worker = _win._libcache_worker
+        saved_pending = _win._libcache_pending
+        saved_shutting_down = _win._shutting_down
+        newer = _make_lib()
+        try:
+            _win._libcache_worker = OwnedWorker()
+            _win._libcache_pending = None
+            _win._shutting_down = False
+            _win.lib = newer
+            _win._cache_library()
+            self.assertIs(_win._libcache_pending, newer)
+        finally:
+            _win._libcache_worker = saved_worker
+            _win._libcache_pending = saved_pending
+            _win._shutting_down = saved_shutting_down
+
+
+class RekordboxRefreshOrdering(unittest.TestCase):
+    """Refresh clicks and results cannot silently land out of order."""
+
+    def test_click_during_refresh_queues_one_follow_up(self):
+        class OwnedWorker:
+            @staticmethod
+            def isRunning():
+                # Models the gap after run() returns but before Qt delivers
+                # the worker's queued ``finished`` callback.
+                return False
+
+        saved_worker = _win._refresh_worker
+        saved_pending = _win._refresh_pending
+        try:
+            _win._refresh_worker = OwnedWorker()
+            _win._refresh_pending = False
+            _win._refresh_rekordbox()
+            self.assertTrue(_win._refresh_pending)
+            _win._refresh_rekordbox()
+            self.assertTrue(_win._refresh_pending)
+        finally:
+            _win._refresh_worker = saved_worker
+            _win._refresh_pending = saved_pending
+
+    def test_finished_refresh_schedules_queued_newer_read(self):
+        class FinishedWorker:
+            deleted = False
+
+            def deleteLater(self):
+                self.deleted = True
+
+        saved_worker = _win._refresh_worker
+        saved_pending = _win._refresh_pending
+        saved_shutting_down = _win._shutting_down
+        worker = FinishedWorker()
+        callbacks = []
+        try:
+            _win._refresh_worker = worker
+            _win._refresh_pending = True
+            _win._shutting_down = False
+            with mock.patch("desktop.app.QTimer.singleShot",
+                            side_effect=lambda _delay, fn: callbacks.append(fn)):
+                _win._finish_refresh_worker(worker)
+            self.assertIsNone(_win._refresh_worker)
+            self.assertFalse(_win._refresh_pending)
+            self.assertTrue(worker.deleted)
+            self.assertEqual(callbacks, [_win._refresh_rekordbox])
+        finally:
+            _win._refresh_worker = saved_worker
+            _win._refresh_pending = saved_pending
+            _win._shutting_down = saved_shutting_down
 
 
 class WaveformRapidLoad(unittest.TestCase):

@@ -4,7 +4,7 @@ Living to-do. Work top-down. The MA446 dual-boot iPod workflow is shipped and
 physically accepted; remaining device work is follow-up hardening and new hardware.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-08-04)
+## Current status (2026-08-05)
 
 - **CORE LIBRARY/EXPORT COMPLETE; LEGACY COVER RE-AUDIT ACTIVE.** Every track
   title is cut/cleaned. A 2026-08-04 review proved that some pre-hardening
@@ -43,6 +43,15 @@ For the live test count, trust `./check.sh` output—not any number written here
   track IDs at the edge, and V4 instant-paint snapshots remain readable.
   There is deliberately no speculative Serato/Traktor registry before a
   second real source establishes the necessary interface.
+- **REKORDBOX MY-TAG SMART PLAYLISTS MIRROR DELETIONS.** The live adapter now
+  excludes soft-deleted tag definitions, `djmdSongMyTag` history, and content
+  from My Tag `contains` and `not contains` predicates while preserving
+  compound ALL/ANY criteria. The 2026-08-05 live audit found 40 deleted tag
+  associations: the old evaluator emitted 28 stale keys from the 10 active
+  smart playlists (15 visible active-song memberships and 13 already-deleted
+  song ghosts), while the remaining 12 belonged to a deleted playlist. The
+  corrected read retained `Jump Bros!` in Trap and removed its historical DnB
+  membership without any rekordbox write.
 - **ROCKBOX-SIDE PLAYLIST APPENDS IMPLEMENTED.** A schema-3 connection now
   reports ordinary Sync-needed drift when Rockbox changes an owned M3U8 size.
   Confirmed Sync accepts only append-only, already-managed device paths, saves
@@ -67,6 +76,25 @@ For the live test count, trust `./check.sh` output—not any number written here
   action releases the hold and refreshes normally. Clean/no-write Sync and
   already-absent Delete outcomes use the same finalization path, allowing an
   immediate trustworthy Eject even when there was nothing to publish.
+- **DEVICE TRANSACTIONS NOW HAVE ONE TERMINAL CONTRACT.** Export, Sync,
+  managed/file Delete, connection preload, verification, and final refreshes
+  consume results only after their QThread has returned and released UI
+  ownership. Newly detected generic rows also wait for that boundary; new iPods
+  additionally remain hidden through dashboard preload and drift. Progress is
+  monotonic 0–15% planning, 15–80% guarded work, and 80–100% final
+  dashboard/sidebar/drift release. Eject and Sync are disabled during true
+  ownership, a recurring read-only poll queues Eject instead of throwing a busy
+  modal, multi-target exports finalize every touched volume, and a failed final
+  refresh cannot run a success dialog.
+- **IPOD CONNECTION NOW PRELOADS THE USEFUL VIEW.** A `/Volumes` notification
+  starts detection immediately instead of waiting up to three seconds. A new
+  stock/dual mount remains absent from the sidebar while the lower-left status
+  reads `Loading iPod...`; it receives one serialized Device/Songs/Playlists
+  preload and the ordinary drift scan. Only that fully loaded result publishes
+  the clickable row, so selecting it performs no removable-device read. The poll
+  remains as missed-event/failure recovery, readers never overlap, and a
+  same-name remount invalidates path caches through its changed filesystem
+  device token.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,
@@ -851,8 +879,9 @@ future expansion, not blockers for normal use:
       now receives its concise Yes/No before expensive work. Explicit Delete is
       authoritative: other available changes reconcile in the same operation
       and unavailable unrelated playlists retain their committed snapshots.
-      Planning occupies the first 30% and commit the final 70% of one monotonic
-      progress bar; one completion closes the action or queued batch.
+      Planning occupies 0–15%, guarded device work 15–80%, and final reads plus
+      ownership release 80–100% of one monotonic progress bar; one genuinely
+      terminal completion closes the action or queued batch.
 - [x] Extend the original manifest drift/Sync contract across stock-only and
       schema-3 dual layouts. Rekordbox rename/move/order/membership/removal and
       SoundBox vetoes surface one format-neutral Sync-needed state; stock-only

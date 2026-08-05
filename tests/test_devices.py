@@ -12,6 +12,33 @@ from desktop import devices
 
 
 class ClassicIpodFacts(unittest.TestCase):
+    def test_same_name_remount_forgets_every_path_keyed_fact(self):
+        path = "/Volumes/IPOD-REMOUNT"
+        caches = (
+            devices._EXTERNAL_CACHE,
+            devices._FS_CACHE,
+            devices._PROFILE_CACHE,
+            devices._INFO_CACHE,
+            devices._IPOD_FACTS_CACHE,
+        )
+        saved = [cache.get(path) for cache in caches]
+        present = [path in cache for cache in caches]
+        try:
+            for index, cache in enumerate(caches):
+                cache[path] = {"old": index}
+            with mock.patch.object(
+                    devices, "_is_external", return_value=True) as probe:
+                self.assertTrue(devices.refresh_device_mount(path))
+            probe.assert_called_once_with(Path(path))
+            self.assertTrue(all(path not in cache for cache in caches))
+        finally:
+            for cache, had_value, value in zip(
+                    caches, present, saved, strict=True):
+                if had_value:
+                    cache[path] = value
+                else:
+                    cache.pop(path, None)
+
     def test_pioneer_tree_is_reserved_inside_external_volume(self):
         with mock.patch.object(devices, "_is_external", return_value=True):
             self.assertTrue(devices._in_external_product_tree(
