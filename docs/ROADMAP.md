@@ -871,6 +871,22 @@ USB sticks (Sonny performs on 4× CDJ-3000). Full plan + status + prototype:
 - [ ] Expand stock writing beyond MA446/MP3/WAV only after per-model hash/layout
       research, fixture round-trips, artwork validation, and separate physical
       acceptance. Do not generalize from the 5.5G result.
+- [ ] Pursue complete **Rockbox Track ReplayGain**, including WAV rather than
+      shipping a misleading MP3-only subset. Start upstream-first with a
+      Rockbox WAV-metadata patch that recognizes a standards-compatible early
+      RIFF/ID3 ReplayGain representation and feeds Rockbox's existing gain/peak
+      parser; do not invent private tags without maintainer review. SoundBox's
+      scanner must use a reference-validated ReplayGain 2.0 / ITU-R BS.1770
+      gated track-loudness implementation at the standard -18 LUFS target plus
+      true peak, checked against independent scanners, official vectors, and
+      real MP3/WAV/AIFF/FLAC/M4A fixtures. Tags may be written only into the
+      bounded, verified disposable device payload: canonical sources stay
+      byte-identical and audio essence stays exact. Preserve the dual iPod's
+      single shared WAV—no lossy conversion or duplicate Rockbox collection—
+      and require physical playback/tag recognition on Rockbox plus unchanged
+      stock-firmware WAV playback before enabling it. A privately carried
+      firmware build remains an explicit later choice if upstream does not
+      accept the parser support.
 
 ## Product decisions (don't re-litigate)
 

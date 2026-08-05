@@ -9,16 +9,18 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 
 - Branch `main` contains the completed cover-matcher hardening, Unknown-cover
   curation support, and managed-default-photo feature in implementation commit
-  `3388b17`; this handoff is the final wrap-up follow-up.
+  `3388b17`. This documentation-only follow-up records deferred, WAV-complete
+  Rockbox Track ReplayGain R&D; shipped export behavior is unchanged.
 - The freshly signed app from that source is installed at
   `/Applications/Soundbox.app`, last observed as PID 24496. Its executable
   SHA-256 matches `dist/Soundbox.app` at
   `efebf8999a55dc330f760581919b8c1d92f3d08970188482207601a779cce0dd`.
   The packaged CoreAudio/Metal deck activated and the live read-only rekordbox
   snapshot loaded 3,414 tracks and 81 playlists.
-- `./check.sh --render` passed on 2026-08-04: pyflakes, native build, mypy,
-  offscreen rendering, and 749 tests
-  with four expected skips.
+- `./check.sh --render` passed earlier on 2026-08-04: pyflakes, native build,
+  mypy, offscreen rendering, and 749 tests with four expected skips. The bare
+  `./check.sh` wrap-up gate passed again after the ReplayGain roadmap addition
+  with the same 749 tests and four expected skips.
   `./build_app.sh` passed; strict signature verification passed for both the
   packaged and installed app.
 - rekordbox remained open throughout the initial 2026-08-03 installation and
@@ -195,6 +197,14 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 - No outstanding check blocks normal use of this MA446. On the next routine
   device deletion, physically confirm the new authoritative path no longer
   presents the obsolete Sync-first refusal.
+- Rockbox Track ReplayGain remains intentionally unimplemented. Rockbox reads
+  gain/peak tags from MP3 and other tagged containers but its current WAV
+  metadata parser does not expose ReplayGain; an MP3-only SoundBox feature was
+  rejected because most of the live library is WAV. `docs/ROADMAP.md` now keeps
+  the complete future path: upstream-first WAV parser support, independently
+  validated ReplayGain 2.0 / ITU-R BS.1770 gated loudness and true peak,
+  disposable-payload-only tags, no transcoding/duplication, and physical proof
+  in both Rockbox and stock firmware before enablement.
 - Other iPod models/checksum families and schema-2 ownership migration remain
   separately hardware-gated and fail closed.
 - If macOS resets the USB transport, preserve
