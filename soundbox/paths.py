@@ -35,6 +35,29 @@ def file_landed_time(path: str | Path) -> float:
 # We must (1) drop the scheme/host, (2) percent-decode the rest.
 _FILE_PREFIXES = ("file://localhost/", "file:///", "file://")
 
+# rekordbox/CDJ device exports own this top-level tree. SoundBox may observe
+# whole-volume capacity, but no managed path or ordinary device transaction may
+# acquire authority below it. FAT paths are case-insensitive, so compare folded.
+_EXTERNAL_DEVICE_ROOTS = frozenset({"pioneer"})
+
+
+def is_external_device_path(path: str | Path) -> bool:
+    """Whether a device-relative path belongs to another product's root.
+
+    Accepts manifest spelling (``/PIONEER/...``) or a relative ``Path``. This
+    is purely lexical and performs no filesystem access.
+    """
+    parts: list[str] = []
+    for part in str(path).replace("\\", "/").split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return bool(parts and parts[0].casefold() in _EXTERNAL_DEVICE_ROOTS)
+
 
 def decode_location(location: str) -> Path:
     """Turn a rekordbox ``Location`` URI into a real local filesystem path.

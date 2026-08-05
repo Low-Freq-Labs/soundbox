@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .paths import is_external_device_path
+
 SCHEMA = 2
 COMPOSITE_SCHEMA = 3
 ROCKBOX_EXPORT_PROFILE = "rockbox-files-no-embedded-universal-bmp-v6"
@@ -105,7 +107,14 @@ def load(device_root) -> dict:
             "updated": str(data.get("updated") or ""),
             "playlists": dict(data.get("playlists") or {}),
         }
-    data.setdefault("files", {})
+    if not isinstance(data.get("files"), dict):
+        data["files"] = {}
+    # Old/tampered manifests cannot make another product's device tree managed.
+    # Drop only the in-memory ownership row; never inspect or touch its payload.
+    data["files"] = {
+        str(path): row for path, row in data["files"].items()
+        if not is_external_device_path(path)
+    }
     data.setdefault("generation", 0)
     data.setdefault("completed_generation", 0)
     return data
@@ -127,6 +136,10 @@ def load_composite(device_root) -> dict:
         or not isinstance(data.get("files"), dict)
     ):
         raise ValueError("Composite SoundBox manifest is invalid")
+    data["files"] = {
+        str(path): row for path, row in data["files"].items()
+        if not is_external_device_path(path)
+    }
     return data
 
 
@@ -153,8 +166,9 @@ def composite_library_counts(manifest: dict) -> CompositeLibraryCounts:
         track_ids.update(str(value) for value in row["tracks"] if str(value))
     stock_dbids = {
         int(row.get("dbid") or 0)
-        for row in manifest["files"].values()
-        if isinstance(row, dict)
+        for path, row in manifest["files"].items()
+        if not is_external_device_path(path)
+        and isinstance(row, dict)
         and row.get("kind") == "shared-stock-media"
         and int(row.get("dbid") or 0) > 0
     }
@@ -184,6 +198,8 @@ def composite_playlist_status(
     output: dict[str, tuple[str, ...]] = {}
     changed: set[str] = set()
     for raw_path, row in manifest["files"].items():
+        if is_external_device_path(raw_path):
+            continue
         if not isinstance(row, dict) or row.get("kind") != "playlist":
             continue
         playlist_key_value = str(row.get("source") or "")
@@ -242,8 +258,17 @@ def composite_playlist_entries(
 def save(device_root, manifest: dict) -> None:
     p = manifest_path(device_root)
     p.parent.mkdir(parents=True, exist_ok=True)
+    output = manifest
+    if isinstance(manifest.get("files"), dict):
+        output = {
+            **manifest,
+            "files": {
+                str(path): row for path, row in manifest["files"].items()
+                if not is_external_device_path(path)
+            },
+        }
     encoded = json.dumps(
-        manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+        output, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
     tmp = p.with_name(f".{p.name}.{os.getpid()}.sbpart")
     try:
         with tmp.open("wb") as handle:
@@ -345,6 +370,7 @@ def record_export(device_root, playlists, incomplete=(), hidden=frozenset(),
     if managed_files is not None:
         m["files"] = {
             str(path): dict(row) for path, row in managed_files.items()
+            if not is_external_device_path(path)
         }
     m["schema"] = SCHEMA
     m["generation"] = generation

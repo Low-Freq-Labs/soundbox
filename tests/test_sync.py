@@ -283,12 +283,34 @@ class TestSyncEndToEnd(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             session.revalidate()
 
+    def test_device_session_refuses_rekordbox_cdj_tree(self):
+        self.target.mkdir()
+        session = sync_mod.DeviceSession(
+            self.target, [self.src / "good1.flac"])
+
+        with self.assertRaisesRegex(RuntimeError, "reserved for rekordbox/CDJ"):
+            session.guard(self.target / "PIONEER" / "rekordbox" / "export.pdb")
+        with self.assertRaisesRegex(RuntimeError, "reserved for rekordbox/CDJ"):
+            session.atomic_write(
+                self.target / "pioneer" / "USBANLZ" / "track.DAT", b"no")
+        (self.target / "PIONEER").mkdir()
+        (self.target / "cdj-data").symlink_to(
+            self.target / "PIONEER", target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "reserved for rekordbox/CDJ"):
+            session.guard(self.target / "cdj-data" / "history.DAT")
+        self.assertEqual(
+            session.guard(self.target / "Music" / "PIONEER" / "song.wav"),
+            self.target / "Music" / "PIONEER" / "song.wav",
+        )
+
     def test_explicit_whole_device_erase_removes_manifest_and_unknown_content(self):
         self.target.mkdir()
         (self.target / "Music").mkdir()
         (self.target / "Music" / "track.flac").write_bytes(b"audio")
         (self.target / "unknown-folder").mkdir()
         (self.target / "unknown-folder" / "notes.txt").write_text("mine")
+        (self.target / "PIONEER").mkdir()
+        (self.target / "PIONEER" / "rekordbox-export.pdb").write_text("rb")
         manifest.record_export(self.target, [], managed_files={
             "/Music/track.flac": {
                 "size": 5, "sha256": "unused", "playlists": [],
@@ -298,7 +320,7 @@ class TestSyncEndToEnd(unittest.TestCase):
         removed = sync_mod.erase_device_contents(
             self.target, [self.src / "good1.flac"])
 
-        self.assertGreaterEqual(removed, 3)
+        self.assertGreaterEqual(removed, 4)
         self.assertEqual(list(self.target.iterdir()), [])
         self.assertEqual(sync_mod.verify_managed(self.target), [])
 

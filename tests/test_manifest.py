@@ -17,6 +17,51 @@ def lib_of(*pls):
 
 
 class TestManifest(unittest.TestCase):
+    def test_external_pioneer_ownership_is_discarded_without_touching_payload(self):
+        root = Path(tempfile.mkdtemp())
+        pioneer = root / "PIONEER" / "rekordbox" / "export.pdb"
+        pioneer.parent.mkdir(parents=True)
+        pioneer.write_bytes(b"rekordbox-owned")
+        path = manifest.manifest_path(root)
+        path.parent.mkdir()
+        path.write_text(json.dumps({
+            "schema": manifest.SCHEMA,
+            "playlists": {},
+            "files": {
+                "/PIONEER/rekordbox/export.pdb": {
+                    "kind": "track", "owned": True,
+                },
+                "/Music/SoundBox/song.wav": {
+                    "kind": "track", "owned": True,
+                },
+            },
+        }), encoding="utf-8")
+
+        loaded = manifest.load(root)
+
+        self.assertNotIn("/PIONEER/rekordbox/export.pdb", loaded["files"])
+        self.assertIn("/Music/SoundBox/song.wav", loaded["files"])
+        self.assertEqual(pioneer.read_bytes(), b"rekordbox-owned")
+
+    def test_manifest_save_refuses_external_pioneer_ownership(self):
+        root = Path(tempfile.mkdtemp())
+        payload = {
+            "schema": manifest.SCHEMA,
+            "playlists": {},
+            "files": {
+                "/PIONEER/rekordbox/export.pdb": {"owned": True},
+                "/Music/SoundBox/song.wav": {"owned": True},
+            },
+        }
+
+        manifest.save(root, payload)
+        saved = json.loads(
+            manifest.manifest_path(root).read_text(encoding="utf-8"))
+
+        self.assertNotIn("/PIONEER/rekordbox/export.pdb", saved["files"])
+        self.assertIn("/Music/SoundBox/song.wav", saved["files"])
+        self.assertIn("/PIONEER/rekordbox/export.pdb", payload["files"])
+
     def test_sig_changes_with_tracks(self):
         a = PL("1", "Set", [], ["t1", "t2", "t3"])
         b = PL("1", "Set", [], ["t1", "t3", "t2"])  # reordered
@@ -107,6 +152,31 @@ class TestManifest(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         self.assertEqual(manifest.load_composite(root), payload)
         self.assertEqual(manifest.load(root)["schema"], manifest.SCHEMA)
+
+    def test_composite_manifest_discards_external_pioneer_ownership(self):
+        root = Path(tempfile.mkdtemp())
+        path = manifest.manifest_path(root)
+        path.parent.mkdir()
+        payload = {
+            "schema": manifest.COMPOSITE_SCHEMA,
+            "profile": manifest.COMPOSITE_EXPORT_PROFILE,
+            "playlists": {"1": {"tracks": ["a"]}},
+            "files": {
+                "/PIONEER/rekordbox/export.pdb": {
+                    "kind": "shared-stock-media", "dbid": 99,
+                },
+                "/iPod_Control/Music/F00/A.mp3": {
+                    "kind": "shared-stock-media", "dbid": 10,
+                },
+            },
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        loaded = manifest.load_composite(root)
+
+        self.assertNotIn("/PIONEER/rekordbox/export.pdb", loaded["files"])
+        self.assertEqual(
+            manifest.composite_library_counts(loaded).stock_visible_tracks, 1)
 
     def test_load_composite_accepts_previous_profile_for_safe_migration(self):
         root = Path(tempfile.mkdtemp())

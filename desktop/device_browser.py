@@ -19,7 +19,9 @@ from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 from soundbox import engine, imports as import_mod, sync as sync_mod
 from soundbox.paths import sanitize_component
 
-from .devices import _external_volume_of, _on_external_device
+from .devices import (
+    _external_volume_of, _in_external_product_tree, _on_external_device,
+)
 from .workers import DeleteWorker, OneShotTask, _running
 
 LOG = logging.getLogger("soundbox")
@@ -215,6 +217,11 @@ class DeviceBrowserMixin:
         paths = [Path(self.fs_model.filePath(i)) for i in sel]
         menu = QMenu(self)
 
+        # rekordbox/CDJ owns /PIONEER. Keep it visible for honest capacity and
+        # Finder-style browsing, but expose no SoundBox action within the tree.
+        if any(_in_external_product_tree(path) for path in paths):
+            return
+
         if len(paths) > 1:  # multi-select → delete only
             if all(import_mod.is_audio(p) or p.suffix.lower() == ".m3u8"
                    for p in paths):
@@ -246,6 +253,7 @@ class DeviceBrowserMixin:
     def _import_device_paths(self, paths: list[Path]):
         if (not paths
                 or any(_external_volume_of(path) is None for path in paths)
+                or any(_in_external_product_tree(path) for path in paths)
                 or _running(getattr(self, "_device_import_worker", None))):
             return
         self._release_eject_ready()
@@ -268,13 +276,18 @@ class DeviceBrowserMixin:
 
     def _edit_name(self, index):
         # Inline rename (like the playlist cells) — QFileSystemModel renames on disk.
+        if _in_external_product_tree(Path(self.fs_model.filePath(index))):
+            return
         name_idx = index.sibling(index.row(), 0)
         self.fs_view.setCurrentIndex(name_idx)
         self.fs_view.edit(name_idx)
 
     def _assign_artist(self, path: Path):
         # Move an audio file out of Unknown Artist into /Music/<Artist>/ on the device.
-        if not _on_external_device(path):
+        if (
+            not _on_external_device(path)
+            or _in_external_product_tree(path)
+        ):
             QMessageBox.critical(self, "Refused", "Can only edit external devices.")
             return
         artist, ok = QInputDialog.getText(self, "Assign Artist", "Artist:")
@@ -288,7 +301,10 @@ class DeviceBrowserMixin:
                 QMessageBox.critical(self, "Assign failed", str(exc))
 
     def _new_folder(self, parent: Path):
-        if _external_volume_of(parent) is None:  # external volume or inside one
+        if (
+            _external_volume_of(parent) is None
+            or _in_external_product_tree(parent)
+        ):  # external volume or inside one, excluding another product's tree
             QMessageBox.critical(self, "Refused", "Can only create folders on external devices.")
             return
         name, ok = QInputDialog.getText(self, "New Folder", f"New folder in {parent.name}:")
@@ -303,7 +319,11 @@ class DeviceBrowserMixin:
         # Safety: only ever delete items strictly INSIDE an external/ejectable volume
         # (never a mount root, never a system volume, never anything reachable by a
         # symlink out of the device). See _on_external_device.
-        if not paths or any(not _on_external_device(p) for p in paths):
+        if (
+            not paths
+            or any(not _on_external_device(p) for p in paths)
+            or any(_in_external_product_tree(p) for p in paths)
+        ):
             QMessageBox.critical(self, "Refused",
                                  "Will only delete files inside an external device.")
             return

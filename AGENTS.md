@@ -129,6 +129,12 @@ repository can answer the question.
   and discarded only after success. Cleanup never depends on regenerating an
   older media or artwork profile from its source. Shared stock
   records additionally survive any remaining ordinary stock playlist reference.
+  The top-level `/PIONEER` tree is reserved for rekordbox/CDJ. SoundBox may
+  include its bytes only in whole-volume capacity, but must never use it for
+  drift, claim it in ownership, verify it, clean it, repair it, import from it,
+  edit it, delete it, or write below it. Case-insensitive spellings and symlink
+  redirects fail closed. The separately confirmed generic-volume whole-device
+  Erase is the sole exception; stock and dual iPods never expose that command.
   Finder-created `._*` AppleDouble files and abandoned `*.sbpart` temporaries
   below `/Music` or `/Playlists` are exact-baseline cleanup rows in that same
   confirmed transaction; successful cleanup also removes only now-empty child

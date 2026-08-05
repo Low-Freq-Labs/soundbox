@@ -159,6 +159,19 @@ payload. Recovery verification contributes to visible sync progress. The
 device ownership manifest still changes only at the final successful
 publication.
 
+The device-root `/PIONEER` tree is a stronger external-ownership boundary, not
+merely an unowned SoundBox folder. rekordbox/CDJ exports may coexist there and
+their bytes still contribute to the volume's used/free capacity, but SoundBox
+does not descend into that tree for drift, accept it into schema-2 or schema-3
+ownership, verify or clean it, import from it, or mutate it through the device
+browser or a transaction. A stale or tampered manifest row beneath `/PIONEER`
+is discarded in memory without inspecting the payload. FAT-style case variants,
+lexical aliases, and symlink redirects into the tree fail closed. Consequently,
+rekordbox changes below `/PIONEER` cannot independently surface **Sync needed**.
+The only exception is the separately confirmed **Erase all files from device**
+command on a generic volume, whose confirmation explicitly covers all unknown
+content; stock and dual iPods do not expose whole-volume erase.
+
 Every dual-iPod Sync, playlist drop, and managed-playlist deletion receives an
 immediate concise Yes/No confirmation before expensive planning begins. An
 explicit Delete approval is authoritative: SoundBox removes the checked
@@ -465,7 +478,9 @@ playlist/track title column receives all spare width. Identity values preserve
 their provenance: mounted metadata,
 Apple's local device record, serial-derived model, or model-derived hardware
 catalog. Parsing runs off the UI thread and eject refuses to race it.
-Rockbox and generic USB devices retain the existing filesystem browser.
+Rockbox and generic USB devices retain the existing filesystem browser. It may
+show `/PIONEER` so volume contents remain honest, but exposes no SoundBox import,
+rename, folder, artist, or delete action inside that reserved tree.
 
 On a schema-3 dual device, Songs and Playlists are composite rather than
 stock-prefixed views. The worker verifies the small manifest-owned M3U8 payloads

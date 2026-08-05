@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from soundbox.device_profile import DeviceProfile, inspect_device
+from soundbox.paths import is_external_device_path
 
 MAX_DEVICES = 3
 
@@ -251,6 +252,22 @@ def _on_external_device(p) -> bool:
         return False
     vol = _external_volume_of(rp)
     return vol is not None and rp != vol  # strictly inside, not the mount root
+
+
+def _in_external_product_tree(p) -> bool:
+    """True for another product's reserved tree on an external volume."""
+    try:
+        rp = Path(p).resolve()
+    except OSError:
+        return False
+    volume = _external_volume_of(rp)
+    if volume is None:
+        return False
+    try:
+        relative = rp.relative_to(volume.resolve())
+    except (OSError, ValueError):
+        return False
+    return is_external_device_path(relative)
 
 
 def list_devices() -> list[tuple[str, str, int | None]]:

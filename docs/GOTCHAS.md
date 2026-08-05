@@ -810,8 +810,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `DateCreated=6/29`, `created_at=7/10 16:43`). Collection's newest-added sort keys
   on `created_at` → `Track.added_ts`. `DateCreated[:10]` stays as display `date_added`.
 - rekordbox reorders → manifest sig is order-sensitive → reorder = drift = resync.
-- rekordbox auto-writes a `PIONEER/` folder onto any USB it touches (not us —
-  leave it alone).
+- rekordbox auto-writes a `PIONEER/` folder onto any USB it touches. It is a
+  hard external-product boundary: count its space, but never use it for drift,
+  manifest ownership, verification, cleanup, import, browsing actions, or an
+  ordinary write. The explicit generic whole-volume Erase is the only exception.
 
 ## Cover art (SoundCloud scrape + Rockbox/stock rendering)
 - **Paste an ARTIST PROFILE URL into the art picker → you get the AVATAR**

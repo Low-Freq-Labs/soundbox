@@ -263,6 +263,22 @@ class LibraryBackups(unittest.TestCase):
 
 
 class DeviceLabels(unittest.TestCase):
+    def test_pioneer_tree_refuses_browser_import_and_delete(self):
+        from desktop import device_browser
+        from PySide6.QtWidgets import QMessageBox
+
+        path = Path("/Volumes/IPOD/PIONEER/rekordbox/export.pdb")
+        with mock.patch.object(
+                device_browser, "_in_external_product_tree",
+                return_value=True), mock.patch.object(
+                    _win, "_start_pulse") as pulse, mock.patch.object(
+                        QMessageBox, "critical") as critical:
+            _win._import_device_paths([path])
+            _win._delete_paths([path])
+
+        pulse.assert_not_called()
+        critical.assert_called_once()
+
     def test_drift_beats_free_space(self):
         s = _win._device_label("IPOD", 5_000_000_000, 2)
         self.assertIn("⚠ Sync needed", s)

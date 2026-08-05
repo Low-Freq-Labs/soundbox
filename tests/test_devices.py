@@ -12,6 +12,15 @@ from desktop import devices
 
 
 class ClassicIpodFacts(unittest.TestCase):
+    def test_pioneer_tree_is_reserved_inside_external_volume(self):
+        with mock.patch.object(devices, "_is_external", return_value=True):
+            self.assertTrue(devices._in_external_product_tree(
+                "/Volumes/IPOD/PIONEER/rekordbox/export.pdb"))
+            self.assertTrue(devices._in_external_product_tree(
+                "/Volumes/IPOD/pioneer/USBANLZ/history.DAT"))
+            self.assertFalse(devices._in_external_product_tree(
+                "/Volumes/IPOD/Music/PIONEER/song.wav"))
+
     def test_finder_cache_supplies_real_firmware_and_hardware_serial(self):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "com.apple.iPod.plist"

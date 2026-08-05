@@ -1,7 +1,10 @@
 import unittest
 from pathlib import Path
 
-from soundbox.paths import decode_location, device_music_path, is_within, sanitize_component
+from soundbox.paths import (
+    decode_location, device_music_path, is_external_device_path, is_within,
+    sanitize_component,
+)
 
 
 class TestDecode(unittest.TestCase):
@@ -47,6 +50,13 @@ class TestSanitize(unittest.TestCase):
 
 
 class TestDevicePath(unittest.TestCase):
+    def test_pioneer_tree_is_reserved_case_insensitively(self):
+        self.assertTrue(is_external_device_path("/PIONEER/rekordbox/export.pdb"))
+        self.assertTrue(is_external_device_path(Path("pioneer/USBANLZ")))
+        self.assertTrue(is_external_device_path("/Music/../PIONEER/export.pdb"))
+        self.assertFalse(is_external_device_path("/Music/PIONEER/song.wav"))
+        self.assertFalse(is_external_device_path("/Playlists/set.m3u8"))
+
     def test_basic(self):
         self.assertEqual(
             device_music_path(Path("/x/Track.flac"), "Artist"),

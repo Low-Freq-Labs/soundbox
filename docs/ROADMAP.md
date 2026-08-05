@@ -185,6 +185,13 @@ For the live test count, trust `./check.sh` output—not any number written here
   automatically created a root `PIONEER` export tree on initial connection;
   Sonny deleted it before inspection, leaving its small settings tree in the
   volume Trash; inspection found no Rekordbox artifacts beneath `iPod_Control`.
+  On 2026-08-05 Sonny proved a fresh rekordbox playlist export on this same iPod
+  loads quickly on a CDJ. SoundBox now formalizes `/PIONEER` as rekordbox/CDJ's
+  external tree: it counts toward volume capacity but cannot create SoundBox
+  drift or be claimed, verified, imported, cleaned, edited, deleted, or written
+  by ordinary SoundBox operations. The apparent post-export Sync badge was
+  independently traced to a real Rockbox append in the managed Favorites
+  playlist, not to the CDJ export.
   Apple/Finder then produced and physically validated a three-track MP3/WAV
   stock playlist in exact order. All media matched SoundBox-derived staging
   hashes, no accidental media remained, GodLovesUgly played successfully through

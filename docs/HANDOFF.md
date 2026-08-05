@@ -13,15 +13,16 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   trigger, post-write finalization so OK means Eject-ready. Named bracketed
   transformation credits consistently outrank original-artist tags. The Eject
   lifecycle now holds periodic polling after the completed finalization scan so
-  Eject remains independent of dashboard work; the wrap-up tip is published to
-  `origin/main`.
+  Eject remains independent of dashboard work. The current wrap also makes the
+  top-level `/PIONEER` tree an enforced rekordbox/CDJ boundary throughout path
+  guards, manifests, drift/count helpers, and filesystem-browser actions.
 - The freshly signed app from that working tree is installed at
-  `/Applications/Soundbox.app`, last observed as PID 50636. Its executable
+  `/Applications/Soundbox.app`, last observed as PID 56989. Its executable
   SHA-256 matches `dist/Soundbox.app` at
-  `db6f67663cc07d755254bc2b6866153c12b5eef62e507009efc3e6c865c6df09`.
+  `99d93083273c15692ae63165025832634e6888dd83afd1af4490f17b0900ec9f`.
   The packaged CoreAudio/Metal deck activated and the live read-only rekordbox
   snapshot loaded 3,414 tracks and 81 playlists.
-- Bare `./check.sh` passed on 2026-08-05: pyflakes, native build, mypy, and 768
+- Bare `./check.sh` passed on 2026-08-05: pyflakes, native build, mypy, and 775
   tests with four expected skips. `./build_app.sh` passed; strict signature
   verification passed for both the packaged and installed app.
 - rekordbox remained open throughout the initial 2026-08-03 installation and
@@ -38,21 +39,24 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   **wrap up** as the complete validation, documentation, install-if-needed,
   commit/push, and clean-published-state sequence—not an intermediate progress
   report.
-- The final-lifecycle pre-install `library.json` SHA-256 was
-  `8b1d45c25843f958fd423f288ea8d1279698aacd83472441960299af48750f4b`;
-  it remained byte-identical after relaunch.
-  Current curated state remains 84 direct imports, 1,049 title overrides, 463
-  artist overrides, 10 custom playlists containing 682 references, 513 hidden
-  tracks, one playlist-removal overlay, and no pending playlist-addition
-  overlay. Sonny's metadata Sync committed physical composite generation 51 at
-  2026-08-04 23:52:50 before the Eject-lifecycle installation; installing the
-  app did not touch the iPod. The current real-cover index is SHA-256
+- The `/PIONEER`-boundary pre-install `library.json` SHA-256 was
+  `d5840d9639f79c99d4d21c1b3b80d3c61291cddb8fd6465d950b3e1055523eec`.
+  Relaunch changed only the serialized table-column order; every curated value
+  remained intact. The resulting SHA-256 is
+  `583b20930082d664ecca40b0b8e5a3f1d43ca8a1a07c9b184375dabc78213c4c`.
+  Current curated state is 84 direct imports, 1,049 title overrides, 463 artist
+  overrides, 10 custom playlists containing 685 references, 513 hidden tracks,
+  one playlist-removal overlay containing two references, and no pending
+  playlist-addition overlay. Sonny's in-app Sync committed physical composite
+  generation 52 at 2026-08-05 02:51:04, before this installation; installing
+  and relaunching the app did not commit another device generation. The current
+  real-cover index is SHA-256
   `46f221270d2a234d5cc07615211411132b8dc89cba7e2c94c3166fb7d69d2438`:
   3,270 images, 131 misses, and 47 sticky blocks.
-- The immediate rollback is `/private/tmp/soundbox-final-lifecycle-JqtMGd/`: it
-  contains the prior accepted app (executable SHA-256
-  `0420398157dd3bb60e14e01548d522da06c47043585fd10b72c288c89cc96003`)
-  and exact pre-install `library.json`. Four older obsolete rollbacks remain
+- The immediate rollback is
+  `/private/tmp/soundbox-pioneer-boundary-0IGyaZ/`: it contains the prior
+  accepted app and exact pre-install `library.json`. Four older obsolete
+  rollbacks remain
   recoverably in Trash (`Soundbox.app-wrong-heading-20260804` plus the three
   `soundbox-install-*-superseded` directories); permanently deleting them still
   requires Sonny's explicit confirmation.
@@ -194,6 +198,17 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 - Full Collection committed physically. Incremental export/Sync, metadata
   repair, interruption recovery, reference-counted cleanup, theme-native
   per-track art, and firmware-owned Rockbox database refresh are operational.
+- Sonny exported a rekordbox playlist directly to this same iPod and proved it
+  loads quickly on a CDJ. The generated root `/PIONEER` tree was not the source
+  of SoundBox's apparent Sync badge: the Playlists tab isolated a real Favorites
+  membership change, and the later in-app Sync committed generation 52. No
+  development-shell command inspected or touched the mounted device.
+- `/PIONEER` now remains capacity-visible but is excluded from SoundBox drift,
+  ownership, verification, cleanup, repair, import, browser mutation, and
+  ordinary writes. Case variants, lexical aliases, symlink redirects, and
+  stale/tampered manifest rows fail closed. Only the separately confirmed
+  whole-device Erase on a generic non-stock volume can remove it; dual/stock
+  iPods never expose that action.
 - Stock firmware follows the applied playlist sequence. Rockbox's alphabetic
   Playlist Catalogue now visibly follows the same order through numbered
   Rockbox-only filenames (`01 - …`, `02 - …`); SoundBox rows and stock titles

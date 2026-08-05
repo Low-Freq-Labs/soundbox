@@ -29,7 +29,7 @@ from . import metadata
 from . import manifest
 from . import rockbox_config
 from .library import Library, Playlist
-from .paths import device_music_path, is_within
+from .paths import device_music_path, is_external_device_path, is_within
 from .report import PlaylistReport, SyncReport
 from .rockbox_media import RockboxMediaError
 
@@ -57,7 +57,8 @@ class DeviceSession:
     """Pinned, revalidated authority for one mounted export target."""
 
     def __init__(
-            self, target: Path, sources: list[Path], *, create: bool = True):
+            self, target: Path, sources: list[Path], *, create: bool = True,
+            allow_external_roots: bool = False):
         requested = target.expanduser()
         assert_target_safe(requested, sources)
         # A generic explicit export folder may not exist yet. Creating exactly
@@ -71,6 +72,7 @@ class DeviceSession:
         stat = self.target.stat()
         self._device = stat.st_dev
         self._inode = stat.st_ino
+        self._allow_external_roots = bool(allow_external_roots)
 
     def revalidate(self) -> None:
         current = self.target.resolve(strict=True)
@@ -85,15 +87,40 @@ class DeviceSession:
         candidate = Path(path)
         if not candidate.is_absolute():
             candidate = self.target / candidate
+        try:
+            relative = candidate.relative_to(self.target)
+        except ValueError:
+            relative = candidate
+        if (
+            not self._allow_external_roots
+            and is_external_device_path(relative)
+        ):
+            raise RuntimeError(
+                f"REFUSING external device tree reserved for rekordbox/CDJ: "
+                f"{candidate}")
         # Resolve the nearest existing parent so a symlink cannot redirect a
         # later mkdir/copy beyond the pinned volume.
         parent = candidate.parent
         while not parent.exists() and parent != self.target:
             parent = parent.parent
         resolved_parent = parent.resolve(strict=True)
-        if not is_within(resolved_parent, self.target):
+        try:
+            unresolved_tail = candidate.relative_to(parent)
+        except ValueError:
+            unresolved_tail = Path(candidate.name)
+        effective_candidate = (resolved_parent / unresolved_tail).resolve(
+            strict=False)
+        if not is_within(effective_candidate, self.target):
             raise RuntimeError(
                 f"REFUSING path outside device target: {candidate}")
+        if (
+            not self._allow_external_roots
+            and is_external_device_path(
+                effective_candidate.relative_to(self.target))
+        ):
+            raise RuntimeError(
+                f"REFUSING external device tree reserved for rekordbox/CDJ: "
+                f"{candidate}")
         return candidate
 
     def atomic_copy(self, source: Path, destination: Path) -> None:
@@ -276,7 +303,10 @@ def erase_device_contents(target: Path, sources: list[Path]) -> int:
     is deleted last, so a partial erase retains its repair/eject warning rather
     than publishing an empty successful state.
     """
-    session = DeviceSession(Path(target), sources, create=False)
+    # Whole-device Erase is the sole explicit exception to ordinary ownership
+    # boundaries. Its confirmation names every unknown/external tree too.
+    session = DeviceSession(
+        Path(target), sources, create=False, allow_external_roots=True)
     session.revalidate()
     entries = list(session.target.iterdir())
     ownership = manifest.manifest_path(session.target).parent
