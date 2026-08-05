@@ -16,12 +16,12 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   Eject remains independent of dashboard work; the wrap-up tip is published to
   `origin/main`.
 - The freshly signed app from that working tree is installed at
-  `/Applications/Soundbox.app`, last observed as PID 48470. Its executable
+  `/Applications/Soundbox.app`, last observed as PID 50636. Its executable
   SHA-256 matches `dist/Soundbox.app` at
-  `0420398157dd3bb60e14e01548d522da06c47043585fd10b72c288c89cc96003`.
+  `db6f67663cc07d755254bc2b6866153c12b5eef62e507009efc3e6c865c6df09`.
   The packaged CoreAudio/Metal deck activated and the live read-only rekordbox
   snapshot loaded 3,414 tracks and 81 playlists.
-- Bare `./check.sh` passed on 2026-08-05: pyflakes, native build, mypy, and 766
+- Bare `./check.sh` passed on 2026-08-05: pyflakes, native build, mypy, and 768
   tests with four expected skips. `./build_app.sh` passed; strict signature
   verification passed for both the packaged and installed app.
 - rekordbox remained open throughout the initial 2026-08-03 installation and
@@ -38,8 +38,8 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   **wrap up** as the complete validation, documentation, install-if-needed,
   commit/push, and clean-published-state sequence—not an intermediate progress
   report.
-- The final-scanner-latch pre-install `library.json` SHA-256 was
-  `304b56f4d4e473e5bcd3a1ab81d7046bb88b010d617d90ccfc9e210c0376b950`;
+- The final-lifecycle pre-install `library.json` SHA-256 was
+  `8b1d45c25843f958fd423f288ea8d1279698aacd83472441960299af48750f4b`;
   it remained byte-identical after relaunch.
   Current curated state remains 84 direct imports, 1,049 title overrides, 463
   artist overrides, 10 custom playlists containing 682 references, 513 hidden
@@ -49,9 +49,9 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   app did not touch the iPod. The current real-cover index is SHA-256
   `46f221270d2a234d5cc07615211411132b8dc89cba7e2c94c3166fb7d69d2438`:
   3,270 images, 131 misses, and 47 sticky blocks.
-- The immediate rollback is `/private/tmp/soundbox-final-scan-PvlgjR/`: it
+- The immediate rollback is `/private/tmp/soundbox-final-lifecycle-JqtMGd/`: it
   contains the prior accepted app (executable SHA-256
-  `2dd70974303040df60cab0f077fb072c814291d5d3ab7f6b07afe9a8a21e1e93`)
+  `0420398157dd3bb60e14e01548d522da06c47043585fd10b72c288c89cc96003`)
   and exact pre-install `library.json`. Four older obsolete rollbacks remain
   recoverably in Trash (`Soundbox.app-wrong-heading-20260804` plus the three
   `soundbox-install-*-superseded` directories); permanently deleting them still
@@ -224,6 +224,8 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   genuinely active device work still blocks Eject. The final scan is forced
   even during playback, and unrelated library/player refreshes cannot release
   the latch; only a new explicit device operation or Eject outcome can do so.
+  Up-to-date/no-write Sync and already-absent Delete results pass through the
+  same finalization boundary before their informational OK.
 - SoundBox manages only four Rockbox config policies: automatic tag-cache
   update, title-from-tags playlist display, alphabetic playlist sorting, and a
   minimum 10,000-entry playlist buffer. Rockbox remains sole writer of

@@ -261,6 +261,8 @@ both workers finish. Polling remains suppressed while that modal dialog is open,
 then stays paused under an explicit eject-ready latch after OK. Eject therefore
 does not cancel or complete dashboard work—the finalization scanner is already
 done. A new explicit device action releases the hold and refreshes normally.
+An up-to-date/no-write Sync and an already-absent playlist Delete use this same
+finalization boundary, so their informational OK is equally Eject-ready.
 All displayed surfaces still update without a navigation round trip.
 The status text
 reserves only its current animation width, and the confirmation shows the

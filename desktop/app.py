@@ -3085,14 +3085,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         summary = result.summary()
         if not result.requires_commit:
-            QMessageBox.information(
-                self,
-                "Stock iPod is up to date",
-                "The read-only comparison found no media, playlist, metadata, "
-                "artwork, or playback changes to publish.",
-            )
-            self._flash_status("iPod up to date")
-            self._refresh_devices()
+            def complete():
+                QMessageBox.information(
+                    self,
+                    "Stock iPod is up to date",
+                    "The read-only comparison found no media, playlist, metadata, "
+                    "artwork, or playback changes to publish.",
+                )
+                self._flash_status("iPod up to date")
+
+            self._finalize_ipod_operation(dev, complete)
             return
         omission_preview = ""
         if result.omissions:
@@ -3401,32 +3403,35 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self.rockbox_media_cache.clear()
             except Exception:
                 pass
-            QMessageBox.information(
-                self,
-                "Nothing to delete" if action == "delete" else "iPod is up to date",
-                (
-                    "The selected playlists are already absent and no managed "
-                    "media became unreferenced."
-                    if action == "delete" else
-                    "The no-write plan found no stock database, media, artwork, "
-                    "playlist, or ownership-manifest changes."
-                ),
-            )
-            self._flash_status(
-                "Nothing to delete" if action == "delete" else "iPod up to date")
-            self._refresh_devices()
-            queued = self._dual_sync_queue.pop(dev, [])
-            if queued:
-                worker = self._dual_plan_worker
 
-                def start_queued():
-                    QTimer.singleShot(
-                        0, lambda: self._begin_dual_ipod_sync(dev, queued))
+            def complete():
+                QMessageBox.information(
+                    self,
+                    "Nothing to delete" if action == "delete" else "iPod is up to date",
+                    (
+                        "The selected playlists are already absent and no managed "
+                        "media became unreferenced."
+                        if action == "delete" else
+                        "The no-write plan found no stock database, media, artwork, "
+                        "playlist, or ownership-manifest changes."
+                    ),
+                )
+                self._flash_status(
+                    "Nothing to delete" if action == "delete" else "iPod up to date")
+                queued = self._dual_sync_queue.pop(dev, [])
+                if queued:
+                    worker = self._dual_plan_worker
 
-                if worker is not None:
-                    worker.finished.connect(start_queued)
-                else:
-                    start_queued()
+                    def start_queued():
+                        QTimer.singleShot(
+                            0, lambda: self._begin_dual_ipod_sync(dev, queued))
+
+                    if worker is not None:
+                        worker.finished.connect(start_queued)
+                    else:
+                        start_queued()
+
+            self._finalize_ipod_operation(dev, complete)
             return
         if self._dual_active_preconfirmed:
             self._commit_dual_ipod_plan(dev, result)

@@ -686,6 +686,89 @@ class StockIpodUI(unittest.TestCase):
             _win._exporting = old_exporting
             _win._eject_ready_device = old_ready
 
+    def test_clean_stock_sync_finalizes_before_up_to_date_dialog(self):
+        class CleanPlan:
+            requires_commit = False
+
+            @staticmethod
+            def summary():
+                return {}
+
+        dev = "/Volumes/IPOD"
+        old_finalize = _win._finalize_ipod_operation
+        callbacks = []
+        try:
+            _win._finalize_ipod_operation = (
+                lambda device, callback: callbacks.append((device, callback)))
+            with (
+                mock.patch("desktop.app.StockIpodSyncPlan", CleanPlan),
+                mock.patch("desktop.app.QMessageBox.information") as information,
+            ):
+                _win._on_stock_ipod_plan(dev, CleanPlan())
+                information.assert_not_called()
+                self.assertEqual([device for device, _cb in callbacks], [dev])
+                callbacks[0][1]()
+                information.assert_called_once()
+        finally:
+            _win._finalize_ipod_operation = old_finalize
+            _win._stop_pulse()
+            _win.status_label.setText("Ready")
+
+    def test_clean_composite_sync_finalizes_before_up_to_date_dialog(self):
+        class CleanPlan:
+            requires_commit = False
+
+            @staticmethod
+            def summary():
+                return {}
+
+        dev = "/Volumes/IPOD"
+        old_finalize = _win._finalize_ipod_operation
+        old_clear = _win.rockbox_media_cache.clear
+        old_exporting = _win._exporting
+        old_active_device = _win._dual_active_device
+        old_active_keys = set(_win._dual_active_playlist_keys)
+        old_preconfirmed = _win._dual_active_preconfirmed
+        old_confirmed = _win._dual_active_confirmed
+        old_action = _win._dual_active_action
+        old_track_total = _win._dual_active_track_total
+        callbacks = []
+        try:
+            _win._finalize_ipod_operation = (
+                lambda device, callback: callbacks.append((device, callback)))
+            _win.rockbox_media_cache.clear = lambda: None
+            _win._exporting = True
+            _win._dual_active_device = dev
+            _win._dual_active_playlist_keys.clear()
+            _win._dual_active_preconfirmed = False
+            _win._dual_active_confirmed = True
+            _win._dual_active_action = "sync"
+            _win._dual_sync_queue.pop(dev, None)
+            with (
+                mock.patch("desktop.app.DualIpodSyncPlan", CleanPlan),
+                mock.patch("desktop.app.QMessageBox.information") as information,
+            ):
+                _win._on_dual_ipod_plan(dev, CleanPlan())
+                information.assert_not_called()
+                self.assertEqual([device for device, _cb in callbacks], [dev])
+                callbacks[0][1]()
+                information.assert_called_once()
+        finally:
+            _win._finalize_ipod_operation = old_finalize
+            _win.rockbox_media_cache.clear = old_clear
+            _win._exporting = old_exporting
+            _win._dual_active_device = old_active_device
+            _win._dual_active_playlist_keys.clear()
+            _win._dual_active_playlist_keys.update(old_active_keys)
+            _win._dual_active_preconfirmed = old_preconfirmed
+            _win._dual_active_confirmed = old_confirmed
+            _win._dual_active_action = old_action
+            _win._dual_active_track_total = old_track_total
+            _win._dual_sync_queue.pop(dev, None)
+            _win._stop_pulse()
+            _win.progress.setVisible(False)
+            _win.status_label.setText("Ready")
+
     def test_eject_ready_hold_suppresses_periodic_scan(self):
         old_ready = _win._eject_ready_device
         old_refresh = _win._refresh_devices

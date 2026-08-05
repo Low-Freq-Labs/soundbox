@@ -64,7 +64,9 @@ For the live test count, trust `./check.sh` output—not any number written here
   throughout the dialog's nested event loop and stays paused in an explicit
   eject-ready state after OK. Eject is not coupled to scanner cancellation or
   completion; the scanner has already finished. Any explicit later device
-  action releases the hold and refreshes normally.
+  action releases the hold and refreshes normally. Clean/no-write Sync and
+  already-absent Delete outcomes use the same finalization path, allowing an
+  immediate trustworthy Eject even when there was nothing to publish.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,

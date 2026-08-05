@@ -915,7 +915,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   action. Do not make Eject cancel, adopt, or finish dashboard work: no such work
   may remain at the success boundary. Keep Eject fail-closed if any device read,
   writer, planner, or import really is active, and suppress polling through
-  verification/unmount outcome.
+  verification/unmount outcome. A no-write/up-to-date plan is still a completed
+  Sync or Delete and must pass through the same final scan/latch before its OK.
 - **An explicit managed-playlist Delete is authoritative.** Do not force a
   separate Sync merely because a different schema-3 playlist changed or is no
   longer available from the current source. Reconcile other available managed
