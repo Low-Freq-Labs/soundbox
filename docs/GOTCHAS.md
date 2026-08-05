@@ -910,10 +910,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   completion dialog start another blocking device worker. `QMessageBox` runs a
   nested event loop, so `_exporting` must remain true until the modal returns;
   clearing it before `exec()` lets the recurring three-second poll launch under
-  the dialog. Read-only sidebar/dashboard workers are disposable housekeeping:
-  Eject cancels or ignores their late results and must not show Device busy for
-  them. Continue to block every writer, publishable planner, and device import,
-  and keep polling suppressed through verification/unmount outcome.
+  the dialog. After the final scan completes, retain an explicit eject-ready
+  latch that pauses recurring polling until Eject or a new explicit device
+  action. Do not make Eject cancel, adopt, or finish dashboard work: no such work
+  may remain at the success boundary. Keep Eject fail-closed if any device read,
+  writer, planner, or import really is active, and suppress polling through
+  verification/unmount outcome.
 - **An explicit managed-playlist Delete is authoritative.** Do not force a
   separate Sync merely because a different schema-3 playlist changed or is no
   longer available from the current source. Reconcile other available managed

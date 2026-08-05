@@ -12,15 +12,16 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   drift-tolerant device dashboard. Completion dialogs follow, rather than
   trigger, post-write finalization so OK means Eject-ready. Named bracketed
   transformation credits consistently outrank original-artist tags. The Eject
-  path now treats periodic sidebar/dashboard reads as cancellable housekeeping
-  rather than device operations; the wrap-up tip is published to `origin/main`.
+  lifecycle now holds periodic polling after the completed finalization scan so
+  Eject remains independent of dashboard work; the wrap-up tip is published to
+  `origin/main`.
 - The freshly signed app from that working tree is installed at
-  `/Applications/Soundbox.app`, last observed as PID 45927. Its executable
+  `/Applications/Soundbox.app`, last observed as PID 48470. Its executable
   SHA-256 matches `dist/Soundbox.app` at
-  `2dd70974303040df60cab0f077fb072c814291d5d3ab7f6b07afe9a8a21e1e93`.
+  `0420398157dd3bb60e14e01548d522da06c47043585fd10b72c288c89cc96003`.
   The packaged CoreAudio/Metal deck activated and the live read-only rekordbox
   snapshot loaded 3,414 tracks and 81 playlists.
-- Bare `./check.sh` passed on 2026-08-04: pyflakes, native build, mypy, and 765
+- Bare `./check.sh` passed on 2026-08-05: pyflakes, native build, mypy, and 766
   tests with four expected skips. `./build_app.sh` passed; strict signature
   verification passed for both the packaged and installed app.
 - rekordbox remained open throughout the initial 2026-08-03 installation and
@@ -37,11 +38,9 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   **wrap up** as the complete validation, documentation, install-if-needed,
   commit/push, and clean-published-state sequence—not an intermediate progress
   report.
-- The Eject-lifecycle pre-install `library.json` SHA-256 was
+- The final-scanner-latch pre-install `library.json` SHA-256 was
   `304b56f4d4e473e5bcd3a1ab81d7046bb88b010d617d90ccfc9e210c0376b950`;
-  relaunch rewrote only normal `settings.columns_state` serialization, yielding
-  `9b2816234ef8bad7df4c4776d4a63419c4dff142ff92191e1525aba3fad22fb0`.
-  A parsed comparison excluding that field was identical.
+  it remained byte-identical after relaunch.
   Current curated state remains 84 direct imports, 1,049 title overrides, 463
   artist overrides, 10 custom playlists containing 682 references, 513 hidden
   tracks, one playlist-removal overlay, and no pending playlist-addition
@@ -50,9 +49,9 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   app did not touch the iPod. The current real-cover index is SHA-256
   `46f221270d2a234d5cc07615211411132b8dc89cba7e2c94c3166fb7d69d2438`:
   3,270 images, 131 misses, and 47 sticky blocks.
-- The immediate rollback is `/private/tmp/soundbox-eject-ready-ruuDxC/`: it
+- The immediate rollback is `/private/tmp/soundbox-final-scan-PvlgjR/`: it
   contains the prior accepted app (executable SHA-256
-  `78e757bede10ea13d3757b959cbc73fb028e0b5a0f98b2c7606fa527b51916e0`)
+  `2dd70974303040df60cab0f077fb072c814291d5d3ab7f6b07afe9a8a21e1e93`)
   and exact pre-install `library.json`. Four older obsolete rollbacks remain
   recoverably in Trash (`Soundbox.app-wrong-heading-20260804` plus the three
   `soundbox-install-*-superseded` directories); permanently deleting them still
@@ -220,9 +219,11 @@ operational resume note; historical evidence stays in the roadmap/device docs.
   now show `Finalizing iPod...` while the committed Device/Songs/Playlists
   snapshot and sidebar free-space/drift scan finish. Only then does the success
   dialog appear. Polling remains suppressed through the dialog's nested event
-  loop, and a later read-only sidebar/dashboard refresh is cancelled or ignored
-  by Eject rather than producing Device busy. Real writers, planners, and device
-  imports still block Eject.
+  loop and stays paused under an eject-ready latch after OK. Eject neither
+  cancels nor completes the scanner because the scanner is already done; any
+  genuinely active device work still blocks Eject. The final scan is forced
+  even during playback, and unrelated library/player refreshes cannot release
+  the latch; only a new explicit device operation or Eject outcome can do so.
 - SoundBox manages only four Rockbox config policies: automatic tag-cache
   update, title-from-tags playlist display, alphabetic playlist sorting, and a
   minimum 10,000-entry playlist buffer. Rockbox remains sole writer of
@@ -234,11 +235,10 @@ operational resume note; historical evidence stays in the roadmap/device docs.
 
 ## Remaining boundaries
 
-- The one-click Eject fix is installed and source/fixture verified. Exact final
-  physical acceptance is Sonny clicking Eject once while the dashboard poll is
-  active and confirming that visible `Verifying`/`Ejecting` replaces the old
-  long-lived Device busy warning; never perform that physical eject from the
-  development shell.
+- The post-finalization polling-latch correction is source-verified, built,
+  installed, and running. Exact final physical acceptance is Sonny clicking
+  Eject after OK and confirming visible `Verifying`/`Ejecting`; never perform
+  that physical eject from the development shell.
 - No outstanding check blocks normal use of this MA446. On the next routine
   device deletion, physically confirm the new authoritative path no longer
   presents the obsolete Sync-first refusal.

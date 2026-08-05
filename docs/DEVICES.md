@@ -258,11 +258,10 @@ instead of showing 0/0. After a successful commit, the selected Device, Songs,
 and Playlists snapshot refreshes before the sidebar free-space/drift scan under
 an explicit `Finalizing iPod...` state. The completion dialog appears only after
 both workers finish. Polling remains suppressed while that modal dialog is open,
-so dismissing it cannot launch another scan before Eject. A later read-only
-sidebar/dashboard refresh is disposable: Eject cancels or ignores it and begins
-verification on the first click; only an actual writer, publishable plan, or
-device import can show Device busy. All displayed surfaces still update without
-a navigation round trip.
+then stays paused under an explicit eject-ready latch after OK. Eject therefore
+does not cancel or complete dashboard work—the finalization scanner is already
+done. A new explicit device action releases the hold and refreshes normally.
+All displayed surfaces still update without a navigation round trip.
 The status text
 reserves only its current animation width, and the confirmation shows the
 Both/Rockbox split plus concise add/update/remove totals.
@@ -528,9 +527,9 @@ separately validated `iTunesDB` implementation.
 - Normal Verify checks managed sizes/references; Deep Verify rehashes every
   managed track, cover, and playlist.
 - Eject flushes and rereads managed references after writers finish, requests
-  normal macOS eject, and asks before any force-unmount. It suppresses new
-  polling through that sequence; in-flight read-only sidebar/dashboard
-  housekeeping never blocks the request and any late UI result is discarded.
+  normal macOS eject, and asks before any force-unmount. It begins only after
+  finalization has completed every dashboard/sidebar read, and suppresses new
+  polling through verification and the unmount outcome.
 
 Unknown devices also expose a threaded import action. Selected audio or M3U8
 entries copy in exact playlist order to

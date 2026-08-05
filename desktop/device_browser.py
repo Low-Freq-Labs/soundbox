@@ -26,16 +26,16 @@ LOG = logging.getLogger("soundbox")
 
 
 class DeviceBrowserMixin:
-    # Eject must serialize behind anything that can write, publish a plan, or
-    # copy from the selected device. The sidebar poll and stock dashboard read
-    # are deliberately absent: they are disposable housekeeping, not a reason
-    # to reject Eject after a completed sync.
+    # Eject is independent of finalization: every required dashboard/sidebar
+    # read must already be finished before the completion dialog appears. Keep
+    # the full guard fail-closed in case the user explicitly starts a new read
+    # or operation before ejecting.
     _EJECT_BLOCKING_WORKERS = (
         "export_worker", "_resync_worker", "_delete_worker",
         "_stock_plan_worker", "_stock_commit_worker",
         "_dual_plan_worker", "_dual_commit_worker",
         "_stock_delete_plan_worker", "_stock_delete_commit_worker",
-        "_device_import_worker",
+        "_device_import_worker", "_stock_view_worker", "_dev_scan_worker",
     )
 
     def _erase_device(self, dev: str):
@@ -72,6 +72,7 @@ class DeviceBrowserMixin:
         )
         if answer != QMessageBox.Yes:
             return
+        self._release_eject_ready()
         sources = [
             track.path for track in (
                 getattr(getattr(self, "lib", None), "tracks_by_id", {}) or {}
@@ -120,9 +121,8 @@ class DeviceBrowserMixin:
             self._eject(path)
 
     def _eject(self, dev: str):
-        # Never race a writer, a publishable plan, or a device import. Read-only
-        # dashboard/sidebar housekeeping is cancelled or allowed to drain in
-        # the background; late results are ignored while eject owns the device.
+        # Never race device work. Finalization owns and finishes its dashboard
+        # scan before success; Eject does not cancel or complete that work.
         if (
             any(_running(getattr(self, name, None))
                 for name in self._EJECT_BLOCKING_WORKERS)
@@ -134,10 +134,6 @@ class DeviceBrowserMixin:
             return
         if _running(getattr(self, "_eject_verify_worker", None)):
             return
-        scan = getattr(self, "_dev_scan_worker", None)
-        if _running(scan) and hasattr(scan, "cancel"):
-            scan.cancel()
-        self._ejecting_device = dev
         self._exporting = True  # suppress every new periodic poll until outcome
         self._start_pulse("Verifying")
 
@@ -206,8 +202,8 @@ class DeviceBrowserMixin:
         run(["eject", dev], try_force)
 
     def _finish_eject_attempt(self, dev: str):
-        if getattr(self, "_ejecting_device", "") == dev:
-            self._ejecting_device = ""
+        if getattr(self, "_eject_ready_device", "") == dev:
+            self._eject_ready_device = ""
         self._exporting = False
 
     # ---------- device browser management ----------
@@ -252,6 +248,7 @@ class DeviceBrowserMixin:
                 or any(_external_volume_of(path) is None for path in paths)
                 or _running(getattr(self, "_device_import_worker", None))):
             return
+        self._release_eject_ready()
         self._start_pulse("IMPORTING")
         w = OneShotTask(lambda: import_mod.copy_from_device(paths))
         self._device_import_worker = w
@@ -317,6 +314,7 @@ class DeviceBrowserMixin:
             return
         if _running(self._delete_worker):
             return  # a delete is already in progress
+        self._release_eject_ready()
         w = DeleteWorker(paths)
         self._delete_worker = w
         self._deleting = True  # owns the status label so bg art status doesn't fight it

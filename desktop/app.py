@@ -281,7 +281,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._stock_delete_commit_worker = None
         self._stock_view_worker = None
         self._eject_verify_worker = None
-        self._ejecting_device = ""
+        self._eject_ready_device = ""
         self._device_import_worker = None
         self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
         self._device_profiles: dict[str, object] = {}
@@ -334,7 +334,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # Devices are recognized on launch and as they're plugged in — no XML needed.
         self._refresh_devices()
         self._dev_timer = QTimer(self)
-        self._dev_timer.timeout.connect(self._refresh_devices)
+        self._dev_timer.timeout.connect(self._poll_devices)
         self._dev_timer.start(3000)
         self._load_state()  # restore custom playlists + last-opened XML
         self.table.setFocus()  # open browsing (transport keys, arrows), not typing
@@ -2420,20 +2420,28 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         kind = f" · {profile.label}" if profile is not None else ""
         return f"⛃  {name}{kind}    {human(free)} free"
 
-    def _refresh_devices(self):
+    def _refresh_devices(self, *, force: bool = False):
         """Kick a background scan of external devices (free space + drift).
 
         The scan touches the removable volume, which can block for seconds while a
         copy/delete hammers it — so it runs OFF the UI thread (DeviceScanWorker) and
         the tree is updated in `_on_devices_scanned`. Single-flight: if a scan is
         already running we skip, so the 3s timer can never pile up workers."""
+        # Finalization owns the last dashboard scan before Eject. Once that
+        # verified result is latched, *every* incidental refresh must leave the
+        # device alone; callers starting a genuinely new device operation clear
+        # the latch explicitly before doing any work.
+        if self._eject_ready_device and not force:
+            return
+        if force:
+            self._release_eject_ready()
         # While OUR export/sync/delete is hammering the stick, don't also poll it —
         # the numbers are mid-flight and the extra reads only slow the operation down
         # (contention). Each op's done-handler calls _refresh_devices() right after.
         if self._exporting or self._deleting:
             return
         player = getattr(self, "player_bar", None)
-        if player is not None and player.is_playing():
+        if not force and player is not None and player.is_playing():
             return
         if _running(getattr(self, "_dev_scan_worker", None)):
             return
@@ -2450,6 +2458,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         w.done.connect(self._on_devices_scanned)
         w.finished.connect(lambda ww=w: self._finish_worker("_dev_scan_worker", ww))
         w.start()
+
+    def _poll_devices(self):
+        """Recurring poll, paused after finalization until Eject or an explicit
+        device action. This preserves the completed dashboard scan as the last
+        operation before the success dialog and Eject click."""
+        if self._eject_ready_device:
+            return
+        self._refresh_devices()
+
+    def _release_eject_ready(self) -> None:
+        """Release a completed operation's scan hold for new device work."""
+        self._eject_ready_device = ""
 
     def _defer_device_operation_until_scan_finishes(self, callback) -> bool:
         """Serialize a device operation behind an already-running poll.
@@ -2763,7 +2783,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _finish_device_surface_refresh(self, after_finished=None):
         """Run the sidebar scan and optionally wait for its worker as well."""
         self._exporting = False
-        self._refresh_devices()
+        # A new completed operation supersedes any earlier hold and must always
+        # run its own final sidebar/dashboard scan before success is reported.
+        self._refresh_devices(force=True)
         if after_finished is None:
             return
         worker = getattr(self, "_dev_scan_worker", None)
@@ -2788,6 +2810,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         def finish():
             self._stop_pulse()
             self.status_label.setText("Ready")
+            # The committed dashboard/sidebar scan just finished. Freeze that
+            # verified state through the success dialog and until Eject; the
+            # recurring timer must not launch another scan in between.
+            self._eject_ready_device = dev
             # QMessageBox runs a nested Qt event loop. Keep polling suppressed
             # through that loop or the three-second timer can launch a fresh,
             # slow device scan while the user is still reading "Eject ready".
@@ -2799,10 +2825,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._refresh_device_surfaces(dev, after_finished=finish)
 
     def _on_stock_device_view(self, dev: str, result):
-        if (
-            dev != self._current_device_path
-            or dev == getattr(self, "_ejecting_device", "")
-        ):
+        if dev != self._current_device_path:
             return
         if isinstance(result, Exception):
             preserve_snapshot = bool(
@@ -2992,6 +3015,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         model = self._stock_write_model(dev, profile)
         if not model:
             return
+        self._release_eject_ready()
         from .workers import OneShotTask
         library = self.lib
         facts = device_facts(dev)
@@ -3212,6 +3236,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         model = self._stock_write_model(dev, profile)
         if not model:
             return
+        self._release_eject_ready()
         self._dual_active_device = dev
         self._dual_active_playlist_keys = {
             device_manifest.playlist_key(playlist) for playlist in playlists}
@@ -3882,6 +3907,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         model = self._stock_write_model(dev, profile)
         if not model:
             return
+        self._release_eject_ready()
         from .workers import OneShotTask
         worker = OneShotTask(lambda: plan_stock_ipod_playlist_delete(
             dev,
@@ -4195,6 +4221,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         from .workers import OneShotTask
         if _running(getattr(self, "_scan_worker", None)):
             return
+        self._release_eject_ready()
         w = OneShotTask(lambda: engine.verify_export(dev, deep=deep))
         self._scan_worker = w
         w.done.connect(lambda res, d=dev: self._on_verify_done(d, res))
@@ -4305,6 +4332,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if self._resync_worker is not None and self._resync_worker.isRunning():
             return
+        self._release_eject_ready()
         LOG.info("Sync device: %s", dev)
         w = ResyncWorker(
             self.lib, dev, self.overrides, self.titles, self.art_cache,
@@ -5254,6 +5282,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._exporting and self.export_worker is not None:
             self.export_worker.add(dev, pls)  # aggregate into the running export
             return
+        self._release_eject_ready()
         LOG.info("Export: %d playlist(s) -> %s", len(pls), dev)
         w = ExportWorker(
             self.lib, self.overrides, self.titles, self.art_cache,
