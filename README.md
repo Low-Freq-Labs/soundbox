@@ -65,13 +65,24 @@ both **Remove from Playlist** (only that playlist) and **Remove from Collection*
 (global hide, restorable from the dated **Graveyard** in Settings); Collection
 offers only the latter. Both drift synced devices; rekordbox never changes.
 
-**Cover art.** Background auto-fetch with an accuracy-first matcher (real
-title match → track cover, else artist avatar; wrong art is treated as worse
-than no art), resumable and scoped to new tracks only. Manual per-track
+**Cover art.** Background auto-fetch with an accuracy-first matcher (an
+artist-accountable title match of at least 0.80 → track cover, else artist
+avatar; wrong art is treated as worse than no art), resumable and scoped to new
+tracks only. `Unknown Artist` is a hard automatic-discovery stop: those tracks
+receive no guessed SoundCloud art until the artist is resolved or a human
+picks art. Artist-aware
+title orientation handles both `ARTIST - TITLE` and `TITLE - ARTIST`, and new
+cache entries retain `auto`/`manual` provenance. Manual per-track
 picker (search results, image file, or URL — an artist profile URL yields
 the avatar), an **Artist Pictures catalog** for avatar-wearing artists, and
-per-track blocking ("Remove cover art" is sticky). Everything in the cache is
-normalized to **baseline JPEG** as canonical app state. The Rockbox exporter
+per-track blocking ("Remove cover art" is sticky). Settings also provides a
+managed **Default photos** pool: imported originals are copied into SoundBox,
+normalized, and deterministically randomized with exact-even distribution
+across visible tracks whose art is naturally missing or deliberately blocked.
+A real cover or artist avatar always wins; the fallback never rewrites the
+underlying miss/block. Pool changes rebalance only fallback assignments.
+Everything in the cache is normalized to **baseline JPEG** as canonical app state.
+The Rockbox exporter
 derives 8-bit paletted BMPs per track: baseline 160×160/116×116 fast paths,
 exact square sizes discovered from the active WPS/SBS, and a lightweight
 dimensionless 160×160 fallback. Exact sizes are retained as themes change. All

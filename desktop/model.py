@@ -62,17 +62,21 @@ def _haystack(r: dict) -> str:
     return hay
 
 # Art status ("art" row key) → glyph + tooltip. Status set by the app from the
-# art cache; sorting groups covers → avatars → misses → unfetched.
+# art cache; sorting groups covers → avatars → managed defaults → blanks.
 ART_COL = next(i for i, c in enumerate(COLUMNS) if c[0] == "art")
-_ART_GLYPH = {"cover": "●", "avatar": "◐", "miss": "○", "blocked": "⊘", "": ""}
+_ART_GLYPH = {"cover": "●", "avatar": "◐", "default": "◆",
+              "miss": "○", "blocked": "⊘", "": ""}
 _ART_TIP = {"cover": "Cover art found",
             "avatar": "Artist avatar (no track cover found — improve the title/artist "
                       "and re-scan, or set art manually)",
+            "default": "Managed default photo (the real cover is missing or was "
+                       "deliberately removed)",
             "miss": "No art found (improve the title/artist and re-scan, or set art manually)",
             "blocked": "Art removed by you — auto-fetch skips this track "
                        "(Choose/Fetch cover art overrides)",
             "": "Not fetched yet"}
-_ART_RANK = {"cover": 0, "avatar": 1, "miss": 2, "blocked": 3, "": 4}
+_ART_RANK = {"cover": 0, "avatar": 1, "default": 2,
+             "miss": 3, "blocked": 4, "": 5}
 
 _CAMELOT = re.compile(r"^\s*(\d{1,2})\s*([ABab])\s*$")
 _DURATION = re.compile(r"^\s*(?:(\d+):)?(\d+):(\d{2})\s*$")
@@ -160,7 +164,8 @@ class TrackModel(QAbstractTableModel):
 
     def refresh_art(self, kind_for_id) -> None:
         """Update the art-status column in place as the background fill progresses
-        (kind_for_id: track_id -> 'cover'|'avatar'|'miss'|''). Cheap; no reset."""
+        (kind_for_id: track_id -> cover/avatar/default/miss/blocked/'').
+        Cheap; no reset."""
         changed = False
         for r in self._all_rows:
             k = kind_for_id(r.get("id", ""))

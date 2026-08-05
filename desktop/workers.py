@@ -354,11 +354,14 @@ class ArtFillWorker(QThread):
                 if err <= 3:
                     LOG.warning("Art fetch failed for %r: %r", title[:40], exc)
             if res:
-                self.cache.store_ok(t.track_id, res); ok += 1
+                self.cache.store_ok(
+                    t.track_id, res, origin="auto", rebalance_defaults=False)
+                ok += 1
             else:
                 self.cache.store_none(t.track_id)
             self.progress.emit(i, total)
             time.sleep(self.DELAY)
+        self.cache.rebalance_default_photos()
         LOG.info("Art fill ended: %d fetched, %d failed", ok, err)
 
 

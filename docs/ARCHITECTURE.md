@@ -8,7 +8,7 @@
                 derivation, imported-file records + relink, cover-art
                 fetch/encode, backup — mypy-clean, gated by ./check.sh.
     desktop/    PySide6 app: MainWindow + mixins, workers (all QThreads),
-                trees, player, art picker, suggesters, artist catalog.
+                trees, player, art picker, suggesters, artist/default catalogs.
     native/     arm64 macOS deck dylib: CoreAudio render/decode engine +
                 CAMetalDisplayLink waveform/grid renderer, exposed by a C ABI.
     tests/      engine behavior + property-based (hypothesis) + mocked live-DB
@@ -25,8 +25,9 @@
 `engine` (the API surface) · `sync` (export + resync; **safety
 contract at the top of the file**) · `paths` (sanitizing, device paths,
 length budgets) · `playlists` (m3u8) · `report` · `metadata` (artist/title
-derivation, title-cleanup rules) · `artfetch` + `artencode` (cover art
-fetch + baseline-JPEG encode) · `manifest` (per-device drift) ·
+derivation, title-cleanup rules) · `artfetch` + `artencode` (artist-accountable
+cover fetch, manual/auto provenance, Unknown-Artist hard stop, managed balanced
+default-photo fallback, and baseline-JPEG encode) · `manifest` (per-device drift) ·
 `track_analysis` (canonical V5 storage plus read-only V4 compatibility,
 streaming RGB/grid
 analysis, and export eligibility) · `rekordbox_analysis` (read-only
@@ -387,7 +388,14 @@ playlists, imported records, hides/removals, settings) at
 `~/Library/Application Support/LowFreqLabs/Soundbox/`, keyed by stable track
 IDs so a newer rekordbox library preserves all work. Atomic saves, rotating
 backups, corruption auto-recovery, one-click full `.zip` backup/restore
-(library + history + art cache). The settings payload also stores the last
+(library + history + art cache, including managed default photos). Track-specific
+art stays in `art/index.json`; the independent `art/defaults/` pool holds
+content-addressed baseline JPEG copies plus its assignment seed/map. Successful
+track covers/avatars take precedence. Naturally missing and explicitly blocked
+tracks receive a deterministic-random, exact-balanced pool assignment without
+changing their underlying cache state. Rebalancing preserves valid assignments
+and moves only the minimum required, preventing unrelated device-art drift. The
+settings payload also stores the last
 closed window geometry, table columns, and Rekordbox/Soundbox/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
 the outer geometry before applying inner pane sizes.

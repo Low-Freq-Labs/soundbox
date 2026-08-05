@@ -1,7 +1,8 @@
 import unittest
 
 from soundbox.artfetch import (
-    _clean_search_title as clean, _core_title, _split_artists, _match_score,
+    _clean_search_title as clean, _core_title, _core_title_for_artist,
+    _split_artists, _match_score,
     MIN_CONFIDENCE,
 )
 
@@ -11,6 +12,12 @@ class TestCoreAndSplit(unittest.TestCase):
         self.assertEqual(_core_title("SAKURO - CORROSION"), "CORROSION")
         self.assertEqual(_core_title("GNARLY (DENNETT REMIX)"), "GNARLY")
         self.assertEqual(_core_title("Just A Title"), "Just A Title")
+
+    def test_core_title_uses_artist_to_orient_working_names(self):
+        self.assertEqual(
+            _core_title_for_artist("WODD - CRASH TEST", "WODD"), "CRASH TEST")
+        self.assertEqual(
+            _core_title_for_artist("CRASH TEST - WODD", "WODD"), "CRASH TEST")
 
     def test_split_artists(self):
         self.assertEqual(_split_artists("DENNETT x MACKAI"), ["DENNETT", "MACKAI"])
@@ -47,6 +54,18 @@ class TestMatchScoreAccuracy(unittest.TestCase):
         s = _match_score("Decimate - Sassy Fake", "Sassy Fake", "Decimate",
                          "DECIMATE - SASSY FAKE", "Decimate")
         self.assertGreaterEqual(s, MIN_CONFIDENCE)
+
+    def test_unattended_floor_rejects_trigger_finger_style_weak_match(self):
+        self.assertGreater(MIN_CONFIDENCE, 0.78)
+
+    def test_unknown_artist_never_searches_unattended(self):
+        import soundbox.artfetch as af
+        real = af.fetch_by_search
+        af.fetch_by_search = lambda *a, **k: self.fail("unknown artist searched")
+        try:
+            self.assertIsNone(af.fetch_best("Unknown Artist", "Nite 'N' Day"))
+        finally:
+            af.fetch_by_search = real
 
 
 class TestSearchTitleCleaner(unittest.TestCase):
@@ -237,3 +256,233 @@ class BlockedArt(unittest.TestCase):
             c.store_ok("1", ArtResult(b"\xff\xd8y", "image/jpeg", 1.0,
                                       "https://soundcloud.com/a/t2", "t2"))
             self.assertEqual(c.status_kind("1"), "cover")
+
+    def test_new_entries_record_manual_or_auto_provenance(self):
+        import tempfile
+        from soundbox.artfetch import ArtResult
+        with tempfile.TemporaryDirectory() as td:
+            c = self._cache(td)
+            result = ArtResult(b"\xff\xd8x", "image/jpeg", 0.9,
+                               "https://soundcloud.com/a/t", "t")
+            c.store_ok("manual", result)
+            c.store_ok("auto", result, origin="auto")
+            self.assertEqual(c.index["manual"]["origin"], "manual")
+            self.assertEqual(c.index["auto"]["origin"], "auto")
+
+
+class DefaultPhotoPool(unittest.TestCase):
+    def _image(self, path, color, size=(900, 300)):
+        from PIL import Image
+        Image.new("RGB", size, color).save(path, "PNG")
+
+    def test_import_copies_normalizes_and_survives_source_move(self):
+        import tempfile
+        from pathlib import Path
+        from PIL import Image
+        from soundbox import artencode
+        from soundbox.artfetch import ArtCache
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "somewhere" / "wide.png"
+            source.parent.mkdir()
+            self._image(source, "magenta")
+            cache = ArtCache(root / "art")
+            result = cache.import_default_photos([source])
+            self.assertEqual(result, {"added": 1, "duplicates": 0, "errors": []})
+            row = cache.default_photos()[0]
+            managed = row["path"]
+            self.assertTrue(managed.is_file())
+            self.assertTrue(artencode.is_device_safe(managed.read_bytes()))
+            with Image.open(managed) as image:
+                self.assertLessEqual(max(image.size), artencode.MAX_SIDE)
+            source.unlink()
+            cache.configure_default_tracks(["blank"])
+            self.assertEqual(cache.image_path("blank"), managed)
+
+    def test_assignments_are_randomized_stable_and_exactly_balanced(self):
+        import tempfile
+        from pathlib import Path
+        from soundbox.artfetch import ArtCache
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sources = []
+            for i, color in enumerate(("red", "green", "blue")):
+                source = root / f"{i}.png"
+                self._image(source, color)
+                sources.append(source)
+            cache = ArtCache(root / "art")
+            cache.import_default_photos(sources)
+            tids = [str(i) for i in range(10)]
+            cache.configure_default_tracks(tids)
+            first = {tid: cache.image_path(tid) for tid in tids}
+            counts = sorted(row["tracks"] for row in cache.default_photos())
+            self.assertEqual(counts, [3, 3, 4])
+
+            reopened = ArtCache(root / "art")
+            reopened.configure_default_tracks(reversed(tids))
+            self.assertEqual(
+                {tid: reopened.image_path(tid) for tid in tids}, first)
+
+    def test_adding_a_pool_photo_moves_only_the_minimum_tracks(self):
+        import tempfile
+        from pathlib import Path
+        from soundbox.artfetch import ArtCache
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            first_sources = []
+            for i, color in enumerate(("red", "green", "blue")):
+                source = root / f"first-{i}.png"
+                self._image(source, color)
+                first_sources.append(source)
+            cache = ArtCache(root / "art")
+            cache.import_default_photos(first_sources)
+            tids = [str(i) for i in range(12)]
+            cache.configure_default_tracks(tids)
+            before = {tid: cache.image_path(tid) for tid in tids}
+
+            added = root / "added.png"
+            self._image(added, "yellow")
+            cache.import_default_photos([added])
+            after = {tid: cache.image_path(tid) for tid in tids}
+
+            # Four photos × three tracks: the new bucket needs exactly three,
+            # and no unrelated assignment should churn beyond those moves.
+            self.assertEqual(sum(before[tid] != after[tid] for tid in tids), 3)
+            self.assertEqual(
+                sorted(row["tracks"] for row in cache.default_photos()),
+                [3, 3, 3, 3])
+
+    def test_real_covers_and_avatars_win_but_blocks_receive_defaults(self):
+        import io
+        import tempfile
+        from pathlib import Path
+        from PIL import Image
+        from soundbox.artfetch import ArtCache, ArtResult
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "default.png"
+            self._image(source, "purple")
+            cache = ArtCache(root / "art")
+            cache.import_default_photos([source])
+            cache.configure_default_tracks(["missing", "blocked", "cover", "avatar"])
+            cache.block("blocked")
+
+            buf = io.BytesIO()
+            Image.new("RGB", (100, 100), "orange").save(buf, "JPEG")
+            cover = ArtResult(buf.getvalue(), "image/jpeg", 1.0,
+                              "https://soundcloud.com/a/song", "song")
+            avatar = ArtResult(buf.getvalue(), "image/jpeg", 1.0,
+                               "https://soundcloud.com/a", "a")
+            cache.store_ok("cover", cover)
+            cache.store_ok("avatar", avatar)
+
+            self.assertEqual(cache.status_kind("missing"), "default")
+            self.assertEqual(cache.status_kind("blocked"), "default")
+            self.assertEqual(cache.status("blocked"), "blocked")
+            self.assertEqual(cache.status_kind("cover"), "cover")
+            self.assertEqual(cache.status_kind("avatar"), "avatar")
+            self.assertNotEqual(cache.image_path("missing"),
+                                cache.canonical_image_path("cover"))
+            self.assertEqual(cache.image_path("cover"),
+                             cache.canonical_image_path("cover"))
+
+    def test_delete_rebalances_without_touching_source_or_track_art(self):
+        import io
+        import tempfile
+        from pathlib import Path
+        from PIL import Image
+        from soundbox.artfetch import ArtCache, ArtResult
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sources = []
+            for i, color in enumerate(("cyan", "yellow")):
+                source = root / f"source-{i}.png"
+                self._image(source, color)
+                sources.append(source)
+            cache = ArtCache(root / "art")
+            cache.import_default_photos(sources)
+            cache.configure_default_tracks([str(i) for i in range(7)])
+
+            buf = io.BytesIO()
+            Image.new("RGB", (80, 80), "black").save(buf, "JPEG")
+            cache.store_ok("real", ArtResult(
+                buf.getvalue(), "image/jpeg", 1.0,
+                "https://soundcloud.com/artist/track", "track"))
+            real = cache.canonical_image_path("real")
+            rows = cache.default_photos()
+            removed_path = rows[0]["path"]
+            self.assertEqual(cache.remove_default_photos([rows[0]["id"]]), 1)
+
+            self.assertFalse(removed_path.exists())
+            self.assertTrue(all(source.exists() for source in sources))
+            self.assertEqual(cache.canonical_image_path("real"), real)
+            self.assertTrue(real.is_file())
+            self.assertEqual(len(cache.default_photos()), 1)
+            self.assertEqual(cache.default_photos()[0]["tracks"], 7)
+
+    def test_duplicate_managed_image_is_not_added_twice(self):
+        import tempfile
+        from pathlib import Path
+        from soundbox.artfetch import ArtCache
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "same.png"
+            self._image(source, "white")
+            cache = ArtCache(root / "art")
+            first = cache.import_default_photos([source])
+            second = cache.import_default_photos([source])
+            self.assertEqual(first["added"], 1)
+            self.assertEqual(second["duplicates"], 1)
+            self.assertEqual(len(cache.default_photos()), 1)
+
+
+class ArtWorkerProvenance(unittest.TestCase):
+    def test_background_fill_marks_new_cover_auto(self):
+        import tempfile
+        from pathlib import Path
+        from desktop.workers import ArtFillWorker
+        from soundbox import artfetch
+        from soundbox.library import Library, Track
+
+        class Cache:
+            def __init__(self):
+                self.stores = []
+
+            def status(self, _track_id):
+                return None
+
+            def store_ok(self, track_id, result, **kwargs):
+                self.stores.append((track_id, result, kwargs))
+
+            def store_none(self, _track_id):
+                self.fail("automatic fetch unexpectedly missed")
+
+            def rebalance_default_photos(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as td:
+            audio = Path(td) / "song.mp3"
+            audio.touch()
+            track = Track("1", "Artist - Song", "Artist", audio.as_uri())
+            lib = Library({"1": track}, [], "test")
+            cache = Cache()
+            result = artfetch.ArtResult(
+                b"image", "image/jpeg", 0.9,
+                "https://soundcloud.com/artist/song", "Artist - Song")
+            real = artfetch.fetch_best
+            artfetch.fetch_best = lambda *_args: result
+            try:
+                worker = ArtFillWorker(lib, cache, {}, {})
+                worker.DELAY = 0
+                worker.run()
+            finally:
+                artfetch.fetch_best = real
+            self.assertEqual(cache.stores[0][0], "1")
+            self.assertEqual(cache.stores[0][2], {
+                "origin": "auto", "rebalance_defaults": False})

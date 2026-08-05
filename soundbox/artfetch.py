@@ -10,17 +10,20 @@ paste-link instead.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import logging
 import os
 import re
+import secrets
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 LOG = logging.getLogger("soundbox.artfetch")
 
-MIN_CONFIDENCE = 0.60      # title-match floor
+MIN_CONFIDENCE = 0.80      # title-match floor; wrong art is worse than no art
 _UPLOADER_MATCH = 0.7      # uploader name ~ artist => it really is them (avatar path)
 _UPLOADER_SAME = 0.90      # uploader IS the artist's own account => trust their upload
 # Collab separators — "DENNETT x MACKAI", "A & B", "FLY VS HORSE". Split so we can try
@@ -122,6 +125,28 @@ def _core_title(clean: str) -> str:
     return re.sub(r"\s{2,}", " ", s).strip() or (clean or "")
 
 
+def _core_title_for_artist(clean: str, artist: str) -> str:
+    """Return the song side of ``ARTIST - TITLE`` *or* ``TITLE - ARTIST``.
+
+    Working-file names use both orientations.  The older unconditional
+    left-side drop turned ``CRASH TEST - WODD`` into the bogus core ``WODD``;
+    because WODD was also the uploader, any WODD upload could then receive the
+    own-account 0.90 rescue.  Use the effective artist to orient the split and
+    retain the conservative legacy fallback when neither edge is identifiable.
+    """
+    parts = re.split(r"\s+-\s+", clean or "", maxsplit=1)
+    if len(parts) == 2:
+        left, right = (part.strip() for part in parts)
+        na = _norm(artist)
+        if na:
+            left_norm, right_norm = _norm(left), _norm(right)
+            if na in left_norm and na not in right_norm:
+                return right or _core_title(clean)
+            if na in right_norm and na not in left_norm:
+                return left or _core_title(clean)
+    return _core_title(clean)
+
+
 def _split_artists(artist: str) -> list[str]:
     """Individual artists in a collab string ('DENNETT x MACKAI' -> [DENNETT, MACKAI]).
     A single artist yields just itself. De-dupes; drops stopword fragments."""
@@ -217,7 +242,7 @@ def fetch_by_search(artist: str, title: str, min_conf: float = MIN_CONFIDENCE) -
     cleaned title, and 'artist + core song' — because an artist's own upload often omits
     the 'ARTIST -' prefix / bracket tags, so the plainer query surfaces it."""
     clean = _clean_search_title(title)
-    core = _core_title(clean)
+    core = _core_title_for_artist(clean, artist)
     na = _norm(artist)
     q1 = clean if (na and na in _norm(clean)) else " ".join(x for x in (artist, clean) if x)
     queries = [q1.strip()]
@@ -284,6 +309,13 @@ def fetch_best(artist: str, title: str) -> ArtResult | None:
       3. the artist's avatar as a floor (covers exclusives not on SoundCloud), trying
          each individual artist if the combined one doesn't resolve.
     Never returns a low-confidence cover — a wrong cover is worse than an avatar."""
+    # A title without a real artist is not accountable enough for unattended
+    # discovery.  In particular, searching for the literal placeholder used to
+    # select unrelated same-title uploads and even random "Unknown Artist"
+    # profile avatars.  The manual picker/file/URL paths remain available.
+    from .metadata import UNKNOWN_ARTIST
+    if _norm(artist) == _norm(UNKNOWN_ARTIST):
+        return None
     r = fetch_by_search(artist, title)
     if r:
         return r
@@ -310,7 +342,7 @@ def search_candidates(artist: str, title: str, n: int = 12) -> list[dict]:
     exclusives unhittable; here the user clicks the right one). Best-guess first.
     Each: {title, uploader, thumb (t500), url, score}."""
     clean = _clean_search_title(title)
-    core = _core_title(clean)
+    core = _core_title_for_artist(clean, artist)
     na = _norm(artist)
     q1 = clean if (na and na in _norm(clean)) else " ".join(x for x in (artist, clean) if x)
     queries = [q1.strip()]
@@ -419,22 +451,257 @@ class ArtCache:
             self.index = json.loads(self._index_path.read_text()) if self._index_path.exists() else {}
         except (ValueError, OSError):
             self.index = {}
+        # User-supplied generic pictures are canonical art inputs too, but are
+        # deliberately separate from the per-track index.  A fallback never
+        # rewrites a miss/block or masquerades as a real cover/avatar.
+        self._defaults_root = self.root / "defaults"
+        self._defaults_index_path = self._defaults_root / "index.json"
+        self._default_track_ids: tuple[str, ...] = ()
+        self._default_assignments: dict[str, str] = {}
+        self._defaults = self._load_defaults()
+
+    def _load_defaults(self) -> dict:
+        try:
+            raw = json.loads(self._defaults_index_path.read_text(encoding="utf-8"))
+            if raw.get("schema") != 1 or not isinstance(raw.get("photos"), dict):
+                raise ValueError("unsupported default-photo index")
+            seed = str(raw.get("seed") or "")
+            if not seed:
+                raise ValueError("missing default-photo seed")
+            photos = {
+                str(pid): dict(info)
+                for pid, info in raw["photos"].items()
+                if isinstance(info, dict)
+            }
+            raw_assignments = raw.get("assignments") or {}
+            if not isinstance(raw_assignments, dict):
+                raw_assignments = {}
+            assignments = {
+                str(tid): str(pid)
+                for tid, pid in raw_assignments.items()
+                if tid and pid
+            }
+            return {"schema": 1, "seed": seed, "photos": photos,
+                    "assignments": assignments}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return {"schema": 1, "seed": secrets.token_hex(16), "photos": {},
+                    "assignments": {}}
+
+    def _save_defaults(self) -> None:
+        self._defaults_root.mkdir(parents=True, exist_ok=True)
+        tmp = self._defaults_index_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._defaults, indent=2), encoding="utf-8")
+        os.replace(tmp, self._defaults_index_path)
+
+    def _default_photo_path(self, photo_id: str) -> Path:
+        return self._defaults_root / f"{photo_id}.jpg"
+
+    def _valid_default_ids(self) -> list[str]:
+        return [
+            pid for pid in self._defaults["photos"]
+            if self._default_photo_path(pid).is_file()
+        ]
+
+    def _is_default_eligible(self, track_id: str) -> bool:
+        # Explicit blocks ARE eligible: the user removed a bad/undesired
+        # discovered image, not the generic safety-net requested for blank art.
+        # Any successful real cover or artist avatar always wins.
+        return (self.index.get(track_id) or {}).get("status") != "ok"
+
+    def configure_default_tracks(self, track_ids) -> None:
+        """Define the visible/exportable assignment universe and rebalance it.
+
+        Assignments are deterministic-random for a given pool/library and exact
+        balanced (counts differ by at most one). They live only in the separate
+        default-pool manifest. Pool/library changes preserve every assignment
+        they can and move only the minimum needed to restore balance, avoiding
+        both curated-index pollution and gratuitous device-sync churn.
+        """
+        self._default_track_ids = tuple(sorted({str(tid) for tid in track_ids if tid}))
+        self._rebuild_default_assignments()
+
+    def _rebuild_default_assignments(self, *, persist: bool = True) -> None:
+        before = dict(self._defaults["assignments"])
+        photos = self._valid_default_ids()
+        eligible = [tid for tid in self._default_track_ids
+                    if self._is_default_eligible(tid)]
+        if not photos or not eligible:
+            self._default_assignments = {}
+            self._defaults["assignments"] = {}
+            if persist and before and self._defaults_index_path.exists():
+                self._save_defaults()
+            return
+        seed = self._defaults["seed"]
+
+        def order(prefix: str, value: str) -> str:
+            return hashlib.sha256(
+                f"{seed}\0{prefix}\0{value}".encode("utf-8")).hexdigest()
+
+        eligible_set, photo_set = set(eligible), set(photos)
+        shuffled_photos = sorted(photos, key=lambda pid: order("photo", pid))
+        base, extra = divmod(len(eligible), len(shuffled_photos))
+        targets = {
+            pid: base + (1 if index < extra else 0)
+            for index, pid in enumerate(shuffled_photos)
+        }
+        assignments = {
+            tid: pid for tid, pid in before.items()
+            if tid in eligible_set and pid in photo_set
+        }
+        counts = {pid: 0 for pid in shuffled_photos}
+        for pid in assignments.values():
+            counts[pid] += 1
+
+        # Preserve every still-valid assignment possible. Only tracks in an
+        # over-capacity bucket move, which prevents one newly discovered real
+        # cover from reshuffling the whole device library.
+        unassigned = set(eligible_set - assignments.keys())
+        for pid in shuffled_photos:
+            surplus = counts[pid] - targets[pid]
+            if surplus <= 0:
+                continue
+            candidates = sorted(
+                (tid for tid, assigned in assignments.items() if assigned == pid),
+                key=lambda tid: order(f"move:{pid}", tid),
+            )[:surplus]
+            for tid in candidates:
+                assignments.pop(tid)
+                counts[pid] -= 1
+                unassigned.add(tid)
+
+        for tid in sorted(unassigned, key=lambda value: order("track", value)):
+            available = [pid for pid in shuffled_photos if counts[pid] < targets[pid]]
+            if not available:  # defensive; the exact target sum should prevent this
+                break
+            pid = min(available, key=lambda value: order(f"assign:{tid}", value))
+            assignments[tid] = pid
+            counts[pid] += 1
+
+        self._default_assignments = assignments
+        self._defaults["assignments"] = dict(assignments)
+        if persist and assignments != before:
+            self._save_defaults()
+
+    def default_photos(self) -> list[dict]:
+        """Managed pool rows for the Settings catalog."""
+        counts: dict[str, int] = {}
+        for pid in self._default_assignments.values():
+            counts[pid] = counts.get(pid, 0) + 1
+        rows = []
+        for pid, info in self._defaults["photos"].items():
+            path = self._default_photo_path(pid)
+            if path.is_file():
+                rows.append({
+                    "id": pid,
+                    "name": str(info.get("name") or "Default photo"),
+                    "added": str(info.get("added") or ""),
+                    "path": path,
+                    "tracks": counts.get(pid, 0),
+                })
+        return sorted(rows, key=lambda row: (row["added"], row["name"].casefold()))
+
+    def import_default_photos(self, paths) -> dict:
+        """Copy/normalize local images into the managed default-photo pool.
+
+        The source path is never retained as a dependency.  Every accepted
+        image becomes a capped baseline JPEG, then the existing stock/Rockbox
+        derivative pipelines consume it exactly like canonical track art.
+        """
+        from . import artencode
+
+        added = duplicates = 0
+        errors: list[str] = []
+        staged: list[tuple[str, bytes, str]] = []
+        known = set(self._defaults["photos"])
+        for raw in paths:
+            source = Path(raw)
+            try:
+                data = source.read_bytes()
+                safe = artencode.to_baseline_jpeg(data)
+                if safe is None:
+                    raise ValueError("not a readable image")
+            except (OSError, ValueError) as exc:
+                errors.append(f"{source.name}: {exc}")
+                continue
+            photo_id = hashlib.sha256(safe).hexdigest()
+            if photo_id in known:
+                duplicates += 1
+                continue
+            known.add(photo_id)
+            staged.append((photo_id, safe, source.name))
+
+        if staged:
+            self._defaults_root.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            for photo_id, safe, name in staged:
+                self._default_photo_path(photo_id).write_bytes(safe)
+                self._defaults["photos"][photo_id] = {
+                    "name": name,
+                    "added": stamp,
+                }
+                added += 1
+            self._rebuild_default_assignments(persist=False)
+            self._save_defaults()
+        return {"added": added, "duplicates": duplicates, "errors": errors}
+
+    def remove_default_photos(self, photo_ids) -> int:
+        """Remove only selected managed pool copies; source originals and
+        per-track curated art are outside this operation."""
+        removed: list[str] = []
+        for photo_id in {str(pid) for pid in photo_ids}:
+            if photo_id in self._defaults["photos"]:
+                self._defaults["photos"].pop(photo_id)
+                removed.append(photo_id)
+        if not removed:
+            return 0
+        self._rebuild_default_assignments(persist=False)
+        self._save_defaults()
+        for photo_id in removed:
+            self._default_photo_path(photo_id).unlink(missing_ok=True)
+        return len(removed)
+
+    def default_image_path(self, track_id: str) -> Path | None:
+        """Assigned generic fallback, never a real per-track image."""
+        if not self._is_default_eligible(track_id):
+            return None
+        photo_id = self._default_assignments.get(track_id)
+        if photo_id is not None:
+            path = self._default_photo_path(photo_id)
+            if path.is_file():
+                return path
+        photos = self._valid_default_ids()
+        if not photos:
+            return None
+        # Safe edge fallback for a caller outside the configured live library
+        # (or a pool file removed outside SoundBox). The desktop path is
+        # preconfigured and therefore uses the exact-balanced map above.
+        seed = self._defaults["seed"]
+        digest = hashlib.sha256(
+            f"{seed}\0edge\0{track_id}".encode("utf-8")).digest()
+        photo_id = sorted(photos)[int.from_bytes(digest[:8], "big") % len(photos)]
+        path = self._default_photo_path(photo_id)
+        return path if path.is_file() else None
 
     def status(self, track_id: str) -> str | None:
         return (self.index.get(track_id) or {}).get("status")  # "ok" | "none" | None
 
     def status_kind(self, track_id: str) -> str:
-        """UI status: 'cover' | 'avatar' | 'miss' | 'blocked' | '' (unfetched)."""
+        """UI status: cover/avatar/default/miss/blocked/unfetched."""
         e = self.index.get(track_id)
+        if (e or {}).get("status") == "ok":
+            return "avatar" if self._is_avatar(e) else "cover"
+        if self.default_image_path(track_id) is not None:
+            return "default"
         if not e:
             return ""
         if e.get("status") == "none":
             return "miss"
         if e.get("status") == "blocked":
             return "blocked"
-        return "avatar" if self._is_avatar(e) else "cover"
+        return ""
 
-    def image_path(self, track_id: str) -> Path | None:
+    def canonical_image_path(self, track_id: str) -> Path | None:
+        """The real per-track cover/avatar only (never a generic fallback)."""
         e = self.index.get(track_id) or {}
         if e.get("status") == "ok":
             p = self.root / f"{track_id}.{e.get('ext', 'jpg')}"
@@ -442,7 +709,11 @@ class ArtCache:
                 return p
         return None
 
-    def store_ok(self, track_id: str, res: ArtResult):
+    def image_path(self, track_id: str) -> Path | None:
+        return self.canonical_image_path(track_id) or self.default_image_path(track_id)
+
+    def store_ok(self, track_id: str, res: ArtResult, *, origin: str = "manual",
+                 rebalance_defaults: bool = True):
         # Normalize to baseline JPEG at the cache boundary — Rockbox renders
         # nothing else (progressive JPEG / PNG show blank on the iPod).
         from . import artencode
@@ -450,8 +721,15 @@ class ArtCache:
         ext = "jpg" if artencode.is_device_safe(data) else ("png" if "png" in res.mime else "jpg")
         (self.root / f"{track_id}.{ext}").write_bytes(data)
         self.index[track_id] = {"status": "ok", "ext": ext,
-                                "src": res.source_url, "conf": round(res.confidence, 2)}
+                                "src": res.source_url, "conf": round(res.confidence, 2),
+                                "origin": "auto" if origin == "auto" else "manual"}
         self._save()
+        if rebalance_defaults:
+            self._rebuild_default_assignments()
+
+    def rebalance_default_photos(self) -> None:
+        """Recompute the exact-balanced live assignment after a bulk art pass."""
+        self._rebuild_default_assignments()
 
     def normalize_all(self) -> tuple[int, int]:
         """One-time sweep: re-encode any cached image that isn't baseline JPEG
@@ -531,6 +809,7 @@ class ArtCache:
         if e and e.get("ext"):
             (self.root / f"{track_id}.{e['ext']}").unlink(missing_ok=True)
         self._save()
+        self._rebuild_default_assignments()
 
     def block(self, track_id: str):
         """User removed this track's art ON PURPOSE: delete the image but keep a
@@ -542,6 +821,7 @@ class ArtCache:
             (self.root / f"{track_id}.{e['ext']}").unlink(missing_ok=True)
         self.index[track_id] = {"status": "blocked"}
         self._save()
+        self._rebuild_default_assignments()
 
     def _save(self):
         # Atomic write (temp + rename): the index is written from BOTH the

@@ -4,10 +4,20 @@ Living to-do. Work top-down. The MA446 dual-boot iPod workflow is shipped and
 physically accepted; remaining device work is follow-up hardening and new hardware.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-08-03)
+## Current status (2026-08-04)
 
-- **CORE LIBRARY/EXPORT COMPLETE + CURATION MONTH COMPLETE.** Every track title
-  cut/cleaned, every cover art eye-verified. Engine is mypy-clean,
+- **CORE LIBRARY/EXPORT COMPLETE; LEGACY COVER RE-AUDIT ACTIVE.** Every track
+  title is cut/cleaned. A 2026-08-04 review proved that some pre-hardening
+  automatic cover rows survived with unrelated same-title/same-artist art, so
+  the old claim that every cover was eye-verified is retired. Current automatic
+  discovery hard-stops on Unknown Artist, orients both title/artist orders,
+  requires 0.80 confidence, and records provenance; existing manual selections
+  and sticky removals remain protected while legacy automatic rows are reviewed.
+  A managed default-photo pool now fills natural misses and deliberate blocks
+  without replacing real covers/avatars: uploads are SoundBox-owned baseline
+  JPEGs, assignments are deterministic-random and exactly balanced, and the
+  existing stock-iTunes/NightPod derivative paths consume them unchanged.
+  Engine is mypy-clean,
   `./check.sh` is the one-command gate, and the installed `Soundbox.app` is
   signed + current.
 - **NATIVE PLAYER CAMPAIGN COMPLETE.** CoreAudio sample-clock playback and a
@@ -491,7 +501,7 @@ follow-up.
 |------|-------|------|
 | Export (copy engine) | 9.5 | pinned target, atomic writes, hashes, FAT collisions, free-space/cancel honesty; last point is USB physics |
 | Sync / re-sync | 9.7 | ownership-aware repair/prune, Deep Verify, completed generations, shared-file safe |
-| Cover art | 8.5 | accuracy-first auto (0 wrong art), manual picker, derivation; ceiling = SoundCloud search + unreleased tracks with no art anywhere |
+| Cover art | 8.4 | conservative auto matching, Unknown-Artist hard stop, manual picker/removal, provenance, and a balanced managed-default pool; legacy pre-provenance auto rows are under review |
 | Device detect & safety | 9.5 | off-thread scan, hardened guards, FAT32 warning |
 | Live rekordbox read | 9 | read-only temp copy, sacred order, smart playlists; validate vs rb7 in Windows phase |
 | UI/UX | 9.7 | collection/artist browsing, curation tools, persistent layout, native DJ-style player |

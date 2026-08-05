@@ -30,8 +30,9 @@ library.json   your portable SoundBox library: title/artist overrides, custom
                playlists, deletes/removals, settings. Keyed by rekordbox
                TrackID — the crown jewels.
 backups/       rotating history of library.json (earlier states).
-art/           the whole cover-art cache (index.json + one image per TrackID),
-               all baseline-JPEG (iPod-safe). Saves an hour+ of re-fetching.
+art/           the whole cover-art cache (index.json + one image per TrackID +
+               managed default-photo pool), all baseline-JPEG (iPod-safe).
+               Saves an hour+ of re-fetching and preserves uploaded defaults.
 
 RESTORE: Settings -> "Restore from backup" and pick this .zip (or the
 library.json inside the unzipped folder). By hand: quit Soundbox, copy
@@ -114,9 +115,12 @@ def restore_backup(data_dir, src) -> dict:
 
         art = root / "art"
         if art.is_dir():
-            (data_dir / "art").mkdir(parents=True, exist_ok=True)
-            for f in art.iterdir():  # merge-overwrite; never deletes extras
+            target_art = data_dir / "art"
+            target_art.mkdir(parents=True, exist_ok=True)
+            for f in art.rglob("*"):  # merge-overwrite; never deletes extras
                 if f.is_file():
-                    shutil.copyfile(f, data_dir / "art" / f.name)
+                    target = target_art / f.relative_to(art)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(f, target)
                     restored["art_files"] += 1
         return restored

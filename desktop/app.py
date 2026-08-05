@@ -253,6 +253,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.settings: dict = dict(_DEFAULT_SETTINGS)
         self.export_worker: ExportWorker | None = None
         self._backup_worker = None  # OneShotTask for backup zip / restore
+        self._default_photo_worker = None  # managed pool image normalization
         self._refresh_worker: RefreshWorker | None = None
         self._resync_worker: ResyncWorker | None = None
         self._dev_scan_worker: DeviceScanWorker | None = None
@@ -502,8 +503,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.sb_tree.setCurrentItem(self.sb_tree.topLevelItem(0))
 
     def _annotate_art(self, rows: list[dict]) -> list[dict]:
-        """Stamp each row with its art-cache status ('cover'/'avatar'/'miss'/'')
-        for the Art column."""
+        """Stamp each row with cover/avatar/default/blank status for Art."""
         for r in rows:
             r["art"] = self.art_cache.status_kind(r.get("id", ""))
         return rows
@@ -4258,7 +4258,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
         menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))
         menu.addAction("Set cover art from URL…", lambda: self._art_from_url(tid))
-        if self.art_cache.image_path(tid):
+        # A managed default is not a per-track cover and cannot be removed from
+        # this menu: blocked tracks intentionally receive defaults too. Only a
+        # real cover/avatar exposes the per-track Remove action.
+        if self.art_cache.canonical_image_path(tid):
             menu.addAction("Remove cover art", lambda: self._art_remove(tid))
         menu.addSeparator()
         # Playlist views expose both scopes: remove only from the current
@@ -4439,6 +4442,80 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dlg = ArtistCatalogDialog(groups, on_action=self._on_catalog_action,
                                   parent=self)
         dlg.exec()  # persistent: user fixes any number of artists, then closes
+
+    def _open_default_photos(self):
+        from .defaultphotos import DefaultPhotosDialog
+
+        dlg = DefaultPhotosDialog(
+            self.art_cache.default_photos(),
+            on_action=self._on_default_photo_action,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _on_default_photo_action(self, choice: dict, done):
+        """Import/delete SoundBox-owned pool copies, then refresh every art
+        consumer. This never changes the per-track cover index: successful
+        covers/avatars keep precedence and misses/blocks remain recorded."""
+        from .workers import OneShotTask
+
+        if _running(self._default_photo_worker):
+            done(False, None, "Default photos are already being updated.")
+            return
+        if choice["kind"] == "add":
+            operation = lambda: self.art_cache.import_default_photos(choice["paths"])
+        else:
+            operation = lambda: self.art_cache.remove_default_photos(choice["ids"])
+        worker = OneShotTask(operation)
+        self._default_photo_worker = worker
+        worker.done.connect(
+            lambda result, c=choice, callback=done:
+                self._finish_default_photo_action(c, result, callback))
+        worker.finished.connect(
+            lambda w=worker: self._finish_worker("_default_photo_worker", w))
+        worker.start()
+
+    def _finish_default_photo_action(self, choice: dict, result, done):
+        try:
+            if isinstance(result, Exception):
+                raise result
+            if choice["kind"] == "add":
+                added = result["added"]
+                duplicates = result["duplicates"]
+                errors = result["errors"]
+                bits = [f"Added {added}"]
+                if duplicates:
+                    bits.append(f"{duplicates} duplicate{'s' if duplicates != 1 else ''} skipped")
+                if errors:
+                    bits.append(f"{len(errors)} unreadable")
+                message = " · ".join(bits) + " ✓"
+                if errors:
+                    QMessageBox.warning(
+                        self, "Some photos weren't added", "\n".join(errors[:12]))
+            else:
+                removed = int(result)
+                message = f"Deleted {removed} managed photo{'s' if removed != 1 else ''} ✓"
+        except Exception as exc:  # noqa: BLE001 — worker returns exact failure
+            QMessageBox.warning(self, "Couldn't update default photos", str(exc))
+            done(False, None, "Default photos weren't changed.")
+            return
+
+        # The pool methods rebalance the already-configured live universe.
+        # Repaint statuses, recompute device drift, and warm each unique
+        # canonical pool JPEG through the ordinary stock-iPod derivative cache.
+        self.model.refresh_art(self.art_cache.status_kind)
+        if self.lib is not None:
+            self._reload_current_view()
+        self._refresh_devices()
+        for row in self.art_cache.default_photos():
+            try:
+                self._stock_art_pending.add(row["path"].resolve(strict=True))
+            except OSError:
+                continue
+        if not _running(self._stock_art_worker):
+            QTimer.singleShot(0, self._start_pending_stock_artwork)
+        self._flash_status(message, 8)
+        done(True, self.art_cache.default_photos(), message)
 
     def _on_catalog_action(self, c: dict, done):
         """Apply one catalog change and call done(ok, image_path) on the main
@@ -5121,6 +5198,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._warm_worker.wait(8000)  # row-cache warm; pure CPU, let it finish
         if _running(getattr(self, "_backup_worker", None)):
             self._backup_worker.wait(30000)  # finish the zip/restore, don't corrupt it
+        if _running(getattr(self, "_default_photo_worker", None)):
+            self._default_photo_worker.wait(30000)  # finish managed pool atomically
         for w in list(getattr(self, "_oneshots", [])):
             if _running(w):
                 w.wait(8000)  # a mid-flight art fetch must not be GC'd running

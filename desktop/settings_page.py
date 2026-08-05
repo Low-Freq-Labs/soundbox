@@ -39,6 +39,11 @@ class SettingsPageMixin:
             self.lib.removed_by_playlist = {k: set(v)
                                             for k, v in self.removals.items() if v}
             self.lib.title_junk = self._title_junk()
+            # The default-photo pool is balanced only across tracks that can
+            # actually appear or export. Graveyard tracks stay out of its
+            # assignment universe just as they stay out of SoundBox views.
+            self.art_cache.configure_default_tracks(
+                tid for tid in self.lib.tracks_by_id if tid not in self.hidden)
             self._invalidate_rows()  # title-junk feeds effective_title
 
     def _settings_section(self, text: str) -> QWidget:
@@ -233,8 +238,8 @@ class SettingsPageMixin:
             "Pick a backup .zip — or the library.json inside an unzipped backup "
             "folder. Your current library is snapshotted first."))
 
-        # --- ARTIST PICTURES -------------------------------------------------
-        bl.addWidget(self._settings_section("ARTIST PICTURES"))
+        # --- COVER ART -------------------------------------------------------
+        bl.addWidget(self._settings_section("COVER ART"))
         cat = QPushButton("Open catalog…"); cat.setCursor(Qt.PointingHandCursor)
         cat.clicked.connect(self._open_artist_catalog)
         bl.addWidget(self._settings_row(
@@ -242,6 +247,16 @@ class SettingsPageMixin:
             "See which profile picture each avatar-fallback artist got, and "
             "swap it (URL / file / re-fetch) — applies to all their avatar "
             "tracks. Real covers are never touched."))
+
+        defaults = QPushButton("Manage photos…")
+        defaults.setCursor(Qt.PointingHandCursor)
+        defaults.clicked.connect(self._open_default_photos)
+        bl.addWidget(self._settings_row(
+            "Default photos", defaults,
+            "Your managed picture pool for tracks whose art is missing or was "
+            "deliberately removed. Pictures are copied into SoundBox, balanced "
+            "randomly, and prepared for stock iTunes and NightPod. Real covers "
+            "and artist pictures are never touched."))
 
         self._sync_settings_controls()
         self._refresh_graveyard()

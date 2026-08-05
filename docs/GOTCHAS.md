@@ -820,6 +820,33 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   covers; artist avatar via the page `<meta og:image>`, NOT yt-dlp's user API.
 - Rule: real title match → track cover, ELSE artist avatar (never a different
   track's cover).
+- **`Unknown Artist` must never drive unattended art discovery.** A title alone
+  is not accountable enough, and searching the placeholder can select an
+  unrelated same-title upload or even a random profile using that name. Leave
+  it coverless for a manual artist correction/picker/URL. Manual art remains
+  available and is recorded with `origin=manual`; the background worker records
+  `origin=auto` for new cache rows.
+- **Orient hyphenated working titles with the effective artist.** Libraries use
+  both `ARTIST - TITLE` and `TITLE - ARTIST`. Unconditionally dropping the left
+  side made `CRASH TEST - WODD` use `WODD` as its song core, so any upload from
+  WODD could receive the own-account rescue. `_core_title_for_artist` selects
+  the opposite edge, and the unattended full-title floor is 0.80. Legacy cache
+  rows predate provenance and require a read-only confidence/source/image audit;
+  never infer that a `blocked` row or a confidence-1.0 picker/URL result is safe
+  to replace merely because an old automatic row looks suspicious.
+- **Managed defaults are a fallback layer, never discovered or per-track art.**
+  An `ok` track cover or artist avatar always wins. Both natural misses and
+  deliberate `blocked` rows receive a pool picture when the pool is non-empty;
+  the underlying miss/block remains intact, so removing the pool reveals the
+  same state and auto-fetch still skips blocks. Visible/exportable tracks are
+  deterministically shuffled over the pool in exact round-robin balance.
+  The separate pool manifest persists assignments; rebalancing must preserve
+  valid mappings and move only the minimum needed for exact balance, or one new
+  real cover creates gratuitous full-library device-art drift. Imported pool
+  images are copied to `art/defaults/`, capped/normalized as
+  baseline JPEG, backed up recursively, and then enter the ordinary MA446
+  RGB565 and per-track Rockbox BMP derivative pipelines. Never make a default
+  row `status=ok`, or it will suppress real discovery and masquerade as curation.
 - yt-dlp = gray area → PUBLIC fork must NOT bundle it.
 - **⚠ Rockbox can't render progressive/multi-scan JPEG, RLE BMP, or PNG.**
   HANDLED: `soundbox/artencode.py` normalizes ALL cached art to baseline JPEG;
