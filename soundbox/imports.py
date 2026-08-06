@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .library import Library, Track
-from .paths import sanitize_component
+from .paths import is_within, sanitize_component
 
 ID_PREFIX = "sb-"
 
@@ -70,10 +70,15 @@ def copy_from_device(
                 entry = line.strip()
                 if not entry or entry.startswith("#"):
                     continue
-                candidates.append(
+                candidate = (
                     (volume / entry.lstrip("/")).resolve()
                     if entry.startswith("/")
                     else (path.parent / entry).resolve())
+                if not is_within(candidate, volume.resolve()):
+                    raise RuntimeError(
+                        "REFUSING playlist entry outside the selected device: "
+                        f"{entry}")
+                candidates.append(candidate)
         for source in candidates:
             if source in seen or not is_audio(source) or not source.is_file():
                 continue

@@ -12,7 +12,9 @@ echo "OK"
 echo "== mypy (engine) =="
 ./.venv/bin/python -m mypy soundbox/
 echo "== tests =="
-./.venv/bin/python -m unittest discover -s tests
+# Buffer passing-test stdout/stderr and always publish the slowest cases. This
+# keeps failure evidence useful while making runtime creep visible every run.
+./.venv/bin/python -m unittest discover -s tests -b --durations 15
 if [ "$1" = "--render" ]; then
   echo "== offscreen render =="
   PYTHONPATH=. ./.venv/bin/python -m desktop._shot /tmp/soundbox-check.png

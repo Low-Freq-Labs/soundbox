@@ -25,6 +25,7 @@ from clickwheel.ipod.itunesdb_writer import (
 
 from soundbox.dual_ipod import (
     DUAL_MANIFEST_SCHEMA,
+    DualIpodError,
     commit_dual_ipod_sync,
     plan_dual_ipod_sync,
 )
@@ -67,6 +68,12 @@ class _ArtCache:
 
 class DualIpodSyncTests(unittest.TestCase):
     def setUp(self):
+        dual_pacer = mock.patch.object(dual_ipod, "_pace_classic_usb")
+        stock_pacer = mock.patch.object(stock_ipod, "_pace_classic_usb")
+        self.dual_usb_pace = dual_pacer.start()
+        self.stock_usb_pace = stock_pacer.start()
+        self.addCleanup(dual_pacer.stop)
+        self.addCleanup(stock_pacer.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -203,6 +210,7 @@ class DualIpodSyncTests(unittest.TestCase):
 
         self.assertEqual(result.copied_media, 1)
         self.assertEqual(result.copied_artwork, 6)
+        self.dual_usb_pace.assert_called_once_with()
         self.assertEqual(progress, [(0, 2), (1, 2), (2, 2)])
         database_tracks = get_ipod_tracks(read_ipod(self.ipod))
         self.assertEqual(len(database_tracks), 1)
@@ -236,6 +244,18 @@ class DualIpodSyncTests(unittest.TestCase):
         self.assertIn("tagcache_autoupdate: on", config)
         self.assertIn(
             "playlist viewer track display: title from tags", config)
+
+    def test_commit_refuses_same_name_target_replacement_after_plan(self):
+        plan = self._plan()
+        original = self.base / "original-ipod"
+        self.ipod.rename(original)
+        self.ipod.mkdir()
+
+        with self.assertRaisesRegex(DualIpodError, "remounted after dry-run"):
+            commit_dual_ipod_sync(plan)
+
+        self.assertEqual(list(self.ipod.iterdir()), [])
+        self.assertTrue((original / "iPod_Control/iTunes/iTunesDB").is_file())
 
     def test_plan_reports_monotonic_visible_progress(self):
         events = []
@@ -965,6 +985,81 @@ class DualIpodSyncTests(unittest.TestCase):
         self.assertIn("Dual Renamed", regular_names)
         self.assertNotIn("Dual Test", regular_names)
         self.assertFalse(engine.device_drift(self.library, self.ipod).any())
+
+    def test_case_only_playlist_rename_publishes_requested_fat_spelling(self):
+        commit_dual_ipod_sync(self._plan())
+        old_relative = Path("Playlists/01 - Dual Test.m3u8")
+        old_payload = (self.ipod / old_relative).read_bytes()
+
+        self.playlist.name = "DUAL TEST"
+        plan = self._plan(reconcile=True)
+
+        self.assertTrue(plan.requires_commit)
+        self.assertEqual(
+            plan.playlists[0].relative_path,
+            Path("Playlists/01 - DUAL TEST.m3u8"),
+        )
+        self.assertEqual(plan.playlists[0].relative_path_before, old_relative)
+        self.assertFalse(any(
+            item.kind == "playlist" for item in plan.file_deletes))
+
+        commit_dual_ipod_sync(plan)
+
+        playlist_names = {
+            path.name for path in (self.ipod / "Playlists").iterdir()
+            if path.is_file()
+        }
+        self.assertIn("01 - DUAL TEST.m3u8", playlist_names)
+        self.assertNotIn("01 - Dual Test.m3u8", playlist_names)
+        self.assertEqual(
+            (self.ipod / "Playlists/01 - DUAL TEST.m3u8").read_bytes(),
+            old_payload,
+        )
+        manifest = device_manifest.load_composite(self.ipod)
+        self.assertIn(
+            "/Playlists/01 - DUAL TEST.m3u8", manifest["files"])
+        self.assertNotIn(
+            "/Playlists/01 - Dual Test.m3u8", manifest["files"])
+        self.assertEqual(
+            manifest["playlists"]["dual-test"]["device_name"],
+            "DUAL TEST",
+        )
+        self.assertFalse(engine.device_drift(self.library, self.ipod).any())
+
+    def test_case_only_playlist_rename_rolls_back_name_and_bytes(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest_path = device_manifest.manifest_path(self.ipod)
+        manifest_before = manifest_path.read_bytes()
+        database_path = self.ipod / "iPod_Control/iTunes/iTunesDB"
+        database_before = _hash(database_path)
+        old_relative = Path("Playlists/01 - Dual Test.m3u8")
+        old_playlist = self.ipod / old_relative
+        old_payload = old_playlist.read_bytes()
+        old_mtime = old_playlist.stat().st_mtime
+        self.playlist.name = "DUAL TEST"
+        plan = self._plan(reconcile=True)
+        real_write = DeviceSession.atomic_write
+
+        def fail_manifest(session, destination, data):
+            if Path(destination).name == "manifest.json":
+                raise OSError("injected case-rename manifest failure")
+            return real_write(session, destination, data)
+
+        with mock.patch.object(DeviceSession, "atomic_write", fail_manifest):
+            with self.assertRaisesRegex(
+                    OSError, "case-rename manifest failure"):
+                commit_dual_ipod_sync(plan)
+
+        playlist_names = {
+            path.name for path in (self.ipod / "Playlists").iterdir()
+            if path.is_file()
+        }
+        self.assertIn("01 - Dual Test.m3u8", playlist_names)
+        self.assertNotIn("01 - DUAL TEST.m3u8", playlist_names)
+        self.assertEqual(old_playlist.read_bytes(), old_payload)
+        self.assertAlmostEqual(old_playlist.stat().st_mtime, old_mtime, delta=2.1)
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        self.assertEqual(_hash(database_path), database_before)
 
     def test_legacy_nested_playlist_migrates_into_catalogue_root(self):
         self.playlist.folder_path = ["GENRES"]

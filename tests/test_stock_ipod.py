@@ -26,6 +26,7 @@ from clickwheel.ipod.itunesdb_writer import (
 )
 from clickwheel.ipod.itunesdb_writer.mhyp_writer import write_mhyp
 
+from soundbox import stock_ipod
 from soundbox.library import Library, Playlist, Track
 from soundbox.stock_ipod import (
     StockIpodError,
@@ -89,6 +90,9 @@ class _FixtureArtCache:
 
 class StockIpodSync(unittest.TestCase):
     def setUp(self):
+        pacer = mock.patch.object(stock_ipod, "_pace_classic_usb")
+        self.usb_pace = pacer.start()
+        self.addCleanup(pacer.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -314,6 +318,20 @@ class StockIpodSync(unittest.TestCase):
             [output_by_id[item["trackID"]] for item in playlist["items"]],
             [101, plan.copies[0].dbid],
         )
+
+    def test_commit_refuses_same_name_target_replacement_after_plan(self):
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA446", filesystem="msdos")
+        original = self.base / "original-ipod"
+        self.ipod.rename(original)
+        self.ipod.mkdir()
+
+        with self.assertRaisesRegex(StockIpodError, "remounted after dry-run"):
+            commit_stock_ipod_sync(plan)
+
+        self.assertEqual(list(self.ipod.iterdir()), [])
+        self.assertTrue((original / "iPod_Control/iTunes/iTunesDB").is_file())
 
     def test_dual_boot_rewrites_existing_media_with_exact_recovery(self):
         (self.ipod / ".rockbox").mkdir()
@@ -826,6 +844,24 @@ class StockIpodSync(unittest.TestCase):
             {raw.get("Title") for raw in after["mhlp"] if not raw.get("isMaster")},
             {"Keep Me", "Collection"},
         )
+
+    def test_playlist_delete_refuses_same_name_target_replacement_after_plan(self):
+        plan = plan_stock_ipod_playlist_delete(
+            self.ipod,
+            [202],
+            model_number="MA446",
+            filesystem="msdos",
+            stock_art_cache=self.stock_art_cache,
+        )
+        original = self.base / "original-ipod"
+        self.ipod.rename(original)
+        self.ipod.mkdir()
+
+        with self.assertRaisesRegex(StockIpodError, "remounted after dry-run"):
+            commit_stock_ipod_playlist_delete(plan)
+
+        self.assertEqual(list(self.ipod.iterdir()), [])
+        self.assertTrue((original / "iPod_Control/iTunes/iTunesDB").is_file())
 
     def test_delete_compacts_remaining_artwork_and_removes_all_art_when_empty(self):
         sync_plan = plan_stock_ipod_sync(

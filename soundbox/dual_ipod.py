@@ -60,6 +60,12 @@ _PLAYLIST_ORDER_EPOCH = 946_684_800  # 2000-01-01 UTC; representable by FAT32
 _PLAYLIST_ORDER_STEP = 4             # wider than FAT's two-second granularity
 _PLAYLIST_MTIME_TOLERANCE = 2.1
 _MAX_MANAGED_PLAYLIST_BYTES = 1024 * 1024
+_CLASSIC_USB_SETTLE_SECONDS = 0.15
+
+
+def _pace_classic_usb() -> None:
+    """Give validated classic hardware a short breath between media writes."""
+    time.sleep(_CLASSIC_USB_SETTLE_SECONDS)
 
 
 class DualIpodError(RuntimeError):
@@ -247,6 +253,7 @@ class DualPlaylistWrite:
     sha256_before: str | None = None
     mtime_before: float | None = None
     order_changed: bool = True
+    relative_path_before: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -260,6 +267,7 @@ class DualPlaylistAddition:
 @dataclass(frozen=True)
 class DualIpodSyncPlan:
     target: Path
+    target_mount_identity: tuple[int, int]
     stock: StockIpodSyncPlan
     media_copies: tuple[DualFileCopy, ...]
     artwork_copies: tuple[DualFileCopy, ...]
@@ -1241,6 +1249,7 @@ def _playlist_writes(
         hash_before: str | None = None
         mtime_before: float | None = None
         order_changed = True
+        relative_path_before: Path | None = None
         if prior is not None:
             approved_before = approved_external.get(identity)
             if approved_before is None:
@@ -1253,16 +1262,33 @@ def _playlist_writes(
                         f"Approved Rockbox playlist path changed: {identity}")
             mtime_before = (target / relative_before).stat().st_mtime
             if relative_before != relative:
-                if live.exists():
-                    raise DualIpodError(
-                        f"Renamed Rockbox playlist destination already exists: {live}")
-                size_before = None
-                hash_before = None
+                same_fat_path = (
+                    sync_mod._destination_key(str(relative_before))
+                    == sync_mod._destination_key(str(relative))
+                )
+                if same_fat_path:
+                    prior_live = target / relative_before
+                    if live.exists() and not os.path.samefile(prior_live, live):
+                        raise DualIpodError(
+                            "Case-only Rockbox playlist rename collides with a "
+                            f"different file: {live}")
+                    # FAT resolves both spellings to one directory entry.  Keep
+                    # the owned baseline so commit can recovery-back the old
+                    # spelling, remove it, and publish the requested casing.
+                    relative_path_before = relative_before
+                else:
+                    if live.exists():
+                        raise DualIpodError(
+                            "Renamed Rockbox playlist destination already "
+                            f"exists: {live}")
+                    size_before = None
+                    hash_before = None
             else:
                 changed = not (
                     size_before == len(payload) and hash_before == payload_hash)
                 order_changed = (
-                    abs(mtime_before - desired_mtime)
+                    changed
+                    or abs(mtime_before - desired_mtime)
                     > _PLAYLIST_MTIME_TOLERANCE)
         elif live.exists():
             raise DualIpodError(
@@ -1278,6 +1304,7 @@ def _playlist_writes(
             hash_before,
             mtime_before,
             order_changed,
+            relative_path_before,
         ))
     desired_by_identity = {
         item.playlist_key: item.relative_path for item in output}
@@ -1289,7 +1316,13 @@ def _playlist_writes(
             and identity not in desired_by_identity
         ):
             continue
-        if desired_by_identity.get(identity) != _relative_manifest_path(device_path):
+        desired = desired_by_identity.get(identity)
+        if (
+            desired is None
+            or sync_mod._destination_key(str(desired))
+            != sync_mod._destination_key(str(
+                _relative_manifest_path(device_path)))
+        ):
             approved_before = approved_external.get(identity)
             if approved_before is None:
                 prior_relative, size, digest = _verify_owned_before(
@@ -1329,6 +1362,7 @@ def plan_dual_ipod_sync(
 ) -> DualIpodSyncPlan:
     """Build an exact, no-target-write composite plan."""
     root = Path(target).expanduser().resolve(strict=True)
+    planning_session = sync_mod.DeviceSession(root, [], create=False)
     if not (root / ".rockbox").is_dir() or not (root / "iPod_Control").is_dir():
         raise DualIpodError("Composite sync requires both .rockbox and iPod_Control")
     if not selected and not reconcile:
@@ -1826,6 +1860,11 @@ def plan_dual_ipod_sync(
             "playlists": [playlist_item.playlist_key],
         }
 
+    planned_device_keys = {
+        sync_mod._destination_key(device_path)
+        for device_path in files_manifest
+    }
+
     retained_stale = 0
     orphan_deletes: list[DualOrphanDelete] = []
     deleted_device_paths = {
@@ -1837,6 +1876,10 @@ def plan_dual_ipod_sync(
 
     for device_path, raw in prior_files.items():
         if device_path in files_manifest or not isinstance(raw, dict):
+            continue
+        if sync_mod._destination_key(device_path) in planned_device_keys:
+            # A case-only FAT rename replaces this exact owned path; retaining
+            # its old spelling would create two manifest rows for one file.
             continue
         if device_path in deleted_device_paths:
             continue
@@ -1944,8 +1987,10 @@ def plan_dual_ipod_sync(
     planning_done += 1
     emit_planning("Ownership manifest")
 
+    planning_session.revalidate()
     return DualIpodSyncPlan(
         target=root,
+        target_mount_identity=planning_session.mount_identity,
         stock=stock_plan,
         media_copies=tuple(media_copies),
         artwork_copies=tuple(artwork_copies),
@@ -1980,6 +2025,12 @@ def commit_dual_ipod_sync(
     """Commit one incremental composite generation with exact rollback."""
     total_tracks = plan.progress_total
     progress_done = 0
+    sources = [item.source for item in (
+        plan.media_copies + plan.artwork_copies + plan.file_rewrites)]
+    session = sync_mod.DeviceSession(plan.target, sources, create=False)
+    if session.mount_identity != plan.target_mount_identity:
+        raise DualIpodError(
+            "iPod target was remounted after dry-run; make a fresh plan")
 
     def emit_progress(label: str = "") -> None:
         if on_progress is not None:
@@ -2013,9 +2064,6 @@ def commit_dual_ipod_sync(
             plan.rockbox_media_cache.verify_source_stat(media_plan)
         except Exception as exc:
             raise DualIpodError(str(exc)) from exc
-    sources = [item.source for item in (
-        plan.media_copies + plan.artwork_copies + plan.file_rewrites)]
-    session = sync_mod.DeviceSession(plan.target, sources, create=False)
     for adopted in plan.file_adoptions:
         destination = session.guard(adopted.relative_path)
         if (
@@ -2033,7 +2081,7 @@ def commit_dual_ipod_sync(
         if adopted.kind == "rockbox-media":
             progress_done += 1
             emit_progress(str(adopted.relative_path))
-            time.sleep(0.15)
+            _pace_classic_usb()
     for file_item in plan.media_copies + plan.artwork_copies:
         if file_item.media_plan is not None:
             if plan.rockbox_media_cache is None:
@@ -2096,7 +2144,11 @@ def commit_dual_ipod_sync(
             raise DualIpodError(
                 f"Managed orphan changed after dry-run: {orphan.relative_path}")
     for playlist_item in plan.playlists:
-        destination = session.guard(playlist_item.relative_path)
+        baseline_relative = (
+            playlist_item.relative_path_before
+            or playlist_item.relative_path
+        )
+        destination = session.guard(baseline_relative)
         if not playlist_item.changed:
             if (
                 not destination.is_file()
@@ -2187,10 +2239,14 @@ def commit_dual_ipod_sync(
         for changed_playlist in changed_playlists:
             if changed_playlist.sha256_before is None:
                 continue
-            live = session.guard(changed_playlist.relative_path)
+            baseline_relative = (
+                changed_playlist.relative_path_before
+                or changed_playlist.relative_path
+            )
+            live = session.guard(baseline_relative)
             saved = session.guard(
-                recovery / "playlists" / changed_playlist.relative_path.parent
-                / (changed_playlist.relative_path.name + ".before"))
+                recovery / "playlists" / baseline_relative.parent
+                / (baseline_relative.name + ".before"))
             session.atomic_copy(live, saved)
         for delete_item in plan.file_deletes:
             live = session.guard(delete_item.relative_path)
@@ -2236,7 +2292,7 @@ def commit_dual_ipod_sync(
             if file_item.kind == "rockbox-media":
                 progress_done += 1
                 emit_progress(str(file_item.relative_path))
-                time.sleep(0.15)
+                _pace_classic_usb()
         for rewrite_item in plan.file_rewrites:
             destination = session.guard(rewrite_item.relative_path)
             prepared = None
@@ -2269,7 +2325,7 @@ def commit_dual_ipod_sync(
             if rewrite_item.kind == "rockbox-media":
                 progress_done += 1
                 emit_progress(str(rewrite_item.relative_path))
-                time.sleep(0.15)
+                _pace_classic_usb()
         if plan.stock.requires_commit:
             stock_result = commit_stock_ipod_sync(
                 plan.stock,
@@ -2279,10 +2335,26 @@ def commit_dual_ipod_sync(
         session.revalidate()
         for playlist_item in changed_playlists:
             destination = session.guard(playlist_item.relative_path)
+            if playlist_item.relative_path_before is not None:
+                previous = session.guard(playlist_item.relative_path_before)
+                if (
+                    sync_mod._destination_key(str(previous))
+                    != sync_mod._destination_key(str(destination))
+                ):
+                    raise DualIpodError(
+                        "Case-only playlist rename lost its FAT path identity: "
+                        f"{playlist_item.relative_path_before} -> "
+                        f"{playlist_item.relative_path}")
+                # The requested spelling cannot be created while FAT still
+                # exposes the owned entry under its prior spelling.  Recovery
+                # already contains the exact old bytes, so remove that one
+                # verified entry before the atomic write publishes the rename.
+                previous.unlink()
+                rewritten_playlists.append(playlist_item)
             session.atomic_write(destination, playlist_item.payload)
             if playlist_item.sha256_before is None:
                 new_playlist_paths.append(destination)
-            else:
+            elif playlist_item.relative_path_before is None:
                 rewritten_playlists.append(playlist_item)
             if _sha256(destination) != playlist_item.sha256:
                 raise DualIpodError(
@@ -2337,7 +2409,7 @@ def commit_dual_ipod_sync(
             if orphan.kind in {"shared-stock-media", "rockbox-media"}:
                 progress_done += 1
                 emit_progress(str(orphan.relative_path))
-                time.sleep(0.15)
+                _pace_classic_usb()
         session.atomic_write(manifest_path, plan.manifest_payload)
         manifest_published = True
         manifest_hash = hashlib.sha256(plan.manifest_payload).hexdigest()
@@ -2366,10 +2438,18 @@ def commit_dual_ipod_sync(
                 failures.append(f"Rockbox config: {exc}")
         for changed_playlist in reversed(rewritten_playlists):
             try:
-                destination = session.guard(changed_playlist.relative_path)
+                baseline_relative = (
+                    changed_playlist.relative_path_before
+                    or changed_playlist.relative_path
+                )
+                destination = session.guard(baseline_relative)
                 saved = session.guard(
-                    recovery / "playlists" / changed_playlist.relative_path.parent
-                    / (changed_playlist.relative_path.name + ".before"))
+                    recovery / "playlists" / baseline_relative.parent
+                    / (baseline_relative.name + ".before"))
+                if changed_playlist.relative_path_before is not None:
+                    session.guard(
+                        changed_playlist.relative_path
+                    ).unlink(missing_ok=True)
                 session.atomic_copy(saved, destination)
             except Exception as exc:  # noqa: BLE001 - preserve all failures
                 failures.append(
@@ -2383,7 +2463,10 @@ def commit_dual_ipod_sync(
             if playlist_item.mtime_before is None:
                 continue
             try:
-                destination = session.guard(playlist_item.relative_path)
+                destination = session.guard(
+                    playlist_item.relative_path_before
+                    or playlist_item.relative_path
+                )
                 if destination.exists():
                     os.utime(
                         destination,
@@ -2486,6 +2569,8 @@ def commit_dual_ipod_sync(
         *(item.relative_path for item in plan.file_deletes),
         *(item.relative_path for item in plan.orphan_deletes),
         *(item.relative_path for item in changed_playlists),
+        *(item.relative_path_before for item in changed_playlists
+          if item.relative_path_before is not None),
         *(tuple([plan.config_update.relative_path])
           if plan.config_update.changed else ()),
         *(item.relative_path for item in plan.stock.copies),

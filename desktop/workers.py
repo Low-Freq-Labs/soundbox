@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import shutil
 import threading
 import time
 from dataclasses import replace
@@ -18,7 +17,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from soundbox import artfetch, engine, metadata, rekordbox_db
+from soundbox import artfetch, engine, metadata, rekordbox_db, sync as sync_mod
 from soundbox.library import Playlist
 from soundbox.stock_artwork import StockArtworkCache
 from soundbox.stock_ipod import (
@@ -342,33 +341,32 @@ class DeleteWorker(QThread):
     thread that's a rainbow cursor with no feedback. Here it drives the same
     progress bar as an export instead. Stops cleanly between items on cancel."""
     progress = Signal(int, int, str)  # done, total, current name
-    done = Signal(list)               # list[str] of errors
+    done = Signal(object)             # DeviceDeleteReport
 
-    def __init__(self, paths: list[Path]):
+    def __init__(
+            self, session: sync_mod.DeviceSession,
+            relatives: list[Path]):
         super().__init__()
-        self.paths = paths
+        self.session = session
+        self.relatives = relatives
         self._stop = False
-        self.result: list[str] | None = None
+        self.result: sync_mod.DeviceDeleteReport | Exception | None = None
 
     def cancel(self):
         self._stop = True
 
     def run(self):
-        errors = []
-        total = len(self.paths)
-        for i, path in enumerate(self.paths, 1):
-            if self._stop:
-                break
-            try:
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-            except OSError as exc:
-                errors.append(f"{path.name}: {exc}")
-            self.progress.emit(i, total, path.name)
-        self.result = errors
-        self.done.emit(errors)
+        try:
+            self.result = sync_mod.delete_device_paths(
+                self.session,
+                self.relatives,
+                on_progress=lambda done, total, label: self.progress.emit(
+                    done, total, label),
+                should_cancel=lambda: self._stop,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface, never crash the app
+            self.result = exc
+        self.done.emit(self.result)
 
 
 class ArtFillWorker(QThread):

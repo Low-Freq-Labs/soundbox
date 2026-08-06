@@ -288,7 +288,11 @@ available, and
 can hot-swap finished analysis or cue metadata onto the current track.
 
 Device export is pinned by `sync.DeviceSession` to one resolved mount identity
-and revalidated before each write. Manifest v2 records normalized destination,
+and revalidated before each write. Stock/composite plans retain that identity
+across the confirmation modal, so a same-name replacement mount cannot inherit
+a plan made for the prior device. Filesystem-browser rename, move, folder, and
+delete operations use the same pinned boundary; confirmed deletion carries the
+already-pinned session into its worker. Manifest v2 records normalized destination,
 source identity, size, SHA-256, playlist membership, artwork/playlist kind,
 ownership, and completed generation. Tracks, covers, playlists, and the
 manifest use destination-filesystem temporaries plus atomic replacement.
@@ -353,8 +357,9 @@ retry.
 
 Device transactions share one UI ownership contract. Custom result signals may
 record a worker result, but only `QThread.finished` clears the owning attribute
-and may advance the UI. Planning maps to 0–15%, device mutation/verification to
-15–80%, and post-operation dashboard, sidebar/drift, and ownership release to
+and may advance the UI. Composite planning maps to 0–30%, device
+mutation/verification to 30–80%, and post-operation dashboard, sidebar/drift,
+and ownership release to
 80–100%. `100%`, a completion dialog, enabled Eject/Sync controls, and a newly
 clickable row are therefore all terminal states. A failed required final read
 shows a final-refresh failure instead of running the success callback.

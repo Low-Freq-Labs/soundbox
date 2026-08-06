@@ -235,5 +235,39 @@ class DeviceImport(unittest.TestCase):
             }
             self.assertEqual(after, before)
 
+    def test_playlist_parent_escape_is_refused_before_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            device = root / "DEVICE"
+            media = root / "SoundBox Media"
+            playlist = device / "Playlists" / "host.m3u8"
+            playlist.parent.mkdir(parents=True)
+            outside = root / "private.mp3"
+            outside.write_bytes(b"private")
+            playlist.write_text("../../private.mp3\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "outside.*device"):
+                imports.copy_from_device([playlist], media)
+
+            self.assertFalse(media.exists())
+
+    def test_playlist_symlink_escape_is_refused_before_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            device = root / "DEVICE"
+            media = root / "SoundBox Media"
+            playlist = device / "Playlists" / "host.m3u8"
+            playlist.parent.mkdir(parents=True)
+            outside = root / "private"
+            outside.mkdir()
+            (outside / "private.mp3").write_bytes(b"private")
+            (device / "Music").symlink_to(outside, target_is_directory=True)
+            playlist.write_text("/Music/private.mp3\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "outside.*device"):
+                imports.copy_from_device([playlist], media)
+
+            self.assertFalse(media.exists())
+
 if __name__ == "__main__":
     unittest.main()

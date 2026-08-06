@@ -74,6 +74,11 @@ class DeviceSession:
         self._inode = stat.st_ino
         self._allow_external_roots = bool(allow_external_roots)
 
+    @property
+    def mount_identity(self) -> tuple[int, int]:
+        """Pinned filesystem/inode identity used across plan/confirm/commit."""
+        return self._device, self._inode
+
     def revalidate(self) -> None:
         current = self.target.resolve(strict=True)
         stat = current.stat()
@@ -231,6 +236,78 @@ class PlannedFile:
     @property
     def canonical_source(self) -> Path:
         return self.original_source or self.source
+
+
+@dataclass(frozen=True)
+class DeviceDeleteReport:
+    """Exact outcome of one explicitly confirmed browser deletion."""
+
+    deleted: int
+    total: int
+    errors: tuple[str, ...] = ()
+    cancelled: bool = False
+
+
+def _delete_device_tree(session: DeviceSession, relative: Path) -> None:
+    """Delete one guarded device entry without following directory symlinks."""
+    path = session.guard(relative)
+    session.revalidate()
+    if path.is_symlink():
+        path.unlink()
+        return
+    if path.is_dir():
+        for child in list(path.iterdir()):
+            _delete_device_tree(session, child.relative_to(session.target))
+        session.revalidate()
+        session.guard(relative).rmdir()
+        return
+    path.unlink()
+
+
+def delete_device_paths(
+    session: DeviceSession,
+    relatives: list[Path],
+    *,
+    on_progress: Callable[[int, int, str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> DeviceDeleteReport:
+    """Delete a confirmed set of paths through an already pinned session.
+
+    The UI creates ``session`` before showing its confirmation dialog. A
+    same-name remount while that dialog is open therefore fails revalidation
+    instead of granting authority over the replacement volume.
+    """
+    normalized: list[Path] = []
+    for raw in relatives:
+        relative = Path(raw)
+        if relative.is_absolute() or relative in {Path(), Path(".")}:
+            raise RuntimeError(
+                f"REFUSING non-relative device deletion path: {relative}")
+        guarded = session.guard(relative)
+        canonical = guarded.relative_to(session.target)
+        if any(parent == canonical or parent in canonical.parents
+               for parent in normalized):
+            continue
+        normalized = [
+            item for item in normalized if canonical not in item.parents]
+        normalized.append(canonical)
+
+    total = len(normalized)
+    deleted = 0
+    errors: list[str] = []
+    for relative in normalized:
+        if should_cancel is not None and should_cancel():
+            return DeviceDeleteReport(
+                deleted, total, tuple(errors), cancelled=True)
+        try:
+            _delete_device_tree(session, relative)
+            deleted += 1
+        except OSError as exc:
+            errors.append(f"{relative.name}: {exc}")
+        if on_progress is not None:
+            on_progress(deleted + len(errors), total, relative.name)
+    session.revalidate()
+    return DeviceDeleteReport(deleted, total, tuple(errors))
 
 
 def _dirs_up_to(start_dir: Path, root: Path) -> list[Path]:

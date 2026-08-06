@@ -544,12 +544,12 @@ class StockIpodUI(unittest.TestCase):
     def test_ipod_progress_keeps_animated_status_and_separate_count(self):
         try:
             _win._on_dual_ipod_progress(14, 37, "track.wav")
-            self.assertEqual(_win.status_label.text(), "Syncing iPod")
+            self.assertEqual(_win.status_label.text(), "Syncing audio")
             self.assertEqual(_win.status_count_label.text(), "14/37")
             self.assertFalse(_win.status_count_label.isHidden())
             self.assertTrue(_win._pulse_timer.isActive())
             _win._pulse_tick()
-            self.assertEqual(_win.status_label.text(), "Syncing iPod.")
+            self.assertEqual(_win.status_label.text(), "Syncing audio.")
             self.assertEqual(_win.status_count_label.text(), "14/37")
         finally:
             _win._stop_pulse()
@@ -567,15 +567,16 @@ class StockIpodUI(unittest.TestCase):
 
             _win._on_dual_ipod_plan_progress(2, 4, "planning")
             planned_value = _win.progress.value()
-            self.assertEqual(planned_value, 75)
+            self.assertEqual(planned_value, 150)
             self.assertEqual(_win.status_label.text(), "Planning iPod")
+            self.assertTrue(_win.status_count_label.isHidden())
 
             _win._on_dual_ipod_plan_progress(4, 4, "planned")
-            self.assertEqual(_win.progress.value(), 150)
+            self.assertEqual(_win.progress.value(), 300)
 
             _win._on_dual_ipod_progress(1, 4, "writing")
             self.assertGreater(_win.progress.value(), planned_value)
-            self.assertEqual(_win.status_label.text(), "Syncing iPod")
+            self.assertEqual(_win.status_label.text(), "Syncing audio")
 
             _win._on_dual_ipod_progress(4, 4, "written")
             self.assertEqual(_win.progress.value(), 800)
@@ -584,6 +585,40 @@ class StockIpodUI(unittest.TestCase):
             _win._stop_pulse()
             _win._set_status_count()
             _win.progress.setValue(old_value)
+            _win.progress.setVisible(False)
+            _win.status_label.setText("Ready")
+
+    def test_confirmed_batch_progress_gives_each_job_a_complete_slice(self):
+        old = (
+            _win._dual_active_preconfirmed,
+            _win._dual_batch_total_tracks,
+            _win._dual_batch_done_tracks,
+            _win._dual_active_track_total,
+            _win.progress.value(),
+        )
+        try:
+            _win._dual_active_preconfirmed = True
+            _win._dual_batch_total_tracks = 10
+            _win._dual_batch_done_tracks = 2
+            _win._dual_active_track_total = 3
+            _win.progress.setValue(0)
+
+            _win._on_dual_ipod_plan_progress(4, 4, "planned")
+            self.assertEqual(_win.progress.value(), 250)
+            _win._on_dual_ipod_progress(4, 4, "written")
+            self.assertEqual(_win.progress.value(), 400)
+            self.assertEqual(_win.status_count_label.text(), "5/10")
+        finally:
+            (
+                _win._dual_active_preconfirmed,
+                _win._dual_batch_total_tracks,
+                _win._dual_batch_done_tracks,
+                _win._dual_active_track_total,
+                progress_value,
+            ) = old
+            _win._stop_pulse()
+            _win._set_status_count()
+            _win.progress.setValue(progress_value)
             _win.progress.setVisible(False)
             _win.status_label.setText("Ready")
 

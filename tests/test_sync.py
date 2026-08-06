@@ -303,6 +303,70 @@ class TestSyncEndToEnd(unittest.TestCase):
             self.target / "Music" / "PIONEER" / "song.wav",
         )
 
+    def test_browser_delete_uses_confirmed_session_not_same_name_remount(self):
+        self.target.mkdir()
+        victim = self.target / "Music" / "victim.mp3"
+        victim.parent.mkdir()
+        victim.write_bytes(b"confirmed-volume")
+        session = sync_mod.DeviceSession(self.target, [], create=False)
+
+        old_target = self.root / "old-device"
+        self.target.rename(old_target)
+        replacement = self.target / "Music" / "victim.mp3"
+        replacement.parent.mkdir(parents=True)
+        replacement.write_bytes(b"replacement-volume")
+
+        with self.assertRaisesRegex(RuntimeError, "remounted"):
+            sync_mod.delete_device_paths(
+                session, [Path("Music/victim.mp3")])
+
+        self.assertEqual(replacement.read_bytes(), b"replacement-volume")
+        self.assertEqual(
+            (old_target / "Music/victim.mp3").read_bytes(),
+            b"confirmed-volume",
+        )
+
+    def test_browser_delete_deduplicates_selected_parent_and_child(self):
+        self.target.mkdir()
+        folder = self.target / "Music" / "Album"
+        folder.mkdir(parents=True)
+        (folder / "one.mp3").write_bytes(b"one")
+        (folder / "two.mp3").write_bytes(b"two")
+        session = sync_mod.DeviceSession(self.target, [], create=False)
+        progress = []
+
+        result = sync_mod.delete_device_paths(
+            session,
+            [Path("Music/Album/one.mp3"), Path("Music/Album")],
+            on_progress=lambda done, total, label: progress.append(
+                (done, total, label)),
+        )
+
+        self.assertEqual(result.deleted, 1)
+        self.assertEqual(result.total, 1)
+        self.assertFalse(result.errors)
+        self.assertFalse(result.cancelled)
+        self.assertFalse(folder.exists())
+        self.assertEqual(progress, [(1, 1, "Album")])
+
+    def test_browser_delete_cancel_reports_incomplete_without_writes(self):
+        self.target.mkdir()
+        victim = self.target / "Music" / "victim.mp3"
+        victim.parent.mkdir()
+        victim.write_bytes(b"keep")
+        session = sync_mod.DeviceSession(self.target, [], create=False)
+
+        result = sync_mod.delete_device_paths(
+            session,
+            [Path("Music/victim.mp3")],
+            should_cancel=lambda: True,
+        )
+
+        self.assertTrue(result.cancelled)
+        self.assertEqual(result.deleted, 0)
+        self.assertEqual(result.total, 1)
+        self.assertTrue(victim.is_file())
+
     def test_explicit_whole_device_erase_removes_manifest_and_unknown_content(self):
         self.target.mkdir()
         (self.target / "Music").mkdir()

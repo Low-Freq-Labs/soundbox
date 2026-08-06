@@ -103,7 +103,10 @@ Rockbox-only M3U8 filename receives a zero-padded sequence such as
 `01 - HOUSE.m3u8`. Stock iTunesDB titles and SoundBox device rows remain clean
 and unnumbered. The Device Playlists tab can move managed rows and explicitly
 publish that one order to both firmware paths without duplicating media;
-reordering renames only the tiny owned Rockbox playlist files.
+reordering renames only the tiny owned Rockbox playlist files. A rename that
+changes only capitalization, such as `DnB` to `DNB`, is still published with
+the requested spelling: SoundBox recovery-backs the owned FAT entry, removes
+that one old spelling, and writes the renamed playlist transactionally.
 This setting is Rockbox-specific. Stock playlists are MHYP/MHIP reference
 lists with 32-bit entry counts; the pinned offline renderer has a regression
 proof for 10,000 entries and there is no equivalent stock-firmware preference
@@ -203,13 +206,16 @@ that cancellation; SoundBox never surprises the user by reviving an old write
 after a later drop.
 
 The planner emits bounded media, retained-playlist, stock-library, Rockbox,
-artwork, playlist, and ownership stages. Planning maps to 0–15%, guarded device
-work maps to 15–80%, and required dashboard/sidebar/drift finalization owns
+artwork, playlist, and ownership stages. Composite planning maps to 0–30%,
+guarded device work maps to 30–80%, and required dashboard/sidebar/drift finalization owns
 80–100%. The displayed value is monotonic across every phase transition and
 queued job; it cannot reach 100% while a SoundBox worker still owns the target.
-The phase-local
-`#/#` remains hidden during planning because planner units and committed audio
-units are intentionally different; it appears for actual audio mutation work.
+Internal planner units drive only the 0–30% percentage bar; planning presents
+the animated `Planning iPod...` label without a `#/#`, because those units are
+neither tracks nor device writes. The counter appears only under the explicit
+`Syncing audio` label for committed audio units. Confirmed multi-job
+queues give every job a complete proportional slice rather than leaving gaps
+between planning and publication.
 
 The open Device, Songs, and Playlists pages retain one immutable last-verified
 snapshot while planning, syncing, deleting, or performing the post-operation
@@ -278,7 +284,7 @@ longer matches its committed hash does not invalidate the read-only stock
 identity/database snapshot: Device details remain available, the affected
 playlist is labeled `Sync needed`, and its changed entries stay hidden until the
 confirmed composite planner validates them.
-During commit, animated `Syncing iPod...` status is followed by a separate
+During commit, animated `Syncing audio...` status is followed by a separate
 `#/#` field and percentage bar. The count covers audio files actually copied,
 replaced, or removed; a 37-track sync-to-zero therefore advances 0/37 through
 37/37, while a database/playlist-only commit hides the inapplicable counter
@@ -497,7 +503,13 @@ Apple's local device record, serial-derived model, or model-derived hardware
 catalog. Parsing runs off the UI thread and eject refuses to race it.
 Rockbox and generic USB devices retain the existing filesystem browser. It may
 show `/PIONEER` so volume contents remain honest, but exposes no SoundBox import,
-rename, folder, artist, or delete action inside that reserved tree.
+rename, folder, artist, or delete action inside that reserved tree. Every
+browser mutation is refused while another device operation owns the UI and is
+performed only through a mount identity pinned before user confirmation/input.
+One Delete cannot span volumes; parent/child selections collapse to the parent,
+and completion reports the exact deleted/total result. M3U8 import resolves
+entries only within the selected device, rejecting `..` and symlink escapes
+before creating the SoundBox Media destination.
 
 On a schema-3 dual device, Songs and Playlists are composite rather than
 stock-prefixed views. The worker verifies the small manifest-owned M3U8 payloads
@@ -541,6 +553,8 @@ separately validated `iTunesDB` implementation.
 - Resolve the mount and confirm it is external before every write/delete.
 - Pin a `DeviceSession` to the resolved mount identity and reject a disappear,
   remount, symlink escape, source overlap, or case/Unicode destination collision.
+  Preserve that identity from plan through confirmation and commit; do not
+  reacquire authority from a reused `/Volumes/<name>` path.
 - Refuse any target that overlaps a source file or source-library parent.
 - Never write below `iPod_Control` except through the guarded MA446-only
   `soundbox.stock_ipod` transaction. On dual boot it may be invoked only by the

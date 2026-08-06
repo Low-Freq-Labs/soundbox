@@ -148,6 +148,15 @@ from .workers import (
 )
 
 
+# One device transaction owns one 0..1000 meter. Composite planning verifies
+# and prepares every source and is often substantial work, so it receives a
+# truthful 30% instead of being squeezed into the old 15% startup sliver.
+_DUAL_PLAN_PROGRESS_END = 300
+_DEVICE_WORK_PROGRESS_END = 800
+_DUAL_PLAN_SHARE_OF_PREFINAL = (
+    _DUAL_PLAN_PROGRESS_END / _DEVICE_WORK_PROGRESS_END)
+
+
 # Wordmark as ASCII art (SOUND = white, BOX = purple), shown in the top bar.
 SOUND_ART = r"""
  ____   ___  _   _ _   _ ____
@@ -1465,7 +1474,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dhh.addWidget(self.eject_btn)
         dl.addWidget(dhead)
         self.fs_model = QFileSystemModel()
-        self.fs_model.setReadOnly(False)  # allow in-place rename on disk
+        # Browser mutations use pinned DeviceSession operations in the context
+        # menu. QFileSystemModel's direct rename path cannot revalidate mounts.
+        self.fs_model.setReadOnly(True)
         self.fs_view = QTreeView()
         self.fs_view.setObjectName("DeviceBrowser")
         self.fs_view.setModel(self.fs_model)
@@ -3732,24 +3743,27 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_dual_ipod_plan_progress(
             self, done: int, total: int, _label: str):
-        """Map read-only planning into the first 15% of the transaction."""
+        """Map read-only planning into the first 30% of the transaction."""
         total = max(1, int(total))
         done = max(0, min(int(done), total))
         fraction = done / total
         if self._dual_active_preconfirmed and self._dual_batch_total_tracks > 0:
             completed = self._dual_batch_done_tracks
             active = self._dual_active_track_total
-            value = round(800 * (
-                completed + active * 0.15 * fraction
+            value = round(_DEVICE_WORK_PROGRESS_END * (
+                completed
+                + active * _DUAL_PLAN_SHARE_OF_PREFINAL * fraction
             ) / self._dual_batch_total_tracks)
         else:
-            value = round(150 * fraction)
+            value = round(_DUAL_PLAN_PROGRESS_END * fraction)
         self.progress.setRange(0, 1000)
         self.progress.setValue(max(self.progress.value(), value))
         self.progress.setVisible(True)
-        # The plan and write callbacks count different work. Keeping the track
-        # counter hidden here avoids a misleading backwards jump at commit.
+        # Internal planner units keep the percentage bar honest, but they are
+        # not tracks or device writes and therefore do not belong in the
+        # user-facing #/# counter. The animated phase label is sufficient.
         self._start_pulse("Planning iPod")
+        self._set_status_count()
 
     def _on_dual_ipod_plan(self, dev: str, result):
         self._stop_pulse()
@@ -3797,7 +3811,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.critical(
                 self, "Dual iPod plan failed", "Unexpected plan result.")
             return
-        self._set_device_progress(max(150, self.progress.value()))
+        self._set_device_progress(max(
+            _DUAL_PLAN_PROGRESS_END, self.progress.value()))
         summary = result.summary()
         if not result.requires_commit:
             if self._dual_active_preconfirmed:
@@ -3821,7 +3836,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._dual_active_playlist_keys.clear()
             self._dual_active_confirmed = False
             self._dual_active_action = "sync"
-            self._set_device_progress(150)
+            self._set_device_progress(_DUAL_PLAN_PROGRESS_END)
             self._set_status_count()
             try:
                 self.rockbox_media_cache.clear()
@@ -3957,18 +3972,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         total = plan.progress_total
         self.progress.setRange(0, 1000)
         if self._dual_active_preconfirmed and self._dual_batch_total_tracks > 0:
-            initial = round(800 * (
+            initial = round(_DEVICE_WORK_PROGRESS_END * (
                 self._dual_batch_done_tracks
-                + self._dual_active_track_total * 0.15
+                + self._dual_active_track_total
+                * _DUAL_PLAN_SHARE_OF_PREFINAL
             ) / self._dual_batch_total_tracks)
         else:
-            initial = 150
+            initial = _DUAL_PLAN_PROGRESS_END
         self.progress.setValue(max(self.progress.value(), initial))
         self.progress.setFormat("%p%")
         self.progress.setVisible(True)
         self.cancel_btn.setVisible(False)
         self._start_pulse(
-            "Syncing iPod",
+            "Syncing audio" if total > 0 else "Syncing iPod",
             keep_count=(
                 self._dual_batch_total_tracks > 0
                 if self._dual_active_preconfirmed else total > 0),
@@ -3998,21 +4014,31 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._dual_batch_done_tracks + current,
             )
             self._start_pulse(
-                "Syncing iPod", keep_count=self._dual_batch_total_tracks > 0)
+                "Syncing audio",
+                keep_count=self._dual_batch_total_tracks > 0)
             self._set_status_count(
                 batch_done, self._dual_batch_total_tracks)
-            value = round(1000 * (
-                0.8 * self._dual_batch_done_tracks
-                + self._dual_active_track_total * (
-                    0.12 + 0.52 * done / max(1, total))
+            active_fraction = (
+                _DUAL_PLAN_SHARE_OF_PREFINAL
+                + (1.0 - _DUAL_PLAN_SHARE_OF_PREFINAL)
+                * done / max(1, total)
+            )
+            value = round(_DEVICE_WORK_PROGRESS_END * (
+                self._dual_batch_done_tracks
+                + self._dual_active_track_total * active_fraction
             ) / max(1, self._dual_batch_total_tracks))
             self.progress.setRange(0, 1000)
             self.progress.setValue(max(self.progress.value(), value))
             self.progress.setVisible(True)
             return
-        self._start_pulse("Syncing iPod", keep_count=total > 0)
+        self._start_pulse(
+            "Syncing audio" if total > 0 else "Syncing iPod",
+            keep_count=total > 0)
         self._set_status_count(done, total)
-        value = round(150 + 650 * done / max(1, total))
+        value = round(
+            _DUAL_PLAN_PROGRESS_END
+            + (_DEVICE_WORK_PROGRESS_END - _DUAL_PLAN_PROGRESS_END)
+            * done / max(1, total))
         self.progress.setRange(0, 1000)
         self.progress.setValue(max(self.progress.value(), value))
         self.progress.setVisible(True)

@@ -961,9 +961,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   verification/unmount outcome. A no-write/up-to-date plan is still a completed
   Sync or Delete and must pass through the same final scan/latch before its OK.
 - **Device progress is a transaction meter, not a copy meter.** Planning owns
-  0–15%, guarded device work owns 15–80%, and final dashboard/sidebar/drift reads
+  0–30% for composite sync, guarded device work owns 30–80%, and final
+  dashboard/sidebar/drift reads
   plus worker-ownership release own 80–100%. Keep it monotonic across queued
-  batches and multiple targets. Never publish 100%, `Complete`, a success modal,
+  batches and multiple targets. Internal planner units can be roughly twice the
+  unique managed source union, so use them only for the percentage bar: show
+  animated `Planning iPod...` with no `#/#`. Show the counter only under
+  `Syncing audio`, where it represents actual audio work. Queued-job formulas
+  must give each job its complete proportional slice. Never publish 100%, `Complete`, a success modal,
   or enabled Eject/Sync while any required worker attribute remains owned. A
   failed required final read is terminal but not successful: retain Eject,
   report `Final refresh failed`, and suppress the success callback.
@@ -1029,6 +1034,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `device_name` clean, retain full rekordbox hierarchy in the manifest, and add
   folder context only for duplicate leaves. Reorder is a transactional rename
   of tiny owned playlist files, never a reason to duplicate or recopy media.
+  FAT resolves case-only names to the same directory entry, so `DnB` to `DNB`
+  cannot use the ordinary write-new/delete-old path. Preserve the verified old
+  path in the playlist plan, recovery-back and unlink that owned entry before
+  publishing the requested spelling, suppress its duplicate stale manifest
+  row, and restore both the original spelling and bytes on rollback. A distinct
+  file at a non-case-equivalent destination remains a hard collision.
 - **Deleting the last managed track can expose directory AppleDouble clutter.**
   Scrubbing only `._filename` for transaction payload paths misses Finder's
   `._Artist` directory sidecars after the real tree becomes empty. Composite
@@ -1142,7 +1153,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   full database initialization only when an older cache is actually corrupt.
 - Device sync manifest lives at `<device>/.soundbox/manifest.json`.
 - **A USB remount can defeat rollback without corrupting the committed
-  generation.** `DeviceSession` must reject the new mount identity; never cross
+  generation.** `DeviceSession` must reject the new mount identity; a read-only
+  stock/composite plan must also carry its pinned identity across the
+  confirmation modal and compare it before commit performs any write. Never cross
   the remount to delete paths remembered by the old session. A dual recovery
   directory named for the still-current manifest can authorize a later retry to
   adopt only freshly planned path/size/SHA-256 matches. Persist each completed
@@ -1150,6 +1163,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   and edge fingerprint so repeated USB resets resume verification rather than
   rereading all prior survivors. The UI must report the preserved baseline and
   verified-resume state, not imply that rollback necessarily removed new files.
+- **A filesystem-browser confirmation grants authority to one mounted volume,
+  not a reusable path string.** Pin before showing rename/new-folder/artist/delete
+  input, carry that session into a delete worker, require all selected items to
+  share the mount, and revalidate recursively without following symlinks. M3U8
+  device import is read-only but still must confine every resolved entry to that
+  volume; otherwise `..` or an on-device symlink can copy an unrelated Mac file.
 - **Dual playlist drops are confirmed jobs, not hidden planner mutations.** Ask
   Yes/No for each drop before expensive work. Deduplicate by stable playlist
   identity and retain FIFO intent. Once the active worker finishes, coalesce all

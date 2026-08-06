@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer
@@ -25,6 +24,20 @@ from .devices import (
 from .workers import DeleteWorker, OneShotTask
 
 LOG = logging.getLogger("soundbox")
+
+
+def _browser_entry_name(raw: str) -> str:
+    """Validate one literal on-device name without silently rewriting it."""
+    name = raw.strip()
+    if (
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or "\0" in name
+    ):
+        raise ValueError("Enter one file or folder name, without slashes.")
+    return name
 
 
 class DeviceBrowserMixin:
@@ -308,12 +321,54 @@ class DeviceBrowserMixin:
         self._import_files([str(path) for path in result])
 
     def _edit_name(self, index):
-        # Inline rename (like the playlist cells) — QFileSystemModel renames on disk.
-        if _in_external_product_tree(Path(self.fs_model.filePath(index))):
+        path = Path(self.fs_model.filePath(index))
+        if (
+            not _on_external_device(path)
+            or _in_external_product_tree(path)
+        ):
+            QMessageBox.critical(
+                self, "Refused", "Can only rename items on external devices.")
             return
-        name_idx = index.sibling(index.row(), 0)
-        self.fs_view.setCurrentIndex(name_idx)
-        self.fs_view.edit(name_idx)
+        if self._device_operation_owned():
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._edit_name(index)):
+            return
+        volume = _external_volume_of(path)
+        if volume is None:
+            return
+        try:
+            session = sync_mod.DeviceSession(volume, [], create=False)
+            source = session.guard(path)
+            relative = source.relative_to(session.target)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "Rename refused", str(exc))
+            return
+        raw, ok = QInputDialog.getText(
+            self, "Rename", "Name:", text=path.name)
+        if not ok:
+            return
+        try:
+            name = _browser_entry_name(raw)
+            destination = session.guard(relative.with_name(name))
+            session.revalidate()
+            same_entry = False
+            if destination.exists():
+                try:
+                    same_entry = os.path.samefile(source, destination)
+                except OSError:
+                    pass
+                if not same_entry:
+                    raise FileExistsError(
+                        f"An item named {name!r} already exists.")
+            if source != destination:
+                source.rename(destination)
+                session.revalidate()
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "Rename failed", str(exc))
 
     def _assign_artist(self, path: Path):
         # Move an audio file out of Unknown Artist into /Music/<Artist>/ on the device.
@@ -323,14 +378,47 @@ class DeviceBrowserMixin:
         ):
             QMessageBox.critical(self, "Refused", "Can only edit external devices.")
             return
+        if self._device_operation_owned():
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._assign_artist(path)):
+            return
+        volume = _external_volume_of(path)
+        if volume is None:
+            return
+        try:
+            session = sync_mod.DeviceSession(volume, [], create=False)
+            source = session.guard(path)
+            relative = source.relative_to(session.target)
+            if (
+                len(relative.parts) != 3
+                or relative.parts[0].casefold() != "music"
+                or relative.parts[1].casefold() != "unknown artist"
+            ):
+                raise RuntimeError(
+                    "Assign Artist only moves /Music/Unknown Artist tracks.")
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "Assign refused", str(exc))
+            return
         artist, ok = QInputDialog.getText(self, "Assign Artist", "Artist:")
         artist = sanitize_component(artist.strip()) if artist.strip() else ""
         if ok and artist:
-            dest_dir = path.parent.parent / artist  # .../Music/<Artist>
             try:
+                dest_dir = session.guard(Path("Music") / artist)
+                destination = session.guard(
+                    Path("Music") / artist / relative.name)
+                session.revalidate()
+                if destination.exists():
+                    raise FileExistsError(
+                        f"{artist}/{relative.name} already exists.")
                 dest_dir.mkdir(exist_ok=True)
-                shutil.move(str(path), str(dest_dir / path.name))
-            except OSError as exc:
+                session.revalidate()
+                source.rename(destination)
+                session.revalidate()
+            except (OSError, RuntimeError) as exc:
                 QMessageBox.critical(self, "Assign failed", str(exc))
 
     def _new_folder(self, parent: Path):
@@ -340,13 +428,35 @@ class DeviceBrowserMixin:
         ):  # external volume or inside one, excluding another product's tree
             QMessageBox.critical(self, "Refused", "Can only create folders on external devices.")
             return
+        if self._device_operation_owned():
+            QMessageBox.warning(
+                self, "Device busy",
+                "Wait for the current SoundBox device operation to finish.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._new_folder(parent)):
+            return
+        volume = _external_volume_of(parent)
+        if volume is None:
+            return
+        try:
+            session = sync_mod.DeviceSession(volume, [], create=False)
+            guarded_parent = session.guard(parent)
+            relative_parent = guarded_parent.relative_to(session.target)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "Create refused", str(exc))
+            return
         name, ok = QInputDialog.getText(self, "New Folder", f"New folder in {parent.name}:")
-        name = name.strip()
-        if ok and name:
-            try:
-                (parent / name).mkdir()
-            except OSError as exc:
-                QMessageBox.critical(self, "Create failed", str(exc))
+        if not ok:
+            return
+        try:
+            name = _browser_entry_name(name)
+            destination = session.guard(relative_parent / name)
+            session.revalidate()
+            destination.mkdir()
+            session.revalidate()
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "Create failed", str(exc))
 
     def _delete_paths(self, paths: list[Path]):
         # Safety: only ever delete items strictly INSIDE an external/ejectable volume
@@ -368,15 +478,54 @@ class DeviceBrowserMixin:
         if self._defer_device_operation_until_scan_finishes(
                 lambda: self._delete_paths(paths)):
             return
+        volumes = [_external_volume_of(path) for path in paths]
+        if (
+            any(volume is None for volume in volumes)
+            or any(volume != volumes[0] for volume in volumes[1:])
+        ):
+            QMessageBox.critical(
+                self, "Refused",
+                "One delete action cannot span multiple devices.")
+            return
+        volume = volumes[0]
+        assert volume is not None
+        try:
+            # Pin the confirmed mount identity before the modal opens. The
+            # worker receives this exact authority rather than resolving the
+            # same /Volumes name again after confirmation.
+            session = sync_mod.DeviceSession(volume, [], create=False)
+            relatives = [
+                session.guard(path).relative_to(session.target)
+                for path in paths
+            ]
+            # Make the confirmation count match the actual top-level work: if
+            # a selected folder already contains another selected row, deleting
+            # the folder is the one operation the user is authorizing.
+            normalized: list[Path] = []
+            for relative in relatives:
+                if any(
+                    existing == relative or existing in relative.parents
+                    for existing in normalized
+                ):
+                    continue
+                normalized = [
+                    existing for existing in normalized
+                    if relative not in existing.parents
+                ]
+                normalized.append(relative)
+            relatives = normalized
+            paths = [session.target / relative for relative in relatives]
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, "Delete refused", str(exc))
+            return
         n = len(paths)
         preview = "\n".join(p.name for p in paths[:12]) + ("\n…" if n > 12 else "")
         if QMessageBox.question(self, "Delete",
                                 f"Permanently delete {n} item(s)?\n\n{preview}") != QMessageBox.Yes:
             return
         self._release_eject_ready()
-        volume = _external_volume_of(paths[0])
-        dev = str(volume) if volume is not None else ""
-        w = DeleteWorker(paths)
+        dev = str(volume)
+        w = DeleteWorker(session, relatives)
         self._delete_worker = w
         self._deleting = True  # owns the status label so bg art status doesn't fight it
         w.progress.connect(self._on_device_delete_progress)
@@ -394,26 +543,44 @@ class DeviceBrowserMixin:
             150 + 650 * min(max(0, done), max(1, total)) / max(1, total))
         self._set_device_progress(max(self.progress.value(), value))
 
-    def _on_delete_done(self, dev: str, errors: list):
+    def _on_delete_done(self, dev: str, result):
         self._deleting = False
         self._stop_pulse()
+        if isinstance(result, Exception):
+            self.progress.setVisible(False)
+            self._set_status_text("Delete failed")
+            QMessageBox.critical(self, "Delete failed", str(result))
+            self._refresh_devices()
+            return
+        errors = list(result.errors)
+        complete_delete = (
+            not result.cancelled
+            and not errors
+            and result.deleted == result.total
+        )
         self._set_device_progress(800)
 
         def complete():
             if self.stack.currentIndex() == 1:
                 self.fs_view.setRootIndex(
                     self.fs_model.setRootPath(self.fs_model.rootPath()))
-            if errors:
+            if result.cancelled:
+                self._set_status_text("Delete cancelled")
+                QMessageBox.information(
+                    self, "Delete cancelled",
+                    f"Deleted {result.deleted} of {result.total} item(s).")
+            elif errors:
                 self._set_status_text("Delete failed")
                 QMessageBox.critical(
                     self, "Delete failed", "\n".join(errors[:10]))
             else:
-                self._flash_status("Deleted ✓")
+                self._flash_status(f"Deleted {result.deleted}/{result.total} ✓")
 
         if dev:
             self._finalize_ipod_operation(
                 dev, complete,
-                terminal_text="Delete failed" if errors else "Complete ✓")
+                terminal_text=(
+                    "Complete ✓" if complete_delete else "Delete incomplete"))
         else:
             self.progress.setVisible(False)
             complete()

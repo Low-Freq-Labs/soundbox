@@ -81,6 +81,12 @@ SUPPORTED_SUFFIXES = frozenset({".mp3", ".wav"})
 SUPPORTED_MODELS = {
     "MA446": ("iPod Video", "5.5th Gen"),
 }
+_CLASSIC_USB_SETTLE_SECONDS = 0.15
+
+
+def _pace_classic_usb() -> None:
+    """Give validated classic hardware a short breath between media writes."""
+    time.sleep(_CLASSIC_USB_SETTLE_SECONDS)
 
 
 class StockIpodError(RuntimeError):
@@ -179,6 +185,7 @@ class StockIpodSyncPlan:
     """Fully rendered dry-run result; constructing it never writes the target."""
 
     target: Path
+    target_mount_identity: tuple[int, int]
     model_number: str
     database_relative_path: Path
     database_sha256_before: str
@@ -321,6 +328,7 @@ class StockIpodDeletePlan:
     """Read-only playlist/index deletion with independent physical cleanup."""
 
     target: Path
+    target_mount_identity: tuple[int, int]
     model_number: str
     database_relative_path: Path
     database_sha256_before: str
@@ -1022,6 +1030,7 @@ def plan_stock_ipod_sync(
 ) -> StockIpodSyncPlan:
     """Render and validate a complete stock-iPod sync without target writes."""
     root = Path(target).expanduser().resolve(strict=True)
+    planning_session = DeviceSession(root, [], create=False)
     if str(filesystem or "").lower() not in {"msdos", "fat32", "fat"}:
         raise StockIpodError(
             f"Stock iPod writes require an explicitly confirmed FAT32 volume; "
@@ -1909,8 +1918,10 @@ def plan_stock_ipod_sync(
         .lstrip(":").replace(":", "/")
         for source in sources
     }
+    planning_session.revalidate()
     return StockIpodSyncPlan(
         target=root,
+        target_mount_identity=planning_session.mount_identity,
         model_number=model,
         database_relative_path=database.relative_to(root),
         database_sha256_before=hashlib.sha256(original).hexdigest(),
@@ -1957,6 +1968,9 @@ def commit_stock_ipod_sync(
     """Commit a validated plan with DB-last ordering and exact-file rollback."""
     sources = [item.source for item in plan.copies + plan.rewrites]
     session = DeviceSession(plan.target, sources, create=False)
+    if session.mount_identity != plan.target_mount_identity:
+        raise StockIpodError(
+            "iPod target was remounted after dry-run; make a fresh plan")
     database = session.guard(plan.database_relative_path)
     play_counts = session.guard(database.with_name("Play Counts"))
     if _sha256(database) != plan.database_sha256_before:
@@ -2207,7 +2221,7 @@ def commit_stock_ipod_sync(
             if on_track_committed is not None:
                 on_track_committed(copy_item.relative_path)
             if plan.dual_boot:
-                time.sleep(0.15)
+                _pace_classic_usb()
         for rewrite_item in plan.rewrites:
             destination = session.guard(rewrite_item.relative_path)
             prepared = None
@@ -2240,7 +2254,7 @@ def commit_stock_ipod_sync(
             if on_track_committed is not None:
                 on_track_committed(rewrite_item.relative_path)
             if plan.dual_boot:
-                time.sleep(0.15)
+                _pace_classic_usb()
         session.revalidate()
         if _sha256(database) != plan.database_sha256_before:
             raise StockIpodError("iTunesDB changed during media copy; aborting")
@@ -2568,6 +2582,7 @@ def plan_stock_ipod_playlist_delete(
     zero user playlists.
     """
     root = Path(target).expanduser().resolve(strict=True)
+    planning_session = DeviceSession(root, [], create=False)
     if str(filesystem or "").lower() not in {"msdos", "fat32", "fat"}:
         raise StockIpodError(
             f"Stock iPod writes require an explicitly confirmed FAT32 volume; "
@@ -2871,8 +2886,10 @@ def plan_stock_ipod_playlist_delete(
                     f"Rendered smart playlist changed {key} for "
                     f"{before.get('Title')!r}")
 
+    planning_session.revalidate()
     return StockIpodDeletePlan(
         target=root,
+        target_mount_identity=planning_session.mount_identity,
         model_number=model,
         database_relative_path=database.relative_to(root),
         database_sha256_before=hashlib.sha256(original).hexdigest(),
@@ -2900,6 +2917,9 @@ def commit_stock_ipod_playlist_delete(
 ) -> StockIpodDeleteResult:
     """Commit a deletion plan; database consistency precedes file cleanup."""
     session = DeviceSession(plan.target, [], create=False)
+    if session.mount_identity != plan.target_mount_identity:
+        raise StockIpodError(
+            "iPod target was remounted after dry-run; make a fresh plan")
     database = session.guard(plan.database_relative_path)
     play_counts = session.guard(database.with_name("Play Counts"))
     if _sha256(database) != plan.database_sha256_before:

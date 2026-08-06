@@ -80,8 +80,8 @@ For the live test count, trust `./check.sh` output—not any number written here
   managed/file Delete, connection preload, verification, and final refreshes
   consume results only after their QThread has returned and released UI
   ownership. Newly detected generic rows also wait for that boundary; new iPods
-  additionally remain hidden through dashboard preload and drift. Progress is
-  monotonic 0–15% planning, 15–80% guarded work, and 80–100% final
+  additionally remain hidden through dashboard preload and drift. Composite
+  progress is monotonic 0–30% planning, 30–80% guarded work, and 80–100% final
   dashboard/sidebar/drift release. Eject and Sync are disabled during true
   ownership, a recurring read-only poll queues Eject instead of throwing a busy
   modal, multi-target exports finalize every touched volume, and a failed final
@@ -818,7 +818,7 @@ future expansion, not blockers for normal use:
       verified M3U8 payloads preserve playlist order, Apple smart indexes stay
       internal, and stock-only legacy playlists cannot invoke composite cleanup.
 - [x] Make iPod status and post-commit refresh honest. Sentence-case animated
-      `Syncing iPod...` keeps a separate audio-mutation `#/#`; zero-work counts
+      `Syncing audio...` keeps a separate audio-mutation `#/#`; zero-work counts
       are hidden, sync-to-zero counts removals, and Device/Songs/Playlists refresh
       before the serialized sidebar scan without requiring navigation. Status
       width follows only the active operation, and the commit prompt is a concise
@@ -879,7 +879,7 @@ future expansion, not blockers for normal use:
       now receives its concise Yes/No before expensive work. Explicit Delete is
       authoritative: other available changes reconcile in the same operation
       and unavailable unrelated playlists retain their committed snapshots.
-      Planning occupies 0–15%, guarded device work 15–80%, and final reads plus
+      Planning occupies 0–30%, guarded device work 30–80%, and final reads plus
       ownership release 80–100% of one monotonic progress bar; one genuinely
       terminal completion closes the action or queued batch.
 - [x] Extend the original manifest drift/Sync contract across stock-only and
