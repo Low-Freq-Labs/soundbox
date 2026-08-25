@@ -4,7 +4,7 @@ Living to-do. Work top-down. The MA446 dual-boot iPod workflow is shipped and
 physically accepted; remaining device work is follow-up hardening and new hardware.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-08-05)
+## Current status (2026-08-25)
 
 - **CORE LIBRARY/EXPORT COMPLETE; LEGACY COVER RE-AUDIT ACTIVE.** Every track
   title is cut/cleaned. A 2026-08-04 review proved that some pre-hardening
@@ -33,7 +33,16 @@ For the live test count, trust `./check.sh` output—not any number written here
   rule. The signed ABI-4 app is installed and accepted, the full V5 audit is
   complete, curated state was verified, and no temporary rollback remains.
   Full evidence: `docs/PLAYER.md` → “Production renderer simplification on
-  2026-07-30” and `docs/HANDOFF.md`.
+  2026-07-30”.
+- **GLOBAL GRAVEYARD CACHE RECLAMATION SHIPPED.** A globally hidden track now
+  relinquishes its disposable SoundBox V4/V5 waveform record immediately.
+  Bulk preparation excludes global-Graveyard IDs, in-flight bulk and
+  interactive cooks cannot republish them, startup reclaims records left by
+  older builds, and selection-scoped restore returns a playable source to
+  ordinary bounded preparation. Playlist-only removals retain analysis because
+  the track remains browsable elsewhere. Installed-app verification reclaimed
+  499 records / 1.244 GiB for the live library, retained the two playlist-only
+  records, and scheduled zero preparation tasks.
 - **SOURCE-ADAPTER BOUNDARY SHIPPED.** `soundbox.library` now owns the
   provider-neutral `Track`, `Playlist`, and `Library` model. The live
   rekordbox DB and XML readers are concrete read-only adapters into it;

@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-07-30. This is the player reference: shipped behavior,
+Current as of 2026-08-25. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -2372,19 +2372,20 @@ collapse into one explicit 64–256 midrange same-LOD reconstruction rule. The
 24–48 and 384–1536 families bypass it.
 
 The native build, 257 focused native/UI tests, and the six-image real-track
-BLUE/RGB/3BAND corpus pass. Full gates and installed-app live review are still
-required. Installation is intentionally deferred while the in-progress V5
-full-library recook and its required rollback remain active.
+BLUE/RGB/3BAND corpus passed. Both complete source gates then passed 560 tests
+with one expected platform skip, including the hermetic render. The full V5
+production audit verified 3,244 reachable records with zero playable V4,
+missing/invalid reachable analysis, or orphan V4/V5 records. The signed ABI-4
+app was safely installed, activated its packaged native deck, loaded the real
+3,263-track / 83-playlist library with zero preparation tasks, and passed
+Sonny's live review. The V5-cutover and player-simplification rollbacks were
+retired only after those checks. This compositor campaign is complete.
 
 ## Committed next player work
 
 See `ROADMAP.md` for sequencing.
 
-1. Complete full validation and live installed-app review of the simplified
-   exact compositor after the V5 recook/rollback gate clears. Preserve the
-   detailed signed inner/outer contour and paused identity; whole-contour
-   unsigned-envelope replacement remains ruled out.
-2. Design the not-yet-shipped grid/cue editing UX on top of the V5 storage
+1. Design the not-yet-shipped grid/cue editing UX on top of the V5 storage
    mutation boundary. It must never mutate Rekordbox analysis. Today a valid
    Rekordbox grid remains authoritative and only the no-grid fallback begins at
    `0:00`; later manual adjustment and precedence require a UX workshop.

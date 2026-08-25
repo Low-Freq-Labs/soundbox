@@ -9,10 +9,14 @@ topic documents.
 ## Repository and runtime
 
 - Branch `main` is clean and published at the current wrap-up commit titled
-  `Reclaim Graveyard analysis caches`. It contains the global-Graveyard cache
-  lifecycle, race hardening, restore behavior, tests, and documentation.
-- Bare `./check.sh` passed: native build, pyflakes, mypy, and 837 tests in
-  11.308 seconds with four expected skips. `./build_app.sh` passed.
+  `Refresh current documentation`. The documentation audit moved retired
+  player acceptance work into dated validation, advanced the current roadmap
+  and verified device reference to 2026-08-25, and stopped the storage audit
+  from presenting the retired August 3 rollback as live.
+- Final bare `./check.sh` passed: native build, pyflakes, mypy, and 837 tests in
+  11.737 seconds with four expected skips. The installed app was not rebuilt or
+  replaced because this wrap-up changed documentation only; the prior
+  `./build_app.sh` result remains the installed runtime baseline.
 - The resulting build is installed at `/Applications/Soundbox.app` and running
   as PID 41294. Installed and `dist` executable SHA-256 values match at
   `17734adba2c35e08ea465287e2f3b2ec4e7d529521e6b2d8cc9da74b9e13f7f5`;
@@ -61,6 +65,6 @@ topic documents.
 
 ## Next action
 
-- No implementation, validation, packaging, installation, or runtime check is
-  pending. At resume, verify `git status -sb` is clean and `main` still matches
-  `origin/main`; there is no deferred acceptance step from this session.
+- No implementation, validation, packaging, installation, runtime check, or
+  documentation cleanup is pending. At resume, verify `git status -sb` is clean
+  and `main` still matches `origin/main`; there is no deferred acceptance step.

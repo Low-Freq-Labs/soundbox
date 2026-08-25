@@ -1,6 +1,6 @@
 # SoundBox device layouts
 
-Current as of 2026-08-05. Read this with `GOTCHAS.md` and the write contract at
+Current as of 2026-08-25. Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
 ## The simple model

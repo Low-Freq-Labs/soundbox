@@ -13,11 +13,21 @@ stock recovery points (about 51 MB total) and the bounded V5 analysis cache
 (about 11.6 GB for 3,244 records). No files were removed during the audit.
 
 Subsequent guarded installs retired the superseded bundles after signature,
-startup, and curated-state verification. The current handoff preserves exactly
-one immediate rollback at
+startup, and curated-state verification. At the 2026-08-03 checkpoint, exactly
+one immediate rollback remained at
 `/private/tmp/soundbox-install-20260803-72RwQm/` (about 235 MB), containing the
-preceding app and `library.json.before`; do not accumulate a new per-install
-trail around it.
+preceding app and `library.json.before`. That was a dated temporary recovery
+point, not a requirement to retain it indefinitely.
+
+### Follow-up: all temporary rollbacks retired (2026-08-25)
+
+Later guarded installs superseded that August 3 recovery point. After the
+current signed app, native-deck startup, curated state, and Graveyard cache
+reclamation were verified, Sonny explicitly approved permanent rollback
+cleanup. The final install rollback was deleted; a follow-up inventory found
+no SoundBox install/rollback directories in `/private/tmp` and no loose
+rollback-named artifacts under `~/Projects`. The pre-author-rewrite Git bundle
+was separately proven redundant and deleted with the same explicit approval.
 
 ### Follow-up: bounded V5 waveform cache (2026-07-30)
 
