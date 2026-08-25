@@ -21,6 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from . import file_locations
 from .library import Library, Track
 from .paths import is_within, sanitize_component
 
@@ -148,9 +149,13 @@ def probe(path: Path) -> dict:
         size = path.stat().st_size
     except OSError:
         size = 0
-    return {"path": str(path), "added": date.today().isoformat(),
-            "added_ts": time.time(),  # full timestamp: newest-added sorts to the top
-            "time": secs, "size": size}
+    record = {"path": str(path), "added": date.today().isoformat(),
+              "added_ts": time.time(),  # newest-added sorts to the top
+              "time": secs, "size": size}
+    bookmark = file_locations.create_bookmark(path)
+    if bookmark:
+        record[file_locations.BOOKMARK_KEY] = bookmark
+    return record
 
 
 def make_track(tid: str, rec: dict) -> Track:

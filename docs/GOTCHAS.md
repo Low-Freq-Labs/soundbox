@@ -157,6 +157,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   strips into broad pastel gradients. The measured screen expansion retains
   red's 0..14 range while leaving calibrated headroom above green/blue's
   three-bit maxima (`14 / 8 / 8.75` divisors in native display space).
+- **Compact RGB codes are already PWV5 channel values.** SoundBox's
+  `_pack_rgb3` produces even red `0..14` and green/blue `0..7`; do not send
+  those bytes through a second 0..255 quantizer. Older fallback records did so
+  and shifted their remaining red into the green field. At native upload,
+  repair only `soundbox-analysis` PWV5 from its canonical same-clock overview,
+  preserving the low seven height/control bits. Never rewrite the cache,
+  re-open source audio, or apply this compatibility path to exact Rekordbox
+  PWV5.
 - **The supplied references are not all the same zoom.** Bad Decisions is
   `768` points/s and High & Scared is `1536`; neither is the `184` stop used
   by the rejected harness. BLUE and RGB both need the signed interval cache
@@ -752,6 +760,27 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the app persists a repair once. `Track.imported` is the non-negotiable
   exemption from rekordbox cue/placeholder hiding; unknown duration must never
   make a real direct import disappear.
+- **Moved direct imports must never trigger a startup tree walk.** Healthy
+  records get only the saved-path file check. `soundbox.file_locations` stores
+  an opaque Core Foundation bookmark on import/relink and resolves it without
+  UI or volume mounting only when that path disappears. Bookmark-less legacy
+  records and unresolved cross-volume moves use one background, batched
+  Spotlight metadata query with exact filename + recorded size; a duplicate,
+  unknown size, stale result, or any ambiguity stays unresolved. Only the
+  user's explicit `Fix Missing Links…` folder choice authorizes a bounded
+  recursive scan. Apply worker results only when the record still has the
+  expected old path, refresh the bookmark after every relocation, and preserve
+  the stable `sb-` ID so playlists/overrides/art/waveforms do not detach.
+- **File Provider mtime normalization is not permission to recook.** SeaDrive
+  can preserve paths, sizes, and audio while truncating nanosecond mtimes to
+  whole seconds. On a V5 stat-identity miss, verify the existing boundary
+  fingerprint against current first/last 128 KiB using the manifest's recorded
+  size/mtime. Only an exact match may publish the cache-bound source-identity
+  xattr proof; a size or byte mismatch still recooks. Never rewrite the multi-MB
+  V5 payload merely to update a timestamp. `SF_DATALESS` placeholders are a
+  separate boundary: matching logical size may provisionally reuse the cache,
+  but startup must not open/hydrate the cloud source. Deliberate playback/export
+  hydrates it and a later ordinary check verifies the local bytes.
 - Title pipeline order: effective ARTIST is computed from the RAW/overridden name
   FIRST, then `effective_title = override | tidy(neat(name, artist), junk)`. Junk
   rules: `metadata.BUILTIN_TITLE_RULES` + user words; `Library.title_junk=None`

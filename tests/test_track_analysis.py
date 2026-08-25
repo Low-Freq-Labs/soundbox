@@ -4,6 +4,9 @@ from pathlib import Path
 import wave
 import hashlib
 import json
+import os
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -58,6 +61,18 @@ class TrackAnalysisStore(unittest.TestCase):
                 np.asarray([[2.0, 2.0, 1.0]]), np.asarray([1.0]))),
             [2, 1, 0],
         )
+
+    def test_compact_rgb_packs_directly_into_all_pwv5_channels(self):
+        packed = track_analysis._pack_rgb_detail(
+            np.ones(4),
+            np.asarray([
+                [14, 0, 0],
+                [0, 7, 0],
+                [0, 0, 7],
+                [14, 5, 7],
+            ], dtype=np.uint8),
+        )
+        self.assertEqual(packed, bytes.fromhex("e07c 1c7c 03fc f7fc"))
 
     def test_frequency_dependent_peak_holds_are_25_3_and_1_ms(self):
         rows = np.zeros((61, 3), dtype=np.float32)
@@ -216,6 +231,54 @@ class TrackAnalysisStore(unittest.TestCase):
         self.audio.write_bytes(self.audio.read_bytes() + b"x")
         self.assertIsNone(
             track_analysis.load(cache, "rb-42", self.audio))
+
+    def test_timestamp_only_drift_adopts_identity_without_rewriting_cache(self):
+        cache = self.root / "analysis"
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        self.assertIsNotNone(data)
+        target = track_analysis.store(cache, "mtime", self.audio, data)
+        self.assertIsNotNone(target)
+        before = target.read_bytes()
+        cache_mtime = target.stat().st_mtime_ns
+        stat = self.audio.stat()
+        os.utime(self.audio, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+
+        self.assertFalse(track_analysis.is_ready(
+            cache, "mtime", self.audio))
+        self.assertTrue(track_analysis.adopt_source_identity(
+            cache, "mtime", self.audio))
+        self.assertTrue(track_analysis.is_ready(
+            cache, "mtime", self.audio))
+        self.assertIsNotNone(track_analysis.load(
+            cache, "mtime", self.audio))
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(target.stat().st_mtime_ns, cache_mtime)
+
+    def test_changed_boundary_bytes_never_adopt_new_source_identity(self):
+        cache = self.root / "analysis"
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        self.assertIsNotNone(data)
+        self.assertIsNotNone(
+            track_analysis.store(cache, "changed", self.audio, data))
+        raw = bytearray(self.audio.read_bytes())
+        raw[0] ^= 0x01
+        self.audio.write_bytes(raw)
+
+        self.assertFalse(track_analysis.adopt_source_identity(
+            cache, "changed", self.audio))
+        self.assertFalse(track_analysis.is_ready(
+            cache, "changed", self.audio))
+
+    def test_dataless_placeholder_reuses_matching_size_without_hydration(self):
+        manifest = {"source": {"identity": "5:1", "size": 5}}
+        stat = SimpleNamespace(
+            st_size=5, st_mtime_ns=2,
+            st_flags=track_analysis._SF_DATALESS)
+        with mock.patch(
+                "soundbox.track_analysis._get_identity_xattr") as getxattr:
+            self.assertTrue(track_analysis._source_identity_matches(
+                Path("cache.sba5"), manifest, stat))
+        getxattr.assert_not_called()
 
     def test_corrupt_section_is_a_clean_miss(self):
         cache = self.root / "analysis"

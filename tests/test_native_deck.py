@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from desktop.native_deck import (
     NativeDeckBackend, _repair_pwv5_visibility,
+    _repair_soundbox_pwv5_color,
     native_available, native_library_path,
 )
 
@@ -28,6 +29,14 @@ def _sha256(path: Path) -> str:
 
 
 class WaveformStreamRepair(unittest.TestCase):
+    def test_soundbox_pwv5_color_is_restored_from_compact_overview(self):
+        # Preserve each low seven-bit height/control payload while replacing
+        # the old red-in-green fallback color with exact compact RGB codes.
+        packed = bytes.fromhex("107c 1078 1074")
+        overview_rgb = bytes((14, 0, 0, 2, 7, 1, 0, 2, 7))
+        repaired = _repair_soundbox_pwv5_color(packed, overview_rgb)
+        self.assertEqual(repaired, bytes.fromhex("e07c 3cf8 0bf4"))
+
     def test_audible_zero_pwv5_rows_receive_only_a_minimum_color_carrier(self):
         packed = bytes.fromhex("e07c 0000 0000 0384")
         overview = struct.pack("<HHHH", 100, 20, 0, 30)

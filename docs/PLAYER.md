@@ -273,6 +273,16 @@ Interactive loads validate only the requested section SHA-256; cache audits
 also verify the complete compressed payload. A
 changed/new track prepares only its own record. Storage-only cue/grid mutation
 support is a dormant boundary for later work; no manual grid editor exists.
+File-provider storage migrations are not audio changes. If size/mtime identity
+drifts, SoundBox recomputes the record's existing inexpensive fingerprint using
+its recorded size/mtime and the current first/last 128 KiB. An exact match
+stores a tiny cache-bound extended-attribute proof and reuses every waveform
+section without rewriting or decoding the source; any content/size mismatch
+remains a normal recook. A dataless File Provider placeholder is never hydrated
+by startup verification: matching logical size provisionally retains its
+existing cache until playback/export deliberately accesses the source, after
+which the ordinary verifier can prove the new local identity. Healthy exact or
+previously proven identities remain metadata-only checks on later scans.
 Tracks globally removed from Collection are outside this active cache universe:
 the removal drops their exact V4/V5 records, recurring preparation skips them,
 and an in-flight bulk or interactive cook cannot republish after the Graveyard
@@ -414,6 +424,18 @@ the nearest valid PWV5 color bits, and assigns the minimum representable PWV5
 height as a color carrier. The canonical cache remains byte-for-byte unchanged,
 true-silence rows remain zero, and the rule applies to every track rather than
 one reference passage.
+
+SoundBox-derived RGB has a provenance-gated compatibility repair of its own.
+Early V5 cooks correctly stored the compact overview RGB but mistakenly passed
+those already-quantized channel codes through a second display-range quantizer
+when packing PWV5 detail. The remaining red code landed in PWV5's green field,
+so SoundBox-only files could appear green at close RGB zoom. On upload, only a
+stream whose manifest says `soundbox-analysis` reconstructs its PWV5 color bits
+from the canonical, same-clock compact overview and preserves every cached
+height/control bit. This takes a bounded vectorized copy, leaves canonical cache
+and source bytes unchanged, and never applies to Rekordbox-authored PWV5. New
+cooks pack the compact codes directly and therefore need no compatibility
+repair; existing long Sets need neither hydration nor audio recooking.
 
 ## Why the waveform remains stable
 

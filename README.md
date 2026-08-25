@@ -37,9 +37,16 @@ for hour-plus sets), edits, art, waveforms, export. Direct imports are always
 exempt from the rekordbox cue/placeholder filter. New rekordbox tracks and
 direct SoundBox imports enter the same background waveform cooker immediately;
 lightweight source-identity rechecks recook only a file that changes later.
-Reorganized your files on disk?
-Right-click → **Fix Missing Links…** relocates them (filename + size match,
-never guesses; folder-picker fallback).
+Reorganized your files on disk? On startup, SoundBox checks only the recorded
+import paths, then uses persistent macOS file bookmarks to follow moved files
+or whole-folder moves without crawling the filesystem. Legacy records and
+cross-volume copies get one batched Spotlight metadata lookup requiring an
+exact filename + recorded byte-size match; duplicates and ambiguity fail
+closed. Only unresolved files expose right-click → **Fix Missing Links…**,
+whose folder picker bounds the fallback search to the location you select.
+Cloud-provider timestamp normalization is content-verified against the existing
+cache instead of recooking unchanged audio, and on-demand placeholders are not
+hydrated by startup checks.
 
 **Sidebar.**
 - **⌂ Collection** — every track (rekordbox + imported), newest first.

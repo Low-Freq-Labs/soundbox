@@ -419,6 +419,25 @@ firmware-generated and absent from iTunesDB.
   duration remains integer seconds; tables render hour-plus audio as H:MM:SS.
   Imported tracks remain categorically exempt from rekordbox cue/placeholder
   hiding, even if a damaged file still has unknown duration.
+- **Imported locations use persistent identity, not startup crawling.** The
+  saved path is the constant-time healthy fast path. Each direct import also
+  carries opaque Core Foundation bookmark data that can resolve the same file
+  after a file or parent-folder move. A background startup repair touches only
+  records with a missing path or legacy missing bookmark. Legacy/unresolvable
+  records receive one batched Spotlight query constrained by exact filename
+  and recorded size; only a unique live result is accepted and immediately
+  receives a fresh bookmark. Ambiguous/unindexed cases remain missing until
+  the user chooses an explicit folder for the bounded `Fix Missing Links…`
+  scan. Stable SoundBox track IDs keep playlists, edits, art, and analysis
+  attached through every successful relocation.
+- **Storage-provider timestamp drift is content-verified.** V5 source identity
+  normally remains the cheap exact size/mtime gate. If a provider move changes
+  only that identity, SoundBox verifies the cache's recorded boundary
+  fingerprint and persists a cache-bound xattr proof instead of decoding or
+  rewriting waveform data. Dataless File Provider placeholders retain an
+  existing same-size cache without hydration; verification waits until a user
+  action makes the source local. Real size/content changes still recook only
+  the affected track.
 - **Playlist identity = rekordbox `pid`** (`DjmdPlaylist.ID`), stable across
   rename/move → it is the device-sync identity. Rename/move = same pid (syncs);
   a genuinely new playlist = new pid = fresh export.

@@ -8,63 +8,70 @@ topic documents.
 
 ## Repository and runtime
 
-- Branch `main` is clean and published at the current wrap-up commit titled
-  `Refresh current documentation`. The documentation audit moved retired
-  player acceptance work into dated validation, advanced the current roadmap
-  and verified device reference to 2026-08-25, and stopped the storage audit
-  from presenting the retired August 3 rollback as live.
-- Final bare `./check.sh` passed: native build, pyflakes, mypy, and 837 tests in
-  11.737 seconds with four expected skips. The installed app was not rebuilt or
-  replaced because this wrap-up changed documentation only; the prior
-  `./build_app.sh` result remains the installed runtime baseline.
-- The resulting build is installed at `/Applications/Soundbox.app` and running
-  as PID 41294. Installed and `dist` executable SHA-256 values match at
-  `17734adba2c35e08ea465287e2f3b2ec4e7d529521e6b2d8cc9da74b9e13f7f5`;
-  strict deep signature verification passed and the packaged native
-  CoreAudio/Metal deck activated.
-- After runtime verification, Sonny explicitly requested permanent rollback
-  cleanup. The exact 246,329,344-byte install rollback at
-  `/private/tmp/soundbox-graveyard-install-eZrARK/` was deleted. A follow-up
-  inventory found no rollback-named artifacts under `~/Projects` and no other
-  SoundBox install/rollback directories in `/private/tmp`.
-- The 714,219-byte
-  `~/Projects/soundbox-BACKUP-preauthorrewrite-20260725.bundle` was verified as
-  a complete 55-commit Git bundle. Every bundled commit had an exact rewritten
-  twin matching tree, timestamp, and subject, so it contained no unique project
-  state; Sonny approved its permanent deletion and a follow-up search found no
-  other top-level SoundBox backup bundles.
+- Branch `main` is clean and published at the wrap-up commit titled
+  `Follow moved imports without cache churn`. The change adds persistent
+  identity relocation for direct imports, cloud-provider cache identity
+  reconciliation, and the provenance-gated legacy SoundBox RGB repair.
+- Final bare `./check.sh` passed: native build, pyflakes, mypy, and 851 tests in
+  11.517 seconds with four expected skips. `./build_app.sh` then produced the
+  installed runtime at `/Applications/Soundbox.app`; strict deep signature
+  verification passed and installed/dist executable SHA-256 values match at
+  `f8d25feaa3b2e287e654e2722e34fc138d75a8e3d1ab581c7d64c68f0eed86a3`.
+- The installed app is running as PID 77373 with the native CoreAudio/Metal
+  deck active. It instant-painted and freshly loaded 3,401 tracks / 75
+  playlists. Its steady-state preparation pass reports zero analysis, grid,
+  or cue tasks.
+- One proportional install rollback remains at
+  `/private/tmp/soundbox-install-rollback.Czp1P7/`: the untouched 235 MiB
+  pre-install `Soundbox.app`, exact 118,716-byte `library-before.json` snapshot
+  (SHA-256
+  `ffbf13f0c641fd1ab0eed320448380f152904160d8ab6ed3eae463d131d655f7`),
+  and exact 282,166-byte post-QA `library-final.json` snapshot (SHA-256
+  `6477b25621c2a8d0cac719fc0e4b87759f993b190c158f7cc54890e09663f6c6`).
+  Two obsolete candidate bundles were deleted after final verification,
+  reclaiming about 470 MiB.
 
 ## Installed behavior and real-state proof
 
-- A track globally removed from Collection owns no persistent SoundBox V4/V5
-  waveform record. Removal discards its exact cache immediately, bulk scans
-  skip global-Graveyard IDs, and in-flight bulk/interactive cooks cannot
-  republish one after removal. Startup reclaims records left by older builds.
-- Selection-scoped global restore returns the track to ordinary bounded
-  preparation. Playlist-only removals retain analysis because those tracks
-  remain browsable/playable elsewhere.
-- The live startup reclaimed exactly 499 records / 1,336,003,488 bytes
-  (1.244 GiB) for the 513 global hidden IDs. Analysis inventory fell from 3,420
-  files / 12,904,367,378 bytes to 2,921 files / 11,568,363,890 bytes, with zero
-  hidden-ID V4/V5 records remaining. The two playlist-only Graveyard tracks
-  retained their active V5 records.
-- The two pre-install tasks (`big dubz` and `JUST HANGIN AROUND...`) were both
-  global-Graveyard tracks. The installed startup now reports zero analysis,
-  grid, or cue tasks, proving that the folder rename did not invalidate active
-  caches and hidden tracks no longer prompt preparation.
-- Startup instant-painted and freshly loaded 3,401 tracks / 75 playlists.
-  Curated state remains intact: 84 imports, 10 custom playlists, 466 artist
-  overrides, 1,075 title overrides, 513 hidden tracks, one playlist-removal
-  layer covering two tracks, no playlist additions, and 24 aliases. Every
-  non-settings `library.json` section is canonically identical to the
-  pre-install snapshot; only `settings.columns_state` changed on relaunch.
-  Current `library.json` SHA-256 is
-  `68474e13b1fdb4423f4bd2051ed5daba388386e13e87c8c3c375f87a21d3f67a`.
-- Other cache inventories remained 3,297 curated-art, 7,609 stock-artwork, one
-  stock shadow, one Rockbox-media, and 20,127 Rockbox-artwork files.
+- Every direct import records an opaque Core Foundation bookmark. Startup does
+  one healthy saved-path check, resolves only missing paths/bookmark-less legacy
+  records in a background worker, and never walks a directory tree. Bookmarks
+  follow file/parent-folder moves; the legacy/cross-volume fallback is one
+  batched exact filename+recorded-size Spotlight lookup whose ambiguity fails
+  closed. Manual repair scans only the folder the user explicitly chooses.
+- The live move of the SoundBox-only `Sets` folder repaired all 83 missing
+  records automatically in 0.507 seconds and backfilled all 84 direct-import
+  bookmarks. All 84 sources exist at their recorded sizes, the stable `sb-`
+  IDs remain attached. Every pre-install curated field remains canonically
+  identical; live QA additionally added the preserved title override `Pop Off`
+  for track `101429231`, bringing the title-override count to 1,076. Current
+  `library.json` SHA-256 is
+  `6477b25621c2a8d0cac719fc0e4b87759f993b190c158f7cc54890e09663f6c6`;
+  the other changes are the intended import paths/bookmarks and Qt's saved
+  column geometry.
+- SeaDrive normalized nanosecond mtimes without changing the audio. The final
+  build content-verified and adopted 1,777 existing V5 records from their
+  first/last-128-KiB fingerprints with zero audio recooks, then recorded tiny
+  cache-bound xattr proofs. Matching-size `SF_DATALESS` placeholders retain
+  their existing cache without startup hydration; deliberate access enables a
+  later content proof. The first rejected candidate was stopped after it had
+  unnecessarily replaced 28 disposable non-Set records; no Set cache or source
+  was written, and every corrected/follow-up preparation pass was zero-task.
+- All 83 existing Set records pass V5 readiness and complete overview/detail
+  loading. Their old green-only close RGB was a compact-code packing bug, not a
+  missing cache. New cooks pack PWV5 correctly; old `soundbox-analysis` streams
+  reconstruct only display color bits from their same-clock cached overview at
+  native upload. This measured 1.4–2.3 ms for a 538,655-row hour-long Set,
+  preserved every cached height/control bit, activated all RGB channels on all
+  83 records, and changed neither source nor canonical cache bytes. A real AHEE
+  Set committed its full overview/detail to the installed RGB native deck.
+- Cache inventories remain 3,297 curated-art, 7,609 stock-artwork, one stock
+  shadow, one Rockbox-media, 20,127 Rockbox-artwork, and 2,921 track-analysis
+  files. The final installed launch wrote zero track-analysis files.
 
 ## Next action
 
-- No implementation, validation, packaging, installation, runtime check, or
-  documentation cleanup is pending. At resume, verify `git status -sb` is clean
-  and `main` still matches `origin/main`; there is no deferred acceptance step.
+- No implementation, validation, packaging, installation, runtime check,
+  documentation update, commit, or push is pending. At resume, verify
+  `git status -sb` is clean and `main` still matches `origin/main`; there is no
+  deferred recook or visual acceptance requirement.

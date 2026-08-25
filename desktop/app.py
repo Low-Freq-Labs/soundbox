@@ -100,8 +100,9 @@ from PySide6.QtWidgets import (
 
 
 from soundbox import (
-    artfetch, engine, imports, libcache, manifest as device_manifest, metadata,
-    paths, rekordbox_db, rockbox_config, track_analysis,
+    artfetch, engine, file_locations, imports, libcache,
+    manifest as device_manifest, metadata, paths, rekordbox_db,
+    rockbox_config, track_analysis,
 )
 from soundbox.device_profile import plan_stock_ipod_export
 from soundbox.dual_ipod import (
@@ -274,6 +275,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._refresh_pending = False
         self._libcache_worker = None
         self._libcache_pending = None
+        self._import_location_worker = None
         self._shutting_down = False
         self._resync_worker: ResyncWorker | None = None
         self._dev_scan_worker: DeviceScanWorker | None = None
@@ -378,6 +380,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._volume_watcher.directoryChanged.connect(
                 lambda _path: self._volume_refresh_timer.start())
         self._load_state()  # restore custom playlists + last-opened XML
+        # Direct imports keep opaque macOS bookmarks. Healthy paths need only a
+        # cheap stat; a moved file resolves by persistent identity without a
+        # filesystem walk. Legacy records use one strict indexed migration.
+        QTimer.singleShot(0, self._repair_import_locations)
         self.table.setFocus()  # open browsing (transport keys, arrows), not typing
 
     # ---------- persistence ----------
@@ -2172,6 +2178,72 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu.exec(self.sb_tree.mapToGlobal(pos))
 
     # ---------- imported (non-rekordbox) audio ----------
+    def _repair_import_locations(self):
+        """Backfill precise locators and resolve moved direct imports at startup.
+
+        This is intentionally not ``Fix Missing Links``: no directory is ever
+        crawled automatically. Core Foundation bookmarks follow ordinary moves;
+        one batched exact-name+size Spotlight query migrates legacy records or
+        recovers a cross-volume copy. The explicit folder picker remains the
+        fallback for anything ambiguous or not indexed.
+        """
+        if self._import_location_worker is not None or self._shutting_down:
+            return
+        targets = {
+            track_id: dict(rec)
+            for track_id, rec in self.imported.items()
+            if (not Path(str(rec.get("path", ""))).is_file()
+                or not rec.get(file_locations.BOOKMARK_KEY))
+        }
+        if not targets:
+            return
+        from .workers import OneShotTask
+        worker = OneShotTask(
+            lambda: file_locations.repair_locations(targets),
+            log_label="Imported-file location repair")
+        self._import_location_worker = worker
+        worker.done.connect(self._on_import_locations_repaired)
+        worker.finished.connect(
+            lambda ww=worker: self._finish_worker(
+                "_import_location_worker", ww))
+        worker.start()
+
+    def _on_import_locations_repaired(self, result):
+        if isinstance(result, Exception):
+            LOG.warning("Imported-file location repair failed: %s", result)
+            return
+        changed = False
+        moved = 0
+        bookmarks = 0
+        for track_id, update in result.updates.items():
+            rec = self.imported.get(track_id)
+            # An import/manual relink may have won while the worker ran. Never
+            # overwrite newer state with a result planned against the old path.
+            if rec is None or str(rec.get("path", "")) != update.expected_path:
+                continue
+            if update.path is not None:
+                rec["path"] = str(update.path)
+                moved += 1
+                changed = True
+            if (update.bookmark
+                    and rec.get(file_locations.BOOKMARK_KEY) != update.bookmark):
+                rec[file_locations.BOOKMARK_KEY] = update.bookmark
+                bookmarks += 1
+                changed = True
+        if changed:
+            self._save_state()
+        if moved and self.lib is not None:
+            imports.inject(self.lib, self.imported)
+            self._build_artist_registry()
+            self._refresh_custom()
+            self._reload_current_view()
+        LOG.info(
+            "Imported-file location repair: %d missing, %d moved, "
+            "%d locator(s) saved, %d unresolved",
+            result.missing_count, moved, bookmarks, result.unresolved_count)
+        if moved:
+            self._flash_status(f"Relinked {moved} moved file(s) ✓", 15)
+
     def _import_dialog(self, playlist: str | None):
         """File picker → import livesets etc. into SoundBox (and optionally
         straight into a SoundBox playlist)."""
@@ -2235,14 +2307,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _fix_links(self, roots: list | None = None):
         """Find imported files the user moved on disk and re-point their
-        records (filename+size matching — see imports.find_moved). Scans the
-        old locations' nearest surviving folders; anything still missing gets
-        an offer to search a folder the user picks."""
+        records (filename+size matching — see imports.find_moved). Startup has
+        already tried precise bookmark/index resolution; this fallback scans
+        only a folder the user explicitly chooses."""
         lost = imports.missing(self.imported)
         if not lost:
             self._flash_status("Links OK ✓", 5)
             return
-        search = roots or imports.search_roots(self.imported)
+        if roots is None:
+            folder = QFileDialog.getExistingDirectory(
+                self, "Search folder for missing audio")
+            if not folder:
+                return
+            roots = [Path(folder)]
+        search = roots
         self._start_pulse("Searching")
         from .workers import OneShotTask
         w = OneShotTask(lambda: imports.find_moved(lost, search))
@@ -2279,6 +2357,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             rec = self.imported.get(tid)
             if rec is not None:
                 rec["path"] = str(p)
+                bookmark = file_locations.create_bookmark(p)
+                if bookmark:
+                    rec[file_locations.BOOKMARK_KEY] = bookmark
         if found:
             if self.lib is not None:
                 imports.inject(self.lib, self.imported)
@@ -4908,8 +4989,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if any(i in self.imported for i in ids):
             lost = imports.missing(self.imported)
             if lost:
-                menu.addAction(f"Fix Missing Links… ({len(lost)})",
-                               self._fix_links)
+                if self._import_location_worker is not None:
+                    locating = menu.addAction(
+                        f"Locating Moved Files… ({len(lost)})")
+                    locating.setEnabled(False)
+                else:
+                    menu.addAction(f"Fix Missing Links… ({len(lost)})",
+                                   self._fix_links)
         self._add_track_reanalysis_action(menu, ids)
         menu.addSeparator()
         menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
@@ -5981,6 +6067,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             w.cancel(); w.wait(10000)
         if _running(self._refresh_worker):
             self._refresh_worker.wait(15000)  # read-only DB read; let it finish
+        if _running(self._import_location_worker):
+            self._import_location_worker.wait(15000)  # bookmark/index lookup
         if _running(self._resync_worker):
             self._resync_worker.cancel(); self._resync_worker.wait(10000)
         if _running(getattr(self, "_dev_scan_worker", None)):

@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import ctypes
 from pathlib import Path
 import re
 import struct
@@ -45,6 +46,22 @@ RANGE_MIP_ENCODING = "song-anchored-extrema-i16le-v1"
 _MAGIC = b"SBA5"
 _LEGACY_MAGIC = b"SBA4"
 _HEADER = struct.Struct("<4sI")
+_SOURCE_IDENTITY_XATTR = (
+    "com.lowfreqlabs.soundbox.source-identity-v1")
+_SF_DATALESS = 0x40000000
+_LIBC = ctypes.CDLL(None, use_errno=True)
+try:
+    _LIBC.getxattr.argtypes = [
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    _LIBC.getxattr.restype = ctypes.c_ssize_t
+    _LIBC.setxattr.argtypes = [
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+        ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    _LIBC.setxattr.restype = ctypes.c_int
+    _XATTR_AVAILABLE = True
+except AttributeError:
+    _XATTR_AVAILABLE = False
 _EXPORTABLE = {".mp3", ".wav", ".aif", ".aiff", ".flac"}
 _PLAYER_ONLY = {".aac", ".alac", ".m4a", ".mp4"}
 
@@ -283,11 +300,17 @@ def _pack_blue_detail(heights, percentile: float = 99.9) -> bytes:
 
 
 def _pack_rgb_detail(heights, rgb, percentile: float = 99.9) -> bytes:
-    """Pack a SoundBox RGB fallback in PWV5's exact 16-bit layout."""
+    """Pack compact SoundBox RGB rows in PWV5's exact 16-bit layout.
+
+    ``_pack_rgb3`` already emits PWV5's native channel codes: even red in
+    0..14 and green/blue in 0..7. Treating those bytes as display-range RGB
+    quantizes green/blue away and shifts the remaining red code into PWV5's
+    green field. Keep this boundary explicitly compact-to-packed.
+    """
     import numpy as np
 
     values = np.asarray(heights, dtype=np.float64)
-    colors = np.asarray(rgb, dtype=np.float64).reshape(-1, 3)
+    colors = np.asarray(rgb, dtype=np.uint8).reshape(-1, 3)
     count = min(len(values), len(colors))
     if not count:
         return b""
@@ -301,15 +324,15 @@ def _pack_rgb_detail(heights, rgb, percentile: float = 99.9) -> bytes:
         np.clip(values / max(ceiling, 1e-12), 0, 1) * 31
     ).astype(np.uint16)
     height[(values > 0) & (height == 0)] = 1
-    # PWV5 gives red four effective bits (stored at bits 15..12) and
-    # green/blue three. This is the inverse of NativeDeckBackend._screen_rgb.
-    red = np.rint(np.clip(colors[:, 0], 0, 255) / 18).astype(np.uint16)
-    green = np.rint(np.clip(colors[:, 1], 0, 255) / 36).astype(np.uint16)
-    blue = np.rint(np.clip(colors[:, 2], 0, 255) / 36).astype(np.uint16)
+    # The native decoder masks red at 0xe000 and shifts it to the even 0..14
+    # code used by overview_rgb. Green/blue are ordinary three-bit fields.
+    red = (np.clip(colors[:, 0], 0, 14) & 0x0e).astype(np.uint16)
+    green = np.clip(colors[:, 1], 0, 7).astype(np.uint16)
+    blue = np.clip(colors[:, 2], 0, 7).astype(np.uint16)
     packed = (
-        (np.clip(red, 0, 14) << 12)
-        | (np.clip(green, 0, 7) << 10)
-        | (np.clip(blue, 0, 7) << 7)
+        (red << 12)
+        | (green << 10)
+        | (blue << 7)
         | (height << 2)
     ).astype(">u2")
     return packed.tobytes()
@@ -393,18 +416,130 @@ def export_eligibility(path: str | Path) -> dict:
     }
 
 
+def _audio_fingerprint_for_identity(
+        path: str | Path, size: int, mtime_ns: int) -> str:
+    """Recompute the V5 boundary fingerprint for an explicit stat identity."""
+    source = Path(path)
+    digest = hashlib.sha256()
+    digest.update(f"{size}|{mtime_ns}".encode())
+    with source.open("rb") as handle:
+        digest.update(handle.read(128 * 1024))
+        if size > 256 * 1024:
+            handle.seek(max(0, size - 128 * 1024))
+            digest.update(handle.read(128 * 1024))
+    return digest.hexdigest()
+
+
 def audio_fingerprint(path: str | Path) -> str:
     """Stable, inexpensive content identity without hashing multi-GB sets."""
     source = Path(path)
-    st = source.stat()
-    digest = hashlib.sha256()
-    digest.update(f"{st.st_size}|{st.st_mtime_ns}".encode())
-    with source.open("rb") as handle:
-        digest.update(handle.read(128 * 1024))
-        if st.st_size > 256 * 1024:
-            handle.seek(max(0, st.st_size - 128 * 1024))
-            digest.update(handle.read(128 * 1024))
-    return digest.hexdigest()
+    stat = source.stat()
+    return _audio_fingerprint_for_identity(
+        source, stat.st_size, stat.st_mtime_ns)
+
+
+def _source_identity_matches(
+        target: Path, manifest: dict, stat: os.stat_result) -> bool:
+    """Accept exact stat identity or a cache-bound verified move/sync proof."""
+    source = dict(manifest.get("source") or {})
+    current = f"{stat.st_size}:{stat.st_mtime_ns}"
+    if source.get("identity") == current:
+        return True
+    # A File Provider placeholder deliberately has no local audio bytes to
+    # verify. Reuse the existing derived cache provisionally when its logical
+    # size still matches; opening the track/export later is the user's explicit
+    # hydration boundary, after which the ordinary identity pass verifies it.
+    if (getattr(stat, "st_flags", 0) & _SF_DATALESS
+            and int(source.get("size") or 0) == stat.st_size):
+        return True
+    try:
+        encoded = _get_identity_xattr(target)
+        if encoded is None:
+            return False
+        proof = json.loads(encoded)
+    except (ValueError, TypeError):
+        return False
+    return bool(
+        proof.get("record_identity") == source.get("identity")
+        and proof.get("record_fingerprint") == source.get("fingerprint")
+        and proof.get("current_identity") == current
+    )
+
+
+def adopt_source_identity(
+        cache_dir: str | Path, track_id: str,
+        audio_path: str | Path) -> bool:
+    """Prove timestamp/path-only drift and persist a tiny cache-bound proof.
+
+    File-provider moves can retain every audio byte while degrading an mtime
+    from nanoseconds to whole seconds. The ordinary stat identity then changes,
+    but re-decoding hours of audio is neither necessary nor honest. Recompute
+    the record's existing first/last-128-KiB fingerprint using its original
+    recorded stat identity. Only an exact match authorizes the xattr proof;
+    size/content ambiguity remains a normal cache miss and full recook.
+    """
+    source = Path(audio_path)
+    target = cache_path(cache_dir, track_id)
+    try:
+        stat = source.stat()
+        with target.open("rb") as handle:
+            header = handle.read(_HEADER.size)
+            if len(header) != _HEADER.size:
+                return False
+            magic, manifest_size = _HEADER.unpack(header)
+            if magic != _MAGIC or manifest_size <= 0:
+                return False
+            encoded = handle.read(manifest_size)
+            if len(encoded) != manifest_size:
+                return False
+        manifest = json.loads(encoded)
+        recorded = dict(manifest.get("source") or {})
+        old_size = int(recorded.get("size") or 0)
+        old_mtime = int(recorded.get("mtime_ns") or 0)
+        if (manifest.get("schema") != SCHEMA
+                or manifest.get("track_id") != str(track_id)
+                or old_size <= 0 or old_mtime <= 0
+                or stat.st_size != old_size
+                or recorded.get("identity")
+                != f"{old_size}:{old_mtime}"):
+            return False
+        fingerprint = _audio_fingerprint_for_identity(
+            source, old_size, old_mtime)
+        if fingerprint != recorded.get("fingerprint"):
+            return False
+        proof = json.dumps({
+            "record_identity": recorded["identity"],
+            "record_fingerprint": fingerprint,
+            "current_identity": f"{stat.st_size}:{stat.st_mtime_ns}",
+        }, separators=(",", ":"), sort_keys=True).encode()
+        if not _set_identity_xattr(target, proof):
+            return False
+        return _source_identity_matches(target, manifest, stat)
+    except (AttributeError, OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _get_identity_xattr(path: Path) -> bytes | None:
+    if not _XATTR_AVAILABLE:
+        return None
+    raw_path = os.fsencode(path)
+    name = _SOURCE_IDENTITY_XATTR.encode()
+    size = int(_LIBC.getxattr(raw_path, name, None, 0, 0, 0))
+    if size <= 0 or size > 16_384:
+        return None
+    buffer = ctypes.create_string_buffer(size)
+    read = int(_LIBC.getxattr(raw_path, name, buffer, size, 0, 0))
+    return buffer.raw[:read] if read == size else None
+
+
+def _set_identity_xattr(path: Path, value: bytes) -> bool:
+    if not _XATTR_AVAILABLE or not value:
+        return False
+    raw_path = os.fsencode(path)
+    name = _SOURCE_IDENTITY_XATTR.encode()
+    buffer = ctypes.create_string_buffer(value)
+    return int(_LIBC.setxattr(
+        raw_path, name, buffer, len(value), 0, 0)) == 0
 
 
 def _record_name(track_id: str) -> str:
@@ -511,8 +646,8 @@ def _read_container_manifest(
             manifest = json.loads(packed[start:start + manifest_size])
             if (manifest.get("schema") != expected_schema
                     or manifest.get("track_id") != str(track_id)
-                    or manifest.get("source", {}).get("identity")
-                    != f"{stat.st_size}:{stat.st_mtime_ns}"):
+                    or not _source_identity_matches(
+                        target, manifest, stat)):
                 continue
             payload = packed[start + manifest_size:]
             if (hashlib.sha256(payload).hexdigest()
@@ -546,8 +681,8 @@ def _read_manifest_header(
             manifest = json.loads(encoded)
             if (manifest.get("schema") != expected_schema
                     or manifest.get("track_id") != str(track_id)
-                    or manifest.get("source", {}).get("identity")
-                    != f"{stat.st_size}:{stat.st_mtime_ns}"):
+                    or not _source_identity_matches(
+                        target, manifest, stat)):
                 continue
             return target, manifest, _HEADER.size + manifest_size
         except (OSError, ValueError, KeyError, TypeError):
@@ -1164,8 +1299,7 @@ def is_ready(cache_dir: str | Path, track_id: str,
         return (
             manifest.get("schema") == SCHEMA
             and manifest.get("track_id") == str(track_id)
-            and manifest.get("source", {}).get("identity")
-            == f"{stat.st_size}:{stat.st_mtime_ns}"
+            and _source_identity_matches(target, manifest, stat)
             and manifest.get("color_model") == COLOR_MODEL
             and manifest.get("waveform_model") == WAVEFORM_MODEL
             and manifest.get("three_band_model") == THREE_BAND_MODEL

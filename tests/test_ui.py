@@ -5523,6 +5523,26 @@ class FixLinksUI(unittest.TestCase):
         self.assertEqual(_win.lib.tracks_by_id[self.tid].path, self.new)
         self.assertTrue(_win._waveform_rechecks_enabled)
 
+    def test_startup_identity_repair_keeps_stable_id_and_curation(self):
+        from soundbox.file_locations import LocationRepair, LocationUpdate
+        try:
+            _win.custom["LIVESETS"] = [self.tid]
+            _win.titles[self.tid] = "Curated Set Title"
+            result = LocationRepair(
+                updates={self.tid: LocationUpdate(
+                    expected_path=str(self.old), path=self.new,
+                    bookmark="new opaque locator")},
+                missing_count=1, unresolved_count=0)
+            with mock.patch("desktop.app.QTimer.singleShot"):
+                _win._on_import_locations_repaired(result)
+            self.assertEqual(_win.imported[self.tid]["path"], str(self.new))
+            self.assertEqual(_win.lib.tracks_by_id[self.tid].path, self.new)
+            self.assertEqual(_win.custom["LIVESETS"], [self.tid])
+            self.assertEqual(_win.titles[self.tid], "Curated Set Title")
+        finally:
+            _win.custom.pop("LIVESETS", None)
+            _win.titles.pop(self.tid, None)
+
     def test_fix_links_noop_when_nothing_missing(self):
         _win._apply_relinks({})
         _win.imported[self.tid]["path"] = str(self.new)  # already healthy
@@ -5780,6 +5800,24 @@ class WaveformFill(unittest.TestCase):
         self.assertGreater(
             sum(got["_audio_detail"]["mip_counts"]), 500)
         self.assertEqual(Path(self.paths[0]).read_bytes(), before)
+
+    def test_timestamp_only_drift_is_adopted_without_audio_recook(self):
+        import os
+        from pathlib import Path
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+
+        canonical = Path(self.cache) / "track_analysis"
+        WaveformFillWorker(self.lib, canonical).run()
+        source = Path(self.paths[0])
+        stat = source.stat()
+        os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+        with mock.patch(
+                "soundbox.track_analysis.analyze_soundfile") as analyze:
+            WaveformFillWorker(self.lib, canonical).run()
+        analyze.assert_not_called()
+        self.assertTrue(track_analysis.is_ready(
+            canonical, "0", source))
 
     def test_late_source_rewrite_is_detected_and_recooked(self):
         import math

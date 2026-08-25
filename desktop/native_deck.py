@@ -106,6 +106,35 @@ def _repair_pwv5_visibility(
     return bytes(repaired) if changed else packed
 
 
+def _repair_soundbox_pwv5_color(
+        packed: bytes, overview_rgb: bytes) -> bytes:
+    """Restore old SoundBox fallback color from its canonical compact rows.
+
+    Early SoundBox V5 cooks fed compact overview channel codes back through a
+    display-range quantizer. The cached overview is already correct, and both
+    streams share the exact 150 Hz clock, so replace only PWV5's color bits and
+    retain every cached height/control bit. Rekordbox-authored PWV5 never calls
+    this repair.
+    """
+    count = min(len(packed) // 2, len(overview_rgb) // 3)
+    if count <= 0:
+        return packed
+    import numpy as np
+
+    values = np.frombuffer(packed, dtype=">u2", count=count)
+    colors = np.frombuffer(
+        overview_rgb, dtype=np.uint8, count=count * 3
+    ).reshape(-1, 3).astype(np.uint16)
+    color_bits = (
+        ((np.minimum(colors[:, 0], 14) & 0x0e) << 12)
+        | (np.minimum(colors[:, 1], 7) << 10)
+        | (np.minimum(colors[:, 2], 7) << 7)
+    )
+    repaired = (color_bits | (values & 0x007f)).astype(
+        ">u2", copy=False).tobytes()
+    return repaired + packed[count * 2:]
+
+
 class PlaybackState(IntEnum):
     """Backend-neutral transport states shared by the deck and its UI."""
 
@@ -1038,6 +1067,11 @@ class NativeDeckBackend(QObject):
         band_count = len(bands) // 3
         if overview is not None:
             overview_heights = overview.get("_overview_heights")
+            overview_rgb = overview.get("_overview_rgb")
+            provenance = dict(overview.get("stream_provenance") or {})
+            if (provenance.get("rgb") == "soundbox-analysis"
+                    and isinstance(overview_rgb, bytes)):
+                rgb = _repair_soundbox_pwv5_color(rgb, overview_rgb)
             if isinstance(overview_heights, bytes):
                 rgb = _repair_pwv5_visibility(
                     rgb, overview_heights,

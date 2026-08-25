@@ -983,6 +983,22 @@ USB sticks (Sonny performs on 4× CDJ-3000). Full plan + status + prototype:
 - **Unknowns-suggester rows UNCHECKED by default** (streaming list must never arm
   an accidental accept); merge-dialog rows stay pre-checked.
 - **Imported audio referenced in place** — never copied or re-tagged.
+- **Imported-file moves are identity-resolved at startup without crawling.**
+  Healthy saved paths take one cheap file check; opaque macOS bookmarks follow
+  file and parent-folder moves. The one-time legacy/cross-volume fallback is a
+  batched exact filename+size Spotlight lookup, with ambiguity failing closed;
+  recursive search requires an explicitly selected folder. Relinking updates
+  only the path/bookmark and retains the stable SoundBox ID and all curation.
+- **Cloud-storage timestamp normalization does not churn analysis.** A stale V5
+  stat identity is adopted only after its recorded boundary fingerprint matches
+  current local bytes, publishing a tiny proof without decoding or rewriting
+  the cache. Dataless placeholders are never hydrated by startup; their same-size
+  cache remains provisional until deliberate source access enables verification.
+- **Legacy SoundBox-only green RGB needs no recook.** New fallback analysis
+  packs compact RGB directly into PWV5. Existing `soundbox-analysis` records
+  reconstruct only their display color bits from the already-cached same-clock
+  overview during native upload; source audio, canonical cache bytes, and exact
+  Rekordbox PWV5 remain untouched.
 - **Device filenames = SoundBox effective titles**, always.
 - **The connected layout selects the exporter.** A stock-only supported iPod uses
   the guarded stock adapter; Rockbox-only/generic FAT32 uses filesystem export;

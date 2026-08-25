@@ -760,6 +760,7 @@ class WaveformFillWorker(QThread):
         from soundbox.rekordbox_analysis import read as read_analysis, read_beats
         from soundbox.track_analysis import (
             analyze_soundfile as analyze_track,
+            adopt_source_identity,
             discard_records,
             fallback_waveform_modes,
             grid_needs_sync,
@@ -790,6 +791,7 @@ class WaveformFillWorker(QThread):
         todo: list[
             tuple[str, str, str, str, float, list[dict] | None, list | None]
         ] = []
+        adopted_identities = 0
         for t in self.lib.tracks_by_id.values():
             try:
                 track_id = str(t.track_id)
@@ -812,16 +814,21 @@ class WaveformFillWorker(QThread):
                         "v5", audio_path, str(analysis_path or ""),
                         track_id, bpm_hint, source_cues, None))
                     continue
-                if (self.track_analysis_dir and audio_path
-                        and not track_is_ready(
+                if self.track_analysis_dir and audio_path:
+                    ready = track_is_ready(
+                        self.track_analysis_dir, track_id, audio_path)
+                    if (not ready and adopt_source_identity(
                             self.track_analysis_dir, track_id, audio_path)):
-                    legacy = legacy_cache_path(
-                        self.track_analysis_dir, track_id)
-                    todo.append((
-                        "v4-migrate" if legacy.is_file() else "v5",
-                        audio_path, str(analysis_path or ""),
-                        track_id, bpm_hint, source_cues, None))
-                    continue
+                        ready = True
+                        adopted_identities += 1
+                    if not ready:
+                        legacy = legacy_cache_path(
+                            self.track_analysis_dir, track_id)
+                        todo.append((
+                            "v4-migrate" if legacy.is_file() else "v5",
+                            audio_path, str(analysis_path or ""),
+                            track_id, bpm_hint, source_cues, None))
+                        continue
                 fallback_modes = (
                     fallback_waveform_modes(
                         self.track_analysis_dir, track_id, audio_path)
@@ -873,6 +880,11 @@ class WaveformFillWorker(QThread):
             kind: sum(task[0] == kind for task in todo)
             for kind in ("v5", "v4-migrate", "grid-meta", "cue-meta")
         }
+        if adopted_identities:
+            LOG.info(
+                "Library source identity reconciliation: %d unchanged "
+                "track(s), 0 audio recooks",
+                adopted_identities)
         LOG.info(
             "Library preparation: %d task(s) "
             "(%d analysis, %d grid metadata, %d cue metadata)",
