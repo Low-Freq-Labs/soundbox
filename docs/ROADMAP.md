@@ -286,6 +286,14 @@ For the live test count, trust `./check.sh` output—not any number written here
   first pass. The installed 2026-08-03 repair automatically found 13 such stale
   new-track records without loading them; the final 2026-08-04 wrap-up launch
   and recurring pass both reported zero pending work.
+- **LATE REKORDBOX ANALYSIS RECOVERY SHIPPED.** The recurring scan now probes
+  only Rekordbox-backed display modes whose cache provenance still identifies a
+  SoundBox fallback; when a valid late PWV3/PWV5/PWV7 stream appears, that one
+  track recooks automatically. A track-row context action can still force one
+  atomic V5 recook even when its manifest is structurally ready. Both routes
+  import the complete current read-only streams, keep the previous playable
+  record on failure, and hot-refresh a loaded track without touching source
+  audio or Rekordbox.
 - Read-only live-DB memory/hot cues now occupy a dedicated two-page 2×4 panel;
   V5 retains overflow cues beyond the eight visible slots.
 - **V4 ANALYSIS FOUNDATION SHIPPED.** SoundBox now owns checksummed per-track

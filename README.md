@@ -64,10 +64,14 @@ Batch tools: **Suggest artist merges…** (fuzzy spelling dedup with in-dialog
 Unmerge), **Suggest artists for Unknowns…**, named **Title Cleanup** rules
 (four intent-based defaults for mixdown, version/copy, BPM/key, and render/file
 tags + exact custom words/bracket tags or validated regex), neat-title edge-artist
-stripping. Removal has two explicit scopes: playlist menus offer
+stripping. A track's context menu can copy its real on-disk filename or reveal
+the selected source directly in Finder. Removal has two explicit scopes: playlist menus offer
 both **Remove from Playlist** (only that playlist) and **Remove from Collection**
 (global hide, restorable from the dated **Graveyard** in Settings); Collection
-offers only the latter. Both drift synced devices; rekordbox never changes.
+offers only the latter. Graveyard restore is selection-scoped: select one,
+Shift/Cmd-select several, or use Cmd-A, then right-click **Restore**. There is
+no unconditional Restore All shortcut. Both removal scopes drift synced
+devices; rekordbox never changes.
 
 **Cover art.** Background auto-fetch with an accuracy-first matcher (an
 artist-accountable title match of at least 0.80 → track cover, else artist
@@ -120,6 +124,11 @@ prepared grid/cues, RGB/24-band
 analysis, export eligibility, and single-silhouette ultra waveform. Valid
 Rekordbox analysis seeds missing data, while cues refresh by fingerprint from
 a read-only live-DB snapshot until SoundBox user data claims ownership.
+If a track was first cached before Rekordbox finished its display analysis,
+the recurring scan notices when a valid PWV3/PWV5/PWV7 stream appears for a
+mode still using SoundBox's fallback and atomically recooks only that track.
+Right-click **Reanalyze Track** remains the explicit recovery path. Both routes
+import only read-only ANLZ data; source audio and Rekordbox are never modified.
 Stored hot-cue colors appear as black-outlined A–H boxes on both the
 whole-track overview and scrolling waveform; memory cues use one consistent
 red upward arrow in both scales.

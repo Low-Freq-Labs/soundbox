@@ -617,6 +617,17 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   worker finishes. `is_ready` uses size + mtime identity and recooks only stale
   records; the scan must stay manifest-only and must not inflate waveform
   payloads or overlap workers.
+- **A ready cache can still preserve an early Rekordbox fallback.** Rekordbox
+  may finish PWV3/PWV5/PWV7 after SoundBox has already stored a structurally
+  complete V5 record. The recurring scan must use stream provenance to keep
+  complete Rekordbox-backed modes on the manifest-only path; only modes still
+  marked as SoundBox fallbacks may probe the current read-only ANLZ payload.
+  A newly valid exact stream queues that one atomic V5 recook. The explicit
+  track-row Reanalyze action remains the escape hatch and bypasses `is_ready`
+  for only the requested track. Both routes retain the old playable cache until
+  a complete replacement is atomically stored and hot-refresh the deck after
+  success. Never delete the record first, and never write source audio or
+  Rekordbox analysis.
 - **Track replacement is an atomic renderer boundary.** Call native
   `begin_track(generation)` before setting the source. It clears overview,
   detail/mips, grid, imported cues, and session CUE together. Packed overview

@@ -115,11 +115,11 @@ class SettingsPageMixin:
         self._grave.header().resizeSection(0, 296)
         self._grave.setContextMenuPolicy(Qt.CustomContextMenu)
         self._grave.customContextMenuRequested.connect(self._grave_menu)
-        self._grave.itemDoubleClicked.connect(lambda *_: self._grave_restore_selected())
         gl.addWidget(self._grave)
         gsub = QLabel("Tracks removed from Collection (and removed from playlists) "
-                      "rest here — rekordbox and disk untouched. Double-click or "
-                      "right-click to restore.")
+                      "rest here — rekordbox and disk untouched. Select one or "
+                      "Shift/Cmd-select several, then right-click to restore; "
+                      "Cmd-A selects all.")
         gsub.setObjectName("SettingsSub"); gsub.setWordWrap(True)
         gl.addWidget(gsub)
 
@@ -295,14 +295,17 @@ class SettingsPageMixin:
     def _grave_menu(self, pos):
         g = self._grave
         menu = QMenu(self)
+        self._add_grave_restore_action(menu)
+        if not menu.isEmpty():
+            menu.exec(g.mapToGlobal(pos))
+
+    def _add_grave_restore_action(self, menu):
+        """Expose only selection-scoped restore; never a bulk shortcut."""
+        g = self._grave
         if g.selectedItems():
             n = len(g.selectedItems())
             menu.addAction("Restore" if n == 1 else f"Restore {n} tracks",
                            self._grave_restore_selected)
-        if g.topLevelItemCount():
-            menu.addAction("Restore All", self._restore_hidden)
-        if not menu.isEmpty():
-            menu.exec(g.mapToGlobal(pos))
 
     def _grave_restore_selected(self):
         picks = [it.data(0, _GRAVE_ROLE) for it in self._grave.selectedItems()]

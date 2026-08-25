@@ -906,6 +906,47 @@ def imported_cues_need_sync(
         return False
 
 
+def fallback_waveform_modes(
+        cache_dir: str | Path, track_id: str,
+        audio_path: str | Path) -> tuple[str, ...]:
+    """Return display modes not yet backed by exact Rekordbox streams.
+
+    This reads only the small SoundBox manifest. Callers can then inspect the
+    corresponding read-only ANLZ sidecar only for fallback records instead of
+    polling every Rekordbox waveform on each recurring library scan.
+    """
+    try:
+        record = _read_manifest_header(cache_dir, track_id, audio_path)
+        if record is None:
+            return ()
+        provenance = dict(record[1].get("stream_provenance") or {})
+        expected = {
+            "blue": "rekordbox-anlz-pwv3",
+            "rgb": "rekordbox-anlz-pwv5",
+            "three_band": "rekordbox-anlz-pwv7",
+        }
+        return tuple(
+            mode for mode, source in expected.items()
+            if provenance.get(mode) != source)
+    except (OSError, ValueError, KeyError, TypeError):
+        return ()
+
+
+def imported_waveforms_need_sync(
+        fallback_modes: Iterable[str], imported: dict | None) -> bool:
+    """Whether valid ANLZ streams have appeared for cached fallback modes."""
+    if not imported:
+        return False
+    payloads = {
+        "blue": "_blue_detail",
+        "rgb": "_rgb_detail",
+        "three_band": "_detail_bands",
+    }
+    return any(
+        bool(imported.get(payloads[mode]))
+        for mode in fallback_modes if mode in payloads)
+
+
 def grid_needs_sync(
         cache_dir: str | Path, track_id: str, audio_path: str | Path,
         imported_beats: list | None = None) -> bool:

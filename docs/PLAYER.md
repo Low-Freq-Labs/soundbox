@@ -273,6 +273,17 @@ Interactive loads validate only the requested section SHA-256; cache audits
 also verify the complete compressed payload. A
 changed/new track prepares only its own record. Storage-only cue/grid mutation
 support is a dormant boundary for later work; no manual grid editor exists.
+The recurring scan also detects the narrow late-Rekordbox case without polling
+all ANLZ waveform bytes: a fully imported display mode stays on the small-
+manifest path, while a mode whose provenance still says `soundbox-analysis`
+may probe its current read-only PWV3/PWV5/PWV7 payload. A newly valid stream
+queues only that track for a normal atomic recook. The browser's per-track
+**Reanalyze Track** action remains the explicit recovery path and deliberately
+bypasses the ready-manifest shortcut for only the selected record. Both routes
+decode the unchanged source again and publish a verified V5 replacement. The
+old playable cache stays in place if decoding or storage fails, a loaded deck
+hot-refreshes after success, and neither source audio nor Rekordbox data is
+written.
 
 The native analyzer streams PCM in bounded memory, derives approximately
 6144 peak windows/second, keeps a normalized 24-band master, and builds the
@@ -335,9 +346,11 @@ The background `WaveformFillWorker`:
 - scans the library incrementally;
 - starts for both newly detected rekordbox tracks and direct SoundBox imports,
   then rechecks source identities every 60 seconds after the preceding pass
-  completes; the recurring scan reads only source stats and small manifests,
-  so a late tag/container rewrite recooks only its stale track and never waits
-  for that track to be loaded;
+  completes; the recurring scan normally reads only source stats and small
+  manifests. A Rekordbox-backed mode still marked as a SoundBox fallback also
+  receives a targeted read-only ANLZ probe, so a late PWV stream or source
+  tag/container rewrite recooks only its stale track and never waits for that
+  track to be loaded;
 - keeps the currently loaded track in a persistent foreground-critical lane;
   that track bypasses playback, interaction, Low Power Mode, and bulk battery
   deferral, and its completed canonical color/detail hot-loads into the deck;

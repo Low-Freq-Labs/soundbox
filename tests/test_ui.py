@@ -2533,7 +2533,9 @@ class DeletedTracks(unittest.TestCase):
         self.assertNotIn("1", [t.track_id for t in _win._collection_tracks()])
         pl = _win.lib.playlists[0]  # SET ONE keys ["3","1"]
         self.assertEqual([t.track_id for t in _win.lib.resolve(pl)], ["3"])
-        _win._restore_hidden()
+        _win._refresh_graveyard()
+        _win._grave.topLevelItem(0).setSelected(True)
+        _win._grave_restore_selected()
         self.assertEqual([t.track_id for t in _win.lib.resolve(pl)], ["3", "1"])
         self.assertFalse(_win.hidden)
 
@@ -2632,6 +2634,74 @@ class TrackRemovalMenu(unittest.TestCase):
             "Remove from Collection"])
 
 
+class TrackReanalysisMenu(unittest.TestCase):
+    def test_singular_and_plural_actions_route_exact_selection(self):
+        from PySide6.QtWidgets import QMenu
+
+        with mock.patch.object(_win, "_reanalyze_tracks") as reanalyze:
+            one = QMenu(_win)
+            _win._add_track_reanalysis_action(one, ["1"])
+            self.assertEqual(one.actions()[0].text(), "Reanalyze Track")
+            one.actions()[0].trigger()
+            reanalyze.assert_called_once_with(("1",))
+
+            reanalyze.reset_mock()
+            many = QMenu(_win)
+            _win._add_track_reanalysis_action(many, ["1", "2"])
+            self.assertEqual(many.actions()[0].text(), "Reanalyze 2 Tracks")
+            many.actions()[0].trigger()
+            reanalyze.assert_called_once_with(("1", "2"))
+
+
+class TrackFileMenu(unittest.TestCase):
+    def test_open_in_finder_is_directly_below_copy_and_routes_selection(self):
+        from PySide6.QtWidgets import QMenu
+
+        with mock.patch.object(_win, "_open_in_finder") as reveal:
+            menu = QMenu(_win)
+            _win._add_track_file_actions(menu, ["1", "2"])
+            self.assertEqual([action.text() for action in menu.actions()], [
+                "Copy 2 File Names", "Open in Finder",
+            ])
+            menu.actions()[1].trigger()
+            reveal.assert_called_once_with(("1", "2"))
+
+    def test_artist_header_copy_does_not_offer_bulk_finder_reveal(self):
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(_win)
+        _win._add_track_file_actions(menu, ["1", "2"], reveal=False)
+        self.assertEqual([action.text() for action in menu.actions()], [
+            "Copy 2 File Names",
+        ])
+
+    def test_open_in_finder_reveals_exact_existing_source_paths(self):
+        expected = [
+            str(_win.lib.tracks_by_id["1"].path),
+            str(_win.lib.tracks_by_id["2"].path),
+        ]
+        with (
+            mock.patch("pathlib.Path.is_file", return_value=True),
+            mock.patch.object(
+                _win, "_start_finder_reveal",
+                return_value=(True, 123),
+            ) as start,
+        ):
+            _win._open_in_finder(["1", "2"])
+        start.assert_called_once_with(expected)
+
+    def test_open_in_finder_warns_when_source_is_unavailable(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        with (
+            mock.patch.object(_win, "_start_finder_reveal") as start,
+            mock.patch.object(QMessageBox, "warning") as warning,
+        ):
+            _win._open_in_finder(["missing-track"])
+        start.assert_not_called()
+        warning.assert_called_once()
+
+
 class BackupWorker(unittest.TestCase):
     def _run(self, fn):
         from desktop.workers import OneShotTask
@@ -2696,6 +2766,36 @@ class Graveyard(unittest.TestCase):
         self.assertNotIn("1", _win.hidden)
         self.assertNotIn("1", _win.hidden_dates)
         self.assertEqual(_win._grave.topLevelItemCount(), 0)
+
+    def test_menu_has_only_selection_scoped_restore(self):
+        from PySide6.QtWidgets import QMenu
+
+        _win.hidden.update({"1", "2"})
+        _win._refresh_graveyard()
+        _win._grave.topLevelItem(0).setSelected(True)
+        menu = QMenu(_win)
+        _win._add_grave_restore_action(menu)
+        self.assertEqual([action.text() for action in menu.actions()], [
+            "Restore",
+        ])
+
+    def test_select_all_then_restore_uses_exact_selection(self):
+        _win.hidden.update({"1", "2"})
+        _win.hidden_dates.update({"1": "2026-07-01", "2": "2026-07-02"})
+        _win._refresh_graveyard()
+        _win._grave.selectAll()
+        self.assertEqual(len(_win._grave.selectedItems()), 2)
+        _win._grave_restore_selected()
+        self.assertFalse(_win.hidden)
+        self.assertFalse(_win.hidden_dates)
+
+    def test_double_click_does_not_restore(self):
+        _win.hidden.add("1")
+        _win._refresh_graveyard()
+        item = _win._grave.topLevelItem(0)
+        _win._grave.itemDoubleClicked.emit(item, 0)
+        _app.processEvents()
+        self.assertIn("1", _win.hidden)
 
     def test_date_stamped_on_delete(self):
         import time as _t
@@ -5690,6 +5790,130 @@ class WaveformFill(unittest.TestCase):
             self.assertTrue(track_analysis.verify_complete(
                 canonical, "new", source))
 
+    def test_forced_reanalysis_reimports_late_rekordbox_waveforms(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+        from soundbox.library import Library
+
+        canonical = Path(self.cache) / "track_analysis"
+        track = self.lib.tracks_by_id["0"]
+        small_lib = Library(
+            tracks_by_id={"0": track}, playlists=[], source="synthetic")
+        WaveformFillWorker(small_lib, canonical).run()
+        before_audio = Path(self.paths[0]).read_bytes()
+        before = track_analysis.load_manifest(
+            canonical, "0", self.paths[0])
+        self.assertEqual(
+            before["stream_provenance"]["rgb"], "soundbox-analysis")
+
+        dat = Path(self.cache) / "ANLZ0000.DAT"
+        dat.write_bytes(b"read-only late-analysis fixture")
+        track.source_analysis_path = str(dat)
+        imported = {
+            "beats": [[1, 100, 140.0]],
+            "_blue_detail": b"\x21\x22",
+            "_rgb_detail": b"\xe0\x7c\xe1\x7d",
+            "_detail_bands": b"\x01\x02\x03\x04\x05\x06",
+        }
+        worker = WaveformFillWorker(
+            small_lib, canonical, force_track_ids={"0"})
+        totals = []
+        worker.tasks_ready.connect(totals.append)
+        with patch("soundbox.rekordbox_analysis.read", return_value=imported):
+            worker.run()
+
+        after = track_analysis.load_manifest(
+            canonical, "0", self.paths[0])
+        self.assertEqual(totals, [1])
+        self.assertEqual(worker.completed_forced_track_ids, {"0"})
+        self.assertEqual(after["stream_provenance"], {
+            "detail": "soundbox-analysis",
+            "blue": "rekordbox-anlz-pwv3",
+            "rgb": "rekordbox-anlz-pwv5",
+            "three_band": "rekordbox-anlz-pwv7",
+        })
+
+        quiet_worker = WaveformFillWorker(small_lib, canonical)
+        quiet_totals = []
+        quiet_worker.tasks_ready.connect(quiet_totals.append)
+        with patch(
+                "soundbox.rekordbox_analysis.read",
+                side_effect=AssertionError(
+                    "complete imported waveforms were polled")) as read:
+            quiet_worker.run()
+        self.assertEqual(quiet_totals, [0])
+        read.assert_not_called()
+        self.assertEqual(Path(self.paths[0]).read_bytes(), before_audio)
+
+    def test_recurring_scan_automatically_imports_late_waveforms(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+        from soundbox.library import Library
+
+        canonical = Path(self.cache) / "track_analysis"
+        track = self.lib.tracks_by_id["0"]
+        small_lib = Library(
+            tracks_by_id={"0": track}, playlists=[], source="synthetic")
+        WaveformFillWorker(small_lib, canonical).run()
+        before = track_analysis.load_manifest(
+            canonical, "0", self.paths[0])
+        self.assertEqual(
+            before["stream_provenance"]["rgb"], "soundbox-analysis")
+
+        dat = Path(self.cache) / "ANLZ0000.DAT"
+        dat.write_bytes(b"read-only late-analysis fixture")
+        track.source_analysis_path = str(dat)
+        imported = {
+            "beats": [[1, 100, 140.0]],
+            "_blue_detail": b"\x21\x22",
+            "_rgb_detail": b"\xe0\x7c\xe1\x7d",
+            "_detail_bands": b"\x01\x02\x03\x04\x05\x06",
+        }
+        worker = WaveformFillWorker(small_lib, canonical)
+        totals = []
+        worker.tasks_ready.connect(totals.append)
+        with patch(
+                "soundbox.rekordbox_analysis.read", return_value=imported):
+            worker.run()
+
+        after = track_analysis.load_manifest(
+            canonical, "0", self.paths[0])
+        self.assertEqual(totals, [1])
+        self.assertEqual(after["stream_provenance"], {
+            "detail": "soundbox-analysis",
+            "blue": "rekordbox-anlz-pwv3",
+            "rgb": "rekordbox-anlz-pwv5",
+            "three_band": "rekordbox-anlz-pwv7",
+        })
+
+    def test_failed_forced_reanalysis_keeps_old_playable_record(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+        from soundbox.library import Library
+
+        canonical = Path(self.cache) / "track_analysis"
+        track = self.lib.tracks_by_id["0"]
+        small_lib = Library(
+            tracks_by_id={"0": track}, playlists=[], source="synthetic")
+        WaveformFillWorker(small_lib, canonical).run()
+        cache_path = track_analysis.cache_path(canonical, "0")
+        before = cache_path.read_bytes()
+        worker = WaveformFillWorker(
+            small_lib, canonical, force_track_ids={"0"})
+        with patch(
+                "soundbox.track_analysis.analyze_soundfile",
+                return_value=None
+        ), patch("desktop.player.qt_detail_peaks", return_value=None):
+            worker.run()
+        self.assertEqual(worker.completed_forced_track_ids, set())
+        self.assertEqual(cache_path.read_bytes(), before)
+
     def test_worker_has_safe_stack_and_metadata_only_cue_refresh(self):
         from pathlib import Path
         from unittest.mock import patch
@@ -5888,6 +6112,23 @@ class WaveformFill(unittest.TestCase):
             _win._wf_fill_worker.wait(8000)
         finally:
             _win._track_analysis_dir = real_dir
+            _win.lib = saved_lib
+
+    def test_reanalysis_request_queues_only_available_selected_tracks(self):
+        from unittest.mock import patch
+
+        saved_lib = _win.lib
+        saved_pending = set(_win._waveform_force_pending)
+        _win.lib = self.lib
+        _win._waveform_force_pending.clear()
+        try:
+            with patch.object(_win, "_maybe_fill_waveforms") as start:
+                _win._reanalyze_tracks(["0", "1", "ghost"])
+            self.assertEqual(_win._waveform_force_pending, {"0", "1"})
+            start.assert_called_once_with()
+        finally:
+            _win._waveform_force_pending.clear()
+            _win._waveform_force_pending.update(saved_pending)
             _win.lib = saved_lib
 
     def test_recurring_recheck_timer_is_bounded_and_single_shot(self):

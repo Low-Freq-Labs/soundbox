@@ -135,7 +135,10 @@ Every successful rekordbox/XML load and direct SoundBox import arms a recurring
 small-manifest/source-stat scan. It starts only after the previous waveform
 worker finishes, so new audio cooks immediately and a later container/tag
 rewrite recooks that one stale record without overlapping workers or reading
-the full cache payload.
+the full cache payload. Exact Rekordbox waveform modes remain manifest-only;
+only a mode still carrying SoundBox-fallback provenance probes its current
+read-only PWV3/PWV5/PWV7 payload, allowing late Rekordbox analysis completion
+to promote that track automatically without polling every ANLZ waveform.
 Current high-rate geometry is versioned as
 `soundbox-polarity-range-mips-i16-v5`. V5 stores little-endian signed minimum
 and maximum extrema at the exact song-anchored divisors selected by the

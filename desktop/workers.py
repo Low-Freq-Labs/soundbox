@@ -536,7 +536,7 @@ class StockArtworkPrepWorker(QThread):
 
 
 class WaveformFillWorker(QThread):
-    """Prepare missing or stale canonical V5 records.
+    """Prepare missing, stale, or explicitly requested canonical V5 records.
 
     Rekordbox analysis is imported read-only into SoundBox-owned records.
     Source audio is decoded by libsndfile or Qt's QAudioDecoder for AAC/ALAC.
@@ -562,7 +562,7 @@ class WaveformFillWorker(QThread):
     BATTERY_CPU_SHARE = 0.45
     LOW_BATTERY_CPU_SHARE = 0.20
 
-    def __init__(self, lib, track_analysis_dir):
+    def __init__(self, lib, track_analysis_dir, force_track_ids=()):
         super().__init__()
         # LLVM/Numba used by scientific dependencies can consume substantially
         # more than macOS's ~512 KiB default QThread stack during first import.
@@ -571,6 +571,10 @@ class WaveformFillWorker(QThread):
         self.setStackSize(self.STACK_BYTES)
         self.lib = lib
         self.track_analysis_dir = track_analysis_dir
+        self.force_track_ids = {
+            str(track_id) for track_id in force_track_ids if str(track_id)
+        }
+        self.completed_forced_track_ids: set[str] = set()
         self._playback_active = threading.Event()
         self._priority_lock = threading.Lock()
         self._priority_path = ""
@@ -749,8 +753,10 @@ class WaveformFillWorker(QThread):
         from soundbox.rekordbox_analysis import read as read_analysis, read_beats
         from soundbox.track_analysis import (
             analyze_soundfile as analyze_track,
+            fallback_waveform_modes,
             grid_needs_sync,
             imported_cues_need_sync,
+            imported_waveforms_need_sync,
             is_ready as track_is_ready,
             legacy_cache_path,
             merge_import,
@@ -767,6 +773,7 @@ class WaveformFillWorker(QThread):
         ] = []
         for t in self.lib.tracks_by_id.values():
             try:
+                track_id = str(t.track_id)
                 analysis_path = getattr(t, "source_analysis_path", "")
                 source_cues = getattr(t, "source_cues", None)
                 audio_path = str(t.path) if t.path.is_file() else ""
@@ -775,15 +782,44 @@ class WaveformFillWorker(QThread):
                 except (TypeError, ValueError):
                     bpm_hint = 0.0
                 if (self.track_analysis_dir and audio_path
+                        and track_id in self.force_track_ids):
+                    # A user-requested recook deliberately bypasses the cheap
+                    # ready-manifest check. Keep the old playable record in
+                    # place until track_store atomically publishes a verified
+                    # replacement; never invalidate first.
+                    todo.append((
+                        "v5", audio_path, str(analysis_path or ""),
+                        track_id, bpm_hint, source_cues, None))
+                    continue
+                if (self.track_analysis_dir and audio_path
                         and not track_is_ready(
-                            self.track_analysis_dir, t.track_id, audio_path)):
+                            self.track_analysis_dir, track_id, audio_path)):
                     legacy = legacy_cache_path(
-                        self.track_analysis_dir, t.track_id)
+                        self.track_analysis_dir, track_id)
                     todo.append((
                         "v4-migrate" if legacy.is_file() else "v5",
                         audio_path, str(analysis_path or ""),
-                        str(t.track_id), bpm_hint, source_cues, None))
+                        track_id, bpm_hint, source_cues, None))
                     continue
+                fallback_modes = (
+                    fallback_waveform_modes(
+                        self.track_analysis_dir, track_id, audio_path)
+                    if self.track_analysis_dir and audio_path
+                    and analysis_path and Path(analysis_path).is_file()
+                    else ()
+                )
+                if fallback_modes:
+                    current_import = read_analysis(analysis_path)
+                    if imported_waveforms_need_sync(
+                            fallback_modes, current_import):
+                        # Rekordbox can publish EXT/2EX after SoundBox's first
+                        # cook. Only a cache still using a fallback reaches
+                        # this read-only probe; a newly valid stream promotes
+                        # the track through the ordinary atomic V5 recook.
+                        todo.append((
+                            "v5", audio_path, str(analysis_path or ""),
+                            track_id, bpm_hint, source_cues, None))
+                        continue
                 imported_beats = (
                     read_beats(analysis_path)
                     if analysis_path and Path(analysis_path).is_file()
@@ -792,18 +828,18 @@ class WaveformFillWorker(QThread):
                 grid_sync = bool(
                     self.track_analysis_dir and audio_path
                     and grid_needs_sync(
-                        self.track_analysis_dir, t.track_id, audio_path,
+                        self.track_analysis_dir, track_id, audio_path,
                         imported_beats))
                 if grid_sync:
                     todo.append((
                         "grid-meta", audio_path, str(analysis_path or ""),
-                        str(t.track_id), bpm_hint, None, imported_beats))
+                        track_id, bpm_hint, None, imported_beats))
                 if (self.track_analysis_dir and audio_path
                         and imported_cues_need_sync(
-                            self.track_analysis_dir, t.track_id, audio_path,
+                            self.track_analysis_dir, track_id, audio_path,
                             source_cues)):
                     todo.append((
-                        "cue-meta", audio_path, "", str(t.track_id), 0.0,
+                        "cue-meta", audio_path, "", track_id, 0.0,
                         source_cues, None))
                     continue
                 if grid_sync:
@@ -887,6 +923,8 @@ class WaveformFillWorker(QThread):
                             retire_legacy_record(
                                 self.track_analysis_dir, track_id, path)
                             done += 1
+                            if track_id in self.force_track_ids:
+                                self.completed_forced_track_ids.add(track_id)
                             self.detail_ready.emit(path)
                     else:
                         LOG.debug(

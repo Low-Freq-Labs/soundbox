@@ -249,6 +249,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._stock_art_pending: set[Path] = set()
         self._wf_fill_worker: WaveformFillWorker | None = None
         self._track_analysis_dir = data_dir / "track_analysis"
+        self._waveform_force_pending: set[str] = set()
         self._preparing_library = False
         self._prep_power_policy = "ac"
         self._landed_cache: dict[str, float] = {}  # path -> file-landing time
@@ -2419,8 +2420,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                                else "Add to Playlist")
             for name in self.custom:
                 sub.addAction(name, lambda n=name, i=list(ids): self._on_tracks_dropped(n, i))
-        menu.addAction("Copy File Name" if len(ids) == 1 else f"Copy {len(ids)} File Names",
-                       lambda: self._copy_filenames(ids))
+        self._add_track_file_actions(menu, ids, reveal=bool(tid))
         menu.exec(self.artists_view.viewport().mapToGlobal(pos))
 
     def _on_artist_item_edited(self, item, col):
@@ -4901,9 +4901,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if cur_artist and cur_artist != "Unknown Artist":
                 menu.addAction(f"Merge “{cur_artist}” into…",
                                lambda a=cur_artist: self._merge_artist(a))
-        n = len(ids)
-        menu.addAction("Copy File Name" if n == 1 else f"Copy {n} File Names",
-                       lambda: self._copy_filenames(ids))
+        self._add_track_file_actions(menu, ids)
         # Imported files the user moved on disk: offer to find them again.
         # Shown from any imported row — a move usually breaks a batch at once,
         # so the action heals ALL missing links, not just the clicked row.
@@ -4912,6 +4910,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if lost:
                 menu.addAction(f"Fix Missing Links… ({len(lost)})",
                                self._fix_links)
+        self._add_track_reanalysis_action(menu, ids)
         menu.addSeparator()
         menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
         menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))
@@ -4927,6 +4926,28 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # and other derived all-track views expose only the global action.
         self._add_track_removal_actions(menu, ids)
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _add_track_reanalysis_action(self, menu: QMenu, ids: list[str]):
+        n = len(ids)
+        menu.addAction(
+            "Reanalyze Track" if n == 1 else f"Reanalyze {n} Tracks",
+            lambda selected=tuple(ids): self._reanalyze_tracks(selected),
+        )
+
+    def _add_track_file_actions(
+            self, menu: QMenu, ids: list[str], *, reveal: bool = True):
+        """Add source-file utilities in their stable menu order."""
+        selected = tuple(ids)
+        n = len(selected)
+        menu.addAction(
+            "Copy File Name" if n == 1 else f"Copy {n} File Names",
+            lambda: self._copy_filenames(list(selected)),
+        )
+        if reveal:
+            menu.addAction(
+                "Open in Finder",
+                lambda: self._open_in_finder(selected),
+            )
 
     def _add_track_removal_actions(self, menu: QMenu, ids: list[str]):
         """Add the scope-explicit reversible removal actions for this view.
@@ -5047,6 +5068,52 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QApplication.clipboard().setText("\n".join(names))
             self._flash_status("Copied ✓", 5)
 
+    def _open_in_finder(self, ids):
+        """Reveal the selected source files without opening or modifying them."""
+        found: list[str] = []
+        missing: list[str] = []
+        seen: set[Path] = set()
+        for track_id in ids:
+            track = self.lib.tracks_by_id.get(str(track_id)) if self.lib else None
+            if track is None:
+                missing.append(str(track_id))
+                continue
+            path = track.path
+            try:
+                available = path.is_file()
+            except OSError:
+                available = False
+            if not available:
+                missing.append(str(track_id))
+            elif path not in seen:
+                seen.add(path)
+                found.append(str(path))
+        if not found:
+            QMessageBox.warning(
+                self, "File unavailable",
+                "The selected source file is missing or unavailable.",
+            )
+            return
+        if missing:
+            LOG.warning(
+                "Open in Finder skipped missing track id(s): %s",
+                ", ".join(sorted(missing)),
+            )
+        started = self._start_finder_reveal(found)
+        ok = started[0] if isinstance(started, tuple) else bool(started)
+        if not ok:
+            QMessageBox.warning(
+                self, "Finder unavailable",
+                "SoundBox could not ask Finder to reveal the selected file.",
+            )
+        elif missing:
+            self._flash_status(
+                f"Opened in Finder; skipped {len(missing)} missing ✕", 8)
+
+    @staticmethod
+    def _start_finder_reveal(found: list[str]):
+        return QProcess.startDetached("/usr/bin/open", ["-R", *found])
+
     def _delete_tracks(self, ids: list[str]):
         """Remove from SOUNDBOX ONLY — never rekordbox or the file on disk.
         The track stops appearing in every view/export and remains restorable
@@ -5064,13 +5131,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         for i in ids:
             self.hidden_dates.setdefault(i, stamp)
         self._after_track_edit(f"Removed {n} from Collection ✓")
-
-    def _restore_hidden(self):
-        n = len(self.hidden) + sum(len(v) for v in self.removals.values())
-        self.hidden.clear()
-        self.hidden_dates.clear()
-        self.removals.clear()
-        self._after_track_edit(f"Restored {n} ✓")
 
     def _artist_avatar_groups(self) -> list:
         """[(artist, [tids], sample_image_path)] for every artist whose tracks
@@ -5443,7 +5503,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # This may be the periodic timer itself or an immediate source-refresh
         # request. Either way, the next interval starts only after this pass.
         self._waveform_recheck_timer.stop()
-        w = WaveformFillWorker(self.lib, self._track_analysis_dir)
+        forced = set(self._waveform_force_pending)
+        self._waveform_force_pending.clear()
+        w = WaveformFillWorker(
+            self.lib, self._track_analysis_dir,
+            force_track_ids=forced,
+        )
         self._wf_fill_worker = w
         w.set_playback_active(self.player_bar.is_playing())
         w.prioritize(self.player_bar._src_path or "")
@@ -5495,16 +5560,75 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_pulse("Preparing your library")
 
     def _on_library_prep_finished(self, w):
+        forced = set(getattr(w, "force_track_ids", ()))
+        completed_forced = set(
+            getattr(w, "completed_forced_track_ids", ()))
         self._finish_worker("_wf_fill_worker", w)
         self._preparing_library = False
         if not self._exporting and not self._cancelling and not self._deleting:
             self._stop_pulse()
-            self._set_status_text("Ready")
+            failed = forced - completed_forced
+            if failed:
+                LOG.warning(
+                    "Manual reanalysis failed for track id(s): %s",
+                    ", ".join(sorted(failed)),
+                )
+                self._flash_status(
+                    "Reanalysis failed ✕" if len(failed) == 1
+                    else f"{len(failed)} reanalyses failed ✕",
+                    10,
+                )
+            elif forced:
+                self._flash_status(
+                    "Reanalyzed ✓" if len(forced) == 1
+                    else f"Reanalyzed {len(forced)} ✓",
+                    8,
+                )
+            else:
+                self._set_status_text("Ready")
         if getattr(self, "_waveform_rescan_pending", False):
             self._waveform_rescan_pending = False
             QTimer.singleShot(0, self._maybe_fill_waveforms)
         else:
             self._schedule_waveform_recheck()
+
+    def _reanalyze_tracks(self, track_ids):
+        """Atomically recook selected disposable SoundBox analysis records.
+
+        Rekordbox analysis and source audio remain read-only. A successful cook
+        imports whatever complete ANLZ streams exist now, then atomically
+        replaces the SoundBox cache and hot-refreshes the loaded deck.
+        """
+        if self.lib is None:
+            return
+        requested = {str(track_id) for track_id in track_ids if str(track_id)}
+        available = {
+            track_id for track_id in requested
+            if (track := self.lib.tracks_by_id.get(track_id)) is not None
+            and track.path.is_file()
+        }
+        if not available:
+            QMessageBox.warning(
+                self, "Reanalysis unavailable",
+                "The selected source audio is missing or unavailable.",
+            )
+            return
+        missing = requested - available
+        if missing:
+            LOG.warning(
+                "Manual reanalysis skipped missing track id(s): %s",
+                ", ".join(sorted(missing)),
+            )
+        self._waveform_force_pending.update(available)
+        LOG.info(
+            "Manual reanalysis requested for track id(s): %s",
+            ", ".join(sorted(available)),
+        )
+        self._maybe_fill_waveforms()
+        if _running(self._wf_fill_worker):
+            self._start_pulse(
+                "Reanalyzing track" if len(available) == 1
+                else f"Reanalyzing {len(available)} tracks")
 
     def _stop_art_fill(self):
         if self._art_worker is not None and self._art_worker.isRunning():
