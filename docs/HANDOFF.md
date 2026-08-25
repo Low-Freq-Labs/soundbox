@@ -31,11 +31,10 @@ topic documents.
   Cache inventories remained exactly 3,420 track-analysis, 3,297 curated-art,
   7,609 stock-artwork, one stock shadow, one Rockbox-media, and 20,127
   Rockbox-artwork files.
-- Install rollback is `/private/tmp/soundbox-final-install-jDWLuK/`. The
-  immediate pre-Finder-action app is `Soundbox.before-finder.app` and its
-  verified state snapshot is `library.before-finder.json`; earlier app
-  checkpoints from this same session are retained in that one temporary
-  rollback directory. AppData was never removed or rebuilt.
+- Sonny explicitly requested permanent removal of the completed install
+  rollback on 2026-08-24. `/private/tmp/soundbox-final-install-jDWLuK/` and its
+  saved app bundles/library snapshots were deleted, freeing 704 MB. No
+  temporary rollback remains; the installed app and AppData were untouched.
 
 ## Installed behavior
 
