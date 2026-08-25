@@ -70,8 +70,12 @@ both **Remove from Playlist** (only that playlist) and **Remove from Collection*
 (global hide, restorable from the dated **Graveyard** in Settings); Collection
 offers only the latter. Graveyard restore is selection-scoped: select one,
 Shift/Cmd-select several, or use Cmd-A, then right-click **Restore**. There is
-no unconditional Restore All shortcut. Both removal scopes drift synced
-devices; rekordbox never changes.
+no unconditional Restore All shortcut. A global Graveyard entry immediately
+drops its disposable SoundBox waveform record and background preparation skips
+it; restoring the track prepares it again when its source remains available.
+Playlist-only removals retain analysis because the track can still be browsed
+and played elsewhere. Both removal scopes drift synced devices; rekordbox and
+source audio never change.
 
 **Cover art.** Background auto-fetch with an accuracy-first matcher (an
 artist-accountable title match of at least 0.80 → track cover, else artist

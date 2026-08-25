@@ -617,6 +617,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   worker finishes. `is_ready` uses size + mtime identity and recooks only stale
   records; the scan must stay manifest-only and must not inflate waveform
   payloads or overlap workers.
+- **Global Graveyard membership vetoes persistent analysis.** Remove from
+  Collection must discard the exact SoundBox V4/V5 record, and startup/bulk
+  preparation must skip every globally hidden ID. Recheck membership before
+  and after atomic publication because either the bulk worker or an interactive
+  deck worker can already be decoding when the UI removal lands. Restore uses
+  the normal bounded preparation path. Do not apply this rule to a
+  playlist-only removal: that track remains browsable elsewhere and still owns
+  its cache. Source audio and Rekordbox ANLZ data remain read-only.
 - **A ready cache can still preserve an early Rekordbox fallback.** Rekordbox
   may finish PWV3/PWV5/PWV7 after SoundBox has already stored a structurally
   complete V5 record. The recurring scan must use stream provenance to keep

@@ -229,6 +229,26 @@ class TrackAnalysisStore(unittest.TestCase):
         path.write_bytes(damaged)
         self.assertIsNone(track_analysis.load(cache, "x", self.audio))
 
+    def test_discard_records_removes_only_exact_v4_v5_cache_files(self):
+        cache = self.root / "analysis"
+        cache.mkdir()
+        current = track_analysis.cache_path(cache, "grave")
+        legacy = track_analysis.legacy_cache_path(cache, "grave")
+        keep = track_analysis.cache_path(cache, "active")
+        current.write_bytes(b"v5-cache")
+        legacy.write_bytes(b"old")
+        keep.write_bytes(b"keep")
+
+        removed, reclaimed = track_analysis.discard_records(
+            cache, ("grave", "grave", "missing"))
+
+        self.assertEqual((removed, reclaimed), (2, 11))
+        self.assertFalse(current.exists())
+        self.assertFalse(legacy.exists())
+        self.assertEqual(keep.read_bytes(), b"keep")
+        self.assertEqual(
+            track_analysis.discard_records(cache, ("grave",)), (0, 0))
+
     def test_selective_sections_survive_unrelated_corruption(self):
         cache = self.root / "analysis"
         track_analysis.store(cache, "selective", self.audio, {

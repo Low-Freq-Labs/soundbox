@@ -312,10 +312,12 @@ class SettingsPageMixin:
         picks = [x for x in picks if x]
         if not picks:
             return
+        restored_global = set()
         for kind, tid, pid in picks:
             if kind == "del":
                 self.hidden.discard(tid)
                 self.hidden_dates.pop(tid, None)
+                restored_global.add(tid)
             else:
                 bag = self.removals.get(pid) or {}
                 bag.pop(tid, None)
@@ -323,6 +325,10 @@ class SettingsPageMixin:
                     self.removals.pop(pid, None)
         self._after_track_edit(f"Restored {len(picks)} ✓")
         self._refresh_graveyard()
+        if restored_global:
+            # Restored tracks become active again. The ordinary bounded scan
+            # prepares only those whose disposable analysis is now absent.
+            self._maybe_fill_waveforms()
 
     def _backup_library(self):
         """Full backup → one .zip (library.json + history + art cache + README),

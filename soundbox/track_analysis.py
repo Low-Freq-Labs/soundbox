@@ -422,6 +422,32 @@ def legacy_cache_path(cache_dir: str | Path, track_id: str) -> Path:
     return cache_path(cache_dir, track_id).with_suffix(".sba4")
 
 
+def discard_records(
+        cache_dir: str | Path, track_ids: Iterable[str]) -> tuple[int, int]:
+    """Delete exact disposable V4/V5 records for the supplied track IDs.
+
+    Source audio and provider analysis are never involved. The returned pair is
+    ``(record_count, bytes_reclaimed)`` so callers can log an honest cleanup.
+    A failed unlink remains visible to the next bounded cleanup pass.
+    """
+    removed = 0
+    reclaimed = 0
+    for track_id in {str(value) for value in track_ids if str(value)}:
+        for target in (
+                cache_path(cache_dir, track_id),
+                legacy_cache_path(cache_dir, track_id)):
+            try:
+                size = target.stat().st_size
+                target.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+            removed += 1
+            reclaimed += size
+    return removed, reclaimed
+
+
 def _record_candidates(
         cache_dir: str | Path, track_id: str
 ) -> tuple[tuple[Path, bytes, int], ...]:

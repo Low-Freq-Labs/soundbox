@@ -2762,10 +2762,26 @@ class Graveyard(unittest.TestCase):
         _win._apply_settings_to_lib()
         _win._refresh_graveyard()
         _win._grave.topLevelItem(0).setSelected(True)
-        _win._grave_restore_selected()
+        with mock.patch.object(_win, "_maybe_fill_waveforms") as prepare:
+            _win._grave_restore_selected()
         self.assertNotIn("1", _win.hidden)
         self.assertNotIn("1", _win.hidden_dates)
         self.assertEqual(_win._grave.topLevelItemCount(), 0)
+        prepare.assert_called_once_with()
+
+    def test_playlist_only_restore_does_not_schedule_analysis(self):
+        pl = _win.lib.playlists[0]
+        saved_pid = pl.pid
+        pl.pid = "42"
+        _win.removals["42"] = {"1": "2026-07-01"}
+        try:
+            _win._refresh_graveyard()
+            _win._grave.topLevelItem(0).setSelected(True)
+            with mock.patch.object(_win, "_maybe_fill_waveforms") as prepare:
+                _win._grave_restore_selected()
+            prepare.assert_not_called()
+        finally:
+            pl.pid = saved_pid
 
     def test_menu_has_only_selection_scoped_restore(self):
         from PySide6.QtWidgets import QMenu
@@ -2785,7 +2801,8 @@ class Graveyard(unittest.TestCase):
         _win._refresh_graveyard()
         _win._grave.selectAll()
         self.assertEqual(len(_win._grave.selectedItems()), 2)
-        _win._grave_restore_selected()
+        with mock.patch.object(_win, "_maybe_fill_waveforms"):
+            _win._grave_restore_selected()
         self.assertFalse(_win.hidden)
         self.assertFalse(_win.hidden_dates)
 
@@ -2809,6 +2826,31 @@ class Graveyard(unittest.TestCase):
         stamp = _win.hidden_dates.get("2")
         self.assertTrue(stamp.startswith(_t.strftime("%Y-%m-%d ")))
         self.assertRegex(stamp, r"\d{2}:\d{2}$")  # minute precision
+
+    def test_collection_removal_discards_exact_analysis_immediately(self):
+        import tempfile
+        from PySide6.QtWidgets import QMessageBox
+        from soundbox.track_analysis import cache_path, legacy_cache_path
+
+        with tempfile.TemporaryDirectory() as td:
+            saved = _win._track_analysis_dir
+            _win._track_analysis_dir = Path(td)
+            current = cache_path(td, "2")
+            legacy = legacy_cache_path(td, "2")
+            current.write_bytes(b"current")
+            legacy.write_bytes(b"legacy")
+            try:
+                with mock.patch(
+                        "desktop.app.QMessageBox.question",
+                        return_value=QMessageBox.Yes), mock.patch.object(
+                            _win.player_bar,
+                            "cancel_analysis_cache_writes") as cancel:
+                    _win._delete_tracks(["2"])
+                self.assertFalse(current.exists())
+                self.assertFalse(legacy.exists())
+                cancel.assert_called_once_with({"2"})
+            finally:
+                _win._track_analysis_dir = saved
 
 
 class TitleJunkSetting(unittest.TestCase):
@@ -6065,14 +6107,49 @@ class WaveformFill(unittest.TestCase):
             self.assertTrue(worker._wait_for_storage())
         self.assertEqual(states, [(True, free[0]), (False, free[1])])
 
-    def test_hidden_tracks_remain_in_canonical_analysis(self):
+    def test_hidden_tracks_are_discarded_and_never_prepared(self):
         from desktop.workers import WaveformFillWorker
-        from soundbox.track_analysis import is_ready
+        from soundbox import track_analysis
         canonical = Path(self.cache) / "track_analysis"
-        self.lib.hidden_ids = {"1"}
         WaveformFillWorker(self.lib, canonical).run()
-        self.assertTrue(is_ready(canonical, "1", self.paths[1]))
-        self.assertTrue(is_ready(canonical, "0", self.paths[0]))
+        self.assertTrue(track_analysis.is_ready(
+            canonical, "1", self.paths[1]))
+        self.lib.hidden_ids = {"1"}
+        totals = []
+        worker = WaveformFillWorker(self.lib, canonical)
+        worker.tasks_ready.connect(totals.append)
+        worker.run()
+        self.assertEqual(totals, [0])
+        self.assertFalse(track_analysis.cache_path(
+            canonical, "1").exists())
+        self.assertTrue(track_analysis.is_ready(
+            canonical, "0", self.paths[0]))
+
+    def test_mid_store_graveyard_change_cannot_republish_analysis(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis
+
+        canonical = Path(self.cache) / "track_analysis"
+        original_store = track_analysis.store
+
+        def store_then_hide(*args, **kwargs):
+            result = original_store(*args, **kwargs)
+            self.lib.hidden_ids.add("0")
+            return result
+
+        ready = []
+        worker = WaveformFillWorker(self.lib, canonical)
+        worker.detail_ready.connect(ready.append)
+        with patch(
+                "soundbox.track_analysis.store",
+                side_effect=store_then_hide):
+            worker.run()
+
+        self.assertFalse(track_analysis.cache_path(
+            canonical, "0").exists())
+        self.assertNotIn(self.paths[0], ready)
 
     def test_interrupted_decode_never_degrades_existing_v4(self):
         from pathlib import Path
@@ -6121,14 +6198,18 @@ class WaveformFill(unittest.TestCase):
         saved_pending = set(_win._waveform_force_pending)
         _win.lib = self.lib
         _win._waveform_force_pending.clear()
+        self.lib.hidden_ids = {"1"}
+        saved_hidden = set(_win.hidden)
+        _win.hidden = {"1"}
         try:
             with patch.object(_win, "_maybe_fill_waveforms") as start:
                 _win._reanalyze_tracks(["0", "1", "ghost"])
-            self.assertEqual(_win._waveform_force_pending, {"0", "1"})
+            self.assertEqual(_win._waveform_force_pending, {"0"})
             start.assert_called_once_with()
         finally:
             _win._waveform_force_pending.clear()
             _win._waveform_force_pending.update(saved_pending)
+            _win.hidden = saved_hidden
             _win.lib = saved_lib
 
     def test_recurring_recheck_timer_is_bounded_and_single_shot(self):
@@ -6451,6 +6532,26 @@ class WaveformRapidLoad(unittest.TestCase):
         self.assertEqual(self.pb.wave._beats[0][1], 0)
         self.assertEqual(list(self.pb.wave._audio_detail), [65534])
         self.assertEqual(self.pb.wave._audio_detail_rate, 768.0)
+
+    def test_graveyard_cancel_discards_interactive_worker_cache_on_exit(self):
+        from desktop.player import WaveformWorker
+        from soundbox.track_analysis import cache_path
+
+        canonical = Path(self.cache) / "track_analysis"
+        canonical.mkdir(exist_ok=True)
+        target = cache_path(canonical, "grave")
+        target.write_bytes(b"disposable")
+        worker = WaveformWorker(
+            self.paths[0], track_id="grave",
+            track_analysis_dir=canonical)
+        self.pb._wf_pending.append(worker)
+        try:
+            self.pb.cancel_analysis_cache_writes({"grave"})
+            self.assertTrue(worker._discard_requested.is_set())
+            worker.run()
+            self.assertFalse(target.exists())
+        finally:
+            self.pb._wf_pending.remove(worker)
 
     def test_canonical_rekordbox_grid_keeps_exact_first_beat(self):
         from pathlib import Path

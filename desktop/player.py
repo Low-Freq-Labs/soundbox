@@ -16,6 +16,7 @@ from bisect import bisect_right
 from enum import Enum
 from math import ceil, exp, floor
 import sys
+import threading
 from time import perf_counter
 
 from PySide6.QtCore import (
@@ -347,6 +348,12 @@ class WaveformWorker(QThread):
         self.track_analysis_dir = track_analysis_dir
         self.generation = int(generation)
         self.native_backend = native_backend
+        self._discard_requested = threading.Event()
+
+    def discard_cached_record(self):
+        """Prevent an in-flight interactive cook from surviving Graveyard."""
+        self._discard_requested.set()
+        self.requestInterruption()
 
     def _load_stages(self) -> tuple[bool, bool, bool]:
         from soundbox.track_analysis import (
@@ -426,6 +433,12 @@ class WaveformWorker(QThread):
         except Exception:  # noqa: BLE001
             if not self.isInterruptionRequested():
                 self.manifest_ready.emit(self.path, self.generation, {})
+        finally:
+            if (self._discard_requested.is_set()
+                    and self.track_analysis_dir and self.track_id):
+                from soundbox.track_analysis import discard_records
+                discard_records(
+                    self.track_analysis_dir, (self.track_id,))
 
 
 class SessionCueState(str, Enum):
@@ -2329,6 +2342,14 @@ class PlayerBar(QWidget):
                     w.requestInterruption(); w.wait(5000)
             except RuntimeError:
                 pass
+
+    def cancel_analysis_cache_writes(self, track_ids):
+        """Cancel matching interactive cooks; their workers delete on exit."""
+        ids = {str(value) for value in track_ids if str(value)}
+        for worker in list(self._wf_pending):
+            if str(getattr(worker, "track_id", "")) in ids:
+                worker.discard_cached_record()
+
     def shutdown(self):
         """Release workers plus any native audio/display threads."""
         self.shutdown_waveforms()

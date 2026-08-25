@@ -749,10 +749,18 @@ class WaveformFillWorker(QThread):
             time.sleep(1.0)
         return False
 
+    def _track_is_hidden(self, track_id: str) -> bool:
+        """Read the live global-Graveyard set, including mid-pass changes."""
+        return str(track_id) in {
+            str(value)
+            for value in (getattr(self.lib, "hidden_ids", ()) or ())
+        }
+
     def run(self):
         from soundbox.rekordbox_analysis import read as read_analysis, read_beats
         from soundbox.track_analysis import (
             analyze_soundfile as analyze_track,
+            discard_records,
             fallback_waveform_modes,
             grid_needs_sync,
             imported_cues_need_sync,
@@ -768,12 +776,25 @@ class WaveformFillWorker(QThread):
             with_imported_cues,
         )
         from .player import qt_detail_peaks
+        hidden = {
+            str(value)
+            for value in (getattr(self.lib, "hidden_ids", ()) or ())
+        }
+        if self.track_analysis_dir and hidden:
+            removed, reclaimed = discard_records(
+                self.track_analysis_dir, hidden)
+            if removed:
+                LOG.info(
+                    "Graveyard analysis cleanup: %d record(s), %.1f MiB",
+                    removed, reclaimed / 1024 ** 2)
         todo: list[
             tuple[str, str, str, str, float, list[dict] | None, list | None]
         ] = []
         for t in self.lib.tracks_by_id.values():
             try:
                 track_id = str(t.track_id)
+                if track_id in hidden:
+                    continue
                 analysis_path = getattr(t, "source_analysis_path", "")
                 source_cues = getattr(t, "source_cues", None)
                 audio_path = str(t.path) if t.path.is_file() else ""
@@ -878,6 +899,13 @@ class WaveformFillWorker(QThread):
             self._active_task_path = (
                 path if kind in {"v5", "v4-migrate"} else "")
             i += 1
+            if self._track_is_hidden(track_id):
+                if self.track_analysis_dir:
+                    discard_records(self.track_analysis_dir, (track_id,))
+                self.progress.emit(i, total)
+                time.sleep(self.DELAY)
+                self._active_task_path = ""
+                continue
             if kind not in {"cue-meta", "grid-meta"}:
                 self._wait_for_playback()
             if self.isInterruptionRequested():
@@ -893,8 +921,12 @@ class WaveformFillWorker(QThread):
                             kind == "v4-migrate"
                             and migrate_v4(
                                 self.track_analysis_dir, track_id, path)):
-                        done += 1
-                        self.detail_ready.emit(path)
+                        if self._track_is_hidden(track_id):
+                            discard_records(
+                                self.track_analysis_dir, (track_id,))
+                        else:
+                            done += 1
+                            self.detail_ready.emit(path)
                         self.progress.emit(i, total)
                         time.sleep(self.DELAY)
                         continue
@@ -915,17 +947,25 @@ class WaveformFillWorker(QThread):
                         if prepared is not None and imported_cues is not None:
                             prepared = with_imported_cues(
                                 prepared, imported_cues)
-                        if prepared and track_store(
-                                self.track_analysis_dir, track_id, path,
+                        if (
                                 prepared
-                        ) and track_is_ready(
-                                self.track_analysis_dir, track_id, path):
-                            retire_legacy_record(
-                                self.track_analysis_dir, track_id, path)
-                            done += 1
-                            if track_id in self.force_track_ids:
-                                self.completed_forced_track_ids.add(track_id)
-                            self.detail_ready.emit(path)
+                                and not self._track_is_hidden(track_id)
+                                and track_store(
+                                self.track_analysis_dir, track_id, path,
+                                prepared)
+                                and track_is_ready(
+                                    self.track_analysis_dir, track_id, path)
+                        ):
+                            if self._track_is_hidden(track_id):
+                                discard_records(
+                                    self.track_analysis_dir, (track_id,))
+                            else:
+                                retire_legacy_record(
+                                    self.track_analysis_dir, track_id, path)
+                                done += 1
+                                if track_id in self.force_track_ids:
+                                    self.completed_forced_track_ids.add(track_id)
+                                self.detail_ready.emit(path)
                     else:
                         LOG.debug(
                             "Library preparation kept existing record after "
@@ -946,6 +986,11 @@ class WaveformFillWorker(QThread):
                         self.detail_ready.emit(path)
             except Exception as exc:  # noqa: BLE001 — one bad track never stops prep
                 LOG.debug("Library preparation failed for %s: %r", path, exc)
+            if self._track_is_hidden(track_id) and self.track_analysis_dir:
+                # A main-thread removal may land in the narrow interval after
+                # the pre-store check. Reassert the no-Graveyard-cache contract
+                # after every task so that race cannot republish a record.
+                discard_records(self.track_analysis_dir, (track_id,))
             self.progress.emit(i, total)
             time.sleep(self.DELAY)
             self._active_task_path = ""

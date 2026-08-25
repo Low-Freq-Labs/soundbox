@@ -273,6 +273,14 @@ Interactive loads validate only the requested section SHA-256; cache audits
 also verify the complete compressed payload. A
 changed/new track prepares only its own record. Storage-only cue/grid mutation
 support is a dormant boundary for later work; no manual grid editor exists.
+Tracks globally removed from Collection are outside this active cache universe:
+the removal drops their exact V4/V5 records, recurring preparation skips them,
+and an in-flight bulk or interactive cook cannot republish after the Graveyard
+change. Startup also reclaims records left by older builds. Selection-scoped
+restore returns a globally removed track to ordinary bounded preparation.
+Playlist-only removals retain analysis because the track remains active in
+Collection or other playlists. No cleanup touches source audio or read-only
+Rekordbox analysis.
 The recurring scan also detects the narrow late-Rekordbox case without polling
 all ANLZ waveform bytes: a fully imported display mode stays on the small-
 manifest path, while a mode whose provenance still says `soundbox-analysis`

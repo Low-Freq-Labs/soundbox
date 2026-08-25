@@ -101,7 +101,7 @@ from PySide6.QtWidgets import (
 
 from soundbox import (
     artfetch, engine, imports, libcache, manifest as device_manifest, metadata,
-    paths, rekordbox_db, rockbox_config,
+    paths, rekordbox_db, rockbox_config, track_analysis,
 )
 from soundbox.device_profile import plan_stock_ipod_export
 from soundbox.dual_ipod import (
@@ -5131,6 +5131,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         for i in ids:
             self.hidden_dates.setdefault(i, stamp)
         self._after_track_edit(f"Removed {n} from Collection ✓")
+        self._discard_graveyard_analysis(ids)
+
+    def _discard_graveyard_analysis(self, track_ids) -> tuple[int, int]:
+        """Drop global-Graveyard analysis without touching source audio."""
+        ids = {
+            str(track_id) for track_id in track_ids
+            if str(track_id) and str(track_id) in self.hidden
+        }
+        if not ids:
+            return 0, 0
+        self.player_bar.cancel_analysis_cache_writes(ids)
+        removed, reclaimed = track_analysis.discard_records(
+            self._track_analysis_dir, ids)
+        if removed:
+            LOG.info(
+                "Graveyard analysis cleanup: %d record(s), %.1f MiB",
+                removed, reclaimed / 1024 ** 2)
+        return removed, reclaimed
 
     def _artist_avatar_groups(self) -> list:
         """[(artist, [tids], sample_image_path)] for every artist whose tracks
@@ -5604,7 +5622,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         requested = {str(track_id) for track_id in track_ids if str(track_id)}
         available = {
             track_id for track_id in requested
-            if (track := self.lib.tracks_by_id.get(track_id)) is not None
+            if track_id not in self.hidden
+            and (track := self.lib.tracks_by_id.get(track_id)) is not None
             and track.path.is_file()
         }
         if not available:

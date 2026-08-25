@@ -594,7 +594,8 @@ manual picker, artist/title derivation incl. trusted-gated reversed flip,
 filename-stem fallback, named bracketed remix credits that consistently outrank
 original-artist tags, alias/merge window, uploader-consensus suggester);
 app.py split into modules; UI-layer tests; rotating + full .zip backup/restore;
-graveyard; title-cleanup named rules; baseline-JPEG art enforcement.
+graveyard with global-track waveform reclamation and restore-time preparation;
+title-cleanup named rules; baseline-JPEG art enforcement.
 
 ### Phase 2.5 — Native player ✅ DONE
 
