@@ -472,7 +472,10 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "positioned_profile_coverage(\n"
             "            heights, profilePositions, profileCount", fragment)
-        self.assertIn("if (u.pixelsPerSecond >= 1152.0)", fragment)
+        self.assertIn(
+            "if ((u.waveformMode != 3 && u.pixelsPerSecond < 64.0)\n"
+            "                || u.pixelsPerSecond >= 1152.0)",
+            fragment)
         self.assertIn("const float firstKnot = floor(leftTile) + 1.0", fragment)
         self.assertIn("for (uint i = 0; i < 5u; ++i)", fragment)
         self.assertIn("saturate(coverage)", fragment)
@@ -605,13 +608,35 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "vivid_wave_coverage(surface.coverage)", fragment)
 
-    def test_every_beat_grid_line_is_opaque_over_waveform_colors(self):
+    def test_beat_grid_has_edge_ticks_and_spacing_based_close_guides(self):
         native = (
             Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
         ).read_text()
-        self.assertIn("const float a = 1.0f;", native)
-        self.assertNotIn("downbeat ? 1.0f : 0.32f", native)
-        self.assertNotIn("downbeat ? 0.82f : 0.32f", native)
+        self.assertEqual(native.count("addBeatGrid(grid,"), 2)
+        self.assertIn("beats[index + 1] - beats[index]", native)
+        self.assertIn("beats[index] - beats[index - 1]", native)
+        self.assertIn("v[i].beatKind = downbeat ? 2u : 1u;", native)
+        grid = self.shader.split("fragment float4 deck_fragment", 1)[1]
+        self.assertIn("if (in.beatStyle.y > 0.0)", grid)
+        self.assertIn("min(in.laneY, in.laneHeight - in.laneY)", grid)
+        self.assertIn("smoothstep(32.0, 80.0, in.beatStyle.x)", grid)
+        self.assertIn("alpha *= max(tick, interior);", grid)
+
+    def test_wide_detail_uses_existing_finer_extrema_not_new_cache_data(self):
+        kernel = self.shader.split("kernel void wave_attribute_kernel", 1)[1]
+        self.assertIn(
+            "detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0)",
+            kernel)
+        # The accepted close family and 4x song-anchored resolve remain.
+        self.assertIn("detailFootprint * 4.0", kernel)
+        divisors = (8, 13, 18, 25, 35, 50, 66, 99, 132, 192, 256)
+        for scale in (1, 2):
+            for zoom in (24, 32, 48):
+                footprint = 6300 / (zoom * scale) * 0.5
+                divisor = next(d for d in divisors if d >= footprint * 0.94)
+                density = 6300 / divisor / (zoom * scale)
+                self.assertLessEqual(density, 2 / 0.94)
+                self.assertLess(density, 4)  # available attribute samples/pixel
 
     def test_scrolling_grid_lines_use_analytic_subpixel_coverage(self):
         native = (
@@ -625,7 +650,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("bool analyticVertical = false", helper)
         self.assertIn("const float fringe = analyticVertical ? 0.5f", helper)
         self.assertIn("lineX0, lineHalf", helper)
-        self.assertEqual(native.count("false, true);"), 2)
+        self.assertEqual(native.count("false, true);"), 1)
 
         grid = self.shader.split(
             "vertex Out grid_vertex", 1

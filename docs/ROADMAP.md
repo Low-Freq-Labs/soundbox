@@ -6,6 +6,12 @@ For the live test count, trust `./check.sh` output—not any number written here
 
 ## Current status (2026-09-10)
 
+Main-waveform visual refinement: retain all thirteen zoom stops and the accepted
+playback/close-carrier behavior, recover finer peaks at the widest three stops
+from existing V5 data, and replace the crowded grid with paired edge ticks and
+spacing-dependent close guides. No recook or persistent storage increase.
+See `PLAYER.md` for reference measurements and `HANDOFF.md` for install status.
+
 September 10 maintenance release: background
 cloud-placeholder guards cover cache misses, late imported waveforms, and
 post-wait eviction. The analysis audit separates corruption, deferred sources,

@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-08-25. This is the player reference: shipped behavior,
+Current as of 2026-09-10. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -132,6 +132,21 @@ across the deck for a typical 140–175 BPM track). The native ABI returns its
 applied scale, so persisted zoom, paint, grid translation, and scrub math can
 never disagree about a silently clamped value.
 
+The main grid uses small paired edge ticks, with red triangles for downbeats.
+At local beat spacing of 32 points or less, there is no line through the audio.
+Between 32 and 80 points, a thin interior guide gradually appears; at close
+spacing its alpha is 0.45 for ordinary beats and 0.75 for downbeats. Edge ticks
+retain opaque timing colors. Spacing comes from adjacent authoritative beat
+timestamps, including variable tempo, not a guessed BPM. Analytic horizontal
+coverage preserves continuous subpixel travel. The overview, cues, grid times,
+playhead, and transport clocks are unchanged.
+
+At the three widest stops (24/32/48), BLUE/RGB use a half-physical-pixel
+extrema footprint from the existing V5 mip ladder. The four-attributes-per-pixel
+song lattice and final exact one-pixel profile integral resolve those finer
+peaks without the old max-pooled slabs. There is no cache-format change,
+recook, extra persistent waveform storage, or close-family geometry change.
+
 Settings exposes three persistent waveform displays:
 
 - `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one. Its
@@ -155,7 +170,8 @@ immediate and never recooks the track. BLUE and RGB combine their authored
 filling positive and negative envelopes back to zero. That shared geometry
 keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
-Both use the literal physical-pixel footprint. 3BAND is different: its three
+Both use output-footprint-selected extrema (the wide and close exceptions are
+documented above and below). 3BAND is different: its three
 PWV7 heights are the complete native geometry and retain their authored timing
 without borrowing the signed trace. The packed stream stays on its 150 Hz cache
 clock, while the scrolling lane begins at the paired-row peak level that
@@ -497,7 +513,7 @@ The following renderer rules are measured invariants, not style preferences:
   The earlier one-attribute close mode preserved an identical raster after
   integer motion alignment, but its 25/26-pixel maximum-zoom steps made dense
   spikes visibly strobe and bend.
-- **The LOD is footprint-matched and `kLodBias` must stay 0.** A physical
+- **The display-stream LOD is footprint-matched and `kLodBias` must stay 0.** A physical
   pixel cannot display more than about one envelope value. Selecting a mip
   two levels sharper (`kLodBias = 2`) was tried on the theory that
   supersampling buys mip bias back as recovered detail; it does not. The
@@ -509,7 +525,11 @@ The following renderer rules are measured invariants, not style preferences:
   fractional LOD stranded the most unresolvable values under each pixel.
   The taps still earn their keep by feeding `profile_coverage` a dense
   profile to integrate; they simply must not buy undisplayable detail.
-- **Ceil the level — at most one envelope value per physical pixel.** Mip
+- **Ceil the display-stream level.** The historical rule was at most one
+  envelope value per physical pixel; the September 10 half-pixel signed-extrema
+  reconstruction is a narrow wide-zoom exception with its own exact lattice
+  integration and explicitly recorded phase-sweep tradeoff, not permission to
+  sharpen the PWV mip bias or change the accepted middle/close families. Mip
   levels are powers of two but the thirteen zoom steps are not, so flooring
   strands every other zoom at ~1.54 envelope values per pixel while its
   neighbours sit at ~1.03, and rounding still leaves up to 1.41. Anything
@@ -556,8 +576,9 @@ The following renderer rules are measured invariants, not style preferences:
   subpixel peaks. This distinction affects only compositing, never height,
   hue, LOD, or detail.
 - Integrate the fixed height/hue profile over exactly one physical pixel before
-  final vertical coverage. Below 1152 px/s, five quarter-pixel boundary samples
-  retain the accepted result. At 1152–1536 px/s, use the pixel endpoints plus
+  final vertical coverage. At 64–864 px/s, five quarter-pixel boundary samples
+  retain the accepted result. At 24–48 (BLUE/RGB only) and 1152–1536 px/s,
+  use the pixel endpoints plus
   every integer knot of the four-attributes-per-pixel lattice, weighted by
   their actual spans; this is the complete piecewise-linear profile and avoids
   a fractional-phase knot hiding between fixed probes. Premultiplied color uses
@@ -2415,6 +2436,35 @@ app was safely installed, activated its packaged native deck, loaded the real
 3,263-track / 83-playlist library with zero preparation tasks, and passed
 Sonny's live review. The V5-cutover and player-simplification rollbacks were
 retired only after those checks. This compositor campaign is complete.
+
+## September 10, 2026: wide waveform and grid visual refinement
+
+Sonny supplied the full Rekordbox/SoundBox zoom sequences for “Turn Up (Final
+v2)”. The native acceptance capture uses track `84590640` at bar 18.1 / 28,137 ms.
+All thirteen RGB zoom stops were rendered; BLUE and 3BAND remain available.
+The correction targets the widest three BLUE/RGB stops and the main-lane grid,
+not the accepted close carrier, overview, audio clock, or zoom sequence.
+
+The supplied first Rekordbox image is 3008 pixels wide, not the chat's scaled
+2048-pixel preview. At fixed playheads and horizontal scale 0.64 against the
+1920-pixel native 48-point/s capture, silhouette correlation improved from
+0.613 to 0.713 and normalized outline error from 0.0821 to 0.0756. These are
+supporting shape measurements, not proof of identical rendering or subjective
+acceptance. Substituting the coarse authored height stream was rejected.
+
+Bounded silent native playback captures covered 24/32/48/64/384/1536, 540
+drawables per build. Both baseline and candidate had zero audio underruns and
+zero GPU deadline misses. One candidate and two baseline presentations were
+dropped; both had a largest actual gap of 16.67 ms. This is a short machine
+measurement, not a camera-based guarantee of perceptual smoothness.
+Developer captures now accept a current source path after a library move,
+retain source/cache identity validation, and refuse to hydrate placeholders.
+The 12-position, 115-source-frame phase sweep retains near-rigid song-locked
+geometry: at the approximately one-pixel displacement, mean RGB-code residual
+was 0.213 for the candidate versus 0.239 for baseline. The fractional-position
+image-resampling metric increased with the finer contours (visible mean code
+change 17.3 versus 10.3); this must not be presented as universal proof that
+shimmer is unchanged. Sonny's live visual acceptance remains the final check.
 
 ## Committed next player work
 

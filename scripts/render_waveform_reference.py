@@ -93,9 +93,11 @@ def _wait_for(predicate, app: QApplication, seconds: float = 3.0) -> bool:
 
 def render(args: argparse.Namespace) -> list[Path]:
     cache_path, raw_manifest = _record(args.cache_root, args.track_id)
-    source = Path(raw_manifest["source"]["path"])
+    source = args.source or Path(raw_manifest["source"]["path"])
     if not source.is_file():
         raise RuntimeError(f"source audio is missing: {source}")
+    if track_analysis.is_dataless_source(source):
+        raise RuntimeError(f"reference capture will not hydrate audio: {source}")
 
     manifest = track_analysis.load_manifest(
         args.cache_root, args.track_id, source)
@@ -243,6 +245,9 @@ def render_corpus(args: argparse.Namespace) -> list[Path]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("track_id", nargs="?")
+    parser.add_argument(
+        "--source", type=Path,
+        help="current source path after a move; cache identity is still validated")
     parser.add_argument(
         "--cache-root", type=Path, default=DEFAULT_CACHE_ROOT)
     parser.add_argument(

@@ -4,72 +4,72 @@ Updated: 2026-09-10 (America/Chicago)
 
 ## Release and runtime
 
-- Branch `main` contains the maintenance release, followed by the documentation
-  completion commit `Record verified maintenance release and curated state`.
-  The final app is rebuilt from that clean completion revision so its signed
-  `SoundboxSourceRevision` matches published HEAD. Check with
+- Branch `main`: main-waveform visual refinement after maintenance revision
+  `712e435`. Sonny explicitly authorized commit, push, and installation.
+  The release app must be built from the clean commit containing this handoff;
+  its signed `SoundboxSourceRevision` must match HEAD. Verify with
   `./.venv/bin/python scripts/app_provenance.py /Applications/Soundbox.app`.
-- Version 1.0.0. Installed path: `/Applications/Soundbox.app`. Native
-  CoreAudio/Metal startup and live load of 3,397 tracks / 75 playlists were
-  verified. Preparation reports zero analysis/grid/cue tasks; cover-art startup
-  fetched zero images. Empty-device poll logs no longer repeat every 3 seconds.
-- The first installed maintenance revision was `2a1a7a2`; the completion commit
-  changes documentation only. Runtime validation must also be repeated after
-  its rebuild/install before declaring the session complete.
-- Git SSH authentication failed on this machine. Authenticated HTTPS through
-  `gh auth git-credential` successfully published the release without changing
-  persistent Git credentials or the configured origin URL.
+- Version 1.0.0, `/Applications/Soundbox.app`. The installed candidate from this
+  source activated its packaged CoreAudio/Metal deck and loaded 3,397 tracks /
+  75 playlists. Preparation found zero analysis/grid/cue tasks; art fetched zero
+  images. The final clean-revision rebuild uses the same tested app code.
+- Git SSH authentication is unavailable here. Publish over authenticated HTTPS
+  using the session-only `gh auth git-credential` helper; do not change the
+  persistent origin or credentials merely to work around it.
 
-## Curated state and rollback
+## Waveform change and validation
 
-- Sonny specifically required preserving cover art and Graveyard work. One
-  recovery directory is retained at `/private/tmp/soundbox-install-rollback.GAq8sU/`.
-  It contains the original August `Soundbox.app`, `library-before.json`, the
-  exact post-quit `library-closed.json`, and the complete `art/` backup including
-  indexes/default-photo pool. `art-index-before.json` preserves the earlier
-  index before Sonny's final manual confirmation.
-- Every one of 3,298 backed-up artwork files was SHA-256 compared with live
-  AppData after installation. All match. All 513 global Graveyard entries and
-  dates, one playlist-removal group, 10 custom playlists, 84 imports, 466 artist
-  overrides, 1,077 title overrides, and 24 aliases remain intact.
-- The old app saved one final user title override and promoted the same track's
-  existing image from automatic to manually confirmed before it exited. No
-  title override or artwork assignment was removed. The backup includes those
-  latest edits; do not restore the earlier snapshot over them.
-- Post-quit and post-install `library.json` were byte-identical at SHA-256
-  `4b7d697e383e889d2a657a2037c38adce7be473b5de9794bee9d69bd6ac0cc98`.
-  Subsequent intentional user edits can legitimately change this value.
-- No source audio or curated data was deleted. No orphan cleanup was performed.
-  The previous August rollback directory no longer existed at session start.
+- Only the large waveform's rendering changed. The thirteen zoom stops,
+  overview, cues, transport/audio clocks, and accepted close signed-carrier
+  reconstruction remain unchanged.
+- Wide BLUE/RGB stops 24/32/48 select finer existing V5 extrema and integrate
+  the exact fixed-lattice profile. No recook, cache-format change, source write,
+  or persistent waveform-storage increase. The cache still contains 2,924 V5s.
+- Grid timing is unchanged. Small paired edge ticks and red downbeat triangles
+  replace the opaque fence; thin interior guides appear only as local beat
+  spacing grows from 32 to 80 points. Both native analysis-upload paths use
+  one helper; overview/cue vertices bypass the grid style.
+- Bare `./check.sh`: native build, lint, mypy, 865 tests passed (four skips).
+  Separate real-Cocoa native-deck suite: 34 tests passed.
+- “Turn Up (Final v2)”, track `84590640`, bar 18.1 / 28,137 ms: all thirteen
+  RGB stops rendered, plus BLUE/3BAND checks. Supplied Rekordbox comparison at
+  fixed registration improved outline correlation 0.613 → 0.713. The small
+  overview/ruler capture was pixel-identical. The old six-image private corpus
+  directory is absent, so it was not rerun; the newly supplied references and
+  current real track were used instead.
+- Baseline/candidate each captured 540 silent native playback drawables across
+  six zooms: zero audio underruns or GPU deadline misses, respectively two/one
+  dropped presentations, maximum actual gap 16.67 ms. A short phase sweep
+  retained near-rigid integer-pixel motion, but its fractional-image-resampling
+  residual increased with the finer contours. Do not claim these measurements
+  guarantee perceptual smoothness; Sonny's live visual acceptance remains the
+  next check. Exact evidence and PNGs: `/private/tmp/soundbox-waveform.iNVKNn/`
+  (about 30 MiB). `docs/PLAYER.md` records the tradeoff and reference dimensions.
 
-## Shipped corrections and verification
+## Curated-state protection and rollback
 
-- Background cloud guards cover cache misses, late waveform promotion, stat
-  failures, and eviction during playback/storage waits. Identity adoption
-  separately rejects dataless sources. Metadata-only cue/grid work remains
-  available; explicit forced recooks may hydrate audio.
-- The audit distinguishes invalid analysis, deferred sources, outdated V5, and
-  verified playable V4. Global V4 retirement requires verified current coverage
-  of all active tracks and no orphan V4. A full read-only audit found 2,892
-  verified current records out of 2,893 active tracks, one deferred placeholder
-  (`120484616`), no missing/invalid records, no V4, and 31 orphan V5 records
-  (59.2 MiB). Retirement correctly remains blocked by the deferred source.
-- Idle no-device polling is 30 seconds; discovered mounts retain 3-second
-  checks and `/Volumes` event discovery. Expanded lint and four security-fix
-  dependency pins are included. Build metadata checks validate the signature,
-  clean checkout, and declared revision/version/build; they do not claim
-  independent source-to-binary proof. Both signing paths run after plist edits.
-- Bare `./check.sh` passed with native build, pyflakes, mypy, and 863 tests
-  (four expected skips). Shellcheck, pip check, and whitespace checks passed.
-  The packaged native dylib also passed a separate real Cocoa silent-output
-  load/play/seek/gain-ramp/teardown test with unchanged synthetic audio.
-- Independent extraction/comparison of all 45 packaged project Python modules
-  matched the relevant Git/working sources after filename normalization. This
-  excludes native/dependency provenance; signed metadata is not a substitute.
+- Recovery remains in the single directory
+  `/private/tmp/soundbox-install-rollback.GAq8sU/`. Preserve it until Sonny is
+  comfortable with this visual change. `maintenance-712e435.app` is the
+  immediately preceding clean release; `Soundbox.app` is the older August
+  recovery app. Earlier maintenance/state recovery material is also retained.
+- The complete `art/` backup contains 3,298 files, including indexes/default
+  photos. Every file was SHA-256 compared with live AppData before and after
+  the candidate install; all match. No cover art was removed or reassigned.
+- `library-waveform-before.json` snapshots the latest live state before this
+  installation; `library-waveform-closed.json` captures the graceful final save.
+  Candidate relaunch preserved that closed state exactly. All 513 Graveyard
+  entries/dates, one playlist-removal group, 10 custom playlists, 84 imports,
+  466 artist overrides, 1,077 title overrides, and 24 aliases remain intact.
+  Do not restore an earlier snapshot over subsequent intentional user edits.
+- Never wipe AppData or regenerate art to troubleshoot a visual issue. No
+  source audio, Rekordbox analysis, library data, or cache record was deleted.
 
-## Future work
+## Next checks
 
-- No cache deletion or forced hydration is required. Retain the art/state/app
-  rollback until Sonny is comfortable with the release.
-- Architecture follow-up remains the roadmap's decomposition of MainWindow by
-  real ownership. It was not attempted as part of this bounded hardening pass.
+- Sonny should review “Turn Up” at wide and close zoom during playback. If
+  the finer wide contour appears shimmery on the physical panel, revisit only
+  that reconstruction; do not change the accepted audio clock or close family.
+- No implementation work or cache cleanup is queued for this release. The
+  broader roadmap's MainWindow ownership decomposition and grid/cue editing
+  remain separate future work.

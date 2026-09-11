@@ -125,6 +125,8 @@ struct GridVertex {
     uint32_t overview;
     float lineDistancePoints;
     float lineHalfWidthPoints;
+    float beatSpacingSeconds = 0.0f;
+    uint32_t beatKind = 0;
 };
 
 struct BeatPosition {
@@ -1262,15 +1264,8 @@ public:
                 static_cast<long long>(
                     std::numeric_limits<uint32_t>::max())));
             beatPositions.push_back({t, bar, beat});
-            const float r = downbeat ? 1.0f : 0.47f;
-            const float g = downbeat ? 0.22f : 0.53f;
-            const float b = downbeat ? 0.34f : 0.62f;
-            // Beat lines are timing references, not translucent decoration.
-            // Their red/gray identity must remain constant over every
-            // waveform color; draw order already places this grid last.
-            const float a = 1.0f;
-            addGridRect(grid, tMillis, 0.0f, -0.5f, kZoomTop,
-                        0.5f, 4096.0f, r, g, b, a, false, true);
+            addBeatGrid(grid, tMillis, downbeat,
+                        beatSeconds, beatCount, i);
         }
 
         std::array<uint32_t, kWaveMipLevels> waveMipOffsets{};
@@ -1393,12 +1388,8 @@ public:
                 static_cast<long long>(
                     std::numeric_limits<uint32_t>::max())));
             beatPositions.push_back({t, bar, beat});
-            addGridRect(
-                grid, millis, 0.0f, -0.5f, kZoomTop, 0.5f, 4096.0f,
-                downbeat ? 1.0f : 0.47f,
-                downbeat ? 0.22f : 0.53f,
-                downbeat ? 0.34f : 0.62f,
-                1.0f, false, true);
+            addBeatGrid(grid, millis, downbeat,
+                        beatSeconds, beatCount, i);
         }
         id<MTLBuffer> waveBuffer =
             [device_ newBufferWithBytes:wavePyramid.data()
@@ -2734,6 +2725,39 @@ public:
     }
 
 private:
+    static void addBeatGrid(
+        std::vector<GridVertex> &v, uint32_t millis, bool downbeat,
+        const double *beats, size_t count, size_t index) {
+        // Use local spacing, not a guessed constant BPM: variable-tempo grids
+        // get the same visual density policy without changing any timestamp.
+        double spacing = count > 1
+            ? (index + 1 < count ? beats[index + 1] - beats[index]
+                                : beats[index] - beats[index - 1])
+            : 0.0;
+        if (!std::isfinite(spacing) || spacing < 0.0) spacing = 0.0;
+        const size_t first = v.size();
+        addGridRect(v, millis, 0.0f, -0.35f, kZoomTop,
+                    0.35f, 4096.0f,
+                    downbeat ? 1.0f : 0.47f,
+                    downbeat ? 0.22f : 0.53f,
+                    downbeat ? 0.34f : 0.62f,
+                    1.0f, false, true);
+        for (size_t i = first; i < v.size(); ++i) {
+            v[i].beatSpacingSeconds = static_cast<float>(spacing);
+            v[i].beatKind = downbeat ? 2u : 1u;
+        }
+        if (downbeat) {
+            addGridTriangle(v, millis, 0.0f,
+                            -2.0f, kZoomTop, 2.0f, kZoomTop,
+                            0.0f, kZoomTop + 2.5f,
+                            1.0f, 0.22f, 0.34f, 1.0f);
+            addGridTriangle(v, millis, 0.0f,
+                            -2.0f, -0.01f, 2.0f, -0.01f,
+                            0.0f, -2.5f,
+                            1.0f, 0.22f, 0.34f, 1.0f);
+        }
+    }
+
     static void addGridRect(
         std::vector<GridVertex> &v, uint32_t tMillis, float tPhase,
         float x0, float y0, float x1, float y1,
@@ -3110,7 +3134,8 @@ struct GridVertex { uint songMillis; float songMillisPhase;
                     float r; float g; float b; float a;
                     uint overview;
                     float lineDistancePoints;
-                    float lineHalfWidthPoints; };
+                    float lineHalfWidthPoints;
+                    float beatSpacingSeconds; uint beatKind; };
 struct Uniforms { float currentSeconds;
                   uint currentMillis; float currentMillisPhase;
                   float pixelsPerSecond;
@@ -3146,6 +3171,9 @@ struct Out {
     float4 color;
     float lineDistancePixels;
     float lineHalfWidthPixels;
+    float laneY;
+    float laneHeight [[flat]];
+    float2 beatStyle [[flat]];
 };
 struct WaveTap {
     float height;
@@ -3217,6 +3245,9 @@ vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     o.color = float4(0.0);
     o.lineDistancePixels = 0.0;
     o.lineHalfWidthPixels = 0.0;
+    o.laneY = 0.0;
+    o.laneHeight = 0.0;
+    o.beatStyle = float2(0.0);
     return o;
 }
 
@@ -3798,7 +3829,11 @@ kernel void wave_attribute_kernel(
             u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
         uint detailLevel = audio_detail_lod(
-            detailFootprint,
+            // The three widest stops integrate two extrema cells per pixel
+            // on the existing four-sample song lattice. One max-pooled cell
+            // inflated dense passages into flat slabs and hid narrow valleys.
+            // Close reconstruction and its accepted motion cadence stay intact.
+            detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0),
             u.audioDetailMipDivisors,
             u.audioDetailMipCount);
         if (u.pixelsPerSecond >= 384.0) {
@@ -4572,12 +4607,15 @@ fragment float4 wave_surface_fragment(
         // attribute-lattice knot inside it are the complete piecewise-linear
         // profile. Fixed quarter-pixel probes miss one moving knot whenever
         // the song phase is fractional. Keep the accepted fixed five-point
-        // resolve below 1152 px/s, where the exact-knot topology measured
-        // fractionally worse on the Bad Decisions reference sweep.
+        // resolve at 64..864 px/s, where the exact-knot topology measured
+        // fractionally worse on the Bad Decisions reference sweep. The three
+        // widest stops now need the exact knots too: their finer extrema
+        // must not lose a peak as a pixel crosses the fixed song lattice.
         float tilePositions[kAttributeProfileCapacity];
         float profilePositions[kAttributeProfileCapacity];
         uint profileCount = 0;
-        if (u.pixelsPerSecond >= 1152.0) {
+        if ((u.waveformMode != 3 && u.pixelsPerSecond < 64.0)
+                || u.pixelsPerSecond >= 1152.0) {
             tilePositions[profileCount++] = leftTile;
             const float firstKnot = floor(leftTile) + 1.0;
             for (uint i = 0; i + 2 < kAttributeProfileCapacity; ++i) {
@@ -4810,10 +4848,26 @@ vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
         p.lineDistancePoints * max(1.0, u.drawableScale);
     o.lineHalfWidthPixels =
         p.lineHalfWidthPoints * max(1.0, u.drawableScale);
+    o.laneY = y - 49.0;
+    o.laneHeight = max(0.0, u.heightPoints - 49.0);
+    o.beatStyle = float2(
+        p.beatSpacingSeconds * u.pixelsPerSecond, float(p.beatKind));
     return o;
 }
 fragment float4 deck_fragment(Out in [[stage_in]]) {
     float alpha = in.color.a;
+    if (in.beatStyle.y > 0.0) {
+        // Rekordbox-like edge ticks at wide scales leave the musical shape
+        // unobstructed. Only spacious close views grow an interior guide.
+        const bool downbeat = in.beatStyle.y > 1.5;
+        const float edgeDistance = min(in.laneY, in.laneHeight - in.laneY);
+        const float tick = 1.0 - smoothstep(
+            downbeat ? 3.5 : 2.5, downbeat ? 4.0 : 3.0, edgeDistance);
+        const float interior = smoothstep(32.0, 80.0, in.beatStyle.x)
+            * (downbeat ? 0.75 : 0.45);
+        alpha *= max(tick, interior);
+        if (alpha <= 0.0) discard_fragment();
+    }
     if (in.lineHalfWidthPixels > 0.0) {
         const float coverage = saturate(
             in.lineHalfWidthPixels + 0.5

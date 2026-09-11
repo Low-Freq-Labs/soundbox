@@ -17,10 +17,9 @@ Example:
         33638604 --position-ms 25597 \
         --out ~/Desktop/soundbox-temporal-2026-07-29
 
-The detailed signed BLUE/RGB contour is the product default. Add
-``--carrier-neutral-probe`` only to reproduce the rejected symmetric-envelope
-experiment for an A/B; neither option writes the installed app or canonical
-cache.
+The detailed signed BLUE/RGB contour is the product default. Neither capture
+nor the optional current-source override writes the installed app or canonical
+cache; offline placeholders are rejected without hydration.
 """
 
 from __future__ import annotations
@@ -66,11 +65,12 @@ def _signed_carrier_lattice_summary(
         drawable_scale: float,
         panel_hz: float = 120.0,
         camera_fps: float = 60.0) -> dict[str, float | int]:
-    """Mirror the close BLUE/RGB mip choice and expose temporal aliases."""
+    """Mirror the BLUE/RGB mip choice and expose temporal aliases."""
     footprint = (
         samples_per_second
         / max(1.0, pixels_per_second * drawable_scale)
-        * 4.0
+        * (0.5 if pixels_per_second < 64.0
+           else 4.0 if pixels_per_second >= 384.0 else 1.0)
     )
     required = max(1.0, footprint * 0.94)
     divisor = next(
@@ -114,11 +114,13 @@ def _wait_for(
         raise RuntimeError(message)
 
 
-def _load_record(cache_root: Path, track_id: str):
+def _load_record(cache_root: Path, track_id: str, source: Path | None = None):
     cache_path, raw_manifest = _record(cache_root, track_id)
-    source = Path(raw_manifest["source"]["path"])
+    source = source or Path(raw_manifest["source"]["path"])
     if not source.is_file():
         raise RuntimeError(f"source audio is missing: {source}")
+    if track_analysis.is_dataless_source(source):
+        raise RuntimeError(f"temporal capture will not hydrate audio: {source}")
     manifest = track_analysis.load_manifest(cache_root, track_id, source)
     overview = track_analysis.load_overview(cache_root, track_id, source)
     detail = track_analysis.load_detail(cache_root, track_id, source)
@@ -321,7 +323,7 @@ def capture(args: argparse.Namespace):
     output.mkdir(parents=True, exist_ok=True)
 
     source, overview, detail = _load_record(
-        args.cache_root.expanduser(), args.track_id)
+        args.cache_root.expanduser(), args.track_id, args.source)
     audio_detail_rate = float(
         detail.get("_audio_detail", {}).get("rate") or 0.0)
     app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -532,6 +534,9 @@ def capture(args: argparse.Namespace):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("track_id")
+    parser.add_argument(
+        "--source", type=Path,
+        help="current source path after a move; cache identity is still validated")
     parser.add_argument("--position-ms", type=int, required=True)
     parser.add_argument(
         "--cache-root",

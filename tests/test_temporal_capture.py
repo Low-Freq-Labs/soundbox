@@ -43,3 +43,9 @@ class TemporalCaptureAnalysis(unittest.TestCase):
                     summary["cells_per_physical_pixel"], 0.20)
                 self.assertLessEqual(
                     summary["cells_per_physical_pixel"], 0.26)
+
+    def test_mirrors_wide_and_middle_audio_detail_mip_choice(self):
+        for zoom, divisor in ((24, 66), (32, 50), (48, 35), (64, 50), (184, 18)):
+            with self.subTest(zoom=zoom):
+                summary = _signed_carrier_lattice_summary(6300.0, zoom, 2.0)
+                self.assertEqual(summary["selected_divisor"], divisor)

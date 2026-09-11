@@ -183,7 +183,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   throws away nearly half the contour and rounds Rekordbox's narrow broken
   attacks into slabs. Build the native in-memory ladder at the measured
   integer divisors (`1,2,3,4,5,6,8,9,13,...`). Below the close family, select
-  the first level within the tightly bounded 6% footprint tolerance. At the
+  the first level within the tightly bounded 6% footprint tolerance. The
+  24/32/48 stops use half that footprint: the existing four-sample song lattice
+  plus exact one-pixel integration resolves finer valleys that max pooling
+  previously flattened. Never just point-sample those finer rows. At the
   five close UI stops (384/576/864/1152/1536), BLUE/RGB instead select from a
   four-physical-pixel output footprint (`audio_detail_lod(footprint * 4)`).
   On a 6300 Hz record at Retina scale two, the fixed stops resolve to divisors
@@ -273,11 +276,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   exactly so color work cannot move the silhouette. A temporary flat BLUE fill
   can diagnose this class of defect but is not a fix because it discards PWV3
   depth information.
-- **Timing-reference color must not inherit waveform color.** Grid lines are
-  drawn after the waveform. Downbeats use opaque red and ordinary beats use
-  opaque gray; translucent timing ink lets saturated waveform content alter
-  both color and contrast. Keep hierarchy in the red/gray colors themselves,
-  not by exposing the waveform through the marker.
+- **Keep timing ink at the edges in crowded views.** The main grid is drawn
+  after the waveform. Paired red/gray edge ticks retain opaque timing colors,
+  with small red downbeat triangles. Interior guides are absent at local beat
+  spacing <=32 points and fade in through 80 points to 0.75/0.45 alpha for
+  downbeats/ordinary beats. This deliberately replaces the old opaque fence
+  through the waveform; do not restore full-height opaque lines at wide zoom.
+  Use adjacent beat timestamps, not nominal BPM, to derive density. Cues and
+  the overview are not tagged as grid guides and must bypass this policy.
 - **A one-point Metal grid rectangle is not subpixel-stable on Retina by
   itself.** Non-MSAA triangles rasterize it as a hard two-physical-pixel box,
   so its center advances on integer pixel boundaries while the waveform below
