@@ -8,8 +8,11 @@ For the live test count, trust `./check.sh` output—not any number written here
 
 Main-waveform visual refinement: retain all thirteen zoom stops and the accepted
 playback/close-carrier behavior, recover finer peaks at the widest three stops
-from existing V5 data, and replace the crowded grid with paired edge ticks and
-spacing-dependent close guides. No recook or persistent storage increase.
+from existing V5 data, and use continuous fixed-width grid guides with
+spacing-dependent contrast. Live review restored the full-height wide guides
+and reclaimed padding at every zoom, with more breathing room close up;
+horizontal detail and playback remain unchanged.
+No recook or persistent storage increase.
 See `PLAYER.md` for reference measurements and `HANDOFF.md` for install status.
 
 September 10 maintenance release: background

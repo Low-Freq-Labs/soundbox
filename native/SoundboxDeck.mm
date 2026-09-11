@@ -2736,8 +2736,9 @@ private:
             : 0.0;
         if (!std::isfinite(spacing) || spacing < 0.0) spacing = 0.0;
         const size_t first = v.size();
-        addGridRect(v, millis, 0.0f, -0.35f, kZoomTop,
-                    0.35f, 4096.0f,
+        const float halfWidth = downbeat ? 0.55f : 0.45f;
+        addGridRect(v, millis, 0.0f, -halfWidth, kZoomTop,
+                    halfWidth, 4096.0f,
                     downbeat ? 1.0f : 0.47f,
                     downbeat ? 0.22f : 0.53f,
                     downbeat ? 0.34f : 0.62f,
@@ -4580,8 +4581,12 @@ fragment float4 wave_surface_fragment(
     }
     const float waveCenter = 49.0 + (u.heightPoints - 49.0) * 0.5;
     const float distance = abs(yPoints - waveCenter);
+    // Reclaim headroom at every zoom, with a little more breathing room close
+    // up. Cached heights, the amplitude curve and reconstruction stay unchanged.
+    const float verticalPadding = mix(
+        2.0, 4.0, smoothstep(64.0, 184.0, u.pixelsPerSecond));
     const float heightScale =
-        max(4.0, (u.heightPoints - 49.0) * 0.5 - 7.0);
+        max(4.0, (u.heightPoints - 49.0) * 0.5 - verticalPadding);
     if (u.waveAttributeValid != 0 && u.waveAttributeCount >= 2) {
         // Height and hue live on one fixed, oversampled global song
         // lattice. Interpolate those attributes first, then perform vertical
@@ -4857,14 +4862,15 @@ vertex Out grid_vertex(const device GridVertex *v [[buffer(0)]],
 fragment float4 deck_fragment(Out in [[stage_in]]) {
     float alpha = in.color.a;
     if (in.beatStyle.y > 0.0) {
-        // Rekordbox-like edge ticks at wide scales leave the musical shape
-        // unobstructed. Only spacious close views grow an interior guide.
+        // Keep timing guides continuous at every zoom. Density changes their
+        // contrast, never their width or whether they cross the waveform.
         const bool downbeat = in.beatStyle.y > 1.5;
         const float edgeDistance = min(in.laneY, in.laneHeight - in.laneY);
         const float tick = 1.0 - smoothstep(
             downbeat ? 3.5 : 2.5, downbeat ? 4.0 : 3.0, edgeDistance);
-        const float interior = smoothstep(32.0, 80.0, in.beatStyle.x)
-            * (downbeat ? 0.75 : 0.45);
+        const float interior = mix(
+            downbeat ? 0.58 : 0.28, downbeat ? 0.75 : 0.45,
+            smoothstep(32.0, 80.0, in.beatStyle.x));
         alpha *= max(tick, interior);
         if (alpha <= 0.0) discard_fragment();
     }

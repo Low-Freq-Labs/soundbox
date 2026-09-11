@@ -132,14 +132,20 @@ across the deck for a typical 140–175 BPM track). The native ABI returns its
 applied scale, so persisted zoom, paint, grid translation, and scrub math can
 never disagree about a silently clamped value.
 
-The main grid uses small paired edge ticks, with red triangles for downbeats.
-At local beat spacing of 32 points or less, there is no line through the audio.
-Between 32 and 80 points, a thin interior guide gradually appears; at close
-spacing its alpha is 0.45 for ordinary beats and 0.75 for downbeats. Edge ticks
-retain opaque timing colors. Spacing comes from adjacent authoritative beat
+The main grid uses continuous full-height guides with paired edge ticks and
+red downbeat triangles. Width stays 0.9 points for ordinary beats and 1.1 for
+downbeats at every zoom. Interior alpha grows from 0.28/0.58 to 0.45/0.75
+(ordinary/downbeat) as local spacing grows from 32 to 80 points; guides never
+disappear in wide views. Edge ticks retain opaque timing colors. Spacing comes from adjacent authoritative beat
 timestamps, including variable tempo, not a guessed BPM. Analytic horizontal
 coverage preserves continuous subpixel travel. The overview, cues, grid times,
 playhead, and transport clocks are unchanged.
+
+Wide framing uses two points of vertical padding through 64 points/s, smoothly
+increasing to four points at 184 and above (previously seven everywhere). This reclaims
+unused lane height without changing the amplitude curve, cached data, horizontal
+detail. Close views gain a little height too, with more breathing room than
+wide views. It applies only to the large scrolling waveform.
 
 At the three widest stops (24/32/48), BLUE/RGB use a half-physical-pixel
 extrema footprint from the existing V5 mip ladder. The four-attributes-per-pixel
@@ -2465,6 +2471,18 @@ was 0.213 for the candidate versus 0.239 for baseline. The fractional-position
 image-resampling metric increased with the finer contours (visible mean code
 change 17.3 versus 10.3); this must not be presented as universal proof that
 shimmer is unchanged. Sonny's live visual acceptance remains the final check.
+
+### Follow-up: continuous grid and tighter wide framing
+
+Sonny's installed review accepted the direction of the detail improvement but
+rejected edge-only wide grids: the useful guides should cross the waveform and
+retain a consistent weight. The follow-up therefore keeps all full-height
+guides, uses contrast instead of disappearance for density, and distinguishes
+ordinary/bar lines with fixed 0.9/1.1-point widths. Wide vertical padding drops
+from seven to two points; Sonny's additional request also tightens close views
+to four points at 184 points/s and above. The detail/clock
+changes and measurements in the preceding section are historical to the first
+iteration; this follow-up changes only line styling and lane framing.
 
 ## Committed next player work
 

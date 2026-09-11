@@ -620,7 +620,15 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("if (in.beatStyle.y > 0.0)", grid)
         self.assertIn("min(in.laneY, in.laneHeight - in.laneY)", grid)
         self.assertIn("smoothstep(32.0, 80.0, in.beatStyle.x)", grid)
+        self.assertIn("downbeat ? 0.58 : 0.28, downbeat ? 0.75 : 0.45", grid)
+        self.assertIn("const float halfWidth = downbeat ? 0.55f : 0.45f;", native)
         self.assertIn("alpha *= max(tick, interior);", grid)
+
+    def test_framing_reclaims_padding_with_more_headroom_at_close_zoom(self):
+        fragment = self.shader.split("fragment float4 wave_surface_fragment", 1)[1]
+        self.assertIn(
+            "2.0, 4.0, smoothstep(64.0, 184.0, u.pixelsPerSecond)", fragment)
+        self.assertIn("(u.heightPoints - 49.0) * 0.5 - verticalPadding", fragment)
 
     def test_wide_detail_uses_existing_finer_extrema_not_new_cache_data(self):
         kernel = self.shader.split("kernel void wave_attribute_kernel", 1)[1]

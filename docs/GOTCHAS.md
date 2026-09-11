@@ -276,12 +276,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   exactly so color work cannot move the silhouette. A temporary flat BLUE fill
   can diagnose this class of defect but is not a fix because it discards PWV3
   depth information.
-- **Keep timing ink at the edges in crowded views.** The main grid is drawn
-  after the waveform. Paired red/gray edge ticks retain opaque timing colors,
-  with small red downbeat triangles. Interior guides are absent at local beat
-  spacing <=32 points and fade in through 80 points to 0.75/0.45 alpha for
-  downbeats/ordinary beats. This deliberately replaces the old opaque fence
-  through the waveform; do not restore full-height opaque lines at wide zoom.
+- **Keep timing guides continuous, with density-controlled contrast.** The main
+  grid is drawn after the waveform. Ordinary/downbeat widths stay 0.9/1.1
+  points at every zoom. Interior alpha grows from 0.28/0.58 to 0.45/0.75 as
+  local spacing grows from 32 to 80 points. Edge ticks stay opaque. Sonny's
+  live review rejected edge-only wide views: never remove the through-wave
+  guides just because the grid is crowded, or restore the old opaque fence.
   Use adjacent beat timestamps, not nominal BPM, to derive density. Cues and
   the overview are not tagged as grid guides and must bypass this policy.
 - **A one-point Metal grid rectangle is not subpixel-stable on Retina by
