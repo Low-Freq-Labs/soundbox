@@ -627,7 +627,7 @@ class NativeWaveformShader(unittest.TestCase):
     def test_framing_reclaims_padding_with_more_headroom_at_close_zoom(self):
         fragment = self.shader.split("fragment float4 wave_surface_fragment", 1)[1]
         self.assertIn(
-            "2.0, 4.0, smoothstep(64.0, 184.0, u.pixelsPerSecond)", fragment)
+            "2.0, 4.0, smoothstep(256.0, 384.0, u.pixelsPerSecond)", fragment)
         self.assertIn("(u.heightPoints - 49.0) * 0.5 - verticalPadding", fragment)
 
     def test_wide_detail_uses_existing_finer_extrema_not_new_cache_data(self):

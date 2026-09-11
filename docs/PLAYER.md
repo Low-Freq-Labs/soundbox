@@ -141,8 +141,8 @@ timestamps, including variable tempo, not a guessed BPM. Analytic horizontal
 coverage preserves continuous subpixel travel. The overview, cues, grid times,
 playhead, and transport clocks are unchanged.
 
-Wide framing uses two points of vertical padding through 64 points/s, smoothly
-increasing to four points at 184 and above (previously seven everywhere). This reclaims
+Wide and middle framing uses two points of vertical padding through 256 points/s,
+smoothly increasing to four points at 384 and above (previously seven everywhere). This reclaims
 unused lane height without changing the amplitude curve, cached data, horizontal
 detail. Close views gain a little height too, with more breathing room than
 wide views. It applies only to the large scrolling waveform.
@@ -2483,6 +2483,11 @@ from seven to two points; Sonny's additional request also tightens close views
 to four points at 184 points/s and above. The detail/clock
 changes and measurements in the preceding section are historical to the first
 iteration; this follow-up changes only line styling and lane framing.
+
+The next installed review identified the middle steps as still underusing the
+lane. Two-point padding now continues through 256 points/s; the four-point
+close framing begins at 384. Wide and close endpoints, waveform reconstruction,
+grid styling, and clocks are unchanged by this middle-only adjustment.
 
 ## Committed next player work
 

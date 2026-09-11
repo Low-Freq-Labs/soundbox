@@ -4584,7 +4584,7 @@ fragment float4 wave_surface_fragment(
     // Reclaim headroom at every zoom, with a little more breathing room close
     // up. Cached heights, the amplitude curve and reconstruction stay unchanged.
     const float verticalPadding = mix(
-        2.0, 4.0, smoothstep(64.0, 184.0, u.pixelsPerSecond));
+        2.0, 4.0, smoothstep(256.0, 384.0, u.pixelsPerSecond));
     const float heightScale =
         max(4.0, (u.heightPoints - 49.0) * 0.5 - verticalPadding);
     if (u.waveAttributeValid != 0 && u.waveAttributeCount >= 2) {

@@ -4,7 +4,7 @@ Updated: 2026-09-10 (America/Chicago)
 
 ## Release and runtime
 
-- Branch `main`: grid/framing follow-up to waveform revision `d3be5e7`.
+- Branch `main`: middle-height adjustment after grid/framing revision `caed2a6`.
   Sonny authorized commit, push, and installation for this waveform work.
   The release app must be built from the clean commit containing this handoff;
   its signed `SoundboxSourceRevision` must match HEAD. Verify with
@@ -29,9 +29,15 @@ Updated: 2026-09-10 (America/Chicago)
   stay visible at every zoom. Fixed ordinary/downbeat widths are 0.9/1.1 points;
   interior alpha ranges 0.28/0.58 to 0.45/0.75 with local beat spacing. The
   paired edge markers remain. Both upload paths use one helper.
-- Large-wave padding is two points through 64 points/s, increasing smoothly to
-  four points at 184 and above (previously seven everywhere). No amplitude-curve, horizontal
+- Large-wave padding is two points through 256 points/s, increasing smoothly to
+  four points at 384 and above. The previous 64–184 transition gave the middle
+  steps too much headroom. Wide/close endpoints stay unchanged. No amplitude-curve, horizontal
   reconstruction, cue, overview, or clock change.
+- Middle-height gate: bare `./check.sh` passed 866 tests (four skips). Native
+  captures at 24/184/256/1536 are under `middle-height-*`. Wide 24 and close
+  1536 captures are pixel-identical to the accepted prior framing; only the
+  middle padding transition changed. Prior playback/resize evidence below is
+  from the preceding grid/framing release, not a new timing campaign.
 - Follow-up bare `./check.sh`: native build, lint, mypy, 866 tests passed (four
   skips). Follow-up real-Cocoa suite passed 34 tests on rerun; two earlier runs
   missed the resize test's 120 ms display-callback assertion. That test passed
@@ -62,7 +68,8 @@ Updated: 2026-09-10 (America/Chicago)
 - Recovery remains in the single directory
   `/private/tmp/soundbox-install-rollback.GAq8sU/`. Preserve it until Sonny is
   comfortable with this visual change. The follow-up installer retains
-  `waveform-d3be5e7.app` as the preceding waveform release;
+  `framing-caed2a6.app` as the immediately preceding release;
+  `waveform-d3be5e7.app` preserves the first waveform iteration;
   `maintenance-712e435.app` is the pre-waveform maintenance release.
   `Soundbox.app` is the older August
   recovery app. Earlier maintenance/state recovery material is also retained.
@@ -80,8 +87,8 @@ Updated: 2026-09-10 (America/Chicago)
 
 ## Next checks
 
-- Sonny reports the detail is getting much better; the follow-up restores the
-  through-wave grid he wanted and tightens wide framing. Review wide/close
+- Sonny accepted wide/close framing and clarified that the middle needed more
+  height, not different detail. Review the middle steps in this release; wide/close
   views in the installed follow-up. If
   the finer wide contour appears shimmery on the physical panel, revisit only
   that reconstruction; do not change the accepted audio clock or close family.
