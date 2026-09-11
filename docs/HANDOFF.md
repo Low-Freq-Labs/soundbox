@@ -1,77 +1,59 @@
 # SoundBox current handoff
 
-Updated: 2026-08-25 (America/Chicago)
-
-Read this immediately after `AGENTS.md` / `CLAUDE.md`. This is the single
-operational resume note; historical product evidence stays in the roadmap and
-topic documents.
+Updated: 2026-09-10 (America/Chicago)
 
 ## Repository and runtime
 
-- Branch `main` is clean and published at the wrap-up commit titled
-  `Follow moved imports without cache churn`. The change adds persistent
-  identity relocation for direct imports, cloud-provider cache identity
-  reconciliation, and the provenance-gated legacy SoundBox RGB repair.
-- Final bare `./check.sh` passed: native build, pyflakes, mypy, and 851 tests in
-  11.517 seconds with four expected skips. `./build_app.sh` then produced the
-  installed runtime at `/Applications/Soundbox.app`; strict deep signature
-  verification passed and installed/dist executable SHA-256 values match at
-  `f8d25feaa3b2e287e654e2722e34fc138d75a8e3d1ab581c7d64c68f0eed86a3`.
-- The installed app is running as PID 77373 with the native CoreAudio/Metal
-  deck active. It instant-painted and freshly loaded 3,401 tracks / 75
-  playlists. Its steady-state preparation pass reports zero analysis, grid,
-  or cue tasks.
-- One proportional install rollback remains at
-  `/private/tmp/soundbox-install-rollback.Czp1P7/`: the untouched 235 MiB
-  pre-install `Soundbox.app`, exact 118,716-byte `library-before.json` snapshot
-  (SHA-256
-  `ffbf13f0c641fd1ab0eed320448380f152904160d8ab6ed3eae463d131d655f7`),
-  and exact 282,166-byte post-QA `library-final.json` snapshot (SHA-256
-  `6477b25621c2a8d0cac719fc0e4b87759f993b190c158f7cc54890e09663f6c6`).
-  Two obsolete candidate bundles were deleted after final verification,
-  reclaiming about 470 MiB.
+- `main` / published GitHub main remain at
+  `578982e7deab5d44f09e3f8a54768fb3a7af8857`. This session's maintenance
+  changes are being released with Sonny's explicit commit/push/install approval.
+- Installed `/Applications/Soundbox.app` remains the August release, executable
+  SHA-256 `f8d25feaa3b2e287e654e2722e34fc138d75a8e3d1ab581c7d64c68f0eed86a3`.
+  Signature passed. Independent extraction/comparison of 45 packaged project
+  Python modules matches code compiled from HEAD after normalizing filenames.
+  This does not independently prove native/dependency source provenance.
+- `dist/Soundbox.app` is now the September maintenance candidate, successfully
+  built and signed. Its plist records version 1.0.0, build 101, HEAD above,
+  and dirty=true. Its 45 packaged project Python modules match the working
+  sources. It is not installed and must not be represented as published Git.
+- No source audio, curated state, or orphan cache cleanup was performed.
+  The old documented rollback at `/private/tmp/soundbox-install-rollback.Czp1P7/`
+  is no longer present. No new installation rollback was created this session;
+  the currently installed August app remains available for the next rollback.
 
-## Installed behavior and real-state proof
+## Candidate changes and validation
 
-- Every direct import records an opaque Core Foundation bookmark. Startup does
-  one healthy saved-path check, resolves only missing paths/bookmark-less legacy
-  records in a background worker, and never walks a directory tree. Bookmarks
-  follow file/parent-folder moves; the legacy/cross-volume fallback is one
-  batched exact filename+recorded-size Spotlight lookup whose ambiguity fails
-  closed. Manual repair scans only the folder the user explicitly chooses.
-- The live move of the SoundBox-only `Sets` folder repaired all 83 missing
-  records automatically in 0.507 seconds and backfilled all 84 direct-import
-  bookmarks. All 84 sources exist at their recorded sizes, the stable `sb-`
-  IDs remain attached. Every pre-install curated field remains canonically
-  identical; live QA additionally added the preserved title override `Pop Off`
-  for track `101429231`, bringing the title-override count to 1,076. Current
-  `library.json` SHA-256 is
-  `6477b25621c2a8d0cac719fc0e4b87759f993b190c158f7cc54890e09663f6c6`;
-  the other changes are the intended import paths/bookmarks and Qt's saved
-  column geometry.
-- SeaDrive normalized nanosecond mtimes without changing the audio. The final
-  build content-verified and adopted 1,777 existing V5 records from their
-  first/last-128-KiB fingerprints with zero audio recooks, then recorded tiny
-  cache-bound xattr proofs. Matching-size `SF_DATALESS` placeholders retain
-  their existing cache without startup hydration; deliberate access enables a
-  later content proof. The first rejected candidate was stopped after it had
-  unnecessarily replaced 28 disposable non-Set records; no Set cache or source
-  was written, and every corrected/follow-up preparation pass was zero-task.
-- All 83 existing Set records pass V5 readiness and complete overview/detail
-  loading. Their old green-only close RGB was a compact-code packing bug, not a
-  missing cache. New cooks pack PWV5 correctly; old `soundbox-analysis` streams
-  reconstruct only display color bits from their same-clock cached overview at
-  native upload. This measured 1.4–2.3 ms for a 538,655-row hour-long Set,
-  preserved every cached height/control bit, activated all RGB channels on all
-  83 records, and changed neither source nor canonical cache bytes. A real AHEE
-  Set committed its full overview/detail to the installed RGB native deck.
-- Cache inventories remain 3,297 curated-art, 7,609 stock-artwork, one stock
-  shadow, one Rockbox-media, 20,127 Rockbox-artwork, and 2,921 track-analysis
-  files. The final installed launch wrote zero track-analysis files.
+- Background analysis defers dataless cache misses and late-waveform recooks,
+  rechecks queued sources after waits, and defers stat errors. Identity
+  adoption independently rejects dataless sources. Metadata-only cue/grid
+  refresh remains available; explicit forced recooks may hydrate audio.
+- Audit excludes hidden tracks, separates invalid analysis from playable V4,
+  reports deferred sources, and permits V4 retirement only with full current
+  coverage of all active tracks and no orphan V4. No deletion is performed.
+- Empty-device polling backs off to 30 seconds; active mounts retain 3-second
+  polling and the mount watcher remains immediate. This is not yet measured
+  in the installed runtime.
+- Expanded Python lint, four updated dependency pins, and signed build metadata
+  are included. Provenance verification checks signature/clean checkout and
+  matching declared metadata; it explicitly does not prove packaged source.
+  Ad-hoc fallback now re-signs after plist edits too.
+- Bare `./check.sh` passed: native build, pyflakes, mypy, 863 tests with four
+  expected skips. Shellcheck, pip check, and diff whitespace checks passed.
+- Candidate native dylib passed a separate real Cocoa load/play/seek/gain-ramp/
+  teardown test with silent output and an unchanged synthetic WAV. This is a
+  native component smoke test, not installed-app curated-state acceptance.
+- Read-only full real-state audit: 2,893 active tracks, 504 hidden excluded;
+  2,892 current verified caches, one deferred dataless track (`120484616`),
+  zero missing sources/analysis or invalid records, zero V4, and 31 orphan
+  V5 records (previously measured 59.2 MiB). Retirement correctly BLOCKED.
+  Counts reflect the snapshot at audit time; the live app may continue updating.
 
-## Next action
+## Release work remaining
 
-- No implementation, validation, packaging, installation, runtime check,
-  documentation update, commit, or push is pending. At resume, verify
-  `git status -sb` is clean and `main` still matches `origin/main`; there is no
-  deferred recook or visual acceptance requirement.
+- Commit intended changes and rebuild from the clean revision under Sonny's
+  explicit release approval. Keep the installed version aligned with Git.
+- Follow the project install contract: back up/hash `library.json`, gracefully
+  quit, keep one proportional rollback, install with ditto, verify signature,
+  relaunch, inspect native startup/preparation, and compare curated state.
+- Publish the final passing revision and verify clean/published status. Update
+  this handoff with actual installed revision, state checks, and rollback facts.

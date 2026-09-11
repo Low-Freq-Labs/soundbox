@@ -46,6 +46,12 @@ ARGS=(
   -c "Add :ApplePressAndHoldEnabled bool false" \
   dist/Soundbox.app/Contents/Info.plist
 
+# Record the exact Git revision and whether the source tree contained local
+# edits. These keys are covered by the final code signature. They describe the
+# checkout at stamping time; they are not independent source-to-binary proof.
+./.venv/bin/python scripts/app_provenance.py \
+  --stamp dist/Soundbox.app
+
 # Re-sign the finished bundle with the stable self-signed identity so macOS remembers
 # TCC grants (USB + Desktop file access) across rebuilds instead of re-prompting.
 # Done here rather than via PyInstaller's --codesign-identity because PyInstaller adds
@@ -56,11 +62,13 @@ ARGS=(
 if security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
   echo "Signing dist/Soundbox.app with: $SIGN_IDENTITY"
   codesign --force --deep --timestamp=none --sign "$SIGN_IDENTITY" dist/Soundbox.app
-  codesign --verify --deep --strict dist/Soundbox.app && echo "Signature verified."
 else
-  echo "NOTE: '$SIGN_IDENTITY' not found — leaving ad-hoc (macOS will re-prompt for USB/"
+  echo "NOTE: '$SIGN_IDENTITY' not found — signing ad-hoc (macOS will re-prompt for USB/"
   echo "      Desktop permission on each rebuild). Create the cert to make it stick."
+  codesign --force --deep --timestamp=none --sign - dist/Soundbox.app
 fi
+codesign --verify --deep --strict dist/Soundbox.app
+echo "Signature verified."
 
 echo
 echo "Built: dist/Soundbox.app"

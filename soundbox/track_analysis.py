@@ -438,6 +438,18 @@ def audio_fingerprint(path: str | Path) -> str:
         source, stat.st_size, stat.st_mtime_ns)
 
 
+def is_dataless_source(path: str | Path) -> bool:
+    """Return whether macOS exposes ``path`` as a cloud placeholder.
+
+    This deliberately performs only a metadata lookup. Opening an
+    ``SF_DATALESS`` file can ask its File Provider to hydrate it, which
+    background preparation must never do implicitly.
+    """
+    # Propagate stat failures so background callers defer an inaccessible
+    # source instead of treating an unknown state as permission to open it.
+    return bool(getattr(Path(path).stat(), "st_flags", 0) & _SF_DATALESS)
+
+
 def _source_identity_matches(
         target: Path, manifest: dict, stat: os.stat_result) -> bool:
     """Accept exact stat identity or a cache-bound verified move/sync proof."""
@@ -482,6 +494,8 @@ def adopt_source_identity(
     target = cache_path(cache_dir, track_id)
     try:
         stat = source.stat()
+        if getattr(stat, "st_flags", 0) & _SF_DATALESS:
+            return False
         with target.open("rb") as handle:
             header = handle.read(_HEADER.size)
             if len(header) != _HEADER.size:

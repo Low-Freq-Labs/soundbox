@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 from scripts.audit_analysis import audit
 from soundbox import imports, libcache
@@ -44,11 +45,13 @@ class AnalysisAudit(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_hidden_track_is_audited_and_blocks_retirement_until_ready(self):
+    def test_hidden_track_is_excluded_and_existing_record_is_orphaned(self):
         result = audit(self.data, full=True)
-        self.assertEqual(result["total_tracks"], 1)
-        self.assertEqual(result["missing_analysis"], ["1"])
-        self.assertFalse(result["safe_to_retire_v4"])
+        self.assertEqual(result["library_tracks"], 1)
+        self.assertEqual(result["hidden_tracks"], 1)
+        self.assertEqual(result["total_tracks"], 0)
+        self.assertEqual(result["missing_analysis"], [])
+        self.assertTrue(result["safe_to_retire_v4"])
 
         stored = store(
             self.data / "track_analysis", "1", self.audio,
@@ -77,12 +80,13 @@ class AnalysisAudit(unittest.TestCase):
         )
         self.assertIsNotNone(stored)
         result = audit(self.data, full=True)
-        self.assertEqual(result["ready"], 1)
-        self.assertEqual(result["current_v5"], 1)
+        self.assertEqual(result["ready"], 0)
+        self.assertEqual(result["current_v5"], 0)
         self.assertEqual(result["playable_legacy_v4"], 0)
         self.assertEqual(result["needs_current_analysis"], [])
         self.assertTrue(result["safe_to_retire_v4"])
-        self.assertEqual(result["orphan_v5_records"], [])
+        self.assertEqual(
+            result["orphan_v5_records"], [stored.name])
         self.assertEqual(result["orphan_v4_records"], [])
 
     def test_imported_track_is_included(self):
@@ -101,6 +105,45 @@ class AnalysisAudit(unittest.TestCase):
         self.assertEqual(
             set(result["missing_analysis"]), {"1", "sb-imported"},
         )
+
+    def test_dataless_cache_miss_is_reported_as_deferred_not_missing(self):
+        (self.data / "library.json").write_text(
+            json.dumps({"imported": {}, "hidden_tracks": {}}),
+            encoding="utf-8",
+        )
+        with mock.patch(
+                "scripts.audit_analysis.is_dataless_source",
+                return_value=True):
+            result = audit(self.data, full=True)
+        self.assertEqual(result["deferred_dataless"], ["1"])
+        self.assertEqual(result["missing_analysis"], [])
+        self.assertFalse(result["safe_to_retire_v4"])
+
+    def test_corrupt_v5_is_invalid_analysis_never_playable_v4(self):
+        (self.data / "library.json").write_text("{}", encoding="utf-8")
+        data = track_analysis.analyze_soundfile(self.audio)
+        record = store(self.data / "track_analysis", "1", self.audio, data)
+        self.assertTrue(audit(self.data, full=True)["safe_to_retire_v4"])
+        damaged = bytearray(record.read_bytes())
+        damaged[-1] ^= 1
+        record.write_bytes(damaged)
+        result = audit(self.data, full=True)
+        self.assertEqual(result["invalid_analysis"], ["1"])
+        self.assertEqual(result["playable_legacy_v4"], 0)
+        self.assertFalse(result["safe_to_retire_v4"])
+
+    def test_missing_source_and_orphan_v4_block_retirement(self):
+        (self.data / "library.json").write_text("{}", encoding="utf-8")
+        with mock.patch.object(Path, "is_file", return_value=False):
+            result = audit(self.data, full=True)
+        self.assertEqual(result["missing_source"], ["1"])
+        self.assertFalse(result["safe_to_retire_v4"])
+        (self.data / "library.json").write_text(
+            json.dumps({"hidden_tracks": ["1"]}), encoding="utf-8")
+        cache = self.data / "track_analysis"
+        cache.mkdir()
+        (cache / "orphan.sba4").write_bytes(b"unverified legacy record")
+        self.assertFalse(audit(self.data, full=True)["safe_to_retire_v4"])
 
 
 if __name__ == "__main__":

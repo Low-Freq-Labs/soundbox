@@ -7,8 +7,8 @@ cffi==2.0.0
 clickwheel==0.19.1
 construct==2.10.70
 h11==0.16.0
-httpcore2==2.9.1
-httpx2==2.9.1
+httpcore2==2.12.0
+httpx2==2.12.0
 hypothesis==6.155.7
 idna==3.18
 librt==0.12.0
@@ -37,7 +37,7 @@ PySide6_Essentials==6.11.1
 python-dateutil==2.9.0.post0
 questionary==2.1.1
 rich==15.0.0
-setuptools==82.0.1
+setuptools==84.0.0
 shellingham==1.5.4
 shiboken6==6.11.1
 six==1.17.0
@@ -51,4 +51,4 @@ truststore==0.10.4
 typer==0.27.0
 typing_extensions==4.15.0
 wcwidth==0.8.2
-yt-dlp==2026.6.9
+yt-dlp==2026.8.19

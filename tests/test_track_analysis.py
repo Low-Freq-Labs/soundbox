@@ -280,6 +280,14 @@ class TrackAnalysisStore(unittest.TestCase):
                 Path("cache.sba5"), manifest, stat))
         getxattr.assert_not_called()
 
+    def test_dataless_source_probe_is_stat_only_and_fails_closed(self):
+        stat = SimpleNamespace(st_flags=track_analysis._SF_DATALESS)
+        with mock.patch.object(Path, "stat", return_value=stat):
+            self.assertTrue(track_analysis.is_dataless_source("cloud.wav"))
+        with mock.patch.object(Path, "stat", side_effect=OSError):
+            with self.assertRaises(OSError):
+                track_analysis.is_dataless_source("missing.wav")
+
     def test_corrupt_section_is_a_clean_miss(self):
         cache = self.root / "analysis"
         track_analysis.store(cache, "x", self.audio, {

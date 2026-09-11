@@ -355,8 +355,9 @@ preloads in the background and the normal drift scan follows. Only that
 completed scan publishes the clickable iPod row. Those removable-volume readers
 are serialized, and the visibility gate therefore guarantees that a click
 consumes the verified in-memory snapshot without touching the device again. The
-three-second timer remains only as missed-event recovery and failed-preload
-retry.
+timer remains only as missed-event recovery and failed-preload retry. It backs
+off to 30 seconds while no removable volumes exist, then returns to three
+seconds while any discovered mount needs live drift or preload checks.
 
 Device transactions share one UI ownership contract. Custom result signals may
 record a worker result, but only `QThread.finished` clears the owning attribute
@@ -483,7 +484,14 @@ Python 3.14, venv at `.venv/`. `build_app.sh` uses the stable local
 `Soundbox Self-Signed` identity when present so macOS can retain TCC grants
 across rebuilds; it falls back to ad-hoc signing. The app is not Apple-notarized,
 so first launch may still require right-click → Open. Notarization is a public
-distribution concern (Phase 5).
+distribution concern (Phase 5). Before signing, the build stamps the project
+version, Git revision, commit-count build number, and clean/dirty source state
+into `Info.plist`; `scripts/app_provenance.py /Applications/Soundbox.app`
+checks the bundle signature and its declared revision/version against a clean
+checkout. A dirty checkout or bundle, bad signature, or mismatched metadata
+fails verification. This is signed build metadata captured at stamping time,
+not independent proof that packaged code was compiled from those sources.
+Both stable and ad-hoc signing happen after all plist edits.
 
 Installation is a state-preserving handoff, not a delete/copy shortcut:
 gracefully quit SoundBox, back up/hash `library.json`, move the previous app

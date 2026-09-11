@@ -6,6 +6,16 @@ For the live test count, trust `./check.sh` output—not any number written here
 
 ## Current status (2026-08-25)
 
+September 10 maintenance candidate (uncommitted; not installed): background
+cloud-placeholder guards cover cache misses, late imported waveforms, and
+post-wait eviction. The analysis audit separates corruption, deferred sources,
+and genuine legacy records and requires full active coverage for retirement.
+Build metadata verification checks signatures and rejects dirty/mismatched
+sources without claiming independent source-to-binary proof. Empty-device
+polling backs off, lint covers all project Python, and four dependency pins
+include published security fixes. See `HANDOFF.md` for validation and release
+status; the shipped behavior below remains the August baseline.
+
 - **CORE LIBRARY/EXPORT COMPLETE; LEGACY COVER RE-AUDIT ACTIVE.** Every track
   title is cut/cleaned. A 2026-08-04 review proved that some pre-hardening
   automatic cover rows survived with unrelated same-title/same-artist art, so

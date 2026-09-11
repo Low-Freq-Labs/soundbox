@@ -584,7 +584,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   snapshot stale until the user navigates away and back.
 - **Connection discovery, dashboard preload, and drift are ordered UX phases.**
   A debounced `/Volumes` watcher begins detection without waiting for the
-  three-second recovery poll. No new generic or iPod row publishes before the
+  recovery poll. That poll backs off to 30 seconds while no mount exists and
+  returns to three seconds while any discovered mount needs drift/preload
+  checks. No new generic or iPod row publishes before the
   discovery QThread has cleared ownership. Never publish a stock/dual iPod's sidebar
   row as a loading affordance. Keep it absent and put `Loading iPod...` in the
   lower-left status while the genuinely new mount skips first-pass drift,
@@ -779,8 +781,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   xattr proof; a size or byte mismatch still recooks. Never rewrite the multi-MB
   V5 payload merely to update a timestamp. `SF_DATALESS` placeholders are a
   separate boundary: matching logical size may provisionally reuse the cache,
-  but startup must not open/hydrate the cloud source. Deliberate playback/export
-  hydrates it and a later ordinary check verifies the local bytes.
+  while a new or size-mismatched placeholder stays stale without a background
+  decode. Startup must not open/hydrate the cloud source. Deliberate playback,
+  export, or a forced recook hydrates it and a later ordinary check verifies the
+  local bytes.
+  Apply the guard to late-waveform recooks too, not only cache misses, and
+  recheck after waits before decoding a queued track. A failed stat must defer
+  background work; it is not evidence that a source is local.
 - Title pipeline order: effective ARTIST is computed from the RAW/overridden name
   FIRST, then `effective_title = override | tidy(neat(name, artist), junk)`. Junk
   rules: `metadata.BUILTIN_TITLE_RULES` + user words; `Library.title_junk=None`

@@ -333,6 +333,19 @@ class DeviceLabels(unittest.TestCase):
 
 
 class StockIpodUI(unittest.TestCase):
+    def test_device_poll_backs_off_only_while_no_mount_exists(self):
+        from desktop.app import (
+            _DEVICE_POLL_ACTIVE_MS,
+            _DEVICE_POLL_IDLE_MS,
+        )
+
+        with mock.patch.object(_win._dev_timer, "setInterval") as set_interval:
+            _win._set_device_poll_interval(False)
+            set_interval.assert_called_once_with(_DEVICE_POLL_IDLE_MS)
+            set_interval.reset_mock()
+            _win._set_device_poll_interval(True)
+            set_interval.assert_called_once_with(_DEVICE_POLL_ACTIVE_MS)
+
     def test_composite_playlist_delete_routes_through_unified_zero_plan(self):
         from PySide6.QtWidgets import QMessageBox
         from soundbox.dual_ipod import composite_playlist_entry
@@ -5818,6 +5831,80 @@ class WaveformFill(unittest.TestCase):
         analyze.assert_not_called()
         self.assertTrue(track_analysis.is_ready(
             canonical, "0", source))
+
+    def test_dataless_cache_miss_is_not_background_hydrated(self):
+        from pathlib import Path
+        from desktop.workers import WaveformFillWorker
+        from soundbox.library import Library
+
+        track = self.lib.tracks_by_id["0"]
+        small_lib = Library(
+            tracks_by_id={"0": track}, playlists=[], source="synthetic")
+        canonical = Path(self.cache) / "dataless-analysis"
+        totals = []
+        worker = WaveformFillWorker(small_lib, canonical)
+        worker.tasks_ready.connect(totals.append)
+        with (
+                mock.patch(
+                    "soundbox.track_analysis.is_dataless_source",
+                    return_value=True),
+                mock.patch(
+                    "soundbox.track_analysis.adopt_source_identity") as adopt,
+                mock.patch(
+                    "soundbox.track_analysis.analyze_soundfile") as analyze):
+            worker.run()
+        self.assertEqual(totals, [0])
+        adopt.assert_not_called()
+        analyze.assert_not_called()
+
+    def test_ready_dataless_track_defers_late_waveforms_but_keeps_cue_updates(self):
+        from desktop.workers import WaveformFillWorker
+        track = self.lib.tracks_by_id["0"]
+        track.source_analysis_path = self.paths[1]
+        lib = Library(tracks_by_id={"0": track}, playlists=[], source="test")
+        worker = WaveformFillWorker(lib, Path(self.cache) / "analysis")
+        with (
+            mock.patch("soundbox.track_analysis.is_ready", return_value=True),
+            mock.patch("soundbox.track_analysis.is_dataless_source", return_value=True),
+            mock.patch("soundbox.track_analysis.fallback_waveform_modes", return_value=("rgb",)),
+            mock.patch("soundbox.track_analysis.imported_waveforms_need_sync", return_value=True),
+            mock.patch("soundbox.rekordbox_analysis.read_beats", return_value=None),
+            mock.patch("soundbox.track_analysis.grid_needs_sync", return_value=False),
+            mock.patch("soundbox.track_analysis.imported_cues_need_sync", return_value=True),
+            mock.patch("soundbox.track_analysis.update_imported_cues", return_value=True) as cues,
+            mock.patch("soundbox.track_analysis.analyze_soundfile") as decode,
+        ):
+            worker.run()
+        cues.assert_called_once()
+        decode.assert_not_called()
+
+    def test_background_decode_rechecks_placeholder_after_wait(self):
+        from desktop.workers import WaveformFillWorker
+        track = self.lib.tracks_by_id["0"]
+        lib = Library(tracks_by_id={"0": track}, playlists=[], source="test")
+        worker = WaveformFillWorker(lib, Path(self.cache) / "analysis")
+        with (
+            mock.patch("soundbox.track_analysis.is_dataless_source", side_effect=[False, True]),
+            mock.patch("soundbox.track_analysis.analyze_soundfile") as decode,
+            mock.patch("desktop.player.qt_detail_peaks") as fallback,
+        ):
+            worker.run()
+        decode.assert_not_called()
+        fallback.assert_not_called()
+
+    def test_forced_recook_can_deliberately_open_placeholder(self):
+        from desktop.workers import WaveformFillWorker
+        track = self.lib.tracks_by_id["0"]
+        lib = Library(tracks_by_id={"0": track}, playlists=[], source="test")
+        worker = WaveformFillWorker(
+            lib, Path(self.cache) / "analysis", force_track_ids={"0"})
+        with (
+            mock.patch("soundbox.track_analysis.is_dataless_source", return_value=True),
+            mock.patch("soundbox.track_analysis.analyze_soundfile", return_value=None) as decode,
+            mock.patch("desktop.player.qt_detail_peaks", return_value=None),
+        ):
+            worker.run()
+        decode.assert_called_once()
 
     def test_late_source_rewrite_is_detected_and_recooked(self):
         import math

@@ -325,7 +325,8 @@ class DeviceScanWorker(QThread):
                     except Exception:  # noqa: BLE001 - keep polling read-only
                         drift = 0
             out.append((name, path, free, drift, profile))
-        LOG.info(
+        log = LOG.info if out else LOG.debug
+        log(
             "Device scan completed for %d mount(s) in %.2fs",
             len(out), time.monotonic() - started)
         # MainWindow publishes this only from QThread.finished, after scan
@@ -766,6 +767,7 @@ class WaveformFillWorker(QThread):
             grid_needs_sync,
             imported_cues_need_sync,
             imported_waveforms_need_sync,
+            is_dataless_source,
             is_ready as track_is_ready,
             legacy_cache_path,
             merge_import,
@@ -817,11 +819,19 @@ class WaveformFillWorker(QThread):
                 if self.track_analysis_dir and audio_path:
                     ready = track_is_ready(
                         self.track_analysis_dir, track_id, audio_path)
-                    if (not ready and adopt_source_identity(
+                    dataless = is_dataless_source(audio_path)
+                    if (not ready and not dataless and adopt_source_identity(
                             self.track_analysis_dir, track_id, audio_path)):
                         ready = True
                         adopted_identities += 1
                     if not ready:
+                        # A File Provider placeholder may have changed logical
+                        # size while offline. Do not turn a periodic cache
+                        # check into an implicit cloud download; playback,
+                        # export, or an explicit forced recook is the hydration
+                        # boundary.
+                        if dataless:
+                            continue
                         legacy = legacy_cache_path(
                             self.track_analysis_dir, track_id)
                         todo.append((
@@ -832,7 +842,7 @@ class WaveformFillWorker(QThread):
                 fallback_modes = (
                     fallback_waveform_modes(
                         self.track_analysis_dir, track_id, audio_path)
-                    if self.track_analysis_dir and audio_path
+                    if self.track_analysis_dir and audio_path and not dataless
                     and analysis_path and Path(analysis_path).is_file()
                     else ()
                 )
@@ -929,6 +939,13 @@ class WaveformFillWorker(QThread):
                     if self.isRunning() and not self._wait_for_storage(
                             reclaiming=kind == "v4-migrate"):
                         break
+                    # The source may have been evicted since planning or while
+                    # waiting for playback/storage. Recheck at the I/O boundary.
+                    if (track_id not in self.force_track_ids
+                            and is_dataless_source(path)):
+                        self.progress.emit(i, total)
+                        self._active_task_path = ""
+                        continue
                     if (
                             kind == "v4-migrate"
                             and migrate_v4(

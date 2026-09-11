@@ -280,14 +280,27 @@ stores a tiny cache-bound extended-attribute proof and reuses every waveform
 section without rewriting or decoding the source; any content/size mismatch
 remains a normal recook. A dataless File Provider placeholder is never hydrated
 by startup verification: matching logical size provisionally retains its
-existing cache until playback/export deliberately accesses the source, after
-which the ordinary verifier can prove the new local identity. Healthy exact or
+existing cache, while a new or size-mismatched placeholder remains stale
+without being background-decoded. Playback, export, or an explicit recook may
+deliberately access the source, after which the ordinary verifier can prove the
+new local identity. Healthy exact or
 previously proven identities remain metadata-only checks on later scans.
 Tracks globally removed from Collection are outside this active cache universe:
 the removal drops their exact V4/V5 records, recurring preparation skips them,
 and an in-flight bulk or interactive cook cannot republish after the Graveyard
 change. Startup also reclaims records left by older builds. Selection-scoped
 restore returns a globally removed track to ordinary bounded preparation.
+The read-only analysis audit uses this same reachable-track boundary, reports
+offline dataless misses as deferred rather than broken, and lists any records
+outside that boundary as orphans without deleting them.
+Deferred/missing sources and invalid or outdated analysis block global V4
+retirement. A full audit must verify current V5 for every active track and find
+no orphan V4 records before reporting safe. V5 checksum failures are invalid
+analysis, never playable V4. Cache verification does not validate every source
+audio byte or prove that offline placeholders can be decoded.
+Background late-waveform recooks also defer dataless sources; queued recooks
+recheck after playback/storage waits. Metadata-only cue/grid changes can still
+use an existing valid cache, and explicit forced reanalysis may hydrate audio.
 Playlist-only removals retain analysis because the track remains active in
 Collection or other playlists. No cleanup touches source audio or read-only
 Rekordbox analysis.

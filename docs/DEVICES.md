@@ -34,8 +34,10 @@ waits for bounded external/layout verification and the discovery thread's real
 not appear yet: the lower-left status reads `Loading iPod...` while SoundBox
 preloads the immutable Device/Songs/Playlists snapshot and completes its
 follow-up drift pass. Only then does the ready, clickable row publish, making a
-second click-time device read structurally impossible. The periodic three-second
-scan is only a recovery path for a missed mount event or failed preload.
+second click-time device read structurally impossible. The periodic scan is
+only a recovery path for a missed mount event or failed preload: it backs off
+to 30 seconds with no removable volumes and returns to three seconds whenever a
+mount exists.
 Dashboard and drift readers never overlap on classic USB, and a remount under
 the same volume name is detected by a changed filesystem device token and fully
 reprobed before any cached snapshot can be reused.

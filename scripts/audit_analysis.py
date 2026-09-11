@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from soundbox import imports, libcache
 from soundbox.track_analysis import (
+    LEGACY_SCHEMA,
     cache_path,
+    is_dataless_source,
     is_ready,
     legacy_cache_path,
     load_manifest,
@@ -29,13 +31,22 @@ def audit(data_dir: Path, *, full: bool = False) -> dict:
     if library is None:
         raise RuntimeError(f"No valid library snapshot at {snapshot_path}")
     imports.inject(library, state.get("imported") or {})
+    raw_hidden = state.get("hidden_tracks") or {}
+    hidden_ids = {str(track_id) for track_id in raw_hidden}
+    active_ids = {
+        str(track_id) for track_id in library.tracks_by_id
+        if str(track_id) not in hidden_ids
+    }
 
     current_v5: list[str] = []
     playable_legacy_v4: list[str] = []
     missing_analysis: list[str] = []
     missing_source: list[str] = []
     invalid_source: list[str] = []
-    for track_id in sorted(library.tracks_by_id, key=str):
+    deferred_dataless: list[str] = []
+    invalid_analysis: list[str] = []
+    needs_current_analysis: list[str] = []
+    for track_id in sorted(active_ids):
         track = library.tracks_by_id[track_id]
         source = Path(track.path)
         try:
@@ -46,19 +57,22 @@ def audit(data_dir: Path, *, full: bool = False) -> dict:
             missing_source.append(str(track_id))
             continue
         try:
-            if (
-                    is_ready(
-                        data_dir / "track_analysis", str(track_id), source)
-                    and (
-                        not full
-                        or verify_complete(
-                            data_dir / "track_analysis",
-                            str(track_id), source))):
-                current_v5.append(str(track_id))
-            elif load_manifest(
-                    data_dir / "track_analysis",
-                    str(track_id), source) is not None:
-                playable_legacy_v4.append(str(track_id))
+            cache = data_dir / "track_analysis"
+            manifest = load_manifest(cache, track_id, source)
+            if is_ready(cache, track_id, source):
+                if full and not verify_complete(cache, track_id, source):
+                    invalid_analysis.append(track_id)
+                else:
+                    current_v5.append(track_id)
+            elif manifest is not None:
+                if not verify_complete(cache, track_id, source):
+                    invalid_analysis.append(track_id)
+                else:
+                    needs_current_analysis.append(track_id)
+                    if manifest["schema"] == LEGACY_SCHEMA:
+                        playable_legacy_v4.append(track_id)
+            elif is_dataless_source(source):
+                deferred_dataless.append(str(track_id))
             else:
                 missing_analysis.append(str(track_id))
         except (OSError, ValueError):
@@ -67,11 +81,11 @@ def audit(data_dir: Path, *, full: bool = False) -> dict:
     analysis_dir = data_dir / "track_analysis"
     expected_v5 = {
         cache_path(analysis_dir, str(track_id)).name
-        for track_id in library.tracks_by_id
+        for track_id in active_ids
     }
     expected_v4 = {
         legacy_cache_path(analysis_dir, str(track_id)).name
-        for track_id in library.tracks_by_id
+        for track_id in active_ids
     }
     orphan_v5 = sorted(
         path.name for path in analysis_dir.glob("*.sba5")
@@ -83,22 +97,27 @@ def audit(data_dir: Path, *, full: bool = False) -> dict:
     )
     return {
         "data_dir": str(data_dir),
-        "total_tracks": len(library.tracks_by_id),
+        "library_tracks": len(library.tracks_by_id),
+        "hidden_tracks": len(hidden_ids & {
+            str(track_id) for track_id in library.tracks_by_id
+        }),
+        "total_tracks": len(active_ids),
         "ready": len(current_v5),
         "current_v5": len(current_v5),
         "playable_legacy_v4": len(playable_legacy_v4),
-        "needs_current_analysis": playable_legacy_v4,
+        "needs_current_analysis": needs_current_analysis,
         "missing_analysis": missing_analysis,
         "missing_source": missing_source,
         "invalid_source": invalid_source,
+        "invalid_analysis": invalid_analysis,
+        "deferred_dataless": deferred_dataless,
         "orphan_v5_records": orphan_v5,
         "orphan_v4_records": orphan_v4,
         "full_verification": full,
         "safe_to_retire_v4": (
             full
-            and not playable_legacy_v4
-            and not missing_analysis
-            and not invalid_source
+            and len(current_v5) == len(active_ids)
+            and not orphan_v4
         ),
     }
 
@@ -123,11 +142,15 @@ def main() -> int:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(f"Tracks: {result['total_tracks']}")
+        print(f"Hidden tracks excluded: {result['hidden_tracks']}")
         print(f"Current verified V5: {result['current_v5']}")
         print(f"Playable legacy V4: {result['playable_legacy_v4']}")
         print(f"Missing analysis: {len(result['missing_analysis'])}")
         print(f"Missing source: {len(result['missing_source'])}")
         print(f"Invalid source: {len(result['invalid_source'])}")
+        print(f"Invalid analysis: {len(result['invalid_analysis'])}")
+        print(f"Needs current analysis: {len(result['needs_current_analysis'])}")
+        print(f"Dataless analysis deferred: {len(result['deferred_dataless'])}")
         print(f"Orphan V5: {len(result['orphan_v5_records'])}")
         print(f"Orphan V4: {len(result['orphan_v4_records'])}")
         print(

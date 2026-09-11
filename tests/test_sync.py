@@ -1,4 +1,3 @@
-import os
 import io
 import tempfile
 import unittest
@@ -153,7 +152,8 @@ class TestSyncEndToEnd(unittest.TestCase):
         # Plenty free — the sum uses plan() sizes (no device I/O) and passes.
         Fake = type("S", (), {"f_bavail": 10**9, "f_frsize": 1})
         with mock.patch.object(sync_mod.os, "statvfs", return_value=Fake()):
-            rep = sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
+            sync_mod.run(
+                self.lib, self.lib.playlists, self.target, dry_run=False)
         self.assertTrue((self.target / "Music").exists())
 
     def test_scoped_clean_only_touches_written_dirs(self):

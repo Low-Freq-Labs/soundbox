@@ -9,7 +9,7 @@ from hypothesis import given, settings, strategies as st
 
 from soundbox import manifest
 from soundbox.metadata import neat_title, tidy_title
-from soundbox.paths import TITLE_MAX, device_music_path, sanitize_component
+from soundbox.paths import device_music_path, sanitize_component
 from soundbox.playlists import M3UEntry, render_m3u8
 from soundbox.library import Playlist
 

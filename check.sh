@@ -4,7 +4,8 @@
 set -e
 cd "$(dirname "$0")"
 echo "== pyflakes =="
-./.venv/bin/python -m pyflakes soundbox/*.py desktop/*.py
+./.venv/bin/python -m pyflakes \
+  soundbox desktop tests scripts research soundbox_app.py
 echo "OK"
 echo "== native deck =="
 ./build_native.sh

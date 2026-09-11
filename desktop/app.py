@@ -34,6 +34,9 @@ from PySide6.QtCore import QStandardPaths
 
 LOG = logging.getLogger("soundbox")
 
+_DEVICE_POLL_ACTIVE_MS = 3_000
+_DEVICE_POLL_IDLE_MS = 30_000
+
 
 def setup_logging() -> Path | None:
     """Console + production file log; Qt test mode never touches the real log."""
@@ -364,7 +367,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._refresh_devices()
         self._dev_timer = QTimer(self)
         self._dev_timer.timeout.connect(self._poll_devices)
-        self._dev_timer.start(3000)
+        self._dev_timer.start(_DEVICE_POLL_IDLE_MS)
         # Finder learns about a mount from the filesystem event immediately;
         # SoundBox used to wait for the next three-second poll before even
         # beginning its read. Keep the poll as recovery, but debounce /Volumes
@@ -2649,6 +2652,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         self._refresh_devices()
 
+    def _set_device_poll_interval(self, devices_present: bool) -> None:
+        """Keep live drift responsive without busy-scanning an empty Mac."""
+        self._dev_timer.setInterval(
+            _DEVICE_POLL_ACTIVE_MS
+            if devices_present else _DEVICE_POLL_IDLE_MS)
+
     def _device_operation_owned(self) -> bool:
         """Whether a real device transaction still owns interactive actions.
 
@@ -2800,6 +2809,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_devices_scanned(self, devs: list, *, mount_tokens=None):
         """Apply a background device scan to the tree (main thread). devs is a list
         of (name, path, free, drift, read-only profile)."""
+        # `/Volumes` notifications provide immediate new-mount discovery. The
+        # timer is only missed-event recovery while empty, but stays quick when
+        # any mount (including a still-hidden iPod preload) needs drift/retry.
+        self._set_device_poll_interval(bool(devs))
         self._drift_cache = {
             path: drift for _n, path, _f, drift, _profile in devs}
         self._device_profiles = {
