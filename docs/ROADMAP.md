@@ -4,9 +4,9 @@ Living to-do. Work top-down. The MA446 dual-boot iPod workflow is shipped and
 physically accepted; remaining device work is follow-up hardening and new hardware.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-08-25)
+## Current status (2026-09-10)
 
-September 10 maintenance candidate (uncommitted; not installed): background
+September 10 maintenance release: background
 cloud-placeholder guards cover cache misses, late imported waveforms, and
 post-wait eviction. The analysis audit separates corruption, deferred sources,
 and genuine legacy records and requires full active coverage for retirement.
@@ -14,7 +14,8 @@ Build metadata verification checks signatures and rejects dirty/mismatched
 sources without claiming independent source-to-binary proof. Empty-device
 polling backs off, lint covers all project Python, and four dependency pins
 include published security fixes. See `HANDOFF.md` for validation and release
-status; the shipped behavior below remains the August baseline.
+status. Installed validation preserved all cover art and Graveyard records;
+the feature baseline below remains unchanged.
 
 - **CORE LIBRARY/EXPORT COMPLETE; LEGACY COVER RE-AUDIT ACTIVE.** Every track
   title is cut/cleaned. A 2026-08-04 review proved that some pre-hardening
