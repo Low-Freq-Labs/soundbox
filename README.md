@@ -5,6 +5,104 @@ Rockbox iPods / USB players** — browse the live rekordbox library, curate it w
 ever touching it, and drag playlists onto a device: exact order, per-track
 cover art, honest sync semantics.
 
+## Start here
+
+SoundBox is a desktop app for keeping a curated music library and exporting it
+to portable players. It reads rekordbox without changing its database or source
+audio, keeps your title/artist edits and artwork in SoundBox's own state, and
+provides a CoreAudio/Metal player for previewing tracks before export.
+
+### Requirements
+
+- **Apple Silicon Mac with macOS 14 or later** for the native player. The native
+  build targets `arm64`; this is not an Intel or cross-platform player build.
+- **Python 3.14** and the pinned packages in [`requirements.txt`](requirements.txt)
+  for development, plus **CMake 3.24+** and Apple's command-line developer tools
+  for the native CoreAudio/Metal library.
+- A local rekordbox library or XML export, or audio files imported directly into
+  SoundBox. The desktop app reads the live database through a read-only snapshot;
+  rekordbox can remain open.
+- An explicitly selected, supported destination for device export. Source audio
+  and the destination must not overlap.
+
+### Run from source
+
+From the repository root on a Mac with those prerequisites available:
+
+```sh
+python3.14 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./build_native.sh
+./.venv/bin/python soundbox_app.py
+```
+
+The `.venv` location matters: the build and check scripts use it directly.
+The native build produces `build/native/libsoundbox_deck.dylib`. If the deck
+cannot load, SoundBox reports the problem and disables playback while leaving
+library management available.
+
+### First workflow
+
+1. Open the desktop app and browse the rekordbox library, or import audio from
+   Finder into Collection or a SoundBox playlist.
+2. Curate titles, artists, playlists, and cover art in SoundBox. Edits remain
+   SoundBox-owned; they do not retag your source audio.
+3. Double-click a track to load it paused. **Space** toggles the loaded deck;
+   **C** is momentary CUE. Use the waveform and overview to inspect the track.
+4. Connect a supported player and inspect its identity under **Devices**. Drag a
+   playlist to the device and follow the displayed planning/confirmation flow.
+5. After later edits, use **Sync** when the device shows **Sync needed**. Review
+   the result, then use **Eject** before disconnecting.
+
+| Destination | Supported path and limits |
+| --- | --- |
+| Rockbox or generic FAT32 USB player | Filesystem export with ordered M3U8 playlists and per-track artwork |
+| Stock MA446 iPod | Guarded stock database export; validated MP3 and supported WAV only |
+| FAT32 MA446 with stock firmware and Rockbox | One composite transaction and a single shared copy where both firmwares support the audio |
+| Other stock iPod models | Read-only; stock writes are not enabled |
+| rekordbox/CDJ `/PIONEER` tree | Reserved and excluded from ordinary SoundBox writes; CDJ export remains separate R&D |
+
+See [`docs/DEVICES.md`](docs/DEVICES.md) for exact format, ownership, recovery,
+and model constraints. The desktop app is the product: `python -m soundbox`
+exposes an older XML-based maintenance CLI, not the desktop curation and device
+workflow.
+
+### Build, verify, and install
+
+```sh
+./check.sh
+./build_app.sh
+```
+
+The check script runs lint, the native build, engine type checks, and the test
+suite. `./check.sh --render` also creates an offscreen UI render. Run the script
+directly so a failed check remains visible; historical test counts in handoff
+notes are dated evidence, not a promise about a new checkout.
+
+The app build writes `dist/Soundbox.app`, stamps its source revision, and verifies
+its signature. It uses the local `Soundbox Self-Signed` identity when available,
+otherwise ad-hoc signing; it is not Apple-notarized. Build does not install the
+app. Follow the [state-preserving install procedure](docs/ARCHITECTURE.md#build--install)
+to back up curated state, retain the previous bundle for rollback, replace the
+app, and verify its signature, launch, and library before accepting an upgrade.
+
+### State and troubleshooting
+
+- **Curated state:** `~/Library/Application Support/LowFreqLabs/Soundbox/` holds
+  `library.json`, history, and curated artwork. Use Settings backup/restore;
+  never wipe this directory to fix a player or cache problem.
+- **Logs:** `~/Library/Logs/Soundbox/soundbox.log` records startup and runtime
+  diagnostics. A missing native deck requires checking the macOS/architecture
+  prerequisites and native build, not rebuilding the music library.
+- **Missing imports:** use **Fix Missing Links…** on unresolved tracks and select
+  a bounded search location. Ambiguous matches are not guessed automatically.
+- **Device unavailable or export refused:** check the selected volume, filesystem,
+  model, and source/target separation. Ordinary writes exclude `/PIONEER` and
+  unsupported stock models; do not bypass those guards.
+- **Runtime acceptance:** source tests and offscreen renders do not substitute
+  for playback, physical-device, or real curated-state verification. The latest
+  recorded checks and remaining visual review are in [`docs/HANDOFF.md`](docs/HANDOFF.md).
+
 ## Docs & roadmap
 
 - **[`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md)** — synchronized
@@ -314,7 +412,7 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
 
 ## Development
 
-    ./check.sh            # pyflakes + mypy (engine) + full test suite
+    ./check.sh            # pyflakes + native build + mypy (engine) + full test suite
     ./check.sh --render   # + offscreen UI render to /tmp
     ./build_native.sh     # CoreAudio/Metal dylib only
     ./build_app.sh        # PyInstaller → dist/Soundbox.app (self-signed)
