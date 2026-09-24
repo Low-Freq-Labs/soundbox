@@ -1455,6 +1455,7 @@ class PlayerBar(QWidget):
         # Momentary cue preview runs the decoder without visually engaging
         # PLAY; Space while held promotes that preview into transport playback.
         self._transport_play_active = False
+        self._ordinary_playback_requested = False
         # Sentinel: never equal to a real signature, so the first call applies.
         self._transport_button_state: tuple | None = None
         self._pending_autoplay = False
@@ -1690,6 +1691,8 @@ class PlayerBar(QWidget):
         path = str(path)
         changed = (track_id != self._track_id or path != self._src_path
                    or analysis_path != self._analysis_path)
+        if changed:
+            self._ordinary_playback_requested = False
         if changed and (self.is_playing() or self._pause_pending):
             # Never tear a live decoder/source out from under an audible
             # buffer. Fade to silence, phase-lock the stopped transport, then
@@ -1760,6 +1763,7 @@ class PlayerBar(QWidget):
         self.next_btn.setEnabled(loaded and can_next)
 
     def _on_error(self, _err, err_string: str):
+        self._ordinary_playback_requested = False
         self.playback_error.emit(err_string or "Playback error")
 
     def _animate_gain(self, end: float, duration_ms: int, completion=None):
@@ -1793,6 +1797,12 @@ class PlayerBar(QWidget):
         """Start/resume with a short click-prevention gain envelope."""
         if not self._src_path or not self._playback_available:
             return
+        # Native PAUSED snapshots during seek/refill or wake describe the
+        # engine, not a cancellation of the user's ordinary playback request.
+        self._ordinary_playback_requested = (
+            self._transport_play_active
+            and not self._cue_preview_active
+            and not self._cue_preview_latched)
         self._gain_completion = None
         self._pause_pending = False
         self._pause_clock.invalidate()
@@ -1803,6 +1813,7 @@ class PlayerBar(QWidget):
 
     def _pause_clean(self, after=None):
         """Fade out, pause, and pin backend + visual clocks to one position."""
+        self._ordinary_playback_requested = False
         if self._pause_pending:
             if after is not None:
                 self._gain_epoch = self._transport_epoch
@@ -1996,6 +2007,7 @@ class PlayerBar(QWidget):
         self._cue_press()
 
     def stop(self):
+        self._ordinary_playback_requested = False
         self._begin_transport_intent()
         self._gain_completion = None
         self._pause_pending = False
@@ -2248,14 +2260,24 @@ class PlayerBar(QWidget):
     def _on_end_of_media(self):
         """Forward only a genuine ordinary-playback terminal edge."""
         ordinary_transport = (
-            self._transport_play_active
+            self._ordinary_playback_requested
             and not self._cue_preview_active
             and not self._cue_preview_latched
+            and not self._deck_drag_active
             and not self._pause_pending)
         track_id = self._track_id
+        self._ordinary_playback_requested = False
         if ordinary_transport and track_id:
-            QTimer.singleShot(
-                0, lambda ended=track_id: self.track_ended.emit(ended))
+            epoch = self._transport_epoch
+            generation = self._analysis_generation
+
+            def advance():
+                if (epoch == self._transport_epoch
+                        and generation == self._analysis_generation
+                        and track_id == self._track_id):
+                    self.track_ended.emit(track_id)
+
+            QTimer.singleShot(0, advance)
 
     def _try_pending_autoplay(self):
         """Set a newly selected track on its first grid beat, then maybe play."""

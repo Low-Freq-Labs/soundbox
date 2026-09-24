@@ -4,7 +4,15 @@ Living to-do. Work top-down. The MA446 dual-boot iPod workflow is shipped and
 physically accepted; remaining device work is follow-up hardening and new hardware.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-09-10)
+## Current status (2026-09-23)
+
+Autoplay reliability fix shipped and accepted in normal use: up/random/down
+retain ordinary playback eligibility through temporary native PAUSED snapshots
+and activation. Explicit pause/stop still cancel it, resume arms it again, and
+terminal advancement is one-shot with stale-command protection. Regression
+coverage includes all three modes and real CoreAudio pause/resume with delayed
+terminal polling. See `PLAYER.md` and `HANDOFF.md`.
+
 
 Main-waveform visual refinement: retain all thirteen zoom stops and the accepted
 playback/close-carrier behavior, recover finer peaks at the widest three stops

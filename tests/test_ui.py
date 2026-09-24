@@ -5142,6 +5142,76 @@ class AutoplaySemantics(unittest.TestCase):
             _win._open_track = real_open
             _win.player_bar._track_id = current
 
+    def test_all_modes_advance_after_transient_pause_and_activation(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        fake = mock.Mock()
+        fake.position.return_value = 1000
+        fake.playbackRate.return_value = 1.0
+        fake.playbackState.return_value = PlaybackState.PAUSED
+        try:
+            with (mock.patch.object(pb, "player", fake),
+                  mock.patch.object(pb, "_animate_gain"),
+                  mock.patch.object(_win, "player_bar", pb),
+                  mock.patch.object(_win, "_autoplay_playable", return_value=True),
+                  mock.patch.object(_win, "_open_track", return_value=True) as opened):
+                pb.track_ended.connect(_win._advance_autoplay)
+                pb._src_path = "/tmp/loaded.wav"
+                pb._playback_available = True
+                pb._dur = 2000
+                for mode in ("up", "random", "down"):
+                    for resume in (False, True):
+                        with self.subTest(mode=mode, resume=resume):
+                            opened.reset_mock()
+                            _win._autoplay_order = ["1", "3", "2"]
+                            _win._autoplay_index = 1
+                            _win._set_autoplay_mode(mode, save=False)
+                            pb._track_id = "3"
+                            pb.toggle()
+                            if resume:
+                                pb._pause_clean()
+                                self.assertFalse(pb._ordinary_playback_requested)
+                                pb.toggle()
+                            # A refill/seek can publish PAUSED before PLAYING;
+                            # activation may also land between those snapshots.
+                            pb._on_state(PlaybackState.PAUSED)
+                            pb.resynchronize_transport()
+                            self.assertFalse(pb._transport_play_active)
+                            pb._on_state(PlaybackState.PLAYING)
+                            # The terminal flag can land a poll after PAUSED.
+                            pb._on_state(PlaybackState.PAUSED)
+                            pb._on_end_of_media()
+                            pb._on_end_of_media()
+                            _app.processEvents()
+                            opened.assert_called_once()
+                            self.assertEqual(opened.call_args.kwargs,
+                                             {"autoplay": True,
+                                              "capture_autoplay": False})
+        finally:
+            pb.shutdown()
+
+    def test_explicit_pause_and_new_command_cancel_terminal_advance(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        hits = []
+        pb.track_ended.connect(hits.append)
+        try:
+            pb._track_id = "ended-track"
+            pb._ordinary_playback_requested = True
+            pb._pause_clean()
+            pb._on_end_of_media()
+            _app.processEvents()
+            self.assertEqual(hits, [])
+            pb._ordinary_playback_requested = True
+            pb._on_end_of_media()
+            pb._begin_transport_intent()
+            _app.processEvents()
+            self.assertEqual(hits, [])
+        finally:
+            pb.shutdown()
+
     def test_only_ordinary_transport_end_requests_advance(self):
         pb = _win.player_bar
         hits = []
@@ -5149,13 +5219,13 @@ class AutoplaySemantics(unittest.TestCase):
         pb.track_ended.connect(on_end)
         saved = (
             pb._track_id,
-            pb._transport_play_active,
+            pb._ordinary_playback_requested,
             pb._cue_preview_active,
             pb._cue_preview_latched,
             pb._pause_pending,
         )
         try:
-            pb._transport_play_active = True
+            pb._ordinary_playback_requested = True
             pb._track_id = "ended-track"
             pb._cue_preview_active = False
             pb._cue_preview_latched = False
@@ -5164,14 +5234,14 @@ class AutoplaySemantics(unittest.TestCase):
             _app.processEvents()
             self.assertEqual(hits, ["ended-track"])
 
-            pb._transport_play_active = False
+            pb._ordinary_playback_requested = False
             pb._on_end_of_media()
             _app.processEvents()
             self.assertEqual(hits, ["ended-track"])
         finally:
             (
                 pb._track_id,
-                pb._transport_play_active,
+                pb._ordinary_playback_requested,
                 pb._cue_preview_active,
                 pb._cue_preview_latched,
                 pb._pause_pending,

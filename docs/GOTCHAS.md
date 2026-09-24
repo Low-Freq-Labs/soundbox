@@ -68,6 +68,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   allocation, file I/O, or blocking lock may enter `renderCallback`. Commands
   are atomics/generation-tagged; AVAudioFile runs only on the decode thread.
   Metal runs from CAMetalDisplayLink, not `PlayerBar._scroll_timer`.
+- **Autoplay intent is not the polled PLAY button state.** Native seek/refill
+  can briefly report PAUSED, and activation can observe that interval. The
+  terminal PAUSED snapshot and ended flag can also arrive on separate polls.
+  Keep ordinary-playback eligibility until explicit cancellation or terminal
+  consumption; never gate advancement on `_transport_play_active`. Delay the
+  source swap one event turn, guarded by transport epoch and source generation.
 - **A static Metal deck must not own a permanent display loop.** Playback,
   loading, preview, and live resize wake the link; every other mutation marks
   one dirty frame and the link pauses again. Python snapshot polling is 8 ms

@@ -158,6 +158,43 @@ class NativeDeckContract(unittest.TestCase):
         self.assertEqual(len(ended), 1)
         self.assertEqual(self.deck.playbackState(), PlaybackState.PAUSED)
 
+    def test_player_advances_after_pause_resume_and_delayed_terminal_poll(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        pb.audio.setVolume(0.0)
+        pb._deck_volume = 0.0
+        ended = []
+        pb.track_ended.connect(ended.append)
+        try:
+            pb._src_path = str(self.audio)
+            pb._track_id = "native-end"
+            pb.player.setSource(QUrl.fromLocalFile(str(self.audio)))
+            self._wait_until(lambda: pb.player.duration() > 0)
+            pb.toggle()
+            self._wait_until(pb.is_playing)
+            pb.toggle()
+            self._wait_until(lambda: not pb._pause_pending)
+            self.assertEqual(ended, [])
+            pb.player.setPosition(1750)
+            pb.toggle()
+            self._wait_until(pb.is_playing)
+            # Model a transient PAUSED/activation report while ordinary audio
+            # continues, then a suspended UI that misses the terminal instant.
+            pb._on_state(PlaybackState.PAUSED)
+            self.assertFalse(pb._transport_play_active)
+            pb.player._poll_timer.stop()
+            time.sleep(0.4)
+            pb.resynchronize_transport()
+            self._wait_until(lambda: ended)
+            self.assertEqual(ended, ["native-end"])
+            pb.player.synchronize()
+            QTest.qWait(150)
+            self.assertEqual(ended, ["native-end"])
+        finally:
+            pb.shutdown()
+            pb.close()
+
     def test_rapid_source_replacement_stays_live(self):
         """Source replacement may race an in-flight CoreAudio callback."""
         errors = []

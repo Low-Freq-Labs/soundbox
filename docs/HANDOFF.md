@@ -1,97 +1,76 @@
 # SoundBox current handoff
 
-Updated: 2026-09-10 (America/Chicago)
+Updated: 2026-09-23 (America/Chicago)
 
 ## Release and runtime
 
-- Branch `main`: middle-height adjustment after grid/framing revision `caed2a6`.
-  Sonny authorized commit, push, and installation for this waveform work.
-  The release app must be built from the clean commit containing this handoff;
-  its signed `SoundboxSourceRevision` must match HEAD. Verify with
+- Branch `main`; release revision is the commit containing this handoff
+  (autoplay fix after `b13384d`). Sonny confirmed the installed fix is working
+  and explicitly authorized wrap-up, commit, and push.
+- The clean release must be built from that commit, installed at
+  `/Applications/Soundbox.app`, and pass
   `./.venv/bin/python scripts/app_provenance.py /Applications/Soundbox.app`.
-- Version 1.0.0, `/Applications/Soundbox.app`. The preceding installed waveform
-  release activated its packaged CoreAudio/Metal deck and loaded 3,397 tracks /
-  75 playlists. Preparation found zero analysis/grid/cue tasks; art fetched zero
-  images. Repeat these checks on the clean follow-up build during installation.
-- Git SSH authentication is unavailable here. Publish over authenticated HTTPS
-  using the session-only `gh auth git-credential` helper; do not change the
-  persistent origin or credentials merely to work around it.
+  This is the final release gate; the initially tested app had dirty-source
+  provenance. The clean rebuild contains the same accepted player code.
+- Runtime verified: packaged CoreAudio/Metal deck active, 3,397 tracks /
+  75 playlists, zero analysis/grid/cue preparation tasks, zero art fetched.
+- Git SSH authentication was unavailable in the preceding release session;
+  authenticated HTTPS with the session-only `gh auth git-credential` helper
+  was used then. Do not change persistent origin/credentials for that workaround.
 
-## Waveform change and validation
+## Autoplay fix and validation
 
-- Only the large waveform's rendering changed. The thirteen zoom stops,
-  overview, cues, transport/audio clocks, and accepted close signed-carrier
-  reconstruction remain unchanged.
-- Wide BLUE/RGB stops 24/32/48 select finer existing V5 extrema and integrate
-  the exact fixed-lattice profile. No recook, cache-format change, source write,
-  or persistent waveform-storage increase. The cache still contains 2,924 V5s.
-- Grid timing is unchanged. Following Sonny's review, full-height guides now
-  stay visible at every zoom. Fixed ordinary/downbeat widths are 0.9/1.1 points;
-  interior alpha ranges 0.28/0.58 to 0.45/0.75 with local beat spacing. The
-  paired edge markers remain. Both upload paths use one helper.
-- Large-wave padding is two points through 256 points/s, increasing smoothly to
-  four points at 384 and above. The previous 64–184 transition gave the middle
-  steps too much headroom. Wide/close endpoints stay unchanged. No amplitude-curve, horizontal
-  reconstruction, cue, overview, or clock change.
-- Middle-height gate: bare `./check.sh` passed 866 tests (four skips). Native
-  captures at 24/184/256/1536 are under `middle-height-*`. Wide 24 and close
-  1536 captures are pixel-identical to the accepted prior framing; only the
-  middle padding transition changed. Prior playback/resize evidence below is
-  from the preceding grid/framing release, not a new timing campaign.
-- Follow-up bare `./check.sh`: native build, lint, mypy, 866 tests passed (four
-  skips). Follow-up real-Cocoa suite passed 34 tests on rerun; two earlier runs
-  missed the resize test's 120 ms display-callback assertion. That test passed
-  in isolation on both installed baseline and candidate; root cause of the
-  intermittent suite timing failure is not established. Follow-up visual
-  captures cover 24/64/256 at the same Turn Up section under `full-grid-*` in
-  the evidence directory below; final close framing is under `full-lane-*`.
-  A final 180-drawable trace across 24/256/1536 had zero audio underruns/GPU
-  deadline misses, six dropped presentations, and a maximum actual gap of
-  16.67 ms. Do not describe it as a zero-drop run.
-- “Turn Up (Final v2)”, track `84590640`, bar 18.1 / 28,137 ms: all thirteen
-  RGB stops rendered, plus BLUE/3BAND checks. Supplied Rekordbox comparison at
-  fixed registration improved outline correlation 0.613 → 0.713. The small
-  overview/ruler capture was pixel-identical. The old six-image private corpus
-  directory is absent, so it was not rerun; the newly supplied references and
-  current real track were used instead.
-- Baseline/candidate each captured 540 silent native playback drawables across
-  six zooms: zero audio underruns or GPU deadline misses, respectively two/one
-  dropped presentations, maximum actual gap 16.67 ms. A short phase sweep
-  retained near-rigid integer-pixel motion, but its fractional-image-resampling
-  residual increased with the finer contours. Do not claim these measurements
-  guarantee perceptual smoothness; Sonny's live visual acceptance remains the
-  next check. Exact evidence and PNGs: `/private/tmp/soundbox-waveform.iNVKNn/`
-  (about 30 MiB). `docs/PLAYER.md` records the tradeoff and reference dimensions.
+- `PlayerBar` now retains ordinary-playback eligibility separately from the
+  polled PLAY button state. Temporary native PAUSED reports during seek/refill
+  or activation, including a PAUSED report preceding the terminal flag, cannot
+  silently disable up/random/down advancement.
+- Explicit pause/stop, source replacement, and errors cancel eligibility;
+  ordinary play/resume arms it again. Cue preview remains excluded. Terminal
+  consumption is one-shot and deferred advancement checks transport epoch,
+  source generation, and track identity.
+- Bare `./check.sh` passed: 868 tests, four skips, native build, pyflakes, mypy.
+  The new all-mode regression fails all six mode/resume combinations with the
+  previous handler and passes with the fix.
+- A separate real-Cocoa/CoreAudio test passed: silent playback, clean
+  pause/resume, injected transient PAUSED report, delayed terminal polling,
+  activation resynchronization, and exactly one end notification. Physical
+  laptop sleep/wake was not performed by the agent. Sonny subsequently
+  confirmed the installed fix has been working reliably in normal use.
+- Initial build log: `/tmp/soundbox-autoplay-build.log`; clean release build
+  log: `/tmp/soundbox-autoplay-release-build.log`. Signature verified after build
+  and installation. No native rendering, audio-clock, cache-format, or playlist
+  ordering changes. The accepted waveform framing remains from `b13384d`.
 
-## Curated-state protection and rollback
+## Curated state and rollback
 
-- Recovery remains in the single directory
-  `/private/tmp/soundbox-install-rollback.GAq8sU/`. Preserve it until Sonny is
-  comfortable with this visual change. The follow-up installer retains
-  `framing-caed2a6.app` as the immediately preceding release;
-  `waveform-d3be5e7.app` preserves the first waveform iteration;
-  `maintenance-712e435.app` is the pre-waveform maintenance release.
-  `Soundbox.app` is the older August
-  recovery app. Earlier maintenance/state recovery material is also retained.
-- The complete `art/` backup contains 3,298 files, including indexes/default
-  photos. Every file was SHA-256 compared with live AppData before and after
-  the candidate install; all match. No cover art was removed or reassigned.
-- `library-waveform-before.json` snapshots the latest live state before this
-  installation; `library-waveform-closed.json` captures the graceful final save.
-  Candidate relaunch preserved that closed state exactly. All 513 Graveyard
-  entries/dates, one playlist-removal group, 10 custom playlists, 84 imports,
-  466 artist overrides, 1,077 title overrides, and 24 aliases remain intact.
-  Do not restore an earlier snapshot over subsequent intentional user edits.
-- Never wipe AppData or regenerate art to troubleshoot a visual issue. No
-  source audio, Rekordbox analysis, library data, or cache record was deleted.
+- Reused the single rollback directory
+  `/private/tmp/soundbox-install-rollback.GAq8sU/`.
+  `autoplay-tested-dirty.app` retains the user-accepted pre-release build;
+  `pre-autoplay-b13384d.app` retains the app before the fix.
+  Preserve the earlier waveform/maintenance recovery bundles and art backup
+  already there until Sonny authorizes their removal.
+- Clean release protection uses `library-autoplay-release-before.json`,
+  `library-autoplay-release-closed.json`, and
+  `autoplay-release-cache-baseline.json` in that directory. Final release
+  verification is recorded in `autoplay-release-verification.txt`.
+- Initial fix installation: `library-autoplay-before.json` is the running-app snapshot;
+  `library-autoplay-closed.json` captures its graceful final save. Only settings
+  differed at shutdown; all curated fields matched. The installed app's
+  library remained byte-identical to the closed snapshot after startup:
+  SHA-256 `30bf85049ebd9473db865bfa7b2a511e8cc4732a43617ce3ccb1cc14d0c6f13f`.
+- All 3,298 art files retained identical SHA-256 hashes; all 2,924 analysis
+  records remained in place. Baseline inventory/hashes are in
+  `autoplay-cache-baseline.json` in the rollback directory.
+- Curated counts: 513 hidden tracks, one playlist-removal group, 10 custom
+  playlists, 84 imports, 467 artist overrides, 1,077 title overrides, 24 aliases.
+  Never restore these snapshots over subsequent intentional user edits.
 
 ## Next checks
 
-- Sonny accepted wide/close framing and clarified that the middle needed more
-  height, not different detail. Review the middle steps in this release; wide/close
-  views in the installed follow-up. If
-  the finer wide contour appears shimmery on the physical panel, revisit only
-  that reconstruction; do not change the accepted audio clock or close family.
-- No implementation work or cache cleanup is queued for this release. The
-  broader roadmap's MainWindow ownership decomposition and grid/cue editing
-  remain separate future work.
+- No implementation work remains; Sonny accepted the fix. Final wrap-up
+  gates are clean-build provenance, startup/curated-state verification,
+  a published `main`, and a clean worktree.
+- If another stall occurs, capture the loaded track, active mode, and whether
+  PLAY still shows active before changing the playhead. Directional playlist
+  boundaries and unavailable-source handling retain their existing semantics.
+- MainWindow decomposition and grid/cue editing remain separate future work.

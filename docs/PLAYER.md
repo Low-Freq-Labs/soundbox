@@ -65,7 +65,12 @@ Transport controls:
   boundary cannot immediately repeat the current track. Browsing elsewhere
   does not change that source snapshot. Deliberately starting a track from
   another playlist replaces it. Manual pause/resume preserves the mode; only
-  the native terminal playback edge advances.
+  the native terminal playback edge advances. Auto-advance eligibility follows
+  the ordinary playback request independently of the button's polled state:
+  temporary PAUSED snapshots during seek/refill or activation cannot disarm it.
+  Explicit pause/stop, source replacement, and playback errors cancel that
+  request; resumed playback arms it again. Each terminal event is consumed once,
+  and a newer transport command or source invalidates deferred advancement.
 
 Cue panel:
 
