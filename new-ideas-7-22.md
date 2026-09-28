@@ -15,8 +15,8 @@ Several ideas below already have an engine or first UI:
 | Incremental Sync | Manifest drift and diff-driven resync already avoid unnecessary work | Optional scan/unchanged/new breakdown |
 | Artwork Dashboard | ART column, artist catalog, sticky blocks, rescan, and missing-art flow exist | One consolidated coverage dashboard |
 | Library Health | Missing-link repair, art state, playlist verification, and untracked filters exist separately | One intentionally designed health view/score |
-| Export Verification | Right-click **Verify export…** already re-reads playlists and files | Optional automatic pre-eject verification/summary |
-| Device Health | The stock-iPod Device tab now reports identity, model-derived DAC, firmware, transport, storage, database state, playback state, and recovery points | Battery/filesystem diagnostics and equivalent Rockbox health/version reporting |
+| Export Verification | Right-click **Verify export…** already re-reads playlists and files | Optional explicit verification summary; idle eject remains independent |
+| Device Health | The stock-iPod Device tab now reports identity, model-derived DAC, firmware, transport, storage, library and playback state (recovery counts/hashes stay in backend diagnostics) | Battery/filesystem diagnostics and equivalent Rockbox health/version reporting |
 
 Do not rebuild the completed foundations. Workshop only the remaining UX with
 Sonny, and move an accepted slice into the roadmap before implementation.
@@ -188,7 +188,8 @@ The goal is confidence that the library is clean.
 ## 10. Export Verification
 
 Manual right-click **Verify export…** is shipped. A future enhancement could
-offer the same check automatically before ejecting and summarize:
+summarize that explicit check below. Idle normal eject must remain available
+without running verification or repairing the library:
 
 -   Files copied successfully
 -   Playlist references valid

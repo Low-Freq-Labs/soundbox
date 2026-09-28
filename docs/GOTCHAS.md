@@ -624,8 +624,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Rapid track loads pile up waveform/analysis workers** → hang + latent GC-mid-run
   crash. Any "load X, user can rapid-switch" worker needs interrupt-previous +
   a strong-ref set (`_wf_pending`), never a single `self.x` reassignment;
-  every result is track-generation guarded; `shutdown_waveforms()`
-  interrupts + waits all.
+  every result is track-generation guarded. `TaskOwner` now retains interactive
+  workers through queued finished delivery and join. Shutdown closes admission,
+  rejects late results and dispatches events until retirement before closing
+  the native backend; never reintroduce timeout-based destruction.
 - **A new track can change after its first background cook.** Rekordbox/tag
   tools may finish rewriting a newly landed container minutes later; direct
   SoundBox imports can also be replaced in place. One refresh-time waveform
@@ -1078,22 +1080,19 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   The Rockbox derivative contract compares MP3 sample rate/channels plus the
   exact tag-excluded audio-essence hash; never reject an otherwise byte-exact
   payload because that tag-size-dependent duration estimate changed.
-- **Let Rockbox own its binary tag cache.** SoundBox may atomically and
-  recovery-safely enforce `tagcache_autoupdate: on`,
-  `playlist viewer track display: title from tags`,
-  and a minimum `max files in playlist: 10000` in `.rockbox/config.cfg`,
-  preserving every unrelated line and the existing LF/CRLF style. Normalizing
-  Rockbox's CRLF file to LF made an already-correct config look perpetually
-  dirty. Preserve any playlist limit already above 10,000; higher limits consume
-  playback buffer, and Rockbox needs a full restart before a changed limit is
-  active. Stock iTunesDB playlists have 32-bit MHIP counts and no corresponding
-  firmware setting; do not invent one. Never synthesize or patch
-  `database_*.tcd`.
-  Rockbox's next boot reconciles added, changed, and deleted media; an explicit
-  Initialize Now remains a one-time user action if an old cache is corrupt.
-  Dashboard freshness may compare `database_idx.tcd` only to the current
-  manifest/config mtimes (with FAT tolerance); that is a pending-restart signal,
-  not permission to parse, delete, or rewrite the cache.
+- **Rockbox preferences and tag cache belong to the user/firmware.** Sync must
+  never rewrite `config.cfg`, `.new`, `.old` or other firmware preference files,
+  including auto-update, playlist limits and tag display. They are not ownership
+  baselines or independent Sync drift. Active theme sizes may be read for artwork.
+  Never synthesize or patch `database_*.tcd`. Database maintenance is optional;
+  exported playlists do not require it. Dashboard freshness is observational,
+  not authority to change settings or caches. Higher playlist limits consume
+  memory; let the user choose rather than silently raising them.
+- **A forced Rockbox reset can interrupt settings saves.** In 4.0, saving queues
+  a storage-idle callback to write `config.cfg.new`, promoted at the next load;
+  `fixed.cfg` is loaded afterward. In the September 27 playback test, settings
+  survived normal Play/Pause shutdown after reverting with Menu+Select reset.
+  Confirm persistence before drawing conclusions from a settings A/B test.
 - **Do not require unsupported firmware settings.** Rockbox 4.0's
   [settings table](https://raw.githubusercontent.com/Rockbox/rockbox/v4.0-final/apps/settings_list.c)
   has no `sort playlists` key. The September 27 hardware config omitted the key
@@ -1338,3 +1337,23 @@ manifest baseline is refreshed merely to clear the badge.
 
 Post-sync polling is held through the completion dialog only. Dismissal releases
 the hold so subsequent SoundBox edits can update drift without reconnecting.
+
+## September 27 software audit — outstanding boundaries
+
+The A1 timed-wait gaps are corrected: ArtPickerDialog, SuggestDialog and
+interactive waveforms use `TaskOwner`. Main-window shutdown stops and drains
+child owners as well as its directly collected workers. Adopt before start;
+retain until queued finished delivery and final join. Search socket/retry budgets
+are explicit, but they are not a total cancellation deadline. An uncooperative
+operation must remain owned until it actually returns.
+
+Ordinary JSON replacement is atomic, but multiple ArtCache writers share a temp
+path without serialization. Backup reads live state, and restore copies library
+before history/art without a coordinated rollback. A temporary-fixture failure
+after library publication reproduced a partial restore. Preserve existing backups;
+do not treat these operations as a whole-state transaction yet.
+
+The coordinator serializes the active device lane; its tested queue API is not
+yet the queue used by desktop adapters. See the prioritized
+[software audit](software-audit-2026-09.md) and [roadmap](ROADMAP.md) before
+expanding lifecycle or persistence claims.

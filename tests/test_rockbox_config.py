@@ -1,4 +1,4 @@
-"""Rockbox settings are narrowed to DB freshness, tag display, and playlist capacity."""
+"""Read-only Rockbox theme and database observations."""
 
 from __future__ import annotations
 
@@ -9,86 +9,28 @@ import unittest
 
 from soundbox.rockbox_config import (
     database_refresh_pending,
-    desired_payload,
-    plan,
-    settings_ready,
+    database_auto_update_enabled,
     theme_album_art_sides,
 )
 
 
 class RockboxConfigTests(unittest.TestCase):
-    def test_preserves_unrelated_lines_and_replaces_only_required_settings(self):
-        before = (
-            b"# personal config\n"
-            b"volume: -33\n"
-            b"tagcache_autoupdate: off\n"
-            b"playlist viewer track display: track name\n"
-            b"shuffle: on\n"
-        )
-        after = desired_payload(before)
-        self.assertIn(b"# personal config\n", after)
-        self.assertIn(b"volume: -33\n", after)
-        self.assertIn(b"shuffle: on\n", after)
-        self.assertIn(b"tagcache_autoupdate: on\n", after)
-        self.assertIn(
-            b"playlist viewer track display: title from tags\n", after)
-        self.assertNotIn(b"sort playlists:", after)
-        self.assertIn(b"max files in playlist: 10000\n", after)
-        self.assertNotIn(b"tagcache_autoupdate: off", after)
-
-    def test_firmware_saved_config_without_unsupported_sort_key_is_ready(self):
-        before = (
-            b"# .cfg file created by rockbox 4.0\r\n"
-            b"volume: -1\r\n"
-            b"max files in playlist: 10000\r\n"
-            b"playlist viewer track display: title from tags\r\n"
-            b"tagcache_autoupdate: on\r\n"
-        )
-        self.assertEqual(desired_payload(before), before)
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / ".rockbox").mkdir()
-            (root / ".rockbox/config.cfg").write_bytes(before)
-            self.assertTrue(settings_ready(root))
-            self.assertFalse(plan(root).changed)
-
-    def test_raises_small_playlist_limit_but_preserves_a_larger_one(self):
-        self.assertIn(
-            b"max files in playlist: 10000\n",
-            desired_payload(b"max files in playlist: 2000\n"),
-        )
-        larger = b"max files in playlist: 32000\n"
-        self.assertIn(larger, desired_payload(larger))
-
-    def test_plan_is_read_only_and_becomes_ready_after_exact_payload_lands(self):
+    def test_database_auto_update_observation_does_not_change_preferences(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / ".rockbox").mkdir()
             config = root / ".rockbox/config.cfg"
-            config.write_text("volume: -20\n", encoding="utf-8")
-            item = plan(root)
-            self.assertTrue(item.changed)
-            self.assertEqual(config.read_text(encoding="utf-8"), "volume: -20\n")
-            config.write_bytes(item.payload)
-            self.assertTrue(settings_ready(root))
-            self.assertFalse(plan(root).changed)
-
-    def test_ready_config_preserves_rockbox_crlf_bytes_exactly(self):
-        before = (
-            b"volume: -20\r\n"
-            b"playlist viewer track display: title from tags\r\n"
-            b"tagcache_autoupdate: on\r\n"
-            b"sort playlists: alpha\r\n"
-            b"max files in playlist: 10000\r\n"
-        )
-        self.assertEqual(desired_payload(before), before)
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / ".rockbox").mkdir()
-            (root / ".rockbox/config.cfg").write_bytes(before)
-            self.assertTrue(settings_ready(root))
-            self.assertFalse(plan(root).changed)
+            self.assertFalse(database_auto_update_enabled(root))
+            self.assertFalse(config.exists())
+            for payload, expected in (
+                (b"tagcache_autoupdate: off\r\nmax files in playlist: 5000\r\n", False),
+                (b"tagcache_autoupdate: on\n", True),
+                (b"volume: -20\n", False),
+                (b"\xff", False),
+            ):
+                config.write_bytes(payload)
+                self.assertEqual(database_auto_update_enabled(root), expected)
+                self.assertEqual(config.read_bytes(), payload)
 
     def test_active_theme_album_art_sizes_are_bounded_and_square(self):
         with tempfile.TemporaryDirectory() as td:
@@ -117,7 +59,7 @@ class RockboxConfigTests(unittest.TestCase):
             rockbox = root / ".rockbox"
             rockbox.mkdir()
             config = rockbox / "config.cfg"
-            config.write_bytes(desired_payload(None))
+            config.write_bytes(b"tagcache_autoupdate: off\n")
             manifest = root / ".soundbox/manifest.json"
             manifest.parent.mkdir()
             manifest.write_text("{}\n", encoding="utf-8")
@@ -138,7 +80,7 @@ class RockboxConfigTests(unittest.TestCase):
             (root / ".rockbox").mkdir()
             self.assertFalse(database_refresh_pending(root))
             config = root / ".rockbox/config.cfg"
-            config.write_bytes(desired_payload(None))
+            config.write_bytes(b"tagcache_autoupdate: off\n")
             self.assertTrue(database_refresh_pending(root))
 
 

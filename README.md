@@ -109,7 +109,7 @@ app, and verify its signature, launch, and library before accepting an upgrade.
   runtime orientation + sacred safety contract (start here).
 - **[`docs/HANDOFF.md`](docs/HANDOFF.md)** — exact current device/app state,
   rollback facts, validation, and next-session sequence.
-- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — status, scorecard, phases, product decisions.
+- **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — active sequence, release gates and deferred work.
 - **[`docs/PLAYER.md`](docs/PLAYER.md)** — native deck behavior, architecture,
   caches, read-only cue panel, non-regression rules, QA, and pending grid work.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — engine/desktop layout, data model, build.
@@ -120,6 +120,11 @@ app, and verify its signature, launch, and library before accepting an upgrade.
 - **[`new-ideas-7-22.md`](new-ideas-7-22.md)** — exploratory QOL backlog; UX
   workshop before roadmap commitment.
 - **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ USB export R&D (prototype in `research/cdj_export/`).
+
+The current [software audit](docs/software-audit-2026-09.md) records architecture,
+lifecycle and performance gaps. The [release boundary](docs/release-boundaries.md)
+defines the planned shared app with optional personal modules; that separation
+is not implemented in the current build.
 
 ## What it does
 
@@ -351,14 +356,12 @@ only after the schema-3 manifest publishes successfully. Cleanup therefore does
 not depend on regenerating an older cover with the current multiview profile.
 Schema-2 migration remains disabled and fails closed.
 
-Composite sync also manages four narrow Rockbox settings: automatic tag-cache
-updates, playlist-viewer titles from tags, alphabetic catalogue sorting, and a
-minimum 10,000-entry playlist buffer while preserving any larger user value.
-Every unrelated `config.cfg` line is preserved, and the config update
-participates in the same recovery-backed transaction. Rockbox itself remains
-the sole writer of its rebuildable
-`database_*.tcd` files; after eject, its next boot reconciles changed and removed
-tracks instead of SoundBox guessing at the binary cache format.
+Sync never changes Rockbox settings. Database auto-update, playlist capacity,
+playlist-viewer display and all other preferences remain yours, and changing them
+alone never creates Sync-needed drift. SoundBox reads the active theme to size
+exported artwork and keeps catalogue order through numbered playlist filenames.
+Rockbox remains the sole writer of its optional `database_*.tcd` cache; database
+users manage updates in Rockbox. Exported playlists do not require that database.
 
 On a schema-3 dual device, **Songs** and **Playlists** are unified views rather
 than stock-only tabs. Their Type column reports `Both`, `Stock`, or `Rockbox`

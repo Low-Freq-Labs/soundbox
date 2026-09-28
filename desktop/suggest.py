@@ -11,7 +11,7 @@ MUST call dlg.shutdown() after exec() (QThread lifetime rule)."""
 
 from __future__ import annotations
 
-import time
+import threading
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from soundbox import artfetch
+from .task_owner import TaskOwner
 
 _ROLE = Qt.UserRole + 21  # (track_id, suggested_artist)
 
@@ -36,9 +37,11 @@ class SuggestWorker(QThread):
         super().__init__()
         self.items = list(items)  # [(tid, title)]
         self._stop = False
+        self._cancelled = threading.Event()
 
     def stop(self):
         self._stop = True
+        self._cancelled.set()
 
     def run(self):
         hits = 0
@@ -50,11 +53,13 @@ class SuggestWorker(QThread):
                 r = artfetch.suggest_artist(title)
             except Exception:  # noqa: BLE001 — offline/blocked: keep scanning
                 r = None
+            if self._stop:
+                break
             if r:
                 hits += 1
                 self.found.emit(tid, title, r[0], r[1])
             self.progress.emit(i, total, hits)
-            time.sleep(self.DELAY)
+            self._cancelled.wait(self.DELAY)
 
 
 class SuggestDialog(QDialog):
@@ -94,21 +99,29 @@ class SuggestDialog(QDialog):
         row.addWidget(cancel)
         v.addLayout(row)
 
+        self._tasks = TaskOwner(self)
         self._worker = SuggestWorker(items)
         self._worker.found.connect(self._add_suggestion)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
+        self._tasks.adopt(self._worker)
         self._worker.start()
 
     def shutdown(self):
-        self._worker.stop()
-        self._worker.wait(8000)
+        """Keep events alive until the exact search worker has retired."""
+        self._tasks.drain()
 
-    def closeEvent(self, ev):  # window ⨯ / Esc also stop the scan promptly
-        self._worker.stop()
+    def done(self, result):
+        self._tasks.stop()
+        super().done(result)
+
+    def closeEvent(self, ev):
+        self._tasks.stop()
         super().closeEvent(ev)
 
     def _add_suggestion(self, tid: str, title: str, artist: str, conf: float):
+        if self._tasks.stopping:
+            return
         it = QTreeWidgetItem([title, artist, f"{conf:.2f}"])
         it.setData(0, _ROLE, (tid, artist))
         # UNCHECKED by default (product decision): suggestions stream in while
@@ -117,17 +130,21 @@ class SuggestDialog(QDialog):
         self.list.addTopLevelItem(it)
 
     def _on_progress(self, scanned: int, total: int, hits: int):
+        if self._tasks.stopping:
+            return
         self.status.setText(f"Scanned {scanned}/{total} — {hits} suggestion(s). "
                             "You can accept at any time.")
 
     def _on_finished(self):
+        if self._tasks.stopping:
+            return
         self.stop_btn.setEnabled(False)
         if not self.list.topLevelItemCount():
             self.status.setText("Scan done — no confident suggestions. The rest "
                                 "need your ears (or they're unreleased).")
 
     def _stop_scan(self):
-        self._worker.stop()
+        self._tasks.stop()
         self.stop_btn.setEnabled(False)
 
     def _accept_checked(self):

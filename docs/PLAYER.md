@@ -435,6 +435,12 @@ The background `WaveformFillWorker`:
 - can hot-load newly completed detail for the current track;
 - is interrupted and joined during shutdown.
 
+Interactive PlayerBar waveform workers now share `TaskOwner`: close admission,
+request interruption, dispatch Qt events through exact worker retirement, then
+close the native backend. Late analysis results cannot update the deck during
+shutdown. The unchecked five-second waits identified in the September 27
+[software audit](software-audit-2026-09.md) have been removed.
+
 A prepared canonical cache hit is staged off the UI thread: the small manifest
 positions transport first, the packed overview is decompressed, and the
 BLUE/RGB/3BAND plus ultra sections are prepared together. All display pyramids

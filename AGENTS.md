@@ -61,16 +61,17 @@ repository can answer the question.
   exact-size 160×160 and 116×116 fast paths, bounded exact square sizes read
   from the active WPS/SBS and retained across later theme changes, plus a
   lightweight dimensionless 160×160 fallback. The curated JPEG cache remains
-  canonical and stock artwork is untouched. On a composite device, SoundBox may manage only
-  `.rockbox/config.cfg` values `tagcache_autoupdate: on`,
-  `playlist viewer track display: title from tags`,
-  and a minimum `max files in playlist: 10000`, preserving a larger user limit,
-  every unrelated line, and the file's existing newline style. That write is
-  baseline-verified, recovery-backed, and atomic. Rockbox
+  canonical and stock artwork is untouched. SoundBox never writes Rockbox firmware
+  preferences during sync, including
+  `.rockbox/config.cfg` and its `.new`/`.old` companions. Database auto-update,
+  playlist capacity, tag display, theme and all other settings remain user-owned;
+  they never independently signal managed-library drift or invalidate a plan.
+  Active theme dimensions may be read to size exported artwork. Rockbox
   remains the only writer of `database_*.tcd`; SoundBox never manufactures or
   directly edits the binary tag cache. SoundBox may report that the index
-  predates its latest manifest/config generation so a required Rockbox restart
-  is not mistaken for a clean cache. The connected layout selects the exporter:
+  predates its latest manifest/config generation so an enabled updater awaiting
+  Rockbox restart is not mistaken for a clean cache. The connected layout selects
+  the exporter:
   stock-only uses the guarded stock planner; Rockbox-only/generic FAT32 uses the
   Rockbox filesystem planner; a FAT32 MA446 containing both `.rockbox/` and
   `iPod_Control/` uses only `soundbox.dual_ipod`, never two exporters. The
@@ -256,8 +257,11 @@ unknown config lines; retain the established numbered playlist filenames.
 | Doc | What's in it |
 |-----|--------------|
 | `docs/ipod-lifecycle-audit-2026-09.md` | Lifecycle inventory, failure matrix, implementation and acceptance boundaries |
+| `docs/rockbox-playlist-oom-2026-09.md` | Read-only USB findings, firmware comparison and pending runtime OOM isolation |
 | `docs/HANDOFF.md` | Single current session-resume note: live state, unfinished work, exact next checks, validation, and rollback facts |
-| `docs/ROADMAP.md` | Current status, committed next work, phases, product decisions, and CDJ frontier |
+| `docs/ROADMAP.md` | Active sequence, acceptance gates, public release and deferred work |
+| `docs/software-audit-2026-09.md` | Architecture, lifecycle, persistence and performance findings with evidence |
+| `docs/release-boundaries.md` | Confirmed public/personal feature scope and proposed optional-module contract |
 | `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and pending grid work |
 | `docs/DEVICES.md` | Rockbox/stock/dual-boot/generic layouts, capability boundaries, and validation |
 | `docs/ARCHITECTURE.md` | Engine/desktop/native layout, data model, persistence, build/install |
@@ -397,3 +401,11 @@ counts and database digests stay in backend snapshots, not dashboard rows.
 
 Post-sync polling is held through the completion dialog only. Dismissal releases
 the hold so subsequent SoundBox edits can update drift without reconnecting.
+
+Artwork/suggestion dialogs and interactive waveform workers use
+`desktop.task_owner.TaskOwner`: adopt before start, close admission on stop,
+retain through queued QThread.finished delivery and final join, and dispatch
+Qt events while draining. Window shutdown stops child owners before callbacks
+can start more work and drains them before native-player teardown. Stopped
+consumers reject late results. Socket/retry budgets are not a total cancellation
+deadline and never authorize destruction of a running worker.

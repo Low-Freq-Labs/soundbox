@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from soundbox import artfetch
+from .task_owner import TaskOwner
 
 _COLS = 4
 _THUMB = 150  # grid icon size; we download the light t200 variant for the grid
@@ -55,6 +56,8 @@ class _CandidateSearch(QThread):
                 got = artfetch._download(small)
             except OSError:
                 got = None
+            if self._stop:
+                break
             if got:
                 n += 1
                 self.found.emit(c, got[0])
@@ -107,22 +110,28 @@ class ArtPickerDialog(QDialog):
         row.addWidget(cancel)
         v.addLayout(row)
 
+        self._tasks = TaskOwner(self)
         self._worker = _CandidateSearch(artist, title)
         self._worker.found.connect(self._add_candidate)
         self._worker.done.connect(self._search_done)
+        self._tasks.adopt(self._worker)
         self._worker.start()
 
     def shutdown(self):
-        """Caller MUST invoke after exec() — stops/waits the search thread so it
-        can't be GC'd mid-run (the QThread-destroyed abort)."""
-        self._worker.stop()
-        self._worker.wait(8000)
+        """Keep events alive until the exact search worker has retired."""
+        self._tasks.drain()
 
-    def closeEvent(self, ev):  # window ⨯ / Esc also stop the search promptly
-        self._worker.stop()
+    def done(self, result):
+        self._tasks.stop()
+        super().done(result)
+
+    def closeEvent(self, ev):
+        self._tasks.stop()
         super().closeEvent(ev)
 
     def _add_candidate(self, cand: dict, img: bytes):
+        if self._tasks.stopping:
+            return
         pm = QPixmap()
         if not pm.loadFromData(img):
             return
@@ -140,6 +149,8 @@ class ArtPickerDialog(QDialog):
         self.status.setText(f"{self._count} result(s) — click one, or use a URL/file below")
 
     def _search_done(self, n: int):
+        if self._tasks.stopping:
+            return
         if n == 0:
             self.status.setText("No SoundCloud results — paste a track URL or choose a file.")
 

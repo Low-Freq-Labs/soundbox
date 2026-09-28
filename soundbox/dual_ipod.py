@@ -295,7 +295,6 @@ class DualIpodSyncPlan:
     orphan_deletes: tuple[DualOrphanDelete, ...]
     playlists: tuple[DualPlaylistWrite, ...]
     media_plans: tuple[PlannedRockboxMedia, ...]
-    config_update: rockbox_config.RockboxConfigPlan
     manifest_payload: bytes = field(repr=False)
     manifest_payload_before: bytes | None = field(default=None, repr=False)
     manifest_sha256_before: str | None = None
@@ -366,7 +365,6 @@ class DualIpodSyncPlan:
             or self.orphan_deletes
             or any(item.changed for item in self.playlists)
             or any(item.order_changed for item in self.playlists)
-            or self.config_update.changed
             or self.manifest_changed
         )
 
@@ -417,7 +415,6 @@ class DualIpodSyncPlan:
             "rockbox_playlists": len(self.playlists),
             "rockbox_playlist_writes": sum(
                 1 for item in self.playlists if item.changed),
-            "rockbox_settings_updated": self.config_update.changed,
             "generation": self.generation,
             "retained_stale_files": self.retained_stale_files,
         }
@@ -657,8 +654,6 @@ def composite_device_drift(
     }
     if not active_art_sides.issubset(managed_art_sides):
         drift.changed.append(("rockbox-theme-art", "Rockbox theme artwork"))
-    if not rockbox_config.settings_ready(root):
-        drift.changed.append(("rockbox-settings", "Rockbox settings"))
     if interrupted_recovery is not None:
         drift.changed.append((
             "interrupted-transaction",
@@ -1566,7 +1561,6 @@ def plan_dual_ipod_sync(
         if interrupted_recovery_hint is not None and manifest_hash_before
         else None
     )
-    config_update = rockbox_config.plan(root)
     combined = _combined_playlists(
         selected,
         existing_manifest,
@@ -2281,7 +2275,6 @@ def plan_dual_ipod_sync(
         orphan_deletes=tuple(orphan_deletes),
         playlists=tuple(playlist_writes),
         media_plans=tuple(planned_media.values()),
-        config_update=config_update,
         playlist_additions=playlist_additions,
         playlist_updates=tuple(playlist_updates),
         manifest_payload=manifest_payload,
@@ -2398,21 +2391,12 @@ def commit_dual_ipod_sync(
         emit_progress(str(relative_path))
 
     manifest_path = plan.target / ".soundbox" / "manifest.json"
-    config_path = plan.target / plan.config_update.relative_path
     if plan.manifest_sha256_before is None:
         if manifest_path.exists():
             raise DualIpodError("SoundBox manifest appeared after dual dry-run")
     elif not manifest_path.is_file() or _sha256(
             manifest_path) != plan.manifest_sha256_before:
         raise DualIpodError("SoundBox manifest changed after dual dry-run")
-    if plan.config_update.sha256_before is None:
-        if config_path.exists():
-            raise DualIpodError("Rockbox config appeared after dual dry-run")
-    elif (
-        not config_path.is_file()
-        or _sha256(config_path) != plan.config_update.sha256_before
-    ):
-        raise DualIpodError("Rockbox config changed after dual dry-run")
     if plan.rockbox_media_cache is None:
         raise DualIpodError("Dual plan lost its Rockbox media cache")
     plan = _refresh_commit_source_baselines(plan)
@@ -2526,10 +2510,8 @@ def commit_dual_ipod_sync(
     recovery_bytes += sum(item.size_before for item in plan.file_deletes)
     recovery_bytes += sum(
         int(item.size_before or 0) for item in changed_playlists)
-    recovery_bytes += len(plan.config_update.payload_before or b"")
     required = plan.rockbox_bytes_to_copy + recovery_bytes + sum(
-        len(item.payload) for item in changed_playlists) + len(
-        plan.config_update.payload) + len(plan.manifest_payload)
+        len(item.payload) for item in changed_playlists) + len(plan.manifest_payload)
     if required > free:
         raise DualIpodError(
             f"Not enough free space for Rockbox phase: needs {required}, has {free}")
@@ -2569,7 +2551,6 @@ def commit_dual_ipod_sync(
     stock_result: StockIpodCommitResult | None = None
     stock_committed = False
     manifest_published = False
-    config_published = False
     deleted_orphans = 0
     deleted_orphan_bytes = 0
     deleted_orphan_items: list[DualOrphanDelete] = []
@@ -2601,9 +2582,6 @@ def commit_dual_ipod_sync(
                 recovery / "deleted" / delete_item.relative_path.parent
                 / (delete_item.relative_path.name + ".before"))
             session.atomic_copy(live, saved)
-        if plan.config_update.changed and plan.config_update.payload_before is not None:
-            saved = session.guard(recovery / "rockbox" / "config.cfg.before")
-            session.atomic_copy(config_path, saved)
         journal = {
             **plan.summary(),
             "baseline_manifest_sha256": plan.manifest_sha256_before,
@@ -2733,11 +2711,6 @@ def commit_dual_ipod_sync(
                 raise DualIpodError(
                     "Rockbox playlist order timestamp failed verification: "
                     f"{destination}")
-        if plan.config_update.changed:
-            session.atomic_write(config_path, plan.config_update.payload)
-            config_published = True
-            if config_path.read_bytes() != plan.config_update.payload:
-                raise DualIpodError("Rockbox config failed verification")
         for delete_item in plan.file_deletes:
             destination = session.guard(delete_item.relative_path)
             destination.unlink()
@@ -2785,16 +2758,6 @@ def commit_dual_ipod_sync(
                 manifest_path.unlink(missing_ok=True)
         except Exception as exc:  # noqa: BLE001 - preserve all failures
             failures.append(f"manifest: {exc}")
-        if config_published:
-            try:
-                if plan.config_update.payload_before is None:
-                    config_path.unlink(missing_ok=True)
-                else:
-                    saved = session.guard(
-                        recovery / "rockbox" / "config.cfg.before")
-                    session.atomic_copy(saved, config_path)
-            except Exception as exc:  # noqa: BLE001 - preserve all failures
-                failures.append(f"Rockbox config: {exc}")
         for changed_playlist in reversed(rewritten_playlists):
             try:
                 baseline_relative = (
@@ -2936,8 +2899,6 @@ def commit_dual_ipod_sync(
             *(item.relative_path for item in changed_playlists),
             *(item.relative_path_before for item in changed_playlists
               if item.relative_path_before is not None),
-            *(tuple([plan.config_update.relative_path])
-              if plan.config_update.changed else ()),
             *(item.relative_path for item in plan.stock.copies),
             *(item.relative_path for item in plan.stock.rewrites),
             manifest_path.relative_to(plan.target),

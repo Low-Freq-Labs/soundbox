@@ -2,6 +2,11 @@
 
 ## Repo layout
 
+Current debt and staged extraction plan: [September software audit](software-audit-2026-09.md).
+The [shared-core / personal-module design](release-boundaries.md) is planned,
+not implemented. Today online discovery and its packaged dependency remain
+part of core.
+
     soundbox/   pure-Python engine (no Qt): source-neutral library model,
                 rekordbox adapters, sync/resync + manifest drift,
                 playlists (m3u8), metadata
@@ -39,7 +44,7 @@ two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
 `stock_ipod_info` (strictly read-only stock/dual device snapshots) ·
 `dual_ipod` (schema-3 single-copy stock/Rockbox plan, rollback, and ownership) ·
 `rockbox_media` (verified picture-free/tag-normalized payload derivatives and
-theme-sized art) · `rockbox_config` (narrow lossless Rockbox setting management) ·
+theme-sized art) · `rockbox_config` (read-only Rockbox theme/database observations) ·
 `backup` · `imports`
 (imported-audio plane) · `libcache` (instant-paint snapshot).
 
@@ -55,8 +60,15 @@ the coordinator never grants firmware capability or ownership of a file.
 
 `operation_control` scopes cooperative cancellation to a worker. Planning and
 media acquisition/copy boundaries poll it; rollback does not. Queued exports
-are cleared on cancellation/failure. Shutdown keeps an event loop dispatching
-until workers have actually stopped, retaining their references throughout.
+are cleared on cancellation/failure. MainWindow shutdown dispatches events until
+its collected workers have stopped. `desktop.task_owner.TaskOwner` retains
+artwork/suggestion dialog and interactive waveform workers through queued
+`finished` delivery and final join. Window shutdown closes child-owner admission
+before dispatching callbacks and drains them before native-player teardown.
+Stopped owners reject new work and their consumers reject late results. This is
+a lifetime primitive, not a replacement device queue. The coordinator owns the
+active device lane, but desktop adapters still
+retain their own queues rather than using its queue API (audit A5).
 
 `source_acquisition` captures canonical audio into disposable local storage in
 one streaming hash pass. Exact expected bytes take precedence over cloud stat
@@ -517,7 +529,7 @@ firmware-generated and absent from iTunesDB.
 Everything user-made lives in one portable `library.json` (overrides,
 playlists, imported records, hides/removals, settings) at
 `~/Library/Application Support/LowFreqLabs/Soundbox/`, keyed by stable track
-IDs so a newer rekordbox library preserves all work. Atomic saves, rotating
+IDs so a newer rekordbox library preserves all work. Atomic ordinary JSON saves, rotating
 backups, corruption auto-recovery, one-click full `.zip` backup/restore
 (library + history + art cache, including managed default photos). Track-specific
 art stays in `art/index.json`; the independent `art/defaults/` pool holds
@@ -530,6 +542,10 @@ settings payload also stores the last
 closed window geometry, table columns, and Rekordbox/Soundbox/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
 the outer geometry before applying inner pane sizes.
+Restore currently copies library/history/art sequentially and is not an atomic
+whole-state transaction; concurrent artwork publication also lacks one writer.
+See audit A2/A3/A8 before changing persistence or claiming failure-safe restore.
+
 The sibling `stock_artwork/` directory is disposable derived data, not curated
 state: it can always be regenerated from the canonical baseline JPEG art cache.
 
@@ -543,7 +559,8 @@ Python 3.14, venv at `.venv/`. `build_app.sh` uses the stable local
 `Soundbox Self-Signed` identity when present so macOS can retain TCC grants
 across rebuilds; it falls back to ad-hoc signing. The app is not Apple-notarized,
 so first launch may still require right-click → Open. Notarization is a public
-distribution concern (Phase 5). Before signing, the build stamps the project
+distribution concern (see the ROADMAP public distribution gate). Before signing,
+the build stamps the project
 version, Git revision, commit-count build number, and clean/dirty source state
 into `Info.plist`; `scripts/app_provenance.py /Applications/Soundbox.app`
 checks the bundle signature and its declared revision/version against a clean

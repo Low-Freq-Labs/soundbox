@@ -222,7 +222,9 @@ def _page_og_image(url: str) -> str | None:
 
 def _flat_search(query: str, n: int = 5) -> list[dict]:
     import yt_dlp
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": True}
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True,
+            "extract_flat": True, "socket_timeout": 15,
+            "retries": 1, "extractor_retries": 1}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"scsearch{n}:{query}", download=False) or {}
     return info.get("entries") or []
@@ -230,7 +232,8 @@ def _flat_search(query: str, n: int = 5) -> list[dict]:
 
 def _full(url: str) -> dict:
     import yt_dlp
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True,
+            "socket_timeout": 15, "retries": 1, "extractor_retries": 1}
     with yt_dlp.YoutubeDL(opts) as ydl:
         return ydl.extract_info(url, download=False) or {}
 

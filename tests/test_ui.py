@@ -1098,7 +1098,7 @@ class StockIpodUI(unittest.TestCase):
             _stock_view_pending={}, _dual_sync_queue={},
             _device_coordinator=DeviceOperationCoordinator(),
             _save_columns=lambda: None, _set_status_text=lambda text: None,
-            worker=worker,
+            worker=worker, findChildren=lambda kind: [],
         )
         QTimer.singleShot(0, lambda: events.append("Qt remained responsive"))
         QTimer.singleShot(25, release.set)
@@ -1864,6 +1864,16 @@ class StockIpodUI(unittest.TestCase):
             pending_database["Rockbox database"],
             "Auto update on · Rockbox restart pending",
         )
+        manual = StockIpodPages()
+        manual.set_snapshot(
+            snapshot, CompositeDeviceData(composite_manifest, {}, False, 9, True))
+        manual_database = {
+            manual.detail_trees["Database"].topLevelItem(index).text(0):
+            manual.detail_trees["Database"].topLevelItem(index).text(1)
+            for index in range(manual.detail_trees["Database"].topLevelItemCount())
+        }
+        self.assertEqual(
+            manual_database["Rockbox database"], "Auto update off · user controlled")
         drifted = StockIpodPages()
         drifted.set_snapshot(
             snapshot,
@@ -3189,6 +3199,121 @@ class SuggestQueue(unittest.TestCase):
             dlg.shutdown()
         finally:
             sg.SuggestWorker.run = real_run
+
+
+class TaskOwnership(unittest.TestCase):
+    def test_finished_but_undelivered_worker_still_belongs_to_owner(self):
+        from desktop.task_owner import TaskOwner
+        from desktop.workers import OneShotTask
+        owner = TaskOwner()
+        worker = OneShotTask(lambda: None)
+        retired = []
+        owner.adopt(worker, retired.append)
+        worker.start()
+        self.assertTrue(worker.wait(2000))
+        self.assertEqual(owner.pending, 1)
+        self.assertEqual(retired, [])
+        owner.drain()
+        self.assertEqual(owner.pending, 0)
+        self.assertEqual(retired, [worker])
+        with self.assertRaisesRegex(RuntimeError, "stopping"):
+            owner.adopt(OneShotTask(lambda: None))
+
+    def test_dialog_shutdown_dispatches_events_and_rejects_late_results(self):
+        from threading import Event
+        from PySide6.QtCore import QTimer
+        from desktop.artpicker import ArtPickerDialog, _CandidateSearch
+        from desktop.suggest import SuggestDialog, SuggestWorker
+        for worker_class, make in (
+            (_CandidateSearch, lambda: ArtPickerDialog("artist", "title")),
+            (SuggestWorker, lambda: SuggestDialog([("1", "title")])),
+        ):
+            entered, release = Event(), Event()
+            events = []
+            def run(worker):
+                entered.set()
+                release.wait(2)
+                events.append("worker stopped")
+            with mock.patch.object(worker_class, "run", run):
+                dialog = make()
+                try:
+                    self.assertTrue(entered.wait(1))
+                    dialog.reject()
+                    old_status = dialog.status.text()
+                    if isinstance(dialog, SuggestDialog):
+                        dialog._add_suggestion("1", "late", "late", 1.0)
+                        dialog._on_progress(1, 1, 1)
+                        self.assertEqual(dialog.list.topLevelItemCount(), 0)
+                    else:
+                        dialog._search_done(0)
+                    self.assertEqual(dialog.status.text(), old_status)
+                    QTimer.singleShot(0, lambda: events.append("events dispatched"))
+                    QTimer.singleShot(25, release.set)
+                    dialog.shutdown()
+                    self.assertEqual(events, ["events dispatched", "worker stopped"])
+                    self.assertEqual(dialog._tasks.pending, 0)
+                finally:
+                    release.set()
+                    dialog.shutdown()
+
+    def test_window_shutdown_drains_child_tasks_before_player_teardown(self):
+        from threading import Event
+        from types import SimpleNamespace
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QWidget
+        from desktop.app import MainWindow
+        from desktop.task_owner import TaskOwner
+        from desktop.workers import OneShotTask
+        from soundbox.device_operations import DeviceOperationCoordinator
+        parent = QWidget()
+        owner = TaskOwner(parent)
+        release = Event()
+        events = []
+        worker = OneShotTask(lambda: release.wait(2))
+        owner.adopt(worker, lambda worker: events.append("child retired"))
+        worker.start()
+        stub = SimpleNamespace(
+            _stock_view_pending={}, _dual_sync_queue={},
+            _device_coordinator=DeviceOperationCoordinator(),
+            _save_columns=lambda: None, _set_status_text=lambda text: None,
+            findChildren=parent.findChildren,
+            player_bar=SimpleNamespace(stop=lambda: None,
+                shutdown=lambda: events.append("player closed")),
+        )
+        try:
+            QTimer.singleShot(25, release.set)
+            MainWindow.shutdown(stub)
+            self.assertTrue(owner.stopping)
+            self.assertEqual(owner.pending, 0)
+            self.assertEqual(events, ["child retired", "player closed"])
+        finally:
+            release.set()
+            owner.drain()
+
+    def test_waveform_shutdown_waits_for_retirement_and_closes_admission(self):
+        from threading import Event
+        from PySide6.QtCore import QTimer
+        from desktop.player import PlayerBar, WaveformWorker
+        entered, release = Event(), Event()
+        def run(worker):
+            entered.set()
+            release.wait(2)
+        pb = PlayerBar()
+        try:
+            with mock.patch.object(WaveformWorker, "run", run):
+                pb._start_waveform("/tmp/synthetic-no-read.wav")
+                self.assertTrue(entered.wait(1))
+                QTimer.singleShot(25, release.set)
+                pb.shutdown_waveforms()
+                self.assertEqual(pb._wf_pending, [])
+                self.assertIsNone(pb._wf)
+                pb._start_waveform("/tmp/must-not-start.wav")
+                self.assertIsNone(pb._wf)
+                self.assertFalse(pb._analysis_is_current(
+                    pb._src_path, pb._analysis_path, pb._analysis_generation))
+        finally:
+            release.set()
+            pb.shutdown()
 
 
 class PlayerHardening(unittest.TestCase):

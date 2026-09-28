@@ -77,7 +77,7 @@ unchanged.
 
 ```text
 /
-├── .rockbox/                 firmware plus narrowly managed config.cfg
+├── .rockbox/                 firmware and user-owned preferences
 ├── Music/Artist/Track/       audio plus exact and universal per-track BMPs
 ├── Playlists/*.m3u8          UTF-8, drive-root-absolute audio paths
 └── .soundbox/manifest.json   v2 path ownership, hashes, membership, generation
@@ -114,13 +114,11 @@ playlists share the same leaf name, SoundBox adds folder context only to those
 colliding titles and refuses any still-ambiguous result. The same chosen title
 is used by Rockbox and the stock iTunesDB. Users may
 play exported playlists without initializing Rockbox's optional tag database;
-database users can run Rockbox's update/initialize workflow afterward. Composite sync enables
-Rockbox's own automatic tag-cache update and tells the playlist viewer to show
-titles from tags. It also raises `max files in playlist` to the documented
-10,000 default when the user's value is lower, while preserving any larger
-value; this prevents a full Collection M3U8 from exhausting a stale 2,000-entry
-buffer. Rockbox requires a full restart before that limit takes effect. The
-Playlist Catalogue is configured to sort alphabetically. Because physical
+database users can run Rockbox's update/initialize workflow afterward. Sync never
+writes Rockbox preferences or requires auto-update, tag display or a minimum
+playlist limit. Those settings and their memory tradeoffs belong to the user.
+Changing them does not signal managed-library drift. The Playlist Catalogue sorts
+alphabetically. Because physical
 Rockbox kept presenting that order despite controlled FAT timestamps, each
 Rockbox-only M3U8 filename receives a zero-padded sequence such as
 `01 - HOUSE.m3u8`. Stock iTunesDB titles and SoundBox device rows remain clean
@@ -130,16 +128,13 @@ reordering renames only the tiny owned Rockbox playlist files. A rename that
 changes only capitalization, such as `DnB` to `DNB`, is still published with
 the requested spelling: SoundBox recovery-backs the owned FAT entry, removes
 that one old spelling, and writes the renamed playlist transactionally.
-This setting is Rockbox-specific. Stock playlists are MHYP/MHIP reference
-lists with 32-bit entry counts; the pinned offline renderer has a regression
-proof for 10,000 entries and there is no equivalent stock-firmware preference
-for SoundBox to set.
-SoundBox preserves all unrelated `config.cfg` lines and the file's existing
-LF/CRLF style, and never writes `database_*.tcd` directly;
-Rockbox reconciles its rebuildable cache on
-the next firmware boot. The dashboard reports `Rockbox restart pending` when
-the index predates the current SoundBox manifest/config generation; that signal
-never authorizes SoundBox to edit or delete the cache.
+Stock playlists are MHYP/MHIP reference lists with 32-bit entry counts; the
+pinned offline renderer has a regression proof for 10,000 entries and there is no
+corresponding stock-firmware preference for SoundBox to set.
+SoundBox never writes `config.cfg`, its staged/old companions, or `database_*.tcd`.
+The dashboard observes the saved auto-update preference without asking to enable
+it. When enabled, a stale index can indicate a pending Rockbox restart; with it
+off, database maintenance remains an optional manual Rockbox operation.
 
 Reference:
 [Rockbox Manual for iPod Video](https://download.rockbox.org/daily/manual/rockbox-ipodvideo/rockbox-build.html).

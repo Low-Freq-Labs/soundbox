@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QGridLayout, QHBoxLayout, QMenu, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
+from .task_owner import TaskOwner
 from .native_deck import (
     NativeGainControl, NativeDeckBackend, PlaybackState,
     UnavailableDeckBackend,
@@ -1480,6 +1481,7 @@ class PlayerBar(QWidget):
         # rapid track change starts a new one before the old returns, and
         # dropping the old Python ref mid-run GC's a running QThread → SIGABRT.
         self._wf_pending: list[WaveformWorker] = []
+        self._waveform_tasks = TaskOwner(self)
 
         # Compact transport stack, modeled after a CDJ/rekordbox deck:
         # track navigation → selectable beat/bar jump → cue/play. MainWindow handles track
@@ -2317,6 +2319,8 @@ class PlayerBar(QWidget):
             self.player.set_session_cue(position_ms)
 
     def _start_waveform(self, path: str, analysis_path: str = ""):
+        if self._waveform_tasks.stopping:
+            return
         # Interrupt the previous decode first: rapid track changes must not pile
         # up multi-second AAC/ALAC analysis threads.
         if self._wf is not None and _thread_running(self._wf):
@@ -2340,7 +2344,7 @@ class PlayerBar(QWidget):
         w.detail_ready.connect(
             lambda src, gen, data, ap=analysis_path:
             self._on_analysis_detail(src, ap, gen, data))
-        w.finished.connect(lambda ww=w: self._wf_done(ww))
+        self._waveform_tasks.adopt(w, self._wf_done)
         w.start()
 
     def _wf_done(self, w):
@@ -2350,20 +2354,10 @@ class PlayerBar(QWidget):
             self._wf_pending.remove(w)
         except ValueError:
             pass
-        try:
-            w.deleteLater()
-        except RuntimeError:
-            pass
 
     def shutdown_waveforms(self):
-        """Interrupt + wait every in-flight decode before teardown (no 'QThread
-        destroyed while running')."""
-        for w in list(self._wf_pending):
-            try:
-                if _thread_running(w):
-                    w.requestInterruption(); w.wait(5000)
-            except RuntimeError:
-                pass
+        """Close admission and drain interactive work before native teardown."""
+        self._waveform_tasks.drain()
 
     def cancel_analysis_cache_writes(self, track_ids):
         """Cancel matching interactive cooks; their workers delete on exit."""
@@ -2380,7 +2374,8 @@ class PlayerBar(QWidget):
     def _analysis_is_current(
             self, path: str, analysis_path: str, generation: int) -> bool:
         return (
-            generation == self._analysis_generation
+            not self._waveform_tasks.stopping
+            and generation == self._analysis_generation
             and path == self._src_path
             and analysis_path == self._analysis_path
         )

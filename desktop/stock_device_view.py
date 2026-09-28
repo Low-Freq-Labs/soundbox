@@ -67,7 +67,7 @@ class CompositeDeviceData:
 
     manifest: dict[str, Any]
     playlist_entries: dict[str, tuple[str, ...]]
-    rockbox_settings_ready: bool = False
+    rockbox_database_auto_update: bool = False
     rockbox_database_files: int = 0
     rockbox_database_refresh_pending: bool = False
     changed_playlist_keys: frozenset[str] = frozenset()
@@ -571,12 +571,12 @@ class StockIpodPages(QWidget):
                 ("Rockbox database", (
                     "Auto update on · Rockbox restart pending"
                     if (
-                        composite.rockbox_settings_ready
+                        composite.rockbox_database_auto_update
                         and composite.rockbox_database_refresh_pending
                     ) else (
                     f"Auto update on · {composite.rockbox_database_files} cache files"
-                    if composite.rockbox_settings_ready
-                    else "Auto update needs enabling"))),
+                    if composite.rockbox_database_auto_update
+                    else "Auto update off · user controlled"))),
                 ("iTunesDB", (
                     f"0x{snapshot.database_version:X} · checksum "
                     f"{snapshot.checksum_scheme}")),

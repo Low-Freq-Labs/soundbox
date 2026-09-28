@@ -1,16 +1,10 @@
-"""Narrow, lossless management of Rockbox settings required by SoundBox.
+"""Read-only Rockbox theme and optional database observations.
 
-Rockbox remains the authority for its binary tag cache.  SoundBox enables
-Rockbox's own boot-time updater, asks the playlist viewer to read the tags
-already written into disposable device payloads, and keeps the playlist buffer
-large enough for full-library catalogues.  Every unrelated config line is
-preserved byte-for-byte after UTF-8 decoding.
+Firmware preferences belong exclusively to the user and Rockbox.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 import re
 
@@ -18,37 +12,11 @@ from .manifest import manifest_path
 
 
 CONFIG_RELATIVE = Path(".rockbox/config.cfg")
-MIN_PLAYLIST_FILES = 10_000
-_PLAYLIST_LIMIT_KEY = "max files in playlist"
-# Rockbox 4.0 has no "sort playlists" setting. Its config save drops unknown
-# keys; requiring that legacy SoundBox line causes a false Sync after every boot.
-# Keep existing unknown lines untouched, but never add or require this one.
-REQUIRED_SETTINGS = (
-    ("tagcache_autoupdate", "on"),
-    ("playlist viewer track display", "title from tags"),
-    (_PLAYLIST_LIMIT_KEY, str(MIN_PLAYLIST_FILES)),
-)
 _THEME_KEYS = ("wps", "sbs")
 _ALBUM_ART = re.compile(
     r"%Cl\(\s*[^,\r\n()]+\s*,\s*[^,\r\n()]+\s*,"
     r"\s*(\d+)\s*,\s*(\d+)(?:\s*,[^)\r\n]*)?\s*\)")
 _MAX_THEME_BYTES = 1024 * 1024
-
-
-class RockboxConfigError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class RockboxConfigPlan:
-    relative_path: Path
-    payload: bytes
-    payload_before: bytes | None
-    sha256_before: str | None
-
-    @property
-    def changed(self) -> bool:
-        return self.payload != self.payload_before
 
 
 def _setting_key(line: str) -> str:
@@ -105,83 +73,13 @@ def theme_album_art_sides(root: str | Path) -> tuple[int, ...]:
     return tuple(sorted(sides, reverse=True))
 
 
-def desired_payload(payload: bytes | None) -> bytes:
-    """Return config bytes with only SoundBox's required values changed."""
+def database_auto_update_enabled(root: str | Path) -> bool:
+    """Observe the saved preference; absent/unreadable settings default to off."""
     try:
-        text = (payload or b"").decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise RockboxConfigError("Rockbox config is not valid UTF-8") from exc
-    lines = text.splitlines(keepends=True)
-    newline = next(
-        (
-            "\r\n" if line.endswith("\r\n")
-            else "\n" if line.endswith("\n")
-            else "\r"
-            for line in lines
-            if line.endswith(("\r\n", "\n", "\r"))
-        ),
-        "\n",
-    )
-    required = {key.casefold(): (key, value) for key, value in REQUIRED_SETTINGS}
-    seen: set[str] = set()
-    output: list[str] = []
-    for line in lines:
-        if line.endswith("\r\n"):
-            content, ending = line[:-2], "\r\n"
-        elif line.endswith(("\n", "\r")):
-            content, ending = line[:-1], line[-1:]
-        else:
-            content, ending = line, ""
-        key = _setting_key(content)
-        desired = required.get(key)
-        if desired is None:
-            output.append(line)
-            continue
-        if key in seen:
-            continue
-        if key == _PLAYLIST_LIMIT_KEY:
-            try:
-                current_limit = int(content.split(":", 1)[1].strip())
-            except (IndexError, ValueError):
-                current_limit = 0
-            if current_limit >= MIN_PLAYLIST_FILES:
-                output.append(line)
-                seen.add(key)
-                continue
-        output.append(f"{desired[0]}: {desired[1]}{ending}")
-        seen.add(key)
-    for folded, (key, value) in required.items():
-        if folded not in seen:
-            if output and not output[-1].endswith(("\r\n", "\n", "\r")):
-                output[-1] += newline
-            output.append(f"{key}: {value}{newline}")
-    return "".join(output).encode("utf-8")
-
-
-def plan(root: str | Path) -> RockboxConfigPlan:
-    target = Path(root).expanduser().resolve(strict=True)
-    rockbox = target / ".rockbox"
-    if rockbox.is_symlink() or not rockbox.is_dir():
-        raise RockboxConfigError("Rockbox config requires an installed .rockbox directory")
-    path = target / CONFIG_RELATIVE
-    if path.is_symlink() or (path.exists() and not path.is_file()):
-        raise RockboxConfigError("Rockbox config path is not a regular file")
-    before = path.read_bytes() if path.is_file() else None
-    return RockboxConfigPlan(
-        CONFIG_RELATIVE,
-        desired_payload(before),
-        before,
-        hashlib.sha256(before).hexdigest() if before is not None else None,
-    )
-
-
-def settings_ready(root: str | Path) -> bool:
-    """Bounded read-only check used by drift scanning and the dashboard."""
-    try:
-        item = plan(root)
-    except (OSError, RockboxConfigError):
+        values = _setting_values((Path(root) / CONFIG_RELATIVE).read_bytes())
+    except (OSError, UnicodeError):
         return False
-    return not item.changed
+    return values.get("tagcache_autoupdate", "off").casefold() == "on"
 
 
 def database_file_count(root: str | Path) -> int:

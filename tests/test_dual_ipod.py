@@ -287,10 +287,25 @@ class DualIpodSyncTests(unittest.TestCase):
             ]["playlists"],
             ["dual-test"],
         )
-        config = (self.ipod / ".rockbox/config.cfg").read_text()
-        self.assertIn("tagcache_autoupdate: on", config)
-        self.assertIn(
-            "playlist viewer track display: title from tags", config)
+        self.assertFalse((self.ipod / ".rockbox/config.cfg").exists())
+
+    def test_sync_never_owns_firmware_preferences(self):
+        config = self.ipod / ".rockbox/config.cfg"
+        before = b"tagcache_autoupdate: off\r\nmax files in playlist: 5000\r\nplaylist viewer track display: track name\r\n"
+        config.write_bytes(before)
+        pending = config.with_name("config.cfg.new")
+        pending.write_bytes(b"volume: -30\n")
+        first = self._plan()
+        # Preferences can change after planning without invalidating device work.
+        changed = before + b"shuffle: on\r\n"
+        config.write_bytes(changed)
+        commit_dual_ipod_sync(first)
+        self.assertEqual(config.read_bytes(), changed)
+        self.assertEqual(pending.read_bytes(), b"volume: -30\n")
+        self.assertFalse(engine.device_drift(self.library, self.ipod).any())
+        commit_dual_ipod_sync(self._plan(reconcile=True))
+        self.assertEqual(config.read_bytes(), changed)
+        self.assertFalse(list(self.ipod.rglob("config.cfg.before")))
 
     def test_commit_refuses_same_name_target_replacement_after_plan(self):
         plan = self._plan()
@@ -1007,6 +1022,9 @@ class DualIpodSyncTests(unittest.TestCase):
     def test_manifest_failure_rolls_back_stock_and_all_new_rockbox_files(self):
         before_database = _hash(self.ipod / "iPod_Control/iTunes/iTunesDB")
         before_media = _hash(self.ipod / "iPod_Control/Music/F00/AAAA.wav")
+        config = self.ipod / ".rockbox/config.cfg"
+        config.write_bytes(b"tagcache_autoupdate: off\nmax files in playlist: 5000\n")
+        before_config = config.read_bytes()
         plan = self._plan()
         real_write = DeviceSession.atomic_write
 
@@ -1022,7 +1040,7 @@ class DualIpodSyncTests(unittest.TestCase):
         self.assertEqual(_hash(self.ipod / "iPod_Control/iTunes/iTunesDB"), before_database)
         self.assertEqual(_hash(self.ipod / "iPod_Control/Music/F00/AAAA.wav"), before_media)
         self.assertFalse((self.ipod / ".soundbox/manifest.json").exists())
-        self.assertFalse((self.ipod / ".rockbox/config.cfg").exists())
+        self.assertEqual(config.read_bytes(), before_config)
         for item in plan.media_copies + plan.artwork_copies:
             self.assertFalse((self.ipod / item.relative_path).exists())
         for item in plan.playlists:
@@ -1271,8 +1289,7 @@ class DualIpodSyncTests(unittest.TestCase):
         # Firmware may update its own cache and rewrite unchanged preferences.
         (remounted / ".rockbox/database_0.tcd").write_bytes(b"firmware cache")
         config = remounted / ".rockbox/config.cfg"
-        firmware_config = config.read_bytes().replace(b"sort playlists: alpha\n", b"")
-        config.write_bytes(firmware_config + b"volume: -20\n")
+        config.write_bytes(b"tagcache_autoupdate: off\nmax files in playlist: 5000\nvolume: -20\n")
         self.safe.chmod(0o400)
         self.assertFalse(engine.device_drift(self.library, remounted).any())
         self.library.tracks_by_id["safe"].name = "A real SoundBox title change"

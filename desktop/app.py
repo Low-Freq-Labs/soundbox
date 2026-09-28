@@ -135,6 +135,7 @@ from soundbox.stock_ipod_shadow import StockIpodShadowStore
 from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 from . import theme
 from .artpicker import ArtPickerDialog
+from .task_owner import TaskOwner
 from .model import (
     COLUMNS, TrackModel, row_display_value, row_matches as _row_matches,
 )
@@ -1873,7 +1874,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dlg = SuggestDialog(items, self)
         dlg.exec()
         dlg.shutdown()  # stop/wait the scan thread BEFORE the dialog is GC'd
-        if not dlg.accepts:
+        if self._shutting_down or not dlg.accepts:
             return
         for tid, artist in dlg.accepts:
             self.overrides[tid] = artist
@@ -3097,7 +3098,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 composite_data = CompositeDeviceData(
                     composite_manifest,
                     playlist_status.entries,
-                    rockbox_config.settings_ready(dev),
+                    rockbox_config.database_auto_update_enabled(dev),
                     rockbox_config.database_file_count(dev),
                     rockbox_config.database_refresh_pending(dev),
                     playlist_status.changed_keys,
@@ -4076,8 +4077,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             f"Audio changes: {added_audio} add · {updated_audio} update · "
             f"{removed_audio} remove\n"
             f"Playlist files updated: {summary['rockbox_playlist_writes']}\n"
-            f"Rockbox database auto-update: "
-            f"{'enable' if summary['rockbox_settings_updated'] else 'on'}\n"
             f"Unreferenced files removed: "
             f"{summary['orphan_media_files'] + summary['orphan_artwork_files'] + summary['rockbox_clutter_files']} "
             f"({human(summary['orphan_bytes_to_delete'])})"
@@ -5495,7 +5494,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dlg.exec()
         dlg.shutdown()  # stop/wait the search thread BEFORE the dialog is GC'd
         choice = dlg.choice
-        if not choice:
+        if self._shutting_down or not choice:
             return
         if choice["kind"] == "thumb":
             c = choice["cand"]
@@ -6201,6 +6200,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._device_coordinator.cancel(shutdown=True)
         self._pending_device_operation = None
         self._dual_sync_queue.clear()
+        # Child dialogs/player own threads outside the window's attributes.
+        # Close their admission before dispatching any queued completion work.
+        task_owners = self.findChildren(TaskOwner)
+        for owner in task_owners:
+            owner.stop()
         # Keep every QThread referenced and keep Qt dispatching until its real
         # completion. A timeout can never grant permission to destroy a writer.
         workers = [value for value in vars(self).values()
@@ -6227,6 +6231,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             timer.start()
             loop.exec()
             timer.stop()
+        for owner in task_owners:
+            owner.drain()
         pb = getattr(self, "player_bar", None)
         if pb is not None:
             pb.stop()
