@@ -8,14 +8,15 @@ Local `main`; Sonny explicitly requested complete wrap-up on September 27.
 The release includes the previously dirty playlist/performance work and lifecycle
 corrections. Resolve the release revision with `git rev-parse HEAD`; the final
 clean build records it in Info.plist. Commit/push are authorized for this release.
-Reconnect/playback/firmware-config correction installed at `/Applications/Soundbox.app`
-with signature verification; relaunched September 27 at 20:01:07. Native
-CoreAudio/Metal active. Discovery found the mounted iPod in 1.27 seconds and the
-loading row was visually confirmed before dashboard completion at 20:01:22.
-Loaded 3397 tracks / 75 playlists, zero preparation work and zero art fetched.
-Postlaunch library hash, 202 Favorites, 3298 art hashes and 2924 analysis baselines
-match the closed state. Generation-60 manifest hash is unchanged. Previous app is
-`lifecycle-before-reconnect-fix.app` in the existing rollback directory.
+Reconnect/playback/firmware-config correction installed at `/Applications/Soundbox.app`.
+The clean release packaging was signature/provenance verified and relaunched on
+September 27 at 20:25:08: native CoreAudio/Metal active, 3397 tracks / 75 playlists,
+zero preparation work, zero artwork fetched. All 202 Favorites, 3298 artwork
+hashes, 2924 analysis baselines and the library hash remained intact. Final
+handoff-only packaging uses the same validated application sources.
+The earlier connected run found the iPod in 1.27 seconds and visually showed its
+loading row before dashboard completion. Generation-60 manifest remained unchanged.
+The preceding installed app is `lifecycle-before-wrap.app` in the rollback directory.
 
 ## Current correction
 
