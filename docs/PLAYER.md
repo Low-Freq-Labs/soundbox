@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-09-10. This is the player reference: shipped behavior,
+Current as of 2026-09-28. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -71,6 +71,9 @@ Transport controls:
   Explicit pause/stop, source replacement, and playback errors cancel that
   request; resumed playback arms it again. Each terminal event is consumed once,
   and a newer transport command or source invalidates deferred advancement.
+  A newer terminal flag overrides a stale PLAYING snapshot before that deferred
+  source swap. Cue playback promoted with Play/Space also advances after release;
+  an unlatched cue preview does not. Device discovery does not gate advancement.
 
 Cue panel:
 

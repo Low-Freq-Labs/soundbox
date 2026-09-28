@@ -21,15 +21,17 @@ audio files are NEVER modified (see soundbox.sync safety contract).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import random
 import sys
 import time
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 
+from soundbox.state_repository import StateRepository
+from soundbox.artwork import ArtCache, ArtResult
 from soundbox.device_operations import (
     DeviceCommand, DeviceOperationCoordinator, adapter_result,
     DeviceSessionIdentity, Phase,
@@ -231,6 +233,19 @@ def _autoplay_arrow_icon(direction: int) -> QIcon:
     painter.end()
     return QIcon(pixmap)
 
+def _art_ui_action(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except (OSError, ValueError) as exc:
+            LOG.error("Artwork was not saved: %s", exc)
+            self._flash_status("Artwork NOT saved — check space/permissions and retry", 20)
+            QMessageBox.warning(self, "Artwork wasn't saved", str(exc))
+            return None
+    return guarded
+
+
 class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self):
         super().__init__()
@@ -238,8 +253,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.resize(1240, 800)
         data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
         self._data_file = data_dir / "library.json"  # portable SoundBox library
+        self._state_repository = StateRepository(self._data_file)
+        self._state_maintenance = False
+        self._state_publication = False
         self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
-        self.art_cache = artfetch.ArtCache(data_dir / "art")  # cover-art cache
+        self.art_cache = ArtCache(data_dir / "art")  # cover-art cache
         self.stock_art_cache = StockArtworkCache(data_dir / "stock_artwork")
         self.rockbox_media_cache = RockboxMediaCache(data_dir / "rockbox_media")
         self.rockbox_art_cache = RockboxArtworkCache(
@@ -402,12 +420,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     # ---------- persistence ----------
     def _load_state(self):
-        data = {}
-        if self._data_file.exists():
-            try:
-                data = json.loads(self._data_file.read_text(encoding="utf-8"))
-            except (ValueError, OSError):
-                data = self._recover_state()
+        self._state_repository = StateRepository(self._data_file)
+        data = self._state_repository.load()
+        self.art_cache.read_only = not self._state_repository.writable
+        recovery = self._state_repository.recovery
+        if recovery is not None:
+            message = (f"Restored {recovery.backup.name}. Recent edits may be missing."
+                       if recovery.backup else
+                       "No usable backup was found. Saving is disabled until you restore a valid backup.")
+            QMessageBox.warning(self, "Library recovery",
+                                f"{message}\n\nDamaged state preserved as {recovery.damaged.name}.")
         self.custom = data.get("custom") or {}
         self.imported = data.get("imported") or {}  # sb-… id -> file record
         self.overrides = data.get("artist_overrides") or {}
@@ -464,75 +486,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         elif self._last_xml and Path(self._last_xml).is_file():
             self.open_library(self._last_xml)
 
-    def _recover_state(self) -> dict:
-        """library.json was unreadable. NEVER silently continue empty (the next
-        save would bury weeks of curation) — restore the newest parseable
-        rotating backup, keep the damaged file aside for forensics, and say so."""
-        corrupt = self._data_file.with_name(
-            f"library.corrupt-{time.strftime('%Y%m%d-%H%M%S')}.json")
-        try:
-            self._data_file.rename(corrupt)
-        except OSError:
-            pass
-        bdir = self._data_file.parent / "backups"
-        candidates = sorted(bdir.glob("*.json"), reverse=True) if bdir.is_dir() else []
-        for bk in candidates:
-            try:
-                data = json.loads(bk.read_text(encoding="utf-8"))
-                assert isinstance(data, dict)
-            except (ValueError, OSError, AssertionError):
-                continue
-            LOG.error("library.json was corrupt — restored backup %s "
-                      "(damaged file kept as %s)", bk.name, corrupt.name)
-            QMessageBox.warning(
-                self, "Library recovered",
-                f"library.json couldn't be read, so the newest good backup "
-                f"({bk.name}) was restored.\n\nThe damaged file was kept as "
-                f"{corrupt.name}. Recent edits since that backup may be missing.")
-            return data
-        LOG.error("library.json corrupt and NO usable backup — starting empty "
-                  "(damaged file kept as %s)", corrupt.name)
-        QMessageBox.warning(
-            self, "Library unreadable",
-            "library.json couldn't be read and no usable backup was found.\n\n"
-            f"Starting fresh; the damaged file was kept as {corrupt.name} — "
-            "you can also use Settings → Restore from backup.")
-        return {}
-
-    def _backup_state(self):
-        """Rotating safety copies of library.json (curation is hours of work).
-        At most one per hour, skipped when nothing changed, newest 10 kept —
-        so the history spans days of curating, not one burst of edits."""
-        try:
-            if not self._data_file.exists():
-                return
-            bdir = self._data_file.parent / "backups"
-            bdir.mkdir(parents=True, exist_ok=True)
-            cur = self._data_file.read_bytes()
-            old = sorted(bdir.glob("library-*.json"))
-            if old and (time.time() - old[-1].stat().st_mtime < 3600
-                        or old[-1].read_bytes() == cur):
-                return
-            stamp = time.strftime("%Y%m%d-%H%M%S")
-            dest, i = bdir / f"library-{stamp}.json", 1
-            while dest.exists():  # two saves in one second must not overwrite
-                dest, i = bdir / f"library-{stamp}-{i}.json", i + 1
-            dest.write_bytes(cur)
-            for p in sorted(bdir.glob("library-*.json"))[:-10]:
-                p.unlink(missing_ok=True)
-        except OSError:
-            pass  # a backup hiccup must never block the real save
-
     def _save_state(self) -> bool:
         """Write the portable SoundBox library (overrides + custom playlists)."""
         self._sync_playlists_cache = None
-        self._backup_state()  # snapshot the previous good state first
         try:
-            self._data_file.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic (temp + rename): a crash mid-save must never corrupt the
-            # library — it holds every override, playlist, delete and setting.
-            tmp = self._data_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps({
+            if self._state_publication:
+                return False
+            self._state_repository.save({
                 "custom": self.custom,
                 "imported": self.imported,
                 "artist_overrides": self.overrides,
@@ -545,11 +505,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "artist_aliases": self.aliases,
                 "last_xml": self._last_xml,
                 "settings": self.settings,
-            }, indent=2), encoding="utf-8")
-            os.replace(tmp, self._data_file)
+            })
+            self.setWindowTitle("Soundbox")
+            if self._state_repository.backup_error:
+                LOG.warning("Library saved, but rotating backup failed: %s",
+                            self._state_repository.backup_error)
+                self._flash_status("Library saved; safety backup failed — check space/permissions", 20)
             return True
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             LOG.error("Could not save library.json: %s", exc)
+            self.setWindowTitle("Soundbox — Library not saved")
+            self._flash_status("Library NOT saved — check available space/permissions and retry", 20)
             return False
 
     # ---------- settings ----------
@@ -619,6 +585,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         """Precompute EVERY track's row off the UI thread so the first click on
         any playlist is already instant — no waiting. Single-flight; a stale
         result (generation moved on) is discarded and re-warmed."""
+        if getattr(self, "_state_maintenance", False):
+            return
         if self.lib is None or _running(self._warm_worker):
             return
         from .workers import OneShotTask
@@ -1691,6 +1659,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._start_library_cache(self.lib)
 
     def _start_library_cache(self, lib):
+        if getattr(self, "_state_maintenance", False):
+            return
         from .workers import OneShotTask
         path = self._libcache_path
         w = OneShotTask(lambda: libcache.dump(lib, path),
@@ -1788,6 +1758,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     # ---------- live rekordbox refresh ----------
     def _refresh_rekordbox(self):
+        if getattr(self, "_state_maintenance", False):
+            return
         if self._refresh_worker is not None:
             # A click during the snapshot is a request for a newer point in
             # time, not a no-op. Coalesce repeated clicks into one immediate
@@ -1945,6 +1917,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._reload_current_view()
         self._flash_status(f"Merged {len(accepts)} ✓", 8)
 
+    @_art_ui_action
     def _rescan_covers(self):
         """One button: re-attempt tracks with no art AND upgrade artist-avatar
         fallbacks toward a real track cover. Keeps confirmed real covers, reuses
@@ -2201,6 +2174,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         recovers a cross-volume copy. The explicit folder picker remains the
         fallback for anything ambiguous or not indexed.
         """
+        if getattr(self, "_state_maintenance", False):
+            return
         if self._import_location_worker is not None or self._shutting_down:
             return
         targets = {
@@ -2617,6 +2592,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         copy/delete hammers it — so it runs OFF the UI thread (DeviceScanWorker) and
         the tree is updated in `_on_devices_scanned`. Single-flight: if a scan is
         already running we skip, so the 3s timer can never pile up workers."""
+        if getattr(self, "_state_maintenance", False):
+            return
         force = force or getattr(self, "_device_mount_refresh_pending", False)
         if not self._device_coordinator.polling_allowed:
             return
@@ -2740,7 +2717,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_devices_discovered(self, devs: list):
         """Show discovered mounts immediately; retain ownership through finished.
 
-        Loading rows are disabled until discovery finishes. Stock dashboard
+        Device rows are disabled until discovery finishes. Stock dashboard
         loading never hides an otherwise recognized mounted device.
         """
         if QApplication.mouseButtons() & Qt.LeftButton:
@@ -2769,7 +2746,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._stock_view_warming.add(path)
             if stock and path in self._stock_view_warming:
                 self._start_ipod_loading_status()
-                # Replace a same-name row with a disabled loading row so its
+                # Replace a same-name row with a disabled device row so its
                 # old dashboard cannot be used under the new mount authority.
                 for index in range(self.device_tree.topLevelItemCount() - 1, -1, -1):
                     item = self.device_tree.topLevelItem(index)
@@ -2783,7 +2760,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._device_profiles[path] = profile
                 self._drift_cache.setdefault(path, 0)
             if path not in current:
-                item = QTreeWidgetItem([f"⛃  {name} · Loading device…"])
+                item = QTreeWidgetItem([f"⛃  {name}"])
                 item.setData(0, DEVPATH_ROLE, path)
                 item.setToolTip(0, "Connected — reading device details")
                 item.setDisabled(True)
@@ -2889,8 +2866,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._device_mount_tokens.pop(stale, None)
             self._device_coordinator.disconnect(stale)
             self._dual_sync_queue.pop(stale, None)
-        # The row is already visible. A completed follow-up scan clears its
-        # loading label once the immutable dashboard is cached.
+        # The row is already visible. A completed follow-up scan clears the
+        # bottom status once the immutable dashboard is cached.
         ready_paths = {
             path for path in self._stock_view_warming
             if path in self._stock_view_cache and path in all_paths
@@ -2918,16 +2895,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 if it is not None:
                     it.setDisabled(False)
                     it.setText(0, self._device_label(
-                        name, free, drift, device_fs(path), profile)
-                        + (" · Loading library…" if path in self._stock_view_warming else ""))
+                        name, free, drift, device_fs(path), profile))
                     it.setToolTip(0, self._device_tip(path, free, profile))
             self._finish_ipod_loading_status()
             return
         self.device_tree.clear()
         for name, path, free, drift, profile in visible_devs:
             it = QTreeWidgetItem([self._device_label(
-                name, free, drift, device_fs(path), profile)
-                + (" · Loading library…" if path in self._stock_view_warming else "")])
+                name, free, drift, device_fs(path), profile)])
             it.setData(0, DEVPATH_ROLE, path)
             it.setToolTip(0, self._device_tip(path, free, profile))
             self.device_tree.addTopLevelItem(it)
@@ -3049,6 +3024,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _read_stock_device_view(
             self, dev: str, profile=None, *, after_finished=None):
+        if getattr(self, "_state_maintenance", False):
+            return
         if after_finished is not None:
             self._stock_view_callbacks.setdefault(dev, []).append(after_finished)
         if self._shutting_down or self._device_coordinator.eject_pending:
@@ -5417,6 +5394,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         done(True, self.art_cache.default_photos(), message)
 
     def _on_catalog_action(self, c: dict, done):
+        try:
+            self._apply_catalog_action(c, done)
+        except (OSError, ValueError) as exc:
+            LOG.error("Artist artwork was not saved: %s", exc)
+            QMessageBox.warning(self, "Artwork wasn't saved", str(exc))
+            done(False, None)
+
+    def _apply_catalog_action(self, c: dict, done):
         """Apply one catalog change and call done(ok, image_path) on the main
         thread so the (still-open) dialog updates its row in place."""
         tids = c["tids"]
@@ -5441,7 +5426,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 done(False, None)
                 return
             mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            self._apply_artist_picture(tids, artfetch.ArtResult(
+            self._apply_artist_picture(tids, ArtResult(
                 data=data, mime=mime, confidence=1.0,
                 source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]))
             done(True, self.art_cache.image_path(tids[0]))
@@ -5458,7 +5443,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if isinstance(res, Exception) or res is None:
                 done(False, None)
                 return
-            self._apply_artist_picture(tids, res)
+            try:
+                self._apply_artist_picture(tids, res)
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self, "Artwork wasn't saved", str(exc))
+                done(False, None)
+                return
             done(True, self.art_cache.image_path(tids[0]))
 
         w.done.connect(landed)
@@ -5474,12 +5464,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._queue_stock_artwork(tids)
         self._flash_status(f"Art set on {len(tids)} ✓", 8)
 
+    @_art_ui_action
     def _art_remove(self, tid):
         # BLOCK, not forget: a deliberate removal must never be undone by the
         # background fill on the next launch (it was — infuriating).
         self.art_cache.block(tid)
         self.model.refresh_art(self.art_cache.status_kind)
 
+    @_art_ui_action
     def _art_pick(self, tid):
         """The manual picker: thumbnail grid of SoundCloud candidates (human
         judges, no confidence gate) + URL/file escape hatches. 100% coverage for
@@ -5510,7 +5502,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 QMessageBox.warning(self, "Couldn't read image", str(exc))
                 return
             mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            self.art_cache.store_ok(tid, artfetch.ArtResult(
+            self.art_cache.store_ok(tid, ArtResult(
                 data=data, mime=mime, confidence=1.0,
                 source_url=p.as_uri(), matched_title=p.name))
             self._flash_status("Art set ✓", 5)
@@ -5535,6 +5527,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             pass
         w.deleteLater()
 
+    @_art_ui_action
     def _on_oneshot(self, tid, res):
         if isinstance(res, Exception):
             # Honest failure: the fetch BROKE (network, block, bug) — that is
@@ -5580,6 +5573,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_art_fill()
 
     def _start_art_fill(self, restart: bool = False):
+        if not self._state_repository.writable:
+            return
+        if getattr(self, "_state_maintenance", False):
+            return
         if self.lib is None or self._shutting_down:
             return
         # A stopped thread still owns this slot until its queued finished
@@ -5596,8 +5593,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._art_worker = w
         w.set_playback_active(self.player_bar.is_playing())
         w.progress.connect(self._on_art_progress)
+        w.failed.connect(self._on_art_persistence_failed)
         w.finished.connect(lambda ww=w: self._on_art_finished(ww))
         w.start()
+
+    def _on_art_persistence_failed(self, message):
+        LOG.error("Artwork pass stopped: %s", message)
+        self._flash_status("Artwork pass stopped: could not save — check space/permissions", 20)
 
     def _on_art_finished(self, worker):
         worker.deleteLater()
@@ -5627,6 +5629,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QTimer.singleShot(0, self._start_pending_stock_artwork)
 
     def _start_pending_stock_artwork(self):
+        if getattr(self, "_state_maintenance", False):
+            return
         if (self._shutting_down or not self._stock_art_pending
                 or self._stock_art_worker is not None):
             return
@@ -5641,6 +5645,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         images: tuple[Path, ...] | None = None,
     ):
         """Warm the disposable stock-iPod art cache without blocking sync/UI."""
+        if getattr(self, "_state_maintenance", False):
+            return
         if self.lib is None or self._shutting_down:
             return
         if self._stock_art_worker is not None:
@@ -5681,6 +5687,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _maybe_fill_waveforms(self):
         """Prepare and continuously revalidate canonical V5 records."""
+        if getattr(self, "_state_maintenance", False):
+            return
         if self.lib is None:
             return
         if _running(self._wf_fill_worker):
@@ -6246,7 +6254,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._shutdown_waiting = False
 
     def closeEvent(self, event):
-        if getattr(self, "_shutdown_waiting", False):
+        if (getattr(self, "_shutdown_waiting", False)
+                or getattr(self, "_state_maintenance", False)):
             event.ignore()
             return
         self.shutdown()
@@ -6395,6 +6404,15 @@ def make_app() -> QApplication:
 
 def main():
     app = make_app()
+    from PySide6.QtCore import QLockFile
+    data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    state_lock = QLockFile(str(data_dir / "application.lock"))
+    state_lock.setStaleLockTime(0)
+    if not state_lock.tryLock(0):
+        QMessageBox.warning(None, "SoundBox already running",
+                            "Another SoundBox instance owns this library. Close it before opening another.")
+        return
     win = MainWindow()
     app.aboutToQuit.connect(win.shutdown)  # also covers Cmd+Q / menu quit
     win.show()

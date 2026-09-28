@@ -45,8 +45,12 @@ class SettingsPageMixin:
             # The default-photo pool is balanced only across tracks that can
             # actually appear or export. Graveyard tracks stay out of its
             # assignment universe just as they stay out of SoundBox views.
-            self.art_cache.configure_default_tracks(
-                tid for tid in self.lib.tracks_by_id if tid not in self.hidden)
+            try:
+                self.art_cache.configure_default_tracks(
+                    tid for tid in self.lib.tracks_by_id if tid not in self.hidden)
+            except (OSError, ValueError) as exc:
+                LOG.error("Default artwork assignments were not saved: %s", exc)
+                self._flash_status("Default artwork assignments NOT saved — check space/permissions", 20)
             self._invalidate_rows()  # title-junk feeds effective_title
 
     def _settings_section(self, text: str) -> QWidget:
@@ -330,87 +334,151 @@ class SettingsPageMixin:
             # prepares only those whose disposable analysis is now absent.
             self._maybe_fill_waveforms()
 
+    def _begin_state_maintenance(self, *, restoring: bool = False) -> bool:
+        """Close admission, drain existing writers, then freeze UI publication.
+
+        Qt continues dispatching completions while draining. Existing results
+        land before the final save; no old callbacks survive the restore boundary.
+        """
+        from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
+        from .workers import _running
+        if (self._state_maintenance or self._backup_worker is not None
+                or self._device_coordinator.active is not None):
+            self._flash_status("Wait for the current operation before backup/restore", 8)
+            return False
+        self._state_maintenance = True
+        self._maintenance_resume_art = getattr(self, "_art_worker", None) is not None
+        self._maintenance_resume_waveforms = getattr(self, "_waveform_rechecks_enabled", False)
+        self._maintenance_resume_locations = getattr(self, "_import_location_worker", None) is not None
+        self.setEnabled(False)
+        self._maintenance_timers = [(t, t.interval()) for t in (
+            self._dev_timer, self._warm_timer, self._waveform_recheck_timer,
+            self._volume_refresh_timer) if t.isActive()]
+        for timer, _interval in self._maintenance_timers:
+            timer.stop()
+        self._art_restart = False
+        self._stock_art_rescan = False
+        self._refresh_pending = False
+        self._libcache_pending = None
+        workers = list(dict.fromkeys(
+            [v for v in vars(self).values() if isinstance(v, QThread)]
+            + list(getattr(self, "_oneshots", []))))
+        for worker in workers:
+            if _running(worker):
+                if hasattr(worker, "stop"):
+                    worker.stop()
+                elif hasattr(worker, "cancel"):
+                    worker.cancel()
+                else:
+                    worker.requestInterruption()
+        self._start_pulse("Finishing background work")
+        if any(_running(w) for w in workers):
+            loop = QEventLoop()
+            timer = QTimer()
+            timer.setInterval(20)
+            timer.timeout.connect(lambda: loop.quit()
+                                  if not any(_running(w) for w in workers) else None)
+            timer.start()
+            loop.exec(QEventLoop.ExcludeUserInputEvents)
+            timer.stop()
+        for worker in workers:
+            try:
+                worker.wait()  # includes thread-local cleanup after finished
+            except RuntimeError:
+                pass  # the existing completion owner already retired it
+        QCoreApplication.sendPostedEvents(None, QEvent.MetaCall)
+        saved = (restoring and not self._state_repository.writable) or self._save_state()
+        if self._shutting_down or not saved:
+            self._end_state_maintenance()
+            return False
+        self._state_publication = True
+        return True
+
+    def _end_state_maintenance(self):
+        self._state_publication = False
+        self._state_maintenance = False
+        self.setEnabled(True)
+        self._stop_pulse()
+        if not self._shutting_down:
+            from PySide6.QtCore import QTimer
+            for timer, interval in getattr(self, "_maintenance_timers", []):
+                timer.start(interval)
+            if self._maintenance_resume_art:
+                QTimer.singleShot(0, self._start_art_fill)
+            if self._maintenance_resume_waveforms:
+                QTimer.singleShot(0, self._maybe_fill_waveforms)
+            if self._maintenance_resume_locations:
+                QTimer.singleShot(0, self._repair_import_locations)
+
+    def _run_state_task(self, operation, *, restoring: bool):
+        from .workers import OneShotTask
+        if not self._begin_state_maintenance(restoring=restoring):
+            return
+        worker = OneShotTask(operation)
+        self._backup_worker = worker
+        # Consume the result only after run() and queued finished delivery.
+        result = []
+        worker.done.connect(result.append)
+
+        def finished():
+            worker.wait()
+            self._finish_worker("_backup_worker", worker)
+            self._end_state_maintenance()
+            if self._shutting_down:
+                return
+            outcome = result[0] if result else RuntimeError("State operation returned no result")
+            if restoring:
+                self._on_restore_done(outcome)
+            else:
+                self._on_backup_done(outcome)
+        worker.finished.connect(finished)
+        self._start_pulse("Restoring" if restoring else "Backing up")
+        worker.start()
+
     def _backup_library(self):
-        """Full backup → one .zip (library.json + history + art cache + README),
-        zipped OFF the UI thread (the art cache is ~200MB)."""
-        import time as _time
+        import time
         from pathlib import Path
         from PySide6.QtWidgets import QFileDialog
         from soundbox import backup
-        from .workers import OneShotTask, _running
-
-        LOG.info("Back Up clicked (worker running: %s)",
-                 _running(self._backup_worker))
-        if _running(self._backup_worker):
-            self._flash_status("Backup already running…", 5)
-            return
-        self._save_state()  # the zip should contain the very latest state
-        self.raise_(); self.activateWindow()  # the save SHEET attaches to us
         dest, _ = QFileDialog.getSaveFileName(
             self, "Back up SoundBox library",
-            str(Path.home() / "Desktop" /
-                f"soundbox-backup-{_time.strftime('%Y-%m-%d')}.zip"),
+            str(Path.home() / "Desktop" / f"soundbox-backup-{time.strftime('%Y-%m-%d')}.zip"),
             "SoundBox backup (*.zip)")
-        LOG.info("Back Up dest: %r", dest)
-        if not dest:
-            return
-        data_dir = self._data_file.parent
-        w = OneShotTask(lambda: backup.export_backup(data_dir, dest))
-        self._backup_worker = w
-        w.done.connect(self._on_backup_done)
-        w.finished.connect(lambda ww=w: self._finish_worker("_backup_worker", ww))
-        self._start_pulse("BACKING UP")
-        w.start()
+        if dest:
+            self._run_state_task(
+                lambda: backup.export_backup(self._data_file.parent, dest), restoring=False)
 
     def _on_backup_done(self, res):
         from PySide6.QtWidgets import QMessageBox
-        self._stop_pulse()
         if isinstance(res, Exception):
-            self.status_label.setText("Ready")
             QMessageBox.warning(self, "Backup failed", str(res))
         else:
             self._flash_status("Backed up ✓", 8)
 
     def _restore_from_backup(self):
-        """Restore a full backup (.zip, or a library.json inside a backup
-        folder). Current state is snapshotted first — never destructive."""
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         from soundbox import backup
-        from .workers import OneShotTask, _running
-
-        if _running(self._backup_worker):
-            return
         src, _ = QFileDialog.getOpenFileName(
-            self, "Restore SoundBox library", "",
-            "SoundBox backup (*.zip *.json)")
+            self, "Restore SoundBox library", "", "SoundBox backup (*.zip *.json)")
         if not src:
             return
         if QMessageBox.question(
                 self, "Restore from backup",
-                "Replace your current SoundBox library with this backup?\n\n"
-                "Your fixes, playlists and settings will be swapped for the "
-                "backup's. The current state is snapshotted into the history "
-                "first, so nothing is lost.") != QMessageBox.Yes:
+                "Replace your SoundBox library with this backup?\n\n"
+                "Background work will finish before restoration. Your current "
+                "state is retained until the complete restore succeeds; a failed "
+                "restore rolls back. Editing is paused during this operation.") != QMessageBox.Yes:
             return
-        data_dir = self._data_file.parent
-        w = OneShotTask(lambda: backup.restore_backup(data_dir, src))
-        self._backup_worker = w
-        w.done.connect(self._on_restore_done)
-        w.finished.connect(lambda ww=w: self._finish_worker("_backup_worker", ww))
-        self._start_pulse("RESTORING")
-        w.start()
+        self._run_state_task(
+            lambda: backup.restore_backup(self._data_file.parent, src), restoring=True)
 
     def _on_restore_done(self, res):
         from PySide6.QtWidgets import QMessageBox
-        from soundbox import artfetch
-        self._stop_pulse()
+        from soundbox.artwork import ArtCache
         if isinstance(res, Exception):
-            self.status_label.setText("Ready")
             QMessageBox.warning(self, "Restore failed", str(res))
             return
-        # Reload the world from the restored files: fresh art cache index +
-        # full state reload (which also re-reads the live rekordbox library).
-        self.art_cache = artfetch.ArtCache(self._data_file.parent / "art")
+        self.art_cache = ArtCache(self._data_file.parent / "art")
         self._load_state()
         self._flash_status("Restored ✓", 8)
 

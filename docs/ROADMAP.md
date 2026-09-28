@@ -1,6 +1,6 @@
 # SoundBox roadmap
 
-Updated September 27, 2026. Active work and acceptance only; completed work is
+Updated September 28, 2026. Active work and acceptance only; completed work is
 summarized below. Historical experiments and release diaries remain in Git and
 specialist documents, not in the task queue. No numeric quality score substitutes
 for evidence. For current validation and installed revision, see [HANDOFF.md](HANDOFF.md).
@@ -28,10 +28,20 @@ alternative remains a later direction, not permission to ship CDJ research.
 User reports stable playback so far with database auto-update off and preferences
 persisting after normal shutdown. Continue normal use; capture diagnostics and
 isolate theme/state/firmware only if OOM returns. No runtime leak/root cause is
-yet established. Sync preference ownership is fixed.
+yet established. Sync preference ownership is fixed. Sonny reiterated zero
+iPod settings changes on September 28; no new firmware experiment is authorized.
 
-- [ ] Add explicit payload durability before `_safe_copy` publication and test
-  failure handling. Normal OS eject remains required.
+- [ ] Install and accept the September 28 loading-row/autoplay corrections.
+  Source fixes preserve the bottom loading status and handle native terminal
+  snapshot ordering plus cue-latched autoplay. Connected-device Random tests use
+  synthetic discovery; the exact reported live failure still needs acceptance.
+  Installation is authorized; current installed provenance is in the handoff.
+- The current Sync badge has real differences: two title changes and a verified
+  Rockbox append to OG. Do not clear it by changing settings or resetting state.
+  Details and read-only evidence are in [HANDOFF.md](HANDOFF.md).
+
+- [x] `_safe_copy` now fsyncs the staged payload before verification/publication;
+  failure leaves the destination absent. Normal OS eject remains required.
 
 Completed disk/firmware/export checks and remaining boundaries:
 [Rockbox OOM investigation](rockbox-playlist-oom-2026-09.md).
@@ -40,12 +50,15 @@ Completed disk/firmware/export checks and remaining boundaries:
 
 Findings and source evidence: [software audit](software-audit-2026-09.md).
 
-- [ ] A2: make restore a staged, validated, recoverable state transaction. Quiesce
-  competing writers; snapshot backup consistently and surface failed saves.
-- [ ] A3: serialize canonical artwork/index/default-photo publication. Add
-  concurrent-writer and persistence-failure regressions.
-- [ ] A8: extract and validate the state repository, preserve extension data,
-  and make durability failures visible to callers. Preserve curation unchanged.
+- [x] A2: staged/validated restore with exact rollback, startup recovery, bounded
+  archive input and consistent backup snapshots. UI closes admission, drains
+  existing writers with events alive, and resumes after worker completion.
+- [x] A3: serialized artwork/image/index/default-photo publication through the
+  common state owner; failure restores disk and in-memory state.
+- [x] A8: Qt-independent state repository validates known schema, preserves
+  unknown namespaces, handles recovery/rotation and exposes save errors. A
+  persistent window-title warning survives transient statuses until a save works.
+  A damaged library without a usable backup remains write-disabled until restore.
 
 Exit: deterministic failure/race tests, full check gate and safe installed-app
 verification for runtime changes. Do not mix these fixes with device-format or
@@ -76,8 +89,9 @@ zero reads or zero database writes. Tests are not hardware acceptance. See
 
 ## 3. Establish the shared-core / personal-module boundary
 
-- [ ] A4: separate local ArtCache/results/default photos from online discovery.
-  Keep local artwork usable without any online package.
+- [x] A4 storage boundary: `soundbox.artwork` owns local ArtCache/results/default
+  photos and works without provider imports/network. Compatibility re-exports
+  remain in `artfetch`. Optional UI/provider/build wiring below is still pending.
 - [ ] Inject optional artwork and artist-suggestion providers; register their
   actions and worker lifetimes through the shared core. Gate startup scheduling
   and command execution as well as menus.
@@ -158,8 +172,8 @@ A1 follow-up: artwork/suggestion dialogs and interactive waveform workers now
 share exact completion ownership, responsive draining and closed admission during
 shutdown. Future optional provider work must use the same contract.
 
-Known limitations in the audit qualify these foundations: backup/restore is not
-transactional yet, task families are not all consolidated under one owner,
+Known limitations in the audit qualify these foundations: task families are not
+all consolidated under one owner,
 legacy automatic artwork still needs targeted quality review, and current
 physical gates remain open. Do not rebuild accepted player/cover behavior as new
 features. Existing invariants live in [ARCHITECTURE.md](ARCHITECTURE.md),

@@ -75,6 +75,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Keep ordinary-playback eligibility until explicit cancellation or terminal
   consumption; never gate advancement on `_transport_play_active`. Delay the
   source swap one event turn, guarded by transport epoch and source generation.
+  If the separate ended read is newer than a PLAYING snapshot, publish PAUSED
+  before deferred advancement so source replacement cannot wait for a fade on
+  an already stopped engine. A cue promoted with Play/Space is ordinary playback
+  and retains autoplay eligibility after cue release.
 - **A static Metal deck must not own a permanent display loop.** Playback,
   loading, preview, and live resize wake the link; every other mutation marks
   one dirty frame and the link pauses again. Python snapshot polling is 8 ms
@@ -601,10 +605,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   hold. If a device worker owns the lane, the request stays pending for retry.
   A three-second timer checks the local `/Volumes` directory timestamp to recover
   missed events; it does not open mounted children merely to check that timestamp.
-  Verified external mounts appear as disabled loading rows during discovery.
-  At QThread.finished they become selectable, while stock/dual dashboard loading
-  continues with a visible loading label. A cached dashboard is presentation-only;
-  selecting a loading row uses the same serialized preload. Writes stay guarded by
+  Verified external mounts appear by name, disabled during discovery.
+  At QThread.finished they become selectable. Stock/dual dashboard loading
+  appears only in the bottom status; device rows have no loading suffix. A cached
+  dashboard is presentation-only; selecting while it loads uses the same serialized
+  preload. Writes stay guarded by
   operation ownership and firmware capabilities. Remounts invalidate stale views.
 - **A stock shadow source row describes two files.** `size`/`sha256` belong to
   the verified device payload; `source_size`/`mtime_ns` describe the canonical
@@ -1217,10 +1222,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   dual sync writes direct, zero-padded children such as `01 - HOUSE.m3u8`,
   never `/Playlists/GENRES/HOUSE.m3u8`. Keep full hierarchy in the manifest;
   stock/SoundBox titles use the concise leaf unless a collision needs context.
-- Rockbox DB is OPTIONAL (playlists play without it). Composite sync enables
-  Rockbox's own automatic update and reports restart pending; after dumping or
-  retagging files, restart Rockbox so its firmware-owned cache reconciles. Use
-  full database initialization only when an older cache is actually corrupt.
+- Rockbox DB is OPTIONAL (playlists play without it). SoundBox never enables
+  automatic database update or writes firmware preferences. If the user has
+  enabled updating, SoundBox may report that the firmware-owned cache predates
+  the latest sync. Cache age and preference changes alone are not Sync drift.
+  Stable playback is not a reason to change settings or initialize the database.
 - Device sync manifest lives at `<device>/.soundbox/manifest.json`.
 - **A USB remount can defeat rollback without corrupting the committed
   generation.** `DeviceSession` must reject the new mount identity; a read-only
@@ -1347,11 +1353,24 @@ retain until queued finished delivery and final join. Search socket/retry budget
 are explicit, but they are not a total cancellation deadline. An uncooperative
 operation must remain owned until it actually returns.
 
-Ordinary JSON replacement is atomic, but multiple ArtCache writers share a temp
-path without serialization. Backup reads live state, and restore copies library
-before history/art without a coordinated rollback. A temporary-fixture failure
-after library publication reproduced a partial restore. Preserve existing backups;
-do not treat these operations as a whole-state transaction yet.
+September 28 follow-up: state publication now uses `state_io` and
+`state_repository`. Never bypass the shared area lock for canonical art/library
+writes. `artwork.ArtCache` stages and publishes image/index/default changes with
+rollback; `artfetch` only re-exports those local types for compatibility.
+Backup snapshots hold the same lock. Restore stages/validates before publication,
+retains exact originals in `.state-transaction`, and fences old consumers by area
+generation. Startup recovers interrupted publication; `.state-retired` is only
+cleanup after a completed commit/rollback. Never recursively delete an active
+journal or its commit marker to "fix" a failed operation.
+
+The restore UI must drain old writers/results before publishing and reload only
+after QThread.finished plus join. Editing and background admission are paused;
+active device work prevents entry. Corrupt library JSON/shapes enter recovery;
+without a valid backup, saving stays disabled until explicit restore. Unknown
+extension namespaces survive saves. The application entrypoint holds one AppData
+lock, so two app processes cannot independently write that state. Failure/race
+injections use disposable fixtures only. The original September 27 partial-restore
+reproduction remains historical evidence in the audit.
 
 The coordinator serializes the active device lane; its tested queue API is not
 yet the queue used by desktop adapters. See the prioritized

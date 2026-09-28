@@ -130,7 +130,7 @@ exhaustion has a separate buffer-full message. Preserve the user's reported text
 and capture the complete screen when possible rather than assigning a call site
 from recollection alone.
 
-## SoundBox findings
+## SoundBox findings at the September 27 investigation baseline
 
 1. `soundbox/rockbox_config.py` forces `tagcache_autoupdate: on` and at least
    10,000 playlist entries. A subsequent sync can undo this user's diagnostic
@@ -143,6 +143,9 @@ from recollection alone.
    boundary, but “every write is explicitly flushed before publication” would be
    false. Add and test the missing durability step separately; this audit found
    no leftover partial file or demonstrated corruption from it.
+   September 28 follow-up: the payload is now explicitly fsynced before
+   verification/rename, with a flush-failure regression. Normal OS eject remains
+   required; this does not establish the OOM cause or hardware durability acceptance.
 3. Incremental ownership/art/playlist evidence is consistent, and the latest
    generation is smaller than the previous capture. A clean/full hardware sync
    was not performed: it would replace the evidence and require substantial

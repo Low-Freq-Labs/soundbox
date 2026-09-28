@@ -32,10 +32,11 @@ Connection presentation separates visibility from readiness. A debounced
 hold. If a device worker owns the lane, the request stays pending for retry.
 A three-second timer checks the local `/Volumes` directory timestamp to recover
 missed events; it does not open mounted children merely to check that timestamp.
-Verified external mounts appear as disabled loading rows during discovery.
-At QThread.finished they become selectable, while stock/dual dashboard loading
-continues with a visible loading label. A cached dashboard is presentation-only;
-selecting a loading row uses the same serialized preload. Writes stay guarded by
+Verified external mounts appear by name, disabled during discovery.
+At QThread.finished they become selectable. Stock/dual dashboard loading
+appears only in the bottom status; device rows have no loading suffix. A cached
+dashboard is presentation-only; selecting while it loads uses the same serialized
+preload. Writes stay guarded by
 operation ownership and firmware capabilities. Remounts invalidate stale views.
 
 ## Lifecycle correction under hardware acceptance
@@ -828,3 +829,9 @@ the prior documented assumption; no device configuration was rewritten for the f
 
 Post-sync polling is held through the completion dialog only. Dismissal releases
 the hold so subsequent SoundBox edits can update drift without reconnecting.
+
+September 28 durability follow-up: `_safe_copy` explicitly fsyncs its staged
+payload before verification and atomic publication. Flush failure leaves the final
+path absent and cleans only the transaction temporary under valid authority.
+Normal macOS eject remains required; this fixture-tested correction is not new
+physical disconnect/power-loss acceptance.

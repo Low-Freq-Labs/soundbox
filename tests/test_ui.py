@@ -1,8 +1,8 @@
 """UI-layer tests: MainWindow wiring, offscreen, against a synthetic library.
 
 Hermetic by construction (see soundbox-gotchas):
-  • QStandardPaths test mode BEFORE the app module loads — all saves land in
-    the qttest sandbox, never the real library.json / art cache / app log.
+  • QStandardPaths test mode BEFORE the app module loads; AppData is redirected
+    to a fresh temporary directory, never the real library/art cache/app log.
   • rekordbox_db.db_available patched False — the live DB is never touched.
 One QApplication + one MainWindow for the module (Qt allows only one app).
 """
@@ -10,6 +10,7 @@ One QApplication + one MainWindow for the module (Qt allows only one app).
 import json
 import os
 import logging
+import tempfile
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -48,6 +49,13 @@ def setUpModule():
     rekordbox_db.db_available = lambda: False  # tests never read the live DB
     from desktop.app import MainWindow, make_app
     _app = make_app()
+    area = unittest.enterModuleContext(tempfile.TemporaryDirectory(
+        prefix="soundbox-ui-tests-"))
+    original_location = QStandardPaths.writableLocation
+    unittest.enterModuleContext(mock.patch.object(
+        QStandardPaths, "writableLocation",
+        side_effect=lambda kind: area if kind == QStandardPaths.AppDataLocation
+        else original_location(kind)))
     # Refresh callbacks later in the suite can discover mounts too. Keep all
     # background scans synthetic; device-worker tests override this locally.
     unittest.enterModuleContext(mock.patch(
@@ -208,7 +216,10 @@ class SettingsPage(unittest.TestCase):
             self.assertTrue(_win.settings["hide_untracked"])
             self.assertTrue(_win.lib.hide_untracked)
             self.assertTrue(_win._data_file.exists())
-            self.assertIn(".qttest", str(_win._data_file))  # sandboxed, not the real one
+            self.assertEqual(_win._data_file.parent, Path(
+                QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)))
+            self.assertTrue(_win._data_file.parent.name.startswith(
+                "soundbox-ui-tests-"))
         finally:
             _win._chk_hide.setChecked(False)
         self.assertFalse(_win.settings["hide_untracked"])
@@ -1044,6 +1055,7 @@ class StockIpodUI(unittest.TestCase):
         retired = mock.Mock()
         retired.isRunning.return_value = False
         stub = SimpleNamespace(lib=object(), _shutting_down=False,
+                               _state_repository=SimpleNamespace(writable=True),
                                _art_worker=retired, _art_restart=False)
         with mock.patch("desktop.app.ArtFillWorker") as factory:
             MainWindow._start_art_fill(stub, restart=True)
@@ -1330,6 +1342,8 @@ class StockIpodUI(unittest.TestCase):
 
             self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
             self.assertTrue(_win.device_tree.topLevelItem(0).isDisabled())
+            self.assertEqual(_win.device_tree.topLevelItem(0).text(0),
+                             "⛃  HIDDEN-UNTIL-READY")
             self.assertIn(dev, _win._stock_view_warming)
             self.assertEqual(_win._pulse_word, "Loading iPod")
             self.assertTrue(_win.status_label.text().startswith("Loading iPod"))
@@ -1383,9 +1397,9 @@ class StockIpodUI(unittest.TestCase):
                 _win._on_devices_scanned(rows)
                 self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
 
-                self.assertIn("Loading library", _win.device_tree.topLevelItem(0).text(0))
+                self.assertNotIn("Loading", _win.device_tree.topLevelItem(0).text(0))
                 self.assertFalse(_win.device_tree.topLevelItem(0).isDisabled())
-                # Preload completion removes the loading label.
+                # Preload completion clears the bottom loading status.
                 _win._stock_view_cache[dev] = (object(), None)
                 _win._on_devices_scanned(rows)
 
@@ -2917,13 +2931,16 @@ class BackupWorker(unittest.TestCase):
         self.assertIsInstance(err, ValueError)
 
     def test_full_zip_roundtrip_through_app_dirs(self):
-        # Real export_backup/restore_backup against the sandboxed app data dir.
+        # Real worker roundtrip in its own disposable state; restoring the
+        # shared window behind its back would correctly invalidate its writers.
         import tempfile
         from pathlib import Path
         from soundbox import backup
-        _win._save_state()
-        data_dir = _win._data_file.parent
         with tempfile.TemporaryDirectory() as td:
+            data_dir = Path(td) / "state"
+            data_dir.mkdir()
+            (data_dir / "library.json").write_text(
+                json.dumps({"custom": {"Fixture": ["1"]}}))
             z = Path(td) / "b.zip"
             n = self._run(lambda: backup.export_backup(data_dir, z))
             self.assertIsInstance(n, int)
@@ -5454,6 +5471,7 @@ class AutoplaySemantics(unittest.TestCase):
             with (mock.patch.object(pb, "player", fake),
                   mock.patch.object(pb, "_animate_gain"),
                   mock.patch.object(_win, "player_bar", pb),
+                  mock.patch.object(_win, "_dev_scan_worker", object()),
                   mock.patch.object(_win, "_autoplay_playable", return_value=True),
                   mock.patch.object(_win, "_open_track", return_value=True) as opened):
                 pb.track_ended.connect(_win._advance_autoplay)
@@ -5488,6 +5506,45 @@ class AutoplaySemantics(unittest.TestCase):
                             self.assertEqual(opened.call_args.kwargs,
                                              {"autoplay": True,
                                               "capture_autoplay": False})
+        finally:
+            pb.shutdown()
+
+    def test_random_advances_during_device_discovery_after_cue_latch(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        fake = mock.Mock()
+        fake.position.return_value = 1000
+        fake.playbackRate.return_value = 1.0
+        fake.playbackState.return_value = PlaybackState.PAUSED
+        try:
+            with (mock.patch.object(pb, "player", fake),
+                  mock.patch.object(pb, "_animate_gain"),
+                  mock.patch.object(_win, "player_bar", pb),
+                  mock.patch.object(_win, "_dev_scan_worker", object()),
+                  mock.patch.object(_win, "_autoplay_playable", return_value=True),
+                  mock.patch.object(_win, "_open_track", return_value=True) as opened):
+                pb.track_ended.connect(_win._advance_autoplay)
+                pb._src_path = "/tmp/loaded.wav"
+                pb._playback_available = True
+                pb._track_id = "3"
+                _win._autoplay_order = ["1", "3", "2"]
+                _win._autoplay_index = 1
+                _win._set_autoplay_mode("random", save=False)
+                pb._cue_press()
+                self.assertFalse(pb._ordinary_playback_requested)
+                fake.playbackState.return_value = PlaybackState.PLAYING
+                pb.toggle()  # Play/Space promotes the held cue to normal play.
+                self.assertTrue(pb._ordinary_playback_requested)
+                fake.playbackState.return_value = PlaybackState.PAUSED
+                pb._on_state(PlaybackState.PAUSED)
+                pb._on_end_of_media()
+                # Releasing the now-latched cue is not a new transport command,
+                # even if it lands just before deferred terminal delivery.
+                pb._cue_release()
+                _app.processEvents()
+                opened.assert_called_once()
+                self.assertNotEqual(opened.call_args.args[0].track_id, "3")
         finally:
             pb.shutdown()
 
@@ -5627,14 +5684,16 @@ class DoubleClickSemantics(unittest.TestCase):
 
 
 class QtWaveformFallback(unittest.TestCase):
-    """AAC/ALAC receive the same canonical V4 analysis via QAudioDecoder."""
+    """AAC/ALAC receive the same canonical V5 analysis via QAudioDecoder."""
 
     @classmethod
     def setUpClass(cls):
         import math, shutil, struct, subprocess, tempfile, wave
-        if not shutil.which("afconvert"):
-            raise unittest.SkipTest("afconvert not available")
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg and not shutil.which("afconvert"):
+            raise unittest.SkipTest("AAC/ALAC fixture encoder not available")
         cls.dir = tempfile.mkdtemp(prefix="sb-wave-")
+        cls.addClassCleanup(shutil.rmtree, cls.dir, ignore_errors=True)
         wav = f"{cls.dir}/probe.wav"
         sr = 44100
         with wave.open(wav, "wb") as w:
@@ -5645,13 +5704,13 @@ class QtWaveformFallback(unittest.TestCase):
                 for i in range(sr * 2)))          # 1s tone + 1s silence
         for name, codec in (("alac.m4a", ["-d", "alac"]),
                             ("aac.m4a", ["-d", "aac", "-b", "128000"])):
-            subprocess.run(["afconvert", "-f", "m4af", *codec, wav,
-                            f"{cls.dir}/{name}"], check=True, capture_output=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        import shutil
-        shutil.rmtree(cls.dir, ignore_errors=True)
+            # ffmpeg creates the same synthetic codec fixtures without macOS
+            # AudioComponent services, which restricted runners may not expose.
+            command = ([ffmpeg, "-v", "error", "-i", wav,
+                        "-c:a", codec[1], f"{cls.dir}/{name}"] if ffmpeg else
+                       ["afconvert", "-f", "m4af", *codec, wav,
+                        f"{cls.dir}/{name}"])
+            subprocess.run(command, check=True, capture_output=True)
 
     def _check(self, name):
         from desktop.player import qt_detail_peaks
@@ -7209,3 +7268,93 @@ class RefreshWhileViewingCollection(unittest.TestCase):
         idx = _win.table.currentIndex()
         self.assertTrue(idx.isValid())
         self.assertEqual(_win.model._rows[idx.row()]["id"], "3")
+
+
+class StateMaintenance(unittest.TestCase):
+    def _host(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QTimer
+        from desktop.settings_page import SettingsPageMixin
+        events = []
+        host = SimpleNamespace(
+            _state_maintenance=False, _state_publication=False,
+            _backup_worker=None, _device_coordinator=SimpleNamespace(active=None),
+            _state_repository=SimpleNamespace(writable=True), _shutting_down=False,
+            _dev_timer=QTimer(), _warm_timer=QTimer(),
+            _waveform_recheck_timer=QTimer(), _volume_refresh_timer=QTimer(),
+            _start_art_fill=lambda: None, _maybe_fill_waveforms=lambda: None,
+            _repair_import_locations=lambda: None,
+            setEnabled=lambda value: events.append(('enabled', value)),
+            _start_pulse=lambda text: None, _stop_pulse=lambda: None,
+            _flash_status=lambda *args: events.append(('status', args)),
+            _save_state=lambda: events.append(('save', None)) or True,
+        )
+        host._end_state_maintenance = lambda: SettingsPageMixin._end_state_maintenance(host)
+        return host, events
+
+    def test_maintenance_drains_late_artwork_before_final_save_with_events_alive(self):
+        import threading
+        from PySide6.QtCore import QTimer
+        from desktop.workers import OneShotTask
+        from desktop.settings_page import SettingsPageMixin
+        host, events = self._host()
+        release, started = threading.Event(), threading.Event()
+
+        def operation():
+            started.set()
+            return release.wait(3) and 'artwork completed'
+
+        worker = OneShotTask(operation)
+        host._art_worker = worker
+        worker.done.connect(lambda value: events.append(('artwork', value)))
+        worker.start()
+        self.assertTrue(started.wait(1))
+        QTimer.singleShot(30, lambda: (events.append(('heartbeat', None)), release.set()))
+        try:
+            self.assertTrue(SettingsPageMixin._begin_state_maintenance(host))
+            self.assertFalse(worker.isRunning())
+            self.assertEqual([row[0] for row in events],
+                             ['enabled', 'heartbeat', 'artwork', 'save'])
+            self.assertTrue(host._state_publication)
+        finally:
+            release.set()
+            worker.wait()
+            host._end_state_maintenance()
+        self.assertFalse(host._state_maintenance)
+
+    def test_failed_final_save_prevents_state_task(self):
+        from desktop.settings_page import SettingsPageMixin
+        host, events = self._host()
+        host._save_state = lambda: False
+        self.assertFalse(SettingsPageMixin._begin_state_maintenance(host))
+        self.assertFalse(host._state_publication)
+        self.assertFalse(host._state_maintenance)
+        self.assertEqual(events[-1], ('enabled', True))
+
+    def test_explicit_restore_can_recover_a_write_disabled_library(self):
+        from desktop.settings_page import SettingsPageMixin
+        host, _events = self._host()
+        host._state_repository.writable = False
+        host._save_state = mock.Mock(side_effect=AssertionError('must preserve damaged file'))
+        try:
+            self.assertTrue(SettingsPageMixin._begin_state_maintenance(host, restoring=True))
+            host._save_state.assert_not_called()
+        finally:
+            host._end_state_maintenance()
+
+    def test_active_device_work_prevents_state_maintenance(self):
+        from desktop.settings_page import SettingsPageMixin
+        host, events = self._host()
+        host._device_coordinator.active = object()
+        self.assertFalse(SettingsPageMixin._begin_state_maintenance(host))
+        self.assertFalse(host._state_maintenance)
+        self.assertEqual(events[0][0], 'status')
+
+    def test_save_failure_is_visible_even_when_caller_ignores_return(self):
+        with mock.patch.object(_win._state_repository, 'save', side_effect=OSError('full')), \
+                mock.patch.object(_win, '_flash_status') as flash:
+            self.assertFalse(_win._save_state())
+        self.assertIn('NOT saved', flash.call_args.args[0])
+        self.assertIn('Library not saved', _win.windowTitle())
+        self.assertTrue(_win._save_state())
+        self.assertEqual(_win.windowTitle(), 'Soundbox')

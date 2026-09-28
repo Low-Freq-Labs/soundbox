@@ -488,6 +488,8 @@ def _safe_copy(src: Path, dst: Path, *, revalidate: Callable[[], None] | None = 
             raise OSError(f"Insufficient device space for {dst.name}")
         phase_progress("Copying to device", 0, size, dst.name)
         shutil.copyfile(src, tmp)
+        with tmp.open("rb") as payload:
+            os.fsync(payload.fileno())
         record_metric("device_bytes_written", size)
         phase_progress("Verifying device copy", size, size, dst.name)
         if tmp.stat().st_size != size or _sha256(tmp) != source_hash:

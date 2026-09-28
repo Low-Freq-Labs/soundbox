@@ -9,6 +9,8 @@ import struct
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 import wave
 from pathlib import Path
 
@@ -18,7 +20,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from desktop.native_deck import (
-    NativeDeckBackend, _repair_pwv5_visibility,
+    NativeDeckBackend, _Snapshot, _repair_pwv5_visibility,
     _repair_soundbox_pwv5_color,
     native_available, native_library_path,
 )
@@ -53,6 +55,33 @@ class WaveformStreamRepair(unittest.TestCase):
             _repair_pwv5_visibility(
                 packed, overview, "linear-u16le"),
             packed)
+
+
+class TerminalSnapshotOrdering(unittest.TestCase):
+    def test_newer_end_flag_overrides_playing_snapshot_and_emits_once(self):
+        snapshot = _Snapshot()
+        snapshot.sample_rate = 44100
+        snapshot.duration_frames = 88200
+        snapshot.position_frames = 88100
+        snapshot.playback_state = 1
+        backend = SimpleNamespace(
+            _handle=1, _snapshot=snapshot,
+            _lib=SimpleNamespace(sb_deck_snapshot=lambda *_: True,
+                                 sb_deck_has_ended=lambda *_: True),
+            _duration_ms=2000, _position_ms=1998, _last_position_emit=0,
+            _state=PlaybackState.PLAYING, _end_emitted=False,
+            _ramp_token=0, _loading=False, _last_error=(0, 0),
+            durationChanged=mock.Mock(), positionChanged=mock.Mock(),
+            endOfMedia=mock.Mock(), _set_poll_interval=mock.Mock(),
+        )
+        backend._set_state = lambda value: setattr(backend, "_state", value)
+        NativeDeckBackend._poll(backend)
+        # A deferred auto-advance must see the stopped engine, otherwise it
+        # waits for a gain ramp whose audio callback can no longer finish.
+        self.assertEqual(backend._state, PlaybackState.PAUSED)
+        backend._set_poll_interval.assert_called_with(125)
+        NativeDeckBackend._poll(backend)
+        backend.endOfMedia.emit.assert_called_once_with()
 
 
 class NativeDeckContract(unittest.TestCase):

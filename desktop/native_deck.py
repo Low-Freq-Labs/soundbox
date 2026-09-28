@@ -1268,6 +1268,12 @@ class NativeDeckBackend(QObject):
         }
         state = states.get(int(snap.playback_state), PlaybackState.STOPPED)
         ended = bool(self._lib.sb_deck_has_ended(self._handle))
+        # CoreAudio can finish between the snapshot and the separate ended
+        # read. The newer terminal flag wins over a stale PLAYING snapshot;
+        # otherwise the next source waits for a fade on an already stopped
+        # engine. PlayerBar defers that source swap until this poll completes.
+        if ended:
+            state = PlaybackState.PAUSED
         if duration != self._duration_ms:
             self._duration_ms = duration
             self.durationChanged.emit(duration)

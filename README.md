@@ -187,7 +187,9 @@ Playlist-only removals retain analysis because the track can still be browsed
 and played elsewhere. Both removal scopes drift synced devices; rekordbox and
 source audio never change.
 
-**Cover art.** Background auto-fetch with an accuracy-first matcher (an
+**Cover art.** Local images, cache indexes and default-photo changes share one
+serialized state owner with backup/restore. Failed publication retains the previous
+state and reports the error. Background auto-fetch with an accuracy-first matcher (an
 artist-accountable title match of at least 0.80 → track cover, else artist
 avatar; wrong art is treated as worse than no art), resumable and scoped to new
 tracks only. `Unknown Artist` is a hard automatic-discovery stop: those tracks
@@ -385,7 +387,8 @@ database commit. Source-library audio and unrelated Rockbox paths stay untouched
 `library.json` (overrides, playlists, imported records, hides, settings) at
 `~/Library/Application Support/LowFreqLabs/Soundbox/` — keyed by stable
 track IDs so a newer rekordbox library preserves all work. Atomic saves,
-rotating backups, corruption auto-recovery, and one-click full backup/restore
+rotating backups, schema-validated corruption recovery, and full backup/restore
+with staged publication, exact rollback and interrupted-operation recovery
 `.zip` (library + history + art cache) in Settings. Window size/position,
 columns, and sidebar pane proportions reopen exactly from the last clean close.
 

@@ -2,13 +2,16 @@
 app. Uses a SYNTHETIC library (no rekordbox, no network) and a sandboxed
 AppData dir (QStandardPaths test mode) so it can never touch real user state.
 
-Usage: PYTHONPATH=. .venv/bin/python -m desktop._shot [out.png] [zoom]
+Usage: PYTHONPATH=. .venv/bin/python -m desktop._shot [out.png] [zoom] [--loading-device]
 """
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
+import tempfile
+from types import SimpleNamespace
+from unittest import mock
 
 from PySide6.QtCore import QStandardPaths
 
@@ -36,7 +39,10 @@ def synthetic_library() -> Library:
     return Library(tracks_by_id=tracks, playlists=pls, source="synthetic")
 
 
-def main() -> None:
+def _render() -> None:
+    loading_device = "--loading-device" in sys.argv
+    if loading_device:
+        sys.argv.remove("--loading-device")
     app = make_app()
     # Suppress the constructor scan as well as timer-triggered scans for the
     # whole harness lifetime. Never probe real removable devices beside the app.
@@ -106,6 +112,10 @@ def main() -> None:
     # main-waveform box/stem seam as well as the whole-track marker.
     pb._on_pos(44_000)
     pb.set_track_navigation(True, True)
+    if loading_device:
+        win._on_devices_discovered([
+            ("IPOD", "/synthetic/IPOD", 1000,
+             SimpleNamespace(has_stock_ipod=True))])
     win.show()
     for _ in range(3):
         app.processEvents()
@@ -113,6 +123,17 @@ def main() -> None:
     win.grab().save(out)
     win.shutdown()
     print("saved", out, "| devices:", win.device_tree.topLevelItemCount())
+
+
+def main() -> None:
+    original_location = QStandardPaths.writableLocation
+    with tempfile.TemporaryDirectory(prefix="soundbox-render-") as area:
+        with mock.patch.object(
+                QStandardPaths, "writableLocation",
+                side_effect=lambda kind: area
+                if kind == QStandardPaths.AppDataLocation
+                else original_location(kind)):
+            _render()
 
 
 if __name__ == "__main__":

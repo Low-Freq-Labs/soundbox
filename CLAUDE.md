@@ -235,10 +235,11 @@ Connection presentation separates visibility from readiness. A debounced
 hold. If a device worker owns the lane, the request stays pending for retry.
 A three-second timer checks the local `/Volumes` directory timestamp to recover
 missed events; it does not open mounted children merely to check that timestamp.
-Verified external mounts appear as disabled loading rows during discovery.
-At QThread.finished they become selectable, while stock/dual dashboard loading
-continues with a visible loading label. A cached dashboard is presentation-only;
-selecting a loading row uses the same serialized preload. Writes stay guarded by
+Verified external mounts appear by name, disabled during discovery.
+At QThread.finished they become selectable. Stock/dual dashboard loading
+appears only in the bottom status; device rows have no loading suffix. A cached
+dashboard is presentation-only; selecting while it loads uses the same serialized
+preload. Writes stay guarded by
 operation ownership and firmware capabilities. Remounts invalidate stale views.
 
 
@@ -409,3 +410,13 @@ Qt events while draining. Window shutdown stops child owners before callbacks
 can start more work and drains them before native-player teardown. Stopped
 consumers reject late results. Socket/retry budgets are not a total cancellation
 deadline and never authorize destruction of a running worker.
+
+Canonical library/artwork persistence shares `soundbox.state_io` ownership.
+Use `state_repository` for library schema/recovery/saves and `soundbox.artwork`
+for local art/results/defaults (`artfetch` compatibility aliases remain). Backup
+snapshots and restore publication share the same lock. Restore closes UI admission,
+drains existing writers/results before final save, publishes staged validated
+state, and reloads only after worker finished/join. Old area generations cannot
+write after restore. Preserve `.state-transaction` if rollback fails; startup
+recovers it. `.state-retired` is disposable only after commit/rollback retirement.
+The app entrypoint holds an AppData instance lock. Never fault-inject live state.

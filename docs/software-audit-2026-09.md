@@ -62,6 +62,10 @@ structure from runtime risks that still need targeted reproductions.
 
 ## Findings, ordered by risk
 
+The finding descriptions record the September 27 source baseline. Dated
+implementation follow-ups below supersede that historical behavior; they do not
+retroactively change what the audit observed.
+
 ### A1 — High at audit: unsafe timed shutdown waits (corrected)
 
 `desktop/artpicker.py:ArtPickerDialog.shutdown` and
@@ -90,7 +94,7 @@ draining, late-result rejection, waveform admission closure and window child
 ownership. This does not migrate all task families or finish the device queue;
 new providers should use the owner instead of introducing another timed wait.
 
-### A2 — High: restore is a partial overwrite, not a transaction
+### A2 — High at audit: partial restore (corrected September 28)
 
 `soundbox/backup.py:restore_backup` copies `library.json` into place before
 history/art, with no rollback of the combined state. The temporary-fixture
@@ -107,7 +111,15 @@ exact rollback material, and publish/reload coherently. Bound archive expansion
 and validate folder/symlink inputs. Test disk-full and failures at every publish
 step, plus a simultaneous artwork completion and user edit.
 
-### A3 — High: artwork persistence has multiple unsynchronized writers
+September 28 follow-up: staged merge restore, schema/artwork validation, bounded
+archive extraction and link rejection now precede journaled publication. Backup
+captures one locked snapshot and preserves an existing zip on failure. UI admission
+closes while existing writers drain; final save failure prevents backup/restore
+(except explicit recovery of a write-disabled damaged library). Six publication
+boundaries, interruption recovery, incomplete rollback and retired-journal cleanup
+are covered by disposable fixtures. No live restore experiment was performed.
+
+### A3 — High at audit: unsynchronized artwork writers (corrected September 28)
 
 `soundbox/artfetch.py:ArtCache._save` explicitly serves background and GUI
 writers, but uses the same `index.tmp`, shared mutable dictionaries and no
@@ -117,6 +129,12 @@ Errors are silently swallowed. Default-photo updates add another worker path.
 Potential lost writes/temp-file races need a deterministic barrier test; this
 audit does not claim observed artwork loss. Move mutations/publication to one
 artwork repository owner, with explicit failure results and versioned snapshots.
+
+September 28 follow-up: `soundbox.artwork` uses the shared state owner for
+image/index/default-photo mutations. Disk and in-memory state roll back together;
+competing cache instances refresh by revision before writing. Errors propagate to
+UI/worker handlers. Concurrency and backup-overlap fixtures reproduce the relevant
+interleavings without live curation.
 
 ### A4 — High for distribution: personal discovery is part of core startup
 
@@ -130,6 +148,11 @@ Extract local artwork storage/results first, then inject optional discovery.
 Guard both commands and startup scheduling, not only visible buttons. Verify the
 public artifact has no private provider/dependency and runs with network access
 denied. Keep existing curated art and sticky blocks when the provider is absent.
+
+September 28 follow-up: local `ArtCache` and `ArtResult` now live in
+`soundbox.artwork`; compatibility aliases remain. A subprocess regression blocks
+provider imports and network while exercising local writes. Online UI/startup
+scheduling and packaging remain coupled and need the planned provider interfaces.
 
 ### A5 — Medium/high: device queue consolidation is incomplete
 
@@ -176,7 +199,7 @@ filesystem calls can still block on an unhealthy mount. Move readiness facts to
 worker-produced snapshots and perform authoritative revalidation in the worker.
 No latency number is claimed without a blocked-I/O test or instrumented run.
 
-### A8 — Medium: state persistence is coupled to UI and weakly validated
+### A8 — Medium at audit: coupled/weak state persistence (corrected September 28)
 
 `MainWindow._load_state/_save_state` own schema interpretation, recovery, backup,
 whole-file serialization and widget restoration. Valid JSON with an invalid
@@ -191,6 +214,15 @@ from curation logically before considering file-format migration. Do not weaken
 the required synchronous durability boundary before device writes; ordinary UI
 settings can be coalesced independently. Test failed saves and public/personal
 round trips before enabling extension state.
+
+September 28 follow-up: `state_repository` owns known-schema validation, recovery,
+rotation, extension-preserving saves and explicit failures. Invalid top-level and
+known nested shapes enter recovery. Without a valid backup, autosaves cannot
+replace damaged state with an empty library. The window adapts domain fields and
+restores widgets; it no longer owns file publication. Save failures mark the window
+title until a later save succeeds. Application startup rejects a second writer
+instance. Coalescing UI settings and remaining controller extraction are future
+performance/ownership work, not claims of a completed UI decomposition.
 
 ### A9 — Medium: no demonstrated unchanged-sync performance acceptance
 

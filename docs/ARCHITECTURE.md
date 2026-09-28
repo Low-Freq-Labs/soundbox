@@ -30,7 +30,7 @@ part of core.
 `engine` (the API surface) · `sync` (export + resync; **safety
 contract at the top of the file**) · `paths` (sanitizing, device paths,
 length budgets) · `playlists` (m3u8) · `report` · `metadata` (artist/title
-derivation, title-cleanup rules) · `artfetch` + `artencode` (artist-accountable
+derivation, title-cleanup rules) · `artwork` (canonical local images, results and defaults) + `artfetch` + `artencode` (artist-accountable
 cover fetch, manual/auto provenance, Unknown-Artist hard stop, managed balanced
 default-photo fallback, and baseline-JPEG encode) · `manifest` (per-device drift) ·
 `track_analysis` (canonical V5 storage plus read-only V4 compatibility,
@@ -77,7 +77,7 @@ retry. Rockbox media inspection, normalization and essence checks use captured
 bytes. Stock planning consumes those technical facts or captures its own source;
 stock execution also captures plain payloads before copying. Generic export
 prepares/copies/discards per file and suppresses destructive cleanup on failure.
-Temporary device files are verified before atomic replacement and the mount is
+Temporary device payloads are explicitly fsynced and verified before atomic replacement and the mount is
 revalidated at that publication boundary.
 
 `payload-receipts-v1` stores compact, checksummed derivative contracts bound to
@@ -423,10 +423,11 @@ and generic USB targets. Connection presentation separates visibility from readi
 hold. If a device worker owns the lane, the request stays pending for retry.
 A three-second timer checks the local `/Volumes` directory timestamp to recover
 missed events; it does not open mounted children merely to check that timestamp.
-Verified external mounts appear as disabled loading rows during discovery.
-At QThread.finished they become selectable, while stock/dual dashboard loading
-continues with a visible loading label. A cached dashboard is presentation-only;
-selecting a loading row uses the same serialized preload. Writes stay guarded by
+Verified external mounts appear by name, disabled during discovery.
+At QThread.finished they become selectable. Stock/dual dashboard loading
+appears only in the bottom status; device rows have no loading suffix. A cached
+dashboard is presentation-only; selecting while it loads uses the same serialized
+preload. Writes stay guarded by
 operation ownership and firmware capabilities. Remounts invalidate stale views.
 
 
@@ -542,9 +543,32 @@ settings payload also stores the last
 closed window geometry, table columns, and Rekordbox/Soundbox/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
 the outer geometry before applying inner pane sizes.
-Restore currently copies library/history/art sequentially and is not an atomic
-whole-state transaction; concurrent artwork publication also lacks one writer.
-See audit A2/A3/A8 before changing persistence or claiming failure-safe restore.
+`state_repository` owns schema validation, recovery, rotating history and saves,
+retaining unknown extension namespaces. Invalid shapes enter recovery just like
+invalid JSON; without a usable backup, normal saves remain disabled. Save failures
+return false at the UI adapter and retain a visible window-title warning.
+
+`state_io` serializes library/artwork/backup access within the app. The executable
+also holds a `QLockFile` for its AppData directory to reject a second writer app.
+`artwork` owns local ArtCache/results/defaults without importing online discovery;
+`artfetch` retains compatibility aliases. Artwork mutations stage image/index/default
+changes together, publish under the area lock, and revert memory on failure.
+
+Backup copies a consistent snapshot under that lock, then compresses outside it
+and atomically publishes the zip. Restore validates bounded archive/folder input,
+rejects links/unsafe members, stages the legacy merge of library/history/art and
+retains originals in a write-ahead journal through publication. Startup rolls back
+an interrupted transaction; committed or rolled-back journals are atomically
+retired before recursive cleanup. Failed rollback preserves recovery material and
+blocks further publication. This is a recoverable multi-path transaction, not a
+single filesystem-atomic swap visible to arbitrary external readers.
+
+The backup/restore UI temporarily disables editing, closes background admission,
+drains existing direct-window writers while Qt events remain alive, saves the final
+state, then starts its worker. Result handling/reload happens after `finished` and
+join. Restoring increments the area generation so stale repositories/caches cannot
+write. Active device operations prevent entry. No analysis or derived-device cache
+is included in restore; no live AppData fault injection is used for validation.
 
 The sibling `stock_artwork/` directory is disposable derived data, not curated
 state: it can always be regenerated from the canonical baseline JPEG art cache.

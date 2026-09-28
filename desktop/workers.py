@@ -239,7 +239,7 @@ class DeviceScanWorker(QThread):
     animation. Running it here keeps the UI responsive no matter what is hammering
     the disk; results are published only from the main-thread `finished` boundary.
     """
-    # `discovered` publishes disabled loading rows after bounded mount probes.
+    # `discovered` publishes named, disabled rows after bounded mount probes.
     # Rows become selectable at `finished`; dashboard preload follows separately.
     discovered = Signal(list)  # list[tuple[name, path, free, profile]]
     done = Signal(list)  # list[tuple[name, path, free, drift, profile]]
@@ -413,6 +413,7 @@ class ArtFillWorker(QThread):
     one track at a time, cached + resumable. Uses the user's curated artist/title
     so matches (and the artist-avatar fallback) keep improving over time."""
     progress = Signal(int, int)  # done, total
+    failed = Signal(str)
 
     DELAY = 1.6  # seconds between fetches — polite, never a burst
 
@@ -440,6 +441,13 @@ class ArtFillWorker(QThread):
             time.sleep(0.05)
 
     def run(self):
+        try:
+            self._fill()
+        except (OSError, ValueError) as exc:
+            LOG.error("Artwork persistence failed: %s", exc)
+            self.failed.emit(str(exc))
+
+    def _fill(self):
         import time
         todo = []
         hidden = getattr(self.lib, "hidden_ids", set())
@@ -472,6 +480,8 @@ class ArtFillWorker(QThread):
                 err += 1
                 if err <= 3:
                     LOG.warning("Art fetch failed for %r: %r", title[:40], exc)
+            if self._stop:
+                break
             if res:
                 self.cache.store_ok(
                     t.track_id, res, origin="auto", rebalance_defaults=False)

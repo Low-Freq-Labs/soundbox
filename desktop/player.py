@@ -1803,8 +1803,7 @@ class PlayerBar(QWidget):
         # engine, not a cancellation of the user's ordinary playback request.
         self._ordinary_playback_requested = (
             self._transport_play_active
-            and not self._cue_preview_active
-            and not self._cue_preview_latched)
+            and (not self._cue_preview_active or self._cue_preview_latched))
         self._gain_completion = None
         self._pause_pending = False
         self._pause_clock.invalidate()
@@ -1877,6 +1876,7 @@ class PlayerBar(QWidget):
             self._cue_preview_latched = True
             self._session_cue_state = SessionCueState.LATCHED_PLAYBACK
             self._transport_play_active = True
+            self._ordinary_playback_requested = True
             if not self.is_playing() and not self._pause_pending:
                 self._play_clean()
             self._sync_deck_button_states()
@@ -1884,6 +1884,7 @@ class PlayerBar(QWidget):
         if self._cue_preview_latched:
             # The next play/Space press ends latched playback at its current
             # position; it deliberately does not jump back to the cue.
+            self._ordinary_playback_requested = False
             self._cue_preview_latched = False
             self._session_cue_state = (
                 SessionCueState.SET if self._src_path
@@ -1969,7 +1970,6 @@ class PlayerBar(QWidget):
         if (not self._cue_preview_active
                 or self._cue_preview_control != control):
             return
-        self._begin_transport_intent()
         target = self._cue_preview_target
         self._cue_preview_active = False
         self._sync_deck_button_states()
@@ -1978,6 +1978,7 @@ class PlayerBar(QWidget):
             # during the clickless seek fade and the button was released before
             # playback actually began.
             return
+        self._begin_transport_intent()
         if control == ("session", -1):
             self._session_cue_state = SessionCueState.SET
         self._cue_preview_control = None
@@ -2263,8 +2264,7 @@ class PlayerBar(QWidget):
         """Forward only a genuine ordinary-playback terminal edge."""
         ordinary_transport = (
             self._ordinary_playback_requested
-            and not self._cue_preview_active
-            and not self._cue_preview_latched
+            and (not self._cue_preview_active or self._cue_preview_latched)
             and not self._deck_drag_active
             and not self._pause_pending)
         track_id = self._track_id

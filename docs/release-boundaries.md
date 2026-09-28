@@ -6,7 +6,7 @@ number of capabilities. Sonny clarified that the public product remains the
 complete music manager, spanning iPod/MP3 players and USB export. Personal
 extensions isolate online scraping/discovery and dependencies withheld from
 public distribution. This document records that allocation and the proposed
-interface contract. No capability registry, public build profile or detachable provider is
+interface contract. Local artwork storage is now independent of discovery; no capability registry, public build profile or detachable provider is
 implemented yet. Preserve all existing personal behavior during migration.
 
 ## Allocation
@@ -39,13 +39,13 @@ permission on a dependency that lacks it.
 | Default-photo pool and balanced assignments | Keep | Same | Personal photos are user data, never bundled |
 | Existing curated JPEGs and provenance | Keep readable | Same | Removing provider never removes stored art |
 | Embedded artwork import from local audio | Planned | Same when built | Not a shipped feature; read-only extraction, explicit precedence |
-| Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Currently autostarts in core |
+| Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Still autostarts in core |
 | Fetch cover art now / background / stop / re-scan | Omit online actions | Retain via provider | Gate command and scheduler, not just menu |
 | Online thumbnail candidate search in cover picker | Omit | Retain via provider | Local picker remains present in both |
 | SoundCloud page URL cover/avatar actions | Omit | Retain via provider | Track picker and artist catalog both need gating |
 | Suggest artists for Unknowns (online consensus) | Omit | Retain via provider | Separate from local merge suggestions |
 | `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Current build bundles it unconditionally |
-| Device discovery, loading rows, dashboard, normal eject | Keep | Same | Core serialized device controller |
+| Device discovery, loading status, dashboard, normal eject | Keep | Same | Core serialized device controller |
 | Generic FAT32 / Rockbox filesystem playlist export | Keep, guarded | Same | Do not revive blanket generic-USB prohibition |
 | Stock MA446 export | Keep after acceptance | Same allowlist | Validated MP3/supported WAV only |
 | Dual MA446 stock/Rockbox single-copy sync | Keep after acceptance | Same allowlist | Schema 3; one transaction authority |
@@ -55,7 +55,7 @@ permission on a dependency that lacks it.
 | Read-only device file browsing/import | Keep | Same | Confined source paths and serialized reads |
 | Raw device file rename/delete/Assign Artist/New Folder | Keep, guarded | Same | Shared device tools with target/source guards and confirmations |
 | Whole generic-volume Erase | Keep, separately confirmed | Same | Exact target confirmation; never enabled for stock/dual |
-| Backup/restore | Keep after transactional hardening | Same | Core state ownership, not personal capability |
+| Backup/restore | Keep | Same | Staged restore/recovery and serialized core state ownership |
 | Diagnostic logging / actionable errors | Keep | Same | No user paths/library data bundled as examples |
 | Exact native traces, developer scripts and legacy XML CLI | Not product UI | Developer tools | Separate tools; do not treat as personal feature unlock |
 | Future validated rekordbox-compatible/CDJ USB export | Planned shared capability | Same | Requires separate implementation, validation and distribution review; not currently shipped |
