@@ -624,19 +624,17 @@ separately validated `iTunesDB` implementation.
   **Erase all files from device…** command is the only exception: it requires
   explicit confirmation naming the exact mounted volume, removes every child
   beneath that volume (including unknown content and the stale manifest), and
-  then performs verified normal eject. The manifest is removed last, so a
+  then requests normal macOS eject. The manifest is removed last, so a
   partial erase remains visibly invalid and cannot masquerade as success.
   Stock and dual-boot iTunes/iPod volumes never expose this command.
 - Normal Verify checks managed sizes/references; Deep Verify rehashes every
   managed track, cover, and playlist.
-- Eject flushes and rereads managed references after writers finish, requests
-  normal macOS eject, and asks before any force-unmount. It begins only after
-  finalization has completed every dashboard/sidebar read, and suppresses new
-  polling through verification and the unmount outcome. If only the recurring
-  read-only poll is active, Eject queues behind its `finished` boundary instead
-  of displaying a device-busy warning. All true planners, writers, deletes,
-  imports, and required reads keep Eject and Sync visibly disabled until their
-  owning worker attributes are cleared.
+- Idle Eject requests normal macOS eject without library verification. macOS
+  handles flushing; a refusal is reported without a force-unmount fallback.
+  A finishing background read queues Eject behind QThread.finished and suppresses
+  replacement polls. Active writes must finish or stop safely first. Required
+  finalization reads remain serialized; failed integrity does not prevent idle
+  eject. The post-sync polling hold ends when the completion dialog is dismissed.
 
 Unknown devices also expose a threaded import action. Selected audio or M3U8
 entries copy in exact playlist order to
@@ -655,7 +653,7 @@ fixture—is hash-compared before normal eject.
 
 ## Remaining hardware boundaries
 
-The MA446 path is physically accepted in both stock and dual-boot use: guarded
+The original MA446 path passed stock and dual-boot hardware acceptance: guarded
 stock database/artwork writes, playback/reconnect recovery, destination-specific
 format filtering, playlist/system-index deletion, Rockbox picture-free playback,
 theme-native external art, firmware-owned database refresh, full-Collection
@@ -663,7 +661,11 @@ commit, incremental Sync, and exact visible playlist order have all run on the
 real device. Rockbox's non-recursive catalogue intentionally remains flat;
 zero-padded filenames carry the user-applied order while stock titles stay clean.
 
-Future hardware gates are different iPod models/checksum families and any
+The September lifecycle corrections still require the repeat reconnect/playback,
+unchanged-Sync performance, overlap, cancellation/retry and failure-eject gates
+in `HANDOFF.md`. Earlier acceptance does not complete these newer gates.
+
+Separate future hardware gates are different iPod models/checksum families and any
 separately designed schema-2 ownership migration. Those boundaries remain
 read-only/fail-closed; they do not block normal use of the validated MA446.
 

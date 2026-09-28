@@ -38,6 +38,9 @@ def synthetic_library() -> Library:
 
 def main() -> None:
     app = make_app()
+    # Suppress the constructor scan as well as timer-triggered scans for the
+    # whole harness lifetime. Never probe real removable devices beside the app.
+    MainWindow._refresh_devices = lambda self, **kwargs: None
     win = MainWindow()
     win.resize(1240, 800)
     win.lib = synthetic_library()

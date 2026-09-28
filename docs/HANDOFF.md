@@ -6,17 +6,37 @@ Updated September 27, 2026, America/Chicago.
 
 Local `main`; Sonny explicitly requested complete wrap-up on September 27.
 The release includes the previously dirty playlist/performance work and lifecycle
-corrections. Resolve the release revision with `git rev-parse HEAD`; the final
-clean build records it in Info.plist. Commit/push are authorized for this release.
+corrections. Published release: `a26dd53` on `main`, installed build 110.
+The application Info.plist records that clean source revision; follow-up documentation/harness
+review changes do not imply a newer installed app.
 Reconnect/playback/firmware-config correction installed at `/Applications/Soundbox.app`.
 The clean release packaging was signature/provenance verified and relaunched on
-September 27 at 20:25:08: native CoreAudio/Metal active, 3397 tracks / 75 playlists,
+September 27 at 20:27:14: native CoreAudio/Metal active, 3397 tracks / 75 playlists,
 zero preparation work, zero artwork fetched. All 202 Favorites, 3298 artwork
-hashes, 2924 analysis baselines and the library hash remained intact. Final
-handoff-only packaging uses the same validated application sources.
+hashes, 2924 analysis baselines and the library hash remained intact. This
+documentation/harness follow-up does not require reinstalling the unchanged app.
 The earlier connected run found the iPod in 1.27 seconds and visually showed its
 loading row before dashboard completion. Generation-60 manifest remained unchanged.
 The preceding installed app is `lifecycle-before-wrap.app` in the rollback directory.
+
+## Post-release correctness review
+
+September 27 follow-up review corrected stale eject/force-unmount guidance,
+post-dialog polling holds, hidden connection rows, obsolete JPEG cover examples,
+source-based rollback advice, hardware-acceptance scope and release/baseline facts.
+The offscreen render harness now suppresses device discovery before construction
+and throughout rendering; the previous harness could probe real mounts.
+This follow-up contains documentation and developer-harness changes only;
+resolve its checkout revision with `git rev-parse HEAD`. Both runtime instruction
+files now require a cross-document consistency gate and final release/state
+evidence review before wrap-up.
+The installed application remains the verified build 110; no runtime code changed.
+The full capture-enabled `./check.sh --render` passed (941 tests, four skips).
+The corrected harness also passed an isolated render with no discovery operation
+logged; the image was inspected. Relative Markdown links and
+runtime-instruction parity passed. Library/Favorites/artwork/analysis match the
+final closed baseline below. Physical acceptance and coordinator queue integration
+remain outstanding, rather than being inferred from passing automated checks.
 
 ## Current correction
 
@@ -103,7 +123,9 @@ Preserve pre-lifecycle.app and named previous build rollbacks. Older recovery at
 `/tmp/soundbox-lifecycle-install-state.py closed` snapshots library/cache baselines;
 `verify` compares. Don't use its backup mode to create another directory casually.
 Current closed baseline: 202 Favorites, 3298 artwork files, 2924 analysis files,
-library SHA-256 `b51daa1e5a9307a12ff41da70b29fa11d7cffab5e2a6941ba26981f89ce11b91`.
+library SHA-256 `7071024731f232c1a20d62b3776f2faadcc3756a45719c646339c56308c2bb78`.
+The final quit changed only Qt `settings.columns_state` serialization; curated
+fields were identical. The earlier baseline is preserved as `pre-wrap-library-closed.json`.
 `library-before-reconnect-fix.json` preserves pre-quit state in the rollback dir.
 Full validation after final source changes:
 `SOUNDBOX_IPOD_CAPTURE="$PWD/soundbox-ipod-ref/offline-lifecycle/20260926-163945" ./check.sh`

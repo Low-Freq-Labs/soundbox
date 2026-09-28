@@ -45,7 +45,8 @@ from a source-edit hint. Unchanged follow-up performance and the remaining physi
 acceptance gates are still outstanding.
 See `ipod-lifecycle-audit-2026-09.md` and `HANDOFF.md` for exact validation.
 
-Sync performance hardening is tested and installed in build 108: resumable
+Sync performance hardening first shipped in build 108 and is retained in the
+verified build 110 release: resumable
 source proofs, exact-byte recovery from cloud timestamp drift, unchanged stock
 compatibility reuse, combined initial playlist drops, generic queue batching,
 and stage timing. The previous live run exposed commit-preflight timestamp
@@ -171,17 +172,17 @@ the feature baseline below remains unchanged.
   while the committed Device/Songs/Playlists snapshot and sidebar drift/free-
   space scan run in series. Their completion dialog is now the terminal event,
   not the trigger for another hidden worker: periodic polling remains suppressed
-  throughout the dialog's nested event loop and stays paused in an explicit
-  eject-ready state after OK. Eject is not coupled to scanner cancellation or
-  completion; the scanner has already finished. Any explicit later device
-  action releases the hold and refreshes normally. Clean/no-write Sync and
+  throughout the dialog's nested event loop and resumes after OK. Eject is not
+  coupled to scanner cancellation or completion; the scanner has already
+  finished. A later device action can also release the hold and refresh normally.
+  Clean/no-write Sync and
   already-absent Delete outcomes use the same finalization path, allowing an
   immediate trustworthy Eject even when there was nothing to publish.
 - **DEVICE TRANSACTIONS NOW HAVE ONE TERMINAL CONTRACT.** Export, Sync,
   managed/file Delete, connection preload, verification, and final refreshes
   consume results only after their QThread has returned and released UI
-  ownership. Newly detected generic rows also wait for that boundary; new iPods
-  additionally remain hidden through dashboard preload and drift. Composite
+  ownership. Newly detected rows appear disabled during discovery and become selectable
+  at that boundary; iPods remain visible while their dashboard loads. Composite
   progress is monotonic 0–30% planning, 30–80% guarded work, and 80–100% final
   dashboard/sidebar/drift release. Eject and Sync are disabled during true
   ownership, a recurring read-only poll queues Eject instead of throwing a busy
@@ -189,13 +190,11 @@ the feature baseline below remains unchanged.
   refresh cannot run a success dialog.
 - **IPOD CONNECTION NOW PRELOADS THE USEFUL VIEW.** A `/Volumes` notification
   starts detection immediately instead of waiting up to three seconds. A new
-  stock/dual mount remains absent from the sidebar while the lower-left status
-  reads `Loading iPod...`; it receives one serialized Device/Songs/Playlists
-  preload and the ordinary drift scan. Only that fully loaded result publishes
-  the clickable row, so selecting it performs no removable-device read. The poll
-  remains as missed-event/failure recovery, readers never overlap, and a
-  same-name remount invalidates path caches through its changed filesystem
-  device token.
+  stock/dual mount appears as a loading row before its serialized dashboard
+  preload and drift scan finish. Selecting a loading row shares that preload;
+  cached completed views avoid another device read. A three-second fallback
+  handles missed mount events. Playback never suppresses detection or polling,
+  readers never overlap, and remounts invalidate stale views.
 - **NEXT ARCHITECTURE MAINTENANCE: decompose `MainWindow` by real ownership.**
   `desktop/app.py` is the remaining general orchestration hotspot. Work in
   small behavior-preserving stages: extract crown-jewel state persistence,

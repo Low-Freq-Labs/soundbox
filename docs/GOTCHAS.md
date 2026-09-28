@@ -1015,13 +1015,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   dialog until Eject is actually available; never make dismissing an alleged
   completion dialog start another blocking device worker. `QMessageBox` runs a
   nested event loop, so install the explicit eject-ready latch before releasing
-  `_exporting` and opening the modal; that latch pauses recurring polling until
-  Eject or a new explicit device action while leaving Eject genuinely enabled.
+  `_exporting` and opening the modal; that latch pauses recurring polling through
+  the dialog and releases on dismissal, while leaving Eject genuinely enabled.
   Do not make Eject cancel, adopt, or finish dashboard work: no such work
-  may remain at the success boundary. Keep Eject fail-closed if any device read,
-  writer, planner, or import really is active, and suppress polling through
-  verification/unmount outcome. A no-write/up-to-date plan is still a completed
-  Sync or Delete and must pass through the same final scan/latch before its OK.
+  may remain at the success boundary. Queue Eject behind a finishing background
+  read; writers, planners and imports must reach their safe boundary first. Suppress new polling through the normal
+  unmount outcome, without starting verification. A no-write/up-to-date plan is
+  still a completed Sync or Delete and must pass through the same final scan/latch before its OK.
 - **Device progress is a transaction meter, not a copy meter.** Planning owns
   0–30% for composite sync, guarded device work owns 30–80%, and final
   dashboard/sidebar/drift reads
@@ -1199,8 +1199,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   never either independent exporter. Playlist rename/move/content/removal is
   coordinated across both firmware views. Managed audio uses its schema-3
   ownership/path/size baseline and a reproducible exact source-side payload;
-  art and playlists retain live hash checks. Delete before the final manifest
-  publish and restore the verified source payload on rollback.
+  art and playlists retain live hash checks. Rename removed/replaced owned audio
+  into same-volume recovery before final manifest publication; restore those original bytes on rollback.
 - **Content equality is not library identity.** Deduplicate repeated playlist
   references to the same canonical source path, but never collapse two distinct
   source paths onto one iTunesDB record merely because their bytes match. The
@@ -1208,8 +1208,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   effective title/artist labels. Each distinct source needs its own DBID,
   metadata/artwork, and scrambled device path.
 - **Scrambled stock names require filename artwork, not folder artwork.** For
-  `/iPod_Control/Music/Fxx/ABCD.wav`, write `ABCD.jpg` beside it. Never guess the
-  audio suffix when recording cover membership: retain an explicit cover→audio
+  `/iPod_Control/Music/Fxx/ABCD.wav`, write `ABCD.160x160.bmp`,
+  `ABCD.116x116.bmp`, and fallback `ABCD.bmp` beside it, plus required theme sizes.
+  Never guess the audio suffix when recording cover membership: retain an explicit cover→audio
   mapping because shared files may be WAV or MP3.
 - **iPod MUST be FAT32, NOT HFS+.** Rockbox does not support HFS+.
 - m3u8: UTF-8 **no BOM**; absolute-from-drive-root paths (`/Music/Artist/...`).

@@ -294,6 +294,39 @@ rendering, clocks, transport behavior, analysis loading, or native code.
   steps for Sonny to request again. If a genuine blocker prevents completion,
   report the exact blocker and leave an operational handoff instead of claiming
   the session is wrapped.
+- **Wrap-up consistency gate (required before commit/push and final response):**
+  - Review the complete intended diff, including work inherited from an earlier
+    session. For each changed behavior, search the README, both runtime files,
+    handoff, roadmap, architecture, device/player guidance as applicable, and
+    gotchas for the old behavior as well as the new wording. Updating one current
+    section does not fix contradictory instructions elsewhere. Correct current
+    guidance; label historical evidence explicitly rather than rewriting history.
+  - Check documentation claims against implementation and tests. Audit recovery,
+    eject, worker ownership, source safety and acceptance claims especially;
+    passing tests do not prove unobserved hardware behavior or complete a partial
+    architecture migration. Keep outstanding work explicit in the handoff.
+  - Check `AGENTS.md`/`CLAUDE.md` byte parity, relative Markdown links, and
+    `git diff --check`. Verify developer harnesses do not read live device/source
+    state merely because their AppData is isolated. Run the relevant render gate
+    for UI/harness changes and inspect its output, in addition to `./check.sh`.
+  - Record the actual final installed build/revision, launch verification and
+    post-quit/postlaunch curated-state baseline. Never copy an intermediate
+    timestamp, hash or build number into the final handoff. If state changed,
+    inspect the exact differences before establishing a new baseline; preserve
+    the earlier evidence and distinguish UI-setting serialization from curation.
+  - Distinguish repository HEAD from the installed app revision. Documentation
+    and developer-harness-only changes do not require reinstalling an unchanged
+    application. State that distinction explicitly; do not stamp an older binary
+    as a newer revision to satisfy a provenance check. User-facing/runtime changes
+    still require the full safe build/install/relaunch procedure below.
+  - Finish documentation before the release commit where possible. Installation
+    evidence added afterward may be a documentation-only follow-up; retain the
+    true installed source revision instead of creating a rebuild/documentation
+    loop. Remove stale pending/uncommitted statements before publishing.
+  - After push, verify the remote branch resolves to local HEAD and the intended
+    worktree is clean. The final response must separate completed release work
+    from remaining physical acceptance or implementation limitations. Never claim
+    that everything is correct merely because the automated suite passed.
 - Do not hard-code a "current" test count as evergreen truth; trust
   `./check.sh`. Dated validation records may include the observed count.
 
@@ -310,6 +343,9 @@ rendering, clocks, transport behavior, analysis loading, or native code.
 - Native deck requires arm64 macOS 14+. Qt Multimedia is analysis-only
   (`QAudioDecoder` for AAC/ALAC); native-deck failure disables playback with a
   diagnostic while library management remains available.
+- The offscreen render harness must suppress device discovery before creating
+  MainWindow and throughout rendering; test-mode AppData alone does not isolate
+  real removable mounts.
 - Logs: `~/Library/Logs/Soundbox/soundbox.log`.
 - Git uses local `main`, tracking `origin/main` on the Low Freq Labs GitHub
   repository. Inspect and preserve the dirty worktree. Do not commit or push
