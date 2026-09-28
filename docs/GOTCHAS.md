@@ -49,8 +49,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Sync, success dialogs, and 100% progress must all follow that same boundary.
 - Accessing a `deleteLater()`'d worker raises `RuntimeError: Internal C++ object
   already deleted`. Guard with the `_running(w)` helper.
-- `shutdown()` (from `closeEvent` + `app.aboutToQuit`) must stop/wait every
-  worker BEFORE Qt teardown.
+- `shutdown()` (from `closeEvent` + `app.aboutToQuit`) must stop every
+  worker BEFORE Qt teardown. Keep Qt events alive until actual completion;
+  timed waits are not permission to destroy a still-running worker.
 - **There is no Qt playback fallback.** Qt Multimedia is analysis-only through
   `QAudioDecoder` for AAC/ALAC. Native-deck initialization failure must leave
   library management usable, disable player controls, and surface the exact
@@ -594,23 +595,17 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   free-space/drift scan from that worker's `finished` signal. Starting both
   readers together adds avoidable USB contention and leaves the visible
   snapshot stale until the user navigates away and back.
-- **Connection discovery, dashboard preload, and drift are ordered UX phases.**
-  A debounced `/Volumes` watcher begins detection without waiting for the
-  recovery poll. That poll backs off to 30 seconds while no mount exists and
-  returns to three seconds while any discovered mount needs drift/preload
-  checks. No new generic or iPod row publishes before the
-  discovery QThread has cleared ownership. Never publish a stock/dual iPod's sidebar
-  row as a loading affordance. Keep it absent and put `Loading iPod...` in the
-  lower-left status while the genuinely new mount skips first-pass drift,
-  preloads the complete immutable Device/Songs/Playlists snapshot exactly once,
-  and then runs the normal drift scan. The completed follow-up scan is the sole
-  visibility gate. Thus every clickable iPod already has a cached snapshot and
-  clicking it is presentation-only; it must never parse/hash iTunesDB again. A
-  failed initial read remains hidden and retries through the bounded poll rather
-  than entering an immediate worker loop. Sidebar and stock-dashboard readers
-  remain strictly single-flight. Bind path-keyed caches to the mount root's
-  `st_dev`, and clear/reprobe every disk/profile/identity cache when the same
-  `/Volumes` name returns with a different token.
+- **Connection visibility must not wait for dashboard integrity.**
+  Connection presentation separates visibility from readiness. A debounced
+  `/Volumes` notification requests discovery even during playback or an eject-ready
+  hold. If a device worker owns the lane, the request stays pending for retry.
+  A three-second timer checks the local `/Volumes` directory timestamp to recover
+  missed events; it does not open mounted children merely to check that timestamp.
+  Verified external mounts appear as disabled loading rows during discovery.
+  At QThread.finished they become selectable, while stock/dual dashboard loading
+  continues with a visible loading label. A cached dashboard is presentation-only;
+  selecting a loading row uses the same serialized preload. Writes stay guarded by
+  operation ownership and firmware capabilities. Remounts invalidate stale views.
 - **A stock shadow source row describes two files.** `size`/`sha256` belong to
   the verified device payload; `source_size`/`mtime_ns` describe the canonical
   Mac source. Picture removal changes payload size without changing the source.
@@ -1053,10 +1048,17 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   planning reads/hashes only bounded managed M3U8 payloads and may authorize an
   external baseline only when the committed track sequence is an exact prefix
   and every appended path maps through schema-3 ownership to one current source
-  track. Persist a genuinely new membership before device writes. If the track
-  was already present, approve the exact live bytes for recovery but omit the
-  appended occurrence from the desired payload, so Sync removes the accidental
-  duplicate. Preserve duplicates that predate this Rockbox edit. Unknown paths
+  track. Authenticate the historical M3U8 prefix against its recorded hash to
+  recover stable IDs: old Mac paths may have disappeared while the original
+  device playlist is still valid. Use that proof in downstream stock/Rockbox
+  source mappings too: fixing only the append reader leaves moved sources
+  failing later as unavailable or unowned. Keep original manifest recovery
+  bytes and hash moved sources before reusing derivatives. Only custom SoundBox playlists accept incoming
+  membership; never create new rekordbox playlist overlays. Baseline-check and
+  persist the exact custom membership before device writes. Deduplicate custom
+  membership by track ID, canonical source, or exact source bytes (hash only
+  size-matched candidates), retaining the first occurrence, including older
+  duplicates. Never merge by title/artist. Unknown paths
   are not imports; deletion/reorder edits and SoundBox-removal conflicts fail
   closed. Rockbox may serialize primary-volume entries as `/<HDD0>/...`; strip
   only that exact leading HDD0 token before schema-3 ownership lookup and
@@ -1078,7 +1080,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   payload because that tag-size-dependent duration estimate changed.
 - **Let Rockbox own its binary tag cache.** SoundBox may atomically and
   recovery-safely enforce `tagcache_autoupdate: on`,
-  `playlist viewer track display: title from tags`, `sort playlists: alpha`,
+  `playlist viewer track display: title from tags`,
   and a minimum `max files in playlist: 10000` in `.rockbox/config.cfg`,
   preserving every unrelated line and the existing LF/CRLF style. Normalizing
   Rockbox's CRLF file to LF made an already-correct config look perpetually
@@ -1092,11 +1094,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Dashboard freshness may compare `database_idx.tcd` only to the current
   manifest/config mtimes (with FAT tolerance); that is a pending-restart signal,
   not permission to parse, delete, or rewrite the cache.
-- **Playlist Catalogue order is a separate Rockbox setting, and physical
-  behavior wins.** Its browser uses `sort playlists`, not the ordinary file-
-  browser sort. Although upstream supports date sorting, the MA446 continued to
-  present the catalogue alphabetically after controlled FAT mtimes. Enforce
-  `sort playlists: alpha` and prefix only Rockbox M3U8 filenames with a zero-
+- **Do not require unsupported firmware settings.** Rockbox 4.0's
+  [settings table](https://raw.githubusercontent.com/Rockbox/rockbox/v4.0-final/apps/settings_list.c)
+  has no `sort playlists` key. The September 27 hardware config omitted the key
+  after firmware saved its preferences, causing a false Sync-needed loop. Do not
+  add or require it; preserve existing unknown lines without treating them as
+  authority. Catalogue order on the validated device uses filenames with a zero-
   padded manifest position (`01 - HOUSE.m3u8`). Keep stock titles and manifest
   `device_name` clean, retain full rekordbox hierarchy in the manifest, and add
   folder context only for duplicate leaves. Reorder is a transactional rename
@@ -1281,3 +1284,56 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   commit, firmware database refresh, and zero-padded playlist order all passed
   on-device. Do not generalize that result to another iPod model, checksum
   family, or schema-2 migration without a separate fixture and physical gate.
+
+## Sync performance and cloud source proofs
+
+- A successful cloud read is not a durable source timestamp. A long composite
+  plan can outlive hydration/eviction metadata changes. Reprove exact bytes
+  before accepting new timestamps, both during planning and commit preflight;
+  never just replace the stat baseline after an unverified change.
+- Completed relocation/dedup hashes persist individually under Rockbox staging
+  `source-verification-v1/`, so a later error does not erase all progress. Every
+  reuse checks canonical path, filesystem/inode, size, mtime, and ctime. This
+  is disposable source evidence, never device ownership or permission to skip
+  destination verification. Staging cleanup deliberately preserves it.
+- Stock format probes can hydrate cloud placeholders. A verified planned
+  derivative matching a managed stock payload's size/hash already has a known
+  compatibility result; retain the independent DBID/path/live-size audit.
+  Unproven/changed sources are inspected once per canonical source per plan.
+- Batch the initial multi-playlist drop as well as jobs queued behind it.
+  Generic exports coalesce contiguous jobs for one target and scale unique-file
+  progress to playlist-entry progress; keep different targets in FIFO order.
+
+- Idle eject never calls library verification. Repair warnings are informational
+  for eject; normal diskutil refusal is the authority, without a force fallback.
+- Once acquired, all audio inspection and transformation must use the local
+  snapshot. A cloud stat check followed by reopening the source is not a stable
+  snapshot and caused the CRANKDAT build-108 failure.
+
+- **Artwork worker completion must retire its own instance.** The September 26
+  offscreen crash showed QThread destruction concurrent with ArtFillWorker
+  startup. A finished-but-undelivered thread still owns its slot: never replace
+  it merely because `isRunning()` became false. Capture the worker in its
+  finished connection and clear only that exact instance. Shutdown callbacks
+  must not schedule new artwork passes while the event loop drains.
+
+## Offline iPod metadata tests
+
+`tests/test_ipod_capture.py` is opt-in through `SOUNDBOX_IPOD_CAPTURE`. It copies
+private captured metadata into temporary writable fixtures and supplies generated
+audio. Omitted historical audio has sparse size placeholders whose reads fail:
+passing these tests proves database/transaction behavior, not historical audio
+integrity, USB reliability, or playback. Never run mutations on pristine captures.
+A no-cache full reconciliation must retain unchanged database bytes; renderer
+header changes alone must not manufacture a Sync requirement.
+
+
+The bounded composite drift poll treats source size/mtime changes as Sync-needed
+hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
+can change ctime immediately after a successful commit. This UI status is not a
+content-integrity certificate. Source proofs/receipts still include ctime, and
+explicit planning/acquisition retain exact-byte verification; no stored proof or
+manifest baseline is refreshed merely to clear the badge.
+
+Post-sync polling is held through the completion dialog only. Dismissal releases
+the hold so subsequent SoundBox edits can update drift without reconnecting.

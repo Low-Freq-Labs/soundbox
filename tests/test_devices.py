@@ -66,6 +66,9 @@ class ClassicIpodFacts(unittest.TestCase):
                 },
             )
 
+            self.assertEqual(devices._classic_ipod_preferences("OTHER", path), {})
+            self.assertEqual(devices._classic_ipod_preferences("", path), {})
+
     def test_multiple_historical_ipods_fail_closed_without_exact_id(self):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "com.apple.iPod.plist"

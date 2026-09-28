@@ -20,10 +20,12 @@ from .manifest import manifest_path
 CONFIG_RELATIVE = Path(".rockbox/config.cfg")
 MIN_PLAYLIST_FILES = 10_000
 _PLAYLIST_LIMIT_KEY = "max files in playlist"
+# Rockbox 4.0 has no "sort playlists" setting. Its config save drops unknown
+# keys; requiring that legacy SoundBox line causes a false Sync after every boot.
+# Keep existing unknown lines untouched, but never add or require this one.
 REQUIRED_SETTINGS = (
     ("tagcache_autoupdate", "on"),
     ("playlist viewer track display", "title from tags"),
-    ("sort playlists", "alpha"),
     (_PLAYLIST_LIMIT_KEY, str(MIN_PLAYLIST_FILES)),
 )
 _THEME_KEYS = ("wps", "sbs")

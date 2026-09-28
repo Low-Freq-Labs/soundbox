@@ -497,6 +497,8 @@ class StockIpodPages(QWidget):
         model_label = snapshot.model or "Not confirmed"
         firmware_label = snapshot.firmware_version or "Not reported"
         serial_label = snapshot.serial_number or "Not reported"
+        if snapshot.firmware_source.startswith("Remembered: "):
+            firmware_label += " (last observed)"
         # Keep identity/catalog provenance on the immutable snapshot for
         # validation and diagnostics. The dashboard only needs the actual
         # model, firmware, serial, and identified component values.
@@ -531,7 +533,7 @@ class StockIpodPages(QWidget):
             ("Family", snapshot.family),
             ("Generation", snapshot.generation),
             ("Model", model_label),
-            ("Firmware", firmware_label),
+            ("Stock firmware", firmware_label),
             ("DAC / codec", dac_label),
             ("Serial number", serial_label),
             ("Connection", connection_label),
@@ -559,8 +561,6 @@ class StockIpodPages(QWidget):
                 ("Version", f"0x{snapshot.database_version:X}"),
                 ("Checksum scheme", str(snapshot.checksum_scheme)),
                 ("Playback state", snapshot.playback_status),
-                ("Recovery points", str(snapshot.recovery_count)),
-                ("SHA-256", snapshot.database_sha256),
             )
         else:
             database_rows = (
@@ -581,8 +581,6 @@ class StockIpodPages(QWidget):
                     f"0x{snapshot.database_version:X} · checksum "
                     f"{snapshot.checksum_scheme}")),
                 ("Playback state", snapshot.playback_status),
-                ("Recovery points", str(snapshot.recovery_count)),
-                ("iTunesDB SHA-256", snapshot.database_sha256),
             )
         self._set_detail_rows("Database", database_rows)
         self._set_detail_rows("SoundBox", (

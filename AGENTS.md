@@ -63,7 +63,7 @@ repository can answer the question.
   lightweight dimensionless 160×160 fallback. The curated JPEG cache remains
   canonical and stock artwork is untouched. On a composite device, SoundBox may manage only
   `.rockbox/config.cfg` values `tagcache_autoupdate: on`,
-  `playlist viewer track display: title from tags`, `sort playlists: alpha`,
+  `playlist viewer track display: title from tags`,
   and a minimum `max files in playlist: 10000`, preserving a larger user limit,
   every unrelated line, and the file's existing newline style. That write is
   baseline-verified, recovery-backed, and atomic. Rockbox
@@ -107,11 +107,31 @@ repository can answer the question.
   playlist-size baseline to surface the standard Sync-needed state; confirmed
   planning reads the changed small M3U8 and accepts only device paths that map
   unambiguously to existing schema-3 managed media. A genuinely new membership
-  is persisted as a SoundBox-owned append layer without writing rekordbox, then
-  reconciled into both firmware views. An appended track already present in
-  that playlist is not adopted twice: the transaction recovery-backs the M3U8
-  and drops only the new duplicate. Pre-existing intentional duplicates are
-  not guessed away. Unknown/unowned paths are never imported
+  is persisted only into a SoundBox-owned custom playlist, then reconciled
+  into both firmware views. Rekordbox playlists do not adopt iPod additions;
+  rekordbox remains read-only. Exact hash-verified historical M3U8 prefixes
+  bind device paths to stable track IDs even after local source removal or
+  relocation. The planning view may rebind those proven IDs to their current
+  canonical Mac sources while retaining original device ownership/recovery
+  baselines. Reusing a moved source's derivative requires matching source
+  SHA-256; a metadata change during cloud hydration permits one full re-hash
+  against a new stable stat baseline, never acceptance of the old digest with
+  unverified new timestamps. Repeated change fails closed. Completed source
+  proofs may persist only in disposable SoundBox state and are reusable only
+  for the same canonical path, filesystem/inode identity, size, mtime, and
+  ctime. Timestamp-only drift at commit preflight requires exact source SHA-256
+  equality against a stable baseline before refreshing the plan; different
+  bytes or continuing changes stop before device writes. Unchanged verified
+  stock payloads may reuse their manifest-proven compatibility, while DBID,
+  device path, and live-size ownership checks still run. Changed bytes use
+  normal verified replacement. Multiple old copies
+  may converge only when their recorded verified source hashes are identical
+  and their current canonical source is one file; surplus copies remain under
+  ordinary reference-counted cleanup. Custom playlist reconciliation retains the first occurrence of
+  each track, canonical source, or byte-identical source file, including older
+  duplicates; distinct recordings are never merged by title/artist. Membership
+  is baseline-checked and saved before device writes, and M3U8 changes are
+  recovery-backed. Unknown/unowned paths are never imported
   automatically, and deletion/reorder edits fail closed. The proven app-side
   membership is saved before device writes so a failed device phase remains an
   honest retry. Generic Sync
@@ -175,15 +195,67 @@ repository can answer the question.
 - Dry-run by default where the workflow supports it; ask before anything
   irreversible; never bulk-delete or orphan-clean without an explicit target
   and confirmation. Do not assume paths—resolve and verify them.
+- Device activity and library integrity are separate. An idle device may
+  always request normal macOS eject without Sync, Verify, or Deep Verify.
+  Never force-unmount automatically. Device worker ownership lasts through
+  QThread.finished; cancellation clears pending work and stops active work at
+  a safe boundary. Shutdown must keep Qt events alive until workers stop;
+  an expired timed wait never permits destroying a worker.
+- Canonical audio acquisition captures one local snapshot while hashing. An
+  expected digest binds captured bytes, so matching bytes survive cloud
+  eviction/timestamp drift. Without a digest, require a stable capture with at
+  most one hydration retry. Inspection/transformation/copy use local captured
+  bytes; retain at most one source and working derivative. Disposable receipts
+  and source proofs never confer device ownership. Preserve generation-58
+  recovery until separately reviewed hardware acceptance succeeds.
 - `library.json` is crown-jewel user state. Never wipe AppData or trigger a
   full cache rebuild casually. Back it up before installation or risky state
   work and verify curated data afterward.
 - Full per-write export contract lives at the top of `soundbox/sync.py`.
 
+
+Missing manifest-owned Rockbox audio and per-track artwork are planned as verified
+new copies when the guarded destination is absent. Existing occupants, symlinks,
+and inaccessible paths are not treated as missing; commit rechecks vacancy and
+rollback removes only files created by that transaction. A fully reconciled stock
+library with no semantic changes retains its original iTunesDB bytes even when
+the disposable stock shadow is absent.
+
+
+The bounded composite drift poll treats source size/mtime changes as Sync-needed
+hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
+can change ctime immediately after a successful commit. This UI status is not a
+content-integrity certificate. Source proofs/receipts still include ctime, and
+explicit planning/acquisition retain exact-byte verification; no stored proof or
+manifest baseline is refreshed merely to clear the badge.
+
+Connection presentation separates visibility from readiness. A debounced
+`/Volumes` notification requests discovery even during playback or an eject-ready
+hold. If a device worker owns the lane, the request stays pending for retry.
+A three-second timer checks the local `/Volumes` directory timestamp to recover
+missed events; it does not open mounted children merely to check that timestamp.
+Verified external mounts appear as disabled loading rows during discovery.
+At QThread.finished they become selectable, while stock/dual dashboard loading
+continues with a visible loading label. A cached dashboard is presentation-only;
+selecting a loading row uses the same serialized preload. Writes stay guarded by
+operation ownership and firmware capabilities. Remounts invalidate stale views.
+
+
+Playback and iPod management are independent. Device discovery and ordinary
+status polling must not check player.is_playing as a suppression condition.
+Only device operation ownership pauses competing device reads/writes. Reconnect,
+Rockbox tag-cache updates, unrelated firmware preferences and ctime-only cloud
+metadata changes do not themselves create managed-library Sync drift.
+
+Rockbox 4.0 does not support `sort playlists`; never add or require that key.
+Its absence after firmware saves preferences is not Sync drift. Preserve existing
+unknown config lines; retain the established numbered playlist filenames.
+
 ## Documentation map
 
 | Doc | What's in it |
 |-----|--------------|
+| `docs/ipod-lifecycle-audit-2026-09.md` | Lifecycle inventory, failure matrix, implementation and acceptance boundaries |
 | `docs/HANDOFF.md` | Single current session-resume note: live state, unfinished work, exact next checks, validation, and rollback facts |
 | `docs/ROADMAP.md` | Current status, committed next work, phases, product decisions, and CDJ frontier |
 | `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and pending grid work |
@@ -275,3 +347,17 @@ Moving/replacing the `.app` bundle must never touch
   git-ignored `soundbox-ipod-ref/` workspace. Treat pristine captures as
   read-only research/recovery fixtures; never restore one to hardware without
   an explicit, separately reviewed recovery plan.
+
+Artwork worker ownership also lasts through delivery of its `finished` callback.
+Completion retires the captured instance, never whatever currently occupies a
+worker attribute; shutdown callbacks cannot start replacement artwork passes.
+
+Dashboard serial and stock-firmware facts may persist under the exact volume UUID
+plus library persistent ID, with provenance. Fresh observations supersede stored
+facts; conflicting serials discard the old association. Remembered facts are
+presentation-only and never grant mount/write authority. A sole historical Apple
+record without an exact device match is not sufficient identification. Recovery
+counts and database digests stay in backend snapshots, not dashboard rows.
+
+Post-sync polling is held through the completion dialog only. Dismissal releases
+the hold so subsequent SoundBox edits can update drift without reconnecting.

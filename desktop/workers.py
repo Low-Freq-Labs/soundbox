@@ -19,6 +19,7 @@ from PySide6.QtCore import QThread, Signal
 
 from soundbox import artfetch, engine, metadata, rekordbox_db, sync as sync_mod
 from soundbox.library import Playlist
+from soundbox.operation_control import checkpoint, operation_scope
 from soundbox.stock_artwork import StockArtworkCache
 from soundbox.stock_ipod import (
     inspect_stock_ipod_sync_status, normalize_model_number,
@@ -42,6 +43,8 @@ class ExportWorker(QThread):
     progress = Signal(int, int, str)
     finished_all = Signal(list)
 
+    phase_progress = Signal(str, object, object, str)
+
     def __init__(self, lib, overrides=None, titles=None, art_cache=None,
                  rockbox_media_cache=None, rockbox_art_cache=None):
         super().__init__()
@@ -52,7 +55,7 @@ class ExportWorker(QThread):
         self.rockbox_media_cache = rockbox_media_cache
         self.rockbox_art_cache = rockbox_art_cache
         self._lock = threading.Lock()
-        self._jobs: list[tuple[str, Playlist]] = []
+        self._jobs: list[tuple[str, Playlist, int]] = []
         self._index = 0
         self._total = 0
         self._base_done = 0
@@ -60,10 +63,12 @@ class ExportWorker(QThread):
         self._reports: list[tuple[str, object]] = []
         self.result: list[tuple[str, object]] | None = None
 
-    def add(self, device: str, playlists: list[Playlist]):
+    def add(self, device: str, playlists: list[Playlist], *, mount_token: int = 0):
         with self._lock:
+            if self._stop:
+                return
             for pl in playlists:
-                self._jobs.append((device, pl))
+                self._jobs.append((device, pl, mount_token))
                 self._total += max(1, len(self.lib.resolve(pl)))
         # No emit here: the next per-file progress tick updates the bar at the
         # real current position with the new total, so adding a playlist mid-export
@@ -72,35 +77,58 @@ class ExportWorker(QThread):
     def cancel(self):
         with self._lock:
             self._stop = True
+            del self._jobs[self._index:]
 
     def run(self):
+        with operation_scope(None, self.phase_progress.emit):
+            self._run_export()
+
+    def _run_export(self):
         try:
             while True:
                 with self._lock:
                     if self._stop or self._index >= len(self._jobs):
                         break
-                    device, pl = self._jobs[self._index]
+                    device, pl, mount_token = self._jobs[self._index]
                     self._index += 1
+                    playlists = [pl]
+                    # One target gets one combined file/membership plan. Keep
+                    # cross-device FIFO order; later arrivals form a new batch.
+                    while (self._index < len(self._jobs)
+                           and self._jobs[self._index][0] == device
+                           and self._jobs[self._index][2] == mount_token):
+                        playlists.append(self._jobs[self._index][1])
+                        self._index += 1
                     base = self._base_done
-                est = max(1, len(self.lib.resolve(pl)))
+                est = sum(max(1, len(self.lib.resolve(p))) for p in playlists)
+                name = pl.name if len(playlists) == 1 else f"{len(playlists)} playlists"
 
-                def cb(d, _t, label, _base=base, _name=pl.name):
+                def cb(d, t, label, _base=base, _name=name, _est=est):
                     with self._lock:
                         tot = self._total
-                    self.progress.emit(_base + d, tot, f"{_name} — {label}")
+                    # Export counts unique media; the growable queue counts
+                    # playlist entries, including shared tracks.
+                    done = int(_est * min(1.0, max(0.0, d / max(1, t))))
+                    self.progress.emit(_base + done, tot, f"{_name} — {label}")
 
                 try:
+                    if mount_token and Path(device).stat().st_dev != mount_token:
+                        raise RuntimeError("Queued export target was remounted; confirmation expired")
                     # clean=False: scrub AppleDouble once at end, not per playlist.
                     rep = engine.export_playlists(
-                        self.lib, [pl], device, dry_run=False, derive_artists=True,
+                        self.lib, playlists, device, dry_run=False, derive_artists=True,
                         on_progress=cb, should_cancel=lambda: self._stop, clean=False,
                         artist_overrides=self.overrides, title_overrides=self.titles,
                         art_cache=self.art_cache,
                         rockbox_media_cache=self.rockbox_media_cache,
                         rockbox_art_cache=self.rockbox_art_cache)
                     self._reports.append((device, rep))
+                    if (getattr(rep, "cancelled", False)
+                            or any(p.errors for p in getattr(rep, "playlists", []))):
+                        self.cancel()
                 except Exception as exc:  # noqa: BLE001 - surface failure in report
                     self._reports.append((device, str(exc) or repr(exc)))
+                    self.cancel()
                 with self._lock:
                     self._base_done = base + est
                     total = self._total
@@ -114,7 +142,7 @@ class ExportWorker(QThread):
             wd = getattr(rep, "written_dirs", None)
             if wd:
                 dev_dirs.setdefault(dev, set()).update(wd)
-        for dev in dict.fromkeys(d for d, _ in self._reports):
+        for dev in (() if self._stop else dict.fromkeys(d for d, _ in self._reports)):
             try:
                 engine.clean_device(dev, dev_dirs.get(dev))
             except Exception:  # noqa: BLE001
@@ -134,6 +162,8 @@ class ResyncWorker(QThread):
     progress = Signal(int, int, str)
     done = Signal(str, object)  # device, SyncReport | error string
 
+    phase_progress = Signal(str, object, object, str)
+
     def __init__(self, lib, device, overrides=None, titles=None, art_cache=None,
                  rockbox_media_cache=None, rockbox_art_cache=None, extra=None):
         super().__init__()
@@ -152,9 +182,17 @@ class ResyncWorker(QThread):
         self._stop = True
 
     def run(self):
+        with operation_scope(None, self.phase_progress.emit):
+            self._run_export()
+
+    def _run_export(self):
         def cb(d, t, label):
             self.progress.emit(d, t, label)
         try:
+            command = getattr(self, "device_command", None)
+            if command is not None and command.target.mount_token:
+                if Path(self.device).stat().st_dev != command.target.mount_token:
+                    raise RuntimeError("Sync target was remounted; confirmation expired")
             rep = engine.resync_device(
                 self.lib, self.device, on_progress=cb,
                 should_cancel=lambda: self._stop,
@@ -201,8 +239,8 @@ class DeviceScanWorker(QThread):
     animation. Running it here keeps the UI responsive no matter what is hammering
     the disk; results are published only from the main-thread `finished` boundary.
     """
-    # `discovered` is the fast verified-mount phase used to begin hidden iPod
-    # preload/status ownership. No clickable row is published until `finished`.
+    # `discovered` publishes disabled loading rows after bounded mount probes.
+    # Rows become selectable at `finished`; dashboard preload follows separately.
     discovered = Signal(list)  # list[tuple[name, path, free, profile]]
     done = Signal(list)  # list[tuple[name, path, free, drift, profile]]
 
@@ -1032,15 +1070,35 @@ class OneShotTask(QThread):
     beachball the app)."""
     done = Signal(object)
 
+    phase_progress = Signal(str, object, object, str)
+
     def __init__(self, fn, *, log_label: str = ""):
         super().__init__()
         self.fn = fn
         self.log_label = log_label
         self.result = None
+        self.cancellation = threading.Event()
+
+    def cancel(self):
+        self.cancellation.set()
+
+    def _validate_command(self):
+        command = getattr(self, "device_command", None)
+        if command is not None and command.target.path and command.target.mount_token:
+            if Path(command.target.path).stat().st_dev != command.target.mount_token:
+                raise RuntimeError("Device mount changed before operation")
 
     def run(self):
         try:
-            self.result = self.fn()
+            with operation_scope(self.cancellation, self.phase_progress.emit):
+                checkpoint()
+                self._validate_command()
+                self.result = self.fn()
+                command = getattr(self, "device_command", None)
+                if command is not None and command.intent in {"inspect", "verify", "import"}:
+                    self._validate_command()
+                if getattr(self, "cancel_after_result", False):
+                    checkpoint()
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI
             if self.log_label:
                 LOG.exception("%s failed", self.log_label)
@@ -1053,19 +1111,46 @@ class ProgressTask(QThread):
     progress = Signal(int, int, str)
     done = Signal(object)
 
+    phase_progress = Signal(str, object, object, str)
+
     def __init__(self, fn, *, log_label: str = ""):
         super().__init__()
         self.fn = fn
         self.log_label = log_label
         self.result = None
+        self.cancellation = threading.Event()
+
+    def cancel(self):
+        self.cancellation.set()
+
+    def _validate_command(self):
+        command = getattr(self, "device_command", None)
+        if command is not None and command.target.path and command.target.mount_token:
+            if Path(command.target.path).stat().st_dev != command.target.mount_token:
+                raise RuntimeError("Device mount changed before operation")
 
     def run(self):
+        started = time.monotonic()
+        if self.log_label:
+            LOG.info("%s started", self.log_label)
         try:
-            self.result = self.fn(self.progress.emit)
+            with operation_scope(self.cancellation, self.phase_progress.emit):
+                checkpoint()
+                self._validate_command()
+                self.result = self.fn(self.progress.emit)
+                command = getattr(self, "device_command", None)
+                if command is not None and command.intent in {"inspect", "verify", "import"}:
+                    self._validate_command()
+                if getattr(self, "cancel_after_result", False):
+                    checkpoint()
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI
             if self.log_label:
                 LOG.exception("%s failed", self.log_label)
             self.result = exc
+        if self.log_label:
+            LOG.info("%s %s in %.2fs", self.log_label,
+                     "failed" if isinstance(self.result, Exception) else "completed",
+                     time.monotonic() - started)
         self.done.emit(self.result)
 
 

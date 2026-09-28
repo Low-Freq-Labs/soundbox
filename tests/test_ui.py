@@ -48,6 +48,10 @@ def setUpModule():
     rekordbox_db.db_available = lambda: False  # tests never read the live DB
     from desktop.app import MainWindow, make_app
     _app = make_app()
+    # Refresh callbacks later in the suite can discover mounts too. Keep all
+    # background scans synthetic; device-worker tests override this locally.
+    unittest.enterModuleContext(mock.patch(
+        "desktop.workers.list_devices", return_value=[]))
     # MainWindow normally starts an immediate removable-device discovery before
     # the timer can be stopped. Keep the UI harness genuinely hermetic so a
     # mounted player is never inspected by tests running beside the real app.
@@ -304,32 +308,58 @@ class DeviceLabels(unittest.TestCase):
             "IPOD", 5_000_000_000, 0, "msdos", profile)
         self.assertIn("IPOD · Dual Boot iPod", label)
 
-    def test_committed_rockbox_addition_persists_source_playlist_overlay(self):
+    def test_rockbox_membership_persists_custom_playlist_and_refreshes(self):
         from types import SimpleNamespace
-        from soundbox.dual_ipod import DualPlaylistAddition
+        from soundbox.dual_ipod import DualPlaylistAddition, DualPlaylistUpdate
 
-        playlist = _win.lib.playlists[0]
-        old_pid = playlist.pid
+        old_custom = dict(_win.custom)
         old_additions = dict(_win.playlist_additions)
-        playlist.pid = "fixture-source"
-        _win.playlist_additions = {}
+        _win.custom["Device Picks"] = ["1", "1"]
         try:
             count = _win._persist_rockbox_playlist_additions(SimpleNamespace(
-                playlist_additions=(DualPlaylistAddition(
-                    "fixture-source", ("2",)),),
+                playlist_additions=(DualPlaylistAddition("cust:Device Picks", ("2",)),),
+                playlist_updates=(DualPlaylistUpdate(
+                    "cust:Device Picks", ("1", "1"), ("1", "2")),),
             ))
             self.assertEqual(count, 1)
-            self.assertEqual(_win.playlist_additions, {"fixture-source": ["2"]})
-            self.assertEqual(playlist.added_keys, ["2"])
-            saved = json.loads(
-                _win._data_file.read_text(encoding="utf-8"))
-            self.assertEqual(
-                saved["playlist_additions"], {"fixture-source": ["2"]})
+            self.assertEqual(_win.custom["Device Picks"], ["1", "2"])
+            self.assertEqual(_win.playlist_additions, old_additions)
+            saved = json.loads(_win._data_file.read_text())
+            self.assertEqual(saved["custom"]["Device Picks"], ["1", "2"])
+            _win._show_custom("Device Picks")
+            self.assertEqual([r["id"] for r in _win.model._rows], ["1", "2"])
         finally:
-            playlist.pid = old_pid
-            _win.playlist_additions = old_additions
-            _win._apply_settings_to_lib()
+            _win.custom = old_custom
+            _win._refresh_custom()
             _win._save_state()
+
+    def test_rockbox_membership_rejects_source_playlist_and_concurrent_edit(self):
+        from types import SimpleNamespace
+        from soundbox.dual_ipod import DualPlaylistUpdate
+
+        for update in (
+            DualPlaylistUpdate("fixture-source", (), ("2",)),
+            DualPlaylistUpdate("cust:Missing Playlist", ("1",), ("1", "2")),
+        ):
+            with self.assertRaises(RuntimeError):
+                _win._persist_rockbox_playlist_additions(SimpleNamespace(
+                    playlist_additions=(), playlist_updates=(update,)))
+
+    def test_rockbox_membership_save_failure_restores_in_memory_playlist(self):
+        from types import SimpleNamespace
+        from soundbox.dual_ipod import DualPlaylistUpdate
+
+        old_custom = dict(_win.custom)
+        _win.custom["Device Picks"] = ["1", "1"]
+        try:
+            with mock.patch.object(_win, "_save_state", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "could not save"):
+                    _win._persist_rockbox_playlist_additions(SimpleNamespace(
+                        playlist_additions=(), playlist_updates=(DualPlaylistUpdate(
+                            "cust:Device Picks", ("1", "1"), ("1", "2")),)))
+            self.assertEqual(_win.custom["Device Picks"], ["1", "1"])
+        finally:
+            _win.custom = old_custom
 
 
 class StockIpodUI(unittest.TestCase):
@@ -771,7 +801,7 @@ class StockIpodUI(unittest.TestCase):
                 exporting_during_dialog, [(False, "/Volumes/IPOD")])
             self.assertEqual(_win.progress.value(), 1000)
             self.assertFalse(_win._exporting)
-            self.assertEqual(_win._eject_ready_device, "/Volumes/IPOD")
+            self.assertEqual(_win._eject_ready_device, "")
         finally:
             _win._stop_pulse()
             _win._refresh_device_surfaces = old_refresh
@@ -797,7 +827,7 @@ class StockIpodUI(unittest.TestCase):
             self.assertEqual(callbacks, [])
             warning.assert_called_once()
             self.assertEqual(_win.status_label.text(), "Final refresh failed")
-            self.assertEqual(_win._eject_ready_device, "/Volumes/IPOD")
+            self.assertEqual(_win._eject_ready_device, "")
             self.assertFalse(_win._exporting)
         finally:
             _win._stop_pulse(force=True)
@@ -919,6 +949,63 @@ class StockIpodUI(unittest.TestCase):
             _win.progress.setVisible(False)
             _win.status_label.setText("Ready")
 
+    def test_mount_notification_retains_retry_when_lane_is_busy(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        stub = SimpleNamespace(
+            _device_coordinator=SimpleNamespace(polling_allowed=False))
+        stub._refresh_devices = lambda **kw: MainWindow._refresh_devices(stub, **kw)
+        MainWindow._on_volume_mount_changed(stub)
+        self.assertTrue(stub._device_mount_refresh_pending)
+
+    def test_missed_mount_event_overrides_eject_hold(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        calls = []
+        stub = SimpleNamespace(
+            _volume_directory_stamp=10, _eject_ready_device="/Volumes/IPOD",
+            _refresh_devices=lambda **kw: calls.append(kw))
+        with mock.patch("desktop.app.os.stat", return_value=SimpleNamespace(st_mtime_ns=11)):
+            MainWindow._poll_devices(stub)
+        self.assertEqual(calls, [{"force": True}])
+        self.assertTrue(stub._device_mount_refresh_pending)
+
+    def test_mount_scan_bypasses_playback_and_eject_hold(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        started = []
+        stub = SimpleNamespace(
+            _device_mount_refresh_pending=True,
+            _device_coordinator=SimpleNamespace(polling_allowed=True),
+            _eject_ready_device="/Volumes/IPOD", _exporting=False, _deleting=False,
+            _dev_scan_worker=None, _stock_view_worker=None,
+            player_bar=SimpleNamespace(is_playing=lambda: True), settings={},
+            device_tree=SimpleNamespace(topLevelItemCount=lambda: 0),
+            _stock_view_cache={}, _device_mount_tokens={}, lib=None,
+            _sync_playlists=lambda: [], overrides={}, titles={}, stock_ipod_shadow_store=None,
+            _on_devices_discovered=lambda rows: None,
+            _start_device_worker=lambda *args: started.append(args))
+        stub._release_eject_ready = lambda: setattr(stub, "_eject_ready_device", "")
+        with mock.patch("desktop.app.DeviceScanWorker") as worker:
+            MainWindow._refresh_devices(stub)
+        self.assertEqual(started, [(worker.return_value, "", "discover")])
+        self.assertFalse(stub._device_mount_refresh_pending)
+        self.assertEqual(stub._eject_ready_device, "")
+        # Ordinary status polling must also work while playback continues.
+        stub._dev_scan_worker = None
+        started.clear()
+        with mock.patch("desktop.app.DeviceScanWorker") as worker:
+            MainWindow._refresh_devices(stub)
+        self.assertEqual(started, [(worker.return_value, "", "discover")])
+
+    def test_mount_notification_requests_force_scan(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        calls = []
+        stub = SimpleNamespace(_refresh_devices=lambda **kw: calls.append(kw))
+        MainWindow._on_volume_mount_changed(stub)
+        self.assertEqual(calls, [{"force": True}])
+
     def test_eject_ready_hold_suppresses_periodic_scan(self):
         old_ready = _win._eject_ready_device
         old_refresh = _win._refresh_devices
@@ -951,6 +1038,88 @@ class StockIpodUI(unittest.TestCase):
             _win._eject_ready_device = old_ready
             _win._dev_scan_worker = old_worker
 
+    def test_art_worker_retains_slot_until_finished_callback(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        retired = mock.Mock()
+        retired.isRunning.return_value = False
+        stub = SimpleNamespace(lib=object(), _shutting_down=False,
+                               _art_worker=retired, _art_restart=False)
+        with mock.patch("desktop.app.ArtFillWorker") as factory:
+            MainWindow._start_art_fill(stub, restart=True)
+        factory.assert_not_called()
+        self.assertIs(stub._art_worker, retired)
+        self.assertTrue(stub._art_restart)
+        retired.stop.assert_called_once()
+
+    def test_stale_art_finished_cannot_delete_current_worker(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        retired, current = mock.Mock(), mock.Mock()
+        stub = SimpleNamespace(_art_worker=current, _shutting_down=False)
+        MainWindow._on_art_finished(stub, retired)
+        retired.deleteLater.assert_called_once()
+        current.deleteLater.assert_not_called()
+        self.assertIs(stub._art_worker, current)
+
+    def test_art_finished_during_shutdown_cannot_restart_workers(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        worker = mock.Mock()
+        stub = SimpleNamespace(_art_worker=worker, _shutting_down=True,
+                               _art_restart=True)
+        with mock.patch("desktop.app.QTimer.singleShot") as schedule:
+            MainWindow._on_art_finished(stub, worker)
+            MainWindow._maybe_prepare_stock_artwork(
+                SimpleNamespace(lib=object(), _shutting_down=True))
+        schedule.assert_not_called()
+        self.assertIsNone(stub._art_worker)
+        self.assertFalse(stub._art_restart)
+
+    def test_shutdown_keeps_event_loop_alive_until_worker_really_finishes(self):
+        from threading import Event
+        from types import SimpleNamespace
+        from PySide6.QtCore import QTimer
+        from desktop.app import MainWindow
+        from desktop.workers import OneShotTask
+        from soundbox.device_operations import DeviceOperationCoordinator
+        entered, release = Event(), Event()
+        events = []
+
+        def work():
+            entered.set()
+            release.wait(2)
+            events.append("worker stopped")
+
+        worker = OneShotTask(work)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        stub = SimpleNamespace(
+            _stock_view_pending={}, _dual_sync_queue={},
+            _device_coordinator=DeviceOperationCoordinator(),
+            _save_columns=lambda: None, _set_status_text=lambda text: None,
+            worker=worker,
+        )
+        QTimer.singleShot(0, lambda: events.append("Qt remained responsive"))
+        QTimer.singleShot(25, release.set)
+        MainWindow.shutdown(stub)
+        self.assertFalse(worker.isRunning())
+        self.assertEqual(events, ["Qt remained responsive", "worker stopped"])
+        worker.deleteLater()
+
+    def test_idle_eject_ignores_known_missing_media_without_verification(self):
+        old_exporting = _win._exporting
+        old_pending = _win._device_coordinator.eject_pending
+        try:
+            with mock.patch.object(_win, "_begin_macos_eject") as eject, \
+                    mock.patch("desktop.app.engine.verify_export", side_effect=AssertionError("eject verified library")):
+                _win._eject("/Volumes/IPOD")
+                eject.assert_called_once_with("/Volumes/IPOD")
+        finally:
+            _win._exporting = old_exporting
+            _win._device_coordinator.eject_pending = old_pending
+            _win._stop_pulse(force=True)
+
     def test_eject_queues_behind_read_only_poll_without_busy_modal(self):
         class FakeSignal:
             def __init__(self):
@@ -967,6 +1136,7 @@ class StockIpodUI(unittest.TestCase):
                 return True
 
         old_scan = _win._dev_scan_worker
+        old_pending_eject = _win._device_coordinator.eject_pending
         old_verify = _win._eject_verify_worker
         old_exporting = _win._exporting
         old_pulse_word = _win._pulse_word
@@ -985,6 +1155,7 @@ class StockIpodUI(unittest.TestCase):
         finally:
             _win._stop_pulse(force=True)
             _win._dev_scan_worker = old_scan
+            _win._device_coordinator.eject_pending = old_pending_eject
             _win._eject_verify_worker = old_verify
             _win._exporting = old_exporting
             _win._pulse_word = old_pulse_word
@@ -1119,6 +1290,7 @@ class StockIpodUI(unittest.TestCase):
         old_cache = _win._stock_view_cache.get(dev)
 
         class Snapshot:
+            identity_key = ""
             tracks = (1, 2)
             playlists = (1,)
 
@@ -1135,7 +1307,7 @@ class StockIpodUI(unittest.TestCase):
             else:
                 _win._stock_view_cache[dev] = old_cache
 
-    def test_new_ipod_stays_hidden_while_lower_status_loads(self):
+    def test_new_ipod_is_visible_but_disabled_during_discovery(self):
         from types import SimpleNamespace
 
         dev = "/Volumes/HIDDEN-UNTIL-READY"
@@ -1156,7 +1328,8 @@ class StockIpodUI(unittest.TestCase):
             _win._on_devices_discovered([
                 ("HIDDEN-UNTIL-READY", dev, 1000, profile)])
 
-            self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
+            self.assertTrue(_win.device_tree.topLevelItem(0).isDisabled())
             self.assertIn(dev, _win._stock_view_warming)
             self.assertEqual(_win._pulse_word, "Loading iPod")
             self.assertTrue(_win.status_label.text().startswith("Loading iPod"))
@@ -1181,7 +1354,7 @@ class StockIpodUI(unittest.TestCase):
                 _win._stock_view_cache[dev] = old_cache
             _win.device_tree.clear()
 
-    def test_ipod_row_publishes_only_after_preload_and_followup_scan(self):
+    def test_ipod_row_is_available_while_dashboard_loads(self):
         from types import SimpleNamespace
         from desktop.trees import DEVPATH_ROLE
 
@@ -1208,10 +1381,11 @@ class StockIpodUI(unittest.TestCase):
                 mock.patch.object(_win, "_device_tip", return_value="ready"),
             ):
                 _win._on_devices_scanned(rows)
-                self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+                self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
 
-                # The immutable preload exists, but the row remains hidden
-                # until this completed scan publishes its verified drift state.
+                self.assertIn("Loading library", _win.device_tree.topLevelItem(0).text(0))
+                self.assertFalse(_win.device_tree.topLevelItem(0).isDisabled())
+                # Preload completion removes the loading label.
                 _win._stock_view_cache[dev] = (object(), None)
                 _win._on_devices_scanned(rows)
 
@@ -1270,7 +1444,7 @@ class StockIpodUI(unittest.TestCase):
             _win._on_devices_scanned = old_apply
             _win._dev_scan_worker = old_worker
 
-    def test_generic_row_also_waits_for_scan_thread_finished(self):
+    def test_generic_row_is_disabled_until_scan_thread_finished(self):
         from types import SimpleNamespace
 
         dev = "/Volumes/GENERIC-WAITS"
@@ -1286,8 +1460,9 @@ class StockIpodUI(unittest.TestCase):
             _win._dev_scan_worker = SimpleNamespace(mount_tokens={dev: 51})
             _win._on_devices_discovered([
                 ("GENERIC-WAITS", dev, 1000, profile)])
-            self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
+            self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
 
+            self.assertTrue(_win.device_tree.topLevelItem(0).isDisabled())
             with (
                 mock.patch("desktop.app.device_fs", return_value="fat32"),
                 mock.patch.object(_win, "_device_tip", return_value="ready"),
@@ -1552,7 +1727,7 @@ class StockIpodUI(unittest.TestCase):
             for index in range(pages.detail_trees["Identity"].topLevelItemCount())
         }
         self.assertEqual(identity["Model"], "MA446")
-        self.assertEqual(identity["Firmware"], "1.3")
+        self.assertEqual(identity["Stock firmware"], "1.3")
         self.assertEqual(identity["DAC / codec"], "Wolfson WM8758BG")
         self.assertEqual(identity["Serial number"], "8M650V0HV9M")
         self.assertNotIn("serial suffix", " ".join(identity.values()).casefold())
@@ -1971,7 +2146,7 @@ class StockIpodUI(unittest.TestCase):
             else:
                 _win._device_profiles[dev] = old_profile
 
-    def test_confirmed_multi_drop_starts_one_job_and_queues_the_rest(self):
+    def test_confirmed_multi_drop_starts_one_combined_generation(self):
         from types import SimpleNamespace
 
         dev = "/Volumes/IPOD"
@@ -2001,12 +2176,12 @@ class StockIpodUI(unittest.TestCase):
                 confirmations, ["CRATES / SET ONE", "SET TWO"])
             self.assertEqual(
                 [item.display_path for item in calls[0][1]],
-                ["CRATES / SET ONE"],
+                ["CRATES / SET ONE", "SET TWO"],
             )
             self.assertTrue(calls[0][2]["preconfirmed"])
             self.assertEqual(
                 [item.display_path for item in _win._dual_sync_queue[dev]],
-                ["SET TWO"],
+                [],
             )
             self.assertEqual(_win._dual_batch_total_tracks, 3)
         finally:

@@ -1,6 +1,6 @@
 """Device browser + eject (mixin for MainWindow): the on-device file
 manager (rename / new folder / assign artist / threaded delete) and the
-QProcess-based eject with the unmount-force fallback.
+QProcess-based normal macOS eject.
 
 Every destructive action is guarded to paths STRICTLY inside an external
 device (_on_external_device) — system volumes and mount roots are unreachable.
@@ -15,8 +15,9 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
-from soundbox import engine, imports as import_mod, sync as sync_mod
+from soundbox import imports as import_mod, sync as sync_mod
 from soundbox.paths import sanitize_component
+from soundbox.device_operations import DeviceCommand, DeviceSessionIdentity, Phase
 
 from .devices import (
     _external_volume_of, _in_external_product_tree, _on_external_device,
@@ -103,7 +104,7 @@ class DeviceBrowserMixin:
         worker.finished.connect(
             lambda w=worker, d=str(volume):
             self._finish_erase_device_worker(w, d))
-        worker.start()
+        self._start_device_worker(worker, dev, "erase")
 
     def _on_erase_device_done(self, dev: str, result):
         self._deleting = False
@@ -124,7 +125,7 @@ class DeviceBrowserMixin:
         if getattr(self, "_erase_eject_pending", None) == dev:
             self._erase_eject_pending = None
             # Start only after QThread has fully returned and our busy guard no
-            # longer sees it. Eject performs its own flush + empty verification.
+            # longer sees it. Eject requests a normal macOS unmount without a library scan.
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, lambda d=dev: self._eject(d))
 
@@ -139,10 +140,12 @@ class DeviceBrowserMixin:
     def _eject(self, dev: str):
         # Never race device work. Finalization owns and finishes its dashboard
         # scan before success; Eject does not cancel or complete that work.
-        scan = getattr(self, "_dev_scan_worker", None)
+        readers = ("_dev_scan_worker", "_stock_view_worker", "_device_verify_worker")
+        scan = next((getattr(self, name, None) for name in readers
+                     if getattr(self, name, None) is not None), None)
         other_blockers = tuple(
             name for name in self._EJECT_BLOCKING_WORKERS
-            if name != "_dev_scan_worker"
+            if name not in readers
         )
         if (
             scan is not None
@@ -153,6 +156,10 @@ class DeviceBrowserMixin:
             # A recurring read-only health poll is not a user operation. Queue
             # Eject behind its actual QThread.finished boundary and suppress a
             # replacement poll; never punish a click with a busy modal.
+            if self._device_coordinator.eject_pending:
+                return
+            self._device_coordinator.eject_pending = dev
+            self._stock_view_pending.clear()
             self._exporting = True
             self._start_pulse("Waiting to eject")
 
@@ -176,42 +183,20 @@ class DeviceBrowserMixin:
             return
         if getattr(self, "_eject_verify_worker", None) is not None:
             return
+        self._device_coordinator.eject_pending = dev
         self._exporting = True  # suppress every new periodic poll until outcome
-        self._start_pulse("Verifying")
+        # macOS eject flushes the filesystem. Library integrity is independent
+        # of whether an idle mount can be released.
+        self._begin_macos_eject(dev)
 
-        def verify():
-            os.sync()
-            return engine.verify_export(dev)
-
-        w = OneShotTask(verify)
-        self._eject_verify_worker = w
-        w.finished.connect(
-            lambda ww=w, d=dev: self._finish_device_result_worker(
-                "_eject_verify_worker", ww,
-                lambda result: self._after_eject_verify(d, result)))
-        w.start()
-
-    def _after_eject_verify(self, dev: str, result):
-        if isinstance(result, Exception):
-            self._finish_eject_attempt(dev)
-            self._stop_pulse()
-            QMessageBox.warning(self, "Eject verification failed", str(result))
-            return
-        problems = list(result.get("missing") or [])
-        problems.extend(result.get("managed_issues") or [])
-        if problems:
-            self._finish_eject_attempt(dev)
-            self._stop_pulse()
-            QMessageBox.warning(
-                self, "Device needs repair",
-                "SoundBox found missing or invalid managed references. "
-                "Run Sync or Deep Verify before ejecting.")
-            return
+    def _begin_macos_eject(self, dev: str):
+        self.fs_view.setRootIndex(self.fs_model.setRootPath(""))
         self._start_pulse("Ejecting")
 
         def succeeded():
             self._stop_pulse()
             self._finish_eject_attempt(dev)
+            self._device_coordinator.disconnect(dev)
             self._current_device_path = ""
             self._stock_snapshot = None
             self.stack.setCurrentIndex(0)
@@ -221,7 +206,15 @@ class DeviceBrowserMixin:
         def run(args, on_fail):
             p = QProcess(self)
             self._eject_proc = p  # keep a ref so it isn't GC'd mid-run
+            identity = self._device_coordinator.mounts.get(dev)
+            if identity is None:
+                identity = DeviceSessionIdentity(dev, self._device_mount_tokens.get(dev, 0))
+                self._device_coordinator.observe(identity)
+            self._device_coordinator.begin(DeviceCommand(identity, "eject"), p, Phase.EJECTING)
             p.finished.connect(lambda code, _s: (succeeded() if code == 0 else on_fail(p)))
+            p.errorOccurred.connect(
+                lambda _error: gave_up(p)
+                if p.state() == QProcess.NotRunning else None)
             p.start("diskutil", args)
 
         def gave_up(p):
@@ -232,19 +225,11 @@ class DeviceBrowserMixin:
                                 err or "Could not eject. Close any app using the device.")
             self._set_status_text("Ready")
 
-        def try_force(_p):
-            if QMessageBox.question(
-                    self, "Force unmount?",
-                    "Normal eject was refused. Force-unmount the device? "
-                    "Only continue if no other app is writing to it.") != QMessageBox.Yes:
-                gave_up(_p)
-                return
-            self._start_pulse("Forcing")
-            run(["unmount", "force", dev], gave_up)
-
-        run(["eject", dev], try_force)
+        run(["eject", dev], gave_up)
 
     def _finish_eject_attempt(self, dev: str):
+        self._device_coordinator.eject_pending = ""
+        self._device_coordinator.finished(getattr(self, "_eject_proc", None))
         if getattr(self, "_eject_ready_device", "") == dev:
             self._eject_ready_device = ""
         self._exporting = False
@@ -309,7 +294,7 @@ class DeviceBrowserMixin:
         w.finished.connect(
             lambda ww=w: self._finish_device_result_worker(
                 "_device_import_worker", ww, self._on_device_imported))
-        w.start()
+        self._start_device_worker(w, str(_external_volume_of(paths[0])), "import")
 
     def _on_device_imported(self, result):
         self._stop_pulse()
@@ -319,6 +304,37 @@ class DeviceBrowserMixin:
         # Register the SoundBox-owned copies; the device and original Finder
         # files remain untouched.
         self._import_files([str(path) for path in result])
+
+    def _start_browser_mutation(self, session, mutate, label: str):
+        if self._device_operation_owned():
+            QMessageBox.warning(self, "Device busy", "Wait for the current device operation.")
+            return
+        if self._defer_device_operation_until_scan_finishes(
+                lambda: self._start_browser_mutation(session, mutate, label)):
+            return
+
+        def execute():
+            session.revalidate()
+            mutate()
+            session.revalidate()
+
+        def complete(result):
+            self._deleting = False
+            self._stop_pulse()
+            if isinstance(result, Exception):
+                QMessageBox.warning(self, f"{label} failed", str(result))
+            else:
+                self._flash_status(f"{label} complete")
+            self._refresh_devices()
+
+        self._release_eject_ready()
+        self._deleting = True
+        self._start_pulse(label)
+        worker = OneShotTask(execute)
+        self._delete_worker = worker
+        worker.finished.connect(lambda w=worker: self._finish_device_result_worker(
+            "_delete_worker", w, complete))
+        self._start_device_worker(worker, str(session.target), "browser-mutation")
 
     def _edit_name(self, index):
         path = Path(self.fs_model.filePath(index))
@@ -353,22 +369,21 @@ class DeviceBrowserMixin:
             return
         try:
             name = _browser_entry_name(raw)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Rename failed", str(exc))
+            return
+
+        def rename():
             destination = session.guard(relative.with_name(name))
-            session.revalidate()
             same_entry = False
             if destination.exists():
-                try:
-                    same_entry = os.path.samefile(source, destination)
-                except OSError:
-                    pass
+                same_entry = os.path.samefile(source, destination)
                 if not same_entry:
-                    raise FileExistsError(
-                        f"An item named {name!r} already exists.")
+                    raise FileExistsError(f"An item named {name!r} already exists.")
             if source != destination:
                 source.rename(destination)
-                session.revalidate()
-        except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.critical(self, "Rename failed", str(exc))
+
+        self._start_browser_mutation(session, rename, "Rename")
 
     def _assign_artist(self, path: Path):
         # Move an audio file out of Unknown Artist into /Music/<Artist>/ on the device.
@@ -406,20 +421,16 @@ class DeviceBrowserMixin:
         artist, ok = QInputDialog.getText(self, "Assign Artist", "Artist:")
         artist = sanitize_component(artist.strip()) if artist.strip() else ""
         if ok and artist:
-            try:
+            def assign():
                 dest_dir = session.guard(Path("Music") / artist)
-                destination = session.guard(
-                    Path("Music") / artist / relative.name)
-                session.revalidate()
+                destination = session.guard(Path("Music") / artist / relative.name)
                 if destination.exists():
-                    raise FileExistsError(
-                        f"{artist}/{relative.name} already exists.")
+                    raise FileExistsError(f"{artist}/{relative.name} already exists.")
                 dest_dir.mkdir(exist_ok=True)
                 session.revalidate()
                 source.rename(destination)
-                session.revalidate()
-            except (OSError, RuntimeError) as exc:
-                QMessageBox.critical(self, "Assign failed", str(exc))
+
+            self._start_browser_mutation(session, assign, "Assign artist")
 
     def _new_folder(self, parent: Path):
         if (
@@ -451,12 +462,15 @@ class DeviceBrowserMixin:
             return
         try:
             name = _browser_entry_name(name)
-            destination = session.guard(relative_parent / name)
-            session.revalidate()
-            destination.mkdir()
-            session.revalidate()
-        except (OSError, RuntimeError, ValueError) as exc:
+        except ValueError as exc:
             QMessageBox.critical(self, "Create failed", str(exc))
+            return
+
+        def create():
+            destination = session.guard(relative_parent / name)
+            destination.mkdir()
+
+        self._start_browser_mutation(session, create, "Create folder")
 
     def _delete_paths(self, paths: list[Path]):
         # Safety: only ever delete items strictly INSIDE an external/ejectable volume
@@ -536,7 +550,7 @@ class DeviceBrowserMixin:
         # Path/target validation and explicit confirmation are the delete plan.
         self._set_device_progress(150)
         self._start_pulse("DELETING")
-        w.start()
+        self._start_device_worker(w, dev, "delete")
 
     def _on_device_delete_progress(self, done: int, total: int, _label: str):
         value = round(

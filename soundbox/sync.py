@@ -18,6 +18,8 @@ import hashlib
 import os
 import re
 import shutil
+import tempfile
+from contextlib import ExitStack
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +33,9 @@ from . import rockbox_config
 from .library import Library, Playlist
 from .paths import device_music_path, is_external_device_path, is_within
 from .report import PlaylistReport, SyncReport
+from .operation_control import phase_progress, record_metric
 from .rockbox_media import RockboxMediaError
+from .source_acquisition import SourceContract, SourceAcquisitionError, acquire_source
 
 
 class NotEnoughSpace(RuntimeError):
@@ -132,7 +136,7 @@ class DeviceSession:
         target = self.guard(destination)
         target.parent.mkdir(parents=True, exist_ok=True)
         self.revalidate()
-        _safe_copy(source, target)
+        _safe_copy(source, target, revalidate=self.revalidate)
 
     def atomic_write(self, destination: Path, data: bytes) -> None:
         target = self.guard(destination)
@@ -460,7 +464,7 @@ def verify_managed(target: Path, *, deep: bool = False) -> list[str]:
     return issues
 
 
-def _safe_copy(src: Path, dst: Path) -> None:
+def _safe_copy(src: Path, dst: Path, *, revalidate: Callable[[], None] | None = None) -> None:
     """Copy file DATA to a temp file in the destination folder, then ATOMICALLY
     rename it into place.
 
@@ -476,16 +480,32 @@ def _safe_copy(src: Path, dst: Path) -> None:
     """
     tmp = dst.with_name(dst.name + ".sbpart")
     try:
-        shutil.copyfile(src, tmp)            # read-only src -> temp in dst's folder
+        size = src.stat().st_size
+        phase_progress("Verifying payload", 0, size, dst.name)
+        source_hash = _sha256(src)
+        space = os.statvfs(dst.parent)
+        if space.f_bavail * space.f_frsize < size:
+            raise OSError(f"Insufficient device space for {dst.name}")
+        phase_progress("Copying to device", 0, size, dst.name)
+        shutil.copyfile(src, tmp)
+        record_metric("device_bytes_written", size)
+        phase_progress("Verifying device copy", size, size, dst.name)
+        if tmp.stat().st_size != size or _sha256(tmp) != source_hash:
+            raise OSError(f"Temporary copy failed verification: {dst}")
+        if revalidate is not None:
+            revalidate()
         try:
             shutil.copystat(src, tmp)
-        except OSError:
+        except (OSError, RuntimeError):
             pass                             # FAT can't store full metadata
         os.replace(tmp, dst)                 # atomic; dst never pre-exists on this path
-    except OSError:
+    except (OSError, RuntimeError):
         try:
+            # Never clean a replacement mount after losing authority.
+            if revalidate is not None:
+                revalidate()
             tmp.unlink()                     # drop the partial temp so a re-run retries
-        except OSError:
+        except (OSError, RuntimeError):
             pass
         raise
 
@@ -624,16 +644,6 @@ def run(
                                 artist_overrides=artist_overrides,
                                 title_overrides=title_overrides)
     assert_target_safe(target, [pf.canonical_source for pf in files.values()])
-    # Prepare disposable Mac-side payloads before pinning or writing the device.
-    # A dry-run remains strictly write-free and reports the conservative original
-    # byte count.  Real exports strip embedded pictures only from these copies.
-    if not dry_run and rockbox_media_cache is not None:
-        for planned in files.values():
-            prepared = rockbox_media_cache.prepare(planned.canonical_source)
-            planned.source = prepared.payload
-            planned.size = prepared.payload_size
-            planned.payload_profile = prepared.profile
-            planned.removed_embedded_images = prepared.removed_images
     session = (
         DeviceSession(
             target,
@@ -667,7 +677,6 @@ def run(
         for entry in entries_by_pl[index]:
             if entry.device_path is not None:
                 memberships.setdefault(entry.device_path, set()).add(key)
-    source_hashes: dict[Path, str] = {}
 
     # --- Free-space precheck ---------------------------------------------
     # Refuse to start writing if the NEW files won't fit, with one clear message,
@@ -725,10 +734,33 @@ def run(
             cancelled = True
             break
         tgt = pf.target_path
+        staged = ExitStack()
+        original_source = pf.source
         try:
             if session is not None:
                 session.guard(tgt)
             source_stat = pf.canonical_source.stat()
+            captured_hash = ""
+            if not dry_run:
+                if on_progress:
+                    on_progress(done - 1, total, f"Acquiring {pf.canonical_source.name}")
+                if rockbox_media_cache is not None:
+                    prepared = rockbox_media_cache.prepare(pf.canonical_source)
+                    staged.callback(rockbox_media_cache.discard, prepared)
+                    pf.source = prepared.payload
+                    pf.size = prepared.payload_size
+                    pf.payload_profile = prepared.profile
+                    pf.removed_embedded_images = prepared.removed_images
+                    report.sanitized_media += bool(prepared.removed_images)
+                    captured_hash = prepared.payload_sha256
+                else:
+                    snapshot = staged.enter_context(acquire_source(
+                        SourceContract(pf.canonical_source.resolve()),
+                        Path(tempfile.gettempdir()) / "soundbox-source-staging",
+                        should_cancel=should_cancel))
+                    pf.source = snapshot.path
+                    pf.size = snapshot.size
+                    captured_hash = snapshot.sha256
             source_identity = (
                 f"{source_stat.st_size}:{source_stat.st_mtime_ns}"
                 f":{pf.payload_profile or 'original'}")
@@ -738,9 +770,8 @@ def run(
                 if (previous.get("source_identity") == source_identity
                     and int(previous.get("size") or -1) == pf.size)
                 else "")
-            if not expected_hash:
-                expected_hash = source_hashes.setdefault(
-                    pf.source, _sha256(pf.source))
+            # Captured bytes outrank a previous stat-only manifest hint.
+            expected_hash = captured_hash or _sha256(pf.source)
             was_present = tgt.exists()
             if was_present:
                 actual_hash = (
@@ -767,6 +798,10 @@ def run(
                 bytes_copied += pf.size  # count only AFTER a successful copy
                 copied_paths.add(device_path)
                 written_dirs.update(_dirs_up_to(tgt.parent, music_root))
+            if not dry_run and device_path in copied_paths:
+                if tgt.stat().st_size != pf.size or _sha256(tgt) != expected_hash:
+                    copied_paths.discard(device_path)
+                    raise OSError(f"Copied payload failed verification: {tgt}")
             if device_path in already or device_path in copied_paths:
                 managed_files[device_path] = {
                     "kind": "track",
@@ -779,8 +814,14 @@ def run(
                     "sha256": expected_hash,
                     "playlists": sorted(memberships.get(device_path, ())),
                 }
-        except OSError as exc:
-            global_errors.append(f"ERROR copying {pf.source} -> {tgt}: {exc}")
+        except (OSError, RockboxMediaError, SourceAcquisitionError) as exc:
+            global_errors.append(f"ERROR copying {pf.canonical_source} -> {tgt}: {exc}")
+            cancelled = bool(should_cancel and should_cancel())
+            # Preserve completed files, but stop work and suppress cleanup.
+            break
+        finally:
+            staged.close()
+            pf.source = original_source
         # Keep exact fast paths and one theme-independent maximum-size fallback.
         if art_cache is not None and not dry_run and tgt.parent.is_dir():
             canonical_img = art_cache.image_path(pf.track_id)
@@ -1109,7 +1150,7 @@ def resync(
     #    stale m3u8s forever.)
     # (report.cancelled only reflects the copy loop — with nothing to copy it was
     # never polled, so ask should_cancel directly before the destructive steps.)
-    stopped = report.cancelled or bool(should_cancel and should_cancel())
+    stopped = report.cancelled or any(row.errors for row in report.playlists) or bool(should_cancel and should_cancel())
     report.cancelled = stopped
     media_prune = bool(
         prune and not stopped and (

@@ -1,10 +1,73 @@
 # SoundBox roadmap
 
-Living to-do. Work top-down. The MA446 dual-boot iPod workflow is shipped and
-physically accepted; remaining device work is follow-up hardening and new hardware.
+Living to-do. Work top-down. The original MA446 dual-boot workflow shipped with
+physical acceptance; the newer lifecycle corrections below still have explicit
+hardware acceptance gates.
 For the live test count, trust `./check.sh` output—not any number written here.
 
-## Current status (2026-09-23)
+## Product sequence
+
+Reliable iPod management is the immediate priority: stock iTunesDB and Rockbox
+integration, safe recovery/cancel/eject, durable device identity, and a dashboard
+focused on useful library/device facts. Recovery counts and hashes belong in
+backend diagnostics. After physical iPod acceptance, broaden the export workflow
+toward a rekordbox alternative focused on export mode; this does not expand the
+current firmware allowlist or authorize direct Rockbox binary tag-cache writes.
+
+## Current status (2026-09-27)
+
+Reconnect correction: mount events bypass playback/eject-ready holds, deferred
+requests survive busy workers, and connected devices appear before dashboard
+preload finishes. A three-second fallback detects missed directory events.
+The real reconnect also exposed an unsupported `sort playlists` config
+requirement; removing it eliminates that firmware-save false drift.
+Ordinary polling also remains active during playback. Synthetic unchanged
+reconnect/Rockbox-restart checks stay clean, while an actual title edit triggers
+drift. Physical repeated reconnect acceptance remains to be observed after installation.
+
+The complete iPod lifecycle consolidation is in implementation and hardware
+acceptance. The local source tree adds a serialized operation coordinator,
+local source acquisition, bounded generic staging, disposable derivative
+receipts, cooperative cancellation, event-loop-preserving shutdown, explicit
+recovery outcomes, and integrity-independent normal eject. It is not yet a
+completed hardware correction. Remaining acceptance: normal SeaDrive-managed
+Sync, unchanged follow-up, overlapping drops, cancel/retry, eject after both
+success and failure, and reconnect. Preserve generation-58 recovery and all
+202 Favorites entries. Sonny authorized release wrap-up, commit and push on
+September 27; that does not waive the remaining hardware gates.
+Offline regressions now use disposable copies of the actual 1839-track iTunesDB
+with generated audio. They cover acquisition eviction, cancellation/publication,
+rollback/retry, unchanged Sync without a shadow, and missing owned media/artwork
+repair. The captured generation-58 inventory revealed two missing Rockbox WAVs
+and their ten covers; repair is covered without touching hardware. Generation 59 completed on hardware at 18:26:26. The follow-up badge exposed
+ctime-only drift in 83 sources; the poll now distinguishes that metadata change
+from a source-edit hint. Unchanged follow-up performance and the remaining physical
+acceptance gates are still outstanding.
+See `ipod-lifecycle-audit-2026-09.md` and `HANDOFF.md` for exact validation.
+
+Sync performance hardening is tested and installed in build 108: resumable
+source proofs, exact-byte recovery from cloud timestamp drift, unchanged stock
+compatibility reuse, combined initial playlist drops, generic queue batching,
+and stage timing. The previous live run exposed commit-preflight timestamp
+drift after planning. The replacement passes synthetic transaction/retry
+regressions. A later live run measured 10m20s planning but failed when SeaDrive
+evicted a source after commit preflight, exposing a remaining per-file staging
+revalidation gap. Local acquisition now replaces that boundary in the installed
+lifecycle build; Sonny is operating the hardware acceptance run. Unchanged
+follow-up Sync and the other physical gates remain pending. A reported
+ArtFillWorker teardown crash exposed a separate completion-callback race;
+its fix is installed. That hardware run later failed in a redundant stock
+compatibility timestamp check. The removed check and preflight-sweep correction
+are installed with the identity improvements; the next physical retry is pending.
+See `docs/sync-performance-audit-2026-09.md` and `HANDOFF.md`.
+
+Custom-playlist iPod reconciliation now authenticates historical playlist
+prefixes to survive removed Mac sources, adopts iPod appends only into
+SoundBox-owned playlists, and removes exact duplicate membership while retaining
+distinct versions. Local membership is saved before device writes and checked
+for concurrent edits. See `DEVICES.md` and `HANDOFF.md` for validation/install
+status; no real device transaction is implied by a passing read-only check.
+
 
 Autoplay reliability fix shipped and accepted in normal use: up/random/down
 retain ordinary playback eligibility through temporary native PAUSED snapshots
@@ -92,10 +155,11 @@ the feature baseline below remains unchanged.
 - **ROCKBOX-SIDE PLAYLIST APPENDS IMPLEMENTED.** A schema-3 connection now
   reports ordinary Sync-needed drift when Rockbox changes an owned M3U8 size.
   Confirmed Sync accepts only append-only, already-managed device paths, saves
-  genuinely new membership into SoundBox without writing rekordbox, and
-  reconciles the same playlist into stock firmware without recopying audio. An
-  accidental appended duplicate is recovery-backed and removed from the M3U8;
-  pre-existing duplicates remain deliberate. Unknown device songs are not
+  genuinely new membership into SoundBox custom playlists without writing
+  rekordbox, and reconciles the same playlist into stock firmware without
+  recopying unchanged audio. Custom playlists retain only the first occurrence
+  of the same track/source or byte-identical source file, including older
+  duplicates; distinct recordings stay separate. Rewrites are recovery-backed. Unknown device songs are not
   imported and no destination is guessed; deletion/reorder edits remain
   fail-closed pending a separate product decision. Physical testing exposed
   Rockbox's `/<HDD0>/...` serialization and a dashboard coupling bug; the

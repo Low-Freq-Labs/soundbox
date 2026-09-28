@@ -242,3 +242,11 @@ internal utility.
 
 Workshop these numbered ideas into small QOL/polish slices **with Sonny**.
 Taken wholesale, they could easily overwhelm the clean, open UI.
+
+## SoundBox playlists in rekordbox (2026-09-26 concept)
+
+Sonny wants playlists curated in SoundBox to become available in rekordbox for
+DJ use, potentially through explicit database writing. This is future design
+work, not part of iPod playlist reconciliation. Workshop the transfer UX,
+supported integration route, conflict ownership, and recovery before committing
+to implementation. The current rekordbox database remains strictly read-only.

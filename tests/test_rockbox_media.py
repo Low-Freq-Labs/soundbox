@@ -200,13 +200,13 @@ class RockboxAudioDerivative(unittest.TestCase):
                 source, title="Bounded title", artist="Bounded artist")
 
             self.assertTrue(planned.transformed)
-            self.assertFalse(cache.root.exists())
+            self.assertFalse(list(cache.root.rglob("*.mp3")))
             self.assertEqual(_hash(source), planned.source_sha256)
             prepared = cache.materialize(planned)
             self.assertEqual(_hash(prepared.payload), planned.payload_sha256)
             self.assertEqual(prepared.payload.stat().st_size, planned.payload_size)
             cache.discard(prepared)
-            self.assertFalse(cache.root.exists())
+            self.assertFalse(list(cache.root.rglob("*.mp3")))
 
     def test_bounded_plan_refuses_changed_canonical_source(self):
         with tempfile.TemporaryDirectory() as td:
@@ -221,7 +221,7 @@ class RockboxAudioDerivative(unittest.TestCase):
             with self.assertRaisesRegex(
                     RockboxMediaError, "source changed after dry-run"):
                 cache.materialize(planned)
-            self.assertFalse(cache.root.exists())
+            self.assertFalse(list(cache.root.rglob("*.mp3")))
 
     def test_embedded_art_is_removed_only_from_verified_copy(self):
         with tempfile.TemporaryDirectory() as td:
@@ -259,7 +259,9 @@ class RockboxAudioDerivative(unittest.TestCase):
             source.write_bytes(frame * 100)
             prepared = RockboxMediaCache(root / "cache").prepare(source)
             self.assertFalse(prepared.transformed)
-            self.assertEqual(prepared.payload, source.resolve())
+            self.assertNotEqual(prepared.payload, source.resolve())
+            self.assertEqual(prepared.payload.read_bytes(), source.read_bytes())
+            RockboxMediaCache(root / "cache").discard(prepared)
             self.assertFalse((root / "cache").exists())
 
     def test_display_tags_are_normalized_only_in_verified_mp3_copy(self):

@@ -32,9 +32,25 @@ class RockboxConfigTests(unittest.TestCase):
         self.assertIn(b"tagcache_autoupdate: on\n", after)
         self.assertIn(
             b"playlist viewer track display: title from tags\n", after)
-        self.assertIn(b"sort playlists: alpha\n", after)
+        self.assertNotIn(b"sort playlists:", after)
         self.assertIn(b"max files in playlist: 10000\n", after)
         self.assertNotIn(b"tagcache_autoupdate: off", after)
+
+    def test_firmware_saved_config_without_unsupported_sort_key_is_ready(self):
+        before = (
+            b"# .cfg file created by rockbox 4.0\r\n"
+            b"volume: -1\r\n"
+            b"max files in playlist: 10000\r\n"
+            b"playlist viewer track display: title from tags\r\n"
+            b"tagcache_autoupdate: on\r\n"
+        )
+        self.assertEqual(desired_payload(before), before)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".rockbox").mkdir()
+            (root / ".rockbox/config.cfg").write_bytes(before)
+            self.assertTrue(settings_ready(root))
+            self.assertFalse(plan(root).changed)
 
     def test_raises_small_playlist_limit_but_preserves_a_larger_one(self):
         self.assertIn(

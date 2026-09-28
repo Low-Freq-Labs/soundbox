@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import struct
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace, field
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import COMM, ID3, TIT2, TPE1, TXXX
 from mutagen.mp4 import MP4
 
+from .operation_control import phase_progress, record_metric
 from . import artencode
 
 
@@ -44,6 +46,8 @@ _LEGACY_NORMALIZED_MEDIA_PROFILES = frozenset({
 ART_PROFILE = "rockbox-paletted8-bmp-universal-v6"
 INTERRUPTED_VERIFY_SCHEMA = 1
 
+
+from .source_acquisition import SourceContract, acquire_source, SourceAcquisitionError
 
 class RockboxMediaError(RuntimeError):
     pass
@@ -577,6 +581,7 @@ def _write_riff_info(path: Path, title: str, artist: str) -> None:
             if not inserted:
                 destination.write(info)
             final_size = destination.tell()
+            record_metric("peak_audio_staging_bytes", total + final_size, peak=True)
             if final_size - 8 > 0xFFFFFFFF:
                 raise RockboxMediaError(f"WAV is too large for RIFF metadata: {path}")
             destination.seek(4)
@@ -677,6 +682,12 @@ class PreparedRockboxMedia:
     payload_size: int
     payload_sha256: str
     profile: str = MEDIA_PROFILE
+    source_sha256: str = ""
+    source_size: int = 0
+    source_mtime_ns: int = 0
+    source_ctime_ns: int = 0
+    source_device: int = 0
+    source_inode: int = 0
 
 
 @dataclass(frozen=True)
@@ -703,6 +714,8 @@ class PlannedRockboxMedia:
     title: str | None
     artist: str | None
     profile: str
+    stock_omission: str | None = field(default=None, compare=False)
+    stock_technical: tuple[int, int, int] | None = field(default=None, compare=False)
 
 
 class RockboxMediaCache:
@@ -716,13 +729,45 @@ class RockboxMediaCache:
         self.root = Path(root)
 
     def prepare(
+            self, source: str | Path, *, title: str | None = None,
+            artist: str | None = None, expected_sha256: str | None = None,
+            expected_size: int | None = None,
+    ) -> PreparedRockboxMedia:
+        original = Path(source).expanduser().resolve(strict=True)
+        try:
+            with acquire_source(
+                SourceContract(original, expected_size, expected_sha256),
+                self.root / "acquisition",
+            ) as snapshot:
+                prepared = self._prepare_local(
+                    snapshot.path, title=title, artist=artist,
+                    source_hash=snapshot.sha256)
+                return replace(
+                    prepared, source=original,
+                    source_sha256=snapshot.sha256, source_size=snapshot.size,
+                    source_mtime_ns=snapshot.observation.st_mtime_ns,
+                    source_ctime_ns=snapshot.observation.st_ctime_ns,
+                    source_device=snapshot.observation.st_dev,
+                    source_inode=snapshot.observation.st_ino)
+        except SourceAcquisitionError as exc:
+            raise RockboxMediaError(str(exc)) from exc
+        finally:
+            try:
+                (self.root / "acquisition").rmdir()
+                self.root.rmdir()
+            except OSError:
+                pass
+
+    def _prepare_local(
             self,
             source: str | Path,
             *,
             title: str | None = None,
             artist: str | None = None,
+            source_hash: str,
     ) -> PreparedRockboxMedia:
         original = Path(source).expanduser().resolve(strict=True)
+        phase_progress("Preparing audio", 0, original.stat().st_size, original.name)
         count = _embedded_picture_count(original)
         normalize_tags = title is not None or artist is not None
         if normalize_tags and (title is None or artist is None):
@@ -730,10 +775,13 @@ class RockboxMediaCache:
                 "Rockbox display metadata requires both title and artist")
         profile = NORMALIZED_MEDIA_PROFILE if normalize_tags else MEDIA_PROFILE
         if not count and not normalize_tags:
+            entry = self.root / profile / source_hash
+            entry.mkdir(parents=True, exist_ok=True)
+            payload = entry / original.name
+            size = original.stat().st_size
+            os.replace(original, payload)
             return PreparedRockboxMedia(
-                original, original, False, 0, original.stat().st_size,
-                "", profile)
-        source_hash = _sha256(original)
+                original, payload, False, 0, size, source_hash, profile)
         key = hashlib.sha256(json.dumps(
             [profile, source_hash, title or "", artist or ""],
             ensure_ascii=False,
@@ -767,15 +815,20 @@ class RockboxMediaCache:
         except (OSError, ValueError, TypeError, RockboxMediaError):
             pass
 
+        record_metric("transformations")
         entry.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(
             prefix=f".{original.stem}.", suffix=original.suffix, dir=entry)
         os.close(fd)
         temp = Path(temp_name)
         try:
-            shutil.copy2(original, temp)
             before_technical = _technical_signature(original)
             before_essence = _audio_essence(original)
+            original_size = original.stat().st_size
+            # The snapshot is disposable. Move it into the working derivative
+            # once its verification facts are captured, so RIFF rewriting never
+            # retains a third whole-track copy.
+            os.replace(original, temp)
             removed = _strip_embedded_pictures(temp)
             if normalize_tags:
                 assert title is not None and artist is not None
@@ -797,7 +850,7 @@ class RockboxMediaCache:
             row = {
                 "profile": profile,
                 "source_sha256": source_hash,
-                "source_size": original.stat().st_size,
+                "source_size": original_size,
                 "payload_sha256": payload_hash,
                 "payload_size": payload.stat().st_size,
                 "removed_images": removed,
@@ -814,6 +867,53 @@ class RockboxMediaCache:
         finally:
             temp.unlink(missing_ok=True)
 
+    def _receipt_path(self, source: Path, title: str | None, artist: str | None) -> Path:
+        key = hashlib.sha256(json.dumps(
+            [str(source), NORMALIZED_MEDIA_PROFILE if title is not None else MEDIA_PROFILE,
+             title, artist], ensure_ascii=False).encode()).hexdigest()
+        return self.root / "payload-receipts-v1" / f"{key}.json"
+
+    def _read_receipt(self, source: Path, title: str | None,
+                      artist: str | None) -> PlannedRockboxMedia | None:
+        try:
+            row = json.loads(self._receipt_path(source, title, artist).read_text())
+            encoded = json.dumps(row["contract"], sort_keys=True).encode()
+            stat = source.stat()
+            if (row["checksum"] != hashlib.sha256(encoded).hexdigest()
+                    or row["identity"] != [stat.st_dev, stat.st_ino, stat.st_size,
+                                            stat.st_mtime_ns, stat.st_ctime_ns]):
+                return None
+            raw = row["contract"]
+            if (raw["source"] != str(source) or raw["title"] != title
+                    or raw["artist"] != artist):
+                return None
+            raw["source"] = source
+            if raw.get("stock_technical") is not None:
+                raw["stock_technical"] = tuple(raw["stock_technical"])
+            result = PlannedRockboxMedia(**raw)
+            if result.profile != (NORMALIZED_MEDIA_PROFILE if title is not None else MEDIA_PROFILE):
+                return None
+            record_metric("payload_receipt_hits")
+            logging.getLogger("soundbox").info("Payload receipt hit: %s", source.name)
+            return result
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
+    def _save_receipt(self, planned: PlannedRockboxMedia, prepared: PreparedRockboxMedia) -> None:
+        contract = asdict(planned)
+        contract["source"] = str(planned.source)
+        row = {
+            "contract": contract,
+            "checksum": hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest(),
+            "identity": [prepared.source_device, prepared.source_inode,
+                         prepared.source_size, prepared.source_mtime_ns, prepared.source_ctime_ns],
+        }
+        try:
+            _atomic_write(self._receipt_path(planned.source, planned.title, planned.artist),
+                          json.dumps(row, sort_keys=True).encode())
+        except OSError:
+            logging.getLogger("soundbox").warning("Could not persist payload receipt: %s", planned.source)
+
     def plan(
             self,
             source: str | Path,
@@ -826,16 +926,24 @@ class RockboxMediaCache:
         The returned contract is sufficient to reproduce and verify the same
         payload during commit while bounding Mac-side staging to one track.
         """
-        prepared = self.prepare(source, title=title, artist=artist)
+        original = Path(source).expanduser().resolve(strict=True)
+        receipt = self._read_receipt(original, title, artist)
+        if receipt is not None:
+            return receipt
+        prepared = self.prepare(original, title=title, artist=artist)
         try:
-            source_stat = prepared.source.stat()
-            source_hash = _sha256(prepared.source)
+            source_hash = prepared.source_sha256
             payload_hash = prepared.payload_sha256 or source_hash
-            return PlannedRockboxMedia(
+            # Validate stock policy against the same captured local bytes.
+            # The stock adapter owns its allowlist; no cloud re-open is needed.
+            from .stock_ipod import _stock_media_omission, _technical_audio
+            omission = _stock_media_omission(prepared.payload)
+            technical = None if omission else _technical_audio(prepared.payload)
+            planned = PlannedRockboxMedia(
                 source=prepared.source,
-                source_size=source_stat.st_size,
-                source_mtime_ns=source_stat.st_mtime_ns,
-                source_ctime_ns=source_stat.st_ctime_ns,
+                source_size=prepared.source_size,
+                source_mtime_ns=prepared.source_mtime_ns,
+                source_ctime_ns=prepared.source_ctime_ns,
                 source_sha256=source_hash,
                 source_sha256_verified=True,
                 transformed=prepared.transformed,
@@ -845,7 +953,11 @@ class RockboxMediaCache:
                 title=title,
                 artist=artist,
                 profile=prepared.profile,
+                stock_omission=omission,
+                stock_technical=technical,
             )
+            self._save_receipt(planned, prepared)
+            return planned
         finally:
             self.discard(prepared)
 
@@ -952,6 +1064,9 @@ class RockboxMediaCache:
             title=title,
             artist=artist,
             profile=desired_profile,
+            stock_omission=(
+                "Previously verified Rockbox-only payload"
+                if committed.get("kind") == "rockbox-media" else None),
         )
 
     @staticmethod
@@ -999,9 +1114,11 @@ class RockboxMediaCache:
             self, planned: PlannedRockboxMedia,
     ) -> PreparedRockboxMedia:
         """Recreate one planned payload and require byte-exact agreement."""
-        self.verify_source(planned)
         prepared = self.prepare(
-            planned.source, title=planned.title, artist=planned.artist)
+            planned.source, title=planned.title, artist=planned.artist,
+            expected_sha256=(planned.source_sha256
+                             if planned.source_sha256_verified else None),
+            expected_size=planned.source_size)
         payload_hash = prepared.payload_sha256 or planned.payload_sha256
         if (
             prepared.source != planned.source
@@ -1018,7 +1135,7 @@ class RockboxMediaCache:
 
     def discard(self, prepared: PreparedRockboxMedia) -> None:
         """Discard one exact transformed entry without sweeping the cache."""
-        if not prepared.transformed:
+        if prepared.payload == prepared.source:
             return
         profile_root = self.root / prepared.profile
         entry = prepared.payload.parent

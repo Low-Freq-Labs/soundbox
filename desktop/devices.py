@@ -81,9 +81,9 @@ def _classic_ipod_preferences(
     """Read Finder's classic-iPod cache without confusing it with USB transport.
 
     Apple stores the user-facing firmware and etched hardware serial here.  We
-    accept an exact device-ID match, or the sole classic-iPod record.  If several
-    historical iPods make the record ambiguous, we return nothing rather than
-    attach another device's identity.
+    accept only an exact device-ID match. Even a sole historical record may
+    belong to a different iPod; boot-mode continuity comes from SoundBox's
+    volume/library-bound remembered display facts.
     """
     path = preferences_path or (
         Path.home() / "Library" / "Preferences" / "com.apple.iPod.plist")
@@ -104,8 +104,6 @@ def _classic_ipod_preferences(
     exact = [item for key, item in candidates if key == usb_serial]
     if len(exact) == 1:
         record = exact[0]
-    elif len(candidates) == 1:
-        record = candidates[0][1]
     else:
         return {}
     return {

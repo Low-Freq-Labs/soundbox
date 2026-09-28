@@ -120,7 +120,8 @@ def export_playlists(
         rockbox_media_cache=rockbox_media_cache,
         rockbox_art_cache=rockbox_art_cache,
     )
-    if not dry_run and clean:
+    if (not dry_run and clean and not report.cancelled
+            and not any(row.errors for row in report.playlists)):
         sync_mod.clean_applefiles(target, report.written_dirs)
     return report
 

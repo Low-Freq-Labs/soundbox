@@ -43,6 +43,40 @@ theme-sized art) · `rockbox_config` (narrow lossless Rockbox setting management
 `backup` · `imports`
 (imported-audio plane) · `libcache` (instant-paint snapshot).
 
+## Device lifecycle and source acquisition (September 2026)
+
+`device_operations` is the Qt-independent serialized I/O authority, with mount
+identity, command, phase, cancellation and typed result records. The desktop
+worker adapter acquires the lane before starting and releases it only at
+QThread.finished. Discovery, dashboard, verification, export, Sync, deletion,
+imports and browser mutations share that lane. Normal macOS eject owns it until
+QProcess finishes. Engine DeviceSession guards still authorize every write;
+the coordinator never grants firmware capability or ownership of a file.
+
+`operation_control` scopes cooperative cancellation to a worker. Planning and
+media acquisition/copy boundaries poll it; rollback does not. Queued exports
+are cleared on cancellation/failure. Shutdown keeps an event loop dispatching
+until workers have actually stopped, retaining their references throughout.
+
+`source_acquisition` captures canonical audio into disposable local storage in
+one streaming hash pass. Exact expected bytes take precedence over cloud stat
+drift. Unknown bytes require a stable capture, with one bounded hydration
+retry. Rockbox media inspection, normalization and essence checks use captured
+bytes. Stock planning consumes those technical facts or captures its own source;
+stock execution also captures plain payloads before copying. Generic export
+prepares/copies/discards per file and suppresses destructive cleanup on failure.
+Temporary device files are verified before atomic replacement and the mount is
+revalidated at that publication boundary.
+
+`payload-receipts-v1` stores compact, checksummed derivative contracts bound to
+canonical filesystem/inode/size/mtime/ctime observations. It survives derivative
+cleanup and avoids repeating completed planning work. Lost/corrupt receipts
+cause verification, never loss of ownership data. `transaction-outcomes-v1`
+mirrors recovery outcomes locally; these records are evidence, never automatic
+permission to resume writes. Device manifests retain their existing schemas.
+
+See the lifecycle audit and HANDOFF for outstanding physical acceptance.
+
 ## Source-adapter boundary
 
 The dependency direction is deliberate:
@@ -335,10 +369,36 @@ plus stereo PCM16/44.1-kHz WAV; that conservative stock rule never filters a
 file supported by Rockbox. Media unsupported by both profiles is omitted and
 reported. Schema-3 playlist reconciliation also performs a bounded reverse
 identity lookup for append-only Rockbox M3U8 edits: device path → owned media
-row → canonical source → current `Track.track_id`. Proven new membership enters
-the portable SoundBox state as a source-playlist append overlay before the
-device transaction; duplicate appends instead produce only an M3U8 rewrite.
+row → hash-authenticated historical playlist position → stable `Track.track_id`
+(with canonical-source lookup available when no historical proof exists).
+That proof also rebinds moved sources in a disposable planning view, keeping
+original manifest bytes for recovery and verifying source hashes before reuse.
+Proven new membership enters only SoundBox custom playlists, using an exact
+before/after membership transition saved before the device transaction.
+Same-track/source and byte-identical-file duplicates retain their first
+occurrence; distinct recordings remain separate. Existing source-playlist
+overlays remain readable for compatibility, but iPod sync creates no new ones.
 Unknown paths never create tracks or choose an import destination.
+
+Source verification uses a disposable `source-verification-v1/` journal under
+Rockbox staging. Each tiny record is written after a complete stable SHA-256
+read, keyed by canonical source path and bound to filesystem/inode identity,
+size, mtime, and ctime. Planning retries reuse exact proofs without rehydrating
+the audio; no audio copies are retained. Cache loss or malformed records mean
+full verification. The journal never grants device ownership. Metadata-only
+source drift rechecks bytes before reusing an existing derivative; preflight
+can refresh a timestamp-only change only after matching the planned source
+hash. Refreshed source baselines flow into the stock copy/rewrite contracts and
+final unified manifest without altering the caller's plan or recovery bytes.
+Different bytes or repeatedly changing sources fail before writes.
+
+Stock compatibility probes are unique-source scoped. A matching verified
+composite payload already in the stock subset reuses that classification,
+retaining all database/path/live-size checks. Initial confirmed dual drops and
+contiguous generic-device queue entries batch all available playlists, so
+shared media is planned once per batch. Stage timing and source-proof counters
+are logged; see `docs/sync-performance-audit-2026-09.md` for measured findings
+and remaining performance limits.
 
 Stock device presentation is a separate read-only path. `stock_ipod_info`
 creates immutable identity/track/playlist snapshots, merges pending playback
@@ -346,26 +406,25 @@ records only in memory, and exposes no mutation API. The desktop device page
 renders them as Device, Songs, and Playlists tabs. On a schema-3 dual device,
 Songs and Playlists merge manifest ownership with the parsed iTunesDB and label
 each row Both, Stock, or Rockbox; the filesystem browser remains for Rockbox-only
-and generic USB targets. Connection handling is phased: a `/Volumes` filesystem
-event starts verified discovery immediately. Every new volume waits for the
-discovery QThread's actual `finished` boundary before its row can publish; a
-stock/dual iPod additionally remains absent from the sidebar
-while the lower-left status reads `Loading iPod...`; its dashboard snapshot
-preloads in the background and the normal drift scan follows. Only that
-completed scan publishes the clickable iPod row. Those removable-volume readers
-are serialized, and the visibility gate therefore guarantees that a click
-consumes the verified in-memory snapshot without touching the device again. The
-timer remains only as missed-event recovery and failed-preload retry. It backs
-off to 30 seconds while no removable volumes exist, then returns to three
-seconds while any discovered mount needs live drift or preload checks.
+and generic USB targets. Connection presentation separates visibility from readiness. A debounced
+`/Volumes` notification requests discovery even during playback or an eject-ready
+hold. If a device worker owns the lane, the request stays pending for retry.
+A three-second timer checks the local `/Volumes` directory timestamp to recover
+missed events; it does not open mounted children merely to check that timestamp.
+Verified external mounts appear as disabled loading rows during discovery.
+At QThread.finished they become selectable, while stock/dual dashboard loading
+continues with a visible loading label. A cached dashboard is presentation-only;
+selecting a loading row uses the same serialized preload. Writes stay guarded by
+operation ownership and firmware capabilities. Remounts invalidate stale views.
+
 
 Device transactions share one UI ownership contract. Custom result signals may
 record a worker result, but only `QThread.finished` clears the owning attribute
 and may advance the UI. Composite planning maps to 0–30%, device
 mutation/verification to 30–80%, and post-operation dashboard, sidebar/drift,
 and ownership release to
-80–100%. `100%`, a completion dialog, enabled Eject/Sync controls, and a newly
-clickable row are therefore all terminal states. A failed required final read
+80–100%. `100%` and a completion dialog describe terminal operation state; device row
+visibility separately describes connection state. A failed required final read
 shows a final-refresh failure instead of running the success callback.
 Preloads are scoped to path plus the mount root's filesystem device token, so a
 same-name remount invalidates and reprobes path-keyed disk/profile facts. Model
@@ -504,3 +563,39 @@ replacing the application bundle.
 
 The synchronized non-negotiable rules are in `AGENTS.md` and `CLAUDE.md`; the
 authoritative per-write commentary is at the top of `soundbox/sync.py`.
+
+`device_identity.remember_identity` enriches read-only dashboard snapshots from
+`settings.stock_ipod_identity`, keyed by volume UUID/library persistent ID.
+Original provenance persists; fresh observations win and serial conflicts reset
+the association. This cache cannot authorize writes or identify a new mount.
+
+
+Missing manifest-owned Rockbox audio and per-track artwork are planned as verified
+new copies when the guarded destination is absent. Existing occupants, symlinks,
+and inaccessible paths are not treated as missing; commit rechecks vacancy and
+rollback removes only files created by that transaction. A fully reconciled stock
+library with no semantic changes retains its original iTunesDB bytes even when
+the disposable stock shadow is absent.
+
+
+The bounded composite drift poll treats source size/mtime changes as Sync-needed
+hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
+can change ctime immediately after a successful commit. This UI status is not a
+content-integrity certificate. Source proofs/receipts still include ctime, and
+explicit planning/acquisition retain exact-byte verification; no stored proof or
+manifest baseline is refreshed merely to clear the badge.
+
+Playback and iPod management are independent. Device discovery and ordinary
+status polling must not check player.is_playing as a suppression condition.
+Only device operation ownership pauses competing device reads/writes. Reconnect,
+Rockbox tag-cache updates, unrelated firmware preferences and ctime-only cloud
+metadata changes do not themselves create managed-library Sync drift.
+
+September 27: the actual reconnected generation-60 device had no managed library
+or playlist drift, only the absent unsupported `sort playlists` setting. Rockbox
+4.0's [settings table](https://raw.githubusercontent.com/Rockbox/rockbox/v4.0-final/apps/settings_list.c)
+does not define that key. SoundBox no longer inserts or requires it. This corrects
+the prior documented assumption; no device configuration was rewritten for the fix.
+
+Post-sync polling is held through the completion dialog only. Dismissal releases
+the hold so subsequent SoundBox edits can update drift without reconnecting.
