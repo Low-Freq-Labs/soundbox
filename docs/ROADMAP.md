@@ -31,11 +31,13 @@ isolate theme/state/firmware only if OOM returns. No runtime leak/root cause is
 yet established. Sync preference ownership is fixed. Sonny reiterated zero
 iPod settings changes on September 28; no new firmware experiment is authorized.
 
-- [ ] Install and accept the September 28 loading-row/autoplay corrections.
-  Source fixes preserve the bottom loading status and handle native terminal
-  snapshot ordering plus cue-latched autoplay. Connected-device Random tests use
-  synthetic discovery; the exact reported live failure still needs acceptance.
-  Installation is authorized; current installed provenance is in the handoff.
+- [x] Install the September 28 loading-row/autoplay corrections: signed build
+  114, source `f6013a9`. Bottom loading status remains; terminal snapshot ordering
+  and cue-latched autoplay are corrected. The installed app passed two real Random
+  transitions after seeking near track ends; current evidence is in the handoff.
+- [ ] Accept the earlier intermittent stop and iPod reconnection behavior during
+  normal use. Connected-device Random regression tests use synthetic discovery;
+  the bounded installed smoke test does not establish the live failure's cause.
 - The current Sync badge has real differences: two title changes and a verified
   Rockbox append to OG. Do not clear it by changing settings or resetting state.
   Details and read-only evidence are in [HANDOFF.md](HANDOFF.md).
