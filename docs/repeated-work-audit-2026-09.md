@@ -35,13 +35,18 @@ is claimed from these small control-flow fixtures.
 
 ## Installed runtime observations
 
-Final build 115 (dirty base `50a47ba`, exact fingerprint in HANDOFF) installed at
+Development build 115 (dirty base `50a47ba`, archived fingerprint in rollback) installed at
 22:47:46 September 28. During **22:47:56–22:49:57**, no device discovery workers
 ran. Startup and both minute checks reused **2891 analysis entries** with zero
 preparation tasks. Both startup art passes reused **2767 covers**, zero preparation
 or failures, each within one logged second. The initial receipt-building pass
 at 22:42 took roughly three seconds, versus the earlier roughly 37-second warm.
 Library curation and existing audio-analysis/artwork cache files were preserved.
+
+Clean release build **116**, source **`47dd540`**, was installed at **22:57:11**.
+Startup again reused 2891 analysis entries and 2767 covers with zero preparation;
+curation remained byte-identical. Final provenance and observation evidence are
+in [HANDOFF.md](HANDOFF.md).
 
 The first installed verification exposed an old unmounted `/Volumes/Data` folder
 as a perpetual failed probe. The final build distinguishes ordinary same-filesystem

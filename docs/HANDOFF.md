@@ -4,37 +4,36 @@ Updated September 28, 2026, America/Chicago.
 
 ## Repository and installed app
 
-The release commit containing this note includes cloud-readiness,
-incremental-sync, progress-spacing and all five non-USB repeated-work fixes.
-Sonny authorized final validation, clean release installation, commit and push.
-The verified development installation below records the exact pre-release
-runtime; the final installation evidence will replace it before publishing.
+Runtime release **`47dd54041fc2f2fae0db1911eb75c248078e6f8b`** on `main`
+contains the cloud-readiness, incremental-sync, progress-spacing and all five
+non-USB repeated-work fixes. The following documentation-only commit records
+final installation evidence; it does not change the installed runtime revision.
 
-Final `/Applications/Soundbox.app` installed **22:47:46**, launched **22:47:48**:
-**build 115**, dirty source base **`50a47ba9e0894438ad4f55b5a97123005321078a`**.
-Earlier uncommitted builds also used Git-derived build 115; exact hashes distinguish
-this final build, including the idle unmounted-folder correction:
+`/Applications/Soundbox.app` installed **22:57:11**, launched **22:57:13**:
+**build 116**, clean source **`47dd540`**.
 
-- Executable SHA-256: `176343305525ce46dba3038cf6d5197f36b22d44a4263feffca373eddb3bc86b`.
-- Native dylib SHA-256: `243da073b5f6907af91bba4312e047d5968020fa071dba209263ce6cb881c62a`.
+- Executable SHA-256: `76614f735453456c0aff9220c611e04fa5b6e5b93e51af30c9ccc714efaa7dd1`.
+- Native dylib SHA-256: `0170f5cf2610d8da3ba76fdc0b97b45aff84dc5267c519bd4b201fd3a57c232d`.
 - Runtime fingerprint, 73 source/build files: `9f02271fc1c19339b491ac34d25e0c26a5450ea9ff659e1bb4e55d124683058c`.
 
-Stable `Soundbox Self-Signed` deep/strict verification passed. Packaged bytecode
-matches all 16 changed runtime modules; the complete source fingerprint matches
-tested source. Build log: `/tmp/soundbox-repeated-work-final-build.log`.
-Candidate/installed provenance and packaged-source proof are `repeated-work-*.json`
-in the existing rollback directory below. `/Applications` and `.git` are writable.
-GitHub SSH fails public-key authentication; the existing `gh` HTTPS helper works.
-No global credential/configuration changes were made.
+Stable `Soundbox Self-Signed` deep/strict verification and clean-release provenance
+check passed. Independent packaged-bytecode comparison matches all 16 changed
+runtime modules; the complete source fingerprint matches tested source.
+Build log: `/tmp/soundbox-performance-wrap-build.log`. Candidate/installed
+provenance and packaged-source proof are `performance-wrap-*.json` in the existing
+rollback directory below. `/Applications` and `.git` are writable. GitHub SSH
+fails public-key authentication; the existing `gh` HTTPS helper works. No global
+credential/configuration changes were made.
 
 Graceful quit independently confirmed process exit despite Apple's misleading
-“User canceled” Apple-event response. Installation moved bundles into the existing
-rollback directory and used `ditto`; AppData was never replaced. Final startup
-confirmed native CoreAudio/Metal, **3397 tracks / 75 playlists**, **2891 analysis
-receipt reuses**, zero preparation tasks and zero artwork fetched. Both stock-art
-passes reused **2767 covers**, zero preparations/failures, each within one logged
-second. The UI shows **208 Favorites / 138 OG / 2882 Collection**, Ready, playback
-stopped, no mounted device. Screenshot: `/tmp/soundbox-repeated-work-installed.png`.
+“User canceled” Apple-event response. Installation moved the old bundle into the
+existing rollback directory and used `ditto`; AppData was never replaced.
+Startup confirmed native CoreAudio/Metal, **3397 tracks / 75 playlists**,
+**2891 analysis receipt reuses**, zero preparation tasks and zero artwork fetched.
+Both stock-art passes reused **2767 covers**, zero preparations/failures, each
+within one logged second. The UI shows **208 Favorites / 138 OG / 2882 Collection**,
+Ready, playback stopped, no mounted device.
+Screenshot: `/tmp/soundbox-performance-wrap-installed.png`.
 
 ## Completed scope
 
@@ -71,7 +70,7 @@ and [DEVICES.md](DEVICES.md) for exact ownership/recovery boundaries.
 
 ## Validation and performance evidence
 
-Final **22:45** gate passed:
+Final **22:53** gate passed:
 `SOUNDBOX_IPOD_CAPTURE="$PWD/soundbox-ipod-ref/offline-lifecycle/20260926-163945" ./check.sh --render`.
 Native build, pyflakes, mypy (41 modules), **995 tests / four skips**, hermetic
 render and visual inspection passed. Tests use synthetic state/media or disposable
@@ -85,13 +84,15 @@ one row. 100 stable empty polls start zero workers; failed probes and fresh moun
 folders retain bounded retry. Receipts never confer device ownership or certify
 source bytes. No whole-app speed multiplier is claimed.
 
-The initial 22:42 installed pass checked 2767 existing covers in roughly three
-seconds (previous build about 37 seconds, including 27.67 seconds of intentional
-sleep); its next warm pass finished within one logged second. Final launch
-reuses those persisted completions. Source analysis reused 2891 entries on
-recurring checks without preparation. Final **22:47:56–22:49:57** idle observation recorded **zero discovery workers**,
-with analysis reuse again at 22:48:53 and 22:49:53. Evidence is in
-`repeated-work-installed-launch.log` / `repeated-work-runtime-observation.json`.
+The development installation's initial 22:42 receipt-building pass checked 2767
+covers in roughly three seconds (previous build about 37 seconds, including
+27.67 seconds of intentional sleep). Later warm passes finished within one logged
+second. The release installation reuses those persisted completions. Development
+idle observation **22:47:56–22:49:57** recorded zero discovery workers and recurring
+2891-entry analysis reuse. Final release **22:57:21–22:58:48** observation
+recorded zero discovery workers; the 22:58:18 minute pass reused 2891 entries
+with zero preparation. Evidence is recorded in
+`performance-wrap-installed-launch.log` / `performance-wrap-runtime-observation.json`.
 
 Prior user-initiated generation 63 remains the real one-title Sync acceptance:
 **18.30 s plan + 8.46 s commit = 26.76 s**, **69,562,392 canonical bytes read**,
@@ -108,7 +109,10 @@ Final post-quit/postlaunch `library.json` SHA-256:
 **208 Favorites / 138 OG / 2882 Collection**, **3298 art files**, **2923 analysis
 records** remain intact. Only the new disposable analysis and stock-art
 `preparation-index.json` files were added; existing art/analysis/stock derivative
-files remain unchanged. Final quit changed no state or caches.
+files remain unchanged. Release pre-quit, post-quit and postlaunch snapshots are
+byte-identical; no art or analysis cache differences. State transaction/retirement
+journals are absent. Release evidence is `library-performance-wrap-*.json` and
+`performance-wrap-*-state.json` in rollback.
 
 The first quit in this task changed only Qt `settings.columns_state` from the
 pre-task SHA `22a121d742609713ab7fe646de00caacff23fd5c35ec399c0f6372eb7f1c8ed5`.
@@ -121,6 +125,7 @@ Preserve Sonny's prior title edit `134230118` and hidden track `258721628`
 (September 28 22:05). Never restore older 202-Favorite/2883-Collection snapshots.
 Use the existing rollback directory only:
 `/private/tmp/soundbox-lifecycle-rollback.18e3k4di/`.
+`before-performance-wrap.app` is the verified 22:47 development build 115.
 `before-repeated-work.app` is the previous incremental/spacing build;
 `before-repeated-work-final.app` is the intermediate 22:42 build. Intermediate
 fingerprints/logs are explicitly `repeated-work-initial-*`. The earlier handoff
