@@ -5,7 +5,7 @@ This is a source audit and implementation plan, not a completed refactor or a
 public-release certification. No application behavior or installed bundle changed during the initial audit.
 Implementation follow-ups below are separate from that baseline.
 
-## Assessment
+## Assessment at the September 27 baseline
 
 SoundBox has useful engine boundaries and unusually explicit device safety
 contracts, but it still has monoliths. The largest problem is ownership spread
@@ -13,7 +13,10 @@ across the window, workers, dialogs and caches, not simply long files. Recent
 device lifecycle work improved one subsystem without completing the same
 transition for every background task. Public/personal separation does not exist
 yet: online discovery, local artwork state, UI construction and packaging are
-coupled.
+coupled. September 28 follow-ups separated local artwork/state ownership and
+fixed the five non-USB repeated-work findings; optional provider/UI/build
+composition remains the next implementation priority. See the follow-ups below
+and `HANDOFF.md` for current status.
 
 Keep one shared product. Add narrow optional providers and action contributions,
 with the public application fully functional when none are installed. Keep
@@ -252,8 +255,9 @@ because music is playing.
 ### A11 — Medium: release packaging has no separation or artifact gate
 
 One dependency file mixes development/runtime/optional packages. The build script
-generates PyInstaller configuration while a tracked spec duplicates collection
-choices. Local signing is verified, but is not a public distribution pipeline.
+generates an ignored `Soundbox.spec` with the same collection choices; it is a
+generated artifact, not a second tracked build authority. Local signing is
+verified, but is not a public distribution pipeline.
 There is no checked-in release profile selecting provider packages and rejecting
 personal artifacts. Add explicit dependency/build profiles, a single packaging
 authority, packaged-content tests and provenance including enabled modules.

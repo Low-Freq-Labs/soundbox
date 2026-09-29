@@ -711,6 +711,11 @@ Automated coverage:
   exact native-anchored scrubbing, autoplay transition/shuffle semantics,
   overview, zoom persistence, rapid loading, preparation, and window state.
 
+The dated records below preserve experiments, installation evidence and acceptance
+at each checkpoint. Their temporary paths, library counts and pending-review
+statements are historical; use the shipped sections above and `HANDOFF.md` for
+current behavior, installed state and remaining acceptance.
+
 Dated validation on 2026-07-23:
 
 - Full gate: 477 tests passed, one platform skip; offscreen reference render

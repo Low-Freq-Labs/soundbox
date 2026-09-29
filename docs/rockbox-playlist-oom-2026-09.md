@@ -154,10 +154,16 @@ from recollection alone.
    forced unmount. Successful verification/remount here is not an export/eject
    durability stress test.
 
-## Controlled playback plan — still pending physical execution
+## Historical controlled playback proposal — not current authorization
 
-Keep SoundBox closed and retain the captured baseline. Do not sync between tests,
-because current policy would restore auto-update and the larger playlist limit.
+This September 27 proposal predates the preference-ownership correction below.
+SoundBox no longer writes those preferences. Sonny subsequently reported stable
+playback with auto-update off and requested no further firmware changes. Keep
+this proposal as investigation history; only revisit it after a new failure and
+separately reviewed authorization, not as a next-session task.
+
+The original plan kept SoundBox closed and avoided Sync between trials because
+the old policy could restore auto-update and the larger playlist limit.
 Record exact error screen, elapsed playback time, track/format, battery, whether
 a plugin ran, and whether the stop followed an automatic or manual transition.
 
@@ -184,7 +190,7 @@ tracing; those cannot simply be enabled by adding a config key. USB cannot captu
 RAM during ordinary standalone playback. No clean-install comparison, live
 memory trace, leak diagnosis or regression identification is claimed complete.
 
-## Follow-up: settings persistence blocks the comparison
+## Historical follow-up: settings persistence blocked the comparison
 
 User reports that after reboot the playlist limit returned to 8,000 and database
 auto-update needed disabling again. The intended off-after-reboot trial therefore

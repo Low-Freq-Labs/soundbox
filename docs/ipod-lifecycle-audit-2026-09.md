@@ -1,8 +1,10 @@
 # iPod lifecycle consolidation — September 26, 2026
 
-Implementation audit of the existing dirty checkout (base bb0a202). This work
-must preserve generation-58 recovery and the current 202-entry Favorites.
-Hardware acceptance is outstanding; automated fixtures are not that acceptance.
+Historical implementation audit of the September 26 dirty checkout (base
+bb0a202), when Favorites contained 202 entries. That count is not a current
+restore target; use `HANDOFF.md` for the latest curated baseline, installation
+and acceptance gates. Preserve generation-58 recovery until separately reviewed
+hardware acceptance; automated fixtures are not that acceptance.
 
 ## Inventory before consolidation
 

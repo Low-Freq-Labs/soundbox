@@ -12,8 +12,9 @@ Prototype code: **`research/cdj_export/`** (`devicesql.py`, `rows.py`,
 `tracks.py`, `anlz_bridge.py`) — standalone, NOT wired into a USB workflow
 until proven.
 
-Related but separate: the shipped player currently imports PQTZ/PWV5/PWV7 only.
-Read-only memory/hot-cue display now ships in the player (`PLAYER.md`). The
+Related but separate: the shipped player reads PQTZ grids, PWV3/PWV5/PWV7
+waveforms and PCOB/PCO2 fallback cues, with live-DB cue rows authoritative.
+Read-only memory/hot-cue display ships in the player (`PLAYER.md`). The
 cue knowledge validated here can inform that reader, but CDJ export code remains
 standalone R&D and must not be pulled into the product wholesale.
 

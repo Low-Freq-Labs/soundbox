@@ -2,6 +2,10 @@
 
 Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root)
 
+All footprints, cleanup approvals and rollback counts below are dated historical
+evidence. They do not authorize deleting current recovery material. Consult
+[HANDOFF.md](HANDOFF.md) for rollback/state that must remain today.
+
 ## Resolution (what was actually done, and what was deliberately declined)
 
 ### Follow-up: temporary install rollbacks (2026-08-03)

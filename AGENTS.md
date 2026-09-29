@@ -46,9 +46,10 @@ repository can answer the question.
   receive the effective SoundBox title/artist so Rockbox never falls back to a
   scrambled stock filename. WAV copies use Rockbox's native RIFF
   `LIST/INFO` `INAM`/`IART` fields rather than ID3-in-WAV. Those display fields
-  live in a small canonical INFO list immediately after `fmt`; unrelated source
-  INFO fields are preserved in separate lists so large vendor metadata cannot
-  hide the artist/title from Rockbox's bounded scan. Effective
+  live in a small canonical INFO list immediately after `fmt`; competing source
+  INFO/ID3/BWF/XMP metadata containers are removed only from the disposable
+  derivative so vendor metadata cannot override or hide the intended display.
+  Audio essence and technical properties remain verified unchanged. Effective
   title/artist is part of the composite playlist baseline, so either edit must
   surface Sync needed. The container audio essence and technical
   properties must remain identical, and the canonical source remains

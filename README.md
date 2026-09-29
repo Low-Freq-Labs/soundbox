@@ -106,7 +106,7 @@ app, and verify its signature, launch, and library before accepting an upgrade.
   unsupported stock models; do not bypass those guards.
 - **Runtime acceptance:** source tests and offscreen renders do not substitute
   for playback, physical-device, or real curated-state verification. The latest
-  recorded checks and remaining visual review are in [`docs/HANDOFF.md`](docs/HANDOFF.md).
+  recorded checks and remaining acceptance gates are in [`docs/HANDOFF.md`](docs/HANDOFF.md).
 
 ## Docs & roadmap
 
@@ -166,7 +166,7 @@ hydrated by startup checks.
   reorder, rename/delete via right-click. Duplicate adds prompt
   Add Anyway/Skip (Skip default). Names `Collection`/`Artists` are reserved.
 - **⛃ Devices** — external drives only, auto-detected; drag any playlist
-  (rekordbox, SoundBox, or a pinned view) onto one to export immediately.
+  (rekordbox, SoundBox, or a pinned view) onto one to start its guarded export flow.
 
 **Curation.** Inline Title/Artist edits (double-click or right-click) become
 per-track overrides that rename files on the device — sources untouched.
@@ -261,8 +261,8 @@ recolors or overrides that RGB stream in either renderer.
 Rekordbox and source audio remain read-only. Native-deck failure disables
 playback with a diagnostic while library management remains available.
 
-**Devices & sync.** Drop = export: threaded copy with one aggregating
-progress bar, FINALIZING sweep (AppleDouble scrub), free-space precheck,
+**Devices & sync.** Drop starts export: threaded copy with one aggregating
+progress bar, free-space precheck,
 FAT32-safe names (length-budgeted artist/title), catalogue-visible flat
 `/Playlists` names for dual iPods, and UTF-8 no-BOM `.m3u8` in exact order with
 `# MISSING:` comments. Dual-iPod Rockbox filenames receive zero-padded order
@@ -279,8 +279,11 @@ Rockbox itself. Sync adopts a new song only when its path already maps to
 SoundBox-managed media, removes a newly appended duplicate instead of listing
 the song twice, and updates both firmware playlist views without copying the
 audio again. Unknown device songs are not imported automatically, and
-device-side deletion/reorder edits fail closed. **Cancel is honest** —
-partial m3u8s are playable and flagged so the next Sync resumes. Right-click
+device-side deletion/reorder edits fail closed. **Cancel is honest** — generic
+filesystem exports retain playable partial M3U8s flagged for retry; stock/composite
+transactions stop at safe boundaries and report rollback or committed state.
+Generic export finalization scrubs AppleDouble files in touched directories;
+composite normal Sync does not perform a broad clutter sweep. Right-click
 a device: Sync, **Verify export…** (references and sizes),
 **Deep Verify managed files…** (also checks file hashes), and Eject. Dual iPods
 also offer **Repair managed library…** to inspect inventory, restore missing

@@ -1,6 +1,8 @@
 # SoundBox device layouts
 
-Current as of 2026-08-25. Read this with `GOTCHAS.md` and the write contract at
+Current as of 2026-09-28. Dated hardware sections retain their historical
+observations; current installation and acceptance are in `HANDOFF.md`.
+Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
 ## The simple model
@@ -690,7 +692,8 @@ read-only/fail-closed; they do not block normal use of the validated MA446.
 The first real target is an Enhanced 5th-generation black iPod Video
 (`MA446LL`, originally 30 GB / 32 MB RAM), flash-modified to a 256.4 GB physical
 disk and reporting 238 GB under stock firmware 1.3. It is Windows-formatted
-FAT32 and currently has no `.rockbox` tree.
+FAT32 and had no `.rockbox` tree at that July 31 baseline. Later dual-boot
+acceptance does not change what this stock-only capture contained.
 
 SoundBox's live read-only probe correctly classified `/Volumes/IPOD` as
 `stock_ipod` and withheld Rockbox export. The refurb's

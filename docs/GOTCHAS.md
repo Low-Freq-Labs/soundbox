@@ -761,11 +761,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - `desktop/_shot.py` is the SELF-CONTAINED reference render harness (synthetic
   lib + qttest sandbox): `PYTHONPATH=. .venv/bin/python -m desktop._shot`.
 - **A failed `open_library` pops a MODAL QMessageBox** → headless/offscreen
-  scripts hang FOREVER. (The old Desktop test XML is deleted — smokes must use a
-  synthetic Library or the live DB.)
-- `tests/test_resync.py` (and others) end with a `__main__` guard — appending
-  test methods via heredoc lands them AFTER it = silently uncollected. Verify the
-  test COUNT went up.
+  scripts hang FOREVER. The old Desktop test XML is deleted; automated smokes
+  must use a synthetic Library and suppress live DB/device discovery.
+- Keep test definitions before a script's `unittest.main()` guard when direct
+  execution is supported. Classes after it are still collected by unittest
+  discovery, but direct script execution reaches the runner before defining
+  them. Confirm new cases appear in the intended runner.
 - unittest runs classes alphabetically; UI tests that mutate lib/view state must
   fully restore (incl. `_reload_current_view()`) or later classes see stale rows.
 - **`setCurrentItem` on the ALREADY-current item fires NO signal** → the slot

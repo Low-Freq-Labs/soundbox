@@ -56,7 +56,8 @@ Runtime release **`47dd54041fc2f2fae0db1911eb75c248078e6f8b`** on `main`
 contains the cloud-readiness, incremental-sync, progress-spacing and all five
 non-USB repeated-work fixes. Documentation-only follow-ups record installation
 evidence and the next-session scope; they do not change the installed runtime
-revision. The prior published documentation baseline is `bc0e1ea`.
+revision. The split-session scope was published in `efab936`; this follow-up
+corrects repository references and stale historical/current wording only.
 
 `/Applications/Soundbox.app` installed **22:57:11**, launched **22:57:13**:
 **build 116**, clean source **`47dd540`**.
@@ -119,12 +120,23 @@ and [DEVICES.md](DEVICES.md) for exact ownership/recovery boundaries.
 
 ## Validation and performance evidence
 
-Final **22:53** gate passed:
+Final runtime-release gate passed at **22:53**; the documentation/reference audit
+reran the same gate successfully at **23:15**:
 `SOUNDBOX_IPOD_CAPTURE="$PWD/soundbox-ipod-ref/offline-lifecycle/20260926-163945" ./check.sh --render`.
 Native build, pyflakes, mypy (41 modules), **995 tests / four skips**, hermetic
 render and visual inspection passed. Tests use synthetic state/media or disposable
 copies of offline captures; no live-source/device fault injection. Runtime-file
 parity, relative Markdown links and `git diff --check` pass.
+
+The reference audit checked all tracked Markdown files, local links and heading
+anchors, repository code-path references, build/test routing and tracked-artifact
+hygiene. Corrections distinguish historical firmware plans/counts from current
+instructions, scope cancellation/finalization by exporter, and align WAV
+derivative metadata guidance with implementation/tests. Research is linted and
+its ANLZ bridge is tested, while remaining outside the app. Runtime sources and
+the installed build are unchanged; no reinstall or live device operation was
+needed. Historical temporary evidence paths may expire and are not repository
+dependencies or permission to recreate old device experiments.
 
 Synthetic before/after: unchanged analysis scan **4 headers + 1 DAT → zero file
 opens**; ten identical state saves **10 publications / 152 fsyncs → zero**; ten

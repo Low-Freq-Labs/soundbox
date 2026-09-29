@@ -19,8 +19,9 @@ part of core.
     tests/      engine behavior + property-based (hypothesis) + mocked live-DB
                 reader + hermetic UI + native deck/shader contracts. Trust
                 ./check.sh output for the live count.
-    research/   R&D that is NOT part of the shipped app (kept out of the
-                packaged bundle + mypy/tests). See research/cdj_export/.
+    research/   R&D excluded from the shipped app and engine mypy. Pyflakes
+                checks it; synthetic tests cover the ANLZ bridge contract.
+                See research/cdj_export/.
     docs/       this documentation.
 
 ## Engine modules (`soundbox/`)
@@ -36,7 +37,7 @@ default-photo fallback, and baseline-JPEG encode) · `manifest` (per-device drif
 `track_analysis` (canonical V5 storage plus read-only V4 compatibility,
 streaming RGB/grid
 analysis, and export eligibility) · `rekordbox_analysis` (read-only
-PQTZ/PCOB/PCO2/PWV5/PWV7 parser) · `device_profile` (read-only device
+PQTZ/PCOB/PCO2/PWV3/PWV5/PWV7 parser) · `device_profile` (read-only device
 classification and stock-iPod readiness planning) · `stock_ipod` (MA446-only
 two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
 (content-addressed MA446 RGB565 preparation and ArtworkDB/ithmb layout) ·

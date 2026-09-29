@@ -34,13 +34,14 @@ iPod settings changes on September 28; no new firmware experiment is authorized.
 - [x] Install the September 28 loading-row/autoplay corrections: signed build
   114, source `f6013a9`. Bottom loading status remains; terminal snapshot ordering
   and cue-latched autoplay are corrected. The installed app passed two real Random
-  transitions after seeking near track ends; current evidence is in the handoff.
+  transitions after seeking near track ends; installation evidence is retained
+  in the build-114 handoff at Git revision `50a47ba`.
 - [x] Bound macOS cloud-provider readiness retries without weakening source
   hashes; preserve source context and show actual composite transaction outcomes.
   Readiness-only build 115 recovered provider failures during planning and
   preflight with Finder closed; generation 62 completed at 21:57 on September
   28. This accepts that controlled run, not universal provider reliability;
-  evidence is in the handoff.
+  evidence is in the [sync audit](sync-performance-audit-2026-09.md).
 - [x] Implement normal composite Sync using the committed device inventory,
   including unchanged local/cloud source contracts and existing-song playlist
   additions. Retained device audio/art needs no per-file stat or tree scan.
@@ -62,8 +63,9 @@ iPod settings changes on September 28; no new firmware experiment is authorized.
   the bounded installed smoke test does not establish the live failure's cause.
 - The September 28 Sync badge reflected real title edits and a verified Rockbox
   append to OG. Sonny's subsequent Sync committed generation 61; never clear
-  future drift by changing settings or resetting state. Evidence and limits are
-  in [HANDOFF.md](HANDOFF.md).
+  future drift by changing settings or resetting state. Historical context is in
+  the [sync audit](sync-performance-audit-2026-09.md); current acceptance limits
+  are in [HANDOFF.md](HANDOFF.md).
 
 - [x] `_safe_copy` now fsyncs the staged payload before verification/publication;
   failure leaves the destination absent. Normal OS eject remains required.
