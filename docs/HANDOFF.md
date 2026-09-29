@@ -2,12 +2,61 @@
 
 Updated September 28, 2026, America/Chicago.
 
+## Next session: complete the public/personal split
+
+Sonny explicitly wants the next context session focused on finishing this split,
+not another audit or proposal. Preserve the full personal build on this Mac
+throughout migration and install the completed **personal** artifact at handoff.
+The currently installed build 116 includes all existing personal features.
+
+Start with [release boundaries](release-boundaries.md),
+[ROADMAP section 3](ROADMAP.md#3-establish-the-shared-core--personal-module-boundary),
+[GOTCHAS.md](GOTCHAS.md) and the relevant architecture/worker guidance. The
+allocation and attachment contract are already agreed; implement them end to end.
+Local artwork storage is provider-independent, state/restore ownership is shared,
+and worker lifetime foundations exist. **The actual split is not implemented:**
+desktop code still directly calls online discovery, `build_app.sh` bundles
+`yt_dlp` unconditionally, and there is no optional provider registration or
+public/personal build composition.
+
+Completion requires:
+
+1. Extract existing online cover search/fetch, SoundCloud URL cover/avatar actions
+   and online Unknown-Artist suggestions behind typed optional providers and a
+   versioned, explicitly selected module manifest. Core retains state publication,
+   task ownership and all device authority. Preserve personal behavior.
+2. Resolve availability at startup and gate menus, direct commands and background
+   scheduling. Public retains local art controls, local artist merges, the same
+   player/library/device UI and existing guarded exports; no dead provider panels.
+3. Build both artifacts from one shared core with one packaging authority,
+   separated optional dependencies and profile/module provenance. Public must
+   physically exclude personal provider code/dependencies, not merely hide them.
+   Initial attachment is build composition plus restart, not hot loading.
+4. Test core with personal packages absent and network denied, provider failures
+   and cancellation/shutdown, paired hermetic UI renders, and shared curated-state
+   round trips across detach/reattach. Existing art, provenance, sticky removals,
+   provider settings and analysis caches must survive without a rebuild/reset.
+   Inspect both built artifacts and prove personal workflows remain available.
+5. Run final validation, safely install/relaunch the full personal build, verify
+   the real curated baseline, update documentation and complete the authorized
+   wrap-up. Test public using isolated state with device discovery suppressed;
+   do not replace Sonny's installed personal app with the public variant.
+
+This is the next priority ahead of unrelated controller extraction or device
+performance work. Generic USB optimization and CDJ export remain deferred.
+New embedded-art extraction is separately planned shared functionality, not a
+prerequisite for separating existing features. Physical iPod acceptance,
+distribution licensing/notarization and clean-machine release gates remain
+explicit; completing the split does not certify public distribution readiness.
+No live device writes or firmware experiments are authorized by this handoff.
+
 ## Repository and installed app
 
 Runtime release **`47dd54041fc2f2fae0db1911eb75c248078e6f8b`** on `main`
 contains the cloud-readiness, incremental-sync, progress-spacing and all five
-non-USB repeated-work fixes. The following documentation-only commit records
-final installation evidence; it does not change the installed runtime revision.
+non-USB repeated-work fixes. Documentation-only follow-ups record installation
+evidence and the next-session scope; they do not change the installed runtime
+revision. The prior published documentation baseline is `bc0e1ea`.
 
 `/Applications/Soundbox.app` installed **22:57:11**, launched **22:57:13**:
 **build 116**, clean source **`47dd540`**.

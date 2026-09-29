@@ -129,6 +129,13 @@ generation-63 one-title run above provides measured acceptance for that path. Se
 
 ## 3. Establish the shared-core / personal-module boundary
 
+**Next-session priority, confirmed September 28:** complete the existing-feature
+public/personal split end to end using [the agreed contract](release-boundaries.md).
+Preserve and finally install Sonny's full personal build. Build and validate the
+public artifact separately with isolated state. This takes priority over unrelated
+controller extraction and generic USB optimization; public distribution clearance
+remains a separate gate. Exact completion checks are in [HANDOFF.md](HANDOFF.md).
+
 - [x] A4 storage boundary: `soundbox.artwork` owns local ArtCache/results/default
   photos and works without provider imports/network. Compatibility re-exports
   remain in `artfetch`. Optional UI/provider/build wiring below is still pending.
@@ -138,7 +145,9 @@ generation-63 one-title run above provides measured acceptance for that path. Se
 - [ ] Preserve current personal discovery behavior in its optional module;
   prove detach/reattach preserves existing art, blocks and curation.
 - [ ] Add read-only embedded-art extraction for local audio with explicit
-  precedence protecting manual choices and sticky removals. This is not shipped.
+  precedence protecting manual choices and sticky removals. This is not shipped;
+  it is separate shared-feature work, not a prerequisite for the existing-feature
+  public/personal split.
 - [ ] A11/A12: add explicit public/personal build composition, separate optional
   dependencies, one packaging authority and artifact-content/provenance checks.
 - [ ] Test both variants without a live library/device. Public must work with
