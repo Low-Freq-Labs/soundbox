@@ -94,10 +94,21 @@ class StateRepository:
         self.recovery: Recovery | None = None
         self.writable = True
         self.backup_error: OSError | None = None
+        self._saved_payload: bytes | None = None
+        self._saved_identity: tuple | None = None
+
+    def _identity(self) -> tuple | None:
+        try:
+            st = self.path.stat()
+            return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        except OSError:
+            return None
 
     def load(self) -> dict:
         with self.area.lock:
             self.generation = self.area.generation
+            self._saved_payload = None
+            self._saved_identity = None
             self.recovery = None
             self.writable = True
             if not self.path.exists():
@@ -154,6 +165,19 @@ class StateRepository:
                 raise OSError('Library recovery required; restore a valid backup before saving')
             document = validate_state({**self._document, **changes})
             payload = json.dumps(document, indent=2, allow_nan=False).encode('utf-8')
+            if self._saved_payload is None:
+                identity = self._identity()
+                try:
+                    existing = self.path.read_bytes()
+                except OSError:
+                    existing = None
+                if existing == payload and identity is not None and identity == self._identity():
+                    self._document = document
+                    self._saved_payload = payload
+                    self._saved_identity = identity
+            if (payload == self._saved_payload and self._saved_identity is not None
+                    and self._identity() == self._saved_identity):
+                return
             self.backup_error = None
             try:
                 self.backup()
@@ -161,3 +185,5 @@ class StateRepository:
                 self.backup_error = exc
             self.area.publish({'library.json': payload})
             self._document = document
+            self._saved_payload = payload
+            self._saved_identity = self._identity()

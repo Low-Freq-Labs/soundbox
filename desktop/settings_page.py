@@ -347,6 +347,7 @@ class SettingsPageMixin:
             self._flash_status("Wait for the current operation before backup/restore", 8)
             return False
         self._state_maintenance = True
+        self._settings_save_timer.stop()
         self._maintenance_resume_art = getattr(self, "_art_worker", None) is not None
         self._maintenance_resume_waveforms = getattr(self, "_waveform_rechecks_enabled", False)
         self._maintenance_resume_locations = getattr(self, "_import_location_worker", None) is not None
@@ -634,7 +635,7 @@ class SettingsPageMixin:
         self.settings["waveform_mode"] = normalized
         if hasattr(self, "player_bar"):
             self.player_bar.set_waveform_mode(normalized)
-        self._save_state()
+        self._schedule_settings_save()
 
     def _apply_and_refresh(self):
         """Persist settings, push them to the library, and re-render the view + counts."""

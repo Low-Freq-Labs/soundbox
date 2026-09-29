@@ -61,7 +61,7 @@ from .paths import is_within
 from contextlib import ExitStack
 from .source_acquisition import SourceContract, acquire_source
 from .transaction_outcome import record_outcome
-from .operation_control import checkpoint, CommittedOperationError
+from .operation_control import checkpoint, CommittedOperationError, record_metric
 from .rockbox_media import (
     InterruptedFileVerifier,
     PlannedRockboxMedia,
@@ -431,11 +431,15 @@ def _db_path(root: Path) -> Path:
     return db
 
 
-def _location_path(root: Path, location: str) -> Path | None:
+def _location_path(root: Path, location: str, *, check_parent: bool = True) -> Path | None:
     parts = [part for part in str(location or "").strip(":").split(":") if part]
-    if not parts or any(part in {".", ".."} for part in parts):
+    if not parts or any(part in {".", ".."} or "/" in part or "\\" in part for part in parts):
         return None
     candidate = root.joinpath(*parts)
+    if not check_parent:
+        # Inventory comparison only. Any operation touching this path must
+        # still resolve it through DeviceSession before reading or writing.
+        return candidate
     try:
         parent = candidate.parent.resolve(strict=True)
     except OSError:
@@ -1034,6 +1038,7 @@ def plan_stock_ipod_sync(
     defer_cleanup: bool = False,
     allow_interrupted_media_adoption: bool = False,
     interrupted_file_verifier: InterruptedFileVerifier | None = None,
+    trust_managed_inventory: bool = False,
 ) -> StockIpodSyncPlan:
     """Render and validate a complete stock-iPod sync without target writes."""
     root = Path(target).expanduser().resolve(strict=True)
@@ -1052,6 +1057,8 @@ def plan_stock_ipod_sync(
     if defer_cleanup and not (allow_dual_boot and dual_boot):
         raise StockIpodError(
             "Deferred stock cleanup is limited to composite dual-boot sync.")
+    if trust_managed_inventory and not (allow_dual_boot and dual_boot):
+        raise StockIpodError("Manifest inventory reuse requires composite ownership.")
     if allow_interrupted_media_adoption and not (allow_dual_boot and dual_boot):
         raise StockIpodError(
             "Interrupted stock-media adoption is limited to composite dual sync.")
@@ -1236,12 +1243,14 @@ def plan_stock_ipod_sync(
     indexed_paths: set[str] = set()
     interrupted_candidates: dict[tuple[int, str], list[Path]] = {}
     for raw in parsed_tracks:
-        location_path = _location_path(root, str(raw.get("location") or ""))
+        location_path = _location_path(root, str(raw.get("location") or ""),
+                                       check_parent=not trust_managed_inventory)
         if location_path is not None:
             indexed_paths.add(str(location_path.relative_to(root)).replace(
                 os.sep, "/").casefold())
     music = root / "iPod_Control" / "Music"
-    if music.is_dir():
+    occupied_paths.update(indexed_paths)
+    if (not trust_managed_inventory or allow_interrupted_media_adoption) and music.is_dir():
         for path in music.glob("F*/*"):
             if path.is_file():
                 relative_key = str(path.relative_to(root)).replace(
@@ -1310,7 +1319,10 @@ def plan_stock_ipod_sync(
         raw = parsed_by_dbid.get(dbid)
         managed_live = root / managed_relative
         managed_location = _location_path(
-            root, str((raw or {}).get("location") or ""))
+            root, str((raw or {}).get("location") or ""),
+            check_parent=not trust_managed_inventory)
+        retained = (trust_managed_inventory and payload_sizes.get(source) == expected_size
+                    and payload_hashes.get(source) == expected_hash)
         if (
             source in managed_sources
             or dbid <= 0
@@ -1319,14 +1331,16 @@ def plan_stock_ipod_sync(
             or managed_location is None
             or managed_location != managed_live
             or len(expected_hash) != 64
-            or not managed_live.is_file()
-            or managed_live.stat().st_size != expected_size
+            or (not retained and (not managed_live.is_file()
+                                  or managed_live.stat().st_size != expected_size))
         ):
             raise StockIpodError(
                 f"Managed composite stock baseline is invalid for {source}")
         managed_sources[source] = (
             dbid, managed_relative, expected_size, expected_hash)
         managed_source_dbids.add(dbid)
+        if retained:
+            record_metric("retained_device_media")
     # Content reconciliation is needed only for sources that are not already
     # proven by the composite ownership manifest.  Including every managed
     # source here made an additive playlist scan the existing iPod library for

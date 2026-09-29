@@ -438,7 +438,9 @@ def verify_managed(target: Path, *, deep: bool = False) -> list[str]:
     rehashes every managed file, including same-size corruption.
     """
     root = Path(target).expanduser().resolve()
-    current = manifest.load(root)
+    current = (manifest.load_composite(root) if manifest.has_composite_ownership(root)
+               else manifest.load(root))
+    session = DeviceSession(root, [], create=False)
     issues: list[str] = []
     seen: set[str] = set()
     for device_path, row in (current.get("files") or {}).items():
@@ -449,6 +451,7 @@ def verify_managed(target: Path, *, deep: bool = False) -> list[str]:
         seen.add(key)
         path = root / str(device_path).lstrip("/")
         try:
+            path = session.guard(path)
             resolved = path.resolve(strict=True)
             if not is_within(resolved, root) or not resolved.is_file():
                 issues.append(f"missing or escaped: {device_path}")
@@ -459,7 +462,7 @@ def verify_managed(target: Path, *, deep: bool = False) -> list[str]:
                 continue
             if deep and _sha256(resolved) != str(row.get("sha256") or ""):
                 issues.append(f"checksum mismatch: {device_path}")
-        except OSError:
+        except (OSError, RuntimeError):
             issues.append(f"missing or unreadable: {device_path}")
     return issues
 

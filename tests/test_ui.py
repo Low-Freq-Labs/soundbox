@@ -1023,13 +1023,15 @@ class StockIpodUI(unittest.TestCase):
         calls = []
         try:
             _win._eject_ready_device = "/Volumes/IPOD"
-            _win._refresh_devices = lambda: calls.append("scan")
+            _win._refresh_devices = lambda **kw: calls.append("scan")
+            _win._device_mount_refresh_pending = False
+            _win._volume_directory_stamp = os.stat('/Volumes').st_mtime_ns
             _win._poll_devices()
             self.assertEqual(calls, [])
 
             _win._eject_ready_device = ""
             _win._poll_devices()
-            self.assertEqual(calls, ["scan"])
+            self.assertEqual(calls, ["scan"] if _win.device_tree.topLevelItemCount() else [])
         finally:
             _win._eject_ready_device = old_ready
             _win._refresh_devices = old_refresh
@@ -2448,6 +2450,16 @@ class StockIpodUI(unittest.TestCase):
             _win._dual_sync_queue.pop(dev, None)
             _win._reset_dual_batch()
 
+    def test_verify_reports_integrity_issues_even_without_playlists(self):
+        result = {"playlists": 0, "entries": 0, "missing": [],
+                  "managed_issues": ["checksum mismatch: /Music/test.wav"]}
+        with mock.patch("desktop.app.QMessageBox.warning") as warning, \
+                mock.patch("desktop.app.QMessageBox.information") as information:
+            _win._on_verify_done("/synthetic/IPOD", result)
+        information.assert_not_called()
+        self.assertIn("checksum mismatch", warning.call_args.args[2])
+        self.assertNotIn("0 of 0", warning.call_args.args[2])
+
     def test_sync_routes_managed_dual_playlists_to_composite_reconcile(self):
         from types import SimpleNamespace
         from unittest import mock
@@ -2469,7 +2481,7 @@ class StockIpodUI(unittest.TestCase):
             with (
                 mock.patch.object(
                     _win, "_confirm_ipod_sync",
-                    side_effect=lambda _dev: events.append(("confirm",)) or True),
+                    side_effect=lambda _dev, **kw: events.append(("confirm",)) or True),
                 mock.patch.object(
                     device_manifest,
                     "load_composite",
@@ -2487,6 +2499,15 @@ class StockIpodUI(unittest.TestCase):
             self.assertTrue(begin[3]["reconcile"])
             self.assertTrue(begin[3]["confirmed"])
             self.assertEqual(begin[3]["action"], "sync")
+            self.assertFalse(begin[3]["audit_existing"])
+            events.clear()
+            with (
+                mock.patch.object(_win, "_confirm_ipod_sync", return_value=True) as confirm,
+                mock.patch.object(device_manifest, "load_composite", return_value=payload),
+            ):
+                _win._sync_device(dev, audit_existing=True)
+            confirm.assert_called_once_with(dev, audit_existing=True)
+            self.assertTrue(events[0][3]["audit_existing"])
         finally:
             _win._begin_dual_ipod_sync = real
             if old_profile is None:
@@ -6214,6 +6235,67 @@ class WaveformFill(unittest.TestCase):
         import shutil
         shutil.rmtree(self.cache, ignore_errors=True)
 
+    def test_discovery_receipts_reuse_headers_and_notice_late_sidecars(self):
+        from soundbox import track_analysis as ta
+        from desktop.workers import WaveformFillWorker
+        canonical = Path(self.cache) / "analysis"
+        source = Path(self.paths[0])
+        record = ta.store(canonical, "0", source, ta.analyze_soundfile(source))
+        dat = Path(self.cache) / "ANLZ.DAT"
+        dat.write_bytes(b"PMAI" + bytes(28))
+        track = Track("0", "Test", "Artist", source.as_uri(), source_analysis_path=str(dat))
+        lib = Library({"0": track}, [], source="synthetic")
+        opened = []
+        original = Path.open
+
+        def opening(path, *args, **kwargs):
+            if path == record or path == source or path == dat:
+                opened.append(path)
+            return original(path, *args, **kwargs)
+
+        with mock.patch("soundbox.rekordbox_analysis.read", return_value={}) as anlz, \
+                mock.patch("soundbox.rekordbox_analysis.read_beats", return_value=None) as beats, \
+                mock.patch.object(Path, "open", opening), \
+                mock.patch("desktop.workers.time.time", return_value=1800):
+            WaveformFillWorker(lib, canonical).run()
+            self.assertEqual(opened, [record])  # readiness/grid/cues/fallback share it
+            opened.clear()
+            anlz.reset_mock(); beats.reset_mock()
+            WaveformFillWorker(lib, canonical).run()  # a new worker loads the receipt
+            self.assertEqual(opened, [])
+            anlz.assert_not_called(); beats.assert_not_called()
+            dat.with_suffix(".EXT").write_bytes(b"late waveform")
+            WaveformFillWorker(lib, canonical).run()
+            self.assertEqual(opened, [record])
+            anlz.assert_called_once(); beats.assert_called_once()
+            opened.clear()
+            with mock.patch("desktop.workers.time.time", return_value=3600):
+                WaveformFillWorker(lib, canonical).run()
+            self.assertEqual(opened, [record])  # bounded fallback retries parse failures
+
+    def test_receipts_do_not_suppress_cue_edits_or_forced_reanalysis(self):
+        from soundbox import track_analysis as ta
+        from desktop.workers import WaveformFillWorker
+        canonical = Path(self.cache) / "analysis"
+        source = Path(self.paths[0])
+        ta.store(canonical, "0", source, ta.analyze_soundfile(source))
+        track = Track("0", "Test", "Artist", source.as_uri())
+        lib = Library({"0": track}, [], source="synthetic")
+        WaveformFillWorker(lib, canonical).run()
+        track.source_cues = []
+        worker = WaveformFillWorker(lib, canonical)
+        tasks = []
+        worker.tasks_ready.connect(tasks.append)
+        worker.run()
+        self.assertEqual(tasks, [1])
+        self.assertFalse(ta.imported_cues_need_sync(canonical, "0", source, []))
+        WaveformFillWorker(lib, canonical).run()
+        forced = WaveformFillWorker(lib, canonical, force_track_ids=("0",))
+        forced.tasks_ready.connect(tasks.append)
+        forced.run()
+        self.assertEqual(tasks, [1, 1])
+        self.assertEqual(forced.completed_forced_track_ids, {"0"})
+
     def test_loaded_track_bypasses_bulk_playback_and_low_power_deferral(self):
         from desktop.workers import WaveformFillWorker
 
@@ -7211,9 +7293,16 @@ class RowCache(unittest.TestCase):
         _win._warm_timer.stop()
 
     def test_title_edit_invalidates(self):
-        _win._row_for(_win.lib.tracks_by_id["1"])
+        _win._row_cache.clear()
+        _win._rows_for(_win.lib.tracks_by_id.values())
+        other = _win._row_cache["2"]
         _win._on_cell_edited("title", "1", "New Title")
-        self.assertEqual(_win._row_cache, {})          # cache dropped on edit
+        self.assertNotIn("1", _win._row_cache)
+        self.assertIs(_win._row_cache["2"], other)
+        with mock.patch("desktop.app.engine.track_row", wraps=engine.track_row) as compute:
+            _win._rows_for(_win.lib.tracks_by_id.values())
+        self.assertEqual(compute.call_count, 1)
+        self.assertEqual(_win._row_cache["1"]["title"], "New Title")
         _win.titles.pop("1", None)
         _win._save_state()
         _win._warm_timer.stop()
@@ -7282,6 +7371,7 @@ class StateMaintenance(unittest.TestCase):
             _state_repository=SimpleNamespace(writable=True), _shutting_down=False,
             _dev_timer=QTimer(), _warm_timer=QTimer(),
             _waveform_recheck_timer=QTimer(), _volume_refresh_timer=QTimer(),
+            _settings_save_timer=QTimer(),
             _start_art_fill=lambda: None, _maybe_fill_waveforms=lambda: None,
             _repair_import_locations=lambda: None,
             setEnabled=lambda value: events.append(('enabled', value)),
@@ -7358,3 +7448,107 @@ class StateMaintenance(unittest.TestCase):
         self.assertIn('Library not saved', _win.windowTitle())
         self.assertTrue(_win._save_state())
         self.assertEqual(_win.windowTitle(), 'Soundbox')
+
+
+class DualFailureEvidence(unittest.TestCase):
+    def test_failure_dialog_uses_transaction_evidence(self):
+        from desktop.app import MainWindow
+        from soundbox.dual_ipod import DualIpodError
+        from soundbox.operation_control import CommittedOperationError
+        cases = [
+            ('not needed', 'No device files were changed', 'rollback'),
+            ('rolled back', 'rollback completed', 'No device files'),
+            ('recovery required', 'rollback was incomplete', 'No device files'),
+        ]
+        for status, expected, forbidden in cases:
+            with self.subTest(status=status), mock.patch('desktop.app.QMessageBox.critical') as dialog:
+                error = DualIpodError('Cannot read source: fixture.wav')
+                error.recovery_status = status
+                MainWindow._show_dual_ipod_failure(_win, error)
+                message = dialog.call_args.args[2]
+                self.assertIn(expected, message)
+                self.assertNotIn(forbidden, message)
+        with mock.patch('desktop.app.QMessageBox.critical') as dialog:
+            MainWindow._show_dual_ipod_failure(_win, OSError('unknown failure'))
+            self.assertIn('could not be established', dialog.call_args.args[2])
+        with mock.patch('desktop.app.QMessageBox.critical') as dialog:
+            MainWindow._show_dual_ipod_failure(_win, CommittedOperationError('cleanup failed'))
+            self.assertIn('were committed', dialog.call_args.args[2])
+
+
+class RepeatedBackgroundWork(unittest.TestCase):
+    def test_empty_idle_poll_never_starts_worker_but_retry_and_mount_do(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        calls = []
+        stub = SimpleNamespace(
+            _volume_directory_stamp=10, _device_mount_refresh_pending=False,
+            _eject_ready_device="", _device_retry_at=float("inf"),
+            device_tree=SimpleNamespace(topLevelItemCount=lambda: 0),
+            _refresh_devices=lambda **kw: calls.append(kw))
+        with mock.patch("desktop.app.os.stat", return_value=SimpleNamespace(st_mtime_ns=10)):
+            for _ in range(100):
+                MainWindow._poll_devices(stub)
+            self.assertEqual(calls, [])
+            stub._device_retry_at = 0
+            MainWindow._poll_devices(stub)
+            self.assertEqual(calls, [{}])
+        with mock.patch("desktop.app.os.stat", return_value=SimpleNamespace(st_mtime_ns=11)):
+            MainWindow._poll_devices(stub)
+        self.assertEqual(calls[-1], {"force": True})
+
+    def test_preference_burst_coalesces_and_curation_flushes_it(self):
+        old = dict(_win.settings)
+        try:
+            with mock.patch.object(_win._state_repository, "save") as save:
+                for zoom in (100, 120, 150):
+                    _win._on_waveform_zoom_changed(zoom)
+                _win._on_jump_mode_changed("4 BEATS")
+                save.assert_not_called()
+                self.assertTrue(_win._settings_save_timer.isActive())
+                _win._save_state()  # same boundary used by curation/backup/shutdown
+                save.assert_called_once()
+                self.assertEqual(save.call_args.args[0]["settings"]["waveform_zoom"], 150)
+                self.assertFalse(_win._settings_save_timer.isActive())
+        finally:
+            _win.settings = old
+            _win._settings_save_timer.stop()
+
+    def test_stock_art_warm_hits_skip_preparation_and_deleted_pixels_recover(self):
+        from PIL import Image
+        from desktop.workers import StockArtworkPrepWorker
+        from soundbox.stock_artwork import StockArtworkCache
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            image = root / "cover.jpg"
+            Image.new("RGB", (64, 64), "blue").save(image)
+            cache = StockArtworkCache(root / "stock")
+            prepared = cache.prepare(image)
+            StockArtworkPrepWorker(None, None, cache, images=[image]).run()
+            cache = StockArtworkCache(root / "stock")
+            with mock.patch.object(cache, "prepare", wraps=cache.prepare) as prepare, \
+                    mock.patch("desktop.workers.time.sleep", side_effect=AssertionError("no pacing on hits")):
+                StockArtworkPrepWorker(None, None, cache, images=[image]).run()
+                prepare.assert_not_called()
+                prepared.payloads[0].path.unlink()
+                StockArtworkPrepWorker(None, None, cache, images=[image]).run()
+                prepare.assert_called_once()
+            self.assertTrue(prepared.payloads[0].path.is_file())
+            cache.prepare(image)  # exact selected-sync verification still succeeds
+
+    def test_failed_discovery_backoff_is_bounded_and_success_resets_it(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        worker = SimpleNamespace(retry_discovery=True, results=None)
+        host = SimpleNamespace(
+            _dev_scan_worker=worker, _finish_worker=lambda *args: None,
+            _shutting_down=False, _device_coordinator=SimpleNamespace(eject_pending=False),
+            _stock_view_pending={}, _stock_view_worker=None)
+        with mock.patch('desktop.app.time.monotonic', return_value=100):
+            for delay in (3, 6, 12, 24, 30, 30):
+                MainWindow._finish_device_scan_worker(host, worker)
+                self.assertEqual(host._device_retry_at, 100 + delay)
+            worker.retry_discovery = False
+            MainWindow._finish_device_scan_worker(host, worker)
+        self.assertEqual(host._device_retry_at, float('inf'))
+        self.assertEqual(host._device_retry_delay, 3)

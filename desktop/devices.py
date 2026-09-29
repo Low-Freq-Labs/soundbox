@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import plistlib
+import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -285,11 +287,23 @@ def _in_external_product_tree(p) -> bool:
     return is_external_device_path(relative)
 
 
+_DISCOVERY_RETRY = False
+
+
+def discovery_needs_retry() -> bool:
+    return _DISCOVERY_RETRY
+
+
 def list_devices() -> list[tuple[str, str, int | None]]:
+    global _DISCOVERY_RETRY
+    _DISCOVERY_RETRY = True  # exceptions remain retryable
+    retry = False
     out = []
     vol = Path("/Volumes")
     if vol.is_dir():
-        present = {str(vol / n.name) for n in vol.iterdir()}
+        parent_device = vol.stat().st_dev
+        children = list(vol.iterdir())
+        present = {str(d) for d in children}
         # Forget cache entries for volumes no longer mounted, so a re-plugged stick
         # (same name) is probed fresh instead of trusting a stale answer.
         for stale in [k for k in _EXTERNAL_CACHE if k not in present]:
@@ -298,10 +312,25 @@ def list_devices() -> list[tuple[str, str, int | None]]:
             _PROFILE_CACHE.pop(stale, None)
             _INFO_CACHE.pop(stale, None)
             _IPOD_FACTS_CACHE.pop(stale, None)
-        for d in sorted(vol.iterdir()):
-            if not d.is_dir() or d.name.startswith("."):
+        for d in sorted(children):
+            if d.name.startswith("."):
+                continue
+            try:
+                identity = d.stat()
+                if not stat.S_ISDIR(identity.st_mode):
+                    continue
+                if identity.st_dev == parent_device:
+                    # Old mountpoint directories and the system-volume alias
+                    # are not failed external probes. A newly created mount
+                    # directory may still be attaching; keep a short retry
+                    # window before treating it as an ordinary local folder.
+                    retry |= time.time() - identity.st_ctime < 30
+                    continue
+            except OSError:
+                retry = True
                 continue
             if not _is_external(d):
+                retry |= str(d) not in _EXTERNAL_CACHE
                 continue
             try:
                 st = os.statvfs(d)
@@ -309,4 +338,7 @@ def list_devices() -> list[tuple[str, str, int | None]]:
             except OSError:
                 free = None
             out.append((d.name, str(d), free))
+    else:
+        retry = True
+    _DISCOVERY_RETRY = retry
     return out[:MAX_DEVICES]

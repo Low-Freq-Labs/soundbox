@@ -16,6 +16,7 @@ from typing import Callable
 
 from .rockbox_media import _atomic_write
 from .operation_control import checkpoint, record_metric
+from .source_read_retry import ProviderReadRetry
 
 LOG = logging.getLogger(__name__)
 
@@ -51,10 +52,19 @@ class SourceVerificationCache:
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
+        readiness = ProviderReadRetry()
         for attempt in range(2):
-            checkpoint()
-            stat = source.stat()
-            digest = hash_file(source)
+            while True:
+                checkpoint()
+                stat = source.stat()
+                try:
+                    digest = hash_file(source)
+                    break
+                except OSError as exc:
+                    if not readiness.wait_after(exc, source):
+                        raise
+                    # Reopen and hash from byte zero against a fresh stat.
+                    # A partial read never contributes to a completed proof.
             self.reads += 1
             self.bytes_read += stat.st_size
             record_metric("source_proof_reads")

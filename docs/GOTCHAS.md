@@ -605,6 +605,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   hold. If a device worker owns the lane, the request stays pending for retry.
   A three-second timer checks the local `/Volumes` directory timestamp to recover
   missed events; it does not open mounted children merely to check that timestamp.
+  With no connected devices and no failed probe, an unchanged timestamp starts no
+  discovery worker. Failed probes retry with a 3–30-second backoff; mount events
+  request immediate discovery. Connected-device drift keeps its three-second poll.
+  Ordinary unmounted folders are skipped after a 30-second attachment grace.
   Verified external mounts appear by name, disabled during discovery.
   At QThread.finished they become selectable. Stock/dual dashboard loading
   appears only in the bottom status; device rows have no loading suffix. A cached
@@ -639,8 +643,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   pass therefore is not enough. Successful source loads/imports arm the
   single-shot 60-second identity recheck, which rearms only after the previous
   worker finishes. `is_ready` uses size + mtime identity and recooks only stale
-  records; the scan must stay manifest-only and must not inflate waveform
-  payloads or overlap workers.
+  records. Disposable `track_analysis/preparation-index.json` receipts bind
+  source/V4/V5/DAT/EXT/2EX stat identities, cue inputs and analysis policies.
+  Unchanged receipts skip record/ANLZ opens; changed records share one scoped
+  manifest read. A 30-minute fallback retries silent sidecar parse failures.
+  Never inflate waveform payloads or overlap workers, and never use scheduling
+  receipts as source-integrity proofs or bypass interactive checks.
 - **Global Graveyard membership vetoes persistent analysis.** Remove from
   Collection must discard the exact SoundBox V4/V5 record, and startup/bulk
   preparation must skip every globally hidden ID. Recheck membership before
@@ -671,8 +679,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   background.
 - **Computed-row cache:** effective title/artist is cached per track_id, warmed
   in background (debounced, generation-guarded), invalidated on
-  override/alias/registry/title-junk change. `_row_for` returns a COPY. If you
-  add anything that changes effective title/artist, call `_invalidate_rows()`.
+  override/alias/registry/title-junk change. `_row_for` returns a COPY. Title-only
+  edits call `_invalidate_rows((track_id,))`; warms fill only missing rows.
+  Registry/alias/title-policy changes still invalidate globally. Keep generation
+  checks and retry after the old worker's `finished` boundary.
 - **A new per-track `Track` field that affects a view MUST survive two caches or
   it silently reverts on the instant paint.** (1) Add it to `libcache._TRACK_FIELDS`
   and bump `SCHEMA` — else the on-disk snapshot drops it and every track loads with
@@ -849,7 +859,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   thousands of tiny metadata migrations otherwise become a needless energy
   spike. Every Rekordbox path remains read-only.
 - **A V4 cache hit is playable but still V5-upgrade-pending.** Only
-  `track_analysis.is_ready()` decides whether background preparation is done;
+  `track_analysis.is_ready()` (or its unchanged preparation receipt) decides
+  whether background preparation is done;
   it requires the complete V5 mip/color contract. The player may load any valid
   V4 record immediately. Do not collapse those two meanings. The read-only
   audit reports playable V4 and verified V5 coverage separately.
@@ -998,11 +1009,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Do not rebuild every committed derivative to plan an incremental sync.**
   Schema-3 media rows carry canonical source size/mtime/ctime, effective
   title/artist, payload hash, and the per-file media profile. Reuse that exact
-  committed identity when all of them still match; stat-check every planned
-  source again before the first device write. Once a row records an explicit
+  committed contract when path/size/mtime/display/policy still match. Normal
+  Sync tolerates ctime-only drift without refreshing old proof timestamps;
+  explicit Repair retains the conservative source checks. Stat-check planned
+  sources again before the first device write using their respective policy. Once a row records an explicit
   media profile, do not reopen it for embedded-art or
   title/artist inspection during every plan—the committed profile is the policy
-  result, and a source stat change is what invalidates it. A changed source,
+  result; source size/mtime, display or policy changes invalidate it. A changed source,
   display field, or media profile must still take the full derivative
   verification route. A narrower legacy profile cannot prove that competing
   metadata is absent and therefore requires a one-time verified migration.
@@ -1036,7 +1049,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   batches and multiple targets. Internal planner units can be roughly twice the
   unique managed source union, so use them only for the percentage bar: show
   animated `Planning iPod...` with no `#/#`. Show the counter only under
-  `Syncing audio`, where it represents actual audio work. Queued-job formulas
+  `Syncing audio`, where it represents actual audio work. Byte-level acquisition/
+  copy phases can instead show transferred/total bytes. The shared export/sync
+  counter must grow to fit its full text, with padding and a spaced slash for
+  byte totals; never cap it at song-count width. Queued-job formulas
   must give each job its complete proportional slice. Never publish 100%, `Complete`, a success modal,
   or enabled Eject/Sync while any required worker attribute remains owned. A
   failed required final read is terminal but not successful: retain Eject,
@@ -1063,9 +1079,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   bytes and hash moved sources before reusing derivatives. Only custom SoundBox playlists accept incoming
   membership; never create new rekordbox playlist overlays. Baseline-check and
   persist the exact custom membership before device writes. Deduplicate custom
-  membership by track ID, canonical source, or exact source bytes (hash only
-  size-matched candidates), retaining the first occurrence, including older
-  duplicates. Never merge by title/artist. Unknown paths
+  membership by track ID, canonical source, or exact source bytes. Normal Sync
+  may reuse matching committed hashes; otherwise hash only size-matched
+  candidates. Retain the first occurrence, including older duplicates. Never merge by title/artist. Unknown paths
   are not imports; deletion/reorder edits and SoundBox-removal conflicts fail
   closed. Rockbox may serialize primary-volume entries as `/<HDD0>/...`; strip
   only that exact leading HDD0 token before schema-3 ownership lookup and
@@ -1117,12 +1133,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Deleting the last managed track can expose directory AppleDouble clutter.**
   Scrubbing only `._filename` for transaction payload paths misses Finder's
   `._Artist` directory sidecars after the real tree becomes empty. Composite
-  planning treats every regular `._*`/`*.sbpart` below `/Music` or `/Playlists`
-  as a verified transient orphan, permits a cleanup-only empty-library plan,
+  Repair (or journal-backed interrupted recovery) treats regular `._*`/`*.sbpart`
+  below `/Music` or `/Playlists` as verified transient orphans, permits a cleanup-only empty-library plan,
   and removes empty child directories only after the manifest-last commit.
   Do not use `._*` presence as drift: Finder can recreate those files as soon
   as a clean export finishes, creating a permanent false Sync-needed loop.
-  Only an abandoned `*.sbpart` independently indicates an interrupted write.
+  Normal Sync/polling does not walk the media trees for these files. Recovery
+  journals signal interrupted work; explicit Verify/Repair finds unjournaled
+  `*.sbpart` files.
 - **Rockbox WAV titles are RIFF INFO, not ID3-in-WAV.** Its WAV metadata parser
   reads `LIST/INFO` `INAM` and `IART`. Mutagen's normal WAVE tag writer creates
   an ID3 chunk that Rockbox ignores, causing a shared `ABCD.wav` to display its
@@ -1237,8 +1255,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   adopt only freshly planned path/size/SHA-256 matches. Persist each completed
   full-hash proof in Mac-side disposable state and recheck its size, timestamp,
   and edge fingerprint so repeated USB resets resume verification rather than
-  rereading all prior survivors. The UI must report the preserved baseline and
-  verified-resume state, not imply that rollback necessarily removed new files.
+  rereading all prior survivors. The UI uses recorded transaction outcomes; an
+  incomplete rollback must retain recovery and must never claim that all new
+  files were removed. Unknown outcomes must not claim no device writes.
 - **A filesystem-browser confirmation grants authority to one mounted volume,
   not a reusable path string.** Pin before showing rename/new-folder/artist/delete
   input, carry that session into a delete worker, require all selected items to
@@ -1293,10 +1312,23 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 
 ## Sync performance and cloud source proofs
 
+- A waking SeaDrive File Provider can return ENEEDAUTH (errno 81) before its
+  account registration completes, even when the account/server works. macOS
+  CloudStorage reads get two cancellable three-second waits, reopening and
+  hashing/capturing from zero each time. Partial snapshots are discarded;
+  EAUTH, permission errors, non-cloud sources and exhausted retries still fail.
+  The budget does not extend the one retry for unstable completed captures,
+  nor impose a deadline on a blocked OS read. Never keep Finder open as an
+  application dependency or refresh ctime proofs without exact-byte evidence.
+- Composite source failures during preflight carry their path and a no-device-
+  writes outcome. Only actual transaction evidence may describe rollback or
+  committed cleanup; cancellation retains its typed result.
 - A successful cloud read is not a durable source timestamp. A long composite
-  plan can outlive hydration/eviction metadata changes. Reprove exact bytes
-  before accepting new timestamps, both during planning and commit preflight;
-  never just replace the stat baseline after an unverified change.
+  plan can outlive hydration/eviction metadata changes. Normal composite Sync
+  retains an unchanged committed contract across ctime-only drift without
+  claiming a new proof. When new/relocated/changed sources need fresh evidence,
+  reprove exact bytes before accepting new timestamps; never replace the proof
+  baseline after an unverified change.
 - Completed relocation/dedup hashes persist individually under Rockbox staging
   `source-verification-v1/`, so a later error does not erase all progress. Every
   reuse checks canonical path, filesystem/inode, size, mtime, and ctime. This
@@ -1304,7 +1336,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   destination verification. Staging cleanup deliberately preserves it.
 - Stock format probes can hydrate cloud placeholders. A verified planned
   derivative matching a managed stock payload's size/hash already has a known
-  compatibility result; retain the independent DBID/path/live-size audit.
+  compatibility result; retain independent DBID/path identity checks and live
+  size checks for affected paths or explicit Repair. Unchanged normal-Sync
+  inventory does not need thousands of per-file USB metadata reads.
   Unproven/changed sources are inspected once per canonical source per plan.
 - Batch the initial multi-playlist drop as well as jobs queued behind it.
   Generic exports coalesce contiguous jobs for one target and scale unique-file
@@ -1337,9 +1371,14 @@ header changes alone must not manufacture a Sync requirement.
 The bounded composite drift poll treats source size/mtime changes as Sync-needed
 hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
 can change ctime immediately after a successful commit. This UI status is not a
-content-integrity certificate. Source proofs/receipts still include ctime, and
-explicit planning/acquisition retain exact-byte verification; no stored proof or
-manifest baseline is refreshed merely to clear the badge.
+content-integrity certificate. Source proofs/receipts still include ctime.
+Normal composite Sync also retains unchanged committed contracts across
+ctime-only drift, without renewing their
+original proof or manifest timestamps. New/relocated/changed sources and actual
+payload acquisition retain exact-byte verification. Verify checks device
+references/sizes; Deep Verify also hashes managed files; Repair explicitly audits
+inventory and restores missing owned Rockbox payloads/art. None of these modes
+turns a clean badge into a fresh source-content integrity certificate.
 
 Post-sync polling is held through the completion dialog only. Dismissal releases
 the hold so subsequent SoundBox edits can update drift without reconnecting.
@@ -1376,3 +1415,11 @@ The coordinator serializes the active device lane; its tested queue API is not
 yet the queue used by desktop adapters. See the prioritized
 [software audit](software-audit-2026-09.md) and [roadmap](ROADMAP.md) before
 expanding lifecycle or persistence claims.
+
+Identical library saves may skip publication only with matching persisted bytes
+and filesystem identity under the existing state lock/generation guard. Deletion,
+replacement and restore invalidate reuse. Zoom/jump/display/autoplay preferences
+coalesce for 400 ms; curation, backup/restore and shutdown still flush immediately.
+Stock-art preparation receipts are metadata-only scheduling hints; selected sync
+continues checking payload hashes. Deleted/changed derivatives invalidate receipts.
+Never pace unchanged art with per-image sleeps.

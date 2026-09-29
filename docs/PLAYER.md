@@ -334,9 +334,9 @@ use an existing valid cache, and explicit forced reanalysis may hydrate audio.
 Playlist-only removals retain analysis because the track remains active in
 Collection or other playlists. No cleanup touches source audio or read-only
 Rekordbox analysis.
-The recurring scan also detects the narrow late-Rekordbox case without polling
-all ANLZ waveform bytes: a fully imported display mode stays on the small-
-manifest path, while a mode whose provenance still says `soundbox-analysis`
+The recurring scan also detects the narrow late-Rekordbox case when sidecar
+identities change (with a bounded fallback retry), without polling all ANLZ bytes.
+A fully imported display mode stays on the small-manifest path, while a mode whose provenance still says `soundbox-analysis`
 may probe its current read-only PWV3/PWV5/PWV7 payload. A newly valid stream
 queues only that track for a normal atomic recook. The browser's per-track
 **Reanalyze Track** action remains the explicit recovery path and deliberately
@@ -407,11 +407,13 @@ The background `WaveformFillWorker`:
 - scans the library incrementally;
 - starts for both newly detected rekordbox tracks and direct SoundBox imports,
   then rechecks source identities every 60 seconds after the preceding pass
-  completes; the recurring scan normally reads only source stats and small
-  manifests. A Rekordbox-backed mode still marked as a SoundBox fallback also
-  receives a targeted read-only ANLZ probe, so a late PWV stream or source
-  tag/container rewrite recooks only its stale track and never waits for that
-  track to be loaded;
+  completes. Disposable `preparation-index.json` receipts bind source/cache and
+  DAT/EXT/2EX identities, cue inputs, BPM and analysis policies. Unchanged entries
+  need stats only; changed entries share one manifest-header read. A 30-minute
+  fallback retries silent sidecar parse failures. Late sidecars invalidate their
+  track's receipt, allowing a targeted read-only probe for fallback modes and
+  recooking only that track. Forced reanalysis bypasses receipts; player section
+  validation and source-identity proof requirements remain independent;
 - keeps the currently loaded track in a persistent foreground-critical lane;
   that track bypasses playback, interaction, Low Power Mode, and bulk battery
   deferral, and its completed canonical color/detail hot-loads into the deck;

@@ -32,7 +32,7 @@ from . import rockbox_config
 from . import sync as sync_mod
 from .library import Library, Playlist
 from .transaction_outcome import record_outcome
-from .operation_control import checkpoint, CommittedOperationError
+from .operation_control import checkpoint, CommittedOperationError, OperationCancelled, record_metric
 from .rockbox_media import (
     InterruptedFileVerifier,
     NORMALIZED_MEDIA_PROFILE,
@@ -42,6 +42,7 @@ from .rockbox_media import (
     RockboxMediaCache,
 )
 from .source_verification import SourceVerificationCache
+from .source_read_retry import source_read_error
 from .stock_artwork import StockArtworkCache
 from .stock_ipod_shadow import StockIpodShadowStore
 from .stock_ipod import (
@@ -161,28 +162,21 @@ def _rockbox_interrupted_writes(root: Path) -> tuple[DualOrphanDelete, ...]:
     )
 
 
-def _clean_empty_rockbox_dirs(session: sync_mod.DeviceSession) -> int:
-    """Best-effort removal of empty directories below /Music and /Playlists."""
+def _clean_empty_rockbox_dirs(
+        session: sync_mod.DeviceSession, removed_paths: set[Path]) -> int:
+    """Prune only deleted files' ancestors; never walk unrelated media trees."""
+    directories = {
+        parent for path in removed_paths for parent in path.parents
+        if len(parent.parts) > 1 and parent.parts[0] in {"Music", "Playlists"}
+    }
     removed = 0
-    for name in ("Music", "Playlists"):
-        base = session.guard(Path(name))
-        if not base.is_dir() or base.is_symlink():
-            continue
+    for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
         try:
-            directories = sorted(
-                (path for path in base.rglob("*")
-                 if path.is_dir() and not path.is_symlink()),
-                key=lambda path: len(path.parts),
-                reverse=True,
-            )
+            session.guard(directory).rmdir()
+            removed += 1
         except OSError:
+            # Nonempty, missing or symlink directories are never removed.
             continue
-        for directory in directories:
-            try:
-                session.guard(directory.relative_to(session.target)).rmdir()
-                removed += 1
-            except OSError:
-                continue
     return removed
 
 
@@ -535,6 +529,7 @@ def composite_device_drift(
     *,
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
+    audit_existing: bool = False,
 ) -> legacy_manifest.Drift | None:
     """Diff schema-3 ownership against the currently exportable Rockbox view."""
     root = Path(target)
@@ -545,7 +540,8 @@ def composite_device_drift(
     interrupted_recovery = _matching_interrupted_recovery(
         root, manifest, manifest_sha256, {})
     if not manifest.get("playlists"):
-        if interrupted_recovery is not None or _rockbox_interrupted_writes(root):
+        if interrupted_recovery is not None or (
+                audit_existing and _rockbox_interrupted_writes(root)):
             drift = legacy_manifest.Drift()
             drift.changed.append((
                 "interrupted-transaction",
@@ -659,7 +655,7 @@ def composite_device_drift(
             "interrupted-transaction",
             "Interrupted iPod sync recovery",
         ))
-    if _rockbox_interrupted_writes(root):
+    if audit_existing and _rockbox_interrupted_writes(root):
         drift.changed.append(("rockbox-clutter", "Rockbox cleanup"))
     return drift
 
@@ -1018,7 +1014,9 @@ def _merge_recognized_rockbox_additions(
 
 def _unique_playlist_tracks(library: Library, keys: list[str],
                             hashes: dict[Path, str],
-                            verifier: SourceVerificationCache) -> list[str]:
+                            verifier: SourceVerificationCache,
+                            committed_media: dict[str, dict[str, Any]] | None = None,
+                            ) -> list[str]:
     """Keep first identity/source/byte-identical file; never match display tags."""
     output: list[str] = []
     seen_ids: set[str] = set()
@@ -1041,7 +1039,19 @@ def _unique_playlist_tracks(library: Library, keys: list[str],
                 for previous in candidates:
                     for source in (previous, path):
                         if source not in hashes:
-                            hashes[source] = verifier.verify(source, _sha256)[0]
+                            row = (committed_media or {}).get(str(source), {})
+                            digest = str(row.get("source_sha256") or "")
+                            stat = source.stat()
+                            if (row.get("source") == str(source)
+                                    and row.get("source_sha256_verified") is True
+                                    and row.get("source_size") == stat.st_size
+                                    and row.get("source_mtime_ns") == stat.st_mtime_ns
+                                    and len(digest) == 64
+                                    and all(c in "0123456789abcdef" for c in digest)):
+                                hashes[source] = digest
+                                record_metric("manifest_dedup_hash_reuses")
+                            else:
+                                hashes[source] = verifier.verify(source, _sha256)[0]
                     if hashes[previous] == hashes[path]:
                         duplicate = True
                         break
@@ -1530,8 +1540,14 @@ def plan_dual_ipod_sync(
     on_progress: Callable[[int, int, str], None] | None = None,
     expected_playlist_rows: dict[str, dict[str, Any]] | None = None,
     adoptable_playlist_keys: set[str] | None = None,
+    audit_existing: bool = True,
 ) -> DualIpodSyncPlan:
-    """Build an exact, no-target-write composite plan."""
+    """Build a no-target-write composite plan.
+
+    Desktop Sync sets audit_existing=False to retain unchanged committed
+    source/device inventory. Explicit Repair uses the conservative default.
+    Changed destinations and acquired payloads keep exact transaction checks.
+    """
     started = time.monotonic()
     phase_started = started
 
@@ -1553,6 +1569,7 @@ def plan_dual_ipod_sync(
         raise DualIpodError("Select at least one playlist for dual-boot sync")
     existing_manifest, existing_payload, manifest_hash_before = (
         _read_existing_manifest(root))
+    trust_inventory = existing_manifest is not None and not audit_existing
     interrupted_recovery_hint = _matching_interrupted_recovery(
         root, existing_manifest, manifest_hash_before, {})
     interrupted_verifier = (
@@ -1592,13 +1609,22 @@ def plan_dual_ipod_sync(
         )
     playlist_updates: list[DualPlaylistUpdate] = []
     hashes: dict[Path, str] = {}
+    committed_dedup = {
+        str(row["source"]): row
+        for row in ((existing_manifest or {}).get("files") or {}).values()
+        if (trust_inventory and isinstance(row, dict)
+            and row.get("kind") in {"shared-stock-media", "rockbox-media"}
+            and row.get("owned") is True
+            and row.get("source") not in relocated_sources)
+    }
     selected_keys = {legacy_manifest.playlist_key(p) for p in selected}
     for playlist in combined:
         identity = legacy_manifest.playlist_key(playlist)
         if (identity not in (adoptable_playlist_keys or set())
                 or identity not in selected_keys):
             continue
-        playlist.keys = _unique_playlist_tracks(library, playlist.keys, hashes, source_verifier)
+        playlist.keys = _unique_playlist_tracks(
+            library, playlist.keys, hashes, source_verifier, committed_dedup)
         membership_before = before_membership[identity]
         if tuple(playlist.keys) != membership_before:
             playlist_updates.append(DualPlaylistUpdate(
@@ -1711,28 +1737,29 @@ def plan_dual_ipod_sync(
         committed = prior[1] if prior is not None else None
         source_stat = source.stat()
         source_baseline_changed = committed is not None and (
-            source_stat.st_size, source_stat.st_mtime_ns, source_stat.st_ctime_ns
-        ) != (committed.get("source_size"), committed.get("source_mtime_ns"),
-              committed.get("source_ctime_ns"))
+            (source_stat.st_size, source_stat.st_mtime_ns)
+            != (committed.get("source_size"), committed.get("source_mtime_ns"))
+            or (audit_existing and source_stat.st_ctime_ns != committed.get("source_ctime_ns")))
         if (committed is not None
                 and (str(source) in relocated_sources or source_baseline_changed)
                 and committed.get("media_profile") == NORMALIZED_MEDIA_PROFILE
                 and committed.get("source_sha256_verified")
                 and committed.get("title") == display_by_source[source][0]
                 and committed.get("artist") == display_by_source[source][1]):
-            # Moves and cloud hydration change ctime. Prove the bytes before
+            # Moves or size/mtime changes require evidence. Prove bytes before
             # refreshing that stat baseline and reusing the old derivative.
             try:
                 source_stat = source.stat()
                 source_digest = ""
                 if source_stat.st_size == committed.get("source_size"):
                     source_digest, source_stat = source_verifier.verify(source, _sha256)
+            except OperationCancelled:
+                raise
             except RuntimeError as exc:
                 raise DualIpodError(str(exc)) from exc
             except OSError as exc:
                 raise DualIpodError(
-                    f"Cannot read relocated source: {source}\n{exc}\n"
-                    "Make the source file available locally, then retry Sync.") from exc
+                    source_read_error(source, exc)) from exc
             if source_digest == committed.get("source_sha256"):
                 committed = {**committed,
                              "source_mtime_ns": source_stat.st_mtime_ns,
@@ -1742,7 +1769,10 @@ def plan_dual_ipod_sync(
             title=display_by_source[source][0],
             artist=display_by_source[source][1],
             committed=committed,
+            retain_metadata_only_drift=trust_inventory and str(source) not in relocated_sources,
         )
+        if planned_media[source].retained_from_manifest:
+            record_metric("retained_manifest_sources")
         planning_done += 1
         emit_planning(source.name)
         now = time.monotonic()
@@ -1822,6 +1852,7 @@ def plan_dual_ipod_sync(
         allow_interrupted_media_adoption=(
             interrupted_recovery_hint is not None),
         interrupted_file_verifier=interrupted_verifier,
+        trust_managed_inventory=trust_inventory,
     )
     planning_done += 1
     emit_planning("Stock library")
@@ -1898,7 +1929,10 @@ def plan_dual_ipod_sync(
             if not bool(prior[1].get("owned", False)):
                 raise DualIpodError(
                     f"Refusing to replace unowned device file: {prior[0]}")
-            if _owned_path_missing(planning_session, relative):
+            if (trust_inventory and prior[1].get("size") == media_plan.payload_size
+                    and prior[1].get("sha256") == payload_hash):
+                record_metric("retained_device_media")
+            elif _owned_path_missing(planning_session, relative):
                 media_copies.append(DualFileCopy(
                     payload_source, relative, media_plan.payload_size,
                     payload_hash, "rockbox-media", media_plan))
@@ -2012,7 +2046,10 @@ def plan_dual_ipod_sync(
                     except (TypeError, ValueError):
                         size_before = -1
                     hash_before = str(previous.get("sha256") or "")
-                    if _owned_path_missing(planning_session, relative):
+                    if (trust_inventory and size_before == image.size
+                            and hash_before == image.sha256):
+                        record_metric("retained_device_artwork")
+                    elif _owned_path_missing(planning_session, relative):
                         image = rockbox_art_cache.prepare(
                             canonical_art, side=side, verify_cache=True)
                         artwork_copies.append(DualFileCopy(
@@ -2184,10 +2221,11 @@ def plan_dual_ipod_sync(
         retained_stale += 1
 
     planned_orphan_paths = {item.relative_path for item in orphan_deletes}
-    orphan_deletes.extend(
-        item for item in _rockbox_clutter(root)
-        if item.relative_path not in planned_orphan_paths
-    )
+    if audit_existing or interrupted_recovery_hint is not None:
+        orphan_deletes.extend(
+            item for item in _rockbox_clutter(root)
+            if item.relative_path not in planned_orphan_paths
+        )
 
     planned_shared_cleanup = {
         item.relative_path for item in orphan_deletes
@@ -2306,7 +2344,13 @@ def _refresh_commit_source_baselines(plan: DualIpodSyncPlan) -> DualIpodSyncPlan
     refreshed: dict[Path, PlannedRockboxMedia] = {}
     for media in plan.media_plans:
         try:
-            RockboxMediaCache.verify_source_stat(media)
+            RockboxMediaCache.verify_source_stat(
+                media, allow_ctime_drift=media.retained_from_manifest)
+            if media.retained_from_manifest:
+                # A retained destination needs no new source-content proof.
+                # Keep its original hash/ctime evidence; only size/mtime/path
+                # drift can require a fresh source decision in ordinary Sync.
+                record_metric("retained_source_preflight_skips")
         except RockboxMediaError:
             try:
                 if (not media.source_sha256_verified
@@ -2321,7 +2365,11 @@ def _refresh_commit_source_baselines(plan: DualIpodSyncPlan) -> DualIpodSyncPlan
                 refreshed[media.source] = replace(
                     media, source_mtime_ns=stat.st_mtime_ns,
                     source_ctime_ns=stat.st_ctime_ns)
-            except (OSError, RuntimeError) as exc:
+            except OSError as exc:
+                raise DualIpodError(source_read_error(media.source, exc)) from exc
+            except OperationCancelled:
+                raise
+            except RuntimeError as exc:
                 raise DualIpodError(str(exc)) from exc
     if not refreshed:
         return plan
@@ -2904,7 +2952,10 @@ def commit_dual_ipod_sync(
             manifest_path.relative_to(plan.target),
         }
         _clean_exact_appledouble(session, written_paths)
-        _clean_empty_rockbox_dirs(session)
+        _clean_empty_rockbox_dirs(
+            session,
+            {item.relative_path for item in plan.orphan_deletes}
+            | {item.relative_path for item in plan.file_deletes})
         cleanup_failures: list[str] = list(stock_result.cleanup_failures)
         transient_media = [
             session.guard(

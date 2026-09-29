@@ -5,7 +5,64 @@ starting another live planner, or reading device media. Validation uses small,
 synthetic devices. See `HANDOFF.md` for the installed build and remaining live
 acceptance; source tests are not a device throughput benchmark.
 
-## Evidence
+## September 28: ordinary Sync trusts committed inventory
+
+Sonny confirmed that SoundBox exclusively manages this iPod's music. The
+expected external edit is a Rockbox append of an already-owned song to a
+playlist. The desktop therefore uses incremental composite Sync by default:
+
+- Read the committed manifest, database identity and small playlist baselines;
+  reconcile library metadata and exact-prefix-proven custom playlist additions.
+- Retain unchanged device media/art without per-file USB stats or media tree
+  walks. Changed/deleted/new destinations retain their live safety checks.
+- Reuse a committed source contract when canonical path, size/mtime, display and
+  media policy match. ctime-only churn does not trigger hashes, for local and
+  cloud sources alike. Original proof timestamps remain unchanged; this is a
+  historical contract, not a newly verified source digest. Actual captures and
+  copies still verify exact source/output bytes. New, relocated and changed
+  sources continue through the verified preparation path.
+- Deduplicate already-owned custom playlist sources from their matching
+  committed hashes. Broad clutter discovery belongs to explicit Repair or
+  journal-backed interrupted recovery. Post-delete empty-directory cleanup
+  visits only ancestors of deleted paths, never unrelated media trees.
+
+Verify explicitly checks device references/sizes; Deep Verify also hashes
+managed files. Both now read the actual schema-3 file inventory (the older
+reader silently stripped it). Repair audits inventory and restores absent
+owned Rockbox media/art, with guarded vacancy and transaction rollback. Existing
+unexpected/corrupt occupants fail closed; Repair is not a promise to overwrite
+all corruption. Unjournaled `.sbpart` discovery belongs to Verify/Repair;
+normal polling still reports manifest-bound interrupted recovery journals.
+The lower-level planner retains conservative auditing by default; desktop normal
+Sync/drop opts into inventory reuse, and the explicit Repair action selects the
+audit path. Generic/stock-only exporters keep their existing policies.
+
+The preceding installed build's generation-61 Sync took **934.45 seconds planning
+and 980.03 seconds committing**, reading **40.42 GB** of canonical audio while
+writing **60.03 MB** to the device. That observed run explains why reducing USB
+writes alone could not fix the delay. Readiness-only build 115's Finder-closed
+generation 62 then completed in **994.57 + 948.26 seconds**, reading **40.75 GB**
+to write **74.09 MB**. Its two changed sources were each processed once, not once
+per firmware. This is the repeated-read baseline; the incremental build was
+installed afterward at 21:58, with exact provenance in the handoff.
+
+New synthetic regressions forbid source/audio reads and unchanged device
+media/art stats or directory scans during a no-op, one-title edit and adoption
+of an already-owned playlist song. They also cover local ctime churn, retained
+manifest dedup, explicit missing-file repair and same-size corruption detected
+only by Deep Verify. These are I/O behavior assertions, not a hardware timing
+claim. The first installed one-title test subsequently committed generation 63
+at 22:03:20: **18.30 s planning + 8.46 s commit = 26.76 s**, with **69,562,392
+canonical bytes read**, **34,781,296 device bytes written**, 2880 retained sources
+and media files, 14,405 retained art files, and zero source-proof rehashes.
+Only the edited AYY0G WAV was acquired once per phase. Final dashboard inspection
+took another 1.883 s. The prior run changed two tracks and this run changed one,
+so the observed roughly 73× elapsed improvement is not a matched workload
+benchmark; the counters directly establish elimination of unchanged-source
+rehashing. No-op, playlist-only and other acceptance gates remain open. See
+[HANDOFF.md](HANDOFF.md).
+
+## September 26 historical evidence
 
 - The mounted schema-3 baseline contained 2,884 media records, representing
   111.66 GB of canonical sources. Every record already used the current
@@ -23,7 +80,7 @@ acceptance; source tests are not a device throughput benchmark.
   custom membership can already have been saved at this boundary, so preserve
   the latest `library.json`; do not restore the old pre-sync copy.
 
-## Changes and their bounds
+## September 26 changes and their bounds
 
 | Path | Previous cost/behavior | Revised behavior |
 | --- | --- | --- |
@@ -42,7 +99,7 @@ their existing authority. Timestamp refresh never accepts different source
 bytes. A continuing change fails closed, and refreshed commit plans are copies
 of the caller's original plan.
 
-## Costs that remain deliberate or need separate measurement
+## September 26 remaining costs (historical baseline)
 
 - New/changed media still produces a verified disposable derivative during
   planning, discards it, and rematerializes one track at a time during commit.

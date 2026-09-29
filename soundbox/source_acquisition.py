@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from .operation_control import checkpoint, phase_progress, record_metric
+from .source_read_retry import ProviderReadRetry, source_read_error
 
 LOG = logging.getLogger("soundbox")
 
@@ -61,6 +62,8 @@ def acquire_source(
     started = time.monotonic()
     total_read = 0
     attempts = 0
+    unstable_captures = 0
+    readiness = ProviderReadRetry()
     with tempfile.TemporaryDirectory(prefix="source-", dir=root) as directory:
         local = Path(directory) / canonical.name
         while True:
@@ -103,7 +106,11 @@ def acquire_source(
                     closed = os.fstat(source.fileno())
                 after = canonical.stat()
             except OSError as exc:
-                raise SourceAcquisitionError(f"Cannot acquire {canonical}: {exc}") from exc
+                local.unlink(missing_ok=True)
+                if readiness.wait_after(exc, canonical, should_cancel=should_cancel):
+                    # The next attempt recreates both snapshot and digest.
+                    continue
+                raise SourceAcquisitionError(source_read_error(canonical, exc)) from exc
             value = digest.hexdigest()
             if contract.sha256 is not None:
                 if size != expected_size or value != contract.sha256:
@@ -115,9 +122,9 @@ def acquire_source(
                       and size == expected_size)
             if stable:
                 break
-            if attempts >= 2:
+            unstable_captures += 1
+            if unstable_captures >= 2:
                 raise SourceAcquisitionError(f"Source remained unstable during acquisition: {canonical}")
         LOG.info("Source acquisition: %s bytes=%d attempts=%d seconds=%.3f peak_snapshot=%d",
                  canonical.name, total_read, attempts, time.monotonic() - started, size)
         yield SourceSnapshot(contract, local, size, value, after)
-

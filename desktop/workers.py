@@ -263,6 +263,7 @@ class DeviceScanWorker(QThread):
         self.mount_tokens: dict[str, int] = {}
         self.new_paths: tuple[str, ...] = ()
         self.results: list = []
+        self.retry_discovery = True
 
     def _effective_profile(self, path: str, profile):
         """Apply a remembered stock model off the UI thread."""
@@ -283,7 +284,9 @@ class DeviceScanWorker(QThread):
 
     def run(self):
         started = time.monotonic()
+        from .devices import discovery_needs_retry
         devices = list_devices()
+        self.retry_discovery = discovery_needs_retry()
         verified_devices = []
         for name, path, free in devices:
             try:
@@ -294,6 +297,7 @@ class DeviceScanWorker(QThread):
             if (known_token and self.mount_tokens[path]
                     and self.mount_tokens[path] != known_token):
                 if not refresh_device_mount(path):
+                    self.retry_discovery = True
                     continue
             verified_devices.append((name, path, free))
         devices = verified_devices
@@ -554,24 +558,30 @@ class StockArtworkPrepWorker(QThread):
 
         total = len(images)
         LOG.info("Stock artwork preparation: %d curated image(s)", total)
-        prepared = failed = 0
+        prepared = failed = reused = 0
         for index, image in enumerate(images, 1):
-            self._wait_for_playback()
             if self._stop:
                 break
             try:
+                if self.stock_cache.is_prepared(image):
+                    reused += 1
+                    continue
+                self._wait_for_playback()
+                if self._stop:
+                    break
+                before = self.stock_cache.preparation_signature(image)
                 # The low-priority whole-library pass validates manifests and
                 # exact payload sizes. A stock sync rehashes/rebuilds the small
                 # selected set before it can enter a device plan.
                 self.stock_cache.prepare(
                     image, verify_cache=False, save_index=False)
+                self.stock_cache.remember_prepared(image, before)
                 prepared += 1
             except Exception as exc:  # noqa: BLE001 — one bad JPEG cannot end the pass
                 failed += 1
                 if failed <= 3:
                     LOG.warning("Stock artwork preparation failed for %s: %s", image, exc)
             self.progress.emit(index, total)
-            time.sleep(0.01)
         try:
             # One atomic index publication per batch keeps a full-library warm
             # pass O(n), instead of rewriting a growing JSON file for every song.
@@ -579,8 +589,8 @@ class StockArtworkPrepWorker(QThread):
         except Exception as exc:  # noqa: BLE001 — derivatives remain disposable
             LOG.warning("Stock artwork source index could not be saved: %s", exc)
         LOG.info(
-            "Stock artwork preparation ended: %d ready, %d failed",
-            prepared, failed,
+            "Stock artwork preparation ended: %d checked/prepared, %d reused, %d failed",
+            prepared, reused, failed,
         )
 
 
@@ -827,6 +837,15 @@ class WaveformFillWorker(QThread):
             with_imported_cues,
         )
         from .player import qt_detail_peaks
+        from soundbox import track_analysis as analysis
+        from soundbox.preparation_inventory import PreparationInventory, signature
+        inventory = (PreparationInventory(Path(self.track_analysis_dir) / 'preparation-index.json')
+                     if self.track_analysis_dir else None)
+        policy = [1, int(time.time() // 1800), analysis.SCHEMA, analysis.COLOR_MODEL, analysis.WAVEFORM_MODEL,
+                  analysis.THREE_BAND_MODEL, analysis.DISPLAY_WAVEFORM_MODEL,
+                  analysis.HEIGHT_ENCODING, analysis.RANGE_ENCODING,
+                  analysis.RANGE_MIP_ENCODING, analysis.RANGE_MIP_DIVISORS]
+        reused = 0
         hidden = {
             str(value)
             for value in (getattr(self.lib, "hidden_ids", ()) or ())
@@ -843,95 +862,122 @@ class WaveformFillWorker(QThread):
         ] = []
         adopted_identities = 0
         for t in self.lib.tracks_by_id.values():
+            if self.isInterruptionRequested():
+                break
             try:
-                track_id = str(t.track_id)
-                if track_id in hidden:
-                    continue
-                analysis_path = getattr(t, "source_analysis_path", "")
-                source_cues = getattr(t, "source_cues", None)
-                audio_path = str(t.path) if t.path.is_file() else ""
-                try:
-                    bpm_hint = float(getattr(t, "bpm", 0) or 0)
-                except (TypeError, ValueError):
-                    bpm_hint = 0.0
-                if (self.track_analysis_dir and audio_path
-                        and track_id in self.force_track_ids):
-                    # A user-requested recook deliberately bypasses the cheap
-                    # ready-manifest check. Keep the old playable record in
-                    # place until track_store atomically publishes a verified
-                    # replacement; never invalidate first.
-                    todo.append((
-                        "v5", audio_path, str(analysis_path or ""),
-                        track_id, bpm_hint, source_cues, None))
-                    continue
-                if self.track_analysis_dir and audio_path:
-                    ready = track_is_ready(
-                        self.track_analysis_dir, track_id, audio_path)
-                    dataless = is_dataless_source(audio_path)
-                    if (not ready and not dataless and adopt_source_identity(
-                            self.track_analysis_dir, track_id, audio_path)):
-                        ready = True
-                        adopted_identities += 1
-                    if not ready:
-                        # A File Provider placeholder may have changed logical
-                        # size while offline. Do not turn a periodic cache
-                        # check into an implicit cloud download; playback,
-                        # export, or an explicit forced recook is the hydration
-                        # boundary.
-                        if dataless:
-                            continue
-                        legacy = legacy_cache_path(
-                            self.track_analysis_dir, track_id)
-                        todo.append((
-                            "v4-migrate" if legacy.is_file() else "v5",
-                            audio_path, str(analysis_path or ""),
-                            track_id, bpm_hint, source_cues, None))
+                with analysis.manifest_probe():
+                    track_id = str(t.track_id)
+                    if track_id in hidden:
                         continue
-                fallback_modes = (
-                    fallback_waveform_modes(
-                        self.track_analysis_dir, track_id, audio_path)
-                    if self.track_analysis_dir and audio_path and not dataless
-                    and analysis_path and Path(analysis_path).is_file()
-                    else ()
-                )
-                if fallback_modes:
-                    current_import = read_analysis(analysis_path)
-                    if imported_waveforms_need_sync(
-                            fallback_modes, current_import):
-                        # Rekordbox can publish EXT/2EX after SoundBox's first
-                        # cook. Only a cache still using a fallback reaches
-                        # this read-only probe; a newly valid stream promotes
-                        # the track through the ordinary atomic V5 recook.
+                    analysis_path = getattr(t, "source_analysis_path", "")
+                    source_cues = getattr(t, "source_cues", None)
+                    paths = [t.path]
+                    if self.track_analysis_dir:
+                        paths += [analysis.cache_path(self.track_analysis_dir, track_id),
+                                  analysis.legacy_cache_path(self.track_analysis_dir, track_id)]
+                    if analysis_path:
+                        dat = Path(analysis_path)
+                        paths += [dat, dat.with_suffix('.EXT'), dat.with_suffix('.2EX')]
+                    inputs = [policy, source_cues, getattr(t, 'bpm', '')]
+                    before = signature(paths, inputs)
+                    if (inventory is not None and track_id not in self.force_track_ids
+                            and inventory.matches(track_id, before)):
+                        reused += 1
+                        continue
+                    audio_path = str(t.path) if t.path.is_file() else ""
+                    ready = dataless = False
+                    try:
+                        bpm_hint = float(getattr(t, "bpm", 0) or 0)
+                    except (TypeError, ValueError):
+                        bpm_hint = 0.0
+                    if (self.track_analysis_dir and audio_path
+                            and track_id in self.force_track_ids):
+                        # A user-requested recook deliberately bypasses the cheap
+                        # ready-manifest check. Keep the old playable record in
+                        # place until track_store atomically publishes a verified
+                        # replacement; never invalidate first.
                         todo.append((
                             "v5", audio_path, str(analysis_path or ""),
                             track_id, bpm_hint, source_cues, None))
                         continue
-                imported_beats = (
-                    read_beats(analysis_path)
-                    if analysis_path and Path(analysis_path).is_file()
-                    else None
-                )
-                grid_sync = bool(
-                    self.track_analysis_dir and audio_path
-                    and grid_needs_sync(
-                        self.track_analysis_dir, track_id, audio_path,
-                        imported_beats))
-                if grid_sync:
-                    todo.append((
-                        "grid-meta", audio_path, str(analysis_path or ""),
-                        track_id, bpm_hint, None, imported_beats))
-                if (self.track_analysis_dir and audio_path
-                        and imported_cues_need_sync(
+                    if self.track_analysis_dir and audio_path:
+                        ready = track_is_ready(
+                            self.track_analysis_dir, track_id, audio_path)
+                        dataless = is_dataless_source(audio_path)
+                        if (not ready and not dataless and adopt_source_identity(
+                                self.track_analysis_dir, track_id, audio_path)):
+                            analysis.reset_manifest_probe()
+                            ready = True
+                            adopted_identities += 1
+                        if not ready:
+                            # A File Provider placeholder may have changed logical
+                            # size while offline. Do not turn a periodic cache
+                            # check into an implicit cloud download; playback,
+                            # export, or an explicit forced recook is the hydration
+                            # boundary.
+                            if dataless:
+                                continue
+                            legacy = legacy_cache_path(
+                                self.track_analysis_dir, track_id)
+                            todo.append((
+                                "v4-migrate" if legacy.is_file() else "v5",
+                                audio_path, str(analysis_path or ""),
+                                track_id, bpm_hint, source_cues, None))
+                            continue
+                    fallback_modes = (
+                        fallback_waveform_modes(
+                            self.track_analysis_dir, track_id, audio_path)
+                        if self.track_analysis_dir and audio_path and not dataless
+                        and analysis_path and Path(analysis_path).is_file()
+                        else ()
+                    )
+                    if fallback_modes:
+                        current_import = read_analysis(analysis_path)
+                        if imported_waveforms_need_sync(
+                                fallback_modes, current_import):
+                            # Rekordbox can publish EXT/2EX after SoundBox's first
+                            # cook. Only a cache still using a fallback reaches
+                            # this read-only probe; a newly valid stream promotes
+                            # the track through the ordinary atomic V5 recook.
+                            todo.append((
+                                "v5", audio_path, str(analysis_path or ""),
+                                track_id, bpm_hint, source_cues, None))
+                            continue
+                    imported_beats = (
+                        read_beats(analysis_path)
+                        if analysis_path and Path(analysis_path).is_file()
+                        else None
+                    )
+                    grid_sync = bool(
+                        self.track_analysis_dir and audio_path
+                        and grid_needs_sync(
                             self.track_analysis_dir, track_id, audio_path,
-                            source_cues)):
-                    todo.append((
-                        "cue-meta", audio_path, "", track_id, 0.0,
-                        source_cues, None))
-                    continue
-                if grid_sync:
-                    continue
+                            imported_beats))
+                    if grid_sync:
+                        todo.append((
+                            "grid-meta", audio_path, str(analysis_path or ""),
+                            track_id, bpm_hint, None, imported_beats))
+                    if (self.track_analysis_dir and audio_path
+                            and imported_cues_need_sync(
+                                self.track_analysis_dir, track_id, audio_path,
+                                source_cues)):
+                        todo.append((
+                            "cue-meta", audio_path, "", track_id, 0.0,
+                            source_cues, None))
+                        continue
+                    if grid_sync:
+                        continue
+                    if inventory is not None and ready:
+                        inventory.remember(track_id, before, signature(paths, inputs))
             except OSError:
                 continue
+        if inventory is not None:
+            inventory.prune(str(tid) for tid in self.lib.tracks_by_id if str(tid) not in hidden)
+            try:
+                inventory.flush()
+            except OSError as exc:
+                LOG.warning("Analysis preparation inventory could not be saved: %s", exc)
+        LOG.info("Analysis discovery reused %d unchanged track(s)", reused)
         total = len(todo)
         self._bulk_task_count = total
         task_counts = {

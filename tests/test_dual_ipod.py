@@ -11,6 +11,9 @@ import tempfile
 import unittest
 from unittest import mock
 import wave
+from contextlib import contextmanager
+import builtins
+import io
 
 from PIL import Image
 
@@ -67,6 +70,48 @@ class _ArtCache:
 
 
 class DualIpodSyncTests(unittest.TestCase):
+    @contextmanager
+    def _forbid_device_inventory_reads(self, allowed=()):
+        roots = [str(self.ipod.absolute()), str(self.ipod.resolve())]
+        manifest = device_manifest.load_composite(self.ipod)
+        forbidden = {root + key for root in roots
+                     for key, row in manifest["files"].items()
+                     if row["kind"] in {"shared-stock-media", "rockbox-media", "rockbox-artwork"}}
+        forbidden.difference_update(root + key for root in roots for key in allowed)
+        music_roots = [root + suffix for root in roots
+                       for suffix in ("/Music", "/iPod_Control/Music")]
+
+        def guard(original, scanning=False):
+            def call(path, *args, **kwargs):
+                if isinstance(path, (str, os.PathLike)):
+                    value = os.path.abspath(path)
+                    if value in forbidden or (scanning and any(
+                            value == root or value.startswith(root + "/") for root in music_roots)):
+                        raise AssertionError(f"Unchanged device inventory was inspected: {path}")
+                return original(path, *args, **kwargs)
+            return call
+
+        with mock.patch("os.stat", guard(os.stat)), mock.patch("os.lstat", guard(os.lstat)), \
+                mock.patch("os.scandir", guard(os.scandir, scanning=True)):
+            yield
+
+    @contextmanager
+    def _forbid_audio_reads(self, paths):
+        forbidden = {p.resolve() for p in paths}
+
+        def guard(original):
+            def opening(file, mode="r", *args, **kwargs):
+                if isinstance(file, (str, os.PathLike)) and (
+                        "r" in mode or "+" in mode):
+                    if Path(file).resolve() in forbidden:
+                        raise AssertionError(f"Unchanged audio was opened: {file}")
+                return original(file, mode, *args, **kwargs)
+            return opening
+
+        with mock.patch("builtins.open", guard(builtins.open)), \
+                mock.patch("io.open", guard(io.open)):
+            yield
+
     def setUp(self):
         dual_pacer = mock.patch.object(dual_ipod, "_pace_classic_usb")
         stock_pacer = mock.patch.object(stock_ipod, "_pace_classic_usb")
@@ -596,6 +641,134 @@ class DualIpodSyncTests(unittest.TestCase):
         commit_dual_ipod_sync(plan)
         self.assertFalse(self._plan(reconcile=True).requires_commit)
 
+    def test_local_metadata_churn_keeps_manifest_and_never_opens_audio(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        before = (self.ipod / ".soundbox/manifest.json").read_bytes()
+        sources = (self.safe, self.unsafe)
+        media_paths = [self.ipod / key.lstrip("/")
+                       for key, row in manifest["files"].items()
+                       if row["kind"] in {"shared-stock-media", "rockbox-media"}]
+        for source in sources:
+            source.chmod(0o400)
+        with self._forbid_audio_reads([*sources, *media_paths]):
+            plan = self._plan(reconcile=True, audit_existing=False)
+            self.assertFalse(plan.requires_commit)
+            for source in sources:
+                source.chmod(0o600)
+            commit_dual_ipod_sync(plan)
+        self.assertEqual((self.ipod / ".soundbox/manifest.json").read_bytes(), before)
+
+    def test_normal_sync_and_poll_do_not_inspect_unchanged_device_inventory(self):
+        commit_dual_ipod_sync(self._plan())
+        with self._forbid_device_inventory_reads(), self._forbid_audio_reads([self.safe, self.unsafe]):
+            self.assertFalse(engine.device_drift(self.library, self.ipod).any())
+            plan = self._plan(reconcile=True, audit_existing=False)
+            self.assertFalse(plan.requires_commit)
+            commit_dual_ipod_sync(plan)
+
+    def test_custom_dedup_reuses_committed_hashes_without_reading_unchanged_sources(self):
+        other = self.sources / "different.wav"
+        _wave(other, 441, 1234)
+        self.library.tracks_by_id["other"] = Track("other", "Different", "Fixture", other.as_uri())
+        self.playlist.keys.append("other")
+        commit_dual_ipod_sync(self._plan())
+        for path in (self.safe, self.unsafe, other):
+            path.chmod(0o400)
+        with self._forbid_audio_reads([self.safe, self.unsafe, other]):
+            plan = self._plan(reconcile=True, audit_existing=False,
+                              adoptable_playlist_keys={"dual-test"})
+            self.assertFalse(plan.requires_commit)
+            self.assertFalse(plan.playlist_updates)
+
+    def test_incremental_preflight_still_refuses_changed_source_bytes(self):
+        commit_dual_ipod_sync(self._plan())
+        plan = self._plan(reconcile=True, audit_existing=False,
+                          title_overrides={"unsafe": "Changed"})
+        before = {p.relative_to(self.ipod): p.read_bytes()
+                  for p in self.ipod.rglob("*") if p.is_file()}
+        _wave(self.safe, 441, 101)
+        with self.assertRaisesRegex(DualIpodError, "source changed after dry-run"):
+            commit_dual_ipod_sync(plan)
+        self.assertEqual(before, {p.relative_to(self.ipod): p.read_bytes()
+                                 for p in self.ipod.rglob("*") if p.is_file()})
+
+    def test_missing_payload_is_reported_by_verify_and_planned_by_repair(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        path = next(self.ipod / key.lstrip("/") for key, row in manifest["files"].items()
+                    if row["kind"] == "rockbox-media")
+        path.unlink()
+        fast = self._plan(reconcile=True, audit_existing=False)
+        self.assertFalse(fast.requires_commit)
+        self.assertTrue(engine.verify_export(self.ipod)["managed_issues"])
+        repair = self._plan(reconcile=True, audit_existing=True)
+        self.assertEqual(len(repair.media_copies), 1)
+        commit_dual_ipod_sync(repair)
+        self.assertFalse(engine.verify_export(self.ipod, deep=True)["managed_issues"])
+
+    def test_deep_verify_checks_composite_bytes_while_sync_trusts_inventory(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        path = next(self.ipod / key.lstrip("/") for key, row in manifest["files"].items()
+                    if row["kind"] == "rockbox-media")
+        payload = path.read_bytes()
+        path.write_bytes(payload[:-1] + bytes([payload[-1] ^ 1]))
+        self.assertFalse(self._plan(reconcile=True, audit_existing=False).requires_commit)
+        self.assertFalse(engine.verify_export(self.ipod).get("managed_issues"))
+        self.assertTrue(any("checksum mismatch" in issue for issue in
+                            engine.verify_export(self.ipod, deep=True)["managed_issues"]))
+
+    def test_title_edit_never_reads_unaffected_local_audio_despite_metadata_churn(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        other = next((key, row) for key, row in manifest["files"].items()
+                     if row.get("source") == str(self.unsafe.resolve())
+                     and row["kind"] == "rockbox-media")
+        self.unsafe.chmod(0o400)
+        changed_paths = [key for key, row in manifest["files"].items()
+                         if row.get("source") == str(self.safe.resolve())]
+        with self._forbid_audio_reads([
+                self.unsafe, self.ipod / other[0].lstrip("/")]), \
+                self._forbid_device_inventory_reads(allowed=changed_paths):
+            plan = self._plan(reconcile=True, audit_existing=False,
+                              title_overrides={"safe": "Fixed title"})
+            self.assertEqual(len(plan.stock.rewrites), 1)
+            self.assertEqual(plan.progress_total, 1)
+            self.unsafe.chmod(0o600)
+            progress = []
+            commit_dual_ipod_sync(plan, on_progress=lambda done, total, _label:
+                                 progress.append((done, total)))
+            self.assertEqual(progress, [(0, 1), (1, 1)])
+        after = device_manifest.load_composite(self.ipod)
+        self.assertEqual(after["files"][other[0]], other[1])
+        with self._forbid_audio_reads([self.safe, self.unsafe]):
+            self.assertFalse(self._plan(
+                reconcile=True, audit_existing=False,
+                title_overrides={"safe": "Fixed title"}).requires_commit)
+
+    def test_fast_sync_adopts_existing_ipod_track_using_playlists_without_audio_reads(self):
+        self.playlist.keys = ["safe"]
+        other = Playlist("Other", [], ["unsafe"], pid="other")
+        self.library.playlists.append(other)
+        commit_dual_ipod_sync(self._plan([self.playlist, other]))
+        manifest = device_manifest.load_composite(self.ipod)
+        media = next(key for key, row in manifest["files"].items()
+                     if row["kind"] == "rockbox-media")
+        playlist_path = next(self.ipod / key.lstrip("/")
+                             for key, row in manifest["files"].items()
+                             if row["kind"] == "playlist" and row["source"] == "dual-test")
+        with playlist_path.open("a") as handle:
+            handle.write(media + "\n")
+        with self._forbid_device_inventory_reads(), self._forbid_audio_reads([self.safe, self.unsafe]):
+            plan = self._plan([self.playlist, other], reconcile=True, audit_existing=False,
+                              adoptable_playlist_keys={"dual-test"})
+            self.assertEqual(plan.playlist_additions[0].track_ids, ("unsafe",))
+            self.assertFalse(plan.media_copies or plan.stock.copies or plan.stock.rewrites)
+            self.playlist.keys.append("unsafe")  # app-side publication precedes commit
+            commit_dual_ipod_sync(plan)
+        self.assertIn(media, playlist_path.read_text())
+
     def test_eviction_between_media_and_stock_planning_keeps_verified_compatibility(self):
         commit_dual_ipod_sync(self._plan())
         original = dual_ipod.plan_stock_ipod_sync
@@ -640,6 +813,21 @@ class DualIpodSyncTests(unittest.TestCase):
         commit_dual_ipod_sync(plan)
         self.assertEqual(plan.manifest_payload, before, "commit mutated caller's plan")
         self.assertFalse(self._plan(reconcile=True).requires_commit)
+
+    def test_cloud_failure_in_commit_preflight_has_path_and_no_write_outcome(self):
+        plan = self._plan()
+        stat = self.safe.stat()
+        os.utime(self.safe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+        before = {p.relative_to(self.ipod): p.read_bytes()
+                  for p in self.ipod.rglob("*") if p.is_file()}
+        with mock.patch.object(dual_ipod.SourceVerificationCache, "verify",
+                               side_effect=OSError(81, "Need authenticator")):
+            with self.assertRaises(DualIpodError) as raised:
+                commit_dual_ipod_sync(plan)
+        self.assertIn(str(self.safe.resolve()), str(raised.exception))
+        self.assertEqual(raised.exception.recovery_status, "not needed")
+        self.assertEqual(before, {p.relative_to(self.ipod): p.read_bytes()
+                                 for p in self.ipod.rglob("*") if p.is_file()})
 
     def test_commit_rejects_changed_source_bytes_before_any_device_write(self):
         plan = self._plan()
@@ -742,7 +930,7 @@ class DualIpodSyncTests(unittest.TestCase):
             return original_hash(path)
 
         with mock.patch.object(dual_ipod, "_sha256", side_effect=unavailable):
-            with self.assertRaisesRegex(DualIpodError, "Cannot read relocated source:.*relocated-safe"):
+            with self.assertRaisesRegex(DualIpodError, "Cannot read source:.*relocated-safe"):
                 self._plan(reconcile=True)
         self.assertEqual(_hash(self.ipod / ".soundbox/manifest.json"), before)
 
@@ -1783,7 +1971,7 @@ class DualIpodSyncTests(unittest.TestCase):
         self.assertFalse(list((self.ipod / "Music").rglob("._*")))
         self.assertFalse(stale_dir.exists())
 
-    def test_interrupted_rockbox_write_requires_reconciliation(self):
+    def test_unjournaled_interrupted_write_is_found_by_explicit_verify(self):
         commit_dual_ipod_sync(self._plan())
         music = self.ipod / "Music"
         (music / "._Finder metadata").write_bytes(b"AppleDouble")
@@ -1795,7 +1983,10 @@ class DualIpodSyncTests(unittest.TestCase):
         (music / "interrupted.wav.sbpart").write_bytes(b"partial")
         drift = engine.device_drift(self.library, self.ipod)
         self.assertIsNotNone(drift)
-        self.assertIn(("rockbox-clutter", "Rockbox cleanup"), drift.changed)
+        self.assertFalse(drift.any())
+        verified = engine.verify_export(self.ipod)
+        self.assertTrue(any("interrupted.wav.sbpart" in issue
+                            for issue in verified["managed_issues"]))
 
     def test_interrupted_completed_media_is_verified_and_adopted_on_retry(self):
         commit_dual_ipod_sync(self._plan())

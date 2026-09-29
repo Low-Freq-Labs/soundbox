@@ -16,6 +16,9 @@ produce byte-identical V5 waveform sections.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 import hashlib
 import json
 import os
@@ -673,7 +676,39 @@ def _read_container_manifest(
     return None
 
 
-def _read_manifest_header(
+# A worker scopes this to one track's discovery, never across publication or
+# interactive loads. Readiness/grid/cue/fallback decisions share one header.
+_manifest_probe: ContextVar[dict[tuple[str, str, str], tuple[Path, dict, int] | None] | None] = ContextVar('manifest_probe', default=None)
+
+
+@contextmanager
+def manifest_probe():
+    token = _manifest_probe.set({})
+    try:
+        yield
+    finally:
+        _manifest_probe.reset(token)
+
+
+def reset_manifest_probe() -> None:
+    memo = _manifest_probe.get()
+    if memo is not None:
+        memo.clear()
+
+
+def _read_manifest_header(cache_dir: str | Path, track_id: str,
+                          audio_path: str | Path) -> tuple[Path, dict, int] | None:
+    memo = _manifest_probe.get()
+    key = (str(cache_dir), str(track_id), str(audio_path))
+    if memo is not None and key in memo:
+        return memo[key]
+    result = _read_manifest_header_uncached(cache_dir, track_id, audio_path)
+    if memo is not None:
+        memo[key] = result
+    return result
+
+
+def _read_manifest_header_uncached(
         cache_dir: str | Path, track_id: str,
         audio_path: str | Path) -> tuple[Path, dict, int] | None:
     """Read only the header and JSON manifest for one source-keyed record."""
@@ -1280,17 +1315,11 @@ def is_ready(cache_dir: str | Path, track_id: str,
     inflate gigabytes of waveform data at startup.
     """
     try:
-        source = Path(audio_path)
-        target = cache_path(cache_dir, track_id)
-        with target.open("rb") as handle:
-            header = handle.read(_HEADER.size)
-            if len(header) != _HEADER.size:
-                return False
-            magic, manifest_size = _HEADER.unpack(header)
-            if magic != _MAGIC or manifest_size <= 0:
-                return False
-            manifest = json.loads(handle.read(manifest_size))
-        stat = source.stat()
+        record = _read_manifest_header(cache_dir, track_id, audio_path)
+        if record is None:
+            return False
+        target, manifest, _ = record
+        stat = Path(audio_path).stat()
         sections = manifest.get("sections", {})
         divisors = tuple(
             int(value)

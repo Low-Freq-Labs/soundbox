@@ -35,12 +35,35 @@ iPod settings changes on September 28; no new firmware experiment is authorized.
   114, source `f6013a9`. Bottom loading status remains; terminal snapshot ordering
   and cue-latched autoplay are corrected. The installed app passed two real Random
   transitions after seeking near track ends; current evidence is in the handoff.
+- [x] Bound macOS cloud-provider readiness retries without weakening source
+  hashes; preserve source context and show actual composite transaction outcomes.
+  Readiness-only build 115 recovered provider failures during planning and
+  preflight with Finder closed; generation 62 completed at 21:57 on September
+  28. This accepts that controlled run, not universal provider reliability;
+  evidence is in the handoff.
+- [x] Implement normal composite Sync using the committed device inventory,
+  including unchanged local/cloud source contracts and existing-song playlist
+  additions. Retained device audio/art needs no per-file stat or tree scan.
+  Explicit Verify/Deep Verify read schema-3 ownership; Repair audits inventory
+  and restores missing owned Rockbox files. Installed and relaunched at 21:58
+  with unchanged curation after 983 tests/four skips and the full render gate.
+  Those development builds both derived number 115 from the same dirty Git
+  base; archived fingerprints distinguish them. The handoff records the final
+  release installation. The first real one-title
+  incremental run committed generation 63 in 26.76 s (18.30 planning + 8.46 commit),
+  reading 69.56 MB and retaining 2880 unchanged songs. The preceding two-title
+  run took 1942.83 s and read 40.75 GB. This accepts that edit path; no-op,
+  playlist-only, cancel/retry and other physical gates remain open.
+- [x] Let the shared export/sync transfer counter grow to fit its text, with
+  padding and spaced byte totals. Final spacing build installed/relaunched at
+  22:09 after the full gate and synthetic transfer renders; curation preserved.
 - [ ] Accept the earlier intermittent stop and iPod reconnection behavior during
   normal use. Connected-device Random regression tests use synthetic discovery;
   the bounded installed smoke test does not establish the live failure's cause.
-- The current Sync badge has real differences: two title changes and a verified
-  Rockbox append to OG. Do not clear it by changing settings or resetting state.
-  Details and read-only evidence are in [HANDOFF.md](HANDOFF.md).
+- The September 28 Sync badge reflected real title edits and a verified Rockbox
+  append to OG. Sonny's subsequent Sync committed generation 61; never clear
+  future drift by changing settings or resetting state. Evidence and limits are
+  in [HANDOFF.md](HANDOFF.md).
 
 - [x] `_safe_copy` now fsyncs the staged payload before verification/publication;
   failure leaves the destination absent. Normal OS eject remains required.
@@ -68,6 +91,14 @@ renderer redesign.
 
 ## 2. Finish lifecycle integration and measure performance
 
+The five non-USB findings from the September 28
+[repeated-work audit](repeated-work-audit-2026-09.md) are implemented: selective
+analysis watching, track-scoped row invalidation, preference-save coalescing and
+identical-save elision, idle discovery admission, and stock-art completion reuse.
+Synthetic probes establish eliminated I/O; they do not claim a whole-app speedup.
+Generic USB/Rockbox export optimization is explicitly deferred at Sonny's request.
+The lifecycle/controller work and physical acceptance below remain separate.
+
 - [ ] A5: make the coordinator the actual confirmed-command queue used by desktop
   adapters; remove duplicate queue/ownership state only after behavior parity.
 - [ ] A7: move remaining GUI-thread removable-filesystem checks into serialized
@@ -85,7 +116,14 @@ renderer redesign.
 
 Generation 59 completed, but read about 20.89 GB of canonical audio in its
 preflight/commit metrics. Generation 60's zero-copy dialog does not establish
-zero reads or zero database writes. Tests are not hardware acceptance. See
+zero reads or zero database writes. The September 28 generation-61 run completed
+in build 114, but planning plus commit read about 40.42 GB of canonical audio;
+cloud timestamp rechecks remain a performance concern. The initial readiness-only build 115 added bounded
+provider retries; it did not address that repeated-I/O cost. The new
+incremental Sync implementation removes unchanged-source rehashes and retained
+media inventory scans from the normal desktop path. Its synthetic no-read/no-stat
+regressions alone do not establish a real-device timing improvement; the later
+generation-63 one-title run above provides measured acceptance for that path. See
 [ipod lifecycle evidence](ipod-lifecycle-audit-2026-09.md) and
 [sync performance evidence](sync-performance-audit-2026-09.md).
 

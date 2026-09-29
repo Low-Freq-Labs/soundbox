@@ -80,6 +80,15 @@ prepares/copies/discards per file and suppresses destructive cleanup on failure.
 Temporary device payloads are explicitly fsynced and verified before atomic replacement and the mount is
 revalidated at that publication boundary.
 
+`source_read_retry` handles macOS CloudStorage ENEEDAUTH reads with at most two
+cancellable three-second waits per verification/acquisition. Each retry opens
+the source anew and starts its hash/snapshot from zero; the independent one-retry
+limit for unstable complete captures remains. Persistent errors, EAUTH, ordinary
+permissions and non-cloud sources fail without this readiness retry. Composite
+preflight errors include the source path; the UI reports the engine outcome
+(no device writes, completed rollback, recovery required, or committed cleanup
+failure) instead of assuming every error attempted rollback.
+
 `payload-receipts-v1` stores compact, checksummed derivative contracts bound to
 canonical filesystem/inode/size/mtime/ctime observations. It survives derivative
 cleanup and avoids repeating completed planning work. Lost/corrupt receipts
@@ -335,6 +344,16 @@ Library preparation builds V5 incrementally, pauses during
 playback, pauses full audio cooking below 20 GiB free until 25 GiB is
 available, and
 can hot-swap finished analysis or cue metadata onto the current track.
+`preparation_inventory` persists disposable scheduling receipts for analysis and
+stock art. Analysis polls stat identities every 60 seconds; unchanged entries
+skip record/ANLZ reads. Changed entries share one header; a 30-minute fallback
+retries sidecar parse failures. These receipts never grant device ownership or
+replace interactive checks. Title edits invalidate one computed row; registry
+and policy changes invalidate all rows. Background warms compute only misses.
+
+The shared export/sync status row sizes its count label to the complete visible
+text, retaining padding around both song counts and spaced byte-transfer totals.
+Byte phases must never inherit a fixed song-count width that clips their units.
 
 Device export is pinned by `sync.DeviceSession` to one resolved mount identity
 and revalidated before each write. Stock/composite plans retain that identity
@@ -345,8 +364,12 @@ already-pinned session into its worker. Manifest v2 records normalized destinati
 source identity, size, SHA-256, playlist membership, artwork/playlist kind,
 ownership, and completed generation. Tracks, covers, playlists, and the
 manifest use destination-filesystem temporaries plus atomic replacement.
-Regular sync repairs only manifest-owned corruption; Deep Verify rehashes every
-managed file. Pruning follows explicit ownership rows and never walks `/Music`
+Composite normal Sync trusts the committed inventory; Verify checks references
+and sizes, and Deep Verify hashes all managed files using the schema-3 reader.
+Explicit composite Repair audits inventory and restores missing owned Rockbox
+audio/art while refusing unexpected occupants. The generic exporter retains its
+existing manifest-owned repair policy. Pruning follows explicit ownership rows
+and never walks `/Music`
 as authority. Unknown content remains untouched. Stock iPod writes are a
 separate additive transaction: a pinned Clickwheel version renders only in a
 temporary tree; SoundBox validates the output, writes recovery bytes,
@@ -397,16 +420,22 @@ Rockbox staging. Each tiny record is written after a complete stable SHA-256
 read, keyed by canonical source path and bound to filesystem/inode identity,
 size, mtime, and ctime. Planning retries reuse exact proofs without rehydrating
 the audio; no audio copies are retained. Cache loss or malformed records mean
-full verification. The journal never grants device ownership. Metadata-only
-source drift rechecks bytes before reusing an existing derivative; preflight
-can refresh a timestamp-only change only after matching the planned source
-hash. Refreshed source baselines flow into the stock copy/rewrite contracts and
+full verification when a fresh proof is needed. The journal never grants device
+ownership. Normal composite Sync uses the committed inventory's unchanged
+path/size/mtime/display/policy contract, retaining original timestamps across
+ctime-only churn for local and cloud sources. It does not scan retained device
+media/art or publish a fresh source proof. New/relocated/changed sources still
+require exact-byte evidence; their preflight timestamp refresh requires matching
+the planned source hash. Refreshed source baselines flow into the stock copy/
+rewrite contracts and
 final unified manifest without altering the caller's plan or recovery bytes.
 Different bytes or repeatedly changing sources fail before writes.
 
 Stock compatibility probes are unique-source scoped. A matching verified
 composite payload already in the stock subset reuses that classification,
-retaining all database/path/live-size checks. Initial confirmed dual drops and
+retaining database/path identity checks. Live-size checks apply to affected
+paths and explicit Repair; unchanged manifest inventory needs no per-file stat.
+Initial confirmed dual drops and
 contiguous generic-device queue entries batch all available playlists, so
 shared media is planned once per batch. Stage timing and source-proof counters
 are logged; see `docs/sync-performance-audit-2026-09.md` for measured findings
@@ -423,6 +452,10 @@ and generic USB targets. Connection presentation separates visibility from readi
 hold. If a device worker owns the lane, the request stays pending for retry.
 A three-second timer checks the local `/Volumes` directory timestamp to recover
 missed events; it does not open mounted children merely to check that timestamp.
+With no connected devices and no failed probe, an unchanged timestamp starts no
+discovery worker. Failed probes retry with a 3–30-second backoff; mount events
+request immediate discovery. Connected-device drift keeps its three-second poll.
+Ordinary unmounted folders are skipped after a 30-second attachment grace.
 Verified external mounts appear by name, disabled during discovery.
 At QThread.finished they become selectable. Stock/dual dashboard loading
 appears only in the bottom status; device rows have no loading suffix. A cached
@@ -547,6 +580,11 @@ the outer geometry before applying inner pane sizes.
 retaining unknown extension namespaces. Invalid shapes enter recovery just like
 invalid JSON; without a usable backup, normal saves remain disabled. Save failures
 return false at the UI adapter and retain a visible window-title warning.
+Identical saves compare serialized bytes and persisted filesystem identity under
+that same lock before skipping backup/publication/fsync. Missing/replaced state
+or restored generations cannot reuse this shortcut. Zoom/jump/display/autoplay
+preferences debounce for 400 ms; curation, backup/restore and shutdown save
+immediately and cancel any pending preference timer.
 
 `state_io` serializes library/artwork/backup access within the app. The executable
 also holds a `QLockFile` for its AppData directory to reject a second writer app.
@@ -572,6 +610,9 @@ is included in restore; no live AppData fault injection is used for validation.
 
 The sibling `stock_artwork/` directory is disposable derived data, not curated
 state: it can always be regenerated from the canonical baseline JPEG art cache.
+A completion inventory binds source, derivative-manifest and pixel-file stat
+identities to the format profile. Warm hits skip preparation and pacing; changed
+or absent files receive ordinary preparation. Selected sync still verifies hashes.
 
 ## Build / install
 
@@ -611,8 +652,10 @@ Original provenance persists; fresh observations win and serial conflicts reset
 the association. This cache cannot authorize writes or identify a new mount.
 
 
-Missing manifest-owned Rockbox audio and per-track artwork are planned as verified
-new copies when the guarded destination is absent. Existing occupants, symlinks,
+Explicit composite Repair plans missing manifest-owned Rockbox audio and per-track
+artwork as verified new copies when the guarded destination is absent. Normal
+Sync trusts retained manifest inventory and does not look for missing files.
+Existing occupants, symlinks,
 and inaccessible paths are not treated as missing; commit rechecks vacancy and
 rollback removes only files created by that transaction. A fully reconciled stock
 library with no semantic changes retains its original iTunesDB bytes even when
@@ -622,9 +665,14 @@ the disposable stock shadow is absent.
 The bounded composite drift poll treats source size/mtime changes as Sync-needed
 hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
 can change ctime immediately after a successful commit. This UI status is not a
-content-integrity certificate. Source proofs/receipts still include ctime, and
-explicit planning/acquisition retain exact-byte verification; no stored proof or
-manifest baseline is refreshed merely to clear the badge.
+content-integrity certificate. Source proofs/receipts still include ctime.
+Normal composite Sync also retains unchanged committed contracts across
+ctime-only drift, without renewing their
+original proof or manifest timestamps. New/relocated/changed sources and actual
+payload acquisition retain exact-byte verification. Verify checks device
+references/sizes; Deep Verify also hashes managed files; Repair explicitly audits
+inventory and restores missing owned Rockbox payloads/art. None of these modes
+turns a clean badge into a fresh source-content integrity certificate.
 
 Playback and iPod management are independent. Device discovery and ordinary
 status polling must not check player.is_playing as a suppression condition.

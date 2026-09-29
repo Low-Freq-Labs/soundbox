@@ -62,6 +62,31 @@ class VerifyExport(unittest.TestCase):
             self.assertEqual(res["missing"],
                              [("Playlists/BAD.m3u8", "/Music/GONE/x/x.wav")])
 
+    def test_verify_refuses_reserved_and_escaped_playlist_entries(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            dev = root / "device"
+            (dev / "Playlists").mkdir(parents=True)
+            reserved = dev / "PIONEER"
+            reserved.mkdir()
+            (reserved / "reserved.mp3").write_bytes(b"private")
+            outside = root / "outside.mp3"
+            outside.write_bytes(b"private")
+            (dev / "escape.mp3").symlink_to(outside)
+            entries = ["/PIONEER/reserved.mp3", "/escape.mp3", "../outside.mp3"]
+            (dev / "Playlists/TEST.m3u8").write_text("\n".join(entries))
+            original_is_file = Path.is_file
+
+            def guarded_is_file(path, *args, **kwargs):
+                if path == outside or reserved in path.parents:
+                    raise AssertionError("verification probed forbidden contents")
+                return original_is_file(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "is_file", guarded_is_file):
+                result = engine.verify_export(dev, deep=True)
+            self.assertEqual([entry for _, entry in result["missing"]], entries)
+
     def test_empty_device(self):
         import tempfile
         from soundbox import engine

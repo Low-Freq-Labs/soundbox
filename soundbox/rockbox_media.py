@@ -716,6 +716,10 @@ class PlannedRockboxMedia:
     profile: str
     stock_omission: str | None = field(default=None, compare=False)
     stock_technical: tuple[int, int, int] | None = field(default=None, compare=False)
+    # A committed payload contract, not a new proof of current source bytes.
+    # Ordinary composite sync can retain it across ctime-only metadata churn;
+    # any later materialization still acquires and verifies the exact digest.
+    retained_from_manifest: bool = field(default=False, compare=False)
 
 
 class RockboxMediaCache:
@@ -968,6 +972,7 @@ class RockboxMediaCache:
             title: str,
             artist: str,
             committed: dict[str, Any] | None,
+            retain_metadata_only_drift: bool = False,
     ) -> PlannedRockboxMedia:
         """Reuse an exact committed payload identity when its source is stable.
 
@@ -976,8 +981,11 @@ class RockboxMediaCache:
         records an explicit derivative profile, later plans need only stat the
         canonical source.  Reopening every managed audio file merely to
         rediscover the already-committed tag policy made a Collection sync take
-        minutes before its confirmation dialog.  A source-stat or display-tag
-        change still falls back to the complete verified derivative plan.
+        minutes before its confirmation dialog. Normal composite Sync may
+        retain the historical contract across ctime-only metadata changes;
+        this never refreshes its original proof. Size/mtime, display or policy
+        changes still require the complete verified derivative plan. Actual
+        materialization always verifies the captured source and output hashes.
         """
         original = Path(source).expanduser().resolve(strict=True)
         if not isinstance(committed, dict):
@@ -1006,6 +1014,15 @@ class RockboxMediaCache:
         prior_mtime = committed.get("source_mtime_ns")
         prior_ctime = committed.get("source_ctime_ns")
         prior_hash = str(committed.get("source_sha256") or "")
+        retain_baseline = (
+            retain_metadata_only_drift
+            and all(isinstance(value, int) and value >= 0
+                    for value in (prior_size, prior_mtime, prior_ctime))
+            and len(prior_hash) == 64
+            and all(c in "0123456789abcdef" for c in prior_hash)
+            and committed.get("source_sha256_verified") is True
+            and "transformed" in committed
+        )
         has_baseline = any(
             value is not None
             for value in (prior_size, prior_mtime, prior_ctime)
@@ -1013,7 +1030,7 @@ class RockboxMediaCache:
         if has_baseline and (
             int(prior_size or -1) != stat.st_size
             or int(prior_mtime or -1) != stat.st_mtime_ns
-            or int(prior_ctime or -1) != stat.st_ctime_ns
+            or (not retain_baseline and int(prior_ctime or -1) != stat.st_ctime_ns)
         ):
             return self.plan(original, title=title, artist=artist)
 
@@ -1054,7 +1071,8 @@ class RockboxMediaCache:
             source=original,
             source_size=stat.st_size,
             source_mtime_ns=stat.st_mtime_ns,
-            source_ctime_ns=stat.st_ctime_ns,
+            # Do not manufacture a fresh source proof from a metadata hint.
+            source_ctime_ns=int(prior_ctime or 0) if retain_baseline else stat.st_ctime_ns,
             source_sha256=source_hash,
             source_sha256_verified=source_hash_verified,
             transformed=transformed,
@@ -1067,10 +1085,12 @@ class RockboxMediaCache:
             stock_omission=(
                 "Previously verified Rockbox-only payload"
                 if committed.get("kind") == "rockbox-media" else None),
+            retained_from_manifest=retain_baseline,
         )
 
     @staticmethod
-    def verify_source_stat(planned: PlannedRockboxMedia) -> None:
+    def verify_source_stat(planned: PlannedRockboxMedia, *,
+                           allow_ctime_drift: bool = False) -> None:
         """Reject a source that changed while its incremental plan was open."""
         try:
             source = planned.source.resolve(strict=True)
@@ -1082,7 +1102,7 @@ class RockboxMediaCache:
             source != planned.source
             or stat.st_size != planned.source_size
             or stat.st_mtime_ns != planned.source_mtime_ns
-            or stat.st_ctime_ns != planned.source_ctime_ns
+            or (not allow_ctime_drift and stat.st_ctime_ns != planned.source_ctime_ns)
         ):
             raise RockboxMediaError(
                 f"Rockbox source changed after dry-run: {planned.source}")

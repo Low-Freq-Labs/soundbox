@@ -308,3 +308,13 @@ and visible layout stable. Each runtime slice needs focused failure tests, the
 full source gate and safe installed-app verification. Renderer work additionally
 needs the established visual/reference gates. A documentation-only audit needs
 neither a rebuild nor a new installed revision.
+
+## September 28 repeated-work follow-up
+
+The composite one-title path now has real generation-63 acceptance (26.76 seconds
+planning/commit, 69.56 MB canonical reads); unchanged no-op acceptance remains
+open. The later [repeated-work audit](repeated-work-audit-2026-09.md) provides
+isolated before/after operation counts. Its five non-USB analysis/UI/polling/artwork
+findings are now implemented and tested; generic-export optimization is explicitly
+deferred. This closes those repeated-work findings, not the broader unfinished
+lifecycle/controller migration or physical acceptance gates above.

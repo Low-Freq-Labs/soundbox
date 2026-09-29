@@ -139,3 +139,55 @@ class AcquisitionTests(unittest.TestCase):
                     with acquire_source(SourceContract(source), root / "stage"):
                         self.fail("capture should not start")
             self.assertFalse(list((root / "stage").iterdir()))
+
+    def test_provider_retry_discards_partial_snapshot_and_still_checks_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / 'track.wav'
+            payload = b'a' * (1024 * 1024 + 7)
+            source.write_bytes(payload)
+            original_open = Path.open
+            opens = []
+
+            class WakeFailure:
+                def __init__(self, handle):
+                    self.handle = handle
+                    self.reads = 0
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    self.handle.close()
+
+                def fileno(self):
+                    return self.handle.fileno()
+
+                def read(self, size):
+                    self.reads += 1
+                    if self.reads == 2:
+                        raise OSError(81, 'Need authenticator')
+                    return self.handle.read(size)
+
+            def opening(path, *args, **kwargs):
+                handle = original_open(path, *args, **kwargs)
+                if path == source:
+                    opens.append(path)
+                    if len(opens) == 1:
+                        return WakeFailure(handle)
+                return handle
+
+            with mock.patch('soundbox.source_read_retry.sys.platform', 'darwin'), \
+                    mock.patch('soundbox.source_read_retry._CLOUD_STORAGE', root), \
+                    mock.patch('soundbox.source_read_retry._wait'), \
+                    mock.patch.object(Path, 'open', opening):
+                contract = SourceContract(source, len(payload), hashlib.sha256(payload).hexdigest())
+                with acquire_source(contract, root / 'stage') as snapshot:
+                    self.assertEqual(snapshot.path.read_bytes(), payload)
+                    self.assertEqual(len(list((root / 'stage').rglob('*.wav'))), 1)
+                self.assertEqual(len(opens), 2)
+                opens.clear()
+                with self.assertRaisesRegex(SourceAcquisitionError, 'captured bytes differ'):
+                    with acquire_source(SourceContract(source, len(payload), '0' * 64), root / 'stage'):
+                        self.fail('wrong digest accepted after provider retry')
+            self.assertFalse(list((root / 'stage').iterdir()))

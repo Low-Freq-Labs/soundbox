@@ -20,6 +20,8 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
+from .preparation_inventory import PreparationInventory, signature
+
 from clickwheel.ipod.artworkdb_writer.artwork_writer import (  # type: ignore[import-untyped]
     ArtworkEntry,
     _read_existing_artwork,
@@ -171,10 +173,39 @@ class StockArtworkCache:
         self._source_index_path = self.root / PROFILE / "source-index.json"
         try:
             raw = json.loads(self._source_index_path.read_text(encoding="utf-8"))
-            self._source_index = raw if isinstance(raw, dict) else {}
+            self._source_index = {
+                key: row for key, row in (raw.items() if isinstance(raw, dict) else ())
+                if isinstance(row, dict)
+                and type(row.get("size")) is int and type(row.get("mtime_ns")) is int
+                and isinstance(row.get("source_sha256"), str)
+                and len(row["source_sha256"]) == 64
+                and all(c in "0123456789abcdef" for c in row["source_sha256"])
+            }
         except (OSError, ValueError):
             self._source_index = {}
         self._source_index_dirty = False
+        self._preparation = PreparationInventory(self.root / PROFILE / 'preparation-index.json')
+
+    def preparation_signature(self, image_path: str | Path) -> str | None:
+        """Metadata scheduling hint only; selected exports still verify pixels."""
+        try:
+            path = Path(image_path).resolve(strict=True)
+            row = self._source_index.get(str(path)) or {}
+            digest = row.get('source_sha256', '')
+            if not isinstance(digest, str) or len(digest) != 64:
+                return None
+            entry = self._entry(self._cache_key(digest))
+            paths = [path, entry / 'manifest.json']
+            paths += [entry / f'F{format_id}.rgb565' for format_id in FORMATS]
+            return signature(paths, [1, PROFILE, list(FORMATS.items())])
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
+    def is_prepared(self, image_path: str | Path) -> bool:
+        return self._preparation.matches(str(image_path), self.preparation_signature(image_path))
+
+    def remember_prepared(self, image_path: str | Path, before: str | None) -> None:
+        self._preparation.remember(str(image_path), before, self.preparation_signature(image_path))
 
     def _save_source_index(self) -> None:
         if not self._source_index_dirty:
@@ -190,6 +221,7 @@ class StockArtworkCache:
     def flush_source_index(self) -> None:
         """Persist pending source-stat lookups after a preparation batch."""
         self._save_source_index()
+        self._preparation.flush()
 
     def _remember_source(self, path: Path, stat: os.stat_result, sha256: str) -> None:
         key = str(path)

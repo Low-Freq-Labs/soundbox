@@ -384,6 +384,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._warm_timer.setSingleShot(True)
         self._warm_timer.setInterval(120)
         self._warm_timer.timeout.connect(self._do_warm)
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.setInterval(400)
+        self._settings_save_timer.timeout.connect(self._save_state)
         # A successful source load/import arms a recurring identity scan. It is
         # single-shot and rearmed only after the previous worker has finished,
         # so scans never overlap and a large cook cannot create a timer storm.
@@ -393,6 +397,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._waveform_recheck_timer.setInterval(_WAVEFORM_RECHECK_MS)
         self._waveform_recheck_timer.timeout.connect(self._maybe_fill_waveforms)
         # Devices are recognized on launch and as they're plugged in — no XML needed.
+        try:
+            self._volume_directory_stamp = os.stat('/Volumes').st_mtime_ns
+        except OSError:
+            self._volume_directory_stamp = None
         self._refresh_devices()
         self._dev_timer = QTimer(self)
         self._dev_timer.timeout.connect(self._poll_devices)
@@ -488,6 +496,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _save_state(self) -> bool:
         """Write the portable SoundBox library (overrides + custom playlists)."""
+        timer = getattr(self, "_settings_save_timer", None)
+        if timer is not None:
+            timer.stop()
         self._sync_playlists_cache = None
         try:
             if self._state_publication:
@@ -571,20 +582,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                   None) if self.lib else None
         return self._rows_for(self.lib.resolve(pl)) if pl is not None else []
 
-    def _invalidate_rows(self) -> None:
-        """Something that feeds track_row changed (an override, alias, the
-        registry, or title-junk) — drop the cache, bump the generation so any
-        in-flight warm is discarded, and schedule a fresh background warm."""
-        self._row_cache.clear()
+    def _invalidate_rows(self, track_ids=None) -> None:
+        """Invalidate affected rows, or all rows for a global metadata policy.
+
+        A generation change rejects old worker results; the next warm computes
+        only missing rows and preserves unaffected cached values.
+        """
+        if track_ids is None:
+            self._row_cache.clear()
+        else:
+            for track_id in track_ids:
+                self._row_cache.pop(track_id, None)
         self._sync_playlists_cache = None
         self._cache_gen += 1
         if self.lib is not None:
             self._warm_timer.start()  # debounced → one rebuild per burst
 
     def _do_warm(self) -> None:
-        """Precompute EVERY track's row off the UI thread so the first click on
-        any playlist is already instant — no waiting. Single-flight; a stale
-        result (generation moved on) is discarded and re-warmed."""
+        """Compute missing rows off-thread, single-flight and generation guarded."""
         if getattr(self, "_state_maintenance", False):
             return
         if self.lib is None or _running(self._warm_worker):
@@ -593,7 +608,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         gen = self._cache_gen
         lib, ov, ti, junk = self.lib, dict(self.overrides), dict(self.titles), self._title_junk()
         reg = lib.artist_registry
-        tracks = list(lib.tracks_by_id.values())
+        tracks = [t for t in lib.tracks_by_id.values()
+                  if t.track_id not in self._row_cache]
+        if not tracks:
+            return
 
         def build():
             return {t.track_id: engine.track_row(t, ov, ti, registry=reg, junk=junk)
@@ -602,8 +620,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         w = OneShotTask(build)
         self._warm_worker = w
         w.done.connect(lambda res, g=gen: self._on_rows_warmed(res, g))
-        w.finished.connect(lambda ww=w: self._finish_worker("_warm_worker", ww))
+        w.finished.connect(lambda ww=w: self._finish_row_warm(ww))
         w.start()
+
+    def _finish_row_warm(self, worker):
+        self._finish_worker("_warm_worker", worker)
+        if (not self._shutting_down and not self._state_maintenance and self.lib
+                and self._row_cache.keys() < self.lib.tracks_by_id.keys()):
+            self._warm_timer.start()
 
     def _on_rows_warmed(self, res, gen: int) -> None:
         if isinstance(res, Exception):
@@ -612,7 +636,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if gen != self._cache_gen:
             self._warm_timer.start()  # inputs changed mid-warm — rebuild
             return
-        self._row_cache = res
+        self._row_cache.update(res)
         LOG.info("Row cache warmed: %d rows", len(res))
 
     def _reload_current_view(self):
@@ -1062,7 +1086,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if field == "artist" and self.lib is not None:
             self._build_artist_registry()  # new override immediately feeds trust/canon
         else:
-            self._invalidate_rows()  # title override changed this row's computed title
+            self._invalidate_rows((track_id,))  # title override changed this row's computed title
         # Fixing the name should re-hunt for art unless a REAL cover is already
         # confirmed — a miss OR an avatar both deserve a retry with the fix.
         if self.lib and track_id in self.lib.tracks_by_id \
@@ -1233,13 +1257,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             text, Qt.ElideRight, available))
         self.now_playing.setToolTip("")
 
+    def _schedule_settings_save(self):
+        """Coalesce preferences; curation/backup/shutdown still flush immediately."""
+        if not self._shutting_down and not self._state_maintenance:
+            self._settings_save_timer.start()
+
     def _on_jump_mode_changed(self, mode: str):
         self.settings["beat_jump_mode"] = mode
-        self._save_state()
+        self._schedule_settings_save()
 
     def _on_waveform_zoom_changed(self, pixels_per_second: float):
         self.settings["waveform_zoom"] = pixels_per_second
-        self._save_state()
+        self._schedule_settings_save()
 
     def _toggle_autoplay_mode(self, mode: str):
         self._set_autoplay_mode("" if self._autoplay_mode == mode else mode)
@@ -1268,7 +1297,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 button.update()
         self.settings["autoplay_mode"] = mode
         if save and changed:
-            self._save_state()
+            self._schedule_settings_save()
 
     def _on_playback_active(self, active: bool):
         """Reserve CPU/UI time for the deck while audio is running."""
@@ -1555,8 +1584,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         h.addWidget(self.status_label)
         self.status_count_label = QLabel("")
         self.status_count_label.setAlignment(Qt.AlignCenter)
-        self.status_count_label.setFixedWidth(
-            fm.horizontalAdvance("9999/9999") + 8)
+        # Counts also show byte transfers (for both export and sync). Let the
+        # label grow to its complete text instead of clipping it to song-count
+        # width; keep some padding between the status and progress meter.
+        self.status_count_label.setMinimumWidth(
+            fm.horizontalAdvance("9999/9999") + 16)
+        self.status_count_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        self.status_count_label.setMargin(4)
         self.status_count_label.setVisible(False)
         h.addWidget(self.status_count_label)
         self.progress = QProgressBar()
@@ -2582,6 +2616,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_volume_mount_changed(self):
         """Mount changes supersede idle/eject/playback holds, never an owner."""
+        self._device_retry_delay = 3.0
         self._device_mount_refresh_pending = True
         self._refresh_devices(force=True)
 
@@ -2647,11 +2682,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             stamp = None
         previous = getattr(self, "_volume_directory_stamp", None)
         self._volume_directory_stamp = stamp
-        if previous is not None and stamp != previous:
+        if stamp != previous:
             self._device_mount_refresh_pending = True
         if getattr(self, "_device_mount_refresh_pending", False):
             self._refresh_devices(force=True)
-        elif not self._eject_ready_device:
+        elif (not self._eject_ready_device
+              and (self.device_tree.topLevelItemCount()
+                   or time.monotonic() >= getattr(self, "_device_retry_at", float("inf")))):
             self._refresh_devices()
 
     def _set_device_poll_interval(self, devices_present: bool) -> None:
@@ -2771,6 +2808,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._dev_scan_worker is not worker:
             self._finish_worker("_dev_scan_worker", worker)
             return
+        if getattr(worker, "retry_discovery", True):
+            delay = getattr(self, "_device_retry_delay", 3.0)
+            self._device_retry_at = time.monotonic() + delay
+            self._device_retry_delay = min(30.0, delay * 2)
+        else:
+            self._device_retry_at = float("inf")
+            self._device_retry_delay = 3.0
         new_paths = tuple(getattr(worker, "new_paths", ()))
         results = getattr(worker, "results", None)
         mount_tokens = dict(getattr(worker, "mount_tokens", {}))
@@ -3509,6 +3553,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             "Deep Verify managed files…",
             lambda: self._verify_device(dev, deep=True))
         action.setEnabled(not busy)
+        if profile is not None and profile.kind == "dual_boot":
+            action = menu.addAction(
+                "Repair managed library…",
+                lambda: self._sync_device(dev, audit_existing=True))
+            action.setEnabled(not busy)
         if profile is not None and not profile.has_stock_ipod:
             menu.addSeparator()
             action = menu.addAction(
@@ -3798,6 +3847,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             confirmed: bool = False,
             action: str = "sync",
             expected_playlist_rows: dict[str, dict] | None = None,
+            audit_existing: bool = False,
     ):
         """Build the composite stock/Rockbox plan without target writes."""
         if self._device_operation_owned():
@@ -3814,6 +3864,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     confirmed=confirmed,
                     action=action,
                     expected_playlist_rows=expected_playlist_rows,
+                    audit_existing=audit_existing,
                 )):
             return
         profile = self._device_profiles.get(dev)
@@ -3856,6 +3907,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 on_progress=callback,
                 expected_playlist_rows=expected_playlist_rows,
                 adoptable_playlist_keys=adoptable_playlist_keys,
+                audit_existing=audit_existing,
             ),
             log_label="Dual iPod planning",
         )
@@ -4345,16 +4397,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return added
 
     def _show_dual_ipod_failure(self, result) -> None:
-        interrupted = "Device target changed or was remounted" in str(result)
-        detail = (
-            "The committed iPod library was left at its last verified "
-            "generation. Completed whole-file copies may remain unowned; "
-            "re-queue the same playlist and SoundBox will verify and reuse "
-            "them automatically."
-            if interrupted else
-            "SoundBox attempted the coordinated stock/Rockbox rollback. "
-            "The next device scan will report any remaining recovery state."
-        )
+        recovery = getattr(result, "recovery_status", None)
+        if getattr(result, "committed", False):
+            detail = "Device changes were committed; final cleanup did not complete."
+        elif recovery == "not needed":
+            detail = "Sync stopped before device writes. No device files were changed."
+        elif recovery == "rolled back":
+            detail = "The coordinated stock/Rockbox rollback completed."
+        elif recovery == "recovery required":
+            detail = ("The coordinated stock/Rockbox rollback was incomplete. "
+                      "Keep the device recovery files; recovery needs review before retrying.")
+        else:
+            detail = ("Device recovery status could not be established. "
+                      "Check the device status before retrying.")
         QMessageBox.critical(
             self,
             "Dual iPod sync failed",
@@ -4829,7 +4884,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QMessageBox.warning(self, "Verify failed", str(res))
             return
         name = Path(dev).name
-        if not res["playlists"]:
+        if not res["playlists"] and not res["missing"] and not res.get("managed_issues"):
             QMessageBox.information(self, "Verify export",
                                     f"No SoundBox playlists found on {name}.")
         elif not res["missing"] and not res.get("managed_issues"):
@@ -4848,18 +4903,30 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 f"  {issue}" for issue in res.get("managed_issues", [])[:12])
             if integrity:
                 integrity = f"\n\nManaged-file integrity:\n{integrity}"
+            missing_detail = (
+                f"{len(res['missing'])} of {res['entries']} playlist entries are "
+                f"missing their files:\n\n{lines}{more}\n\n"
+                if res["missing"] else "")
             QMessageBox.warning(
                 self, "Verify export",
-                f"{name}: {len(res['missing'])} of {res['entries']} entries are "
-                f"MISSING their files:\n\n{lines}{more}\n\nA Sync usually "
-                f"heals this (or re-export the affected playlists)."
+                f"{name}: verification found problems.\n\n{missing_detail}"
+                + ("Use Repair managed library for missing owned Rockbox files. "
+                   "Other integrity problems need review. Normal Sync trusts "
+                   "the committed inventory."
+                   if getattr(self._device_profiles.get(dev), "kind", "") == "dual_boot"
+                   else "A Sync usually heals this (or re-export the affected playlists).") +
                 f"{integrity}{extra}")
 
-    def _confirm_ipod_sync(self, dev: str) -> bool:
+    def _confirm_ipod_sync(self, dev: str, *, audit_existing: bool = False) -> bool:
         answer = QMessageBox.question(
             self,
-            "Sync iPod?",
+            "Repair managed library?" if audit_existing else "Sync iPod?",
             f"Sync the managed library on {Path(dev).name} now?\n\n"
+            + ("SoundBox will inspect the managed inventory, reconcile missing "
+               "files and clean interrupted writes. This can take longer.\n\n"
+               if audit_existing else
+               "SoundBox will trust its committed inventory and read playlist "
+               "edits made on the iPod. Use Verify for a full file check.\n\n") +
             "SoundBox will compare the current playlists and metadata, then "
             "apply only the required stock/Rockbox changes. Planning and "
             "writing will appear as one continuous operation. Source files "
@@ -4869,7 +4936,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         )
         return answer == QMessageBox.Yes
 
-    def _sync_device(self, dev: str):
+    def _sync_device(self, dev: str, *, audit_existing: bool = False):
         if self.lib is None or not dev:
             return
         profile = self._device_profiles.get(dev)
@@ -4900,7 +4967,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._begin_stock_ipod_sync(dev, playlists, reconcile=True)
             return
         if profile is not None and profile.kind == "dual_boot":
-            if not self._confirm_ipod_sync(dev):
+            if not self._confirm_ipod_sync(dev, audit_existing=audit_existing):
                 self._flash_status("iPod sync cancelled — nothing written")
                 return
             try:
@@ -4921,10 +4988,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 reconcile=True,
                 confirmed=True,
                 action="sync",
+                audit_existing=audit_existing,
             )
             return
         if self._defer_device_operation_until_scan_finishes(
-                lambda: self._sync_device(dev)):
+                lambda: self._sync_device(dev, audit_existing=audit_existing)):
             return
         if self._device_operation_owned():
             QMessageBox.warning(
@@ -6139,7 +6207,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         active.progress = (done, total, label)
         self._start_pulse(stage, keep_count=True)
-        self.status_count_label.setText(f"{human(done)}/{human(total)}" if total else "")
+        self.status_count_label.setText(f"{human(done)} / {human(total)}" if total else "")
         self.status_count_label.setVisible(bool(total))
         self.status_label.setToolTip(label)
 
@@ -6195,6 +6263,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._waveform_rechecks_enabled = False
         for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
                   getattr(self, "_warm_timer", None),
+                  getattr(self, "_settings_save_timer", None),
                   getattr(self, "_volume_refresh_timer", None),
                   getattr(self, "_waveform_recheck_timer", None)):
             if t is not None:

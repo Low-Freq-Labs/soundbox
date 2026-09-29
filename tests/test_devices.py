@@ -108,3 +108,45 @@ class ClassicIpodFacts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdleDiscoveryRetries(unittest.TestCase):
+    def test_failed_probe_retries_but_definitive_internal_scan_can_sleep(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            volume = Path(td)
+            child = volume / 'Internal'
+            child.mkdir()
+            original = Path.stat
+            remote_stat = SimpleNamespace(st_mode=child.stat().st_mode,
+                                          st_dev=volume.stat().st_dev + 1)
+            with mock.patch.object(Path, 'stat', lambda p, **kw: remote_stat if p == child else original(p, **kw)), \
+                    mock.patch.object(devices, 'Path', return_value=volume), \
+                    mock.patch.multiple(devices, _EXTERNAL_CACHE={}, _FS_CACHE={},
+                                        _PROFILE_CACHE={}, _INFO_CACHE={}, _IPOD_FACTS_CACHE={}), \
+                    mock.patch.object(devices, '_DISCOVERY_RETRY', False), \
+                    mock.patch.object(devices, '_is_external', return_value=False):
+                self.assertEqual(devices.list_devices(), [])
+                self.assertTrue(devices.discovery_needs_retry())
+                devices._EXTERNAL_CACHE[str(child)] = False
+                self.assertEqual(devices.list_devices(), [])
+                self.assertFalse(devices.discovery_needs_retry())
+
+    def test_old_unmounted_folder_does_not_retry_but_fresh_mountpoint_does(self):
+        with tempfile.TemporaryDirectory() as td:
+            volume = Path(td)
+            child = volume / 'Data'
+            child.mkdir()
+            created = child.stat().st_ctime
+            with mock.patch.object(devices, 'Path', return_value=volume), \
+                    mock.patch.multiple(devices, _EXTERNAL_CACHE={}, _FS_CACHE={},
+                                        _PROFILE_CACHE={}, _INFO_CACHE={}, _IPOD_FACTS_CACHE={}), \
+                    mock.patch.object(devices, '_DISCOVERY_RETRY', False), \
+                    mock.patch.object(devices, '_is_external') as probe:
+                with mock.patch.object(devices.time, 'time', return_value=created + 1):
+                    self.assertEqual(devices.list_devices(), [])
+                    self.assertTrue(devices.discovery_needs_retry())
+                with mock.patch.object(devices.time, 'time', return_value=created + 31):
+                    self.assertEqual(devices.list_devices(), [])
+                    self.assertFalse(devices.discovery_needs_retry())
+                probe.assert_not_called()

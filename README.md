@@ -62,6 +62,11 @@ library management available.
 | Other stock iPod models | Read-only; stock writes are not enabled |
 | rekordbox/CDJ `/PIONEER` tree | Reserved and excluded from ordinary SoundBox writes; CDJ export remains separate R&D |
 
+Background upkeep reuses unchanged analysis and prepared artwork, title edits
+refresh only their display row, and idle device watching waits for mount changes.
+Ordinary player preferences save in a short batch; library edits still save
+immediately. Generic USB export optimization remains a separate upcoming task.
+
 See [`docs/DEVICES.md`](docs/DEVICES.md) for exact format, ownership, recovery,
 and model constraints. The desktop app is the product: `python -m soundbox`
 exposes an older XML-based maintenance CLI, not the desktop curation and device
@@ -266,16 +271,22 @@ Rockbox/USB exports may additionally mirror the playlist tree for file-browser u
 A per-device ownership manifest tracks normalized paths, source identity,
 hashes, playlist membership, artwork, and completed generations. Playlist
 edits/reorders/deletes show as **⚠ Sync needed**; **Sync** resolves
-the diff, atomically repairs owned corruption, and prunes only explicitly owned
-paths. On a schema-3 dual iPod, that same badge also catches an append made in
+the diff and prunes only explicitly owned paths. On a managed dual iPod,
+normal Sync trusts SoundBox's committed inventory and reads changes, without
+rescanning unchanged device audio or rehashing unchanged local/cloud sources.
+On a schema-3 dual iPod, that same badge also catches an append made in
 Rockbox itself. Sync adopts a new song only when its path already maps to
 SoundBox-managed media, removes a newly appended duplicate instead of listing
 the song twice, and updates both firmware playlist views without copying the
 audio again. Unknown device songs are not imported automatically, and
 device-side deletion/reorder edits fail closed. **Cancel is honest** —
 partial m3u8s are playable and flagged so the next Sync resumes. Right-click
-a device: Sync, **Verify export…**, **Deep Verify managed files…**,
-**Erase all files from device…**, Eject. Whole-device erase names the exact
+a device: Sync, **Verify export…** (references and sizes),
+**Deep Verify managed files…** (also checks file hashes), and Eject. Dual iPods
+also offer **Repair managed library…** to inspect inventory, restore missing
+owned Rockbox files and clean interrupted writes. Existing damaged or unexpected
+occupants fail closed; Repair does not silently replace arbitrary corruption.
+Generic volumes additionally offer **Erase all files from device…**. Whole-device erase names the exact
 volume in a destructive confirmation, removes the SoundBox manifest last, and
 normally ejects only after a complete result. Stock-only MA446 iPods have a
 separate MP3/WAV two-phase path: read-only database plan, explicit confirmation,

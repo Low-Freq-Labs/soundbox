@@ -162,12 +162,23 @@ def verify_export(target: str | Path, *, deep: bool = False) -> dict:
         "playlists": 0, "entries": 0, "missing": [], "advisories": [],
     }
     managed_issues = sync_mod.verify_managed(Path(target), deep=deep)
+    if manifest_mod.has_composite_ownership(target):
+        from .dual_ipod import _rockbox_interrupted_writes
+        managed_issues.extend(
+            f"interrupted write: {item.relative_path}"
+            for item in _rockbox_interrupted_writes(target))
     if deep or managed_issues:
         res["managed_issues"] = managed_issues
     adv = _rockbox_art_advisory(target)
     if adv:
         res["advisories"].append(adv)
-    pdir = target / "Playlists"
+    session = sync_mod.DeviceSession(target, [], create=False)
+    target = session.target
+    try:
+        pdir = session.guard(target / "Playlists")
+    except (OSError, RuntimeError):
+        res["missing"].append(("Playlists", "<unsafe path>"))
+        return res
     if not pdir.is_dir():
         return res
     for m3u in sorted(pdir.rglob("*.m3u8")):
@@ -175,8 +186,8 @@ def verify_export(target: str | Path, *, deep: bool = False) -> dict:
             continue
         res["playlists"] += 1
         try:
-            text = m3u.read_text(encoding="utf-8")
-        except OSError:
+            text = session.guard(m3u).read_text(encoding="utf-8")
+        except (OSError, RuntimeError):
             res["missing"].append((str(m3u.relative_to(target)), "<unreadable>"))
             continue
         for line in text.splitlines():
@@ -184,7 +195,11 @@ def verify_export(target: str | Path, *, deep: bool = False) -> dict:
             if not line or line.startswith("#"):
                 continue
             res["entries"] += 1
-            if not (target / line.lstrip("/")).is_file():
+            try:
+                exists = session.guard(target / line.lstrip("/")).is_file()
+            except (OSError, RuntimeError):
+                exists = False
+            if not exists:
                 res["missing"].append((str(m3u.relative_to(target)), line))
     return res
 

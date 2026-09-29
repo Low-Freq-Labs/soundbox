@@ -92,8 +92,9 @@ repository can answer the question.
   stock commit, and the unified schema-3 ownership manifest publishes last; any
   later-phase failure coordinates stock rollback with restoration of managed
   Rockbox rewrites and removal of only new files. For schema-3 managed audio,
-  planning validates ownership/path/size without streaming every old device
-  payload; the exact desired derivative is verified on the Mac, the old live
+  normal planning trusts unchanged manifest inventory; affected audio paths
+  require live ownership/path/size checks without streaming their old payload.
+  The exact changed derivative is verified on the Mac, the old live
   file is renamed within the device only for transaction rollback, and the
   replacement is atomically copied and verified one track at a time. Successful
   commits discard those transient old managed-audio bytes. Unowned paths remain
@@ -120,11 +121,15 @@ repository can answer the question.
   unverified new timestamps. Repeated change fails closed. Completed source
   proofs may persist only in disposable SoundBox state and are reusable only
   for the same canonical path, filesystem/inode identity, size, mtime, and
-  ctime. Timestamp-only drift at commit preflight requires exact source SHA-256
-  equality against a stable baseline before refreshing the plan; different
-  bytes or continuing changes stop before device writes. Unchanged verified
-  stock payloads may reuse their manifest-proven compatibility, while DBID,
-  device path, and live-size ownership checks still run. Changed bytes use
+  ctime. Normal composite Sync treats the committed manifest as its inventory:
+  unchanged canonical path, size/mtime, effective display and media policy retain
+  the original source/payload contract across ctime-only drift, for local and
+  cloud files alike. This is not a fresh integrity proof and never refreshes
+  stored proof timestamps. New, relocated or changed sources retain exact-byte
+  verification; preflight may refresh their changed timestamps only after exact
+  source SHA-256 equality against a stable baseline. Unchanged verified stock
+  payloads reuse compatibility and DBID/path identity; live-size/ownership checks
+  run for affected paths and explicit Repair, not every retained file. Changed bytes use
   normal verified replacement. Multiple old copies
   may converge only when their recorded verified source hashes are identical
   and their current canonical source is one file; surplus copies remain under
@@ -157,11 +162,12 @@ repository can answer the question.
   redirects fail closed. The separately confirmed generic-volume whole-device
   Erase is the sole exception; stock and dual iPods never expose that command.
   Finder-created `._*` AppleDouble files and abandoned `*.sbpart` temporaries
-  below `/Music` or `/Playlists` are exact-baseline cleanup rows in that same
-  confirmed transaction; successful cleanup also removes only now-empty child
-  directories. Finder sidecars are opportunistic cleanup and never independently
-  signal drift because macOS may recreate them immediately; an abandoned
-  `*.sbpart` is an interrupted SoundBox write and does require reconciliation.
+  below `/Music` or `/Playlists` are exact-baseline cleanup rows during explicit
+  Repair or journal-backed interrupted recovery; successful cleanup removes only
+  now-empty child directories. Normal Sync/polling never walks these trees just
+  to find clutter. Finder sidecars never independently signal drift. Recovery
+  journals signal interrupted work; unjournaled `*.sbpart` files are discovered
+  by explicit Verify/Repair.
   An empty schema-3 library remains plannable so cleanup can never become
   unreachable after the last playlist is deleted.
   Schema-2 migration is not enabled. The old Rockbox exporter must still fail
@@ -205,7 +211,11 @@ repository can answer the question.
 - Canonical audio acquisition captures one local snapshot while hashing. An
   expected digest binds captured bytes, so matching bytes survive cloud
   eviction/timestamp drift. Without a digest, require a stable capture with at
-  most one hydration retry. Inspection/transformation/copy use local captured
+  most one hydration retry. macOS CloudStorage reads returning ENEEDAUTH may
+  restart from byte zero after at most two cancellable three-second waits;
+  partial reads never publish proofs or snapshots. Persistent errors still
+  fail closed with source context. This readiness budget is separate from
+  the single unstable-capture retry. Inspection/transformation/copy use local captured
   bytes; retain at most one source and working derivative. Disposable receipts
   and source proofs never confer device ownership. Preserve generation-58
   recovery until separately reviewed hardware acceptance succeeds.
@@ -215,8 +225,10 @@ repository can answer the question.
 - Full per-write export contract lives at the top of `soundbox/sync.py`.
 
 
-Missing manifest-owned Rockbox audio and per-track artwork are planned as verified
-new copies when the guarded destination is absent. Existing occupants, symlinks,
+Explicit composite Repair plans missing manifest-owned Rockbox audio and per-track
+artwork as verified new copies when the guarded destination is absent. Normal
+Sync trusts retained manifest inventory and does not look for missing files.
+Existing occupants, symlinks,
 and inaccessible paths are not treated as missing; commit rechecks vacancy and
 rollback removes only files created by that transaction. A fully reconciled stock
 library with no semantic changes retains its original iTunesDB bytes even when
@@ -226,15 +238,24 @@ the disposable stock shadow is absent.
 The bounded composite drift poll treats source size/mtime changes as Sync-needed
 hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
 can change ctime immediately after a successful commit. This UI status is not a
-content-integrity certificate. Source proofs/receipts still include ctime, and
-explicit planning/acquisition retain exact-byte verification; no stored proof or
-manifest baseline is refreshed merely to clear the badge.
+content-integrity certificate. Source proofs/receipts still include ctime.
+Normal composite Sync also retains unchanged committed contracts across
+ctime-only drift, without renewing their
+original proof or manifest timestamps. New/relocated/changed sources and actual
+payload acquisition retain exact-byte verification. Verify checks device
+references/sizes; Deep Verify also hashes managed files; Repair explicitly audits
+inventory and restores missing owned Rockbox payloads/art. None of these modes
+turns a clean badge into a fresh source-content integrity certificate.
 
 Connection presentation separates visibility from readiness. A debounced
 `/Volumes` notification requests discovery even during playback or an eject-ready
 hold. If a device worker owns the lane, the request stays pending for retry.
 A three-second timer checks the local `/Volumes` directory timestamp to recover
 missed events; it does not open mounted children merely to check that timestamp.
+With no connected devices and no failed probe, an unchanged timestamp starts no
+discovery worker. Failed probes retry with a 3–30-second backoff; mount events
+request immediate discovery. Connected-device drift keeps its three-second poll.
+Ordinary unmounted folders are skipped after a 30-second attachment grace.
 Verified external mounts appear by name, disabled during discovery.
 At QThread.finished they become selectable. Stock/dual dashboard loading
 appears only in the bottom status; device rows have no loading suffix. A cached
@@ -261,6 +282,8 @@ unknown config lines; retain the established numbered playlist filenames.
 | `docs/rockbox-playlist-oom-2026-09.md` | Read-only USB findings, firmware comparison and pending runtime OOM isolation |
 | `docs/HANDOFF.md` | Single current session-resume note: live state, unfinished work, exact next checks, validation, and rollback facts |
 | `docs/ROADMAP.md` | Active sequence, acceptance gates, public release and deferred work |
+| `docs/sync-performance-audit-2026-09.md` | Composite inventory reuse, source-read counters and physical acceptance |
+| `docs/repeated-work-audit-2026-09.md` | Completed non-USB optimizations and before/after evidence |
 | `docs/software-audit-2026-09.md` | Architecture, lifecycle, persistence and performance findings with evidence |
 | `docs/release-boundaries.md` | Confirmed public/personal feature scope and proposed optional-module contract |
 | `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and pending grid work |

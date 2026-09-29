@@ -32,6 +32,10 @@ Connection presentation separates visibility from readiness. A debounced
 hold. If a device worker owns the lane, the request stays pending for retry.
 A three-second timer checks the local `/Volumes` directory timestamp to recover
 missed events; it does not open mounted children merely to check that timestamp.
+With no connected devices and no failed probe, an unchanged timestamp starts no
+discovery worker. Failed probes retry with a 3–30-second backoff; mount events
+request immediate discovery. Connected-device drift keeps its three-second poll.
+Ordinary unmounted folders are skipped after a 30-second attachment grace.
 Verified external mounts appear by name, disabled during discovery.
 At QThread.finished they become selectable. Stock/dual dashboard loading
 appears only in the bottom status; device rows have no loading suffix. A cached
@@ -155,8 +159,10 @@ duplicating the collection. The approved single-copy layout is:
 MA446 containing both layouts. A new or changed source is fully normalized and
 verified during planning, which retains only its reproducible source/output
 contract. An unchanged committed source instead reuses the unified manifest's
-payload identity after source size/mtime/ctime, effective title/artist, and
-per-file media policy match. That steady-state proof is stat-only: it does not
+payload identity after canonical path, source size/mtime, effective title/artist,
+and per-file media policy match. Normal Sync ignores ctime-only metadata churn
+for both local and cloud files, retaining the original proof timestamps rather
+than certifying those bytes anew. This steady-state decision is stat-only: it does not
 reopen thousands of unchanged audio files to rediscover embedded art or display
 tags already represented by the committed policy. A row from the narrower
 legacy metadata profiles takes one fully verified migration through the current
@@ -167,10 +173,13 @@ source stats, and effective title/artist are otherwise unchanged. Planning write
 the device, uses the exact matching stock shadow only as a disposable
 accelerator, and produces exact copy/reuse/rewrite/omission/byte counts. Commit
 recreates at most one planned audio derivative at a time and refuses any source
-or output hash mismatch. For existing schema-3 audio, planning validates manifest ownership,
-path, and size without streaming every old device file; it still verifies the
-exact desired source derivative on the Mac when that source or its policy
-changed. Commit rechecks every planned source stat baseline before its first
+or output hash mismatch. Normal Sync validates schema-3 inventory/DBID/path
+identity in metadata, retaining unchanged device audio/art without per-file
+stats or tree walks. Affected paths retain live ownership/size checks; desired
+changed derivatives receive exact Mac-side verification. Explicit Repair audits
+the full inventory and restores absent owned Rockbox audio/art, while refusing
+unexpected occupants. Verify checks references/sizes; Deep Verify additionally
+hashes every managed file using the schema-3 inventory. Commit rechecks every planned source stat baseline before its first
 write, then copies new Rockbox files
 first, renames each old managed audio file within the device for transient
 rollback, lands and verifies its replacement one track at a time, then runs the
@@ -227,11 +236,13 @@ after a later drop.
 
 Completed source hashes survive failed planning in a disposable Mac-side proof
 journal. Reuse requires exact canonical path, filesystem/inode, size, mtime,
-and ctime; cache loss falls back to a complete read. Timestamp-only cloud
-changes reprove source bytes instead of rebuilding unchanged derivatives. A
-change between planning and commit receives the same bounded exact-hash check
-before any device write, refreshing the final source timestamps only when the
-planned bytes match. A content change or repeatedly changing baseline refuses.
+and ctime; cache loss falls back to a complete read when a fresh proof is
+required. Normal Sync's unchanged manifest contracts do not require that fresh
+proof, including for dedup of already-owned sources. Relocated, new and changed
+sources still do. Their timestamp drift between planning and commit receives a
+bounded exact-hash check before any device write, refreshing timestamps only
+when planned bytes match. Unchanged retained contracts tolerate ctime-only drift
+without refreshing their evidence. A content change or repeatedly changing baseline refuses.
 An unchanged, verified stock payload reuses its known format compatibility
 without reopening the source; new/changed payloads retain full format checks.
 
@@ -267,13 +278,13 @@ fallback without a shared-folder collision. A shared stock-safe source with embe
 picture-free payload and never reintroduces the hazardous embedded picture.
 Finder-generated `._*` AppleDouble files and abandoned `*.sbpart` temporaries
 below `/Music` and `/Playlists` are planned as exact-baseline transactional
-cleanup rows. This includes directory sidecars left after the final managed
+cleanup rows during explicit Repair or journal-backed interrupted recovery. This includes directory sidecars left after the final managed
 track disappears; after commit, only empty child directories are pruned. Empty
 schema-3 libraries remain valid cleanup plans rather than stranding that clutter.
 AppleDouble files are opportunistic cleanup, not library drift, because Finder
-may recreate them immediately after a successful export. Only an abandoned
-`*.sbpart` independently requests reconciliation as evidence of an interrupted
-SoundBox write.
+may recreate them immediately after a successful export. Normal polling and
+Sync do not walk these trees for clutter; recovery journals identify interrupted
+transactions. Explicit Verify/Repair discovers unjournaled `*.sbpart` files.
 
 Every composite audio payload also carries the effective SoundBox title and
 artist. WAV payloads use the RIFF `LIST/INFO` fields Rockbox actually parses
@@ -377,13 +388,20 @@ changing file still fails closed; changed bytes take the normal verified
 replacement path. Byte-identical old copies that
 now resolve to one canonical source reuse one managed record, leaving surplus
 records to ordinary reference-counted cleanup. Differing old hashes fail closed.
-Unavailable/cloud-authentication-blocked sources stop planning with their path
-and a request to make the file available locally; no device writes occur.
+macOS CloudStorage ENEEDAUTH reads receive at most two cancellable three-second
+waits to let a waking provider load its account. Every retry restarts the complete
+read/hash; it never accepts partial bytes or a stale source proof. Persistent
+unavailable/authentication-blocked sources stop with their path and a cloud-drive
+availability hint. A planning or commit-preflight failure precedes device writes;
+later failures report the actual coordinated rollback or committed outcome.
+SoundBox does not open Finder; the retry does not repair a server outage or
+expired account credentials.
 
 Custom playlist reconciliation keeps the first occurrence of each track ID,
 canonical source path, or byte-identical source file. This also removes older
-custom duplicates. Size-matched candidates are hashed on the Mac; titles and
-artists are never used to merge distinct versions. Both firmware playlists
+custom duplicates. Normal Sync reuses matching committed source hashes for
+already-owned size-matched candidates; other candidates are hashed on the Mac.
+Titles and artists are never used to merge distinct versions. Both firmware playlists
 receive the resulting sequence. Unknown/unowned paths are not imported, and
 device-side deletion/reorder edits remain a closed conflict. The exact local
 membership transition is checked against concurrent edits and durably saved
@@ -463,8 +481,10 @@ firmware-omission list.
 Curated SoundBox JPEGs are also the stock-art source of truth. A background
 worker pre-renders MA446's RGB565 formats 1028 (100×100) and 1029 (200×200)
 into a content-addressed AppData cache, pausing during playback. A source
-locator skips unchanged startup entries; one manual cover change queues only
-that JPEG. Initial reconciliation deduplicates identical images into one segment in
+locator plus completion inventory skips unchanged startup entries without
+opening derivative manifests or sleeping. Source/profile/derivative identity
+changes invalidate the receipt; deleted derivatives rebuild. Selected sync still
+verifies pixel hashes. One manual cover change queues only that JPEG. Initial reconciliation deduplicates identical images into one segment in
 each `F1028_1.ithmb`/`F1029_1.ithmb`, while ArtworkDB has the per-track MHII
 records stock firmware expects. SoundBox validates every iTunesDB MHIT link,
 ArtworkDB song ID, MHNI format/offset/size, and ithmb boundary before showing
@@ -786,10 +806,11 @@ Apple's historical device records require an exact device-ID match even when
 only one record exists. Recovery counts and iTunesDB digests remain backend
 snapshot fields and are omitted from both stock and dual dashboard rows.
 
-Installed September 26; latest drift-fix relaunch at 18:34:28 verified the
-curated library and caches. The current Rockbox USB identity cannot seed a remembered serial from
-Apple's unmatched historical record. A verified stock-mode connection is needed
-once before boot-mode fallback can populate those previously unknown fields.
+Historical September 26 acceptance: the drift-fix relaunch at 18:34:28 verified
+the curated library and caches. The observed Rockbox USB identity could not seed
+a remembered serial from Apple's unmatched historical record. That observation
+required a verified stock-mode connection before boot-mode fallback could
+populate the unknown fields; see HANDOFF.md for current runtime evidence.
 
 For offline lifecycle work, the private September 26 metadata capture and exact
 omissions are recorded in HANDOFF.md. It contains real database/recovery/config
@@ -800,8 +821,10 @@ written and normally ejected; this does not change the exporter's automatic
 configuration allowlist.
 
 
-Missing manifest-owned Rockbox audio and per-track artwork are planned as verified
-new copies when the guarded destination is absent. Existing occupants, symlinks,
+Explicit composite Repair plans missing manifest-owned Rockbox audio and per-track
+artwork as verified new copies when the guarded destination is absent. Normal
+Sync trusts retained manifest inventory and does not look for missing files.
+Existing occupants, symlinks,
 and inaccessible paths are not treated as missing; commit rechecks vacancy and
 rollback removes only files created by that transaction. A fully reconciled stock
 library with no semantic changes retains its original iTunesDB bytes even when
@@ -811,9 +834,14 @@ the disposable stock shadow is absent.
 The bounded composite drift poll treats source size/mtime changes as Sync-needed
 hints, but not ctime alone: cloud eviction/hydration and filesystem metadata edits
 can change ctime immediately after a successful commit. This UI status is not a
-content-integrity certificate. Source proofs/receipts still include ctime, and
-explicit planning/acquisition retain exact-byte verification; no stored proof or
-manifest baseline is refreshed merely to clear the badge.
+content-integrity certificate. Source proofs/receipts still include ctime.
+Normal composite Sync also retains unchanged committed contracts across
+ctime-only drift, without renewing their
+original proof or manifest timestamps. New/relocated/changed sources and actual
+payload acquisition retain exact-byte verification. Verify checks device
+references/sizes; Deep Verify also hashes managed files; Repair explicitly audits
+inventory and restores missing owned Rockbox payloads/art. None of these modes
+turns a clean badge into a fresh source-content integrity certificate.
 
 Playback and iPod management are independent. Device discovery and ordinary
 status polling must not check player.is_playing as a suppression condition.
