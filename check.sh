@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# One-command health check: lint + full test suite (+ optional offscreen render).
+# Release check: all tests in offscreen/Cocoa processes, required offline fixtures.
 # Usage: ./check.sh [--render] [--native]
 set -e
 cd "$(dirname "$0")"
 render=0
-native=0
 for option in "$@"; do
   case "$option" in
     --render) render=1 ;;
-    --native) native=1 ;;
+    --native) : ;; # compatibility: native is now always required
     *) echo "Usage: ./check.sh [--render] [--native]" >&2; exit 2 ;;
   esac
 done
@@ -21,18 +20,18 @@ echo "== native deck =="
 echo "OK"
 echo "== mypy (engine) =="
 ./.venv/bin/python -m mypy soundbox/ soundbox_personal/
+echo "== required offline fixtures =="
+./.venv/bin/python scripts/check_fixtures.py
 echo "== tests =="
 # Buffer passing-test stdout/stderr and always publish the slowest cases. This
 # keeps failure evidence useful while making runtime creep visible every run.
-./.venv/bin/python -m unittest discover -s tests -b --durations 15
+QT_QPA_PLATFORM=offscreen ./.venv/bin/python scripts/check_tests.py \
+  --phase offscreen --report build/check/offscreen.json
 if [ "$render" = 1 ]; then
   echo "== offscreen render =="
   PYTHONPATH=. ./.venv/bin/python -m desktop._shot /tmp/soundbox-check.png
 fi
-if [ "$native" = 1 ]; then
-  echo "== native Cocoa drawable/playback gate =="
-  QT_QPA_PLATFORM=cocoa PYTHONPATH=. ./.venv/bin/python scripts/check_native.py
-else
-  echo "Native Cocoa drawable/playback gate NOT RUN (use --native); headless Metal math runs in the suite."
-fi
-echo "REQUESTED CHECKS PASSED (see reported skips and known expected failures)"
+echo "== native Cocoa drawable/playback gate =="
+QT_QPA_PLATFORM=cocoa ./.venv/bin/python scripts/check_tests.py \
+  --phase native --report build/check/native.json
+./.venv/bin/python scripts/verify_test_reports.py

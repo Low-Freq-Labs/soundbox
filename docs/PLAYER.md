@@ -124,8 +124,9 @@ Loading semantics are deliberate:
 October 1 test audit: production Metal helpers now run against independent
 GPU numerical oracles, with a separate required Cocoa drawable gate. Tiny
 clipped color moments use stable local midpoint arithmetic; the accepted
-geometry and sampling footprint are unchanged. Known signed-coverage and
-five-probe approximations remain explicit. See the
+geometry and sampling footprint are unchanged. October 2 corrects the signed
+coverage intersection and retires its expected failure. The retained five-probe
+profile and BLUE radial-centroid approximations remain explicit. See the
 [test audit](waveform-test-audit-2026-10.md).
 
 September 30 installed correction: BLUE/RGB retain the original
@@ -137,8 +138,8 @@ change accompanies this fix. CPU arithmetic, native frames and Cocoa gates pass,
 but remaining motion artifacts required the October 1 sampling fix: RGB/BLUE
 at 256/384/576/864 now include every lattice corner within one physical pixel.
 Sonny describes B in the live A/B preview as “rock solid.” Detail, footprint,
-clocks and other zooms remain unchanged. Joint coverage remains an isolated
-experiment. See the
+clocks and other zooms remain unchanged. October 2 promotes corrected joint
+coverage after numerical and native comparison; it does not smooth source detail. See the
 [pulse audit](waveform-reuse-audit-2026-09.md#september-30-color-pulse-correction).
 
 The fixed cyan playhead sits over three waveform lanes:
@@ -625,8 +626,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
   pixel. There is no moving RGBA texture, coverage resampling, accumulated
   frame, or refresh seam. Height and hue move together, while final edge
   antialiasing remains tied to the destination pixel. The scrolling lane uses
-  geometric coverage without a vividness boost; its signed-interval overlap
-  remains the documented approximation. Boosting 20% coverage to nearly 49%
+  joint signed-interval coverage without a vividness boost. Boosting 20% coverage to nearly 49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
   overview alone retains the continuous cubic vividness curve for true
   subpixel peaks. This distinction affects only compositing, never height,
@@ -647,8 +647,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   This removes subpixel needles and edge pulsing without the multi-pixel
   softening of the retired B-spline.
 - BLUE/RGB interval color must be conditioned on the portion of the signed
-  interval that actually covers the destination pixel. The accepted continuous
-  upper/lower boundary coverage remains unchanged. Within that coverage,
+  interval that actually covers the destination pixel. Upper/lower boundaries
+  intersect pointwise before integration, rather than after it. Within that coverage,
   clipped-linear moments integrate PWV5 color in premultiplied linear light;
   a horizontally hidden color sample can no longer tint a visible RGB edge.
   BLUE evaluates its white/cyan/blue radial transfer from the same local
@@ -666,7 +666,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   the display's own sample-and-hold already supplies ~25 Retina pixels of
   persistence blur at 1536 px/s, which no software can remove and which a
   shutter only doubles. Taps stay flat weighted across one physical pixel to keep a moving contour
-  crisp. This footprint policy does not make the signed-overlap approximation exact.
+  crisp. Coverage integrates the resulting profile intersection; profile sampling is
+  separate from the coverage integral.
 - Filter final silhouette coverage—not raw peak height. Geometry and color are
   reconstructed from the same level and phase, preventing the contour from
   acquiring a separate translucent edge.
@@ -678,8 +679,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
   again.
 - The small overview alone composites coverage through a continuous cubic
   ease-out so one-physical-pixel quiet passages remain visible. The scrolling
-  lane uses its geometric coverage directly, with the documented signed-interval
-  overlap approximation; applying overview vividness
+  lane uses its joint geometric coverage directly; applying overview vividness
   there made entering/leaving saturated edge pixels pulse.
 - Address audio detail and compact color with integer sample anchors plus local
   float phase. Never multiply a large absolute float time back into a sample

@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "track_id": "265095720",
+  "source_name": "NGHTMRE & Subtronics - Nuclear Bass Face (feat. Boogie T).mp3",
+  "source_file": "source.mp3",
+  "cache_file": "analysis.sba5",
+  "cases": [
+    {
+      "mode": "RGB",
+      "image": "RGB.png",
+      "archived_frame": "sep29-14.png",
+      "video_second": 14,
+      "transfer": "BT.709 display codes",
+      "waveform_region": [
+        200,
+        190,
+        2800,
+        415
+      ]
+    },
+    {
+      "mode": "BLUE",
+      "image": "BLUE.png",
+      "archived_frame": "oct01-20-srgb.png",
+      "video_second": 20,
+      "transfer": "sRGB",
+      "waveform_region": [
+        200,
+        190,
+        2800,
+        415
+      ]
+    },
+    {
+      "mode": "3BAND",
+      "image": "3BAND.png",
+      "archived_frame": "oct01-60-srgb.png",
+      "video_second": 60,
+      "transfer": "sRGB",
+      "waveform_region": [
+        200,
+        190,
+        2800,
+        415
+      ]
+    }
+  ],
+  "files": {
+    "RGB.png": {
+      "sha256": "cc200b0b2740a72400f740de3f1c9981d9f960e90f1c6b17da2ed798716af901",
+      "size": 653019
+    },
+    "source.mp3": {
+      "sha256": "a666cd836f24ff8fd6a4185edb949a232fd7e71dab917c0f45b11621c3536a2e",
+      "size": 3144968
+    },
+    "BLUE.png": {
+      "sha256": "4da9be819d44b90716b991726f48a109193107a3df0f09fa98cd0f327ab91840",
+      "size": 712023
+    },
+    "analysis.sba5": {
+      "sha256": "8c027a4d0b0c415b66e0a793e11d9a5ff21311c0feb984280032d5058df69161",
+      "size": 920681
+    },
+    "3BAND.png": {
+      "sha256": "a1a8f77af9f20d85b80db507aa7d2e77fa677587f7b23bbd8f196d1dd622936e",
+      "size": 333625
+    }
+  },
+  "provenance": "Frames extracted during October 1 review of supplied September 29 / October 1 recordings. Original MOVs no longer present; archived extracted frames preserved unchanged. Cache/source snapshots read-only October 2. No exact pixel-parity claim."
+}

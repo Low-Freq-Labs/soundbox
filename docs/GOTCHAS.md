@@ -120,8 +120,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   The legacy upload-only zero-row visibility repair may use its independent
   overview; compact imported overviews preserve authored PWV5 zero rows.
 - **Filter final coverage once.** Keep integer song anchors and local phases,
-  one footprint-selected peak level, and one-pixel coverage. The signed interval
-  approximation is documented below; do not treat it as exact joint area. Compact
+  one footprint-selected peak level, and one-pixel coverage. Signed intervals
+  intersect before integration, as documented below. Compact
   mips are `1/2/3/4/6/8/12/16/24/32/48/64`; old V5 retains its persisted ladder.
   The three widest and the 384–1500 close zooms use half a pixel of source
   support; the middle family uses one pixel. This supersedes the four-pixel rule and artificial
@@ -196,13 +196,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Coverage policy may change compositing only—never height, hue, LOD, detail
   density, or timing. This rule applies to both sides of a signed interval:
   averaging five independent inside/outside tests still quantizes BLUE/RGB
-  coverage into fifths. The existing path integrates upper/lower half-planes
-  separately and takes the smaller result. This is an approximation, not exact
-  signed-interval area when both edges traverse a pixel: min of the integrals
-  differs from integral of their pointwise minimum. September 30's numerical
-  counterexample is recorded in the pulse audit. Preserve the accepted shape
-  until a correction passes native still/motion comparison; the color-weight
-  fix alone does not resolve this remaining coverage issue.
+  coverage into fifths. Integrate the pointwise upper/lower intersection with
+  the same clipped moments used for visible color. The older minimum of two
+  separate edge integrals overfilled pixels and was removed October 2. Keep
+  the final fragment covered by a numerical oracle: a correct helper followed
+  by the old alpha override is still wrong. Mutation tests restore that error.
   The interval's minimum full width is one physical pixel before coverage;
   it must follow drawable scale, not the old fixed 3.6-point width. This keeps
   the two half-pixel AA supports from overlapping. The historical High & Scared close-RGB phase sweep cut the aligned
@@ -222,8 +220,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   color depends on the moving signed center and width. Integrate clipped-linear
   coverage moments per quarter-pixel segment, accumulate only visible color in
   premultiplied linear light, and evaluate BLUE's radial field at the local
-  coverage centroid. Preserve the accepted `interval_profile_coverage` result
-  exactly so color work cannot move the silhouette. A temporary flat BLUE fill
+  coverage centroid. Resolve coverage and color together so neither can use an
+  independently averaged silhouette. A temporary flat BLUE fill
   can diagnose this class of defect but is not a fix because it discards PWV3
   depth information.
 - **Keep timing guides continuous, with density-controlled contrast.** The main
@@ -381,8 +379,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   fractional-coordinate sharpening added contrast after the exact resolve and
   made the remaining physical carrier easier to read as pulsing/static. The
   2026-07-30 simplification removed the bed and both post-resolve transfers
-  from the ABI and shader. Keep continuous interval/color integration, subject to
-  the signed-coverage approximation documented above;
+  from the ABI and shader. Keep continuous joint interval/color integration;
   keep 3BAND exact, and regression-check all thirteen real UI zooms.
 - **Never blend two mip levels' coverage. Pick one.** Levels are song-anchored
   maxima on power-of-two lattices, so level N quantizes every 2^N bins and
@@ -672,9 +669,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 ## Type-checking + test-honesty
 - Waveform arithmetic must run production helpers against an independent oracle,
   not a Python copy of the same formula or source strings alone. Headless Metal
-  tests run in the ordinary suite on arm64 macOS. `./check.sh --native` separately
-  requires Cocoa drawable/playback tests with no skips. Explicit known numerical
-  limits must stay visible; see [the audit](waveform-test-audit-2026-10.md).
+  tests run in the offscreen phase on arm64 macOS. `./check.sh` also runs the
+  required Cocoa phase and verifies complete, nonduplicated test inventories.
+  Any skip or expected failure fails the gate; see [the release guide](test-release-gate.md).
 - Integrate tiny clipped pieces using local midpoint moments. Subtraction of
   global squared/cubed endpoints can corrupt color centroids by cancellation,
   producing different BLUE color when an identical segment is reversed.
@@ -1328,7 +1325,8 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
 
 ## Offline iPod metadata tests
 
-`tests/test_ipod_capture.py` is opt-in through `SOUNDBOX_IPOD_CAPTURE`. It copies
+`tests/test_ipod_capture.py` requires the preserved offline fixture;
+`SOUNDBOX_IPOD_CAPTURE` overrides its documented repository-local location. It copies
 private captured metadata into temporary writable fixtures and supplies generated
 audio. Omitted historical audio has sparse size placeholders whose reads fail:
 passing these tests proves database/transaction behavior, not historical audio

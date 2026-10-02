@@ -4022,55 +4022,6 @@ inline float positioned_profile_coverage(
     return total / max(totalSpan, 1e-6);
 }
 
-inline float interval_profile_coverage(
-        thread const float *minimums,
-        thread const float *maximums,
-        thread const float *positions,
-        uint count, float signedPosition,
-        float heightScale, float antialias,
-        float halfWidthScale) {
-    if (count < 2 || count > kAttributeProfileCapacity) {
-        return 0.0;
-    }
-    // Full minimum stroke is one physical pixel (two AA half-widths),
-    // independent of Retina scale. A fixed point width bloats thin carriers.
-    const float minimumHalfWidth =
-        antialias / max(heightScale, 1e-5);
-    const float minimumInsetHalfWidth =
-        antialias / max(heightScale, 1e-5);
-    float lowerEdges[kAttributeProfileCapacity];
-    float upperEdges[kAttributeProfileCapacity];
-    float invertedLowerEdges[kAttributeProfileCapacity];
-    for (uint i = 0; i < count; ++i) {
-        const float low = min(minimums[i], maximums[i]);
-        const float high = max(minimums[i], maximums[i]);
-        const float center = (low + high) * 0.5;
-        const float outerHalfWidth = max(
-            (high - low) * 0.5, minimumHalfWidth);
-        const float halfWidth = max(
-            outerHalfWidth * saturate(halfWidthScale),
-            minimumInsetHalfWidth);
-        lowerEdges[i] = center - halfWidth;
-        upperEdges[i] = center + halfWidth;
-        invertedLowerEdges[i] = -lowerEdges[i];
-    }
-    // Integrate both moving boundaries continuously across the output pixel.
-    // Averaging independent point-in-interval tests quantizes coverage into
-    // fifths, so a sloped BLUE/RGB edge visibly crawls as playback phase
-    // advances. This retained silhouette approximates the overlap by the
-    // lesser integral; it is not exact when both edges traverse the pixel.
-    // See the explicit known-limit GPU regression before changing this policy.
-    const float upperCoverage = positioned_profile_coverage(
-        upperEdges, positions, count,
-        signedPosition * heightScale,
-        heightScale, antialias);
-    const float lowerCoverage = positioned_profile_coverage(
-        invertedLowerEdges, positions, count,
-        -signedPosition * heightScale,
-        heightScale, antialias);
-    return min(upperCoverage, lowerCoverage);
-}
-
 inline CoverageMoments clipped_linear_coverage_moments(
         float valueAtZero, float valueAtOne,
         float begin, float end) {
@@ -4615,18 +4566,12 @@ fragment float4 wave_surface_fragment(
                 profilePositions, profileCount,
                 signedPosition, heightScale, antialias,
                 u.waveformMode == 1);
-            const float acceptedCoverage = interval_profile_coverage(
-                blueMinimums, blueMaximums, profilePositions, profileCount,
-                signedPosition, heightScale, antialias, 1.0);
-            if (acceptedCoverage <= 0.0 || interval.coverage <= 0.0) {
+            if (interval.coverage <= 0.0) {
                 discard_fragment();
             }
-            // The continuous signed-boundary coverage is already visually
-            // accepted. Preserve it bit-for-bit while using the joint resolve
-            // only to condition color on the locally visible interval.
-            interval.premultipliedLinearColor *=
-                acceptedCoverage / interval.coverage;
-            interval.coverage = acceptedCoverage;
+            // Coverage and visible color use the same pointwise interval
+            // intersection. Separately averaging the two edges overfills
+            // pixels when opposite edges cross at different horizontal phases.
             return float4(
                 background * (1.0 - interval.coverage)
                     + interval.premultipliedLinearColor,

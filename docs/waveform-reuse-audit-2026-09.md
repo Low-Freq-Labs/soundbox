@@ -70,8 +70,9 @@ video contact sheet, `color-recovery-report.json` and reproducible CPU scripts.
 The live cache was read, not rewritten; its inspected SHA-256 is
 8c027a4d0b0c415b66e0a793e11d9a5ff21311c0feb984280032d5058df69161.
 
-The broader audit also found an unresolved coverage approximation. The current
-signed compositor overwrites joint coverage with the smaller of separately
+The September 30 audit also found a coverage approximation, subsequently
+corrected October 2 (see [the release gate](test-release-gate.md)). At this
+historical checkpoint the signed compositor overwrote joint coverage with the smaller of separately
 integrated upper/lower half-planes. These are not mathematically equivalent
 when both boundaries cross a pixel. A synthetic diagonal narrow-interval test
 of the extracted shader helper yields approximately 0.509375 versus 0.0125
@@ -115,7 +116,8 @@ but it does not resolve the reported artifact.
 
 An isolated `joint-source/` experiment uses the existing joint interval resolve
 without replacing its coverage by the legacy half-plane minimum; it also includes
-all attribute knots for RGB/BLUE. It is not in production or installed. Its 507
+all attribute knots for RGB/BLUE. It was not in production or installed at that
+checkpoint. Its 507
 native frames and the registered phase comparisons have not established a decisive
 improvement. Bilinear image registration itself filters captured pixels and is
 not an independent flicker ground truth. Flat-color phase controls keep solid
@@ -127,7 +129,9 @@ All scripts and captures remain under the ignored investigation directory.
 
 The October 1 section below supersedes the pending motion diagnosis: the
 complete-corner candidate received physical A/B acceptance. The joint-coverage
-variant remains experimental. Broader 1:1 acceptance still requires pairing
+variant remained experimental at that checkpoint; October 2 later corrected
+production coverage with independent final-fragment oracles and a fresh native
+comparison. Broader 1:1 acceptance still requires pairing
 native drawables/timestamps with physical-panel observation and a matched
 rekordbox recording. Thirteen point-per-second stops are not proof of identical
 rekordbox visible-time windows. Decoder-origin parity outside known headers,
@@ -166,7 +170,8 @@ Only the sampling condition/comment is promoted; the diagnostic uniform/setter
 stays outside production. `tests/test_waveform_profile_math.py` compiles the
 actual profile builder and checks fractional-phase peak area and complete
 corners, with the unchanged branches as positive controls for the former
-missing-peak defect. The previous joint-coverage experiment remains separate.
+missing-peak defect. The previous joint-coverage experiment remained separate
+until the October 2 coverage correction documented in the release gate.
 The personal app was safely installed and relaunched October 1 at 00:18:35.
 All 507 production frames exactly match B. Bare checks passed (1023 tests,
 13 skips), as did 40 Cocoa tests. Twelve moving segments captured 1080 frames

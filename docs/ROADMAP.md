@@ -47,13 +47,15 @@ with the stable signature. All-stop fractional-phase/recenter comparisons pass
 and 3BAND is unchanged, but remaining playback pulses led to the October 1
 complete-corner sampling change at RGB/BLUE 256/384/576/864. Sonny calls B
 “rock solid” in the single-backend live A/B preview. The one-pixel footprint,
-detail, clocks, other zooms and 3BAND remain unchanged. Joint coverage remains
-experimental. Broader track/panel/rekordbox acceptance remains open. See the
+detail, clocks, other zooms and 3BAND remain unchanged. Joint coverage remained
+experimental at that checkpoint. Broader track/panel/rekordbox acceptance remains open. See the
 [pulse audit](waveform-reuse-audit-2026-09.md#september-30-color-pulse-correction).
 The October 1 [test audit](waveform-test-audit-2026-10.md) adds direct Metal
 oracles and synthetic drawable regression coverage, exposes the omitted Cocoa
 gate, and corrects clipped color-moment cancellation. The signed-coverage
-approximation remains a named expected failure, not claimed fixed.
+approximation was recorded as an expected failure at that checkpoint. October 2
+corrects the final coverage intersection and removes the expected-failure label;
+the unified release gate requires every discovered test to run and pass.
 The supplied October 1 [reference verification](waveform-reference-check-2026-10.md)
 confirms intact full-rate 3BAND imports but leaves exact layer geometry unverified.
 BLUE's subsequent color correction widens the edge hue range and replaces the
@@ -61,7 +63,8 @@ unconditional white center with a width-dependent cyan/white interior. The
 reference-gamut and thin-interval GPU regressions now pass, including a mutation
 that restores the washout. Sonny accepted the narrowed
 white center in the live comparison, and it is installed. Exact color parity and
-broader track acceptance remain open; signed coverage is an independent known limit.
+broader track acceptance remain open. See the [release test guide](test-release-gate.md)
+for the corrected coverage and required frozen fixtures.
 The recognized MP3 source origin is coupled to native playback/seek/duration;
 unknown headers retain their old origin. Exact fallback equivalence, every
 codec/header variant, and long-session physical-panel acceptance remain outside

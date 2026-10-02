@@ -247,17 +247,13 @@ zoom retains fractional travel through the oversampled attribute lattice. The
 antialias window is exactly one physical pixel. The small overview applies
 continuous cubic vividness to true subpixel coverage; the scrolling lane uses
 geometric coverage rather than the overview's vividness transfer.
-For signed intervals, taking the smaller of separately integrated upper/lower
-half-plane coverages is an approximation: it can overestimate narrow diagonal
-traces. The September 30 audit establishes this limitation; changing it still
-requires comparison against the accepted detail.
-For BLUE/RGB signed intervals, the fragment additionally integrates clipped
-linear coverage moments and conditions color on the locally visible portion of
-each quarter-pixel segment. PWV5 RGB and BLUE's center/width-dependent radial
-field are accumulated in premultiplied linear light; a hidden horizontal sample
-cannot tint a visible interval. The established continuous upper/lower boundary
-coverage is reapplied exactly after the color resolve, preserving silhouette
-geometry independently from color.
+For BLUE/RGB signed intervals, the fragment integrates clipped linear coverage
+moments and visible color over the same pointwise intersection. It does not
+reapply the smaller of separately integrated upper/lower boundaries: that older
+approximation overfilled narrow diagonal traces and was removed October 2.
+PWV5 RGB and BLUE's center/width-dependent radial field accumulate in
+premultiplied linear light. Source extrema, mips and the one-pixel footprint are
+unchanged; the corrected alpha describes only the area actually covered.
 The canonical 64–256 px/s midrange family applies one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
 integration. The 24–48 distant stops and 384–1500 close family bypass it; it
@@ -295,8 +291,7 @@ pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
 carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
-uses continuous coverage/color integration directly, subject to the signed
-coverage approximation above. The installed September 30 correction additionally
+uses continuous joint coverage/color integration directly. The installed September 30 correction additionally
 retains the original color-premultiplication weight through attribute interpolation;
 reconstructing that weight from interpolated signed bounds spuriously brightens
 polarity/dominant-boundary crossings. Geometry and coverage are unchanged.

@@ -535,7 +535,7 @@ class NativeWaveformShader(unittest.TestCase):
             "vertex Out grid_vertex", 1
         )[0]
         self.assertEqual(fragment.count("saturate(coverage)"), 2)
-        self.assertIn("interval_profile_coverage(", fragment)
+        self.assertIn("resolve_interval_surface(", fragment)
         self.assertIn(
             "background * (1.0 - interval.coverage)\n"
             "                    + interval.premultipliedLinearColor",
@@ -752,7 +752,7 @@ class NativeWaveformShader(unittest.TestCase):
         )[0]
         self.assertIn(
             "if (u.waveformMode == 1 || u.waveformMode == 2)", fragment)
-        self.assertEqual(fragment.count("interval_profile_coverage("), 1)
+        self.assertEqual(fragment.count("resolve_interval_surface("), 1)
         self.assertIn(
             "IntervalSurface interval = resolve_interval_surface(", fragment)
         self.assertIn(
@@ -763,9 +763,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "u.waveformMode == 1);",
             fragment)
-        self.assertIn("const float acceptedCoverage =", fragment)
-        self.assertIn(
-            "acceptedCoverage / interval.coverage", fragment)
+        self.assertNotIn("acceptedCoverage", fragment)
         self.assertNotIn("centerSum", fragment)
         self.assertNotIn("radialBlendSum", fragment)
 

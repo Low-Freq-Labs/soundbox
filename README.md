@@ -82,7 +82,10 @@ workflow.
 The check script runs lint, the native build, engine type checks, and the test
 suite. `./check.sh --render` also creates an offscreen UI render. Run the script
 directly so a failed check remains visible; historical test counts in handoff
-notes are dated evidence, not a promise about a new checkout.
+notes are dated evidence, not a promise about a new checkout. Every discovered
+test must run and pass; skips and expected failures fail the release gate.
+Required offline fixtures and provisioning are documented in the
+[release test guide](docs/test-release-gate.md).
 
 `./build_app.sh` builds the full personal app; `./build_app.sh public` builds
 `dist/public/Soundbox.app` separately. `Soundbox.spec` is the shared packaging
@@ -450,9 +453,9 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
 
 ## Development
 
-    ./check.sh            # pyflakes + native build + mypy (engine) + full test suite
+    ./check.sh            # lint/build/types + all offscreen/Cocoa tests; zero skips
     ./check.sh --render   # + offscreen UI render to /tmp
-    ./check.sh --native   # + Cocoa drawable/playback gate; required for native changes
+    ./check.sh --native   # compatibility alias; native tests always run
     ./build_native.sh     # CoreAudio/Metal dylib only
     ./build_app.sh        # PyInstaller → dist/personal/Soundbox.app (self-signed)
 

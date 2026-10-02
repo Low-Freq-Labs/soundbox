@@ -79,8 +79,9 @@ present those model errors as matched native-frame pixel errors.
 The gamut regression now passes. A production-Metal regression additionally
 requires fully covered thin interval centers to reach cyan, preserves white in
 broad centers, and proves restoring an unconditional white center violates the
-cyan requirement. It is no longer an expected failure; the independent legacy
-signed-coverage approximation remains one.
+cyan requirement. The gamut expected failure was retired October 1. The
+independent signed-coverage expected failure was then corrected October 2; see
+[the release gate](test-release-gate.md).
 
 Across 507 actual native captures (all modes/stops, three song positions, four
 subpixel phases and recenter), all 338 RGB/3BAND frames are pixel-identical to the

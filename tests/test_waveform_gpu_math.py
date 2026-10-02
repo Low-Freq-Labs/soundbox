@@ -22,7 +22,23 @@ def audit_shader(source):
     block = shader[start:shader.index('        float heights[kAttributeProfileCapacity];', start)]
     expression = re.search(r'intervalEncodedColors\[i\]\s*=\s*(.*?);', shader, re.S)[1]
     outer = re.search(r'const float outerHeight =.*?;', shader, re.S)[0]
-    return shader + r'''
+    start = shader.index('            IntervalSurface interval = resolve_interval_surface(')
+    end = shader.index('        const float coverage = positioned_profile_coverage(', start)
+    compositor = shader[start:end].rsplit('        }', 1)[0]
+    # Execute the production final fragment branch in a compute-callable wrapper.
+    # Discard is equivalent to the untouched background for this opaque surface.
+    compositor = compositor.replace('discard_fragment();', 'return float4(background, 1.0);')
+    wrapper = r'''
+inline float4 audit_composite(thread const float *blueMinimums,
+        thread const float *blueMaximums, thread const float3 *intervalEncodedColors,
+        thread const float *profilePositions, uint profileCount, float signedPosition,
+        float heightScale, float antialias, uint mode) {
+    Uniforms u{}; u.waveformMode = mode;
+    float3 background = float3(0.0);
+    COMPOSITOR
+}
+'''.replace('COMPOSITOR', compositor)
+    return shader + wrapper + r'''
 kernel void audit_math(device const float *inputs [[buffer(0)]],
                        device float *outputs [[buffer(1)]], uint id [[thread_position_in_grid]]) {
     device const float *a = inputs + id * 64;
@@ -51,7 +67,9 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         out[1] = v.premultipliedLinearColor.r;
         out[2] = v.premultipliedLinearColor.g;
         out[3] = v.premultipliedLinearColor.b;
-        out[4] = interval_profile_coverage(lower, upper, positions, count, a[2], a[3], a[4], 1.0);
+        float4 final = audit_composite(lower, upper, colors, positions,
+            count, a[2], a[3], a[4], a[5] != 0 ? 1u : 2u);
+        out[4] = final.r; out[5] = final.g; out[6] = final.b;
     } else if (op == 4) {
         device const WaveSample *samples = (device const WaveSample *)(a + 8);
         WaveTap tap = three_band_detail_tap(samples, 0, uint(a[1]),
@@ -315,19 +333,42 @@ class WaveformGPUMath(unittest.TestCase):
         self.assertTrue((values[:, 1:4] <= values[:, :1]+2e-6).all())
         self.assertTrue((values[:, :5] >= -2e-6).all())
 
-    def setUp(self):
-        # Execute outside expectedFailure: GPU/compiler/fixture failures must
-        # remain real errors, never be swallowed as the known math limitation.
-        if self._testMethodName == "test_known_signed_coverage_approximation_matches_pointwise_area":
-            row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
-            row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
-            row[22:24] = [0, 1]; row[29:35] = 1
-            self.known_actual = self.execute([row])[0, 4]
-            self.known_expected = interval_oracle(row)[0]
+    def test_signed_crossing_final_fragment_matches_pointwise_area(self):
+        row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
+        row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
+        row[22:24] = [0, 1]; row[29:35] = 1
+        expected = interval_oracle(row)
+        actual = self.execute([row])[0]
+        np.testing.assert_allclose(actual[:4], expected, atol=3e-5, rtol=0)
+        # White on black exposes final coverage directly, including any
+        # post-resolve alpha replacement in the production fragment.
+        np.testing.assert_allclose(actual[4:7], expected[1:], atol=3e-5, rtol=0)
 
-    @unittest.expectedFailure
-    def test_known_signed_coverage_approximation_matches_pointwise_area(self):
-        # Tracked limitation: production replaces joint coverage with min of
-        # separately integrated edges. Keep the correctness assertion visible,
-        # never assert that its wrong answer is the desired result.
-        self.assertAlmostEqual(float(self.known_actual), float(self.known_expected), delta=3e-5)
+    def test_final_rgb_fragment_matches_independent_visible_color(self):
+        rows = self.interval_cases()
+        expected = np.array([interval_oracle(row)[1:] for row in rows])
+        np.testing.assert_allclose(self.execute(rows)[:, 4:7], expected, atol=3e-5, rtol=0)
+
+    def test_restoring_separate_edge_averages_breaks_final_fragment_oracle(self):
+        row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
+        row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
+        row[22:24] = [0, 1]; row[29:35] = 1
+        old = r'''
+            float inverted[kAttributeProfileCapacity];
+            for (uint i = 0; i < profileCount; ++i) inverted[i] = -blueMinimums[i];
+            float oldCoverage = min(
+                positioned_profile_coverage(blueMaximums, profilePositions, profileCount,
+                    signedPosition * heightScale, heightScale, antialias),
+                positioned_profile_coverage(inverted, profilePositions, profileCount,
+                    -signedPosition * heightScale, heightScale, antialias));
+            interval.premultipliedLinearColor *= oldCoverage / max(interval.coverage, 1e-6);
+            interval.coverage = oldCoverage;
+'''
+        anchor = '            if (interval.coverage <= 0.0) {'
+        mutated = self.source.replace(anchor, old + anchor)
+        self.assertNotEqual(mutated, self.source)
+        expected = interval_oracle(row)[1:]
+        fixed = self.execute([row])[0, 4:7]
+        broken = self.execute([row], mutated)[0, 4:7]
+        np.testing.assert_allclose(fixed, expected, atol=3e-5, rtol=0)
+        self.assertGreater(float(np.max(np.abs(broken - expected))), .4)

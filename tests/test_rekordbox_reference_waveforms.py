@@ -1,123 +1,74 @@
-"""Integrity checks for the private six-image waveform acceptance corpus.
+"""Frozen supplied-reference integrity; never reads live AppData or Desktop.
 
-Pixel acceptance is performed by ``scripts/render_waveform_reference.py`` with
-the real native Metal deck. These tests deliberately do not replace rendering
-with a correlation score; they ensure the harness stays bound to the exact two
-source WAVs, imported caches, modes, positions, and untouched reference PNGs.
+This corpus supersedes the unavailable historical two-track screenshots with
+Sonny's Sept 29 / Oct 1 Nuclear reference frames. Integrity and palette checks
+are not exact pixel-parity acceptance; native geometry has separate oracles.
 """
-
+import hashlib
 import json
-from pathlib import Path
 import struct
 import unittest
 
 import numpy as np
 from PIL import Image
 
-from scripts.render_waveform_reference import (
-    DEFAULT_CACHE_ROOT,
-    DEFAULT_REFERENCE_ROOT,
-    REFERENCE_CASES,
-)
+from scripts.check_fixtures import waveform_reference
 from scripts.compare_waveform_motion import compare as compare_motion
 from soundbox import track_analysis
 
 
-EXPECTED_SOURCES = {
-    "33638604": "Bad Decisions w SUMA (FINAL FR).wav",
-    "54231927": "Sonny - High & Scared (final master).wav",
-}
-EXPECTED_WINDOWS = {
-    "33638604": (25_597, 768.0),
-    "54231927": (27_000, 1536.0),
-}
-
-
-def _manifest(track_id: str) -> tuple[dict, Path]:
-    matches = list(DEFAULT_CACHE_ROOT.glob(f"{track_id}-*.sba5"))
-    if not matches:
-        matches = list(DEFAULT_CACHE_ROOT.glob(f"{track_id}-*.sba4"))
-    if len(matches) != 1:
-        raise AssertionError(
-            f"expected one real cache for {track_id}, found {matches}")
-    path = matches[0]
-    with path.open("rb") as handle:
-        magic, size = struct.unpack(
-            "<4sI", handle.read(track_analysis._HEADER.size))
-        if magic not in {b"SBA4", b"SBA5"}:
-            raise AssertionError(f"bad cache magic: {path}")
-        return json.loads(handle.read(size)), path
-
-
-@unittest.skipUnless(
-    DEFAULT_REFERENCE_ROOT.is_dir() and DEFAULT_CACHE_ROOT.is_dir(),
-    "private Rekordbox waveform acceptance corpus is not installed",
-)
 class RekordboxReferenceWaveforms(unittest.TestCase):
-    def test_corpus_is_exactly_two_real_tracks_by_three_modes(self):
-        self.assertEqual(len(REFERENCE_CASES), 6)
-        self.assertEqual(
-            {(track_id, mode) for track_id, mode, _position, _zoom, _file
-             in REFERENCE_CASES},
-            {(track_id, mode)
-             for track_id in EXPECTED_SOURCES
-             for mode in ("BLUE", "RGB", "3BAND")},
-        )
-        for track_id, mode, position_ms, zoom, filename in REFERENCE_CASES:
-            with self.subTest(track=track_id, mode=mode):
-                self.assertEqual(position_ms % 1, 0)
-                self.assertGreater(position_ms, 20_000)
-                self.assertEqual(
-                    (position_ms, zoom), EXPECTED_WINDOWS[track_id])
-                with Image.open(DEFAULT_REFERENCE_ROOT / filename) as image:
-                    self.assertGreater(image.width, 2_800)
-                    self.assertGreater(image.height, 275)
+    @classmethod
+    def setUpClass(cls):
+        cls.root, cls.reference = waveform_reference()
 
-    def test_harness_sources_and_streams_are_the_real_imported_records(self):
-        section_for_mode = {
-            "BLUE": "blue_detail",
-            "RGB": "rgb_detail",
-            "3BAND": "three_band",
-        }
-        manifests = {}
-        for track_id in EXPECTED_SOURCES:
-            manifests[track_id], _path = _manifest(track_id)
-        for track_id, mode, _position_ms, _zoom, _filename in REFERENCE_CASES:
-            manifest = manifests[track_id]
-            with self.subTest(track=track_id, mode=mode):
-                source = Path(manifest["source"]["path"])
-                self.assertTrue(source.is_file())
-                self.assertEqual(source.name, EXPECTED_SOURCES[track_id])
-                self.assertEqual(
-                    manifest["provenance"]["analysis"],
-                    "rekordbox-import+soundbox")
-                self.assertGreater(
-                    manifest["sections"][section_for_mode[mode]]["raw_size"],
-                    20_000,
-                )
+    def test_corpus_contains_frozen_supplied_frames_in_all_three_modes(self):
+        self.assertEqual(len(self.reference['cases']), 3)
+        self.assertEqual({row['mode'] for row in self.reference['cases']},
+                         {'BLUE', 'RGB', '3BAND'})
+        for row in self.reference['cases']:
+            with Image.open(self.root / row['image']) as image:
+                self.assertEqual(image.size, (3006, 444))
+                self.assertGreater(row['video_second'], 0)
+                self.assertIn(row['transfer'], ('sRGB', 'BT.709 display codes'))
+        self.assertEqual(self.reference['track_id'], '265095720')
 
-    def test_reference_palette_contains_rekordbox_authored_colors(self):
-        exact_required = {
-            "BLUE": ((255, 255, 255),),
-            "RGB": ((255, 0, 0), (0, 125, 225)),
-            "3BAND": (
-                (0, 85, 225),
-                (180, 105, 10),
-                (245, 235, 215),
-                (210, 220, 250),
-            ),
-        }
-        for _track_id, mode, _position_ms, _zoom, filename in REFERENCE_CASES:
-            with Image.open(DEFAULT_REFERENCE_ROOT / filename) as image:
-                colors = set(image.convert("RGB").get_flattened_data())
-            with self.subTest(mode=mode, file=filename):
-                for color in exact_required[mode]:
-                    self.assertIn(color, colors)
-                if mode == "BLUE":
-                    self.assertTrue(any(
-                        blue > 180 and green > 80 and red < 80
-                        for red, green, blue in colors
-                    ))
+    def test_frozen_source_and_cache_preserve_full_rate_imported_streams(self):
+        source = self.root / self.reference['source_file']
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
+            self.reference['files'][source.name]['sha256'])
+        raw = (self.root / self.reference['cache_file']).read_bytes()
+        magic, size = struct.unpack('<4sI', raw[:8])
+        self.assertEqual(magic, b'SBA5')
+        manifest = json.loads(raw[8:8+size])
+        self.assertEqual(manifest['source']['size'], source.stat().st_size)
+        self.assertEqual(manifest['provenance']['analysis'], 'rekordbox-import+soundbox')
+        sections = track_analysis._decode_sections(raw[8+size:], manifest)
+        self.assertIsNotNone(sections)
+        for key, mode, width, tag in [('blue_detail', 'blue', 1, 'pwv3'),
+                                      ('rgb_detail', 'rgb', 2, 'pwv5'),
+                                      ('three_band', 'three_band', 3, 'pwv7')]:
+            self.assertEqual(manifest['stream_provenance'][mode], 'rekordbox-anlz-'+tag)
+            self.assertEqual(len(sections[key]), 29290*width)
+        self.assertEqual(float(manifest['color_rate']), 150.0)
+
+    def test_reference_palette_retains_recorded_cyan_rgb_and_band_colors(self):
+        for row in self.reference['cases']:
+            with Image.open(self.root / row['image']) as image:
+                a = np.asarray(image.convert('RGB').crop(tuple(row['waveform_region'])))
+            r, g, b = a.transpose(2, 0, 1).astype(int)
+            if row['mode'] == 'BLUE':
+                masks = [(r <= 24) & (g >= 235) & (b >= 235)]
+            elif row['mode'] == 'RGB':
+                masks = [(r > 200) & (g < 90) & (b < 90),
+                         (r < 90) & (g > 100) & (b > 180)]
+            else:
+                masks = [(r < 90) & (g < 170) & (b > 170),
+                         (r > 180) & (g > 100) & (g < 220) & (b < 90),
+                         (r > 220) & (g > 220) & (b > 200)]
+            with self.subTest(mode=row['mode']):
+                for mask in masks:
+                    self.assertGreater(int(mask.sum()), 500)
 
 
 class WaveformMotionMetric(unittest.TestCase):

@@ -375,17 +375,19 @@ Header probes belong to the native decode thread. See `docs/PLAYER.md`.
 
 ## Development
 
-    ./check.sh            # native build + pyflakes + mypy(engine) + full suite
+    ./check.sh            # lint/build/types + all offscreen/Cocoa tests; zero skips
     ./check.sh --render   # + hermetic offscreen UI render
-    ./check.sh --native   # + explicit Cocoa drawable/playback gate; no skips
+    ./check.sh --native   # compatibility alias; Cocoa is always required
     ./build_native.sh     # arm64 CoreAudio/Metal dylib only
     ./build_app.sh        # personal → dist/personal/Soundbox.app, then stable signing
 
-- Waveform/native changes also require `./check.sh --native`. The ordinary
-  suite executes headless Metal math on arm64 macOS; its offscreen Qt run does
-  not establish Cocoa drawable/playback acceptance. The native gate fails on
-  skips. Known mathematical approximations stay explicitly labeled expected
-  failures, never assertions that a wrong answer is correct.
+- The release gate routes every discovered test exactly once into offscreen or
+  Cocoa processes and reconciles their inventories. Skips, expected failures,
+  missing fixtures and unrun tests fail the gate. Headless Metal oracles and
+  native drawable/playback tests always run on the supported arm64 Mac.
+  Required offline iPod and frozen waveform snapshots are private, read-only
+  inputs; see `docs/test-release-gate.md` for provisioning. Never read live
+  devices/AppData or silently replace reference fixtures to make a gate pass.
 - Run `./check.sh` **bare**—never pipe it through `tail`/`grep` in an `&&`
   chain because that can mask a failing gate.
 - Python 3.14, pinned dependencies in `requirements.txt`, venv at `.venv/`.

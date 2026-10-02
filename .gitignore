@@ -17,3 +17,5 @@ dist/
 /soundbox-cdj-ref/
 # local stock/Rockbox iPod golden-reference snapshots
 /soundbox-ipod-ref/
+# private immutable waveform release fixtures (manifest is tracked)
+/soundbox-waveform-ref/

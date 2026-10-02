@@ -1,6 +1,6 @@
-"""Opt-in real-database regression; never writes the original capture or sources.
+"""Required offline database regression; never writes the original capture or sources.
 
-SOUNDBOX_IPOD_CAPTURE points to a private capture containing device/ and
+SOUNDBOX_IPOD_CAPTURE can override the preserved private capture containing device/ and
 inventory.json. Omitted historical audio is represented by sparse size fixtures;
 opening those fixtures as audio is an error. Only generated new audio is read.
 These tests do not establish hardware or historical-audio integrity.
@@ -28,10 +28,13 @@ from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 from soundbox.sync import DeviceSession
 
 
-@unittest.skipUnless(os.environ.get('SOUNDBOX_IPOD_CAPTURE'), 'private capture not supplied')
 class CapturedIpodLifecycle(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from scripts.check_fixtures import ipod_capture
+        cls.capture = ipod_capture()
+
     def setUp(self):
-        self.capture = Path(os.environ['SOUNDBOX_IPOD_CAPTURE']).resolve(strict=True)
         self.temp = tempfile.TemporaryDirectory(prefix='soundbox-captured-ipod-')
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)

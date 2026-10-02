@@ -15,9 +15,11 @@ The previous suite had three material gaps:
   not evidence of correct numerical output.
 - `./check.sh` runs Qt offscreen, so native Cocoa tests were skipped. The old
   final “ALL CHECKS PASSED” line concealed that distinction. The ordinary suite
-  now executes headless Metal math on supported Macs; `--native` adds an explicit
+  at that checkpoint executed headless Metal math on supported Macs; `--native` added an explicit
   fresh Cocoa process whose gate fails on skipped/expected-failure tests. The
-  summary explicitly names the omitted gate and reported limitations.
+  summary named the omitted gate and reported limitations. October 2 makes both
+  processes mandatory and reconciles every test ID; skips and expected failures
+  now fail the whole release gate.
 - Developer comparisons depended on private tracks and ignored scripts. A
   tracked synthetic native drawable test now covers all thirteen zooms and
   RGB/BLUE/3BAND with temporary generated audio and analysis, no AppData or device
@@ -62,16 +64,17 @@ it changes neither authored geometry, sampling footprint, LOD, stroke width,
 clock nor the accepted separate silhouette policy. The reversal and tiny-piece
 oracles pass after the correction.
 
-## Explicit remaining limitations
+## October 1 limitations and October 2 correction
 
-The production signed silhouette still takes the minimum of separately integrated
-upper/lower edges. That is not the integral of their pointwise intersection.
-`test_known_signed_coverage_approximation_matches_pointwise_area` asserts the
-correct value and is explicitly marked expected-failure. Its GPU execution runs
-in setup, outside expected-failure handling, so compiler/GPU failures cannot be
-mistaken for that known numerical limit. An unexpected pass fails the suite and
-requires retiring the label. This has not been silently changed after Sonny's
-visual acceptance; the isolated joint-coverage experiment remains separate.
+At the October 1 checkpoint, the production signed silhouette took the minimum
+of separately integrated upper/lower edges. That is not the integral of their pointwise intersection.
+`test_known_signed_coverage_approximation_matches_pointwise_area` asserted the
+correct value with an explicit expected-failure label. GPU execution ran in
+setup so infrastructure failures could not be mistaken for the known math limit.
+October 2 replaces that final alpha override with the joint resolve, keeps the
+assertion as an ordinary passing test, adds random final-fragment comparisons,
+and proves a mutation restoring the separate-edge rule fails. The source detail,
+footprint and palette do not change. See [the release gate](test-release-gate.md).
 
 The retained five-probe RGB/BLUE 64–184 and 3BAND below 1152 branches are also
 approximations: complete-corner peak invariance is not claimed there. The CPU
