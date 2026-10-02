@@ -4,7 +4,10 @@ Updated October 2, 2026, America/Chicago.
 
 ## Release state
 
-Branch `main`. This release includes the accepted waveform/color corrections,
+Branch `main`; runtime release **66aa2b7072d8b885c34e3620a65cf29e26899f9e** is
+committed and pushed to `origin/main`. This handoff update is a documentation-only
+follow-up; use `git rev-parse HEAD` for its containing repository revision.
+This release includes the accepted waveform/color corrections,
 compact import-first analysis, provider/build composition, device mount/status
 presentation, regression gates and reconciled documentation. The installed app
 already contains these runtime sources; only documentation changed during the
@@ -22,6 +25,8 @@ inspected. Harnesses suppress real device/library discovery and use disposable
 state; native tests use generated audio. Runtime files have byte parity, relative
 Markdown file links resolve, and `git diff --check` passes. The developer
 requirements now pin the numerical test/tool SciPy dependency; `pip check` passes.
+Git publication used the existing `~/.ssh/lowfreqlabs_key` explicitly because
+the default SSH agent had no loaded identities; no remote/config changes were needed.
 
 Final installed-source fingerprint, executable/native hashes and live-library
 hash were rechecked October 2 at **16:03:18 CDT**. All match the accepted install
