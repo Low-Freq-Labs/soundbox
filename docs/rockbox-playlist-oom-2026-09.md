@@ -222,3 +222,60 @@ The user subsequently reports normal playback with no OOM so far and asked to
 resume architecture work. This supports continued observation with auto-update
 off; session duration and allocator behavior remain unmeasured, so it is not a
 confirmed leak diagnosis or permanent-resolution claim.
+
+## September 30: low-battery shutdown investigation
+
+Separate from the earlier OOM report, Sonny supplied a Rockbox 4.0 Battery
+Bench run ending at 04:06:06 / 48% / 3836 mV. The preceding approximately
+50 minutes stay near 3837 mV. His photo shows Rockbox's own
+"Battery empty! RECHARGE! Shutting down..." over the playback screen.
+Wired headphones were in use, but the Playersmod Bluetooth board can remain
+on unnoticed: its control is tied to the Menu/hold control and its indicator
+is visible through the headphone socket. Bluetooth state during this run is
+unknown. Sonny reports Menu+Select is required to restart without charging;
+Play alone does not restart it. This does not establish that shutdown finished
+normally. Storage-adapter model and post-reset voltage remain unconfirmed.
+
+Read-only inspection of the captured official v4.0-final source establishes:
+
+- `battery_bench.c` records cached, filtered `battery_voltage()`, buffers up
+  to 1000 entries, flushes through storage-idle callbacks, and attempts a final
+  flush/end marker on SYS_POWEROFF/SYS_REBOOT. The supplied text has no end
+  marker. Its last saved row cannot establish the voltage or exact timing of
+  the shutdown decision; later buffered samples could be absent.
+- `powermgmt.c` compares filtered voltage with the shutdown threshold.
+  The default filter is 128 with nominal half-second steps. From a steady
+  3836 mV, one zero-valued raw sample would yield approximately 3806 mV,
+  not an immediate crossing of 3300 mV. Persistent bad readings or a genuine
+  sustained voltage drop remain possible. Sampling normally skips active
+  storage above the low-battery region, so a flat log alone does not prove
+  equally stable physical voltage.
+- `powermgmt-ipod-pcf.c` sets iPod Video's default shutoff to 3300 mV and
+  disk-safe threshold to 3500 mV. `apps/misc.c` selects the photographed
+  message when the disk-safe check fails during shutdown. The message alone
+  therefore does not prove a 3300 mV crossing or identify the original
+  shutdown trigger. A `.rockbox/battery_levels.cfg` can override thresholds;
+  the September 27 capture contains only `battery_levels.default`, not an
+  active override. Current live settings were not inspected in this turn.
+- `adc-ipod-pcf.c` does not check the PMU multi-byte read's error return before
+  consuming its data. This is a concrete diagnostic weakness, not evidence
+  an I2C failure occurred here. ADC scaling is approximately 5.86 mV per
+  count; 3837 mV corresponds to a valid quantized reading. Repeated 3837s
+  alone do not demonstrate a stuck ADC or memory corruption.
+- `apps/debug_menu.c` offers an unfiltered reading on the status page of
+  System / Debug / View battery (`battery_read_info`). This is still the same
+  hardware sensor, not an independent measurement of battery-terminal voltage.
+
+Next physical comparison: same wired playback with Bluetooth positively off,
+recording raw debug voltage before playback and after any forced restart,
+plus exact warning/reset behavior and elapsed time. Repeated Bluetooth-on/off
+comparisons may isolate the added load/control path. If failure persists,
+compare equivalent stock-firmware playback where supported. Distinguishing
+sensor errors from real rail sag ultimately needs instrumented raw/filtered
+readings and, where necessary, a qualified hardware measurement under load.
+Do not lower protection thresholds, infer a fix from the capacity setting,
+or equate a genuine allocation failure with memory corruption. A common cause
+for the OOM and battery reports is not established. No device, firmware,
+preferences, or SoundBox runtime code was changed for this investigation.
+
+Primary source reference: [Rockbox v4.0-final](https://github.com/Rockbox/rockbox/tree/v4.0-final).

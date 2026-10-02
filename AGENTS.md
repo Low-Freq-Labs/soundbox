@@ -248,21 +248,25 @@ references/sizes; Deep Verify also hashes managed files; Repair explicitly audit
 inventory and restores missing owned Rockbox payloads/art. None of these modes
 turns a clean badge into a fresh source-content integrity certificate.
 
-Connection presentation separates visibility from readiness. A debounced
-`/Volumes` notification requests discovery even during playback or an eject-ready
-hold. If a device worker owns the lane, the request stays pending for retry.
-A three-second timer checks the local `/Volumes` directory timestamp to recover
-missed events; it does not open mounted children merely to check that timestamp.
-With no connected devices and no failed probe, an unchanged timestamp starts no
-discovery worker. Failed probes retry with a 3–30-second backoff; mount events
-request immediate discovery. Connected-device drift keeps its three-second poll.
-Ordinary unmounted folders are skipped after a 30-second attachment grace.
-Verified external mounts appear by name, disabled during discovery.
-At QThread.finished they become selectable. Stock/dual dashboard loading
-appears only in the bottom status; device rows have no loading suffix. A cached
+Connection presentation separates visibility from readiness. Debounced `/Volumes`
+notifications and a 250-ms cached kernel mount-table check request discovery even
+during playback or an eject-ready hold. The latter uses Darwin
+`getfsstat64(MNT_NOWAIT)` without opening mounted paths, so mounting over an
+existing directory cannot strand detection behind probe backoff. These are hints,
+never external-device/write authority. A busy lane retains the request and retries
+on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
+unchanged mount/timestamp state starts no idle discovery worker. Failed probes
+retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
+three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
+Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+computes sync drift before publishing the selectable row at QThread.finished;
+unknown/failed checks say `Sync status pending`, never imply a clean result.
+Stock/dual dashboard preload follows in the same serialized device lane, with
+loading only in the bottom status after the row becomes ready. Successful preload
+clears that status directly, without another immediate drift scan. A cached
 dashboard is presentation-only; selecting while it loads uses the same serialized
-preload. Writes stay guarded by
-operation ownership and firmware capabilities. Remounts invalidate stale views.
+preload. Writes stay guarded by operation ownership and firmware capabilities.
+Remounts invalidate stale views.
 
 
 Playback and iPod management are independent. Device discovery and ordinary
@@ -286,8 +290,9 @@ unknown config lines; retain the established numbered playlist filenames.
 | `docs/sync-performance-audit-2026-09.md` | Composite inventory reuse, source-read counters and physical acceptance |
 | `docs/repeated-work-audit-2026-09.md` | Completed non-USB optimizations and before/after evidence |
 | `docs/software-audit-2026-09.md` | Architecture, lifecycle, persistence and performance findings with evidence |
-| `docs/release-boundaries.md` | Confirmed public/personal feature scope and proposed optional-module contract |
+| `docs/release-boundaries.md` | Public/personal scope, provider contract and distribution boundaries |
 | `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and pending grid work |
+| `docs/waveform-reuse-audit-2026-09.md` | Rekordbox-first waveform implementation, storage audit, diagnostic previews and remaining acceptance |
 | `docs/DEVICES.md` | Rockbox/stock/dual-boot/generic layouts, capability boundaries, and validation |
 | `docs/ARCHITECTURE.md` | Engine/desktop/native layout, data model, persistence, build/install |
 | `docs/GOTCHAS.md` | Hard-won Qt/QThread/native-player/rekordbox/Rockbox traps |
@@ -359,13 +364,28 @@ rendering, clocks, transport behavior, analysis loading, or native code.
 - Do not hard-code a "current" test count as evergreen truth; trust
   `./check.sh`. Dated validation records may include the observed count.
 
+Waveform preparation is import-first for complete PWV3/PWV5/PWV7 streams plus grid.
+Compact V5 stores one 1-ms signed-detail supplement and builds zoom mips in
+memory; incomplete imports retain the full fallback analyzer. Old V5 remains
+ready and upgrades only on selected local-track load or explicit reanalysis,
+never by invalidating the whole library at startup. Preserve manual grid/cue
+ownership and authoritative DB cues. MP3 source-origin changes must couple
+analysis, audible playback, duration and seeks; never shift only the waveform.
+Header probes belong to the native decode thread. See `docs/PLAYER.md`.
+
 ## Development
 
     ./check.sh            # native build + pyflakes + mypy(engine) + full suite
     ./check.sh --render   # + hermetic offscreen UI render
+    ./check.sh --native   # + explicit Cocoa drawable/playback gate; no skips
     ./build_native.sh     # arm64 CoreAudio/Metal dylib only
-    ./build_app.sh        # PyInstaller → dist/Soundbox.app, then stable signing
+    ./build_app.sh        # personal → dist/personal/Soundbox.app, then stable signing
 
+- Waveform/native changes also require `./check.sh --native`. The ordinary
+  suite executes headless Metal math on arm64 macOS; its offscreen Qt run does
+  not establish Cocoa drawable/playback acceptance. The native gate fails on
+  skips. Known mathematical approximations stay explicitly labeled expected
+  failures, never assertions that a wrong answer is correct.
 - Run `./check.sh` **bare**—never pipe it through `tail`/`grep` in an `&&`
   chain because that can mask a failing gate.
 - Python 3.14, pinned dependencies in `requirements.txt`, venv at `.venv/`.
@@ -444,3 +464,17 @@ state, and reloads only after worker finished/join. Old area generations cannot
 write after restore. Preserve `.state-transaction` if rollback fails; startup
 recovers it. `.state-retired` is disposable only after commit/rollback retirement.
 The app entrypoint holds an AppData instance lock. Never fault-inject live state.
+
+Public/personal composition uses the tracked `Soundbox.spec` and
+`scripts/build_composition.py`. `./build_app.sh public` writes
+`dist/public/Soundbox.app`; no argument builds personal. Only install the personal
+artifact on Sonny's Mac. Frozen profiles come from the signed bundle manifest;
+user settings/environment cannot enable an excluded provider. Source runs may use
+`SOUNDBOX_PROFILE=public`. Existing SoundCloud discovery is in
+`soundbox_personal.discovery`; core `soundbox.providers` owns typed interfaces and
+explicit module/action admission. Core retains all state and device authority.
+Online functionality is public-eligible only after service/content and dependency
+clearance; personal packaging does not waive those terms.
+`--isolated-check OUTPUT_DIRECTORY` launches an empty disposable-state packaged
+smoke check, suppresses library/device discovery, writes a screenshot/report and
+exits. It is not live-library or physical-device acceptance.

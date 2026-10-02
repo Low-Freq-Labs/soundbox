@@ -91,83 +91,42 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   its one synchronous C call commits the AppKit child frame and Retina
   `drawableSize` before requesting a frame. Returning to generic resize wakes
   causes both a request storm and a one-frame small/stretched waveform.
-- **Scrolling waveform filtering happens in COVERAGE space, never by averaging
-  per-tap alpha.** Keep one song-anchored peak pyramid and select one
-  footprint-matched level with `ceil(log2(footprint))`; blending adjacent
-  power-of-two lattices makes them beat against each other as they move.
-  Overview, compact fallback geometry, and ultra geometry use this one rule;
-  adding a zoom threshold recreates wide/close disagreement. Do not add a
-  separate translucent/RMS envelope: it reads as a ghost waveform. Color comes
-  from the compact SoundBox RGB filterbank stream: overlapping LP 100 Hz,
-  HP 300 + LP 3000 Hz, and HP 1500 Hz paths, with 25/3/1 ms peak holds and
-  per-column energy transfer. Its pyramid must amplitude-weight RGB and use
-  the same selected mip/song anchor as geometry, otherwise far-zoom colors
-  alternate as pixels move. The persisted normalized 24-band master is
-  independent analysis and must never be remixed by a renderer or override the
-  dedicated RGB rows. Rekordbox PWV5 is a read-only fallback/reference, never
-  the source for a successfully analyzed SoundBox color record. Current
-  audio-detail and color positions are integer sample anchors + local float
-  phase; never collapse either into one absolute float.
-- **BLUE and RGB both need a signed range, not filled polarity envelopes.**
-  Making peak(L,R) the primary silhouette inflates
-  stereo ambience and fills attack/decay valleys; mirroring
-  `abs((L + R) / 2)` forces upper/lower correlation even where the real signal
-  is strongly asymmetric. Current `soundbox-polarity-range-u16-v4` stores
-  independent positive and negative stereo-midpoint peaks in `detail` and
-  `detail_lower`, plus signed midpoint minimum/maximum int16 sections and a
-  1/16 peak-channel safety floor. Both BLUE and RGB render the signed min/max
-  interval; only their PWV3/PWV5 color compositors differ. Drawing raw
-  independent maxima is the rejected hairy contour, and smoothing those maxima
-  into a crest still leaves the rejected center seam because both sides remain
-  filled back to zero. Legacy records may use a compatibility interval only
-  while the rolling recook adds the signed sections. Keep the 150 Hz overview
-  on complete non-overlapping 1/150-second cells; the spectral FFT window looks
-  ahead about 46 ms and must not own geometry. The visually validated
-  `height^1.4` display curve, 0.84 ceiling, and continuous low-end shoulder
-  apply only during native/Qt upload. The shoulder is 1/64 of full display
-  height after a four-LSB knee so very quiet nonzero audio remains visible;
-  true zero remains zero and persisted amplitudes stay linear. Packed PWV
-  heights are already authored display values and do not receive this
-  transfer. Applying an equal display-height floor to both sides at close zoom
-  reconnects signed lobes through the center and turns blue transients into
-  filled blocks, even when the polarity cache is correct.
-- **RGB timeline compensation is decoder-specific, never global.** The
-  seven-row / 46.7 ms correction is proven for MP3 and remains there. Applying
-  it to WAV/AIFF/FLAC makes lossless color late enough for a kick to inherit a
-  preceding clap/snare hue. Current lossless and Qt-decoded player-only paths
-  use zero correction; add a format offset only after measuring that decoder
-  against an authoritative same-track timeline. Geometry, RGB, grid, and cues
-  must still begin at the same track origin.
-- **BLUE, RGB, and 3BAND are three source streams and three geometry models.**
-  Rekordbox-backed records copy the exact packed PWV3/PWV5/PWV7
-  rows into SoundBox-owned canonical storage during one read-only import; other
-  sources derive all three during the same analysis pass. Version and readiness
-  gate the source set together under
-  `rekordbox-blue-rgb-three-band-v1`, so changing the Settings selector must
-  only swap an already-resident native pyramid—never recook a track or reopen
-  ANLZ. RGB uses PWV5 color and BLUE uses PWV3 edge tint; both use the
-  SoundBox signed min/max interval trace. 3BAND instead
-  uses three native PWV7 layer heights and must bypass both audio-derived
-  contours. Treat the stored
-  rows as blue-low/amber-mid/white-high display layers, with measured scales
-  of `0.40/0.43/0.40` against Rekordbox's 64-point detail height. BLUE has a
-  white core and blue/cyan edge. 3BAND uses the measured blue/brown/cream/
-  pale-blue/white membership table, not generic alpha-composited paints.
-- **A zero PWV5 row is zero authored RGB geometry.** PWV5 can encode
-  both height and RGB as zero while the independent SoundBox overview/ultra
-  envelopes prove that the source audio is nonzero. Because the native color
-  pyramid amplitude-weights its rows, leaving that row untouched makes the
-  correct contour visually disappear. At upload only, use the independent
-  overview height to identify audible zero rows, borrow the nearest valid PWV5
-  hue, and assign the minimum representable PWV5 height. Never change cached
-  bytes or substitute a track-specific timestamp. PWV5 is one RGB color plus
-  one compact height per row, not three
-  independently layered band heights; only PWV7/3BAND uses the layered
-  compositor. Keep PWV5 cell boundaries crisp and song-anchored.
-  Cubic-smearing the 150 Hz colors turns visible Rekordbox
-  strips into broad pastel gradients. The measured screen expansion retains
-  red's 0..14 range while leaving calibrated headroom above green/blue's
-  three-bit maxima (`14 / 8 / 8.75` divisors in native display space).
+- **Imported analysis comes first.** Complete, equal-length 150-Hz PWV3/5/7 plus grid
+  bypass FFT/filterbank analysis. Decode only the 1-ms signed midpoint supplement;
+  persist its base once and build mips in memory. Compact V5 omits spectral_24.
+  Old V5 remains ready/playable; convert only selected local tracks on demand or
+  explicit reanalysis. Do not invalidate every cache at launch. Failure or
+  interruption preserves the prior record and manual/DB metadata authority.
+- **BLUE/RGB require signed intervals.** Filling back to zero destroys the thin
+  carrier. Close cells are held on the song clock and resolved with the
+  spatial profile integral. Current upload is linear with the existing 0.84
+  ceiling/quiet shoulder; the older `height^1.4` rule is superseded. True zero
+  stays zero. Compact cells use absolute integer sample boundaries, including
+  alternating 44/45-sample cells at 44.1 kHz, independent of decoder chunking.
+- **MP3 clock correction must include audible playback.** Recognized MPEG-1
+  LAME Info/Xing headers determine encoder delay, packet length and decoded
+  frame count. Both analysis and native playback restore that lead-in; seek and
+  duration share the same clock. Native probes run on the decode thread and
+  validate against AVAudioFile. Unknown headers retain the old decoded origin;
+  recognized decoder/header mismatches report an error. Never shift only the
+  visual trace or use a per-track measured constant globally. The legacy RGB
+  fallback's seven-row filterbank delay is separate from this source origin.
+- **3BAND geometry is independent.** Use original PWV7 150-Hz rows, linear layer
+  interpolation, a one-row sampling offset and the measured seven membership
+  colors. The older forced 75-Hz pairing and eight-percent facet are superseded
+  by the September 29 reference. Mode switches select resident buffers only.
+- **Full-range RGB is 14/7/7.** Interpolate PWV5 channels on their song clock.
+  The older 14/8/8.75 divisors and nearest-row hold were too dark and discontinuous.
+  The legacy upload-only zero-row visibility repair may use its independent
+  overview; compact imported overviews preserve authored PWV5 zero rows.
+- **Filter final coverage once.** Keep integer song anchors and local phases,
+  one footprint-selected peak level, and one-pixel coverage. The signed interval
+  approximation is documented below; do not treat it as exact joint area. Compact
+  mips are `1/2/3/4/6/8/12/16/24/32/48/64`; old V5 retains its persisted ladder.
+  The three widest and the 384–1500 close zooms use half a pixel of source
+  support; the middle family uses one pixel. This supersedes the four-pixel rule and artificial
+  divisor-dependent height compensation. Never blend adjacent mips or blur
+  final pixels to hide sampling errors.
 - **Compact RGB codes are already PWV5 channel values.** SoundBox's
   `_pack_rgb3` produces even red `0..14` and green/blue `0..7`; do not send
   those bytes through a second 0..255 quantizer. Older fallback records did so
@@ -176,52 +135,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   preserving the low seven height/control bits. Never rewrite the cache,
   re-open source audio, or apply this compatibility path to exact Rekordbox
   PWV5.
-- **The supplied references are not all the same zoom.** Bad Decisions is
-  `768` points/s and High & Scared is `1536`; neither is the `184` stop used
-  by the rejected harness. BLUE and RGB both need the signed interval cache
-  reconstructed linearly at the physical-pixel footprint; widening or
-  smoothing center-filled peaks does not create either close waveform.
-  3BAND is not a recolored version of that contour: render its native PWV7
-  layers directly. PWV7 storage uses the shared 150 Hz clock, but the supplied
-  Rekordbox edges expose one display facet per paired row (75 Hz); select the
-  first per-band peak mip and linearly connect those paired values. Rendering
-  every stored row doubles the visible corner density, while holding a row as
-  a rectangle creates a different rejected staircase.
-  `scripts/render_waveform_reference.py --corpus` is the required
-  real-track visual proof; a byte correlation is not acceptance.
-- **Audio-detail peak levels must match the physical-pixel footprint, not just
-  the next power of two.** A 4.2-cell pixel rendered from an 8-cell max mip
-  throws away nearly half the contour and rounds Rekordbox's narrow broken
-  attacks into slabs. Build the native in-memory ladder at the measured
-  integer divisors (`1,2,3,4,5,6,8,9,13,...`). Below the close family, select
-  the first level within the tightly bounded 6% footprint tolerance. The
-  24/32/48 stops use half that footprint: the existing four-sample song lattice
-  plus exact one-pixel integration resolves finer valleys that max pooling
-  previously flattened. Never just point-sample those finer rows. At the
-  five close UI stops (384/576/864/1152/1536), BLUE/RGB instead select from a
-  four-physical-pixel output footprint (`audio_detail_lod(footprint * 4)`).
-  On a 6300 Hz record at Retina scale two, the fixed stops resolve to divisors
-  `35/25/18/13/8`, or 0.20–0.26 extrema cells per physical pixel. The final
-  divisor is eight because the 6% footprint tolerance accepts it; do not copy
-  the stale pre-measurement value of nine. Live acceptance showed that both
-  the original
-  0.91–1.03 density and the first 0.51–0.63 reduction still left a static
-  pulse. This is still one stable song-anchored peak level—never blend two
-  lattices, never blur final pixels, and never persist or recook these runtime
-  mips. 3BAND has its independent paired-PWV7 cadence and must bypass this
-  rule.
-- **Peak mips change typical height even when their extrema are correct.**
-  Coarser max-pooled rows make the same song window taller, so the dedicated
-  close source caused a visible 256→384 height jump while finer rows made
-  64/92/128 and the closest stops progressively thinner. From 64 px/s upward,
-  normalize signed min/max by the selected integer divisor against the
-  50-cell reference with the shallow `pow(50 / divisor, 0.22)` curve, plus
-  narrow headroom compensation at 64/92/128. Never apply this as a straight
-  multiply: loud 256 px/s peaks clip to the lane edge and then collapse when
-  the four-pixel family begins at 384. Apply gain only through remaining
-  headroom, `m + (gain - 1) * m * (1 - m)`. That fixes digital zero and full
-  scale while equalizing the middle of the trace without changing horizontal
-  knot cadence, colors, cache data, or 3BAND.
+- **Reference scale must be measured.** The fresh Nuclear Bass Face reference
+  is 1500 points/s (3000 physical pixels/s at Retina scale two), now the maximum
+  UI stop. The older Bad Decisions/High & Scared corpus is unavailable; its
+  historical zoom assumptions are not new acceptance. Capture actual native
+  surfaces in all three modes, then inspect moving frames as well as stills.
 - **Waveform primaries are authored for the built-in Display-P3 surface.**
   Keep `CAMetalLayer.colorspace` explicitly set to Display P3 while retaining
   the sRGB-transfer Metal attachment for linear-light coverage blending.
@@ -238,15 +156,24 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   generous guarded margin scaled by the attribute density and absolute
   integer-song-coordinate recentering so regeneration cannot create a viewport
   seam.
-- **A signed extrema cell needs about four physical pixels at the close
-  stops.** “At most one cell per pixel” was sufficient to stop gross aliasing,
-  and about two pixels per cell improved it, but neither removed the final
-  static pulse: adjacent min/max cells can alternate from one extreme to the
-  other, placing their highest spatial frequency at a visibly phase-sensitive
-  screen cadence. Keep `kLodBias = 0`; select the dedicated close peak level
-  from a four-pixel output footprint without a final-image filter.
-  Midpoint/profile taps integrate final coverage; they do not buy sharper
-  source detail.
+- **Color's premultiplication weight is not reconstructed signed amplitude.**
+  Keep `lowerAndColorWeight.y` with the amplitude-weighted RGB through every
+  lattice interpolation. The magnitude of interpolated signed bounds can be
+  much smaller than that original weight at a polarity or dominant-boundary
+  crossing. Dividing RGB by it creates bright/white pulses. The September 30
+  correction uses an existing padding lane and adds no buffer or cache space.
+  That correction alone left playback-only dark waves. The October 1 complete-
+  corner sampling and stable-moment corrections subsequently passed Sonny's B
+  comparison. The CPU regression runs the actual extracted shader expression
+  and fails against the old formula; native motion checks cover the later fixes.
+- **The former four-pixel close footprint is historical.** That rule addressed
+  the old dense detail ladder. The September 29 reference established held
+  1-ms cells, now with a half-pixel close footprint instead; do not restore the older
+  broadening or compensate it with per-divisor height gain.
+- **Static drawable callbacks are not pixel acceptance.** macOS can expose the
+  correct static Metal surface without a nonzero presentedTime callback.
+  Resize tests inspect the playhead pixels and subsequent idle retirement;
+  moving capture tests still require real presentation timestamps.
 - **Do not recover close detail by flooring the mip.** The fixed lattice stops
   phase-dependent redraw, but it cannot make above-Nyquist values displayable.
   A floor-mip prototype looked richly detailed in a still and immediately
@@ -263,18 +190,30 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   hard minimum vividness for every nonzero fragment turns a contour crossing a
   pixel into an on/off color flash, even when the song coordinate itself is
   perfectly smooth. Use the cubic ease-out only for the small overview, where
-  true subpixel peaks need visibility. The scrolling lane must use exact
-  geometric coverage at every zoom; at 24 px/s the ease-out still exaggerated
+  true subpixel peaks need visibility. The scrolling lane must use continuous
+  geometric coverage without a visibility boost; at 24 px/s the ease-out exaggerated
   20% physical coverage to nearly 49%, making saturated red/orange edges pulse.
   Coverage policy may change compositing only—never height, hue, LOD, detail
   density, or timing. This rule applies to both sides of a signed interval:
   averaging five independent inside/outside tests still quantizes BLUE/RGB
-  coverage into fifths. Integrate the upper boundary with `profile_coverage`,
-  integrate the inverted lower boundary the same way, and take their overlap.
-  The interval's enforced minimum width keeps the two one-pixel AA bands
-  disjoint. The exact High & Scared close-RGB phase sweep cut the aligned
+  coverage into fifths. The existing path integrates upper/lower half-planes
+  separately and takes the smaller result. This is an approximation, not exact
+  signed-interval area when both edges traverse a pixel: min of the integrals
+  differs from integral of their pointwise minimum. September 30's numerical
+  counterexample is recorded in the pulse audit. Preserve the accepted shape
+  until a correction passes native still/motion comparison; the color-weight
+  fix alone does not resolve this remaining coverage issue.
+  The interval's minimum full width is one physical pixel before coverage;
+  it must follow drawable scale, not the old fixed 3.6-point width. This keeps
+  the two half-pixel AA supports from overlapping. The historical High & Scared close-RGB phase sweep cut the aligned
   greater-than-64-code change tail by almost 90% without changing its accepted
   silhouette.
+- **BLUE must not force a white center into every interval.** The October 1
+  recording contains saturated cyan interiors. Use normalized source interval
+  width for cyan-to-white strength, then the continuous radial edge transfer.
+  Do not use a zoom-specific gain, enlarge the source footprint, or smooth the
+  signed detail to reduce white washout. The production-Metal regression checks
+  the thin center itself and proves restoring fixed white breaks the test.
 - **BLUE/RGB color must be resolved conditionally on signed coverage.** The
   continuous upper/lower boundary resolve can be perfectly stable while an
   independently averaged color still ticks inside it. RGB may inherit hue from
@@ -324,22 +263,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Never cache or interpolate final alpha.
 - **A fixed attribute lattice still needs one-physical-pixel horizontal
   integration.** One center height sample leaves subpixel needles that crawl
-  through dense passages. Below 1152 px/s, retain the accepted five
-  quarter-pixel boundaries over `[-0.5, +0.5]`. At the two closest stops, a
-  fractional song phase can place one integer attribute-lattice knot between
+  through dense passages. RGB/BLUE retain five quarter-pixel boundaries at
+  64–184 px/s; 3BAND retains them below 1152. At all other stops, a
+  fractional song phase can place an integer attribute-lattice knot between
   those probes; integrate the two pixel endpoints plus every interior knot
   with their actual spans. Feed the same positioned profile to silhouette,
   signed-interval, color, and 3BAND coverage. Do not widen the footprint: one
   pixel removes the alias while retaining the close detail that B-spline
   reconstruction erased.
-- **Do not cure source aliasing by widening the final image filter.** Narrow
-  fixed-stop `[1, 2, 1]` reconstruction remains song-space and same-LOD.
-  The separate 384–1536 BLUE/RGB fix is a discrete peak-source decision:
-  select one peak row from the four-physical-pixel output footprint, then
-  retain the same one-pixel final integration. A triangle/RMS mip and fixed
-  150–600 Hz low-pass probes reduced motion numerically but rounded the
-  reference facets and were rejected. Do not turn the selected-row rule into
-  a broader screen kernel, an adjacent-LOD blend, or a 3BAND change.
+- **Do not cure source aliasing by widening the final image filter.** The
+  earlier four-pixel close-source rule is historical. Current compact detail
+  uses the half-pixel close source footprint and final pixel coverage. Keep any needed
+  reconstruction in song space; no adjacent-LOD blends or temporal blur.
 - **Inactive preview is an idempotent native transition.** PlayerBar publishes
   coarse transport text positions during ordinary playback. Those
   `preview_active=false` calls must do nothing once native preview is already
@@ -446,7 +381,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   fractional-coordinate sharpening added contrast after the exact resolve and
   made the remaining physical carrier easier to read as pulsing/static. The
   2026-07-30 simplification removed the bed and both post-resolve transfers
-  from the ABI and shader. Keep the exact continuous interval/color integral,
+  from the ABI and shader. Keep continuous interval/color integration, subject to
+  the signed-coverage approximation documented above;
   keep 3BAND exact, and regression-check all thirteen real UI zooms.
 - **Never blend two mip levels' coverage. Pick one.** Levels are song-anchored
   maxima on power-of-two lattices, so level N quantizes every 2^N bins and
@@ -600,21 +536,25 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   readers together adds avoidable USB contention and leaves the visible
   snapshot stale until the user navigates away and back.
 - **Connection visibility must not wait for dashboard integrity.**
-  Connection presentation separates visibility from readiness. A debounced
-  `/Volumes` notification requests discovery even during playback or an eject-ready
-  hold. If a device worker owns the lane, the request stays pending for retry.
-  A three-second timer checks the local `/Volumes` directory timestamp to recover
-  missed events; it does not open mounted children merely to check that timestamp.
-  With no connected devices and no failed probe, an unchanged timestamp starts no
-  discovery worker. Failed probes retry with a 3–30-second backoff; mount events
-  request immediate discovery. Connected-device drift keeps its three-second poll.
-  Ordinary unmounted folders are skipped after a 30-second attachment grace.
-  Verified external mounts appear by name, disabled during discovery.
-  At QThread.finished they become selectable. Stock/dual dashboard loading
-  appears only in the bottom status; device rows have no loading suffix. A cached
+  Connection presentation separates visibility from readiness. Debounced `/Volumes`
+  notifications and a 250-ms cached kernel mount-table check request discovery even
+  during playback or an eject-ready hold. The latter uses Darwin
+  `getfsstat64(MNT_NOWAIT)` without opening mounted paths, so mounting over an
+  existing directory cannot strand detection behind probe backoff. These are hints,
+  never external-device/write authority. A busy lane retains the request and retries
+  on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
+  unchanged mount/timestamp state starts no idle discovery worker. Failed probes
+  retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
+  three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
+  Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+  computes sync drift before publishing the selectable row at QThread.finished;
+  unknown/failed checks say `Sync status pending`, never imply a clean result.
+  Stock/dual dashboard preload follows in the same serialized device lane, with
+  loading only in the bottom status after the row becomes ready. Successful preload
+  clears that status directly, without another immediate drift scan. A cached
   dashboard is presentation-only; selecting while it loads uses the same serialized
-  preload. Writes stay guarded by
-  operation ownership and firmware capabilities. Remounts invalidate stale views.
+  preload. Writes stay guarded by operation ownership and firmware capabilities.
+  Remounts invalidate stale views.
 - **A stock shadow source row describes two files.** `size`/`sha256` belong to
   the verified device payload; `source_size`/`mtime_ns` describe the canonical
   Mac source. Picture removal changes payload size without changing the source.
@@ -730,6 +670,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   FAT identity is Unicode-NFD + casefold, not Python path equality.
 
 ## Type-checking + test-honesty
+- Waveform arithmetic must run production helpers against an independent oracle,
+  not a Python copy of the same formula or source strings alone. Headless Metal
+  tests run in the ordinary suite on arm64 macOS. `./check.sh --native` separately
+  requires Cocoa drawable/playback tests with no skips. Explicit known numerical
+  limits must stay visible; see [the audit](waveform-test-audit-2026-10.md).
+- Integrate tiny clipped pieces using local midpoint moments. Subtraction of
+  global squared/cubed endpoints can corrupt color centroids by cancellation,
+  producing different BLUE color when an identical segment is reversed.
 - `./check.sh` gates: pyflakes + **mypy on `soundbox/` (must stay 0 errors)** +
   the full suite. `desktop/` is NOT mypy-gated yet (PySide6 stub gaps).
 - Never `assertX(...) and assertY(...)` (short-circuits the second). Never test
@@ -879,16 +827,27 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   future scientific-library lazy imports; do not remove it because current
   code happens not to JIT.
 - **A nearly full data volume must pause preparation, never trigger cache
-  cleanup.** Full V5 audio cooking pauses below 20 GiB and resumes above
+  cleanup.** Full V5 audio cooking pauses below 20 GiB and resumes at
   25 GiB. A verified one-record V4→V5 reduction uses a 5/7 GiB guard because
   it retires its larger V4 only after complete V5 verification. `library.json`,
   its small rotating backups, art, and existing analysis are not expendable.
   Installer app rollbacks are temporary and only one may exist during
   verification.
+- **Status presentation has one owner at a time.** Per-file acquisition/copy/
+  verification notifications update hover details only; they never replace the
+  operation label, track count, pulse or overall percentage. Reserve count width
+  against the total, and resize static messages through `_set_status_text`.
+  Static messages retire the old animation; transient expiry callbacks are bound
+  to a presentation generation so an older timer cannot clear a newer message.
+  Background preparation/artwork yields to all device operations (including
+  Verify), not just export/delete flags. Returning to Ready restores an active
+  analysis pause. The hermetic render harness supports `--analysis-paused` and
+  `--sync-progress`; the latter checks that a phase burst never moves the row.
 - Build: `./build_app.sh` first builds the arm64 CoreAudio/Metal dylib, then
   PyInstaller collects it alongside pyrekordbox, sqlcipher3,
-  sqlalchemy, yt_dlp, soundfile, zstandard, and NumPy's standard runtime hook,
-  `--collect-submodules PySide6.QtMultimedia`, `--collect-all PIL`.
+  sqlalchemy, soundfile, zstandard, and NumPy's standard runtime hook; the
+  personal profile additionally collects yt_dlp. Shared composition also collects
+  PySide6.QtMultimedia submodules and PIL.
 - The app is locally self-signed when the `Soundbox Self-Signed` identity is
   available (otherwise ad-hoc), but it is NOT Apple-notarized → Gatekeeper may
   require right-click → Open. Logs at
@@ -938,7 +897,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   manifest ownership, verification, cleanup, import, browsing actions, or an
   ordinary write. The explicit generic whole-volume Erase is the only exception.
 
-## Cover art (SoundCloud scrape + Rockbox/stock rendering)
+## Cover art (optional SoundCloud provider + shared Rockbox/stock rendering)
+
+The SoundCloud details below apply only to `soundbox_personal.discovery`.
+Public has local image controls and retains existing cached art/provenance, but
+imports no personal provider or `yt_dlp`. Gate online direct commands and startup
+scheduling as well as menus. Never clear misses/blocks on provider detach. The
+tracked `Soundbox.spec` is the only packaging composition; use `build_app.sh`
+with `personal` (default) or `public`. Packaged profile selection is immutable
+for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
+
 - **Paste an ARTIST PROFILE URL into the art picker → you get the AVATAR**
   (og:image of a profile page IS the avatar; lands baseline-JPEG via `store_ok`).
 - SoundCloud deep extract 403s → use FLAT search `thumbnails` (t500x500) for
@@ -1051,9 +1019,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   unique managed source union, so use them only for the percentage bar: show
   animated `Planning iPod...` with no `#/#`. Show the counter only under
   `Syncing audio`, where it represents actual audio work. Byte-level acquisition/
-  copy phases can instead show transferred/total bytes. The shared export/sync
-  counter must grow to fit its full text, with padding and a spaced slash for
-  byte totals; never cap it at song-count width. Queued-job formulas
+  copy phases show transferred/total bytes in the status tooltip, retaining
+  spaced units and a spaced slash. They never replace the visible track count.
+  Reserve counter width against its total for the whole operation. Queued-job formulas
   must give each job its complete proportional slice. Never publish 100%, `Complete`, a success modal,
   or enabled Eject/Sync while any required worker attribute remains owned. A
   failed required final read is terminal but not successful: retain Eject,

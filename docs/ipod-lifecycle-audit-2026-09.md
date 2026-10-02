@@ -137,6 +137,17 @@ ctime-only metadata change and mtime drift. No automatic hardware resync occurre
 
 ## September 27 reconnect correction
 
+The connection trigger/presentation below is historical. September 29 adds a
+250-ms cached Darwin mount-table hint because mounting over an existing directory
+can leave its parent's timestamp unchanged. The first discovery scan now computes
+drift before enabling the row; its disabled preview says `Checking…` rather than
+showing a bare name. Dashboard preload follows and clears loading directly,
+without an extra immediate drift scan. Failure leaves `Sync status pending`.
+Hints never grant write authority. Synthetic tests cover attachment/remount
+transitions, failed/truncated kernel snapshots, first-pass drift and owner release;
+the local cached syscall measured about 0.007 ms median across 100 reads. Fresh
+physical Finder-to-SoundBox reconnect timing remains an acceptance observation.
+
 User reported two mounts visible in Finder but absent from SoundBox. The live
 mount enumerated correctly in an independent bounded probe. Code inspection
 found post-sync eject-ready and playback gates suppressing mount notifications,

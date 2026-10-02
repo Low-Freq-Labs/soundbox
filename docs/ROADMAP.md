@@ -1,6 +1,6 @@
 # SoundBox roadmap
 
-Updated September 28, 2026. Active work and acceptance only; completed work is
+Updated October 2, 2026. Active work and acceptance only; completed work is
 summarized below. Historical experiments and release diaries remain in Git and
 specialist documents, not in the task queue. No numeric quality score substitutes
 for evidence. For current validation and installed revision, see [HANDOFF.md](HANDOFF.md).
@@ -13,8 +13,11 @@ owns state, playback, library and safe device operations. No public fork, hidden
 safety bypass or separate library format. Preserve Sonny's existing capabilities.
 The public product is a complete music manager from iPod/MP3 players to USB.
 Guarded device file editing and confirmed generic-volume Erase remain shared.
-Personal modules add online scraping/discovery; dependency redistribution review
-separately determines what can enter a public artifact. Future validated
+Personal modules isolate current uncleared online scraping/discovery implementations.
+Online features may be public when their service/content permissions and dependency
+licenses allow the intended use. Sonny confirmed excluding the current SoundCloud
+Unknown-Artist implementation; this is not a permanent exclusion of artist suggestions.
+Future validated
 rekordbox-compatible/CDJ USB export belongs to the shared product.
 See the [feature allocation and module contract](release-boundaries.md).
 
@@ -22,6 +25,47 @@ Reliable supported-device management remains the release prerequisite. The
 original MA446 workflow has physical acceptance; newer lifecycle/performance
 corrections still have the gates below. Expansion toward a rekordbox export-mode
 alternative remains a later direction, not permission to ship CDJ research.
+
+### Rekordbox-first waveform detail (installed locally September 29)
+
+Sonny initially selected saved rekordbox waveforms first. His September 29 evening
+references make detailed visual fidelity the acceptance boundary: a filled
+BLUE/RGB envelope is rejected, and storage savings must preserve the supplied
+rekordbox close detail, 3BAND layers, zoom transitions and motion. The
+[reuse audit](waveform-reuse-audit-2026-09.md) records the 11.57 GB cache inventory,
+renderer dependencies, fresh three-mode Nuclear Bass Face screenshots, a zoom
+recording, isolated native candidates and ordered migration gates. Native capture
+worked in the September 29 session, and Sonny accepted the isolated candidate. Import-first preparation,
+compact V5 supplements, on-demand conversion and renderer changes are implemented
+and installed in the personal app; exact build and validation evidence are in HANDOFF.
+Four complete-cache measurements save 65–66%, not a library-wide guarantee.
+The subsequent thick/jagged feedback is addressed by finer close reconstruction
+and a physical-pixel minimum stroke; the cache profile stays unchanged.
+September 30: Sonny accepts that detail but reports renewed color pulsing. A
+color-weight normalization correction passes CPU/native gates and is installed
+with the stable signature. All-stop fractional-phase/recenter comparisons pass
+and 3BAND is unchanged, but remaining playback pulses led to the October 1
+complete-corner sampling change at RGB/BLUE 256/384/576/864. Sonny calls B
+“rock solid” in the single-backend live A/B preview. The one-pixel footprint,
+detail, clocks, other zooms and 3BAND remain unchanged. Joint coverage remains
+experimental. Broader track/panel/rekordbox acceptance remains open. See the
+[pulse audit](waveform-reuse-audit-2026-09.md#september-30-color-pulse-correction).
+The October 1 [test audit](waveform-test-audit-2026-10.md) adds direct Metal
+oracles and synthetic drawable regression coverage, exposes the omitted Cocoa
+gate, and corrects clipped color-moment cancellation. The signed-coverage
+approximation remains a named expected failure, not claimed fixed.
+The supplied October 1 [reference verification](waveform-reference-check-2026-10.md)
+confirms intact full-rate 3BAND imports but leaves exact layer geometry unverified.
+BLUE's subsequent color correction widens the edge hue range and replaces the
+unconditional white center with a width-dependent cyan/white interior. The
+reference-gamut and thin-interval GPU regressions now pass, including a mutation
+that restores the washout. Sonny accepted the narrowed
+white center in the live comparison, and it is installed. Exact color parity and
+broader track acceptance remain open; signed coverage is an independent known limit.
+The recognized MP3 source origin is coupled to native playback/seek/duration;
+unknown headers retain their old origin. Exact fallback equivalence, every
+codec/header variant, and long-session physical-panel acceptance remain outside
+these measurements. No whole-library invalidation or eager conversion is planned.
 
 ## Device follow-up: observe playback; retain the durability finding
 
@@ -55,9 +99,9 @@ iPod settings changes on September 28; no new firmware experiment is authorized.
   reading 69.56 MB and retaining 2880 unchanged songs. The preceding two-title
   run took 1942.83 s and read 40.75 GB. This accepts that edit path; no-op,
   playlist-only, cancel/retry and other physical gates remain open.
-- [x] Let the shared export/sync transfer counter grow to fit its text, with
-  padding and spaced byte totals. Final spacing build installed/relaunched at
-  22:09 after the full gate and synthetic transfer renders; curation preserved.
+- [x] Historical September 28 transfer spacing correction prevented clipped byte
+  totals. The September 29 presentation fix below supersedes its alternating
+  byte/track counter: per-file details now live on hover, keeping the row stable.
 - [ ] Accept the earlier intermittent stop and iPod reconnection behavior during
   normal use. Connected-device Random regression tests use synthetic discovery;
   the bounded installed smoke test does not establish the live failure's cause.
@@ -77,6 +121,11 @@ Completed disk/firmware/export checks and remaining boundaries:
 
 Findings and source evidence: [software audit](software-audit-2026-09.md).
 
+- [x] September 29 connection presentation: cached kernel mount hints bypass
+  attachment backoff; disabled Checking rows publish their real sync status on
+  the first scan. Dashboard preload follows without another forced drift scan.
+  Fresh physical Finder-to-SoundBox reconnect timing remains to be observed.
+
 - [x] A2: staged/validated restore with exact rollback, startup recovery, bounded
   archive input and consistent backup snapshots. UI closes admission, drains
   existing writers with events alive, and resumes after worker completion.
@@ -86,6 +135,12 @@ Findings and source evidence: [software audit](software-audit-2026-09.md).
   unknown namespaces, handles recovery/rotation and exposes save errors. A
   persistent window-title warning survives transient statuses until a save works.
   A damaged library without a usable backup remains write-disabled until restore.
+- [x] September 29 status presentation: per-file copy/verify details remain on
+  hover while operation labels/counts stay stable. Static messages fit their
+  text and retire old pulses; stale transient timers cannot clear newer messages.
+  Background preparation/artwork yields to Verify and other device work, and
+  disk-space pauses explain their cause and resume threshold. Rekordbox relocation
+  continues to use stable IDs and refreshed paths; no database watcher was added.
 
 Exit: deterministic failure/race tests, full check gate and safe installed-app
 verification for runtime changes. Do not mix these fixes with device-format or
@@ -131,28 +186,28 @@ generation-63 one-title run above provides measured acceptance for that path. Se
 
 ## 3. Establish the shared-core / personal-module boundary
 
-**Next-session priority, confirmed September 28:** complete the existing-feature
-public/personal split end to end using [the agreed contract](release-boundaries.md).
-Preserve and finally install Sonny's full personal build. Build and validate the
-public artifact separately with isolated state. This takes priority over unrelated
-controller extraction and generic USB optimization; public distribution clearance
-remains a separate gate. Exact completion checks are in [HANDOFF.md](HANDOFF.md).
+The existing-feature public/personal split is implemented with explicit profiles,
+a typed first-party provider boundary, command/scheduler admission and package
+inspection. Public excludes the existing SoundCloud implementation and `yt_dlp`;
+personal preserves the original workflows. Both retain the same core and state.
+See [the contract](release-boundaries.md) and [HANDOFF.md](HANDOFF.md) for final
+artifact/install evidence. Public distribution clearance remains a separate gate.
 
 - [x] A4 storage boundary: `soundbox.artwork` owns local ArtCache/results/default
   photos and works without provider imports/network. Compatibility re-exports
-  remain in `artfetch`. Optional UI/provider/build wiring below is still pending.
-- [ ] Inject optional artwork and artist-suggestion providers; register their
+  remain in `artfetch`; online matching lives in `soundbox_personal.discovery`.
+- [x] Inject optional artwork and artist-suggestion providers; register their
   actions and worker lifetimes through the shared core. Gate startup scheduling
   and command execution as well as menus.
-- [ ] Preserve current personal discovery behavior in its optional module;
+- [x] Preserve current personal discovery behavior in its optional module;
   prove detach/reattach preserves existing art, blocks and curation.
 - [ ] Add read-only embedded-art extraction for local audio with explicit
   precedence protecting manual choices and sticky removals. This is not shipped;
   it is separate shared-feature work, not a prerequisite for the existing-feature
   public/personal split.
-- [ ] A11/A12: add explicit public/personal build composition, separate optional
+- [x] A11/A12: add explicit public/personal build composition, separate optional
   dependencies, one packaging authority and artifact-content/provenance checks.
-- [ ] Test both variants without a live library/device. Public must work with
+- [x] Test both variants without a live library/device. Public must work with
   private packages absent and network denied; paired renders preserve the same
   main layout with only intentional action differences.
 

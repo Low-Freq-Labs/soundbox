@@ -44,14 +44,11 @@ from soundbox import track_analysis
 
 UI_ZOOMS = (
     24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0, 256.0,
-    384.0, 576.0, 864.0, 1152.0, 1536.0,
+    384.0, 576.0, 864.0, 1152.0, 1500.0,
 )
-CLOSE_ZOOMS = (384.0, 576.0, 864.0, 1152.0, 1536.0)
+CLOSE_ZOOMS = (384.0, 576.0, 864.0, 1152.0, 1500.0)
 MODES = ("BLUE", "RGB", "3BAND")
-AUDIO_DETAIL_MIP_DIVISORS = (
-    1, 2, 3, 4, 5, 6, 8, 9, 13,
-    18, 25, 35, 50, 66, 99, 132, 192, 256,
-)
+AUDIO_DETAIL_MIP_DIVISORS = track_analysis.RANGE_MIP_DIVISORS
 
 
 def _fold_frequency(frequency: float, sample_rate: float) -> float:
@@ -69,16 +66,18 @@ def _signed_carrier_lattice_summary(
     footprint = (
         samples_per_second
         / max(1.0, pixels_per_second * drawable_scale)
-        * (0.5 if pixels_per_second < 64.0
-           else 4.0 if pixels_per_second >= 384.0 else 1.0)
+        * (0.5 if pixels_per_second < 64.0 or pixels_per_second >= 384.0
+           else 1.0)
     )
     required = max(1.0, footprint * 0.94)
+    from soundbox.waveform_detail import DETAIL_DIVISORS
+    divisors = DETAIL_DIVISORS if samples_per_second == 1000.0 else AUDIO_DETAIL_MIP_DIVISORS
     divisor = next(
         (
-            candidate for candidate in AUDIO_DETAIL_MIP_DIVISORS
+            candidate for candidate in divisors
             if candidate >= required
         ),
-        AUDIO_DETAIL_MIP_DIVISORS[-1],
+        divisors[-1],
     )
     carrier_hz = samples_per_second / divisor
     return {
@@ -374,7 +373,7 @@ def capture(args: argparse.Namespace):
             backend.setPosition(args.position_ms)
             backend.set_visual_position(args.position_ms, True)
             backend.set_waveform_mode("3BAND")
-            backend.set_zoom(1536.0)
+            backend.set_zoom(1500.0)
             backend.request_display()
             _wait_for(
                 app,
@@ -405,7 +404,7 @@ def capture(args: argparse.Namespace):
                 "directory": segment.name,
                 "kind": "camera-calibration",
                 "mode": "3BAND",
-                "zoom_pixels_per_second": 1536.0,
+                "zoom_pixels_per_second": 1500.0,
                 "start_position_ms": args.position_ms,
                 "submitted_frames": max_frames,
             })

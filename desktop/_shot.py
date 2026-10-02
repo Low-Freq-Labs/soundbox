@@ -3,6 +3,7 @@ app. Uses a SYNTHETIC library (no rekordbox, no network) and a sandboxed
 AppData dir (QStandardPaths test mode) so it can never touch real user state.
 
 Usage: PYTHONPATH=. .venv/bin/python -m desktop._shot [out.png] [zoom] [--loading-device]
+       Add --analysis-paused, --sync-progress or --ready-device for status QA.
 """
 import os
 
@@ -40,6 +41,15 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    ready_device = "--ready-device" in sys.argv
+    if ready_device:
+        sys.argv.remove("--ready-device")
+    sync_progress = "--sync-progress" in sys.argv
+    if sync_progress:
+        sys.argv.remove("--sync-progress")
+    analysis_paused = "--analysis-paused" in sys.argv
+    if analysis_paused:
+        sys.argv.remove("--analysis-paused")
     loading_device = "--loading-device" in sys.argv
     if loading_device:
         sys.argv.remove("--loading-device")
@@ -112,12 +122,40 @@ def _render() -> None:
     # main-waveform box/stem seam as well as the whole-track marker.
     pb._on_pos(44_000)
     pb.set_track_navigation(True, True)
-    if loading_device:
+    if loading_device or ready_device:
         win._on_devices_discovered([
             ("IPOD", "/synthetic/IPOD", 1000,
              SimpleNamespace(has_stock_ipod=True))])
+    if ready_device:
+        win._stock_view_cache["/synthetic/IPOD"] = (object(), None)
+        with mock.patch("desktop.app.device_fs", return_value="msdos"), \
+                mock.patch.object(win, "_device_tip", return_value="Fixture sync needed"):
+            win._on_devices_scanned([
+                ("IPOD", "/synthetic/IPOD", 1000, 1,
+                 SimpleNamespace(has_stock_ipod=True))])
     win.show()
     for _ in range(3):
+        app.processEvents()
+    if sync_progress:
+        from threading import Event
+        from soundbox.device_operations import Phase
+
+        worker = object()
+        win._on_dual_ipod_progress(14, 37, "fixture.wav")
+        win.cancel_btn.setVisible(True)
+        app.processEvents()
+        positions = tuple(widget.geometry() for widget in (
+            win.status_label, win.status_count_label, win.progress, win.cancel_btn))
+        active = SimpleNamespace(worker=worker, cancellation=Event(), phase=Phase.EXECUTING)
+        with mock.patch.object(win._device_coordinator, "active", active):
+            for stage in ("Acquiring source", "Copying to device", "Verifying device copy") * 20:
+                win._on_device_phase_progress(worker, stage, 14_500, 14_500, "fixture.bmp")
+                app.processEvents()
+                assert positions == tuple(widget.geometry() for widget in (
+                    win.status_label, win.status_count_label, win.progress, win.cancel_btn))
+    if analysis_paused:
+        win._on_analysis_tasks_ready(3)
+        win._on_analysis_storage_paused(True, 19 * 1024 ** 3, 25 * 1024 ** 3)
         app.processEvents()
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/soundbox.png"
     win.grab().save(out)

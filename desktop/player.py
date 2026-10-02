@@ -55,7 +55,7 @@ _WAVEFORM_MODES = ("BLUE", "RGB", "3BAND")
 # caches, so switching levels remains instant.
 _ZOOM_LEVELS = (
     24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0, 256.0,
-    384.0, 576.0, 864.0, 1152.0, 1536.0,
+    384.0, 576.0, 864.0, 1152.0, 1500.0,
 )
 _HOT_CUE_FALLBACKS = (
     "#ff376f", "#45acdb", "#7dc13d", "#aa72ff",
@@ -411,26 +411,38 @@ class WaveformWorker(QThread):
             from soundbox.track_analysis import (
                 analyze_soundfile, merge_import, store as track_store,
             )
+            from soundbox.waveform_detail import analyze_imported, complete_import, DETAIL_MODEL
+            from soundbox.track_analysis import load_manifest, is_dataless_source
             present = self._load_stages()
-            if not all(present):
-                checkpoint = lambda: not self.isInterruptionRequested()
+            checkpoint = lambda: not self.isInterruptionRequested()
+            if not checkpoint():
+                return
+            existing = load_manifest(self.track_analysis_dir, self.track_id, self.path)
+            # A valid old record plays immediately. Upgrade just the selected
+            # local track; never turn launch into a full-library recook.
+            if all(present) and (existing or {}).get("waveform_model") == DETAIL_MODEL:
+                return
+            if all(present) and is_dataless_source(self.path):
+                return
+            imported = None
+            if self.analysis_path:
+                from soundbox.rekordbox_analysis import read
+                imported = read(self.analysis_path)
+            prepared = (analyze_imported(self.path, imported, checkpoint)
+                        if complete_import(imported) else None)
+            if prepared is None and not all(present) and checkpoint():
                 native = (
                     analyze_soundfile(self.path, checkpoint=checkpoint)
                     or qt_detail_peaks(self.path, checkpoint=checkpoint)
                 )
-                if self.isInterruptionRequested():
-                    return
-                imported = None
-                if self.analysis_path:
-                    from soundbox.rekordbox_analysis import read
-                    imported = read(self.analysis_path)
-                prepared = merge_import(native, imported)
-                if prepared:
-                    track_store(
-                        self.track_analysis_dir, self.track_id,
-                        self.path, prepared)
-                    if not self.isInterruptionRequested():
-                        self._load_stages()
+                prepared = merge_import(native, imported) if native is not None else None
+            if prepared and checkpoint():
+                if (existing or {}).get("cue_import", {}).get("source") == "rekordbox-db":
+                    from soundbox.track_analysis import with_imported_cues
+                    prepared = with_imported_cues(prepared, existing.get("cues") or [])
+                track_store(self.track_analysis_dir, self.track_id, self.path, prepared)
+                if checkpoint():
+                    self._load_stages()
         except Exception:  # noqa: BLE001
             if not self.isInterruptionRequested():
                 self.manifest_ready.emit(self.path, self.generation, {})

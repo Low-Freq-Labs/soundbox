@@ -110,7 +110,7 @@ from PySide6.QtWidgets import (
 
 
 from soundbox import (
-    artfetch, engine, file_locations, imports, libcache,
+    engine, file_locations, imports, libcache,
     manifest as device_manifest, metadata, paths, rekordbox_db,
     rockbox_config, track_analysis,
 )
@@ -136,6 +136,7 @@ from soundbox.stock_ipod_info import (
 from soundbox.stock_ipod_shadow import StockIpodShadowStore
 from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 from . import theme
+from .mount_watch import mounted_volume_snapshot
 from .artpicker import ArtPickerDialog
 from .task_owner import TaskOwner
 from .model import (
@@ -246,12 +247,30 @@ def _art_ui_action(method):
     return guarded
 
 
+def _provider_action(action):
+    """Gate direct commands as well as menus and delayed callbacks."""
+    def decorate(method):
+        @wraps(method)
+        def guarded(self, *args, **kwargs):
+            if (not self.providers.allows(action)
+                    or self._shutting_down
+                    or getattr(self, "_state_maintenance", False)):
+                return None
+            return method(self, *args, **kwargs)
+        return guarded
+    return decorate
+
+
 class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
-    def __init__(self):
+    def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
+        self._isolated = isolated_dir is not None
+        from soundbox.providers import runtime_providers
+        self.providers = providers if providers is not None else runtime_providers()
         self.setWindowTitle("Soundbox")
         self.resize(1240, 800)
-        data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
+        data_dir = (Path(isolated_dir) if isolated_dir is not None else
+                    Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)))
         self._data_file = data_dir / "library.json"  # portable SoundBox library
         self._state_repository = StateRepository(self._data_file)
         self._state_maintenance = False
@@ -281,6 +300,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._waveform_force_pending: set[str] = set()
         self._preparing_library = False
         self._prep_power_policy = "ac"
+        self._prep_storage_pause: tuple[int, int] | None = None
+        self._prep_progress: tuple[int, int] | None = None
         self._landed_cache: dict[str, float] = {}  # path -> file-landing time
         self._last_xml = ""
         self.lib = None
@@ -336,14 +357,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             str, tuple[StockIpodSnapshot, CompositeDeviceData | None]] = {}
         self._stock_view_warming: set[str] = set()
         self._stock_view_failures: dict[str, str] = {}
-        self._device_rescan_after_stock_view = False
         self._device_coordinator = DeviceOperationCoordinator()
         self._eject_verify_worker = None
         self._eject_ready_device = ""
         self._device_import_worker = None
         self._device_verify_worker = None
         self._device_finalization_error: Exception | None = None
-        self._drift_cache: dict[str, int] = {}  # device path -> #playlists out of date
+        self._drift_cache: dict[str, int | None] = {}  # None means not yet checked
         self._device_profiles: dict[str, object] = {}
         self._device_mount_tokens: dict[str, int] = {}
         self._current_device_path = ""
@@ -405,20 +425,25 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._dev_timer = QTimer(self)
         self._dev_timer.timeout.connect(self._poll_devices)
         self._dev_timer.start(_DEVICE_POLL_IDLE_MS)
-        # Finder learns about a mount from the filesystem event immediately;
-        # SoundBox used to wait for the next three-second poll before even
-        # beginning its read. Keep the poll as recovery, but debounce /Volumes
-        # notifications into an immediate background discovery pass.
+        # Directory notifications announce attachment, but mounting over an
+        # existing directory can leave /Volumes' timestamp unchanged. Watch the
+        # cached kernel mount table too; neither trigger probes mounted files.
         self._volume_refresh_timer = QTimer(self)
         self._volume_refresh_timer.setSingleShot(True)
         self._volume_refresh_timer.setInterval(150)
         self._volume_refresh_timer.timeout.connect(self._on_volume_mount_changed)
         self._volume_watcher = QFileSystemWatcher(self)
+        self._mount_snapshot = None
+        self._mount_table_timer = QTimer(self)
+        self._mount_table_timer.setInterval(250)
+        self._mount_table_timer.timeout.connect(self._poll_mount_table)
         if (not QStandardPaths.isTestModeEnabled()
                 and Path("/Volumes").is_dir()):
             self._volume_watcher.addPath("/Volumes")
             self._volume_watcher.directoryChanged.connect(
                 lambda _path: self._volume_refresh_timer.start())
+            self._mount_snapshot = mounted_volume_snapshot()
+            self._mount_table_timer.start()
         self._load_state()  # restore custom playlists + last-opened XML
         # Direct imports keep opaque macOS bookmarks. Healthy paths need only a
         # cheap stat; a moved file resolves by persistent identity without a
@@ -489,6 +514,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # Auto-load on launch: live rekordbox DB first, else the last XML
         # fallback. This runs REGARDLESS of the snapshot paint above — the
         # snapshot is a stand-in until the authoritative source loads over it.
+        if self._isolated:
+            return
         if rekordbox_db.db_available():
             self._refresh_rekordbox()
         elif self._last_xml and Path(self._last_xml).is_file():
@@ -1584,9 +1611,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         h.addWidget(self.status_label)
         self.status_count_label = QLabel("")
         self.status_count_label.setAlignment(Qt.AlignCenter)
-        # Counts also show byte transfers (for both export and sync). Let the
-        # label grow to its complete text instead of clipping it to song-count
-        # width; keep some padding between the status and progress meter.
+        # Reserve the full track-count width for the operation. Per-file byte
+        # details live in the status tooltip, so copy/verify bursts cannot
+        # replace the count or move the progress bar.
         self.status_count_label.setMinimumWidth(
             fm.horizontalAdvance("9999/9999") + 16)
         self.status_count_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
@@ -1632,7 +1659,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
         self._arm_waveform_rechecks()
-        QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        if self.providers.allows("artwork.search"):
+            QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
@@ -1802,7 +1830,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # so ownership—not isRunning()—is the serialization boundary.
             self._refresh_pending = True
             return
-        self._start_pulse("Loading")
+        if not self._device_operation_owned():
+            self._start_pulse("Loading")
         w = RefreshWorker()
         self._refresh_worker = w
         w.done.connect(self._on_refresh_done)
@@ -1821,22 +1850,25 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             QTimer.singleShot(0, self._refresh_rekordbox)
 
     def _on_refresh_done(self, lib):
-        self._stop_pulse()
+        if not self._device_operation_owned():
+            self._stop_pulse()
         self.lib = lib
         self._apply_loaded_library()
         self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
-        self._flash_status("Updated ✓", 6)
+        if not self._device_operation_owned():
+            self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
         self._arm_waveform_rechecks()
-        QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+        if self.providers.allows("artwork.search"):
+            QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _on_refresh_fail(self, err):
-        self._stop_pulse()
-        self._set_status_text("Ready")
+        if not self._device_operation_owned():
+            self._set_status_text("Ready")
         LOG.error("rekordbox refresh failed: %s", err)
         QMessageBox.warning(
             self, "Couldn't read rekordbox",
@@ -1848,15 +1880,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         menu.addAction("Refresh from rekordbox", self._refresh_rekordbox)
         menu.addAction("Open XML…", self._open_dialog)
         menu.addSeparator()
-        if self._art_worker is not None and self._art_worker.isRunning():
-            menu.addAction("Stop fetching cover art", self._stop_art_fill)
-        else:
-            menu.addAction("Fetch cover art (background)", self._start_art_fill)
-        menu.addAction("Re-scan covers (missing + upgrade avatars)", self._rescan_covers)
-        menu.addAction("Suggest artists for Unknowns…", self._suggest_artists)
+        if self.providers.allows("artwork.search"):
+            if self._art_worker is not None and self._art_worker.isRunning():
+                menu.addAction("Stop fetching cover art", self._stop_art_fill)
+            else:
+                menu.addAction("Fetch cover art (background)", self._start_art_fill)
+            menu.addAction("Re-scan covers (missing + upgrade avatars)", self._rescan_covers)
+        if self.providers.allows("artists.suggest"):
+            menu.addAction("Suggest artists for Unknowns…", self._suggest_artists)
         menu.addAction("Suggest artist merges…", self._suggest_merges)
         menu.exec(widget.mapToGlobal(pos))
 
+    @_provider_action("artists.suggest")
     def _suggest_artists(self):
         """Batch queue: scan all Unknown-Artist tracks for uploader-consensus
         suggestions; accepted ones become normal overrides (which also teach the
@@ -1877,7 +1912,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not items:
             self._flash_status("No Unknowns ✓", 6)
             return
-        dlg = SuggestDialog(items, self)
+        dlg = SuggestDialog(items, self, provider=self.providers.artists)
         dlg.exec()
         dlg.shutdown()  # stop/wait the scan thread BEFORE the dialog is GC'd
         if self._shutting_down or not dlg.accepts:
@@ -1898,7 +1933,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self.lib is None:
             return
         from .workers import OneShotTask
-        if _running(getattr(self, "_scan_worker", None)):
+        if getattr(self, "_scan_worker", None) is not None:
             return
         tracks = list(self.lib.tracks_by_id.values())
         overrides = dict(self.overrides)
@@ -1952,6 +1987,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._flash_status(f"Merged {len(accepts)} ✓", 8)
 
     @_art_ui_action
+    @_provider_action("artwork.search")
     def _rescan_covers(self):
         """One button: re-attempt tracks with no art AND upgrade artist-avatar
         fallbacks toward a real track cover. Keeps confirmed real covers, reuses
@@ -2317,7 +2353,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             else:
                 self._reload_current_view()  # Collection view picks them up live
             self._arm_waveform_rechecks()
-            QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
+            if self.providers.allows("artwork.search"):
+                QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
             QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
             QTimer.singleShot(500, self._maybe_fill_waveforms)
         elif skipped:
@@ -2601,11 +2638,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return self._sync_playlists_cache
 
     def _device_label(
-            self, name: str, free, drift: int, fs: str = "",
+            self, name: str, free, drift: int | None, fs: str = "",
             profile=None) -> str:
         # When a device is out of sync, HIDE the "GB free" so the full
         # "⚠ Sync needed" state fits (it was getting truncated). Free space
         # returns once everything is synced again.
+        if drift is None:
+            return f"⛃  {name}    Sync status pending"
         if drift:
             return f"⛃  {name}    ⚠ Sync needed"
         if fs and fs not in ("msdos", "fat32"):
@@ -2620,6 +2659,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._device_mount_refresh_pending = True
         self._refresh_devices(force=True)
 
+    def _poll_mount_table(self):
+        """Mount-over-directory events may not change /Volumes' timestamp."""
+        snapshot = mounted_volume_snapshot()
+        if snapshot is None or snapshot == self._mount_snapshot:
+            return
+        self._mount_snapshot = snapshot
+        LOG.info("Kernel mount table changed; requesting device discovery")
+        self._on_volume_mount_changed()
+
     def _refresh_devices(self, *, force: bool = False):
         """Kick a background scan of external devices (free space + drift).
 
@@ -2627,7 +2675,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         copy/delete hammers it — so it runs OFF the UI thread (DeviceScanWorker) and
         the tree is updated in `_on_devices_scanned`. Single-flight: if a scan is
         already running we skip, so the 3s timer can never pile up workers."""
-        if getattr(self, "_state_maintenance", False):
+        if (getattr(self, "_isolated", False)
+                or getattr(self, "_state_maintenance", False)):
             return
         force = force or getattr(self, "_device_mount_refresh_pending", False)
         if not self._device_coordinator.polling_allowed:
@@ -2795,9 +2844,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     self._stock_snapshot = None
                     self.stack.setCurrentIndex(0)
                 self._device_profiles[path] = profile
-                self._drift_cache.setdefault(path, 0)
+                self._drift_cache.setdefault(path, None)
             if path not in current:
-                item = QTreeWidgetItem([f"⛃  {name}"])
+                item = QTreeWidgetItem([f"⛃  {name} · Checking…"])
                 item.setData(0, DEVPATH_ROLE, path)
                 item.setToolTip(0, "Connected — reading device details")
                 item.setDisabled(True)
@@ -2826,7 +2875,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if results is not None:
             self._on_devices_scanned(results, mount_tokens=mount_tokens)
-        # Useful dashboard data outranks another drift pass. Queue a full,
+        # The first usable row already has drift. Queue a full,
         # immutable read for each newly connected stock-capable device; the
         # stock-view queue remains single-flight across classic USB.
         queued = False
@@ -2840,9 +2889,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_ipod_loading_status()
             self._read_stock_device_view(path, profile)
             queued = True
-        if queued:
-            self._device_rescan_after_stock_view = True
-        elif self._stock_view_pending and self._stock_view_worker is None:
+        if not queued and self._stock_view_pending and self._stock_view_worker is None:
             next_dev = next(iter(self._stock_view_pending))
             profile = self._stock_view_pending.pop(next_dev)
             self._read_stock_device_view(next_dev, profile)
@@ -2910,8 +2957,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._device_mount_tokens.pop(stale, None)
             self._device_coordinator.disconnect(stale)
             self._dual_sync_queue.pop(stale, None)
-        # The row is already visible. A completed follow-up scan clears the
-        # bottom status once the immutable dashboard is cached.
+        # Reconcile any cached presentation left by a completed dashboard read.
         ready_paths = {
             path for path in self._stock_view_warming
             if path in self._stock_view_cache and path in all_paths
@@ -3212,9 +3258,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._read_stock_device_view(device, value),
             )
             return
-        if self._device_rescan_after_stock_view and not self._shutting_down:
-            self._device_rescan_after_stock_view = False
-            QTimer.singleShot(0, self._refresh_devices)
 
     def _refresh_device_surfaces(
             self, dev: str, *, after_finished=None,
@@ -3294,7 +3337,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._stock_view_failures[dev] = "iPod library could not be read. Eject remains available."
         # Do not immediately recurse through preload -> rescan -> preload on a
         # persistently unreadable iPod. The existing three-second poll retries.
-        self._device_rescan_after_stock_view = False
         if not self._stock_view_warming and self._pulse_word == "Loading iPod":
             self._stop_pulse(force=True)
             self._flash_status("iPod load failed — retrying", 3)
@@ -3478,6 +3520,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._save_state()
         self._stock_view_failures.pop(dev, None)
         self._stock_view_cache[dev] = (result, composite_data)
+        self._stock_view_warming.discard(dev)
+        self._finish_ipod_loading_status()
         if dev != self._current_device_path:
             LOG.info(
                 "iPod dashboard preloaded: %s (%d tracks, %d playlists)",
@@ -3935,6 +3979,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_dual_ipod_plan_progress(
             self, done: int, total: int, _label: str):
         """Map read-only planning into the first 30% of the transaction."""
+        if self._cancelling:
+            return
         total = max(1, int(total))
         done = max(0, min(int(done), total))
         fraction = done / total
@@ -4193,6 +4239,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._start_device_worker(worker, dev, "commit")
 
     def _on_dual_ipod_progress(self, done: int, total: int, _label: str):
+        if self._cancelling:
+            return
         total = max(0, total)
         done = max(0, min(done, total))
         if self._dual_active_preconfirmed:
@@ -5042,6 +5090,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         value = round(
             150 + 650 * min(max(0, done), max(1, total)) / max(1, total))
         self._set_device_progress(max(self.progress.value(), value))
+        if self._cancelling:
+            return
         self._start_pulse("Syncing")
 
     # ---------- columns ----------
@@ -5121,8 +5171,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._add_track_reanalysis_action(menu, ids)
         menu.addSeparator()
         menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
-        menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))
-        menu.addAction("Set cover art from URL…", lambda: self._art_from_url(tid))
+        if self.providers.allows("artwork.search"):
+            menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))
+        if self.providers.allows("artwork.url"):
+            menu.addAction("Set cover art from URL…", lambda: self._art_from_url(tid))
         # A managed default is not a per-track cover and cannot be removed from
         # this menu: blocked tracks intentionally receive defaults too. Only a
         # real cover/avatar exposes the per-track Remove action.
@@ -5384,7 +5436,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._flash_status("No avatar art ✓", 6)
             return
         dlg = ArtistCatalogDialog(groups, on_action=self._on_catalog_action,
-                                  parent=self)
+                                  parent=self, allow_url=self.providers.allows("artwork.url"))
         dlg.exec()  # persistent: user fixes any number of artists, then closes
 
     def _open_default_photos(self):
@@ -5499,15 +5551,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]))
             done(True, self.art_cache.image_path(tids[0]))
             return
-        # url fetch hits the network — off the UI thread, dialog stays live
-        from .workers import OneShotTask
-        if _running(getattr(self, "_scan_worker", None)):
+        if (c["kind"] != "url" or not self.providers.allows("artwork.url")
+                or self._shutting_down or self._state_maintenance):
             done(False, None)
             return
-        w = OneShotTask(lambda u=c["url"]: artfetch.fetch_by_url(u))
+        # url fetch hits the network — off the UI thread, dialog stays live
+        from .workers import OneShotTask
+        if getattr(self, "_scan_worker", None) is not None:
+            done(False, None)
+            return
+        w = OneShotTask(lambda u=c["url"]: self.providers.artwork.fetch_by_url(u))
         self._scan_worker = w
 
         def landed(res, tids=tids, done=done):
+            if self._shutting_down or self._state_maintenance:
+                return
             if isinstance(res, Exception) or res is None:
                 done(False, None)
                 return
@@ -5550,19 +5608,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         title = self.titles.get(tid) or t.name
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
                                            self.lib.artist_registry, stem=t.path.stem)
-        dlg = ArtPickerDialog(artist, title, self)
+        dlg = ArtPickerDialog(artist, title, self, provider=self.providers.artwork)
         dlg.exec()
         dlg.shutdown()  # stop/wait the search thread BEFORE the dialog is GC'd
         choice = dlg.choice
         if self._shutting_down or not choice:
             return
-        if choice["kind"] == "thumb":
+        if choice["kind"] == "thumb" and self.providers.allows("artwork.search"):
             c = choice["cand"]
-            self._run_oneshot(tid, lambda c=c: artfetch.fetch_thumb(
+            self._run_oneshot(tid, lambda c=c: self.providers.artwork.fetch_thumb(
                 c["thumb"], c["url"], c["title"]))
-        elif choice["kind"] == "page":
-            self._run_oneshot(tid, lambda u=choice["url"]: artfetch.fetch_by_url(u))
-        else:  # local file — store_ok normalizes it to Rockbox-safe baseline JPEG
+        elif choice["kind"] == "page" and self.providers.allows("artwork.url"):
+            self._run_oneshot(tid, lambda u=choice["url"]: self.providers.artwork.fetch_by_url(u))
+        elif choice["kind"] == "file":  # local image remains shared
             p = Path(choice["path"])
             try:
                 data = p.read_bytes()
@@ -5578,7 +5636,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._queue_stock_artwork((tid,))
 
     def _run_oneshot(self, tid, fn):
-        self._set_status_text("Fetching…")
+        if self._shutting_down or self._state_maintenance:
+            return
+        if self._background_status_available():
+            self._set_status_text("Fetching…")
         w = _OneShotArt(tid, fn)
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
@@ -5597,20 +5658,26 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     @_art_ui_action
     def _on_oneshot(self, tid, res):
+        if self._shutting_down or self._state_maintenance:
+            return
         if isinstance(res, Exception):
             # Honest failure: the fetch BROKE (network, block, bug) — that is
             # not "no art found". Log the whole story; keep the flash short
             # (the status label is narrow).
             LOG.warning("Art fetch failed for %s: %s", tid, res, exc_info=res)
-            self._flash_status("Fetch failed ✕", 8)
+            if self._background_status_available():
+                self._flash_status("Fetch failed ✕", 8)
         elif res:
             self.art_cache.store_ok(tid, res)
             self._queue_stock_artwork((tid,))
-            self._flash_status("Art set ✓", 5)
+            if self._background_status_available():
+                self._flash_status("Art set ✓", 5)
         else:
-            self._flash_status("No art found", 5)
+            if self._background_status_available():
+                self._flash_status("No art found", 5)
         self.model.refresh_art(self.art_cache.status_kind)  # update the Art column
 
+    @_provider_action("artwork.search")
     def _art_fetch_one(self, tid):
         t = self.lib.tracks_by_id.get(tid) if self.lib else None
         if not t:
@@ -5618,15 +5685,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         title = self.titles.get(tid) or t.name
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
                                            self.lib.artist_registry, stem=t.path.stem)
-        self._run_oneshot(tid, lambda: artfetch.fetch_best(artist, title))
+        self._run_oneshot(tid, lambda: self.providers.artwork.fetch_best(artist, title))
 
+    @_provider_action("artwork.url")
     def _art_from_url(self, tid):
         url, ok = QInputDialog.getText(
             self, "Cover art",
             "SoundCloud URL (track = its cover, artist profile = avatar):")
         if ok and url.strip():
-            self._run_oneshot(tid, lambda u=url.strip(): artfetch.fetch_by_url(u))
+            self._run_oneshot(tid, lambda u=url.strip(): self.providers.artwork.fetch_by_url(u))
 
+    @_provider_action("artwork.search")
     def _maybe_autostart_art_fill(self):
         """Auto-fetch runs ONLY when the library gained tracks the cache has
         never seen (new rekordbox adds) — and the fill worker's to-do list is
@@ -5640,6 +5709,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             LOG.info("Art fill autostart: %d new track(s) without cache entries", fresh)
             self._start_art_fill()
 
+    @_provider_action("artwork.search")
     def _start_art_fill(self, restart: bool = False):
         if not self._state_repository.writable:
             return
@@ -5657,7 +5727,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._art_restart = True
                 self._art_worker.stop()
             return
-        w = ArtFillWorker(self.lib, self.art_cache, self.overrides, self.titles)
+        w = ArtFillWorker(self.lib, self.art_cache, self.overrides, self.titles,
+                          provider=self.providers.artwork)
         self._art_worker = w
         w.set_playback_active(self.player_bar.is_playing())
         w.progress.connect(self._on_art_progress)
@@ -5790,39 +5861,49 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if total <= 0:
             return
         self._preparing_library = True
-        if not self._exporting and not self._cancelling and not self._deleting:
-            self._start_pulse("Preparing your library")
+        self._prep_progress = None
+        self._show_preparation_status()
+
+    def _background_status_available(self) -> bool:
+        """Background upkeep never takes over a foreground device operation."""
+        return (not self._shutting_down and not self._cancelling
+                and not self._device_operation_owned()
+                and self._refresh_worker is None
+                and self._pulse_word not in {"Loading", "Scanning", "Searching"})
+
+    def _show_preparation_status(self) -> None:
+        if not self._preparing_library or not self._background_status_available():
+            return
+        if self._prep_storage_pause is not None:
+            free_bytes, resume_bytes = self._prep_storage_pause
+            self._set_status_text(
+                f"Analysis paused · Low disk space · "
+                f"{free_bytes / 1024 ** 3:.1f} GiB free")
+            self.status_label.setToolTip(
+                "Background analysis will resume automatically at "
+                f"{resume_bytes / 1024 ** 3:.0f} GiB free. "
+                "Existing library data is preserved.")
+        elif self._prep_power_policy == "low-power":
+            self._set_status_text("Prep paused · Low Power")
+        else:
+            word = ("Preparing · Battery Eco" if self._prep_power_policy == "battery"
+                    else "Preparing your library")
+            self._start_pulse(word, keep_count=self._prep_progress is not None)
+            if self._prep_progress is not None:
+                self._set_status_count(*self._prep_progress)
 
     def _on_analysis_progress(self, done: int, total: int):
-        if (not self._preparing_library or self._exporting
-                or self._cancelling or self._deleting):
-            return
-        self._stop_pulse()
-        suffix = " · Eco" if self._prep_power_policy == "battery" else ""
-        self._set_status_text(f"Prep {done}/{total}{suffix}")
+        self._prep_progress = (done, total)
+        self._show_preparation_status()
 
     def _on_analysis_power_policy(self, policy: str):
         self._prep_power_policy = policy
-        if (not self._preparing_library or self._exporting
-                or self._cancelling or self._deleting):
-            return
-        self._stop_pulse()
-        if policy == "low-power":
-            self._set_status_text("Prep paused · Low Power")
-        elif policy == "battery":
-            self._set_status_text("Preparing · Battery Eco")
-        else:
-            self._start_pulse("Preparing your library")
+        self._show_preparation_status()
 
-    def _on_analysis_storage_paused(self, paused: bool, free_bytes: int):
-        if self._exporting or self._cancelling or self._deleting:
-            return
-        if paused:
-            self._stop_pulse()
-            self._set_status_text(
-                f"Analysis paused — {free_bytes / 1024 ** 3:.1f} GiB free")
-        elif self._preparing_library:
-            self._start_pulse("Preparing your library")
+    def _on_analysis_storage_paused(
+            self, paused: bool, free_bytes: int, resume_bytes: int):
+        self._prep_storage_pause = (free_bytes, resume_bytes) if paused else None
+        self._show_preparation_status()
 
     def _on_library_prep_finished(self, w):
         forced = set(getattr(w, "force_track_ids", ()))
@@ -5830,7 +5911,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             getattr(w, "completed_forced_track_ids", ()))
         self._finish_worker("_wf_fill_worker", w)
         self._preparing_library = False
-        if not self._exporting and not self._cancelling and not self._deleting:
+        self._prep_storage_pause = None
+        self._prep_progress = None
+        if self._background_status_available():
             self._stop_pulse()
             failed = forced - completed_forced
             if failed:
@@ -5900,19 +5983,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._art_worker is not None and self._art_worker.isRunning():
             self._art_worker.stop()
             # Clear the stale "Art N/M" ticker (unless a device op owns the label).
-            if not self._exporting and not self._cancelling and not self._deleting:
+            if self._background_status_available():
                 self._set_status_text("Ready")
 
     def _on_art_progress(self, done, total):
         if not self.player_bar.is_playing():
             self.model.refresh_art(self.art_cache.status_kind)
-        if (not self._exporting and not self._cancelling and not self._deleting
-                and not self._preparing_library):
+        if self._background_status_available() and not self._preparing_library:
             # A device op (export/sync/delete) owns the status bar; don't fight it.
             if done >= total:
                 self._flash_status("Art done ✓", 6)
             else:
-                self._set_status_text(f"Art {done}/{total}")  # ticks every fetch
+                self._start_pulse("Fetching artwork", keep_count=True)
+                self._set_status_count(done, total)
 
     def _header_menu(self, pos):
         menu = QMenu(self)
@@ -6206,10 +6289,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 or active.cancellation.is_set() or self._shutting_down):
             return
         active.progress = (done, total, label)
-        self._start_pulse(stage, keep_count=True)
-        self.status_count_label.setText(f"{human(done)} / {human(total)}" if total else "")
-        self.status_count_label.setVisible(bool(total))
-        self.status_label.setToolTip(label)
+        # The operation's main progress callback owns the visible phase/count.
+        # Small media/artwork writes can emit several phases in one UI frame;
+        # replacing the primary label here resets its dots and makes the entire
+        # row jump between track counts and byte totals. Keep details on hover.
+        detail = f"{stage}\n{label}"
+        if total:
+            detail += f"\n{human(done)} / {human(total)}"
+        self.status_label.setToolTip(detail)
 
     def _cancel_export(self):
         self._device_coordinator.cancel()
@@ -6234,6 +6321,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         except RuntimeError:
             pass  # already gone
         self._update_device_action_state()
+        if (getattr(self, "_device_mount_refresh_pending", False)
+                and not self._shutting_down):
+            # A mount event held behind an owner need not wait for the next
+            # three-second drift poll. Admission still checks every owner.
+            QTimer.singleShot(0, self._refresh_devices)
 
     def _finish_device_result_worker(self, attr: str, worker, callback) -> None:
         """Clear QThread ownership before exposing a device result to the UI."""
@@ -6259,12 +6351,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._refresh_pending = False
         self._libcache_pending = None
         self._stock_view_pending.clear()
-        self._device_rescan_after_stock_view = False
         self._waveform_rechecks_enabled = False
         for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
                   getattr(self, "_warm_timer", None),
                   getattr(self, "_settings_save_timer", None),
                   getattr(self, "_volume_refresh_timer", None),
+                  getattr(self, "_mount_table_timer", None),
                   getattr(self, "_waveform_recheck_timer", None)):
             if t is not None:
                 t.stop()
@@ -6358,6 +6450,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         total = max(1, int(total))
         done = max(0, min(int(done), total))
+        fm = self.status_count_label.fontMetrics()
+        self.status_count_label.setFixedWidth(max(
+            fm.horizontalAdvance("9999/9999"),
+            fm.horizontalAdvance(f"{total}/{total}")) + 16)
         self.status_count_label.setText(f"{done}/{total}")
         self.status_count_label.setVisible(True)
 
@@ -6378,7 +6474,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not force and self._stock_view_warming:
             self._start_ipod_loading_status()
             return False
+        if (text == "Ready" and self._preparing_library
+                and self._background_status_available()):
+            self._show_preparation_status()
+            return True
+        self._stop_pulse(force=force)
+        self._status_generation = getattr(self, "_status_generation", 0) + 1
         self.status_label.setText(text)
+        self.status_label.setFixedWidth(
+            self.status_label.fontMetrics().horizontalAdvance(text) + 8)
+        self.status_label.setToolTip(text)
         self._update_device_action_state()
         return True
 
@@ -6392,10 +6497,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._update_device_action_state()
             return  # already animating this word — don't reset the dots
         self._pulse_word = word
+        self._status_generation = getattr(self, "_status_generation", 0) + 1
         self._pulse_dots = 0
         self.status_label.setFixedWidth(
             self.status_label.fontMetrics().horizontalAdvance(word + "...") + 8)
         self.status_label.setText(word)
+        self.status_label.setToolTip(word)
         self._pulse_timer.start()
         self._update_device_action_state()
 
@@ -6410,6 +6517,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._update_device_action_state()
 
     def _pulse_tick(self):
+        if self._pulse_word is None:
+            return
         self._pulse_dots = (self._pulse_dots + 1) % 4
         self.status_label.setText((self._pulse_word or "") + "." * self._pulse_dots)
 
@@ -6418,12 +6527,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._set_status_count()
         if not self._set_status_text(msg):
             return
-        self.status_label.setFixedWidth(
-            self.status_label.fontMetrics().horizontalAdvance(msg) + 8)
+        generation = self._status_generation
         QTimer.singleShot(
             seconds * 1000,
             lambda: self._set_status_text("Ready")
-            if self.status_label.text() == msg else None,
+            if (self._status_generation == generation
+                and self.status_label.text() == msg) else None,
         )
 
     def _on_export_done(self, reports: list):
@@ -6472,6 +6581,33 @@ def make_app() -> QApplication:
 
 
 def main():
+    # Explicit packaged smoke check: fresh disposable state, no library/device
+    # discovery, no production log. The report is the only retained output.
+    if len(sys.argv) == 3 and sys.argv[1] == "--isolated-check":
+        import tempfile
+        import json
+        report_dir = Path(sys.argv[2]).resolve()
+        report_dir.mkdir(parents=True, exist_ok=True)
+        QStandardPaths.setTestModeEnabled(True)
+        app = make_app()
+        with tempfile.TemporaryDirectory(prefix="soundbox-isolated-") as area:
+            win = MainWindow(isolated_dir=area)
+            app.aboutToQuit.connect(win.shutdown)
+            win.show()
+            def finish_check():
+                win.grab().save(str(report_dir / "window.png"))
+                report = {"profile": win.providers.profile,
+                          "modules": list(win.providers.modules),
+                          "actions": list(win.providers.actions),
+                          "native": bool(win.player_bar.player.is_native),
+                          "devices": win.device_tree.topLevelItemCount(),
+                          "library_loaded": win.lib is not None,
+                          "art_worker": win._art_worker is not None}
+                (report_dir / "runtime.json").write_text(json.dumps(report, indent=2))
+                app.quit()
+            QTimer.singleShot(1500, finish_check)
+            app.exec()
+        return
     app = make_app()
     from PySide6.QtCore import QLockFile
     data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))

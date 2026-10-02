@@ -6,6 +6,8 @@ import hashlib
 import json
 import math
 import struct
+import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -113,7 +115,11 @@ class NativeDeckContract(unittest.TestCase):
     def setUp(self):
         self.host = QWidget()
         self.host.resize(800, 100)
+        self.host.move(80, 80)  # repeated Cocoa windows must not cascade off-screen
         self.host.show()
+        self.host.raise_()
+        self.host.activateWindow()
+        self.app.processEvents()
         self.deck = NativeDeckBackend(self.host)
         self.deck.set_gain(0.0)  # real output path, silent test
 
@@ -374,7 +380,7 @@ class NativeDeckContract(unittest.TestCase):
             self.deck.diagnostic_audio_detail_buffer_bytes(), 128)
         for zoom in (
                 24.0, 32.0, 48.0, 64.0, 92.0, 128.0, 184.0,
-                256.0, 384.0, 576.0, 864.0, 1152.0, 1536.0):
+                256.0, 384.0, 576.0, 864.0, 1152.0, 1500.0):
             self.assertEqual(self.deck.set_zoom(zoom), zoom)
             self.assertEqual(self.deck.diagnostic_audio_detail_mip_count(), 6)
 
@@ -468,6 +474,51 @@ class NativeDeckContract(unittest.TestCase):
             self.deck.diagnostic_audio_detail_buffer_bytes(),
             sum(counts) * 8)
 
+    @unittest.skipUnless(shutil.which("lame"), "LAME encoder fixture unavailable")
+    def test_mp3_header_and_native_decoder_use_the_same_origin(self):
+        from soundbox.waveform_detail import mp3_origin
+        target = Path(self.temp.name) / "origin.mp3"
+        subprocess.run([shutil.which("lame"), "--silent", str(self.audio), str(target)],
+                       check=True, capture_output=True)
+        hint = mp3_origin(target)
+        self.assertGreater(hint.lead_frames, 0)
+        before = _sha256(target)
+        errors = []
+        self.deck.errorOccurred.connect(lambda _, message: errors.append(message))
+        self.deck.setSource(QUrl.fromLocalFile(str(target)))
+        expected = round((hint.decoded_frames + hint.lead_frames) / hint.sample_rate * 1000)
+        self._wait_until(lambda: self.deck.duration() == expected)
+        self.deck.setPosition(expected - 150)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() >= expected - 10)
+        self.assertFalse(errors)
+        self.assertEqual(_sha256(target), before)
+
+    def test_timeline_leadin_is_in_duration_seek_and_end_contract(self):
+        # A synthetic one-second lead isolates the mapping from MP3 parsing.
+        # The WAV still contains exactly two seconds of unmodified audio.
+        before = _sha256(self.audio)
+        self.assertTrue(self.deck._lib.sb_deck_load_timeline(
+            self.deck._handle, str(self.audio).encode(), 44100, 88200, 44100.0))
+        self._wait_until(lambda: self.deck.duration() == 3000)
+        self.deck.setPosition(500)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() > 550)
+        self.deck.pause()
+        self.deck.setPosition(2800)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() >= 2990)
+        self.assertEqual(_sha256(self.audio), before)
+
+    def test_timeline_header_decoder_mismatch_fails_closed(self):
+        errors = []
+        self.deck.errorOccurred.connect(lambda _, message: errors.append(message))
+        self.assertTrue(self.deck._lib.sb_deck_load_timeline(
+            self.deck._handle, str(self.audio).encode(), 2257, 123, 44100.0))
+        self._wait_until(lambda: bool(errors))
+        self.assertIn("decoder clock differs", errors[-1])
+        self.assertEqual(self.deck.duration(), 0)
+
     def test_native_zoom_returns_the_applied_renderer_scale(self):
         self.assertEqual(self.deck.set_zoom(-100.0), 24.0)
         self.assertEqual(self.deck.diagnostic_zoom(), 24.0)
@@ -475,8 +526,8 @@ class NativeDeckContract(unittest.TestCase):
         self.assertEqual(self.deck.diagnostic_zoom(), 92.0)
         self.assertEqual(self.deck.set_zoom(112.0), 128.0)
         self.assertEqual(self.deck.diagnostic_zoom(), 128.0)
-        self.assertEqual(self.deck.set_zoom(50_000.0), 1536.0)
-        self.assertEqual(self.deck.diagnostic_zoom(), 1536.0)
+        self.assertEqual(self.deck.set_zoom(50_000.0), 1500.0)
+        self.assertEqual(self.deck.diagnostic_zoom(), 1500.0)
 
     def test_rejected_visual_probes_are_not_in_the_production_abi(self):
         for name in (
@@ -627,10 +678,22 @@ class NativeDeckContract(unittest.TestCase):
         self.host.resize(901, 148)
         self.app.processEvents()
         QTest.qWait(120)
-        presentations, _fps, _max_gap_ms = (
-            self.deck.diagnostic_display_stats())
-        self.assertGreaterEqual(presentations, 1)
-        self.assertLessEqual(presentations, 2)
+        # macOS may show a static drawable without delivering a nonzero
+        # presentedTime callback. Check the actual playhead pixels after resize
+        # instead of treating a missing callback as proof of a blank surface.
+        from PySide6.QtCore import QPoint
+        origin = self.host.mapToGlobal(QPoint(448, 132))
+        pixels = self.host.screen().grabWindow(0, origin.x(), origin.y(), 6, 6).toImage()
+        self.assertFalse(pixels.isNull())
+        self.assertTrue(any(
+            pixels.pixelColor(x, y).red() < 100
+            and pixels.pixelColor(x, y).green() > 120
+            and pixels.pixelColor(x, y).blue() > 120
+            for x in range(pixels.width()) for y in range(pixels.height())))
+        QTest.qWait(150)
+        self.deck.diagnostic_reset_display_stats()
+        QTest.qWait(150)
+        self.assertLessEqual(self.deck.diagnostic_display_stats()[0], 1)
 
     def test_native_snapshot_polling_is_adaptive(self):
         self.assertEqual(self.deck._poll_timer.interval(), 125)
@@ -695,6 +758,127 @@ class NativeDeckContract(unittest.TestCase):
         self.assertIn("target_presentation_timestamp", rows[0])
         self.assertIn("actual_presented_time", rows[0])
 
+    def test_thin_signed_carrier_does_not_gain_a_retina_point_stroke(self):
+        import numpy as np
+
+        self.host.resize(800, 166)
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.set_analysis({
+            "heights": [0.5] * 300,
+            "colors": [[255, 0, 0]] * 300,
+            "sample_rate": 150.0,
+        })
+        self.assertTrue(self.deck._set_waveform_streams({
+            "_blue_detail": bytes([31]) * 300,
+            "_rgb_detail": bytes.fromhex("e07c") * 300,
+            "_detail_bands": bytes([30, 40, 50]) * 300,
+        }, 150.0))
+        self.deck.set_audio_detail({
+            "rate": 1000.0, "base_count": 2000,
+            "mip_divisors": [1], "mip_counts": [2000],
+            "range_min_mips": [struct.pack("<2000h", *([100] * 2000))],
+            "range_max_mips": [struct.pack("<2000h", *([100] * 2000))],
+            "encoding": "song-anchored-extrema-i16le-v1",
+        })
+        self.deck.set_waveform_mode("RGB")
+        self.deck.set_zoom(1500)
+        self.deck.setPosition(500)
+        self.deck.diagnostic_begin_frame_trace(4, 64)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+            "submitted_frames"] == 4)
+        self.deck.pause()
+        output = Path(self.temp.name) / f"thin-carrier-{time.time_ns()}"
+        self.deck.diagnostic_finish_frame_trace(output)
+        manifest = json.loads((output / "manifest.json").read_text())
+        pixels = np.frombuffer((output / "frames.bgra").read_bytes(), dtype="u1")
+        pixels = pixels.reshape(4, manifest["crop_height_pixels"], 64, 4)
+        # Away from the playhead and trace markers, a constant signed point
+        # must stay visible without the previous 7.2-pixel Retina stroke.
+        column = pixels[:, 30:-30, 20, :3].astype(int)
+        colored = (column.max(2) > 50) & (column.max(2) - column.min(2) > 35)
+        counts = colored.sum(1)
+        self.assertTrue(np.all(counts >= 1), counts)
+        self.assertTrue(np.all(counts <= 3), counts)
+
+    def test_synthetic_drawables_translate_and_recenter_at_every_zoom(self):
+        """Rendered pixels, not shader strings; no live library/audio fixture."""
+        import numpy as np
+
+        audio = Path(self.temp.name) / "render-96s.wav"
+        with wave.open(str(audio), "wb") as out:
+            out.setnchannels(2); out.setsampwidth(2); out.setframerate(44100)
+            out.writeframes(bytes(96 * 44100 * 4))
+        before = _sha256(audio)
+        self.host.resize(800, 166)
+        self.deck.setSource(QUrl.fromLocalFile(str(audio)))
+        self._wait_until(lambda: self.deck.duration() >= 96000)
+        count = 96 * 150
+        self.deck.set_analysis({"heights": [.7] * count,
+                                "colors": [[255, 0, 0]] * count,
+                                "sample_rate": 150.0})
+        rgb = (np.arange(count) // 11) % 3
+        self.assertTrue(self.deck._set_waveform_streams({
+            "_blue_detail": bytes([24]) * count,
+            "_rgb_detail": np.array([0xe07c, 0x03fc, 0x1c7c], dtype="<u2")[rgb].tobytes(),
+            "_detail_bands": bytes([24, 42, 58]) * count,
+        }, 150.0))
+        centers = .55 * np.sin(np.arange(96000) * .17)
+        self.deck.set_audio_detail({
+            "rate": 1000.0, "base_count": 96000,
+            "mip_divisors": [1], "mip_counts": [96000],
+            "range_min_mips": [np.rint((centers-.08)*32767).astype("<i2").tobytes()],
+            "range_max_mips": [np.rint((centers+.08)*32767).astype("<i2").tobytes()],
+            "encoding": "song-anchored-extrema-i16le-v1",
+        })
+        self.deck.sync_view_geometry()
+        self.app.processEvents()
+        parent_width, _, drawable_width = self.deck.diagnostic_view_geometry()
+        scale = drawable_width / parent_width
+
+        def capture(position):
+            self.deck.set_visual_position(position, True)
+            QTest.qWait(25)
+            self.deck.diagnostic_begin_frame_trace(1, 512)
+            self.deck.request_display()
+            # Drain callbacks before the synchronous exporter; blocking the Qt
+            # event loop early can strand presentation callbacks until timeout.
+            self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                "presentation_completed_frames"] == 1)
+            self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                "gpu_completed_frames"] == 1)
+            output = Path(self.temp.name) / f"audit-frame-{time.time_ns()}"
+            self.deck.diagnostic_finish_frame_trace(output)
+            info = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(info["gpu_completed_frames"], 1)
+            return np.frombuffer((output / "frames.bgra").read_bytes(), dtype="u1").reshape(
+                info["crop_height_pixels"], 512, 4).copy()
+
+        for mode in ("RGB", "BLUE", "3BAND"):
+            self.deck.set_waveform_mode(mode)
+            for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500):
+                with self.subTest(mode=mode, zoom=zoom):
+                    self.deck.set_zoom(zoom)
+                    first = capture(50000)
+                    pixel_rate = round(zoom*scale)
+                    common = math.gcd(44100, pixel_rate)
+                    shift = pixel_rate // common
+                    self.assertLessEqual(shift, 128)
+                    moved = capture(50000 + 1000/common)
+                    # Preview is audio-frame quantized. Choose travel that is
+                    # exactly representable in BOTH samples and drawable pixels,
+                    # rather than mistaking rounded preview time for a render bug.
+                    # Ignore markers, playhead and grid margins.
+                    a = first[30:-30, 5+shift:105+shift, :3].astype(int)
+                    b = moved[30:-30, 5:105, :3].astype(int)
+                    self.assertLessEqual(int(np.abs(a-b).max()), 2)
+                    self.assertGreater(int(a.max()), 40, "blank renders must not pass")
+                    capture(0)  # forces a different attribute buffer center
+                    returned = capture(50000)
+                    np.testing.assert_array_equal(first, returned)
+        self.assertEqual(_sha256(audio), before)
+
     def test_frame_trace_refuses_file_io_until_playback_stops(self):
         self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
         self._wait_until(lambda: self.deck.duration() > 0)
@@ -710,7 +894,7 @@ class NativeDeckContract(unittest.TestCase):
 
     def test_detail_zoom_wakes_one_static_frame_then_sleeps(self):
         self.deck.set_zoom(1536.0)
-        self.assertEqual(self.deck.diagnostic_zoom(), 1536.0)
+        self.assertEqual(self.deck.diagnostic_zoom(), 1500.0)
         QTest.qWait(100)
         self.deck.diagnostic_reset_display_stats()
         QTest.qWait(500)

@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "profile": "personal",
+  "modules": [{
+    "id": "lowfreqlabs.soundcloud",
+    "version": "1.0.0",
+    "core_api": 1,
+    "actions": ["artwork.search", "artwork.url", "artists.suggest"],
+    "dependencies": ["yt-dlp==2026.8.19"]
+  }]
+}

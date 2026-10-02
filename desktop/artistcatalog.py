@@ -23,12 +23,13 @@ _ROLE = Qt.UserRole + 31  # (artist, [tids])
 
 
 class ArtistCatalogDialog(QDialog):
-    def __init__(self, groups, on_action=None, parent=None):
+    def __init__(self, groups, on_action=None, parent=None, *, allow_url=False):
         """`groups` = [(artist, [track_ids], image_path_or_None), ...]
         `on_action(choice_dict, done_cb)` applies a change; done_cb(ok, img)."""
         super().__init__(parent)
         self.setWindowTitle("Artist pictures")
         self.resize(680, 620)
+        self._allow_url = allow_url
         self._on_action = on_action
 
         v = QVBoxLayout(self)
@@ -72,6 +73,7 @@ class ArtistCatalogDialog(QDialog):
         self.url_btn = QPushButton("Set from URL…")
         self.url_btn.clicked.connect(self._use_url)
         row.addWidget(self.url_btn)
+        self.url_btn.setVisible(allow_url)
         self.file_btn = QPushButton("Choose image file…")
         self.file_btn.clicked.connect(self._use_file)
         row.addWidget(self.file_btn)
@@ -145,6 +147,8 @@ class ArtistCatalogDialog(QDialog):
                             "new": new_name})
 
     def _use_url(self):
+        if not self._allow_url:
+            return
         cur = self._current()
         if not cur:
             return

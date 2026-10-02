@@ -10,6 +10,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!Soundbox.spec
 # macOS
 .DS_Store
 # local CDJ golden-reference snapshots and large audio fixtures

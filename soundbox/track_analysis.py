@@ -29,6 +29,10 @@ import struct
 import threading
 from typing import Callable, Iterable
 
+from soundbox.waveform_detail import (
+    DETAIL_MODEL, DETAIL_RATE, DETAIL_DIVISORS, IMPORTED_COLOR_MODEL,
+)
+
 SCHEMA = 5
 LEGACY_SCHEMA = 4
 ULTRA_RATE = 6144.0
@@ -750,6 +754,8 @@ def load_manifest(
         _target, manifest, _payload_offset = record
         return {
             "schema": int(manifest.get("schema") or 0),
+            "timeline_lead_frames": int(manifest.get("timeline_lead_frames") or 0),
+            "timeline_sample_rate": int(manifest.get("timeline_sample_rate") or 0),
             "beats": list(manifest.get("beats") or []),
             "cues": list(manifest.get("cues") or []),
             "sample_rate": float(
@@ -960,7 +966,8 @@ def _load_v5_range_mips(
 ) -> dict | None:
     divisors = tuple(int(value) for value in (
         manifest.get("range_mip_divisors") or ()))
-    if divisors != RANGE_MIP_DIVISORS:
+    compact = manifest.get("waveform_model") == DETAIL_MODEL
+    if divisors != ((1,) if compact else RANGE_MIP_DIVISORS):
         return None
     names = tuple(
         name
@@ -986,6 +993,13 @@ def _load_v5_range_mips(
                 + divisors[index] - 1) // divisors[index]
             for index in range(len(divisors))):
         return None
+    if compact:
+        expanded, _ = _range_mip_sections(
+            minimum_levels[0], maximum_levels[0], DETAIL_DIVISORS)
+        divisors = DETAIL_DIVISORS
+        minimum_levels = [expanded[f"detail_minimum_d{x}"] for x in divisors]
+        maximum_levels = [expanded[f"detail_maximum_d{x}"] for x in divisors]
+        counts = [len(row) // 2 for row in minimum_levels]
     return {
         "rate": float(manifest.get("detail_rate") or 0),
         "base_count": int(manifest.get("detail_base_count") or 0),
@@ -1009,7 +1023,9 @@ def load_detail(
         if manifest.get("schema") == SCHEMA:
             loaded = _load_sections(
                 cache_dir, track_id, audio_path,
-                ("spectral_24", "blue_detail", "rgb_detail", "three_band"))
+                (("blue_detail", "rgb_detail", "three_band")
+                 if manifest.get("waveform_model") == DETAIL_MODEL else
+                 ("spectral_24", "blue_detail", "rgb_detail", "three_band")))
             if loaded is None:
                 return None
             sections = loaded[1]
@@ -1019,7 +1035,7 @@ def load_detail(
                 return None
             return {
                 "_audio_detail": detail,
-                "_spectral_24": sections["spectral_24"],
+                "_spectral_24": sections.get("spectral_24", b""),
                 "_blue_detail": sections["blue_detail"],
                 "_rgb_detail": sections["rgb_detail"],
                 "_detail_bands": sections["three_band"],
@@ -1325,8 +1341,9 @@ def is_ready(cache_dir: str | Path, track_id: str,
             int(value)
             for value in manifest.get("range_mip_divisors") or ())
         base_count = int(manifest.get("detail_base_count") or 0)
+        compact = manifest.get("waveform_model") == DETAIL_MODEL
         ranges_ready = (
-            divisors == RANGE_MIP_DIVISORS
+            divisors == ((1,) if compact else RANGE_MIP_DIVISORS)
             and base_count > 0
             and all(
                 int(sections.get(
@@ -1343,15 +1360,16 @@ def is_ready(cache_dir: str | Path, track_id: str,
             manifest.get("schema") == SCHEMA
             and manifest.get("track_id") == str(track_id)
             and _source_identity_matches(target, manifest, stat)
-            and manifest.get("color_model") == COLOR_MODEL
-            and manifest.get("waveform_model") == WAVEFORM_MODEL
+            and manifest.get("color_model") == (IMPORTED_COLOR_MODEL if compact else COLOR_MODEL)
+            and manifest.get("waveform_model") in (WAVEFORM_MODEL, DETAIL_MODEL)
             and manifest.get("three_band_model") == THREE_BAND_MODEL
             and manifest.get("display_waveform_model")
             == DISPLAY_WAVEFORM_MODEL
             and manifest.get("height_encoding") == HEIGHT_ENCODING
             and manifest.get("range_encoding") == RANGE_ENCODING
             and manifest.get("range_mip_encoding") == RANGE_MIP_ENCODING
-            and float(manifest.get("detail_rate") or 0) >= 5500
+            and (float(manifest.get("detail_rate") or 0) == DETAIL_RATE
+                 if compact else float(manifest.get("detail_rate") or 0) >= 5500)
             and ranges_ready
             and int(sections.get("overview_rgb", {}).get("raw_size") or 0) > 0
             and int(sections.get("blue_detail", {}).get("raw_size") or 0) > 0
@@ -1474,8 +1492,10 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         if not range_min or not range_max:
             range_min, range_max = _fallback_signed_ranges(
                 heights, height_encoding)
+        compact = prepared.get("waveform_model") == DETAIL_MODEL
+        persisted_divisors = (1,) if compact else RANGE_MIP_DIVISORS
         range_sections, detail_base_count = _range_mip_sections(
-            range_min, range_max)
+            range_min, range_max, persisted_divisors)
         if detail_base_count <= 0 or detail_rate <= 0:
             return None
         height_width = 2 if height_encoding == HEIGHT_ENCODING else 1
@@ -1495,6 +1515,8 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             "rgb_detail": rgb_detail,
             "three_band": three_band,
         }
+        if compact:
+            sections.pop("spectral_24")
         section_rows, payload = _encode_sections(sections)
         metadata = {
             "schema": SCHEMA,
@@ -1532,10 +1554,12 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             "height_encoding": height_encoding,
             "range_encoding": RANGE_ENCODING,
             "range_mip_encoding": RANGE_MIP_ENCODING,
-            "range_mip_divisors": list(RANGE_MIP_DIVISORS),
+            "range_mip_divisors": list(persisted_divisors),
             "detail_base_count": detail_base_count,
             "overview_count": count,
-            "spectral_bands": SPECTRAL_BANDS,
+            "spectral_bands": 0 if compact else SPECTRAL_BANDS,
+            "timeline_lead_frames": int(prepared.get("timeline_lead_frames") or 0),
+            "timeline_sample_rate": int(prepared.get("timeline_sample_rate") or 0),
             "beats": list(prepared.get("beats") or []),
             "cues": list(prepared.get("cues") or []),
             "grid_import": dict(prepared.get("grid_import") or {}),
@@ -2224,7 +2248,7 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
     heights = source.get("heights") or []
     colors = source.get("colors") or []
     native_rgb = (
-        result.get("color_model") == COLOR_MODEL
+        result.get("color_model") in (COLOR_MODEL, IMPORTED_COLOR_MODEL)
         and result.get("overview_heights")
         and result.get("overview_rgb")
     )
@@ -2256,7 +2280,8 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
             and result.get("three_band")):
         result["display_waveform_model"] = DISPLAY_WAVEFORM_MODEL
         result["display_render_model"] = DISPLAY_RENDER_MODEL
-    if isinstance(bands, bytes) and bands and not result.get("spectral_bands"):
+    if (isinstance(bands, bytes) and bands and not result.get("spectral_bands")
+            and result.get("waveform_model") != DETAIL_MODEL):
         # Preserve the authentic three-band source in a 24-band-shaped master.
         expanded = bytearray()
         for offset in range(0, len(bands) - 2, 3):

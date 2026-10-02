@@ -252,7 +252,7 @@ class SettingsPageMixin:
         bl.addWidget(self._settings_row(
             "Auto-selected artist pictures", cat,
             "See which profile picture each avatar-fallback artist got, and "
-            "swap it (URL / file / re-fetch) — applies to all their avatar "
+            "replace it or choose a local image — applies to all their avatar "
             "tracks. Real covers are never touched."))
 
         defaults = QPushButton("Manage photos…")

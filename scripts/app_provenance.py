@@ -45,6 +45,15 @@ def stamp(app: Path, repo: Path) -> dict[str, str | bool]:
         "SoundboxSourceRevision": metadata["revision"],
         "SoundboxSourceDirty": metadata["dirty"],
     })
+    manifest_path = app / "Contents" / "Resources" / "soundbox-build.json"
+    if manifest_path.exists():
+        import json
+        manifest = json.loads(manifest_path.read_text())
+        info.update({
+            "SoundboxBuildProfile": manifest["profile"],
+            "SoundboxModules": [m["id"] for m in manifest["modules"]],
+            "SoundboxSourceFingerprint": manifest["source_sha256"],
+        })
     info_path.write_bytes(plistlib.dumps(info, fmt=plistlib.FMT_BINARY))
     return metadata
 

@@ -1,13 +1,17 @@
 # Shared app and optional personal modules
 
-September 27, 2026. Product direction requested by Sonny: one shared application,
+Updated September 29, 2026. Product direction requested by Sonny: one shared application,
 nearly identical public/personal UI, optional installed modules adding a small
 number of capabilities. Sonny clarified that the public product remains the
 complete music manager, spanning iPod/MP3 players and USB export. Personal
-extensions isolate online scraping/discovery and dependencies withheld from
-public distribution. This document records that allocation and the proposed
-interface contract. Local artwork storage is now independent of discovery; no capability registry, public build profile or detachable provider is
-implemented yet. Preserve all existing personal behavior during migration.
+extensions isolate the current uncleared online scraping/discovery implementations
+and dependencies withheld from public distribution. Online features with permitted
+access/content use and compatible dependency licenses remain public-eligible.
+This document records that allocation and the implemented first-party
+interface contract. The provider boundary and explicit public/personal build
+profiles are implemented. Core owns local artwork and resolved action availability;
+the existing online implementation is isolated in `soundbox_personal.discovery`.
+Build/install validation is recorded in the current handoff.
 
 ## Allocation
 
@@ -16,10 +20,28 @@ implemented yet. Preserve all existing personal behavior during migration.
 Device management is shared, including guarded file maintenance and confirmed
 generic-volume Erase. Future validated rekordbox-compatible/CDJ USB export is
 also shared product scope. Neither profile may bypass source/device safety
-contracts. Online scraping is personal-only by product choice; dependency
-redistribution clearance remains a separate review, not an assumed prohibition
-on every scraping library. A personal module does not confer redistribution
-permission on a dependency that lacks it.
+contracts. September 28 clarification: Sonny wants features in public when their
+specific implementation can be properly distributed and operated. Online features,
+including Unknown-Artist suggestions, are not inherently personal-only. The table's
+online exclusions apply to the current SoundCloud implementations pending clearance
+or replacement. Review dependency redistribution separately from service access,
+attribution, persistent storage/export and commercial-use permissions. Personal
+packaging does not waive service terms or confer redistribution permission.
+
+The current `soundbox_personal.discovery.suggest_artist` searches SoundCloud via `yt_dlp`,
+compares titles and infers an artist from uploaders; only user-checked suggestions
+are applied. No audio is downloaded by this action. Sonny confirmed keeping this
+implementation out of the public build after learning how it works. A cleared
+metadata provider could support public suggestions later; none is implemented.
+[SoundCloud's platform terms](https://soundcloud.com/terms-of-use) restrict scraping
+information about users, and its [API terms](https://developers.soundcloud.com/docs/api/terms-of-use/)
+restrict persistent User Content storage and commercial use. Moving to that API
+alone would not clear permanent artwork caching or device export.
+[yt-dlp's source license](https://github.com/yt-dlp/yt-dlp#licensing) is the Unlicense,
+with different licenses in some bundled artifacts; it is not categorically
+undistributable, nor does its license authorize a particular service use.
+These September 28 findings support withholding the current implementation;
+they are not a completed legal or dependency clearance.
 
 | Capability / current surface | Public | Personal | Current boundary / work needed |
 |---|---|---|---|
@@ -34,17 +56,17 @@ permission on a dependency that lacks it.
 | Waveforms, zoom/modes, jumps, CUE, imported hot/memory cues | Keep | Same | Preserve exact native/player contracts |
 | Autoplay up/random/down, now-playing navigation | Keep | Same | Shared navigation |
 | Background analysis, reanalysis, cache reclamation | Keep | Same | Shared task ownership and resource policy |
-| Local cover selection and sticky cover removal | Keep | Same | Split local picker from auto-started online search |
+| Local cover selection and sticky cover removal | Keep | Same | Local picker works with no provider |
 | Artist catalog, local avatar upload/rename/delete | Keep | Same | Hide only provider-specific URL action |
 | Default-photo pool and balanced assignments | Keep | Same | Personal photos are user data, never bundled |
 | Existing curated JPEGs and provenance | Keep readable | Same | Removing provider never removes stored art |
 | Embedded artwork import from local audio | Planned | Same when built | Not a shipped feature; read-only extraction, explicit precedence |
-| Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Still autostarts in core |
+| Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Starts only with the personal provider |
 | Fetch cover art now / background / stop / re-scan | Omit online actions | Retain via provider | Gate command and scheduler, not just menu |
 | Online thumbnail candidate search in cover picker | Omit | Retain via provider | Local picker remains present in both |
-| SoundCloud page URL cover/avatar actions | Omit | Retain via provider | Track picker and artist catalog both need gating |
+| SoundCloud page URL cover/avatar actions | Omit | Retain via provider | Track picker and artist catalog gate URL controls and commands |
 | Suggest artists for Unknowns (online consensus) | Omit | Retain via provider | Separate from local merge suggestions |
-| `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Current build bundles it unconditionally |
+| `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Personal bundles it; public physically excludes it |
 | Device discovery, loading status, dashboard, normal eject | Keep | Same | Core serialized device controller |
 | Generic FAT32 / Rockbox filesystem playlist export | Keep, guarded | Same | Do not revive blanket generic-USB prohibition |
 | Stock MA446 export | Keep after acceptance | Same allowlist | Validated MP3/supported WAV only |
@@ -95,7 +117,7 @@ No locked buttons, empty provider panels, upgrade banners or alternate layout.
    activate a module absent from the public artifact. A null provider schedules
    no network work. Optional provider jobs use core cancellation/ownership and
    bounded resource budgets.
-5. Initial delivery should use explicit build composition: shared core plus a
+5. Initial delivery uses explicit build composition: shared core plus a
    known provider package in the personal artifact, shared core alone in public.
    This gives attach/detach at build and restart without a code fork. Loading
    separately installed modules later requires a reviewed allowlist, compatible

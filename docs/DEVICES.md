@@ -29,21 +29,25 @@ shared subset enters Apple's database.
 Non-FAT volumes remain browseable but do not accept the Rockbox-style drop.
 Unknown or failed probes never grant extra capability.
 
-Connection presentation separates visibility from readiness. A debounced
-`/Volumes` notification requests discovery even during playback or an eject-ready
-hold. If a device worker owns the lane, the request stays pending for retry.
-A three-second timer checks the local `/Volumes` directory timestamp to recover
-missed events; it does not open mounted children merely to check that timestamp.
-With no connected devices and no failed probe, an unchanged timestamp starts no
-discovery worker. Failed probes retry with a 3–30-second backoff; mount events
-request immediate discovery. Connected-device drift keeps its three-second poll.
-Ordinary unmounted folders are skipped after a 30-second attachment grace.
-Verified external mounts appear by name, disabled during discovery.
-At QThread.finished they become selectable. Stock/dual dashboard loading
-appears only in the bottom status; device rows have no loading suffix. A cached
+Connection presentation separates visibility from readiness. Debounced `/Volumes`
+notifications and a 250-ms cached kernel mount-table check request discovery even
+during playback or an eject-ready hold. The latter uses Darwin
+`getfsstat64(MNT_NOWAIT)` without opening mounted paths, so mounting over an
+existing directory cannot strand detection behind probe backoff. These are hints,
+never external-device/write authority. A busy lane retains the request and retries
+on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
+unchanged mount/timestamp state starts no idle discovery worker. Failed probes
+retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
+three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
+Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+computes sync drift before publishing the selectable row at QThread.finished;
+unknown/failed checks say `Sync status pending`, never imply a clean result.
+Stock/dual dashboard preload follows in the same serialized device lane, with
+loading only in the bottom status after the row becomes ready. Successful preload
+clears that status directly, without another immediate drift scan. A cached
 dashboard is presentation-only; selecting while it loads uses the same serialized
-preload. Writes stay guarded by
-operation ownership and firmware capabilities. Remounts invalidate stale views.
+preload. Writes stay guarded by operation ownership and firmware capabilities.
+Remounts invalidate stale views.
 
 ## Lifecycle correction under hardware acceptance
 
@@ -337,9 +341,10 @@ an explicit `Finalizing iPod...` state. The completion dialog appears only after
 both workers finish and their owning attributes are cleared. At that terminal
 boundary SoundBox installs an eject-ready latch, releases operation ownership,
 enables Eject, and only then opens the completion dialog. The latch suppresses
-polling throughout the modal and after OK. Eject therefore
+polling throughout the modal; dismissal releases it so subsequent library edits
+can update drift without reconnecting. Eject therefore
 does not cancel or complete dashboard work—the finalization scanner is already
-done. A new explicit device action releases the hold and refreshes normally.
+done. An explicit device action also releases the hold and refreshes normally.
 An up-to-date/no-write Sync and an already-absent playlist Delete use this same
 finalization boundary, so their informational OK is equally Eject-ready.
 All displayed surfaces still update without a navigation round trip.

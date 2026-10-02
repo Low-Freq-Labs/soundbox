@@ -25,7 +25,7 @@ _HOT_CUE_FALLBACKS = (
 )
 _MEMORY_CUE_RGB = (255, 52, 52)
 _WAVEFORM_MODES = {"BLUE": 1, "RGB": 2, "3BAND": 3}
-_NATIVE_ABI_VERSION = 4
+_NATIVE_ABI_VERSION = 5
 _NATIVE_GEOMETRY_EVENTS = tuple(
     event_type
     for event_type in (
@@ -226,6 +226,9 @@ def _bind(path: Path):
     lib.sb_deck_destroy.argtypes = [handle]
     lib.sb_deck_load.argtypes = [handle, ctypes.c_char_p]
     lib.sb_deck_load.restype = ctypes.c_int
+    lib.sb_deck_load_timeline.argtypes = [
+        handle, ctypes.c_char_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_double]
+    lib.sb_deck_load_timeline.restype = ctypes.c_int
     lib.sb_deck_begin_track.argtypes = [handle, ctypes.c_uint64]
     lib.sb_deck_begin_track.restype = ctypes.c_int
     lib.sb_deck_play.argtypes = [handle]
@@ -636,6 +639,8 @@ class NativeDeckBackend(QObject):
         self.positionChanged.emit(0)
         self.durationChanged.emit(0)
         self._set_state(PlaybackState.STOPPED)
+        # Header probing and all source reads belong to the native decode
+        # thread, including when a cloud-backed source needs hydration.
         if not path or not self._lib.sb_deck_load(
                 self._handle, path.encode("utf-8")):
             self.errorOccurred.emit(None, "Native deck could not load the track")

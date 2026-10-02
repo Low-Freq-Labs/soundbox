@@ -89,6 +89,7 @@ class CollectionView(unittest.TestCase):
         from desktop.app import LOG
         self.assertFalse(any(isinstance(h, logging.FileHandler)
                              for h in LOG.handlers))
+        self.assertFalse(_win._mount_table_timer.isActive())
 
     def test_pinned_first_with_count(self):
         it = _win.sb_tree.topLevelItem(0)
@@ -595,6 +596,120 @@ class StockIpodUI(unittest.TestCase):
         )
         self.assertEqual(_win.progress.width(), 208)
 
+    def test_analysis_pause_status_fits_after_shorter_pulse(self):
+        try:
+            _win._on_analysis_tasks_ready(3)
+            _win._on_analysis_storage_paused(
+                True, 19 * 1024 ** 3, 25 * 1024 ** 3)
+            self.assertIn("Low disk space", _win.status_label.text())
+            self.assertGreaterEqual(
+                _win.status_label.width(),
+                _win.status_label.fontMetrics().horizontalAdvance(
+                    _win.status_label.text()))
+            self.assertIn("25 GiB", _win.status_label.toolTip())
+            self.assertFalse(_win._pulse_timer.isActive())
+            _win._preparing_library = False
+            _win._set_status_text("Ready")
+            self.assertNotIn("25 GiB", _win.status_label.toolTip())
+            self.assertLess(_win.status_label.width(), 100)
+        finally:
+            _win._preparing_library = False
+            _win._prep_storage_pause = None
+            _win._stop_pulse()
+            _win._set_status_text("Ready")
+
+    def test_file_phases_do_not_replace_or_resize_overall_sync_status(self):
+        from threading import Event
+        from types import SimpleNamespace
+        from soundbox.device_operations import Phase
+
+        worker = object()
+        active = SimpleNamespace(worker=worker, cancellation=Event(), phase=Phase.EXECUTING)
+        try:
+            _win._on_dual_ipod_progress(9, 37, "track.wav")
+            _win._pulse_tick()
+            text = _win.status_label.text()
+            widths = (_win.status_label.width(), _win.status_count_label.width())
+            value = _win.progress.value()
+            with mock.patch.object(_win._device_coordinator, "active", active):
+                for stage, done, total in [
+                        ("Acquiring source", 0, 9_000_000_000),
+                        ("Copying to device", 0, 14_500),
+                        ("Verifying device copy", 14_500, 14_500)] * 10:
+                    _win._on_device_phase_progress(
+                        worker, stage, done, total, "fixture.wav")
+                    self.assertEqual(_win.status_label.text(), text)
+                    self.assertEqual(_win.status_count_label.text(), "9/37")
+                    self.assertEqual(
+                        (_win.status_label.width(), _win.status_count_label.width()),
+                        widths)
+                    self.assertEqual(_win.progress.value(), value)
+                    self.assertTrue(_win._pulse_timer.isActive())
+                self.assertIn("Verifying device copy", _win.status_label.toolTip())
+                self.assertIn("14.5 KB", _win.status_label.toolTip())
+                active.cancellation.set()
+                _win._start_pulse("Cancelling")
+                _win._on_device_phase_progress(worker, "Copying to device", 0, 1, "late")
+                self.assertEqual(_win.status_label.text(), "Cancelling")
+                self.assertNotIn("late", _win.status_label.toolTip())
+        finally:
+            _win._stop_pulse()
+            _win._set_status_text("Ready")
+            _win.progress.setVisible(False)
+
+    def test_static_statuses_stop_old_animation_and_fit_their_text(self):
+        try:
+            for text in ("Ready", "Prep paused · Low Power", "Fetch failed ✕",
+                         "iPod playlist deletion cancelled — nothing written",
+                         "Stopping device work safely…", "Complete ✓"):
+                with self.subTest(text=text):
+                    _win._start_pulse("Loading")
+                    _win._set_status_text(text)
+                    _win._pulse_tick()  # already-queued tick must be harmless
+                    self.assertEqual(_win.status_label.text(), text)
+                    self.assertFalse(_win._pulse_timer.isActive())
+                    self.assertGreaterEqual(
+                        _win.status_label.width(),
+                        _win.status_label.fontMetrics().horizontalAdvance(text))
+        finally:
+            _win._set_status_text("Ready")
+
+    def test_older_flash_timer_cannot_clear_a_newer_identical_message(self):
+        callbacks = []
+        with mock.patch("desktop.app.QTimer.singleShot",
+                        side_effect=lambda _ms, callback: callbacks.append(callback)):
+            _win._flash_status("Updated ✓", 6)
+            _win._flash_status("Updated ✓", 6)
+        callbacks[0]()
+        self.assertEqual(_win.status_label.text(), "Updated ✓")
+        callbacks[1]()
+        self.assertEqual(_win.status_label.text(), "Ready")
+
+    def test_verify_owns_status_and_idle_restores_analysis_pause(self):
+        from types import SimpleNamespace
+        from soundbox.device_operations import Phase
+
+        try:
+            _win._on_analysis_tasks_ready(3)
+            _win._start_pulse("Verifying")
+            with mock.patch.object(_win._device_coordinator, "active",
+                                   SimpleNamespace(phase=Phase.INSPECTING)):
+                _win._on_analysis_storage_paused(
+                    True, 19 * 1024 ** 3, 25 * 1024 ** 3)
+                _win._on_analysis_power_policy("battery")
+                _win._on_art_progress(1, 20)
+                self.assertEqual(_win.status_label.text(), "Verifying")
+                self.assertTrue(_win._pulse_timer.isActive())
+            _win._set_status_text("Ready")
+            self.assertIn("Low disk space", _win.status_label.text())
+            self.assertIn("25 GiB", _win.status_label.toolTip())
+        finally:
+            _win._preparing_library = False
+            _win._prep_storage_pause = None
+            _win._prep_progress = None
+            _win._prep_power_policy = "ac"
+            _win._set_status_text("Ready")
+
     def test_ipod_progress_keeps_animated_status_and_separate_count(self):
         try:
             _win._on_dual_ipod_progress(14, 37, "track.wav")
@@ -1057,6 +1172,7 @@ class StockIpodUI(unittest.TestCase):
         retired = mock.Mock()
         retired.isRunning.return_value = False
         stub = SimpleNamespace(lib=object(), _shutting_down=False,
+                               providers=_win.providers,
                                _state_repository=SimpleNamespace(writable=True),
                                _art_worker=retired, _art_restart=False)
         with mock.patch("desktop.app.ArtFillWorker") as factory:
@@ -1302,6 +1418,7 @@ class StockIpodUI(unittest.TestCase):
         dev = "/Volumes/PRELOAD-CACHE"
         old_current = _win._current_device_path
         old_cache = _win._stock_view_cache.get(dev)
+        old_warming = set(_win._stock_view_warming)
 
         class Snapshot:
             identity_key = ""
@@ -1311,11 +1428,18 @@ class StockIpodUI(unittest.TestCase):
         snapshot = Snapshot()
         try:
             _win._current_device_path = ""
-            with mock.patch("desktop.app.StockIpodSnapshot", Snapshot):
+            _win._stock_view_warming.add(dev)
+            _win._start_ipod_loading_status()
+            with mock.patch("desktop.app.StockIpodSnapshot", Snapshot), \
+                    mock.patch.object(_win, "_refresh_devices") as scan:
                 _win._on_stock_device_view(dev, (snapshot, None))
+                scan.assert_not_called()
             self.assertEqual(_win._stock_view_cache[dev], (snapshot, None))
+            self.assertNotIn(dev, _win._stock_view_warming)
+            self.assertEqual(_win.status_label.text(), "Ready")
         finally:
             _win._current_device_path = old_current
+            _win._stock_view_warming = old_warming
             if old_cache is None:
                 _win._stock_view_cache.pop(dev, None)
             else:
@@ -1345,7 +1469,7 @@ class StockIpodUI(unittest.TestCase):
             self.assertEqual(_win.device_tree.topLevelItemCount(), 1)
             self.assertTrue(_win.device_tree.topLevelItem(0).isDisabled())
             self.assertEqual(_win.device_tree.topLevelItem(0).text(0),
-                             "⛃  HIDDEN-UNTIL-READY")
+                             "⛃  HIDDEN-UNTIL-READY · Checking…")
             self.assertIn(dev, _win._stock_view_warming)
             self.assertEqual(_win._pulse_word, "Loading iPod")
             self.assertTrue(_win.status_label.text().startswith("Loading iPod"))
@@ -1562,13 +1686,11 @@ class StockIpodUI(unittest.TestCase):
         old_status = _win.status_label.text()
         old_warming = set(_win._stock_view_warming)
         old_cache = dict(_win._stock_view_cache)
-        old_rescan = _win._device_rescan_after_stock_view
         _win.device_tree.clear()
         try:
             _win._current_device_path = ""
             _win._stock_view_cache.pop(dev, None)
             _win._stock_view_warming = {dev}
-            _win._device_rescan_after_stock_view = True
             _win._start_ipod_loading_status()
 
             _win._on_stock_device_view(dev, RuntimeError("unreadable"))
@@ -1576,7 +1698,6 @@ class StockIpodUI(unittest.TestCase):
             self.assertEqual(_win.device_tree.topLevelItemCount(), 0)
             self.assertNotIn(dev, _win._stock_view_cache)
             self.assertNotIn(dev, _win._stock_view_warming)
-            self.assertFalse(_win._device_rescan_after_stock_view)
             self.assertEqual(_win.status_label.text(),
                              "iPod load failed — retrying")
         finally:
@@ -1584,7 +1705,6 @@ class StockIpodUI(unittest.TestCase):
             _win.status_label.setText(old_status)
             _win._stock_view_warming = old_warming
             _win._stock_view_cache = old_cache
-            _win._device_rescan_after_stock_view = old_rescan
             _win._current_device_path = old_current
             _win.device_tree.clear()
 
@@ -1596,7 +1716,6 @@ class StockIpodUI(unittest.TestCase):
         old_profile = _win._device_profiles.get(dev)
         old_cache = _win._stock_view_cache.get(dev)
         old_reader = _win._read_stock_device_view
-        old_rescan = _win._device_rescan_after_stock_view
         old_warming = set(_win._stock_view_warming)
         calls = []
 
@@ -1615,15 +1734,13 @@ class StockIpodUI(unittest.TestCase):
             _win._stock_view_cache.pop(dev, None)
             _win._read_stock_device_view = (
                 lambda device, value: calls.append((device, value)))
-            _win._device_rescan_after_stock_view = False
             _win._finish_device_scan_worker(worker)
             self.assertIsNone(_win._dev_scan_worker)
             self.assertEqual(calls, [(dev, profile)])
-            self.assertTrue(_win._device_rescan_after_stock_view)
+            self.assertIn(dev, _win._stock_view_warming)
         finally:
             _win._dev_scan_worker = old_worker
             _win._read_stock_device_view = old_reader
-            _win._device_rescan_after_stock_view = old_rescan
             _win._stock_view_warming = old_warming
             _win._stop_pulse(force=True)
             if old_profile is None:
@@ -2672,7 +2789,7 @@ class StockIpodUI(unittest.TestCase):
         self.assertEqual(
             drift_call.kwargs["title_overrides"], {"1": "Edited title"})
 
-    def test_new_device_scan_publishes_before_deferring_drift(self):
+    def test_new_device_scan_publishes_pending_then_real_drift(self):
         from types import SimpleNamespace
         from desktop.workers import DeviceScanWorker
 
@@ -2687,14 +2804,17 @@ class StockIpodUI(unittest.TestCase):
             mock.patch("desktop.workers.list_devices", return_value=[
                 ("IPOD", "/Volumes/IPOD", 1000)]),
             mock.patch("desktop.workers.device_profile", return_value=profile),
-            mock.patch("desktop.workers.engine.device_drift") as drift,
+            mock.patch("desktop.workers.engine.device_drift",
+                       side_effect=lambda *a, **kw: (
+                           self.assertTrue(discovered),
+                           SimpleNamespace(count=lambda: 2))[1]) as drift,
         ):
             worker.run()
         self.assertEqual(discovered[0], [
             ("IPOD", "/Volumes/IPOD", 1000, profile)])
-        self.assertEqual(completed[0][0][3], 0)
+        self.assertEqual(completed[0][0][3], 2)
         self.assertEqual(worker.new_paths, ("/Volumes/IPOD",))
-        drift.assert_not_called()
+        drift.assert_called_once()
 
     def test_same_name_new_mount_token_is_a_new_connection(self):
         from types import SimpleNamespace
@@ -2716,13 +2836,29 @@ class StockIpodUI(unittest.TestCase):
             mock.patch("desktop.workers.refresh_device_mount",
                        return_value=True) as refresh_mount,
             mock.patch("desktop.workers.device_profile", return_value=profile),
-            mock.patch("desktop.workers.engine.device_drift") as drift,
+            mock.patch("desktop.workers.engine.device_drift", return_value=None) as drift,
         ):
             worker.run()
         self.assertEqual(worker.mount_tokens, {"/Volumes/IPOD": 99})
         self.assertEqual(worker.new_paths, ("/Volumes/IPOD",))
         refresh_mount.assert_called_once_with("/Volumes/IPOD")
-        drift.assert_not_called()
+        drift.assert_called_once()
+
+    def test_failed_initial_sync_check_does_not_publish_clean_status(self):
+        from types import SimpleNamespace
+        from desktop.workers import DeviceScanWorker
+
+        profile = SimpleNamespace(kind="dual_boot", has_stock_ipod=True, model="MA446")
+        worker = DeviceScanWorker(_win.lib, [], known_paths=set())
+        with (
+            mock.patch("desktop.workers.list_devices", return_value=[
+                ("IPOD", "/Volumes/IPOD", 1000)]),
+            mock.patch("desktop.workers.device_profile", return_value=profile),
+            mock.patch("desktop.workers.engine.device_drift", side_effect=OSError("busy")),
+        ):
+            worker.run()
+        self.assertIsNone(worker.results[0][3])
+        self.assertIn("Sync status pending", _win._device_label("IPOD", 1000, None))
 
     def test_stock_commit_prompt_defaults_to_cancel(self):
         source = (Path(__file__).parents[1] / "desktop" / "app.py").read_text()
@@ -3224,7 +3360,7 @@ class SuggestQueue(unittest.TestCase):
         real_run = sg.SuggestWorker.run
         sg.SuggestWorker.run = lambda self: None  # no network in tests
         try:
-            dlg = sg.SuggestDialog([("1", "t1"), ("2", "t2")])
+            dlg = sg.SuggestDialog([("1", "t1"), ("2", "t2")], provider=_win.providers.artists)
             dlg._worker.wait(2000)
             dlg._add_suggestion("1", "t1", "GRiZ", 1.0)
             dlg._add_suggestion("2", "t2", "Wrongy", 0.9)
@@ -3263,8 +3399,8 @@ class TaskOwnership(unittest.TestCase):
         from desktop.artpicker import ArtPickerDialog, _CandidateSearch
         from desktop.suggest import SuggestDialog, SuggestWorker
         for worker_class, make in (
-            (_CandidateSearch, lambda: ArtPickerDialog("artist", "title")),
-            (SuggestWorker, lambda: SuggestDialog([("1", "title")])),
+            (_CandidateSearch, lambda: ArtPickerDialog("artist", "title", provider=_win.providers.artwork)),
+            (SuggestWorker, lambda: SuggestDialog([("1", "title")], provider=_win.providers.artists)),
         ):
             entered, release = Event(), Event()
             events = []
@@ -4640,10 +4776,10 @@ class PlayerHardening(unittest.TestCase):
         w.mousePressEvent(Ev(20, 40))  # minus
         self.assertEqual(w.PIXELS_PER_SECOND, 92.0)
         w.set_zoom(2000.0)
-        self.assertEqual(w.PIXELS_PER_SECOND, 1536.0)
+        self.assertEqual(w.PIXELS_PER_SECOND, 1500.0)
         self.assertEqual(w._overview_time_at_x(300), overview_target)
-        self.assertAlmostEqual(w._time_at_x(1736, 200), 11.0)
-        self.assertEqual(changes, [128.0, 92.0, 1536.0])
+        self.assertAlmostEqual(w._time_at_x(1700, 200), 11.0)
+        self.assertEqual(changes, [128.0, 92.0, 1500.0])
         self.assertEqual(seeks, [])
 
     def test_zoom_scale_is_one_bounded_canonical_sequence(self):
@@ -4656,11 +4792,11 @@ class PlayerHardening(unittest.TestCase):
             w.set_zoom(scale)
             self.assertEqual(w.PIXELS_PER_SECOND, scale)
         self.assertEqual(_ZOOM_LEVELS[0], 24.0)
-        self.assertEqual(_ZOOM_LEVELS[-1], 1536.0)
+        self.assertEqual(_ZOOM_LEVELS[-1], 1500.0)
         w.set_zoom(-100)
         self.assertEqual(w.PIXELS_PER_SECOND, 24.0)
         w.set_zoom(50_000)
-        self.assertEqual(w.PIXELS_PER_SECOND, 1536.0)
+        self.assertEqual(w.PIXELS_PER_SECOND, 1500.0)
 
     def test_waveform_drag_is_anchored_and_releases_exactly(self):
         from desktop.player import WaveformBar
@@ -6235,6 +6371,28 @@ class WaveformFill(unittest.TestCase):
         import shutil
         shutil.rmtree(self.cache, ignore_errors=True)
 
+    def test_complete_import_prepares_without_fallback_analysis(self):
+        from soundbox import track_analysis as ta
+        from soundbox.waveform_detail import DETAIL_MODEL
+        from desktop.workers import WaveformFillWorker
+        source = Path(self.paths[0])
+        track = Track("0", "Test", "Artist", source.as_uri(),
+                      source_analysis_path=self.paths[1])
+        lib = Library({"0": track}, [], source="synthetic")
+        imported = {"sample_rate": 150, "beats": [[1, 0, 120]],
+                    "_blue_detail": bytes([31]) * 150,
+                    "_rgb_detail": bytes.fromhex("e47c") * 150,
+                    "_detail_bands": bytes([30, 40, 50]) * 150}
+        canonical = Path(self.cache) / "analysis"
+        with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+              mock.patch("soundbox.track_analysis.analyze_soundfile") as fallback,
+              mock.patch("desktop.player.qt_detail_peaks") as qt):
+            WaveformFillWorker(lib, canonical).run()
+        fallback.assert_not_called()
+        qt.assert_not_called()
+        self.assertTrue(ta.is_ready(canonical, "0", source))
+        self.assertEqual(ta.load_manifest(canonical, "0", source)["waveform_model"], DETAIL_MODEL)
+
     def test_discovery_receipts_reuse_headers_and_notice_late_sidecars(self):
         from soundbox import track_analysis as ta
         from desktop.workers import WaveformFillWorker
@@ -6715,7 +6873,7 @@ class WaveformFill(unittest.TestCase):
 
                 _win._on_analysis_tasks_ready(2)
                 self.assertTrue(_win._preparing_library)
-                pulse.assert_called_once_with("Preparing your library")
+                pulse.assert_called_once_with("Preparing your library", keep_count=False)
         finally:
             _win._preparing_library = saved
 
@@ -6730,9 +6888,10 @@ class WaveformFill(unittest.TestCase):
         worker = WaveformFillWorker(self.lib, canonical)
         states = []
         worker.storage_paused.connect(
-            lambda paused, free: states.append((paused, free)))
+            lambda paused, free, resume: states.append((paused, free, resume)))
         free = [
             worker.MIN_FREE_BYTES - 1,
+            worker.MIN_FREE_BYTES + 1,
             worker.RESUME_FREE_BYTES,
         ]
         with patch(
@@ -6741,7 +6900,9 @@ class WaveformFill(unittest.TestCase):
                     SimpleNamespace(free=value) for value in free
                 ]), patch("time.sleep"):
             self.assertTrue(worker._wait_for_storage())
-        self.assertEqual(states, [(True, free[0]), (False, free[1])])
+        self.assertEqual(states, [
+            (True, free[0], worker.RESUME_FREE_BYTES),
+            (False, free[-1], worker.RESUME_FREE_BYTES)])
 
     def test_hidden_tracks_are_discarded_and_never_prepared(self):
         from desktop.workers import WaveformFillWorker
@@ -7552,3 +7713,85 @@ class RepeatedBackgroundWork(unittest.TestCase):
             MainWindow._finish_device_scan_worker(host, worker)
         self.assertEqual(host._device_retry_at, float('inf'))
         self.assertEqual(host._device_retry_delay, 3)
+
+
+class ProviderProfiles(unittest.TestCase):
+    def test_public_commands_and_menus_preserve_local_actions(self):
+        from soundbox.providers import Providers
+        from PySide6.QtCore import QPoint
+        old = _win.providers
+        _win.providers = Providers('public')
+        try:
+            with mock.patch('desktop.app.ArtFillWorker') as fill, \
+                    mock.patch.object(_win, '_run_oneshot') as fetch, \
+                    mock.patch.object(_win.art_cache, 'retry_weak') as rescan:
+                _win._start_art_fill()
+                _win._maybe_autostart_art_fill()
+                _win._rescan_covers()
+                _win._suggest_artists()
+                _win._art_fetch_one('1')
+                _win._art_from_url('1')
+                fill.assert_not_called()
+                fetch.assert_not_called()
+                rescan.assert_not_called()
+            actions = []
+            menu = mock.Mock()
+            menu.addAction.side_effect = lambda text, *args: actions.append(text)
+            with mock.patch('desktop.app.QMenu', return_value=menu):
+                _win._rb_header_menu(_win.tree, QPoint())
+            self.assertIn('Suggest artist merges…', actions)
+            self.assertFalse(any('cover' in a or 'Unknowns' in a for a in actions))
+            from desktop.artistcatalog import ArtistCatalogDialog
+            catalog = ArtistCatalogDialog([('Artist', ['1'], None)])
+            self.assertTrue(catalog.url_btn.isHidden())
+            with mock.patch('desktop.artistcatalog.QInputDialog.getText') as prompt:
+                catalog._use_url()
+                prompt.assert_not_called()
+            catalog.close()
+        finally:
+            _win.providers = old
+
+    def test_detach_reattach_preserves_curation_art_blocks_settings_and_analysis(self):
+        import hashlib
+        from PIL import Image
+        import io
+        from desktop.app import MainWindow
+        from soundbox.artwork import ArtCache, ArtResult
+        from soundbox.providers import Providers
+        with tempfile.TemporaryDirectory(prefix='sb-profile-state-') as area:
+            root = Path(area)
+            original = {'custom': {'Favorites': ['1']}, 'title_overrides': {'1': 'Chosen'},
+                        'artist_overrides': {'1': 'Artist'},
+                        'extensions': {'lowfreqlabs.soundcloud': {'schema': 1, 'preference': 'keep'}},
+                        'settings': {'future_provider_setting': {'enabled': True}}}
+            (root / 'library.json').write_text(json.dumps(original))
+            cache = ArtCache(root / 'art')
+            pixels = io.BytesIO()
+            Image.new('RGB', (24,24), 'blue').save(pixels, 'PNG')
+            cache.store_ok('1', ArtResult(pixels.getvalue(), 'image/png', 1.0, 'file:fixture', 'Chosen'))
+            cache.block('2')
+            cache.normalize_all()
+            (root / 'track_analysis').mkdir()
+            analysis = root / 'track_analysis' / 'untouched.fixture'
+            analysis.write_bytes(b'opaque existing analysis')
+            def hashes():
+                return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                        for directory in ('art', 'track_analysis')
+                        for p in (root / directory).rglob('*') if p.is_file()}
+            before = hashes()
+            for profile in (_win.providers, Providers('public'), _win.providers):
+                win = MainWindow(providers=profile, isolated_dir=area)
+                try:
+                    win._save_state()
+                    stored = json.loads((root / 'library.json').read_text())
+                    for key in ('custom', 'title_overrides', 'artist_overrides', 'extensions'):
+                        self.assertEqual(stored[key], original[key])
+                    self.assertEqual(stored['settings']['future_provider_setting'], {'enabled': True})
+                    self.assertEqual(win.art_cache.status('2'), 'blocked')
+                    self.assertEqual(hashes(), before)
+                    self.assertIsNone(win._wf_fill_worker)
+                    self.assertIsNone(win._art_worker)
+                finally:
+                    win.shutdown()
+                    win.deleteLater()
+            _app.processEvents()

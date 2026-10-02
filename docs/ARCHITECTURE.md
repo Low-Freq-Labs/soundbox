@@ -3,9 +3,17 @@
 ## Repo layout
 
 Current debt and staged extraction plan: [September software audit](software-audit-2026-09.md).
-The [shared-core / personal-module design](release-boundaries.md) is planned,
-not implemented. Today online discovery and its packaged dependency remain
-part of core.
+The [shared-core / personal-module boundary](release-boundaries.md) uses
+`soundbox.providers` for typed artwork/artist interfaces and startup admission.
+The versioned `profiles/*.json` manifests select an allowlisted first-party module;
+missing/incompatible/broken providers leave the local core available. Public
+contains no current SoundCloud provider or `yt_dlp`; personal includes
+`soundbox_personal.discovery`. Menus, direct commands and delayed scheduling all
+use the resolved actions. Providers return results; core workers and artwork/state
+owners retain publication, cancellation, shutdown and device authority.
+Frozen apps resolve only the bundled manifest, ignoring source-profile environment
+settings. Detach/reattach uses build composition plus restart; it does not migrate
+or reset curation, provider namespaces, images, sticky removals or analysis.
 
     soundbox/   pure-Python engine (no Qt): source-neutral library model,
                 rekordbox adapters, sync/resync + manifest drift,
@@ -31,9 +39,9 @@ part of core.
 `engine` (the API surface) · `sync` (export + resync; **safety
 contract at the top of the file**) · `paths` (sanitizing, device paths,
 length budgets) · `playlists` (m3u8) · `report` · `metadata` (artist/title
-derivation, title-cleanup rules) · `artwork` (canonical local images, results and defaults) + `artfetch` + `artencode` (artist-accountable
-cover fetch, manual/auto provenance, Unknown-Artist hard stop, managed balanced
-default-photo fallback, and baseline-JPEG encode) · `manifest` (per-device drift) ·
+derivation, title-cleanup rules) · `artwork` (canonical local images, results, provenance and defaults) +
+`artfetch` (local compatibility aliases) + `artencode` (baseline-JPEG encode) +
+`providers` (optional discovery contracts and startup composition) · `manifest` (per-device drift) ·
 `track_analysis` (canonical V5 storage plus read-only V4 compatibility,
 streaming RGB/grid
 analysis, and export eligibility) · `rekordbox_analysis` (read-only
@@ -180,108 +188,69 @@ the library. Their normalized fingerprint and the exact normalized PQTZ beat
 rows update only the V5 manifest until SoundBox user data claims ownership;
 deleted database cues and later Rekordbox beat-grid corrections therefore land
 without touching the compressed analysis payload or decoding source audio.
-SoundBox's canonical schema-V5 record under `track_analysis/` owns the result:
-full grid/cues, exact-or-derived 150 Hz BLUE/PWV3, RGB/PWV5, and 3BAND/PWV7
-display streams, 24 normalized spectral bands, export eligibility, provenance,
-and exact signed-range renderer mips derived from an approximately
-6144-window/s analysis. Each section is
-independently Zstandard-compressed and SHA-256 verified inside one atomic
-per-track container. Source identity invalidates only the changed track.
-Every successful rekordbox/XML load and direct SoundBox import arms a recurring
-small-manifest/source-stat scan. It starts only after the previous waveform
-worker finishes, so new audio cooks immediately and a later container/tag
-rewrite recooks that one stale record without overlapping workers or reading
-the full cache payload. Exact Rekordbox waveform modes remain manifest-only;
-only a mode still carrying SoundBox-fallback provenance probes its current
-read-only PWV3/PWV5/PWV7 payload, allowing late Rekordbox analysis completion
-to promote that track automatically without polling every ANLZ waveform.
-Current high-rate geometry is versioned as
-`soundbox-polarity-range-mips-i16-v5`. V5 stores little-endian signed minimum
-and maximum extrema at the exact song-anchored divisors selected by the
-supported zoom/scale contract:
-`8/13/18/25/35/50/66/99/132/192/256`. The compact overview keeps one symmetric
-maximum. `waveform_model`, `range_encoding`, `range_mip_encoding`, and the
-explicit divisor list version the payload. V4 remains read-only/playable
-during migration; conversion and fresh analysis share one reduction routine,
-and V4 is retired only after a complete V5 audit. A display-only `height^1.4`
-curve,
-0.84 ceiling, and continuous four-LSB visibility shoulder are applied after
-loading; persisted amplitudes remain linear.
+SoundBox's schema-V5 container owns the imported streams, grid/cues, source
+identity and optional derived detail under `track_analysis/`. Sections are
+independently Zstandard-compressed and SHA-256 verified, then atomically published.
+The import-first path reads complete PWV3/PWV5/PWV7 plus grid data before selecting an analyzer.
+It produces only exact 1-ms signed stereo-midpoint extrema, with no duplicate
+filter bank, FFT or beat analysis, and builds its overview from PWV5.
 
-The dedicated RGB stream is versioned separately as
-`soundbox-rgb-filterbank-v2`. Its timeline correction follows the decoder:
-lossless PCM uses zero offset, while MP3 retains the measured seven-row /
-46.7 ms correction. This prevents lossless kick/snare hue from landing on the
-following transient without changing frequency-band semantics.
+Compact records use `soundbox-rekordbox-supplement-i16-v1` and
+`rekordbox-pwv5-rgb-v1`, store divisor 1 only, and omit the 24-band master. Loading
+builds `1/2/3/4/6/8/12/16/24/32/48/64` mips in memory. Incomplete imports and codecs
+not supported by the supplemental decoder retain full fallback analysis. Old
+V5 remains ready; startup does not force conversion. Interactive playback loads
+old analysis immediately and upgrades just that selected local track atomically.
+The old record survives interruption or failure; manual metadata ownership and
+DB cue authority survive replacement. Source changes, forced Reanalyze Track and
+late imports use the same preparation path. Dataless background reads remain
+deferred and per-track preparation receipts still avoid repeated work.
 
-`display_waveform_model=rekordbox-blue-rgb-three-band-v1` versions the three
-mode payloads together. A Rekordbox-backed track imports the original packed
-PWV3/PWV5/PWV7 rows read-only; another source derives all three during the same
-audio pass. The native deck retains three GPU pyramids and switches the
-persistent Settings selection immediately, without reopening Rekordbox or
-recooking the track.
+Loading remains generation-guarded: native decode, manifest, overview and detail.
+All cache decoding and waveform preparation stay off the UI thread. A complete
+native upload presents overview and all three display modes together. Source
+replacement rejects late generations. Native ABI 5 additionally accepts a tested
+timeline load contract. Tagged MPEG-1/LAME header facts are read on the decode
+thread, matched to the decoder's rate/valid-frame count, and restore leading
+samples to both playback and supplemental analysis. Seek and duration use that
+same clock. Unknown headers retain their decoded origin; mismatched recognized
+headers fail closed. No blanket MP3 timestamp is used.
 
-Prepared loading is four-stage and generation-guarded: native source decode,
-small manifest, packed RGB overview, then ultra detail/native peak pyramid.
-The last three run outside the UI thread. Section reads seek directly to their
-compressed byte ranges and validate only that section; `verify_complete()` is
-reserved for audits. `begin_track()` clears every renderer buffer atomically,
-so rapid A→B→C replacement cannot display a late A/B result.
+The renderer uses linear amplitude, a 0.84 ceiling and its existing continuous
+quiet-signal shoulder. Close BLUE/RGB hold signed cells and interpolate full-range
+PWV5 colors (14/7/7 channel divisors); 3BAND uses original 150-Hz rows, a one-row
+sampling offset, and linear layers with the measured membership palette. Paired
+75-Hz rows, the artificial eight-percent facet, four-pixel close extrema footprint
+and divisor-dependent height compensation were removed after the September 29
+reference comparison. The 13 UI/native zoom stops end at 1500 points/s.
 
-The main scrolling waveform uses V5's prepared signed-range mip pyramid at
-every supported zoom. Metal uploads those levels directly and still creates
-the compact amplitude-weighted RGB mips.
-Overview and scrolling lanes derive one footprint-matched ceiling LOD from
-source samples per physical pixel and select one song-anchored level; there is
-no adjacent-level blend. The native ABI snaps every requested zoom to the same
-thirteen canonical stops exposed by the UI, so renderer policy never depends
-on proximity to an unsupported scale. For the scrolling lane, a compute pass
-reconstructs height and premultiplied RGB onto a fixed global song-space
-attribute lattice.
-Keeping color premultiplied makes its final one-pixel integral phase-stable.
-Positive cubic reconstruction stabilizes 24–384 px/s. At 576–1536 px/s,
-BLUE/RGB signed min/max intervals use direct linear reconstruction with the
-literal physical-pixel footprint. At the five close UI stops
-(384/576/864/1152/1536), those signed intervals select one native integer peak
-level from a four-physical-pixel output footprint. The resulting
-`35/25/18/13/8` divisors hold alternating extrema density to 0.20–0.26 cells
-per physical pixel before the fixed song-space attribute lattice; it is not a
-final-image blur. Because max pooling raises typical amplitude as divisors
-grow, BLUE/RGB signed min/max are normalized from 64 px/s upward against the
-50-cell row with a shallow divisor curve. The divisor gain is applied only
-through each signed magnitude's remaining headroom,
-`m + (gain - 1) * m * (1 - m)`, rather than as a clipping multiply. Narrow
-64/92/128 compensation completes the far-to-close ladder. This keeps vertical
-scale continuous across the 256→384 source-family boundary while fixing zero
-and full scale and leaving horizontal cadence and cache data unchanged. Native
-PWV7
-retains its own display-cell timing, but the scrolling 3BAND lane begins at
-the paired-row peak level:
-PWV7 is stored on the common 150 Hz clock while Rekordbox's supplied close
-references visibly author 75 Hz facets. Successive paired low/mid/high peaks
-are connected linearly; a nearest-cell hold is still rejected.
-Every zoom uses four attributes per Retina pixel for
-continuous subpixel motion. The private buffer margin scales with that density
-and is recentered from an absolute integer song coordinate. High-rate detail
-promotes only geometry quality, while
-the already-uploaded compact ~150 Hz RGB pyramid remains the time/color
-authority.
-The normalized 24-band master remains stored for long-term analysis but never
-participates in renderer color. Metal receives integer sample anchors plus
+One footprint-selected song-anchored mip feeds the fixed four-attributes-per-pixel
+lattice. The three widest stops and the 384–1500 close family use a half-pixel source
+footprint; the middle family keeps one pixel. Thin signed carriers use a
+one-physical-pixel minimum before coverage, replacing the former fixed
+3.6-point stroke. Color is
+premultiplied before the final one-pixel integral, with no adjacent-LOD blend or
+translated RGBA texture. Legacy/fallback spectral masters never recolor the
+imported display modes.
+Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
 precision. The scrolling lane translates fixed height/hue attributes into each
 final Retina drawable pixel. The fragment computes vertical silhouette
 coverage and composites the final color exactly once. The accepted
-quarter-pixel profile remains in use below 1152 px/s. At 1152–1536 px/s the
-pixel endpoints plus every integer knot of the four-attributes-per-pixel
-lattice form the complete piecewise-linear profile; integrating those true
+quarter-pixel profile remains in use at 64–184 px/s for RGB/BLUE and below
+1152 px/s for 3BAND. RGB/BLUE at 24–48 and 256–1500, and 3BAND at
+1152–1500, use the pixel endpoints plus every integer knot of the four-attributes-per-pixel
+lattice to form the complete piecewise-linear profile; integrating those true
 segment spans avoids a hidden corner moving through a fixed probe interval.
 There is no translated RGBA texture or second coverage/color filter; every
 zoom retains fractional travel through the oversampled attribute lattice. The
 antialias window is exactly one physical pixel. The small overview applies
 continuous cubic vividness to true subpixel coverage; the scrolling lane uses
-exact geometric coverage at every zoom so saturated edges are not
-over-amplified.
+geometric coverage rather than the overview's vividness transfer.
+For signed intervals, taking the smaller of separately integrated upper/lower
+half-plane coverages is an approximation: it can overestimate narrow diagonal
+traces. The September 30 audit establishes this limitation; changing it still
+requires comparison against the accepted detail.
 For BLUE/RGB signed intervals, the fragment additionally integrates clipped
 linear coverage moments and conditions color on the locally visible portion of
 each quarter-pixel segment. PWV5 RGB and BLUE's center/width-dependent radial
@@ -291,7 +260,7 @@ coverage is reapplied exactly after the color resolve, preserving silhouette
 geometry independently from color.
 The canonical 64–256 px/s midrange family applies one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
-integration. The 24–48 distant stops and 384–1536 close family bypass it; it
+integration. The 24–48 distant stops and 384–1500 close family bypass it; it
 changes neither mip selection nor the continuous close-detail path.
 Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
@@ -326,7 +295,16 @@ pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
 carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
-uses the exact continuous coverage/color integral directly. Rejected
+uses continuous coverage/color integration directly, subject to the signed
+coverage approximation above. The installed September 30 correction additionally
+retains the original color-premultiplication weight through attribute interpolation;
+reconstructing that weight from interpolated signed bounds spuriously brightens
+polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
+The October 1 complete-corner correction at RGB/BLUE 256/384/576/864
+resolved the remaining reported pulses in Sonny's live B comparison. The separate
+BLUE palette/white-core correction was also accepted and installed. Broader track
+and exact-reference acceptance remain open; see the current handoff.
+Rejected
 carrier-neutral, background-bed, coverage-sharpening, and RGB-transition
 experiments are absent from the production ABI and shader. They either removed
 accepted paused detail or steepened fractional pixels after the exact resolve,
@@ -352,9 +330,15 @@ retries sidecar parse failures. These receipts never grant device ownership or
 replace interactive checks. Title edits invalidate one computed row; registry
 and policy changes invalidate all rows. Background warms compute only misses.
 
-The shared export/sync status row sizes its count label to the complete visible
-text, retaining padding around both song counts and spaced byte-transfer totals.
-Byte phases must never inherit a fixed song-count width that clips their units.
+The shared status row reserves the operation label's animated width and the
+counter's complete total-width, so repeated updates do not move the controls.
+Per-file acquisition/copy/verification phases and spaced byte totals live in
+the status tooltip; the operation callback alone owns visible progress. Static
+messages resize to fit and stop any old pulse. Transient expiry is bound to the
+presentation generation. Analysis/artwork use separate counters, yield to device
+ownership (including Verify), and restore a still-active pause after returning
+to idle. These are presentation rules; transaction progress and completion
+boundaries are unchanged.
 
 Device export is pinned by `sync.DeviceSession` to one resolved mount identity
 and revalidated before each write. Stock/composite plans retain that identity
@@ -448,21 +432,25 @@ records only in memory, and exposes no mutation API. The desktop device page
 renders them as Device, Songs, and Playlists tabs. On a schema-3 dual device,
 Songs and Playlists merge manifest ownership with the parsed iTunesDB and label
 each row Both, Stock, or Rockbox; the filesystem browser remains for Rockbox-only
-and generic USB targets. Connection presentation separates visibility from readiness. A debounced
-`/Volumes` notification requests discovery even during playback or an eject-ready
-hold. If a device worker owns the lane, the request stays pending for retry.
-A three-second timer checks the local `/Volumes` directory timestamp to recover
-missed events; it does not open mounted children merely to check that timestamp.
-With no connected devices and no failed probe, an unchanged timestamp starts no
-discovery worker. Failed probes retry with a 3–30-second backoff; mount events
-request immediate discovery. Connected-device drift keeps its three-second poll.
-Ordinary unmounted folders are skipped after a 30-second attachment grace.
-Verified external mounts appear by name, disabled during discovery.
-At QThread.finished they become selectable. Stock/dual dashboard loading
-appears only in the bottom status; device rows have no loading suffix. A cached
+and generic USB targets. Connection presentation separates visibility from readiness. Debounced `/Volumes`
+notifications and a 250-ms cached kernel mount-table check request discovery even
+during playback or an eject-ready hold. The latter uses Darwin
+`getfsstat64(MNT_NOWAIT)` without opening mounted paths, so mounting over an
+existing directory cannot strand detection behind probe backoff. These are hints,
+never external-device/write authority. A busy lane retains the request and retries
+on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
+unchanged mount/timestamp state starts no idle discovery worker. Failed probes
+retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
+three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
+Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+computes sync drift before publishing the selectable row at QThread.finished;
+unknown/failed checks say `Sync status pending`, never imply a clean result.
+Stock/dual dashboard preload follows in the same serialized device lane, with
+loading only in the bottom status after the row becomes ready. Successful preload
+clears that status directly, without another immediate drift scan. A cached
 dashboard is presentation-only; selecting while it loads uses the same serialized
-preload. Writes stay guarded by
-operation ownership and firmware capabilities. Remounts invalidate stale views.
+preload. Writes stay guarded by operation ownership and firmware capabilities.
+Remounts invalidate stale views.
 
 
 Device transactions share one UI ownership contract. Custom result signals may
@@ -619,7 +607,19 @@ or absent files receive ordinary preparation. Selected sync still verifies hashe
 
     ./check.sh                 # + arm64 native build, then Python gates
     ./build_native.sh          # native dylib only
-    ./build_app.sh             # PyInstaller → dist/Soundbox.app (self-signed)
+    ./build_app.sh             # PyInstaller → dist/personal/Soundbox.app (self-signed)
+
+`./build_app.sh public` separately writes `dist/public/Soundbox.app`.
+The tracked `Soundbox.spec` delegates profile content to
+`scripts/build_composition.py`; the shell only drives compilation, stamping,
+signing and artifact inspection. `requirements-core.txt` excludes `yt-dlp`;
+`requirements-personal.txt` adds it, and `requirements.txt` selects the full
+personal/developer environment. Artifact checks inspect the executable PYZ and
+bundle files for provider exclusion and fixture leaks. Signed profile/module and
+source-fingerprint fields accompany Git provenance; dirty builds remain labeled
+as such. `--isolated-check OUTPUT_DIRECTORY` uses fresh temporary state, disables
+live library/device discovery and production logging, renders and exits. This
+checks packaged startup without testing real sources/devices.
 
 Python 3.14, venv at `.venv/`. `build_app.sh` uses the stable local
 `Soundbox Self-Signed` identity when present so macOS can retain TCC grants

@@ -14,8 +14,9 @@ device lifecycle work improved one subsystem without completing the same
 transition for every background task. Public/personal separation does not exist
 yet: online discovery, local artwork state, UI construction and packaging are
 coupled. September 28 follow-ups separated local artwork/state ownership and
-fixed the five non-USB repeated-work findings; optional provider/UI/build
-composition remains the next implementation priority. See the follow-ups below
+fixed the five non-USB repeated-work findings. September 29 implemented optional
+provider/UI/build composition; this does not complete licensing or physical
+acceptance. See the follow-ups below
 and `HANDOFF.md` for current status.
 
 Keep one shared product. Add narrow optional providers and action contributions,
@@ -155,7 +156,13 @@ denied. Keep existing curated art and sticky blocks when the provider is absent.
 September 28 follow-up: local `ArtCache` and `ArtResult` now live in
 `soundbox.artwork`; compatibility aliases remain. A subprocess regression blocks
 provider imports and network while exercising local writes. Online UI/startup
-scheduling and packaging remain coupled and need the planned provider interfaces.
+scheduling and packaging remained coupled at that September 28 checkpoint.
+
+September 29 follow-up: `soundbox.providers` now resolves explicit profile/module
+manifests; the existing online implementation moved to `soundbox_personal.discovery`.
+Menus, direct commands and background scheduling gate provider actions. Public
+excludes both that package and `yt_dlp`, with absent-package/network-denied tests,
+paired renders and shared-state detach/reattach coverage.
 
 ### A5 — Medium/high: device queue consolidation is incomplete
 
@@ -263,6 +270,13 @@ personal artifacts. Add explicit dependency/build profiles, a single packaging
 authority, packaged-content tests and provenance including enabled modules.
 Distribution also needs a dependency/license/notice inventory and a verified
 public signing/notarization workflow; this audit makes no legal clearance claim.
+
+September 29 follow-up: `Soundbox.spec` is now tracked and delegates composition
+to `scripts/build_composition.py`. Separate core/personal dependency files and
+explicit profiles build separate artifacts. Actual PYZ/bundle inspection and
+signed profile/module/source-fingerprint provenance are in place. Both packaged
+apps passed isolated startup with network denied; licensing, notarization and
+clean-machine release gates remain open.
 
 ### A12 — Medium: tests do not establish every advertised boundary
 

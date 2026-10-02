@@ -1,6 +1,6 @@
 import unittest
 
-from soundbox.artfetch import (
+from soundbox_personal.discovery import (
     _clean_search_title as clean, _core_title, _core_title_for_artist,
     _split_artists, _match_score,
     MIN_CONFIDENCE,
@@ -59,7 +59,7 @@ class TestMatchScoreAccuracy(unittest.TestCase):
         self.assertGreater(MIN_CONFIDENCE, 0.78)
 
     def test_unknown_artist_never_searches_unattended(self):
-        import soundbox.artfetch as af
+        import soundbox_personal.discovery as af
         real = af.fetch_by_search
         af.fetch_by_search = lambda *a, **k: self.fail("unknown artist searched")
         try:
@@ -137,7 +137,7 @@ class CleanerUpgrades2026_07_02(unittest.TestCase):
     """Measured from Sonny's 164 real title fixes."""
 
     def _c(self, s):
-        from soundbox.artfetch import _clean_search_title
+        from soundbox_personal.discovery import _clean_search_title
         return _clean_search_title(s)
 
     def test_underscores_normalized(self):
@@ -172,7 +172,7 @@ class CleanerUpgrades2026_07_02(unittest.TestCase):
                          "Monxx- Dinero (sonnyedit)")
 
     def test_feat_split(self):
-        from soundbox.artfetch import _split_artists
+        from soundbox_personal.discovery import _split_artists
         self.assertEqual(_split_artists("Far East Movement feat. The Cataracs"),
                          ["Far East Movement", "The Cataracs"])
 
@@ -181,7 +181,7 @@ class SuggestArtist(unittest.TestCase):
     """Uploader-consensus suggestions (human-gated)."""
 
     def _with_results(self, results, title="SOME TRACK"):
-        import soundbox.artfetch as af
+        import soundbox_personal.discovery as af
         real = af._flat_search
         af._flat_search = lambda q, n=6: results
         try:
@@ -229,12 +229,12 @@ class BlockedArt(unittest.TestCase):
 
     def _cache(self, td):
         from pathlib import Path
-        from soundbox.artfetch import ArtCache
+        from soundbox_personal.discovery import ArtCache
         return ArtCache(Path(td))
 
     def test_block_survives_rescans_and_reads_as_blocked(self):
         import tempfile
-        from soundbox.artfetch import ArtResult
+        from soundbox_personal.discovery import ArtResult
         with tempfile.TemporaryDirectory() as td:
             c = self._cache(td)
             c.store_ok("1", ArtResult(b"\xff\xd8x", "image/jpeg", 0.9,
@@ -249,7 +249,7 @@ class BlockedArt(unittest.TestCase):
 
     def test_explicit_store_overrides_block(self):
         import tempfile
-        from soundbox.artfetch import ArtResult
+        from soundbox_personal.discovery import ArtResult
         with tempfile.TemporaryDirectory() as td:
             c = self._cache(td)
             c.block("1")
@@ -259,7 +259,7 @@ class BlockedArt(unittest.TestCase):
 
     def test_new_entries_record_manual_or_auto_provenance(self):
         import tempfile
-        from soundbox.artfetch import ArtResult
+        from soundbox_personal.discovery import ArtResult
         with tempfile.TemporaryDirectory() as td:
             c = self._cache(td)
             result = ArtResult(b"\xff\xd8x", "image/jpeg", 0.9,
@@ -280,7 +280,7 @@ class DefaultPhotoPool(unittest.TestCase):
         from pathlib import Path
         from PIL import Image
         from soundbox import artencode
-        from soundbox.artfetch import ArtCache
+        from soundbox_personal.discovery import ArtCache
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -303,7 +303,7 @@ class DefaultPhotoPool(unittest.TestCase):
     def test_assignments_are_randomized_stable_and_exactly_balanced(self):
         import tempfile
         from pathlib import Path
-        from soundbox.artfetch import ArtCache
+        from soundbox_personal.discovery import ArtCache
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -328,7 +328,7 @@ class DefaultPhotoPool(unittest.TestCase):
     def test_adding_a_pool_photo_moves_only_the_minimum_tracks(self):
         import tempfile
         from pathlib import Path
-        from soundbox.artfetch import ArtCache
+        from soundbox_personal.discovery import ArtCache
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -360,7 +360,7 @@ class DefaultPhotoPool(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from PIL import Image
-        from soundbox.artfetch import ArtCache, ArtResult
+        from soundbox_personal.discovery import ArtCache, ArtResult
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -395,7 +395,7 @@ class DefaultPhotoPool(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from PIL import Image
-        from soundbox.artfetch import ArtCache, ArtResult
+        from soundbox_personal.discovery import ArtCache, ArtResult
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -428,7 +428,7 @@ class DefaultPhotoPool(unittest.TestCase):
     def test_duplicate_managed_image_is_not_added_twice(self):
         import tempfile
         from pathlib import Path
-        from soundbox.artfetch import ArtCache
+        from soundbox_personal.discovery import ArtCache
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -447,7 +447,7 @@ class ArtWorkerProvenance(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from desktop.workers import ArtFillWorker
-        from soundbox import artfetch
+        from soundbox_personal import discovery as artfetch
         from soundbox.library import Library, Track
 
         class Cache:
@@ -478,7 +478,7 @@ class ArtWorkerProvenance(unittest.TestCase):
             real = artfetch.fetch_best
             artfetch.fetch_best = lambda *_args: result
             try:
-                worker = ArtFillWorker(lib, cache, {}, {})
+                worker = ArtFillWorker(lib, cache, {}, {}, provider=artfetch)
                 worker.DELAY = 0
                 worker.run()
             finally:

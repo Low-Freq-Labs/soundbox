@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SB_DECK_ABI_VERSION 4u
+#define SB_DECK_ABI_VERSION 5u
 
 typedef void *SBDeckRef;
 
@@ -52,6 +52,8 @@ SBDeckRef sb_deck_create(void *parent_nsview);
 void sb_deck_destroy(SBDeckRef deck);
 
 int sb_deck_load(SBDeckRef deck, const char *utf8_path);
+int sb_deck_load_timeline(SBDeckRef deck, const char *utf8_path,
+    uint64_t lead_frames, uint64_t expected_frames, double expected_rate);
 int sb_deck_begin_track(SBDeckRef deck, uint64_t generation);
 void sb_deck_play(SBDeckRef deck);
 void sb_deck_pause(SBDeckRef deck);

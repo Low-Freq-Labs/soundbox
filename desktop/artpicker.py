@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
-from soundbox import artfetch
+from soundbox.providers import ArtworkProvider
 from .task_owner import TaskOwner
 
 _COLS = 4
@@ -33,8 +33,9 @@ class _CandidateSearch(QThread):
     found = Signal(dict, bytes)
     done = Signal(int)  # how many results total
 
-    def __init__(self, artist: str, title: str):
+    def __init__(self, artist: str, title: str, provider: ArtworkProvider):
         super().__init__()
+        self.provider = provider
         self.artist = artist
         self.title = title
         self._stop = False
@@ -43,33 +44,36 @@ class _CandidateSearch(QThread):
         self._stop = True
 
     def run(self):
+        if self._stop:
+            return
         try:
-            cands = artfetch.search_candidates(self.artist, self.title)
+            cands = self.provider.search_candidates(self.artist, self.title)
         except Exception:  # noqa: BLE001 — offline/blocked: URL + file still work
             cands = []
         n = 0
         for c in cands:
             if self._stop:
                 break
-            small = c["thumb"].replace("t500x500", "t200x200")
             try:
-                got = artfetch._download(small)
-            except OSError:
+                got = self.provider.preview_image(c)
+            except Exception:  # provider failures leave the local picker usable
                 got = None
             if self._stop:
                 break
             if got:
                 n += 1
-                self.found.emit(c, got[0])
+                self.found.emit(c, got)
         if not self._stop:
             self.done.emit(n)
 
 
 class ArtPickerDialog(QDialog):
-    def __init__(self, artist: str, title: str, parent=None):
+    def __init__(self, artist: str, title: str, parent=None, *,
+                 provider: ArtworkProvider | None = None):
         super().__init__(parent)
         self.setWindowTitle("Choose cover art")
         self.resize(740, 560)
+        self.provider = provider
         self.choice: dict | None = None
         self._count = 0
 
@@ -111,11 +115,19 @@ class ArtPickerDialog(QDialog):
         v.addLayout(row)
 
         self._tasks = TaskOwner(self)
-        self._worker = _CandidateSearch(artist, title)
-        self._worker.found.connect(self._add_candidate)
-        self._worker.done.connect(self._search_done)
-        self._tasks.adopt(self._worker)
-        self._worker.start()
+        self._worker = None
+        if provider is not None:
+            self._worker = _CandidateSearch(artist, title, provider)
+            self._worker.found.connect(self._add_candidate)
+            self._worker.done.connect(self._search_done)
+            self._tasks.adopt(self._worker)
+            self._worker.start()
+        else:
+            self.status.setText("Choose an image from your Mac.")
+            scroll.hide()
+            self.url_edit.hide()
+            use.hide()
+            self.resize(620, 160)
 
     def shutdown(self):
         """Keep events alive until the exact search worker has retired."""
@@ -155,10 +167,14 @@ class ArtPickerDialog(QDialog):
             self.status.setText("No SoundCloud results — paste a track URL or choose a file.")
 
     def _use_thumb(self, cand: dict):
+        if self.provider is None:
+            return
         self.choice = {"kind": "thumb", "cand": cand}
         self.accept()
 
     def _use_url(self):
+        if self.provider is None:
+            return
         url = self.url_edit.text().strip()
         if url:
             self.choice = {"kind": "page", "url": url}

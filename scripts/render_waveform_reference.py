@@ -130,7 +130,20 @@ def render(args: argparse.Namespace) -> list[Path]:
             backend.synchronize()
         if backend.duration() <= 0:
             raise RuntimeError("native decoder did not publish track duration")
-        if not all(backend.set_complete_analysis(overview, detail, 1)):
+        if getattr(args, "stored_waveforms_only", False):
+            # Explicit comparison mode: upload the validated packed ANLZ rows
+            # without SoundBox audio geometry or its zero-row color repair.
+            # This is the existing renderer, not a claim of Rekordbox parity.
+            provenance = manifest.get("stream_provenance") or {}
+            if any(not str(provenance.get(mode, "")).startswith("rekordbox-anlz")
+                   for mode in ("blue", "rgb", "three_band")):
+                raise RuntimeError("comparison requires all three imported ANLZ streams")
+            if not backend.set_overview(overview, 1) or not backend._set_waveform_streams(
+                    detail, float(overview.get("sample_rate") or 150.0)):
+                raise RuntimeError("native deck rejected the packed Rekordbox streams")
+            if backend.diagnostic_audio_detail_buffer_bytes() != 0:
+                raise RuntimeError("stored-only comparison retained SoundBox detail")
+        elif not all(backend.set_complete_analysis(overview, detail, 1)):
             raise RuntimeError("native deck rejected the real waveform cache")
         backend.set_zoom(args.zoom)
         position_ms = (
@@ -140,8 +153,21 @@ def render(args: argparse.Namespace) -> list[Path]:
         backend.sync_view_geometry()
 
         args.out.mkdir(parents=True, exist_ok=True)
+        (args.out / "render-inputs.json").write_text(json.dumps({
+            "track_id": args.track_id,
+            "stored_waveforms_only": getattr(args, "stored_waveforms_only", False),
+            "position_ms": position_ms,
+            "zoom_points_per_second": args.zoom,
+            "stream_provenance": manifest.get("stream_provenance"),
+            "audio_detail_buffer_bytes": backend.diagnostic_audio_detail_buffer_bytes(),
+            "packed_stream_bytes": {
+                key: len(detail.get(key) or b"")
+                for key in ("_blue_detail", "_rgb_detail", "_detail_bands")
+            },
+        }, indent=2) + "\n")
         outputs = []
         for mode in args.modes:
+            presentations_before = backend.diagnostic_display_stats()[0]
             backend.set_waveform_mode(mode)
             for position_index in range(args.position_count):
                 capture_position = (
@@ -161,7 +187,9 @@ def render(args: argparse.Namespace) -> list[Path]:
                 if not _wait_for(
                         lambda: (
                             backend.diagnostic_presented_frame()
-                            == expected_frame),
+                            == expected_frame
+                            and backend.diagnostic_display_stats()[0]
+                            > presentations_before),
                         app, 3.0):
                     backend._poll()
                     error_message = bytes(
@@ -176,6 +204,13 @@ def render(args: argparse.Namespace) -> list[Path]:
                         f"presented={backend.diagnostic_presented_frame()}, "
                         f"scheduled={backend.diagnostic_scheduled_frame()}, "
                         f"display={backend.diagnostic_display_stats()})")
+                # A mode switch can keep the same source frame. Wait for a
+                # fresh presentation above, then let WindowServer expose it
+                # to screen capture instead of labelling the preceding mode.
+                settle_until = time.monotonic() + 0.1
+                while time.monotonic() < settle_until:
+                    app.processEvents()
+                    time.sleep(0.005)
                 screen = QGuiApplication.screenAt(
                     wave.mapToGlobal(
                         QPoint(wave.width() // 2, wave.height() // 2))
@@ -194,6 +229,7 @@ def render(args: argparse.Namespace) -> list[Path]:
                     raise RuntimeError(
                         f"could not capture native render: {target}")
                 outputs.append(target)
+                presentations_before = backend.diagnostic_display_stats()[0]
 
         print(
             f"rendered track={args.track_id} source={source.name!r} "
@@ -255,6 +291,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--corpus", action="store_true",
         help="render the exact six supplied Rekordbox comparison cases")
+    parser.add_argument(
+        "--stored-waveforms-only", action="store_true",
+        help="preview exact imported PWV rows without SoundBox audio detail or color repair")
     where = parser.add_mutually_exclusive_group()
     where.add_argument("--bar")
     where.add_argument("--position-ms", type=int)

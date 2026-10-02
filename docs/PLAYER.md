@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-09-28. This is the player reference: shipped behavior,
+Current as of 2026-09-30. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -121,6 +121,26 @@ Loading semantics are deliberate:
 
 ## Waveform interaction
 
+October 1 test audit: production Metal helpers now run against independent
+GPU numerical oracles, with a separate required Cocoa drawable gate. Tiny
+clipped color moments use stable local midpoint arithmetic; the accepted
+geometry and sampling footprint are unchanged. Known signed-coverage and
+five-probe approximations remain explicit. See the
+[test audit](waveform-test-audit-2026-10.md).
+
+September 30 installed correction: BLUE/RGB retain the original
+premultiplication weight in the existing eight-float song attribute. Color
+recovery divides by that interpolated weight, never by the magnitude of the
+interpolated signed bounds. The latter shrinks at polarity/dominant-boundary
+crossings and can spuriously whiten colors. No geometry, clock, cache or LOD
+change accompanies this fix. CPU arithmetic, native frames and Cocoa gates pass,
+but remaining motion artifacts required the October 1 sampling fix: RGB/BLUE
+at 256/384/576/864 now include every lattice corner within one physical pixel.
+Sonny describes B in the live A/B preview as “rock solid.” Detail, footprint,
+clocks and other zooms remain unchanged. Joint coverage remains an isolated
+experiment. See the
+[pulse audit](waveform-reuse-audit-2026-09.md#september-30-color-pulse-correction).
+
 The fixed cyan playhead sits over three waveform lanes:
 
 1. A small, unzoomed whole-track RGB overview. Clicking or dragging it seeks
@@ -132,11 +152,11 @@ The fixed cyan playhead sits over three waveform lanes:
 The `−` and `+` controls change only the detail lane. The overview never zooms.
 There are thirteen persistent scales governed by one UI/native zoom contract:
 
-`24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1536 px/s`.
+`24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500 points/s`.
 
-The 24 px/s stop shows about 38 seconds in a 900-point lane. The 1536 px/s
-maximum retains the established close-up appearance (roughly three beats
-across the deck for a typical 140–175 BPM track). The native ABI returns its
+The 24 px/s stop shows about 38 seconds in a 900-point lane. The 1500 points/s
+maximum matches the September 29 reference scale (3000 physical pixels/s at
+Retina scale two). Visible duration depends on the lane width. The native ABI returns its
 applied scale, so persisted zoom, paint, grid translation, and scrub math can
 never disagree about a silently clamped value.
 
@@ -155,27 +175,34 @@ unused lane height without changing the amplitude curve, cached data, horizontal
 detail. Close views gain a little height too, with more breathing room than
 wide views. It applies only to the large scrolling waveform.
 
-At the three widest stops (24/32/48), BLUE/RGB use a half-physical-pixel
-extrema footprint from the existing V5 mip ladder. The four-attributes-per-pixel
-song lattice and final exact one-pixel profile integral resolve those finer
-peaks without the old max-pooled slabs. There is no cache-format change,
-recook, extra persistent waveform storage, or close-family geometry change.
+At 24/32/48 and 384–1500 points/s, BLUE/RGB select a half-pixel extrema
+footprint; the 64–256 middle stops select the physical-pixel footprint. One song-anchored mip and the final
+one-pixel profile integral preserve detail without mixing adjacent mip levels.
+The former four-pixel close footprint and divisor-dependent height gain were
+removed after comparison with the new reference.
 
 Settings exposes three persistent waveform displays:
 
 - `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one. Its
-  three luminance bits select the blue/cyan edge while the renderer supplies
-  Rekordbox's white center core. Its scrolling geometry is a high-rate signed
+  three luminance bits select the calibrated blue-to-cyan edge range. The
+  interior transitions from cyan to white with normalized signed-interval width;
+  thin intervals no longer receive an unconditional white center. The October 1
+  correction reduces wide-view white washout without changing geometry or
+  smoothing detail. Sonny accepted the narrowed BLUE candidate in a live muted comparison. Exact
+  recording parity and broader track acceptance remain open.
+  Its scrolling geometry is a high-rate signed
   min/max trace: low-frequency bins remain thin oscillating lines and dense
   bins widen naturally.
 - `RGB` uses the exact packed PWV5 stream. Each row is one display color plus
   one compact height—not three band layers. PWV5 owns color and distant-scale
   amplitude. Its scrolling geometry uses the same signed min/max trace as
-  BLUE, while song-anchored PWV5 color-cell boundaries remain crisp.
+  BLUE, with linearly interpolated full-range PWV5 colors on their song clock.
 - `3BAND` uses the exact packed PWV7 display rows as three independent
-  shapes. Rekordbox's band scales are applied separately and composited as
+  shapes. Empirically calibrated band scales are applied separately and composited as
   blue lows, brown mids, white highs, and the measured cream/pale-blue
-  membership colors.
+  membership colors. The full-rate rows are preserved; exact layer-height and
+  interpolation parity remain unverified. See the October 1
+  [recording verification](waveform-reference-check-2026-10.md).
 
 All three streams are imported or derived in one cache preparation pass and
 remain resident as separate native GPU pyramids. Switching the selector is
@@ -184,14 +211,13 @@ immediate and never recooks the track. BLUE and RGB combine their authored
 filling positive and negative envelopes back to zero. That shared geometry
 keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
-Both use output-footprint-selected extrema (the wide and close exceptions are
-documented above and below). 3BAND is different: its three
-PWV7 heights are the complete native geometry and retain their authored timing
-without borrowing the signed trace. The packed stream stays on its 150 Hz cache
-clock, while the scrolling lane begins at the paired-row peak level that
-matches Rekordbox's visible 75 Hz close facets. Successive paired values are
-connected linearly; holding each row as a rectangle creates a different coarse
-staircase.
+Both use output-footprint-selected extrema. Compact supplements hold signed
+1-ms cells at close zoom; spatial antialiasing supplies continuous coverage.
+The minimum signed stroke is one physical pixel before antialiasing, replacing
+the fixed 3.6-point width that made thin carriers visibly thick on Retina.
+3BAND uses the original 150-Hz PWV7 rows and linear per-band interpolation,
+with a one-row sampling offset. It does not borrow the signed contour, force
+paired 75-Hz rows, or add an artificial decay facet.
 
 Main-waveform scrubbing is relative and precise:
 
@@ -263,6 +289,13 @@ player.
 
 ## Analysis ownership and read-only Rekordbox import
 
+The September 29 implementation reuses complete imported waveform streams and
+adds only a 1-ms signed detail supplement. Sonny accepted the isolated visual
+candidate; production validation/install status is in [HANDOFF.md](HANDOFF.md).
+The [reuse audit](waveform-reuse-audit-2026-09.md) separates measured evidence from
+remaining visual/format acceptance. Existing caches remain usable during gradual
+conversion; launch does not invalidate the whole library.
+
 V5 analysis is owned by SoundBox. For an existing Rekordbox library track, the
 live DB snapshot supplies authoritative cue rows and its `AnalysisDataPath` is
 resolved beneath Rekordbox's `share/` directory for analysis fallback:
@@ -282,9 +315,11 @@ a future SoundBox edit claims ownership. Correcting Rekordbox's initial
 automatic beat grid therefore reaches SoundBox on the next live-library
 refresh without reanalyzing audio, and waveform payload bytes never change
 during either metadata refresh.
-SoundBox's audio analyzer supplies the ultra contour, derived BLUE/RGB/3BAND
-fallbacks for tracks without complete Rekordbox detail, and the 24-band
-spectral master. No player code opens Rekordbox files for writing. No SoundBox
+Complete, consistent PWV3/5/7 imports with a grid use `waveform_detail.DetailSupplement`:
+no FFT, filter bank or beat detector runs. The source is decoded once in bounded
+chunks for exact song-anchored 1-ms stereo-midpoint signed extrema. The overview
+comes from PWV5. Incomplete imports or unsupported supplemental decoders retain
+the existing full analyzer and its generated display modes/spectral master. No player code opens Rekordbox files for writing. No SoundBox
 operation updates `master.db`, ANLZ data, or source audio.
 
 ## SoundBox-owned caches
@@ -295,7 +330,7 @@ All derived caches are disposable accelerators under
 | Directory/file | Owner and purpose |
 |---|---|
 | `libcache.json` | Last read-only library snapshot for instant first paint |
-| `track_analysis/*.sba5` | Canonical V5: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND display streams, 24-band spectral master, and exact song-anchored signed-range renderer mips |
+| `track_analysis/*.sba5` | Canonical V5: checksummed Zstandard sections for source identity/provenance/export eligibility, full grid/cues, 150 Hz BLUE/RGB/3BAND streams and overview; compact imported records store one signed 1-ms base, while fallback/legacy records retain spectral analysis and signed-range mips |
 | `track_analysis/*.sba4` | Read-only compatibility input during bounded one-record-at-a-time V4 migration |
 
 Each V5 record is atomically replaced, keyed by track ID plus audio identity.
@@ -346,7 +381,7 @@ old playable cache stays in place if decoding or storage fails, a loaded deck
 hot-refreshes after success, and neither source audio nor Rekordbox data is
 written.
 
-The native analyzer streams PCM in bounded memory, derives approximately
+The fallback analyzer streams PCM in bounded memory, derives approximately
 6144 peak windows/second, keeps a normalized 24-band master, and builds the
 three 150 Hz display-mode fallbacks from overlapping second-order Butterworth
 paths:
@@ -360,7 +395,7 @@ Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips. Export eligibility is
 deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
 candidates; AAC/ALAC/M4A/MP4 are always player-only.
 
-Waveform geometry is analyzed at approximately 6144 cells/second from the
+Fallback/legacy geometry is analyzed at approximately 6144 cells/second from the
 stereo midpoint, which preserves the
 attack/decay contrast lost when the louder channel was allowed to inflate every
 row. A 1/16 peak-channel safety floor retains genuinely wide or anti-phase
@@ -377,20 +412,38 @@ non-overlapping 1/150-second cells; it never reuses the wider spectral FFT
 window, which previously looked ahead about 46 ms, rounded attacks, filled
 decay valleys, and omitted the final seven rows.
 
-Native upload applies a display-only `height^1.4` curve and 0.84 full-scale
-ceiling plus a continuous low-end shoulder. This retains real shoulders without
-the needle-like peaks caused by `height^2` or the swollen center body caused by
-a linear map. The 1/64-height shoulder rises through a four-LSB knee and
-resolves real -60 to -73 dB tails as a
-physical-pixel hairline but evaluates to exactly zero at digital zero; it is
-not a hard minimum-height rule. Packed PWV3/PWV5/PWV7 heights remain linear
-because they are already authored display values. The cache remains linear.
+Current native upload uses linear amplitude, a 0.84 ceiling and the continuous
+low-end shoulder; digital zero remains zero. The former `height^1.4` curve was
+superseded by the September 29 comparison. RGB channels use divisors 14/7/7.
+PWV7 retains its separate band scales and membership palette.
+
+Compact V5 is distinguished by `soundbox-rekordbox-supplement-i16-v1` and
+`rekordbox-pwv5-rgb-v1`, not by a new file extension. It stores only divisor 1;
+load builds `1/2/3/4/6/8/12/16/24/32/48/64` mips in memory. It omits the unused
+24-band master. Legacy V5 remains ready/playable, so startup does not recook it.
+An interactive load first presents the existing record, then upgrades only that
+selected local track if a complete import is available. Cancellation/failure
+retains the prior record. Manual grid/cue ownership and authoritative DB cues
+survive conversion. Reanalyze Track and new background preparation use the same
+import-first path. Dataless old-cache upgrades are deferred.
+
+Tagged MPEG-1 Layer III LAME files have an explicit source origin derived from
+Info/Xing frame length, encoder delay and 529 synthesis samples. Both supplemental
+analysis and native playback restore that lead-in; seeks subtract it when mapping
+to decoded PCM and duration includes it. Native header reads occur only on the
+decode thread. The native decoder must match the header's valid-frame count and
+sample rate or reports an error. Unknown headers retain the decoded clock; never
+apply Nuclear Bass Face's 2257 samples as a universal constant. Legacy signed
+contours are sampled with the same origin shift until replaced. Imported grid,
+cue timestamps and colors remain unchanged.
+
 V4 stays playable during compatibility migration. A V4 reduction and a fresh
 audio cook use the same extrema routine and must produce byte-identical V5
 waveform sections. The old record is removed only after the new record passes
 schema/source identity, every-section SHA-256, and whole-payload verification.
 
-RGB rows use the same track timeline, but decoder compensation is
+The legacy generated RGB fallback retains its earlier filterbank compensation;
+this is separate from the tagged-MP3 source-clock mapping above. Compensation is
 format-specific. Lossless PCM (WAV/AIFF/FLAC) has no correction. MP3 retains
 the measured seven-row / 46.7 ms decoder correction. Applying that MP3
 correction globally made lossless color arrive seven rows late, so a kick
@@ -435,8 +488,12 @@ The background `WaveformFillWorker`:
 - uses a 16 MiB worker stack and a 20/25 GiB full-cook pause/resume guard;
   verified one-record V4 reductions use 5/7 GiB because each successful
   migration immediately retires a larger source record;
+- names low disk space in its pause status and exposes the applicable resume
+  threshold on hover; status text fits its full message and the pause is restored
+  after higher-priority device work finishes;
 - keeps the discovery scan silent and reports `Preparing your library…` only
-  after actual analysis or metadata work is found;
+  after actual analysis or metadata work is found; progress uses a separate,
+  width-reserved count rather than changing the operation label on every track;
 - can hot-load newly completed detail for the current track;
 - is interrupted and joined during shutdown.
 
@@ -490,7 +547,8 @@ repair; existing long Sets need neither hydration nor audio recooking.
 
 ## Why the waveform remains stable
 
-The following renderer rules are measured invariants, not style preferences:
+The following combines current rendering rules with explicitly labeled historical
+measurements. The compact-cache and source-clock contracts above take precedence.
 
 - BLUE and RGB share persisted signed minimum/maximum detail and a
   literal-pixel interval trace; only their PWV3/PWV5 color compositors differ.
@@ -498,9 +556,8 @@ The following renderer rules are measured invariants, not style preferences:
   the signed audio trace.
 - Pyramid levels remain song-anchored. Exact display pyramids retain peak
   geometry and amplitude-weighted color. The higher-rate signed detail uses
-  persisted integer divisor ladder
-  (`8,13,18,25,35,50,66,99,132,192,256`) covering every supported scale-1
-  and Retina-2 zoom footprint. Blending adjacent lattices
+  compact runtime ladder `1/2/3/4/6/8/12/16/24/32/48/64`, or the legacy
+  persisted ladder for older/fallback records. Blending adjacent lattices
   made them beat against each other while moving, so every frame still selects
   exactly one song-anchored level. There is no alternate wide/close geometry
   shader. A second
@@ -515,14 +572,12 @@ The following renderer rules are measured invariants, not style preferences:
   adjacent colors converge instead of alternating at far zoom. For derived
   records, per-column normalization retains the real low/mid/high relationship
   instead of making weak independently normalized FFT bands falsely
-  competitive. The 24-band master is stored independently and neither Metal
+  competitive. Fallback records retain the 24-band master independently and neither Metal
   nor Qt may remix it into display color. PWV5 RGB expands its compact channels
-  with the visually measured `14 / 8 / 8.75` divisors; close rows use crisp
-  cell ownership rather than cubic color gradients, and only PWV7 enters the
+  with `14 / 7 / 7` divisors and linear interpolation, and only PWV7 enters the
   layered 3BAND compositor.
 - `color_model` versions the persisted RGB analysis independently of the V5
-  container schema. Old records remain playable while the background worker
-  atomically replaces one track at a time; each temporary record lives beside
+  container schema. Old records remain playable during selected-track upgrades; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
 - Derive one footprint-matched LOD from source samples per physical pixel and
   select one peak level. The overview and main lane call the same sampler;
@@ -547,42 +602,20 @@ The following renderer rules are measured invariants, not style preferences:
   fractional LOD stranded the most unresolvable values under each pixel.
   The taps still earn their keep by feeding `profile_coverage` a dense
   profile to integrate; they simply must not buy undisplayable detail.
-- **Ceil the display-stream level.** The historical rule was at most one
-  envelope value per physical pixel; the September 10 half-pixel signed-extrema
-  reconstruction is a narrow wide-zoom exception with its own exact lattice
-  integration and explicitly recorded phase-sweep tradeoff, not permission to
-  sharpen the PWV mip bias or change the accepted middle/close families. Mip
-  levels are powers of two but the thirteen zoom steps are not, so flooring
-  strands every other zoom at ~1.54 envelope values per pixel while its
-  neighbours sit at ~1.03, and rounding still leaves up to 1.41. Anything
-  above 1.0 is undisplayable surplus: it is the hairy comb along the contour
-  that rewrites itself every frame. Measured on a screen recording of the
-  real app, that comb was 4.7 pixels of column-to-column edge jump at the
-  zooms Sonny called worst. Measured aliasing across all thirteen zooms —
-  floor 0.029 mean / 0.066 worst, round 0.021 / 0.066, **ceil 0.012 / 0.032**,
-  better at every zoom. Sonny chose ceil over keeping the extra sharpness
-  after seeing those numbers.
-- **Use one mip level, never a blend of two.** Levels are song-anchored
-  maxima on power-of-two lattices, so level N quantizes every 2^N bins and
-  N+1 every 2^(N+1). Blending scrolls both at the same speed with different
-  quantization and they beat against each other. Continuous blending only
-  ever protected zoom *transitions*, and zoom is thirteen fixed steps, so the
-  level is constant for the whole of playback.
-- **Use the stable B-spline through 384 px/s, then preserve the native close
-  edges.** The B-spline removes mid/wide lattice corners where the display
-  cannot resolve them. At 576 px/s and above, BLUE/RGB signed intervals use
-  direct linear reconstruction. 3BAND linearly connects the authored
-  paired-row PWV7 peak cells instead of exposing twice the source screenshot's
-  corner density or holding each row as a rectangle. The prior
-  monotone-Hermite close path rounded the straight-sided carrier peaks that
-  distinguish the supplied Rekordbox views. The kernel choice depends only on
-  the fixed zoom, never on playback phase.
-- **At the five close stops, pace signed extrema in output space.** BLUE/RGB
-  selects one conservative peak row from a four-physical-pixel footprint,
-  producing about 0.20–0.26 cells per pixel. Exact extrema and linear facets
-  remain; only adjacent peak knots too dense to stay visually stable are
-  removed. This is the stricter close-family exception to the general
-  one-value-per-pixel ceiling rule. It does not apply to 3BAND.
+- **Select one conservative level for the physical source footprint.** Compact
+  signed mips use integer millisecond divisors; legacy V5 uses its persisted
+  ladder. The three widest and close stops use the documented half-pixel footprint.
+  Earlier power-of-two PWV alias measurements are historical, not a description
+  of the compact signed ladder.
+- **Use one mip level, never a blend of two.** Levels remain song-anchored.
+  Blending independently quantized levels can create phase beating; the thirteen
+  fixed zoom stops do not require such a blend.
+- **Preserve source cells at close zoom.** BLUE/RGB use held signed extrema;
+  3BAND connects the original 150-Hz rows linearly. The former paired-row
+  rule, four-pixel close footprint and height compensation are historical.
+- **Close detail uses a half-pixel source footprint.** One selected signed mip
+  feeds the fixed four-attributes-per-pixel song lattice; it does not broaden
+  the final spatial integral or apply divisor-dependent height gain.
 - Rebuild the small private attribute buffer only when analysis, zoom, Retina
   scale, or its guarded song-space margin changes. The buffer is deliberately
   wider than the drawable, and every recenter is computed from an absolute
@@ -592,14 +625,16 @@ The following renderer rules are measured invariants, not style preferences:
   pixel. There is no moving RGBA texture, coverage resampling, accumulated
   frame, or refresh seam. Height and hue move together, while final edge
   antialiasing remains tied to the destination pixel. The scrolling lane uses
-  exact geometric coverage at every zoom. Boosting 20% coverage to nearly 49%
+  geometric coverage without a vividness boost; its signed-interval overlap
+  remains the documented approximation. Boosting 20% coverage to nearly 49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
   overview alone retains the continuous cubic vividness curve for true
   subpixel peaks. This distinction affects only compositing, never height,
   hue, LOD, or detail.
 - Integrate the fixed height/hue profile over exactly one physical pixel before
-  final vertical coverage. At 64–864 px/s, five quarter-pixel boundary samples
-  retain the accepted result. At 24–48 (BLUE/RGB only) and 1152–1536 px/s,
+  final vertical coverage. BLUE/RGB retain five quarter-pixel boundary samples
+  at 64–184 px/s. At 24–48 and 256–864 (BLUE/RGB only), and 1152–1500 px/s
+  (all modes),
   use the pixel endpoints plus
   every integer knot of the four-attributes-per-pixel lattice, weighted by
   their actual spans; this is the complete piecewise-linear profile and avoids
@@ -630,8 +665,8 @@ The following renderer rules are measured invariants, not style preferences:
   freezes the last rendered frame, hands back a blurred still. On top of that
   the display's own sample-and-hold already supplies ~25 Retina pixels of
   persistence blur at 1536 px/s, which no software can remove and which a
-  shutter only doubles. Taps stay flat weighted: a box across the pixel is
-  exact area coverage and is what keeps a moving contour crisp.
+  shutter only doubles. Taps stay flat weighted across one physical pixel to keep a moving contour
+  crisp. This footprint policy does not make the signed-overlap approximation exact.
 - Filter final silhouette coverage—not raw peak height. Geometry and color are
   reconstructed from the same level and phase, preventing the contour from
   acquiring a separate translucent edge.
@@ -643,7 +678,8 @@ The following renderer rules are measured invariants, not style preferences:
   again.
 - The small overview alone composites coverage through a continuous cubic
   ease-out so one-physical-pixel quiet passages remain visible. The scrolling
-  lane uses its exact geometric coverage directly; applying overview vividness
+  lane uses its geometric coverage directly, with the documented signed-interval
+  overlap approximation; applying overview vividness
   there made entering/leaving saturated edge pixels pulse.
 - Address audio detail and compact color with integer sample anchors plus local
   float phase. Never multiply a large absolute float time back into a sample
@@ -1873,8 +1909,10 @@ compared the committed checkpoint with the joint resolve:
   greater-than-64 share stayed 0.052%.
 
 Both tracks were rendered again in BLUE and RGB at all thirteen UI zoom stops.
-The BLUE white/cyan core now follows the supplied Rekordbox references instead
-of collapsing toward dark blue. RGB retained its established appearance: at
+At this historical checkpoint, the BLUE white/cyan core appeared closer to the
+then-supplied references instead of collapsing toward dark blue. The October 1
+recording later exposed its missing saturated cyan and excessive white core;
+see the current mode description and recording verification. RGB retained its established appearance: at
 864–1536 px/s, 99% of compared pixels changed by no more than 0–2 display
 codes. The Metal runtime compiled the shader, the exact six-case corpus
 rendered, 83 focused native/reference tests passed, and `./check.sh --render`
@@ -1931,8 +1969,10 @@ and every interior knot, then weights coverage and premultiplied color by the
 true segment spans. On the 32-position High & Scared sweep this reduced BLUE
 visible p99 from 42.443 to 39.903 codes and RGB from 44.321 to 41.571; the
 greater-than-64 tails fell from 0.093% to 0.049% and 0.119% to 0.079%.
-Applying that topology at 768 px/s was fractionally worse, so the accepted
-fixed five-point profile remains below 1152.
+Applying that topology at 768 px/s was fractionally worse in that historical
+sweep, so five-point sampling was then retained below 1152. The October 1
+physical A/B review supersedes that choice at RGB/BLUE 256/384/576/864; the
+current sampling rules are in Waveform interaction above.
 
 For 3BAND, a hard PWV7 cell hold was immediately rejected as blocky. Counting
 the exact screenshot facets instead showed that Rekordbox displays one close
@@ -2149,7 +2189,13 @@ Sonny's immediate live verdict was that the full zoom transition was “much
 better”; the bounded height ladder and exact ordinary-pause endpoint are the
 accepted checkpoint.
 
-### BLUE/RGB temporal-aliasing R&D record
+### Historical BLUE/RGB temporal-aliasing R&D record (superseded)
+
+The July product-choice boundary below is historical. September 29 explicitly
+retained signed detail, and September 30 accepted that detail while reporting
+renewed color pulsing. The new normalization defect and unresolved coverage
+approximation require separate arithmetic/native tests; this older record
+does not establish that all residual wiggle is unavoidable temporal aliasing.
 
 The preserved R&D boundary starts here. Do not reopen the accepted 3BAND shape,
 BLUE/RGB height ladder, pause endpoint, palette, or paused desktop-reference
@@ -2439,8 +2485,11 @@ carrier easier to perceive as pulsing/static.
 
 The simplified source removes all four visual experiment controls,
 native/Python ABI surfaces, harness flags, shader uniforms, and branches.
-BLUE/RGB now use the exact continuous signed-boundary coverage and exact
-premultiplied linear-light PWV5 integral directly. The detailed signed contour,
+BLUE/RGB then used continuous signed-boundary coverage and the
+premultiplied linear-light PWV5 integral directly. The historical description
+of that signed coverage as exact was disproved by the September 30 counterexample
+in the pulse audit; the retained upper/lower half-plane combination is approximate.
+The detailed signed contour,
 four-pixel close mip decision, CoreAudio clock, and presentation prediction
 remain unchanged; 3BAND is untouched. The bounded exact-drawable trace remains
 as measurement infrastructure but no longer changes waveform reconstruction.

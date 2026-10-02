@@ -84,7 +84,10 @@ suite. `./check.sh --render` also creates an offscreen UI render. Run the script
 directly so a failed check remains visible; historical test counts in handoff
 notes are dated evidence, not a promise about a new checkout.
 
-The app build writes `dist/Soundbox.app`, stamps its source revision, and verifies
+`./build_app.sh` builds the full personal app; `./build_app.sh public` builds
+`dist/public/Soundbox.app` separately. `Soundbox.spec` is the shared packaging
+authority. The personal build writes `dist/personal/Soundbox.app`, stamps its source
+revision, profile, modules and source fingerprint, inspects package contents, and verifies
 its signature. It uses the local `Soundbox Self-Signed` identity when available,
 otherwise ad-hoc signing; it is not Apple-notarized. Build does not install the
 app. Follow the [state-preserving install procedure](docs/ARCHITECTURE.md#build--install)
@@ -128,14 +131,18 @@ app, and verify its signature, launch, and library before accepting an upgrade.
 
 The current [software audit](docs/software-audit-2026-09.md) records architecture,
 lifecycle and performance gaps. The [release boundary](docs/release-boundaries.md)
-defines the planned shared app with optional personal modules; that separation
-is not implemented in the current build.
+defines the shared app and optional personal providers. The public build excludes
+the current SoundCloud provider and `yt_dlp`; the personal build retains them.
+Both use the same library format, local artwork controls, player and device guards.
 
 ## What it does
 
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
 temp snapshot — rekordbox can stay open) or an XML export as fallback; ↻
-Refresh any time. Smart playlists follow active rekordbox My Tags; removed-tag
+Refresh any time. After relocating a file in rekordbox, refresh SoundBox (or
+reopen it) to read the new path under the same track ID; SoundBox edits and
+playlist membership remain attached to that ID. SoundBox does not watch the
+rekordbox database continuously. Smart playlists follow active rekordbox My Tags; removed-tag
 history is ignored. On top of the rekordbox mirror, SoundBox keeps its own
 plane: **import audio files directly** (drag from Finder onto a SoundBox
 playlist or Collection, or right-click → Import Audio Files…). Imported files
@@ -194,7 +201,8 @@ source audio never change.
 
 **Cover art.** Local images, cache indexes and default-photo changes share one
 serialized state owner with backup/restore. Failed publication retains the previous
-state and reports the error. Background auto-fetch with an accuracy-first matcher (an
+state and reports the error. The personal provider adds background auto-fetch
+with an accuracy-first matcher (an
 artist-accountable title match of at least 0.80 → track cover, else artist
 avatar; wrong art is treated as worse than no art), resumable and scoped to new
 tracks only. `Unknown Artist` is a hard automatic-discovery stop: those tracks
@@ -202,7 +210,7 @@ receive no guessed SoundCloud art until the artist is resolved or a human
 picks art. Artist-aware
 title orientation handles both `ARTIST - TITLE` and `TITLE - ARTIST`, and new
 cache entries retain `auto`/`manual` provenance. Manual per-track
-picker (search results, image file, or URL — an artist profile URL yields
+picker (image files in both builds; personal also offers search results and URL — an artist profile URL yields
 the avatar), an **Artist Pictures catalog** for avatar-wearing artists, and
 per-track blocking ("Remove cover art" is sticky). Settings also provides a
 managed **Default photos** pool: imported originals are copied into SoundBox,
@@ -230,7 +238,7 @@ Metal scrolls the RGB waveform/grid at display refresh (120 Hz on ProMotion).
 Three compact header toggles provide playlist-relative autoplay: up, a
 no-repeat shuffle bag, or down. The source playlist is frozen when a track is
 deliberately started, so browsing elsewhere does not redirect playback.
-It includes a whole-song overview, thirteen detail zoom levels from 24–1536
+It includes a whole-song overview, thirteen detail zoom levels from 24–1500
 px/s, bar/beat
 counting, previous/next, selectable beat/bar jumps, momentary CUE, clean
 play/pause/seek ramps, and precise pause-preview-resume scrubbing. Double-click
@@ -241,9 +249,9 @@ A native atomic hold uses the frame actually visible under the fixed playhead,
 not a lagging UI poll. Prepared overview and ultra buffers become visible
 together, so long sets never inflate when detail finishes loading.
 A newly loaded track starts on its first analyzed beat. SoundBox V5 owns the
-prepared grid/cues, RGB/24-band
-analysis, export eligibility, and single-silhouette ultra waveform. Valid
-Rekordbox analysis seeds missing data, while cues refresh by fingerprint from
+prepared grid/cues, waveform streams, export eligibility, and signed detail.
+Complete Rekordbox analysis is reused first, with only a compact 1-ms detail
+supplement generated from audio; fallback analysis handles incomplete imports, while cues refresh by fingerprint from
 a read-only live-DB snapshot until SoundBox user data claims ownership.
 If a track was first cached before Rekordbox finished its display analysis,
 the recurring scan notices when a valid PWV3/PWV5/PWV7 stream appears for a
@@ -253,15 +261,17 @@ import only read-only ANLZ data; source audio and Rekordbox are never modified.
 Stored hot-cue colors appear as black-outlined A–H boxes on both the
 whole-track overview and scrolling waveform; memory cues use one consistent
 red upward arrow in both scales.
-Waveform color comes from SoundBox's dedicated overlapping time-domain
-filterbank: low-pass 100 Hz, band-pass 300–3000 Hz, and high-pass 1500 Hz,
-followed by frequency-dependent peak holds and a local RGB energy transfer.
-The separate 24-band master remains long-term analysis data and never
-recolors or overrides that RGB stream in either renderer.
+Waveform colors and three-band shapes come directly from imported rekordbox
+analysis when complete. Compact caches store one signed detail base and build
+zoom levels in memory, omitting duplicate spectral analysis. Existing caches
+remain playable and upgrade individually when loaded; startup does not rebuild
+the library. Incomplete imports retain SoundBox's generated fallback colors.
 Rekordbox and source audio remain read-only. Native-deck failure disables
 playback with a diagnostic while library management remains available.
 
-**Devices & sync.** Drop starts export: threaded copy with one aggregating
+**Devices & sync.** New connections appear as **Checking…**, then become usable
+with their sync status already shown. Full iPod dashboard loading follows
+separately. Drop starts export: threaded copy with one aggregating
 progress bar, free-space precheck,
 FAT32-safe names (length-budgeted artist/title), catalogue-visible flat
 `/Playlists` names for dual iPods, and UTF-8 no-BOM `.m3u8` in exact order with
@@ -390,7 +400,13 @@ audio files actually copied, replaced, or removed; commits with no audio work
 hide that counter. Successful sync/deletion refreshes the open Device, Songs,
 and Playlists snapshot before the sidebar free-space/drift scan, so navigating
 away and back is never required. The status label reserves only the active
-animation width, keeping the count beside it. Approval is intentionally concise
+animation width, keeping the count beside it; static messages resize to fit.
+Per-file acquisition/copy/verification phases and byte totals appear on hover,
+so small files cannot flicker through phases or replace the overall track count.
+Analysis/artwork use the same steady-label/separate-counter presentation and
+yield the status to device work. Low-space analysis pauses explicitly name disk
+space; hover shows the automatic resume threshold (25 GiB for full analysis).
+Approval is intentionally concise
 and precedes the expensive exact plan; completion reports the result without
 exposing the transaction's internal checklist.
 Before that first composite generation, deleting old stock playlists removes
@@ -436,8 +452,9 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
 
     ./check.sh            # pyflakes + native build + mypy (engine) + full test suite
     ./check.sh --render   # + offscreen UI render to /tmp
+    ./check.sh --native   # + Cocoa drawable/playback gate; required for native changes
     ./build_native.sh     # CoreAudio/Metal dylib only
-    ./build_app.sh        # PyInstaller → dist/Soundbox.app (self-signed)
+    ./build_app.sh        # PyInstaller → dist/personal/Soundbox.app (self-signed)
 
 Python 3.14, deps in `requirements.txt` (venv at `.venv/`). Logs at
 `~/Library/Logs/Soundbox/soundbox.log`. Player accelerators live under AppData:

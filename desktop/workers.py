@@ -17,8 +17,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from soundbox import artfetch, engine, metadata, rekordbox_db, sync as sync_mod
+from soundbox import engine, metadata, rekordbox_db, sync as sync_mod
 from soundbox.library import Playlist
+from soundbox.providers import ArtworkProvider
 from soundbox.operation_control import checkpoint, operation_scope
 from soundbox.stock_artwork import StockArtworkCache
 from soundbox.stock_ipod import (
@@ -322,11 +323,12 @@ class DeviceScanWorker(QThread):
                 len(self.new_paths), time.monotonic() - started)
         out = []
         for name, path, free, raw_profile in raw_profiles:
-            drift = 0
+            drift = None
             profile = self._effective_profile(path, raw_profile)
-            # First connection prioritizes the useful full dashboard preload.
-            # The follow-up scan computes drift after that serialized read.
-            if self.lib is not None and path not in self.new_paths:
+            # Publish the first usable row with its actual sync status. The
+            # disabled discovery row is already visible; dashboard preload must
+            # not delay the first status check by another full read/pass.
+            if self.lib is not None:
                 try:
                     dr = engine.device_drift(
                         self.lib,
@@ -337,9 +339,9 @@ class DeviceScanWorker(QThread):
                     )
                     drift = dr.count() if dr else 0
                 except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
-                    drift = 0
+                    drift = None
                 if (
-                    not drift
+                    drift == 0
                     and profile.kind == "stock_ipod"
                     and self.stock_shadow_store is not None
                 ):
@@ -365,7 +367,7 @@ class DeviceScanWorker(QThread):
                             if status.state not in {"up_to_date", "untracked"}:
                                 drift = max(1, status.local_changes)
                     except Exception:  # noqa: BLE001 - keep polling read-only
-                        drift = 0
+                        drift = None
             out.append((name, path, free, drift, profile))
         log = LOG.info if out else LOG.debug
         log(
@@ -421,12 +423,14 @@ class ArtFillWorker(QThread):
 
     DELAY = 1.6  # seconds between fetches — polite, never a burst
 
-    def __init__(self, lib, cache, artist_overrides, title_overrides):
+    def __init__(self, lib, cache, artist_overrides, title_overrides, *,
+                 provider: ArtworkProvider | None):
         super().__init__()
         self.lib = lib
         self.cache = cache
         self.artist_overrides = artist_overrides
         self.title_overrides = title_overrides
+        self.provider = provider
         self._stop = False
         self._playback_active = threading.Event()
 
@@ -452,6 +456,8 @@ class ArtFillWorker(QThread):
             self.failed.emit(str(exc))
 
     def _fill(self):
+        if self.provider is None:
+            return
         import time
         todo = []
         hidden = getattr(self.lib, "hidden_ids", set())
@@ -478,7 +484,7 @@ class ArtFillWorker(QThread):
                 t.track_id, title, t.artist, self.artist_overrides, True,
                 self.lib.artist_registry, stem=t.path.stem)
             try:
-                res = artfetch.fetch_best(artist, title)
+                res = self.provider.fetch_best(artist, title)
             except Exception as exc:  # noqa: BLE001
                 res = None
                 err += 1
@@ -608,7 +614,7 @@ class WaveformFillWorker(QThread):
     progress = Signal(int, int)  # done, total
     tasks_ready = Signal(int)  # scan complete; actual metadata/analysis work
     detail_ready = Signal(str)  # audio path; receiver reloads canonical V5
-    storage_paused = Signal(bool, object)  # paused, free bytes (64-bit)
+    storage_paused = Signal(bool, object, object)  # paused, free/resume bytes (64-bit)
     power_policy_changed = Signal(str)  # ac, battery, low-power
 
     DELAY = 0.05  # tiny yield between files — gentle on CPU, never a UI beachball
@@ -778,6 +784,8 @@ class WaveformFillWorker(QThread):
             return True
         target = Path(self.track_analysis_dir)
         probe = target if target.exists() else target.parent
+        resume_bytes = (self.MIGRATION_RESUME_FREE_BYTES if reclaiming
+                        else self.RESUME_FREE_BYTES)
         paused = False
         while not self.isInterruptionRequested():
             try:
@@ -796,7 +804,7 @@ class WaveformFillWorker(QThread):
                     LOG.info(
                         "Library preparation resumed with %.1f GiB free",
                         free / 1024 ** 3)
-                    self.storage_paused.emit(False, free)
+                    self.storage_paused.emit(False, free, resume_bytes)
                 return True
             if not paused:
                 paused = True
@@ -804,7 +812,7 @@ class WaveformFillWorker(QThread):
                     "Library preparation paused: %.1f GiB free "
                     "(needs %.0f GiB)",
                     free / 1024 ** 3, threshold / 1024 ** 3)
-                self.storage_paused.emit(True, free)
+                self.storage_paused.emit(True, free, resume_bytes)
             time.sleep(1.0)
         return False
 
@@ -1053,20 +1061,23 @@ class WaveformFillWorker(QThread):
                         self.progress.emit(i, total)
                         time.sleep(self.DELAY)
                         continue
-                    native = analyze_track(
-                        path, bpm_hint, self._analysis_checkpoint
-                    ) or qt_detail_peaks(
-                        path, checkpoint=self._analysis_checkpoint)
-                    # A cooperative cancellation or decoder failure returns no
-                    # native result. Never replace an existing playable record
-                    # with a Rekordbox-only shell in that case: doing so loses
-                    # its SoundBox detail stream and guarantees another retry.
-                    if native is not None:
-                        imported = (
-                            read_analysis(fallback_path)
-                            if fallback_path
-                            and Path(fallback_path).is_file() else None)
-                        prepared = merge_import(native, imported)
+                    # Inspect provider streams before spending CPU on fallback
+                    # colors, FFT bands or beat detection.
+                    imported = (
+                        read_analysis(fallback_path)
+                        if fallback_path and Path(fallback_path).is_file()
+                        else None)
+                    from soundbox.waveform_detail import analyze_imported, complete_import
+                    prepared = (analyze_imported(path, imported, self._analysis_checkpoint)
+                                if complete_import(imported) else None)
+                    if prepared is None and self._analysis_checkpoint():
+                        native = analyze_track(
+                            path, bpm_hint, self._analysis_checkpoint
+                        ) or qt_detail_peaks(
+                            path, checkpoint=self._analysis_checkpoint)
+                        prepared = merge_import(native, imported) if native is not None else None
+                    # Cancellation must never publish an imported-only shell.
+                    if prepared is not None and not self.isInterruptionRequested():
                         if prepared is not None and imported_cues is not None:
                             prepared = with_imported_cues(
                                 prepared, imported_cues)

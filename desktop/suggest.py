@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from soundbox import artfetch
+from soundbox.providers import ArtistProvider
 from .task_owner import TaskOwner
 
 _ROLE = Qt.UserRole + 21  # (track_id, suggested_artist)
@@ -33,8 +33,9 @@ class SuggestWorker(QThread):
 
     DELAY = 1.2  # seconds between searches — polite, never a burst
 
-    def __init__(self, items):
+    def __init__(self, items, provider: ArtistProvider | None = None):
         super().__init__()
+        self.provider = provider
         self.items = list(items)  # [(tid, title)]
         self._stop = False
         self._cancelled = threading.Event()
@@ -44,13 +45,15 @@ class SuggestWorker(QThread):
         self._cancelled.set()
 
     def run(self):
+        if self.provider is None:
+            return
         hits = 0
         total = len(self.items)
         for i, (tid, title) in enumerate(self.items, 1):
             if self._stop:
                 break
             try:
-                r = artfetch.suggest_artist(title)
+                r = self.provider.suggest_artist(title)
             except Exception:  # noqa: BLE001 — offline/blocked: keep scanning
                 r = None
             if self._stop:
@@ -63,7 +66,7 @@ class SuggestWorker(QThread):
 
 
 class SuggestDialog(QDialog):
-    def __init__(self, items, parent=None):
+    def __init__(self, items, parent=None, *, provider: ArtistProvider | None = None):
         super().__init__(parent)
         self.setWindowTitle("Suggest artists")
         self.resize(680, 480)
@@ -100,12 +103,16 @@ class SuggestDialog(QDialog):
         v.addLayout(row)
 
         self._tasks = TaskOwner(self)
-        self._worker = SuggestWorker(items)
+        self._worker = SuggestWorker(items, provider)
         self._worker.found.connect(self._add_suggestion)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
-        self._tasks.adopt(self._worker)
-        self._worker.start()
+        if provider is not None:
+            self._tasks.adopt(self._worker)
+            self._worker.start()
+        else:
+            self.status.setText("Artist suggestions are unavailable.")
+            self.stop_btn.setEnabled(False)
 
     def shutdown(self):
         """Keep events alive until the exact search worker has retired."""

@@ -54,7 +54,7 @@ class NativeWaveformShader(unittest.TestCase):
 
     def test_current_geometry_keeps_u16_precision_until_display_upload(self):
         self.assertIn(
-            "constexpr float kWaveformDisplayExponent = 1.4f;",
+            "constexpr float kWaveformDisplayExponent = 1.0f;",
             self.source)
         self.assertIn(
             "constexpr float kWaveformDisplayScale = 0.84f;",
@@ -313,6 +313,13 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("ceil(log2(max(1.0, footprint)))", lod)
         self.assertNotIn("floor(log2(", lod)
 
+    def test_attribute_color_retains_its_original_weight(self):
+        self.assertIn("float4(lowerHeight, height, 0.0, 0.0)", self.shader)
+        self.assertIn("attributes[uint(left)].lowerAndColorWeight", self.shader)
+        self.assertIn("attributes[uint(right)].lowerAndColorWeight", self.shader)
+        self.assertIn("/ max(attribute.lowerAndColorWeight.y, 0.0001)", self.shader)
+        self.assertNotIn("attribute.colorAndUpper.rgb / max(outerHeight", self.shader)
+
     def test_audio_detail_ladder_avoids_power_of_two_oversmoothing(self):
         native = self.source.split(
             "constexpr std::array<uint32_t, 18>"
@@ -443,8 +450,8 @@ class NativeWaveformShader(unittest.TestCase):
             "attributes[id].colorAndUpper =\n"
             "        float4(color * height, upperHeight)", kernel)
         self.assertIn(
-            "attributes[id].lowerAndPadding =\n"
-            "        float4(lowerHeight, 0.0, 0.0, 0.0)", kernel)
+            "attributes[id].lowerAndColorWeight =\n"
+            "        float4(lowerHeight, height, 0.0, 0.0)", kernel)
         self.assertNotIn("profile_coverage(", kernel)
         self.assertNotIn("vivid_wave_coverage(", kernel)
 
@@ -473,7 +480,8 @@ class NativeWaveformShader(unittest.TestCase):
             "positioned_profile_coverage(\n"
             "            heights, profilePositions, profileCount", fragment)
         self.assertIn(
-            "if ((u.waveformMode != 3 && u.pixelsPerSecond < 64.0)\n"
+            "if ((u.waveformMode != 3\n"
+            "                && (u.pixelsPerSecond < 64.0 || u.pixelsPerSecond >= 256.0))\n"
             "                || u.pixelsPerSecond >= 1152.0)",
             fragment)
         self.assertIn("const float firstKnot = floor(leftTile) + 1.0", fragment)
@@ -496,75 +504,6 @@ class NativeWaveformShader(unittest.TestCase):
             body = self.shader.split(name, 1)[1].split("\n}", 1)[0]
             self.assertIn("float heights[kIntegrationTaps]", body)
             self.assertIn("profile_coverage(", body)
-
-    def _coverage(self, heights, threshold, band=0.0063):
-        """Reference implementation of the shader's exact-area model."""
-        total = 0.0
-        for a, b in zip(heights, heights[1:]):
-            lo, hi = min(a, b), max(a, b)
-            total += min(1.0, max(0.0, (hi + band - threshold)
-                                  / max(hi - lo, 2.0 * band)))
-        return total / max(1, len(heights) - 1)
-
-    def test_sliding_taps_move_edge_coverage_smoothly(self):
-        """The old mean could only step in 1/8ths; this must not step."""
-        import math
-        # A contour sweeping past the threshold as playback advances.
-        steps = []
-        for phase in range(200):
-            shift = phase / 200.0
-            heights = [
-                0.5 + 0.25 * math.sin((i / 8.0 + shift) * 2 * math.pi)
-                for i in range(8)
-            ]
-            steps.append(self._coverage(heights, 0.5))
-        jumps = [abs(b - a) for a, b in zip(steps, steps[1:])]
-        # Averaging eight binary taps would produce 0.125 jumps.
-        self.assertLess(
-            max(jumps), 0.05,
-            f"edge coverage still steps: largest jump {max(jumps):.3f}")
-
-    def test_flat_profile_still_antialiases_vertically(self):
-        """With no horizontal slope the band must supply a soft edge."""
-        flat = [0.5] * 8
-        self.assertAlmostEqual(self._coverage(flat, 0.5), 0.5, places=5)
-        self.assertEqual(self._coverage(flat, 0.9), 0.0)
-        self.assertEqual(self._coverage(flat, 0.1), 1.0)
-
-    def test_signed_interval_edges_use_continuous_area_coverage(self):
-        """BLUE/RGB boundaries must not quantize into five tap states."""
-        helper = self.shader.split(
-            "inline float interval_profile_coverage", 1
-        )[1].split("\n}", 1)[0]
-        self.assertEqual(helper.count("profile_coverage("), 2)
-        self.assertIn("return min(upperCoverage, lowerCoverage)", helper)
-        self.assertNotIn("total += saturate(", helper)
-
-        import math
-        continuous = []
-        point_average = []
-        threshold = 0.5
-        band = 0.0063
-        for phase in range(200):
-            shift = phase / 200.0
-            upper = [
-                0.5 + 0.25 * math.sin(
-                    (i / 5.0 + shift) * 2 * math.pi)
-                for i in range(5)
-            ]
-            continuous.append(self._coverage(upper, threshold, band))
-            point_average.append(sum(
-                min(1.0, max(0.0, (value + band - threshold)
-                    / (2.0 * band)))
-                for value in upper
-            ) / len(upper))
-        continuous_jumps = [
-            abs(b - a) for a, b in zip(continuous, continuous[1:])
-        ]
-        point_jumps = [
-            abs(b - a) for a, b in zip(point_average, point_average[1:])
-        ]
-        self.assertLess(max(continuous_jumps), max(point_jumps) * 0.5)
 
     def test_composite_is_opaque_without_an_outer_ghost(self):
         fragment = self.shader.split(
@@ -589,7 +528,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertGreaterEqual(
             self.shader.count("vivid_wave_coverage("), 2)
 
-    def test_scrolling_lane_uses_exact_edge_coverage_at_every_zoom(self):
+    def test_scrolling_lane_does_not_apply_overview_vividness(self):
         fragment = self.shader.split(
             "fragment float4 wave_surface_fragment", 1
         )[1].split(
@@ -636,7 +575,7 @@ class NativeWaveformShader(unittest.TestCase):
             "detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0)",
             kernel)
         # The accepted close family and 4x song-anchored resolve remain.
-        self.assertIn("detailFootprint * 4.0", kernel)
+        self.assertNotIn("detailFootprint * 4.0", kernel)
         divisors = (8, 13, 18, 25, 35, 50, 66, 99, 132, 192, 256)
         for scale in (1, 2):
             for zoom in (24, 32, 48):
@@ -712,12 +651,8 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "const WaveTap sharpWave = u.waveformMode == 3", kernel)
         self.assertIn("? three_band_detail_tap(", kernel)
-        self.assertIn(
-            "u.waveformMode == 3 && u.waveMipCount > 1", kernel)
-        self.assertIn("max(1u, requestedWaveLevel)", kernel)
-        self.assertIn(
-            "0.08 * smoothstep(1152.0, 1536.0, pixelsPerSecond)",
-            self.shader)
+        self.assertIn("const uint waveLevel = requestedWaveLevel;", kernel)
+        self.assertNotIn("facetStrength", self.shader)
         self.assertIn("if (u.waveformMode != 3", kernel)
         interpolated = self.shader.split(
             "inline WaveTap linear_wave_tap", 1
@@ -796,8 +731,8 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("if (u.pixelsPerSecond >= 384.0)", kernel)
         self.assertIn(
             "audio_detail_lod(\n"
-            "                detailFootprint * 4.0", kernel)
-        self.assertIn("linear_envelope_tap(", kernel)
+            "                detailFootprint * 0.5,", kernel)
+        self.assertIn("held_envelope_tap(", kernel)
         self.assertIn(
             "u.audioDetailMipOffsets[detailLevel]", kernel)
         self.assertIn(
@@ -809,26 +744,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("quietDisplayRescue", kernel)
         self.assertIn("upperHeight = sharpDetail.maximum;", kernel)
         self.assertIn("lowerHeight = sharpDetail.minimum;", kernel)
-        self.assertIn(
-            "const float levelHeightGain = u.pixelsPerSecond >= 64.0",
-            kernel)
-        self.assertIn(
-            "50.0 / max(1.0, float(detailDivisor))", kernel)
-        self.assertIn("+ 0.10 * thin64", kernel)
-        self.assertIn("+ 0.23 * thin92", kernel)
-        self.assertIn("+ 0.26 * thin128", kernel)
-        self.assertIn(
-            "(levelHeightGain - 1.0)\n"
-            "                        * minimumMagnitude"
-            " * (1.0 - minimumMagnitude)", kernel)
-        self.assertIn(
-            "(levelHeightGain - 1.0)\n"
-            "                        * maximumMagnitude"
-            " * (1.0 - maximumMagnitude)", kernel)
-        self.assertNotIn(
-            "sharpDetail.minimum * levelHeightGain", kernel)
-        self.assertNotIn(
-            "sharpDetail.maximum * levelHeightGain", kernel)
+        self.assertNotIn("levelHeightGain", kernel)
         fragment = self.shader.split(
             "fragment float4 wave_surface_fragment", 1
         )[1].split(
@@ -873,7 +789,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "moments.firstMoment / moments.area", resolve)
         self.assertIn(
-            "whiteLinear, edgeLinear, radialBlend", resolve)
+            "centerLinear, edgeLinear, radialBlend", resolve)
         self.assertNotIn("targeted_stop_filter(", resolve)
         native = self.source
         self.assertIn(
@@ -921,8 +837,8 @@ class NativeWaveformShader(unittest.TestCase):
             "static WaveSample threeBandWaveSample", 1
         )[0]
         self.assertIn("raw[0] / 14.0f", rgb)
-        self.assertIn("raw[1] / 8.0f", rgb)
-        self.assertIn("raw[2] / 8.75f", rgb)
+        self.assertIn("raw[1] / 7.0f", rgb)
+        self.assertIn("raw[2] / 7.0f", rgb)
         self.assertIn(
             "threeBandActive_ = waveformMode_ == 3", native)
         kernel = self.shader.split(
@@ -931,7 +847,7 @@ class NativeWaveformShader(unittest.TestCase):
             "constant uint kIntegrationTaps", 1
         )[0]
         self.assertIn("if (u.waveformMode == 2)", kernel)
-        self.assertIn("nearest_wave_color(", kernel)
+        self.assertIn("linear_wave_color(", kernel)
         self.assertIn(
             "smoothstep(92.0, 184.0, u.pixelsPerSecond)", kernel)
 
