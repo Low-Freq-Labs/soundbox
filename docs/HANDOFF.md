@@ -6,9 +6,10 @@ Updated October 9, 2026, America/Chicago.
 
 Sonny accepted the installed build (“loving this build”) and requested wrap-up.
 The October 2–9 waveform/startup/palette/background-detail/rapid-load and
-playback-preserving browser-load work is complete. The release commit is
-identified by the subject **Stabilize waveform playback and complete background detail preparation**
-on `main`, tracking `origin/main`. No diagnostic window remains open.
+playback-preserving browser-load work is complete in release commit
+**126a5e3a39262dc86013c22e6d26937c71b6c217** on `main`, tracking `origin/main`.
+This handoff follow-up changes documentation only; `git rev-parse HEAD` identifies
+its containing repository revision. No diagnostic window remains open.
 
 Next: Sonny plans one to two weeks of normal use. Preserve this accepted build;
 respond to concrete new reports. No renderer experiment, manual cache rebuild,
