@@ -331,7 +331,7 @@ neither a rebuild nor a new installed revision.
 
 The composite one-title path now has real generation-63 acceptance (26.76 seconds
 planning/commit, 69.56 MB canonical reads); unchanged no-op acceptance remains
-open. The later [repeated-work audit](repeated-work-audit-2026-09.md) provides
+open. The later [repeated-work audit](archive/repeated-work-audit-2026-09.md) provides
 isolated before/after operation counts. Its five non-USB analysis/UI/polling/artwork
 findings are now implemented and tested; generic-export optimization is explicitly
 deferred. This closes those repeated-work findings, not the broader unfinished

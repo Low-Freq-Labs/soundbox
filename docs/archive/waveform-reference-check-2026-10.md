@@ -1,5 +1,11 @@
 # Supplied waveform recordings — October 1 verification
 
+Historical evidence; dated status and instructions below apply only to their
+original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
+[ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
+Original `build/` evidence paths now resolve beneath the external archive listed
+in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+
 Sonny asked to verify 3BAND detail and BLUE colors after accepting the scrolling
 sampling fix. The recordings are local, read-only inputs on Desktop:
 
@@ -81,7 +87,7 @@ requires fully covered thin interval centers to reach cyan, preserves white in
 broad centers, and proves restoring an unconditional white center violates the
 cyan requirement. The gamut expected failure was retired October 1. The
 independent signed-coverage expected failure was then corrected October 2; see
-[the release gate](test-release-gate.md).
+[the release gate](../test-release-gate.md).
 
 Across 507 actual native captures (all modes/stops, three song positions, four
 subpixel phases and recenter), all 338 RGB/3BAND frames are pixel-identical to the
@@ -99,7 +105,7 @@ frames, contact sheets, `import-proof.json`, `threeband-high-fit.json`, fitted
 contours and `blue-gamut-proof.json`. Recordings and source music stay outside
 version control. The test-strengthening and tiny-moment arithmetic correction
 are separate, installed work; see [test audit](waveform-test-audit-2026-10.md)
-and [HANDOFF](HANDOFF.md).
+and [HANDOFF](../HANDOFF.md).
 
 ## October 8 RGB color recovery — accepted
 

@@ -23,6 +23,19 @@ That fingerprint matches the released runtime sources. The repository release
 and installed signed Git revision are different: wrap-up changed documentation
 only, so the accepted app was retained without rebuilding or restamping it.
 
+## Checkout cleanup — October 9
+
+The follow-up folder cleanup changes documentation and local generated files only.
+Historical player experiments and completed audits now live in `docs/archive/`;
+`docs/IDEAS.md` replaces the dated root ideas file and corrects stale UI claims.
+Current documentation links and both runtime instruction files follow those paths.
+Obsolete packaging outputs/caches went reversibly to Trash. Diagnostic evidence
+moved outside the checkout with original subpaths and a move manifest; see
+[PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact locations. Earlier `build/` evidence
+references below now resolve under that archive. Current `build/native/` and
+`build/check/`, the development environment and required fixtures remain.
+Installed app, AppData and protected recovery are unchanged.
+
 ## Validation
 
 Final October 9 **`./check.sh --render` passed all 1,104 tests** (1,053 offscreen
@@ -48,9 +61,11 @@ no production/test code or threshold was changed.
 ## Installed runtime and state
 
 Built with `./build_app.sh`; installed **2026-10-09T03:43:46.097655-05:00**, verified
-**2026-10-09T03:44:05.582782-05:00**. Signature passes (Soundbox Self-Signed), installed
-executable/native hashes match dist, and signed source fingerprint matches
-runtime sources. Startup/native-deck/library and preparation log checks are
+**2026-10-09T03:44:05.582782-05:00**. At installation the strict/deep signature
+passed (Soundbox Self-Signed), executable/native hashes matched signed dist, and
+the source fingerprint matched runtime sources. The later directory cleanup
+retired the redundant dist copy; installed hashes and source fingerprint still match
+the recorded installation. Startup/native-deck/library and preparation log checks are
 recorded in `build/playback-load-review/startup.log`: startup 03:43:48, native
 deck active 03:43:49, 3,398 tracks / 75 playlists loaded 03:43:52, and zero
 preparation tasks at 03:43:53 CDT. Native ABI remains 5.

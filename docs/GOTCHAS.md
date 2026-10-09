@@ -4,6 +4,9 @@ Hard-won + researched. **Read before touching workers, playlists, sync, art, or
 the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 
 ## Repo hygiene
+- Current guidance and historical evidence are separated; see
+  [project layout](PROJECT_LAYOUT.md) before cleaning ignored files. Required
+  fixture/recovery directories are not disposable build output.
 - **NEVER pipe `./check.sh` through `tail`/`grep` in a `&&` chain** — the
   pipeline exit code is `tail`'s `0`, so a FAILING gate gets masked and the
   build/commit proceeds. (Real incident: a syntax-broken module shipped + got
@@ -17,7 +20,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **`AGENTS.md` and `CLAUDE.md` are synchronized runtime equivalents.** A shared
   rule changed in one must change in the other in the same edit. Shipped
   behavior/status belongs in the relevant docs; committed work goes in
-  `ROADMAP.md`; exploratory UX belongs in `new-ideas-7-22.md`.
+  `ROADMAP.md`; exploratory UX belongs in `docs/IDEAS.md`.
 - **Installation must preserve rollback and AppData.** Back up/hash
   `library.json`, gracefully quit, move the old app bundle into a temporary
   rollback directory, install with `ditto`, verify/relaunch/log-check, and
@@ -197,7 +200,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the identical origin misses floating-point source-cell boundary drift. Generate
   attributes from canonical 128-attribute clock blocks, preserving the same
   integer anchors and local phases across tiles. Never hide outline changes by
-  averaging source cells. See the [October 2 review](waveform-zoom-review-2026-10.md).
+  averaging source cells. See the [October 2 review](archive/waveform-zoom-review-2026-10.md).
 - **Color's premultiplication weight is not reconstructed signed amplitude.**
   Keep `lowerAndColorWeight.y` with the amplitude-weighted RGB through every
   lattice interpolation. The magnitude of interpolated signed bounds can be

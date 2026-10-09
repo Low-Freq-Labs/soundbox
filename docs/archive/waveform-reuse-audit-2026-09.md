@@ -1,5 +1,11 @@
 # Rekordbox waveform reuse — September 29, 2026
 
+Historical evidence; dated status and instructions below apply only to their
+original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
+[ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
+Original `build/` evidence paths now resolve beneath the external archive listed
+in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+
 ## Requested direction and current boundary
 
 The initial request preferred saved rekordbox streams and small storage, with a
@@ -9,7 +15,7 @@ filled-envelope compromise and requires the detailed rekordbox BLUE/RGB appearan
 and its separate 3BAND geometry, including zooming and motion. Reuse saved data
 where it meets that reference; do not retire detail merely to meet a storage
 target. Exact fallback parity remains a validation target. Production implementation is installed locally; the exact build and final
-validation status are recorded in [HANDOFF](HANDOFF.md). No whole-library invalidation is used.
+validation status are recorded in [HANDOFF](../HANDOFF.md). No whole-library invalidation is used.
 
 ## Follow-up: thick/jagged close detail
 
@@ -71,7 +77,7 @@ The live cache was read, not rewritten; its inspected SHA-256 is
 8c027a4d0b0c415b66e0a793e11d9a5ff21311c0feb984280032d5058df69161.
 
 The September 30 audit also found a coverage approximation, subsequently
-corrected October 2 (see [the release gate](test-release-gate.md)). At this
+corrected October 2 (see [the release gate](../test-release-gate.md)). At this
 historical checkpoint the signed compositor overwrote joint coverage with the smaller of separately
 integrated upper/lower half-planes. These are not mathematically equivalent
 when both boundaries cross a pixel. A synthetic diagonal narrow-interval test

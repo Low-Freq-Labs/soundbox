@@ -286,19 +286,20 @@ unknown config lines; retain the established numbered playlist filenames.
 | `docs/ipod-lifecycle-audit-2026-09.md` | Lifecycle inventory, failure matrix, implementation and acceptance boundaries |
 | `docs/rockbox-playlist-oom-2026-09.md` | Read-only USB findings, firmware comparison and pending runtime OOM isolation |
 | `docs/HANDOFF.md` | Single current session-resume note: live state, unfinished work, exact next checks, validation, and rollback facts |
+| `docs/PROJECT_LAYOUT.md` | Checkout contents, external evidence archive, disposable outputs and retained fixtures |
 | `docs/ROADMAP.md` | Active sequence, acceptance gates, public release and deferred work |
 | `docs/sync-performance-audit-2026-09.md` | Composite inventory reuse, source-read counters and physical acceptance |
-| `docs/repeated-work-audit-2026-09.md` | Completed non-USB optimizations and before/after evidence |
+| `docs/archive/repeated-work-audit-2026-09.md` | Completed non-USB optimizations and before/after evidence |
 | `docs/software-audit-2026-09.md` | Architecture, lifecycle, persistence and performance findings with evidence |
 | `docs/release-boundaries.md` | Public/personal scope, provider contract and distribution boundaries |
-| `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and pending grid work |
-| `docs/waveform-reuse-audit-2026-09.md` | Rekordbox-first waveform implementation, storage audit, diagnostic previews and remaining acceptance |
+| `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and deferred grid work |
+| `docs/archive/waveform-reuse-audit-2026-09.md` | Rekordbox-first waveform implementation, storage audit, diagnostic previews and remaining acceptance |
 | `docs/DEVICES.md` | Rockbox/stock/dual-boot/generic layouts, capability boundaries, and validation |
 | `docs/ARCHITECTURE.md` | Engine/desktop/native layout, data model, persistence, build/install |
 | `docs/GOTCHAS.md` | Hard-won Qt/QThread/native-player/rekordbox/Rockbox traps |
-| `new-ideas-7-22.md` | Exploratory quality-of-life concepts that require UX workshop before commitment |
+| `docs/IDEAS.md` | Exploratory quality-of-life concepts that require UX workshop before commitment |
 | `docs/cdj-usb-export.md` | CDJ USB R&D and `research/cdj_export/` status |
-| `docs/storage-audit-2026-07.md` | Resolved storage audit; full backups remain deliberate |
+| `docs/archive/storage-audit-2026-07.md` | Resolved storage audit; full backups remain deliberate |
 | `README.md` | User/dev product tour |
 
 Read `docs/GOTCHAS.md` before touching workers, playlists, sync, removable
@@ -310,7 +311,7 @@ rendering, clocks, transport behavior, analysis loading, or native code.
 - Documentation is part of the change. Update relevant docs before ending a
   session when behavior, architecture, invariants, setup, or status changed.
 - Put committed/sequenced work in `docs/ROADMAP.md`. Put uncommitted concepts
-  and UX explorations in `new-ideas-7-22.md`.
+  and UX explorations in `docs/IDEAS.md`.
 - Keep shipped behavior, future work, and historical validation clearly
   separated. Never leave a completed feature presented as a TODO.
 - On every **wrap up**, replace/update `docs/HANDOFF.md` with the single current
@@ -375,6 +376,10 @@ analysis, audible playback, duration and seeks; never shift only the waveform.
 Header probes belong to the native decode thread. See `docs/PLAYER.md`.
 
 ## Development
+
+Checkout hygiene and historical evidence locations: `docs/PROJECT_LAYOUT.md`.
+Current guidance stays in `docs/`; superseded experiments belong in
+`docs/archive/` and never override the current handoff or roadmap.
 
     ./check.sh            # lint/build/types + all offscreen/Cocoa tests; zero skips
     ./check.sh --render   # + hermetic offscreen UI render

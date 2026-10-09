@@ -26,9 +26,9 @@ passing reruns do not establish their cause.
 - Accepted RGB/BLUE motion and close detail, BLUE color integration, stable
   overlapping render tiles, and quiet RGB color recovery across the encoded
   palette. 3BAND retains its imported rows and existing layer policy. See the
-  [zoom review](waveform-zoom-review-2026-10.md),
-  [color comparison](waveform-reference-check-2026-10.md) and
-  [test audit](waveform-test-audit-2026-10.md).
+  [zoom review](archive/waveform-zoom-review-2026-10.md),
+  [color comparison](archive/waveform-reference-check-2026-10.md) and
+  [test audit](archive/waveform-test-audit-2026-10.md).
 - First-Play visual position no longer extrapolates before its launch point.
   Native cloud readiness failures explain the cause and permit Play to retry.
   The observed cold AAC/ALAC delay was SeaDrive hydration, confirmed by Sonny;
@@ -151,7 +151,7 @@ verification; physical acceptance remains listed separately below.
 ## 2. Finish lifecycle integration and measure performance
 
 The five non-USB findings from the September 28
-[repeated-work audit](repeated-work-audit-2026-09.md) are implemented: selective
+[repeated-work audit](archive/repeated-work-audit-2026-09.md) are implemented: selective
 analysis watching, track-scoped row invalidation, preference-save coalescing and
 identical-save elision, idle discovery admission, and stock-art completion reuse.
 Synthetic probes establish eliminated I/O; they do not claim a whole-app speedup.
@@ -266,7 +266,7 @@ manifest/cache schemas, native timing and visible behavior in each slice.
   metadata only on disposable
   verified payloads, unchanged shared stock WAV and physical dual-firmware
   playback acceptance. No MP3-only promise or automatic private firmware fork.
-- Uncommitted UX ideas stay in [the exploration backlog](../new-ideas-7-22.md).
+- Uncommitted UX ideas stay in [the exploration backlog](IDEAS.md).
 
 ## Shipped foundations — not TODOs
 

@@ -1,8 +1,14 @@
 # Close-zoom waveform review — October 2, 2026
 
+Historical evidence; dated status and instructions below apply only to their
+original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
+[ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
+Original `build/` evidence paths now resolve beneath the external archive listed
+in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+
 This is a historical experiment/acceptance record. The accepted October 6
 policy remains in the October 9 build, now accepted for normal use. Current
-release state is in [HANDOFF](HANDOFF.md); no diagnostic window remains open.
+release state is in [HANDOFF](../HANDOFF.md); no diagnostic window remains open.
 
 ## Reference and scope
 
@@ -74,7 +80,7 @@ establishes the numerical/render contracts, not complete visual acceptance.
 At that checkpoint, muted B was the canonical-clock correction, installed as signed
 personal build 122 after the final gate. Sonny's subsequent October 3 playback review rejected it as a fix for the visible artifact.
 That installation is superseded; current rollback and launch/state evidence are
-in [HANDOFF](HANDOFF.md).
+in [HANDOFF](../HANDOFF.md).
 
 The earlier first-B temporal capture submitted 1,620 frames across all three
 modes at 384/864/1500, with zero audio underruns and zero GPU-deadline drops.
@@ -174,7 +180,7 @@ cache inventories were verified intact. Its Git-derived build number remains
 122, but its source fingerprint is now
 `4a3255767e1904e2ff6f2c26193da4e8dd545a9f35f5d966d897c094f821e958`.
 That first installation was superseded by the accepted smaller-increment build
-below; current startup/state/rollback evidence is in [HANDOFF](HANDOFF.md). The October 9 wrap-up publishes the accepted follow-ups; these historical
+below; current startup/state/rollback evidence is in [HANDOFF](../HANDOFF.md). The October 9 wrap-up publishes the accepted follow-ups; these historical
 measurements do not establish blanket physical acceptance.
 
 ### Post-install mid-zoom stepping

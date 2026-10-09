@@ -1,10 +1,16 @@
 # Soundbox cache and storage audit — RESOLVED
 
+Historical evidence; dated status and instructions below apply only to their
+original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
+[ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
+Original `build/` evidence paths now resolve beneath the external archive listed
+in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+
 Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root)
 
 All footprints, cleanup approvals and rollback counts below are dated historical
 evidence. They do not authorize deleting current recovery material. Consult
-[HANDOFF.md](HANDOFF.md) for rollback/state that must remain today.
+[HANDOFF.md](../HANDOFF.md) for rollback/state that must remain today.
 
 ## Resolution (what was actually done, and what was deliberately declined)
 

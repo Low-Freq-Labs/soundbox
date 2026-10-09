@@ -1,11 +1,17 @@
 # Repeated-work audit — September 28, 2026
 
+Historical evidence; dated status and instructions below apply only to their
+original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
+[ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
+Original `build/` evidence paths now resolve beneath the external archive listed
+in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+
 The initial read-only audit followed generation 63's incremental-sync acceptance.
 The original findings below describe the pre-change baseline at `50a47ba` plus
 the incremental/spacing changes. Sonny subsequently authorized all five non-USB
 fixes; those are implemented. Generic USB/Rockbox export optimization remains
 explicitly deferred. All probes use disposable synthetic media/state; physical
-acceptance and installation evidence belong in [HANDOFF.md](HANDOFF.md).
+acceptance and installation evidence belong in [HANDOFF.md](../HANDOFF.md).
 
 ## Implemented non-USB changes
 
@@ -46,7 +52,7 @@ Library curation and existing audio-analysis/artwork cache files were preserved.
 Clean release build **116**, source **`47dd540`**, was installed at **22:57:11**.
 Startup again reused 2891 analysis entries and 2767 covers with zero preparation;
 curation remained byte-identical. Final provenance and observation evidence are
-in [HANDOFF.md](HANDOFF.md).
+in [HANDOFF.md](../HANDOFF.md).
 
 The first installed verification exposed an old unmounted `/Volumes/Data` folder
 as a perpetual failed probe. The final build distinguishes ordinary same-filesystem

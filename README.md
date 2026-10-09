@@ -117,19 +117,23 @@ app, and verify its signature, launch, and library before accepting an upgrade.
 
 ## Docs & roadmap
 
+See [project layout](docs/PROJECT_LAYOUT.md) for checkout contents, retained
+fixtures and external diagnostic evidence. Superseded investigations are indexed
+in [the documentation archive](docs/archive/README.md).
+
 - **[`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md)** — synchronized
   runtime orientation + sacred safety contract (start here).
 - **[`docs/HANDOFF.md`](docs/HANDOFF.md)** — exact current device/app state,
   rollback facts, validation, and next-session sequence.
 - **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — active sequence, release gates and deferred work.
 - **[`docs/PLAYER.md`](docs/PLAYER.md)** — native deck behavior, architecture,
-  caches, read-only cue panel, non-regression rules, QA, and pending grid work.
+  caches, read-only cue panel, non-regression rules, QA, and deferred grid work.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — engine/desktop layout, data model, build.
 - **[`docs/DEVICES.md`](docs/DEVICES.md)** — Rockbox, stock iPod, dual-boot,
   and generic-USB layouts, capabilities, and validation rules.
 - **[`docs/GOTCHAS.md`](docs/GOTCHAS.md)** — Qt/native-player/rekordbox/Rockbox
   traps (read before touching workers, player, or sync).
-- **[`new-ideas-7-22.md`](new-ideas-7-22.md)** — exploratory QOL backlog; UX
+- **[`docs/IDEAS.md`](docs/IDEAS.md)** — exploratory QOL backlog; UX
   workshop before roadmap commitment.
 - **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ USB export R&D (prototype in `research/cdj_export/`).
 

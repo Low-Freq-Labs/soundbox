@@ -1,5 +1,11 @@
 # Waveform test audit — October 1, 2026
 
+Historical evidence; dated status and instructions below apply only to their
+original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
+[ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
+Original `build/` evidence paths now resolve beneath the external archive listed
+in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+
 ## Scope and finding
 
 Sonny requested a follow-up after the complete-corner renderer B improved the
@@ -77,7 +83,7 @@ setup so infrastructure failures could not be mistaken for the known math limit.
 October 2 replaces that final alpha override with the joint resolve, keeps the
 assertion as an ordinary passing test, adds random final-fragment comparisons,
 and proves a mutation restoring the separate-edge rule fails. The source detail,
-footprint and palette do not change. See [the release gate](test-release-gate.md).
+footprint and palette do not change. See [the release gate](../test-release-gate.md).
 
 The retained five-probe RGB/BLUE 64–184 and 3BAND below 1152 branches are also
 approximations: complete-corner peak invariance is not claimed there. The CPU
