@@ -38,7 +38,12 @@ inline float4 audit_composite(thread const float *blueMinimums,
     COMPOSITOR
 }
 '''.replace('COMPOSITOR', compositor)
+    selection_start = shader.index('        const float detailFootprint =')
+    selection_end = shader.index('        const uint detailDivisor =', selection_start)
+    selection = shader[selection_start:selection_end].replace(
+        'u.audioDetailMipDivisors', 'auditDivisors').replace('u.audioDetailMipCount', '12u')
     return shader + wrapper + r'''
+constant uint auditDivisors[12] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
 kernel void audit_math(device const float *inputs [[buffer(0)]],
                        device float *outputs [[buffer(1)]], uint id [[thread_position_in_grid]]) {
     device const float *a = inputs + id * 64;
@@ -70,6 +75,16 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         float4 final = audit_composite(lower, upper, colors, positions,
             count, a[2], a[3], a[4], a[5] != 0 ? 1u : 2u);
         out[4] = final.r; out[5] = final.g; out[6] = final.b;
+    } else if (op == 5) {
+        Uniforms u{}; u.audioDetailSamplesPerSecond = a[1];
+        u.pixelsPerSecond = a[2]; float scale = a[3];
+        DETAIL_SELECTION
+        out[0] = float(auditDivisors[detailLevel]);
+    } else if (op == 6) {
+        float3 authored = float3(a[1], a[2], a[3]);
+        float3 recovered = recover_rgb_color(authored * a[4], a[4], authored);
+        float3 color = mix(recovered, authored, smoothstep(92.0, 184.0, a[5]));
+        out[0] = color.r; out[1] = color.g; out[2] = color.b;
     } else if (op == 4) {
         device const WaveSample *samples = (device const WaveSample *)(a + 8);
         WaveTap tap = three_band_detail_tap(samples, 0, uint(a[1]),
@@ -90,7 +105,7 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         out[0] = color.r; out[1] = color.g; out[2] = color.b;
     }
 }
-'''.replace('PROFILE', block).replace('OUTER', outer).replace('EXPRESSION', expression)
+'''.replace('PROFILE', block).replace('OUTER', outer).replace('EXPRESSION', expression).replace('DETAIL_SELECTION', selection)
 
 
 def linear_color(rgb):
@@ -130,6 +145,28 @@ def interval_oracle(row, samples=4096):
         total[1:] += (color*coverage[:, None]).mean(0)*span
         span_sum += span
     return total/span_sum
+
+
+def rgb_column_oracle(row):
+    """Independent area/color quadrature plus the declared column policy.
+
+    The exact joint integral determines visibility and conditional color. A
+    constant white rectangle spanning every endpoint supplies the conservative
+    column bound; it cannot reduce the minimum-width contour's coverage.
+    """
+    integral = interval_oracle(row)
+    if integral[0] == 0:
+        return np.zeros(3)
+    count = int(row[1])
+    endpoints = np.r_[row[8:8+count], row[15:15+count]]
+    rectangle = np.zeros(64, dtype=np.float32)
+    rectangle[:5] = [2, 2, *row[2:5]]
+    rectangle[8:10] = endpoints.min()
+    rectangle[15:17] = endpoints.max()
+    rectangle[22:24] = [0, 1]
+    rectangle[29:35] = 1
+    coverage = max(integral[0], interval_oracle(rectangle)[0])
+    return integral[1:] / integral[0] * coverage
 
 
 @unittest.skipUnless(platform.system() == 'Darwin' and platform.machine() == 'arm64',
@@ -226,6 +263,23 @@ class WaveformGPUMath(unittest.TestCase):
         rows[:, 1:4] = weighted; rows[:, 4:6] = interpolated; rows[:, 6:7] = weights
         expected = weighted/np.maximum(weights, .0001)
         np.testing.assert_allclose(self.execute(rows)[:, :3], expected, atol=3e-6, rtol=0)
+
+    def test_all_rgb_codes_keep_color_when_compact_height_is_zero_or_tiny(self):
+        # Exhaust the 3-bit channels, not a hand-picked green/blue screenshot.
+        # Constant authored hue must not depend on compact height or zoom.
+        palette = np.array(list(np.ndindex(8, 8, 8)), dtype=float) / 7
+        rows, expected = [], []
+        for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500):
+            for weight in (0, 1e-8, 1e-5, .2, 1):
+                block = np.zeros((len(palette), 64))
+                block[:, 0] = 6
+                block[:, 1:4] = palette
+                block[:, 4] = weight
+                block[:, 5] = zoom
+                rows.append(block)
+                expected.append(palette)
+        np.testing.assert_allclose(self.execute(np.vstack(rows))[:, :3],
+                                   np.vstack(expected), atol=2e-6, rtol=0)
 
     def test_three_band_close_tap_preserves_independent_150_hz_layer_detail(self):
         # Alternating narrow peaks in different bands expose pair pooling,
@@ -333,24 +387,63 @@ class WaveformGPUMath(unittest.TestCase):
         self.assertTrue((values[:, 1:4] <= values[:, :1]+2e-6).all())
         self.assertTrue((values[:, :5] >= -2e-6).all())
 
-    def test_signed_crossing_final_fragment_matches_pointwise_area(self):
+    def test_blue_final_color_matches_independent_pixel_area_oracle(self):
+        rows = self.interval_cases(); rows[:, 5] = 1
+        expected = np.array([interval_oracle(row) for row in rows])
+        actual = self.execute(rows)
+        np.testing.assert_allclose(actual[:, :4], expected, atol=1e-4, rtol=0)
+        np.testing.assert_allclose(actual[:, 4:7], expected[:, 1:], atol=1e-4, rtol=0)
+
+    def test_blue_shading_is_independent_of_linear_profile_subdivision(self):
+        rows = []
+        for width in (.003, .03, .15, .4):
+            for y in (-.3, 0, .2):
+                for count in (2, 3, 5, 7):
+                    positions = np.linspace(0, 1, count)
+                    centers = -.6 + positions * 1.2
+                    row = np.zeros(64, dtype=np.float32)
+                    row[:6] = [2, count, y, 120, .5, 1]
+                    row[8:8+count] = centers - width
+                    row[15:15+count] = centers + width
+                    row[22:22+count] = positions
+                    row[29:29+count*3] = np.tile([.08, .12, .86], count)
+                    rows.append(row)
+        actual = self.execute(rows)[:, 4:7].reshape(-1, 4, 3)
+        np.testing.assert_allclose(actual, np.repeat(actual[:, :1], 4, axis=1),
+                                   atol=1e-4, rtol=0)
+
+    def test_close_detail_uses_resolvable_extrema_at_each_drawable_scale(self):
+        rows = []
+        for scale in (1, 2):
+            for zoom in (384, 576, 864, 1152, 1500):
+                row = np.zeros(64); row[:4] = [5, 1000, zoom, scale]
+                rows.append(row)
+        actual = self.execute(rows)[:, 0]
+        for row, divisor in zip(rows, actual):
+            # Each retained cell must cover the physical source footprint,
+            # allowing the established six-percent reconstruction tolerance.
+            self.assertGreaterEqual(divisor, max(1, .94*row[1]/(row[2]*row[3])))
+        np.testing.assert_array_equal(actual[5:], [2, 1, 1, 1, 1])
+
+    def test_signed_crossing_retains_exact_color_integral_and_solid_rgb_column(self):
         row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
         row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
         row[22:24] = [0, 1]; row[29:35] = 1
         expected = interval_oracle(row)
         actual = self.execute([row])[0]
         np.testing.assert_allclose(actual[:4], expected, atol=3e-5, rtol=0)
-        # White on black exposes final coverage directly, including any
-        # post-resolve alpha replacement in the production fragment.
-        np.testing.assert_allclose(actual[4:7], expected[1:], atol=3e-5, rtol=0)
+        # White on black exposes the deliberate conservative presentation:
+        # the crossing occupies this column, which must now be solid. The
+        # underlying exact area above is still tested independently.
+        np.testing.assert_allclose(actual[4:7], [1, 1, 1], atol=3e-5, rtol=0)
 
     def test_final_rgb_fragment_matches_independent_visible_color(self):
         rows = self.interval_cases()
-        expected = np.array([interval_oracle(row)[1:] for row in rows])
-        np.testing.assert_allclose(self.execute(rows)[:, 4:7], expected, atol=3e-5, rtol=0)
+        expected = np.array([rgb_column_oracle(row) for row in rows])
+        np.testing.assert_allclose(self.execute(rows)[:, 4:7], expected, atol=6e-5, rtol=0)
 
-    def test_restoring_separate_edge_averages_breaks_final_fragment_oracle(self):
-        row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
+    def test_restoring_separate_edge_averages_breaks_blue_final_fragment_oracle(self):
+        row = np.zeros(64, dtype=np.float32); row[:6] = [2, 2, 0, 60, .5, 1]
         row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
         row[22:24] = [0, 1]; row[29:35] = 1
         old = r'''
@@ -372,3 +465,27 @@ class WaveformGPUMath(unittest.TestCase):
         broken = self.execute([row], mutated)[0, 4:7]
         np.testing.assert_allclose(fixed, expected, atol=3e-5, rtol=0)
         self.assertGreater(float(np.max(np.abs(broken - expected))), .4)
+
+    def test_rgb_columns_preserve_minimum_stroke_and_empty_pixels(self):
+        rows = []
+        for y in np.linspace(-.1, .15, 101):
+            row = np.zeros(64, dtype=np.float32)
+            row[:5] = [2, 2, y, 60, .5]
+            row[8:10] = [0, .05]; row[15:17] = [0, .05]
+            row[22:24] = [0, 1]; row[29:35] = 1
+            rows.append(row)
+        actual = self.execute(rows)
+        self.assertTrue(np.all(actual[:, 4] >= actual[:, 0] - 1e-6))
+        np.testing.assert_array_equal(actual[actual[:, 0] == 0, 4:7], 0)
+        self.assertGreater(np.count_nonzero(actual[:, 4] > actual[:, 0] + .1), 5)
+
+    def test_removing_rgb_column_policy_loses_accepted_solid_detail(self):
+        row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
+        row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
+        row[22:24] = [0, 1]; row[29:35] = 1
+        old = self.source.replace(
+            'if (u.waveformMode == 2 && interval.coverage > 0.0)',
+            'if (false)')
+        self.assertNotEqual(old, self.source)
+        np.testing.assert_allclose(self.execute([row])[0, 4:7], 1, atol=1e-6)
+        self.assertLess(float(self.execute([row], old)[0, 4]), .2)

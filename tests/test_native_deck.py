@@ -50,6 +50,30 @@ class WaveformStreamRepair(unittest.TestCase):
             repaired,
             bytes.fromhex("e07c e004 0000 0384"))
 
+    def test_visibility_repair_matches_scalar_nearest_color_reference(self):
+        import numpy as np
+        rng = np.random.default_rng(41)
+        for width in (1, 2):
+            values = rng.integers(0, 65536, 2400, dtype=np.uint16)
+            values[::3] &= 0xff83
+            values[::7] = 0
+            heights = rng.integers(0, 4, len(values), dtype=np.uint16)
+            valid = [i for i, value in enumerate(values) if int(value) & 0xff80]
+            expected = values.copy()
+            for i, value in enumerate(values):
+                if heights[i] and not int(value) & 0x7c:
+                    color = int(value) & 0xff80
+                    if not color:
+                        nearest = min(valid, key=lambda j: (abs(i - j), j))
+                        color = int(values[nearest]) & 0xff80
+                    expected[i] = color | 4
+            tail = b"x"
+            self.assertEqual(_repair_pwv5_visibility(
+                values.astype(">u2").tobytes() + tail,
+                heights.astype("<u2" if width == 2 else "u1").tobytes(),
+                "linear-u16le" if width == 2 else "u8"),
+                expected.astype(">u2").tobytes() + tail)
+
     def test_repair_is_track_agnostic_and_preserves_true_silence(self):
         packed = bytes.fromhex("e07c 0000 0384")
         overview = struct.pack("<HHH", 100, 0, 30)
@@ -137,6 +161,60 @@ class NativeDeckContract(unittest.TestCase):
 
     def test_library_exists_and_has_stable_abi(self):
         self.assertTrue(native_library_path().is_file())
+
+    def test_aac_and_alac_native_playback_and_seek(self):
+        for codec in ("aac", "alac"):
+            with self.subTest(codec=codec):
+                path = Path(self.temp.name) / f"native-{codec}.m4a"
+                subprocess.run([
+                    "afconvert", "-f", "m4af", "-d", codec,
+                    str(self.audio), str(path)], check=True, capture_output=True)
+                before = _sha256(path)
+                errors = []
+                slot = lambda _, message: errors.append(message)
+                self.deck.errorOccurred.connect(slot)
+                try:
+                    self.deck.setSource(QUrl.fromLocalFile(str(path)))
+                    self.deck.play()  # Play before open/format negotiation finishes
+                    self._wait_until(lambda: self.deck.position() > 200)
+                    self.deck.setPosition(1000)
+                    self._wait_until(lambda: self.deck.position() > 1200)
+                    self.deck.pause()
+                    self.assertEqual(errors, [])
+                    self.assertEqual(_sha256(path), before)
+                finally:
+                    self.deck.errorOccurred.disconnect(slot)
+
+    def test_failed_source_can_retry_play_after_file_becomes_readable(self):
+        path = Path(self.temp.name) / "not-ready.wav"
+        path.write_bytes(b"not an audio file")
+        errors = []
+        self.deck.errorOccurred.connect(lambda _, message: errors.append(message))
+        self.deck.setSource(QUrl.fromLocalFile(str(path)))
+        self.deck.play()
+        self._wait_until(lambda: bool(errors))
+        self.assertNotEqual(self.deck.playbackState(), PlaybackState.PLAYING)
+        shutil.copyfile(self.audio, path)  # disposable recovery fixture only
+        self.deck.play()  # no second selection or setSource call
+        self._wait_until(lambda: self.deck.position() > 200)
+        self.assertEqual(len(errors), 1)
+
+    def test_play_from_nonzero_position_never_rewinds_visual_clock(self):
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        for _ in range(5):
+            self.deck.pause()
+            self.deck.setPosition(1000)
+            QTest.qWait(50)
+            start = self.deck.diagnostic_visual_frame()
+            self.deck.play()
+            frames = [start]
+            for _ in range(80):
+                QTest.qWait(1)
+                frames.append(self.deck.diagnostic_visual_frame())
+            self.assertGreaterEqual(min(frames), start)
+            self.assertEqual(frames, sorted(frames))
+            self.assertGreater(frames[-1], start)
 
     def test_load_play_seek_ramp_and_teardown_leave_source_untouched(self):
         before = _sha256(self.audio)
@@ -226,6 +304,91 @@ class NativeDeckContract(unittest.TestCase):
             pb.player.synchronize()
             QTest.qWait(150)
             self.assertEqual(ended, ["native-end"])
+        finally:
+            pb.shutdown()
+            pb.close()
+
+    def test_browser_replacement_keeps_playing_and_rapid_load_uses_latest_track(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb.audio.setVolume(0.0)
+        pb._deck_volume = 0.0
+        try:
+            with mock.patch.object(pb, "_start_waveform"):
+                pb.play_track("first", self.audio, autoplay=True)
+                self._wait_until(lambda: pb.is_playing() and pb.player.position() > 30)
+                pb.play_track("second", self.audio, autoplay=None)
+                self.assertTrue(pb._pause_pending)
+                pb.play_track("third", self.audio, autoplay=None)
+                self._wait_until(lambda: pb.current_track() == "third" and pb.is_playing())
+                self.assertTrue(pb._ordinary_playback_requested)
+                self._wait_until(lambda: pb.player.position() > 60)
+                pb.toggle()
+                self.assertTrue(pb._pause_pending)
+                # Loading during a user-requested fade to pause stays paused,
+                # even though the native decoder still reports PLAYING.
+                pb.play_track("paused", self.audio, autoplay=None)
+                QTest.qWait(120)
+                self.assertEqual(pb.current_track(), "paused")
+                self.assertFalse(pb.is_playing())
+                self.assertFalse(pb._ordinary_playback_requested)
+        finally:
+            pb.shutdown()
+            pb.close()
+
+    def test_browser_replacement_preserves_pending_play_and_exact_first_beat(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb.audio.setVolume(0.0)
+        pb._deck_volume = 0.0
+        try:
+            with mock.patch.object(pb, "_start_waveform"):
+                pb.play_track("waiting", self.audio, analysis_path="synthetic-grid", autoplay=True)
+                self._wait_until(lambda: pb.player.duration() > 0)
+                self.assertFalse(pb.is_playing())
+                pb.play_track("latest", self.audio, analysis_path="synthetic-grid", autoplay=None)
+                self.assertTrue(pb._pending_should_play)
+                pb._on_analysis_manifest(str(self.audio), "synthetic-grid", pb._analysis_generation,
+                                         {"beats": [[1, 375, 120.0]],
+                                          "provenance": {"grid": "rekordbox"}})
+                self._wait_until(pb.is_playing)
+                self.assertEqual(pb._cue_ms, 375)
+                self._wait_until(lambda: pb.player.position() > 400)
+                # A refill/activation PAUSED snapshot must not drop ordinary intent.
+                pb.player.pause()
+                self.assertTrue(pb._ordinary_playback_requested)
+                pb.play_track("refill", self.audio, autoplay=None)
+                self._wait_until(pb.is_playing)
+        finally:
+            pb.shutdown()
+            pb.close()
+
+    def test_browser_replacement_does_not_latch_momentary_cue(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb.audio.setVolume(0.0)
+        pb._deck_volume = 0.0
+        try:
+            with mock.patch.object(pb, "_start_waveform"):
+                pb.play_track("paused", self.audio, autoplay=None)
+                self._wait_until(lambda: pb.player.duration() > 0)
+                self.assertFalse(pb.is_playing())
+                pb._cue_press()
+                self._wait_until(pb.is_playing)
+                self.assertFalse(pb._ordinary_playback_requested)
+                pb.play_track("replacement", self.audio, autoplay=None)
+                self._wait_until(lambda: pb.current_track() == "replacement" and not pb._pause_pending)
+                QTest.qWait(100)
+                self.assertFalse(pb.is_playing())
+                pb._cue_release()
+                self.assertFalse(pb.is_playing())
+                pb._cue_press()
+                self._wait_until(pb.is_playing)
+                pb.toggle()  # Play latches the preview into ordinary playback.
+                pb._cue_release()
+                pb.play_track("latched-replacement", self.audio, autoplay=None)
+                self._wait_until(lambda: pb.current_track() == "latched-replacement" and pb.is_playing())
+                self.assertTrue(pb._ordinary_playback_requested)
         finally:
             pb.shutdown()
             pb.close()
@@ -345,6 +508,51 @@ class NativeDeckContract(unittest.TestCase):
         self.assertFalse(self.deck.set_analysis(packed, 41))
         self.assertEqual(self.deck.diagnostic_analysis_shape(), (0, 0.0))
         self.assertTrue(self.deck.set_analysis(packed, 42))
+
+    def test_late_color_stream_upload_cannot_replace_new_track(self):
+        detail = {"_blue_detail": bytes([31]) * 150,
+                  "_rgb_detail": bytes.fromhex("e47c") * 150,
+                  "_detail_bands": bytes([30, 40, 50]) * 150}
+        self.deck.begin_track(41)
+        self.assertTrue(self.deck._set_waveform_streams(detail, 150, generation=41))
+        self.deck.begin_track(42)
+        self.assertFalse(self.deck._set_waveform_streams(detail, 150, generation=41))
+        self.assertEqual(self.deck.diagnostic_analysis_shape(), (0, 0.0))
+        self.assertTrue(self.deck._set_waveform_streams(detail, 150, generation=42))
+        self.assertEqual(self.deck.diagnostic_analysis_shape(), (150, 150.0))
+
+    def test_native_detail_delivery_never_builds_unused_qt_envelope(self):
+        from desktop.player import PlayerBar
+        from soundbox import track_analysis as ta
+        from soundbox.waveform_detail import DETAIL_DIVISORS
+        pb = PlayerBar()
+        pb.audio.setVolume(0.0)
+        try:
+            self.assertTrue(pb.wave._native_rendering)
+            pb._src_path = str(self.audio)
+            pb._track_id = "rapid-cache"
+            minimum = struct.pack("<h", -18000) * 240000
+            maximum = struct.pack("<h", 21000) * 240000
+            sections, count = ta._range_mip_sections(minimum, maximum, DETAIL_DIVISORS)
+            detail = {"rate": 1000, "base_count": count, "encoding": ta.RANGE_MIP_ENCODING,
+                      "mip_divisors": list(DETAIL_DIVISORS),
+                      "mip_counts": [(count + d - 1) // d for d in DETAIL_DIVISORS],
+                      "range_min_mips": [sections[f"detail_minimum_d{d}"] for d in DETAIL_DIVISORS],
+                      "range_max_mips": [sections[f"detail_maximum_d{d}"] for d in DETAIL_DIVISORS]}
+            for generation in range(1, 5):
+                pb._analysis_generation = generation
+                pb.player.begin_track(generation)
+                pb.player.set_audio_detail(detail, generation)
+                # Production delivery runs on the UI thread. This asserts the
+                # absence of O(track duration) Qt work, without a timing flake.
+                with mock.patch("desktop.player.array", side_effect=AssertionError("unused Qt envelope")):
+                    pb._on_analysis_detail(str(self.audio), "", generation,
+                                           {"_audio_detail": detail, "_native_uploaded": True})
+                self.assertEqual(pb.player.diagnostic_detail_shape(), (240000, 1000.0))
+                self.assertFalse(pb.wave._audio_detail)
+        finally:
+            pb.shutdown()
+            pb.close()
 
     def test_fresh_analysis_promotes_one_full_resolution_surface(self):
         self.deck.set_analysis({
@@ -802,6 +1010,51 @@ class NativeDeckContract(unittest.TestCase):
         self.assertTrue(np.all(counts >= 1), counts)
         self.assertTrue(np.all(counts <= 3), counts)
 
+    def test_rgb_palette_is_not_dimmed_by_zero_compact_height(self):
+        import numpy as np
+
+        self.host.resize(800, 166)
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.set_analysis({"heights": [.5] * 300,
+                                "colors": [[255, 255, 255]] * 300,
+                                "sample_rate": 150.0})
+        self.deck.set_audio_detail({
+            "rate": 1000.0, "base_count": 2000,
+            "mip_divisors": [1], "mip_counts": [2000],
+            "range_min_mips": [struct.pack("<2000h", *([-8000] * 2000))],
+            "range_max_mips": [struct.pack("<2000h", *([8000] * 2000))],
+            "encoding": "song-anchored-extrema-i16le-v1",
+        })
+        self.deck.set_waveform_mode("RGB")
+        self.deck.set_visual_position(500, True)
+        palettes = ((7, 0, 0), (0, 7, 0), (0, 0, 7), (7, 7, 0),
+                    (7, 0, 7), (0, 7, 7), (7, 7, 7), (0, 6, 2))
+        for zoom in (32, 128):
+            self.deck.set_zoom(zoom)
+            for red, green, blue in palettes:
+                frames = []
+                for height in (31, 0):
+                    code = (red << 13) | (green << 10) | (blue << 7) | (height << 2)
+                    self.assertTrue(self.deck._set_waveform_streams({
+                        "_blue_detail": bytes([31]) * 300,
+                        "_rgb_detail": code.to_bytes(2, "big") * 300,
+                        "_detail_bands": bytes([30, 40, 50]) * 300,
+                    }, 150.0))
+                    self.deck.diagnostic_begin_frame_trace(1, 64)
+                    self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                        "presentation_completed_frames"] == 1)
+                    output = Path(self.temp.name) / f"palette-{time.time_ns()}"
+                    self.deck.diagnostic_finish_frame_trace(output)
+                    manifest = json.loads((output / "manifest.json").read_text())
+                    frame = np.frombuffer((output / "frames.bgra").read_bytes(), dtype="u1")
+                    frames.append(frame.reshape(manifest["crop_height_pixels"], 64, 4))
+                # Signed detail owns identical geometry. This also executes the
+                # complete production kernel, catching a disconnected helper.
+                np.testing.assert_array_equal(frames[0][30:-30, 5:25],
+                                              frames[1][30:-30, 5:25])
+                self.assertGreater(int(frames[1][30:-30, 5:25, :3].max()), 150)
+
     def test_synthetic_drawables_translate_and_recenter_at_every_zoom(self):
         """Rendered pixels, not shader strings; no live library/audio fixture."""
         import numpy as np
@@ -860,23 +1113,54 @@ class NativeDeckContract(unittest.TestCase):
             for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500):
                 with self.subTest(mode=mode, zoom=zoom):
                     self.deck.set_zoom(zoom)
-                    first = capture(50000)
-                    pixel_rate = round(zoom*scale)
-                    common = math.gcd(44100, pixel_rate)
-                    shift = pixel_rate // common
-                    self.assertLessEqual(shift, 128)
-                    moved = capture(50000 + 1000/common)
-                    # Preview is audio-frame quantized. Choose travel that is
-                    # exactly representable in BOTH samples and drawable pixels,
-                    # rather than mistaking rounded preview time for a render bug.
-                    # Ignore markers, playhead and grid margins.
-                    a = first[30:-30, 5+shift:105+shift, :3].astype(int)
-                    b = moved[30:-30, 5:105, :3].astype(int)
-                    self.assertLessEqual(int(np.abs(a-b).max()), 2)
-                    self.assertGreater(int(a.max()), 40, "blank renders must not pass")
-                    capture(0)  # forces a different attribute buffer center
-                    returned = capture(50000)
-                    np.testing.assert_array_equal(first, returned)
+                    # Include a non-whole-second origin at the reported 864
+                    # stop: exact-second phases alone can miss a cell boundary.
+                    for base in ((50000, 42704) if zoom == 864 else (50000,)):
+                        first = capture(base)
+                        point_rate = round(zoom)
+                        common = math.gcd(44100, point_rate)
+                        shift = round(point_rate / common * scale)
+                        self.assertLessEqual(shift, 128)
+                        moved = capture(base + 1000/common)
+                        # Preview is audio-frame quantized. Choose travel that is
+                        # exactly representable in BOTH samples and logical points,
+                        # rather than mistaking rounded preview time for a render bug.
+                        # Ignore markers, playhead and grid margins.
+                        a = first[30:-30, 5+shift:105+shift, :3].astype(int)
+                        b = moved[30:-30, 5:105, :3].astype(int)
+                        self.assertLessEqual(int(np.abs(a-b).max()), 2)
+                        self.assertGreater(int(a.max()), 40, "blank renders must not pass")
+                        if mode in ("RGB", "BLUE") and base == 50000:
+                            # Stay inside both the physical-pixel wide quantum
+                            # and the logical-point close quantum on this screen.
+                            # Opaque fill AND fine contour retain their pixels.
+                            phase = capture(base + 200.0 / zoom)
+                            np.testing.assert_array_equal(
+                                first[30:-30, 5:105, :3],
+                                phase[30:-30, 5:105, :3])
+                        if mode in ("RGB", "BLUE") and zoom <= 384 and base == 50000:
+                            # A 0.75-physical-pixel move must advance exactly one
+                            # pixel, not remain frozen at the old two-pixel Retina
+                            # quantum. The aligned contour must retain its pixels.
+                            one_pixel = capture(base + 750.0 / (zoom * scale))
+                            delta = np.abs(
+                                first[30:-30, 6:106, :3].astype(int)
+                                - one_pixel[30:-30, 5:105, :3].astype(int))
+                            self.assertLessEqual(int(delta.max()), 2)
+                        capture(0)  # forces a different attribute buffer center
+                        returned = capture(base)
+                        np.testing.assert_array_equal(first, returned)
+                        # Regenerate around a DIFFERENT nearby origin, then return
+                        # while retaining that overlapping tile. Returning straight
+                        # from zero only recreated the same origin and missed cell
+                        # boundary rounding that changed the outline during playback.
+                        for origin_offset in (-137.27, 83.47):
+                            capture(0)
+                            capture(base + origin_offset)
+                            overlap = capture(base)
+                            delta = np.abs(first.astype(int) - overlap.astype(int))
+                            self.assertLessEqual(int(delta.max()), 2,
+                                f"overlapping tile changed: {mode} {zoom} {origin_offset}")
         self.assertEqual(_sha256(audio), before)
 
     def test_frame_trace_refuses_file_io_until_playback_stops(self):

@@ -1,9 +1,52 @@
 # SoundBox roadmap
 
-Updated October 2, 2026. Active work and acceptance only; completed work is
-summarized below. Historical experiments and release diaries remain in Git and
-specialist documents, not in the task queue. No numeric quality score substitutes
-for evidence. For current validation and installed revision, see [HANDOFF.md](HANDOFF.md).
+Updated October 9, 2026. Current priorities and remaining acceptance are below;
+completed behavior is summarized separately. Historical experiments belong in
+the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
+
+## Current focus — normal use for one to two weeks
+
+Sonny accepted the installed October 9 build and plans to use it normally for
+one to two weeks. The waveform, background preparation, rapid-load and
+playback-preserving replacement work is complete. No further renderer retuning,
+cache rebuild or device experiment is queued for this observation period.
+Investigate concrete new reports if they arise; do not turn the deferred items
+below into unsolicited changes to the accepted build.
+
+Broader use is still the check for workload-specific UI hesitations and physical
+motion perception. Exact rekordbox pixel/3BAND calibration, the retained profile
+approximation and fallback/codec equivalence are not certified by the automated
+gate. Cloud-only tracks still depend on their provider supplying audio bytes.
+The separate device and public-release gates below remain future work.
+Retain the intermittent native-test observations in HANDOFF if they recur;
+passing reruns do not establish their cause.
+
+## Completed player and preparation work — October 2–9
+
+- Accepted RGB/BLUE motion and close detail, BLUE color integration, stable
+  overlapping render tiles, and quiet RGB color recovery across the encoded
+  palette. 3BAND retains its imported rows and existing layer policy. See the
+  [zoom review](waveform-zoom-review-2026-10.md),
+  [color comparison](waveform-reference-check-2026-10.md) and
+  [test audit](waveform-test-audit-2026-10.md).
+- First-Play visual position no longer extrapolates before its launch point.
+  Native cloud readiness failures explain the cause and permit Play to retry.
+  The observed cold AAC/ALAC delay was SeaDrive hydration, confirmed by Sonny;
+  a ready waveform does not make offloaded audio local.
+- Eligible local legacy waveforms upgrade automatically in the background,
+  retaining imported streams, manual grids and DB cues. AAC/ALAC compact detail
+  uses native-rate Qt decoding when required. The completed library audit
+  verified 2,712 upgrades with no checksum/grid/cue failures and no remaining
+  eligible local work. Offloaded/incomplete records retain valid older caches.
+  No whole-library invalidation or manual track-by-track loading is needed.
+- Rapid loading avoids unused UI-thread detail expansion, redundant cue polish
+  and scalar color-row walks; generation checks reject stale display uploads.
+  The foreground probe made 72 requests across 24 local tracks. Its measured
+  UI heartbeat bound is evidence for that workload, not a universal latency promise.
+- Browser loads preserve ordinary playback: playing decks start the replacement
+  at its first beat; paused/empty decks stay paused. Rapid replacements, pending
+  media/grid, pause fades and momentary versus latched CUE have regressions.
+  Previous/next remain explicit play commands. See [PLAYER](PLAYER.md).
 
 ## Product direction
 
@@ -26,51 +69,7 @@ original MA446 workflow has physical acceptance; newer lifecycle/performance
 corrections still have the gates below. Expansion toward a rekordbox export-mode
 alternative remains a later direction, not permission to ship CDJ research.
 
-### Rekordbox-first waveform detail (installed locally September 29)
-
-Sonny initially selected saved rekordbox waveforms first. His September 29 evening
-references make detailed visual fidelity the acceptance boundary: a filled
-BLUE/RGB envelope is rejected, and storage savings must preserve the supplied
-rekordbox close detail, 3BAND layers, zoom transitions and motion. The
-[reuse audit](waveform-reuse-audit-2026-09.md) records the 11.57 GB cache inventory,
-renderer dependencies, fresh three-mode Nuclear Bass Face screenshots, a zoom
-recording, isolated native candidates and ordered migration gates. Native capture
-worked in the September 29 session, and Sonny accepted the isolated candidate. Import-first preparation,
-compact V5 supplements, on-demand conversion and renderer changes are implemented
-and installed in the personal app; exact build and validation evidence are in HANDOFF.
-Four complete-cache measurements save 65–66%, not a library-wide guarantee.
-The subsequent thick/jagged feedback is addressed by finer close reconstruction
-and a physical-pixel minimum stroke; the cache profile stays unchanged.
-September 30: Sonny accepts that detail but reports renewed color pulsing. A
-color-weight normalization correction passes CPU/native gates and is installed
-with the stable signature. All-stop fractional-phase/recenter comparisons pass
-and 3BAND is unchanged, but remaining playback pulses led to the October 1
-complete-corner sampling change at RGB/BLUE 256/384/576/864. Sonny calls B
-“rock solid” in the single-backend live A/B preview. The one-pixel footprint,
-detail, clocks, other zooms and 3BAND remain unchanged. Joint coverage remained
-experimental at that checkpoint. Broader track/panel/rekordbox acceptance remains open. See the
-[pulse audit](waveform-reuse-audit-2026-09.md#september-30-color-pulse-correction).
-The October 1 [test audit](waveform-test-audit-2026-10.md) adds direct Metal
-oracles and synthetic drawable regression coverage, exposes the omitted Cocoa
-gate, and corrects clipped color-moment cancellation. The signed-coverage
-approximation was recorded as an expected failure at that checkpoint. October 2
-corrects the final coverage intersection and removes the expected-failure label;
-the unified release gate requires every discovered test to run and pass.
-The supplied October 1 [reference verification](waveform-reference-check-2026-10.md)
-confirms intact full-rate 3BAND imports but leaves exact layer geometry unverified.
-BLUE's subsequent color correction widens the edge hue range and replaces the
-unconditional white center with a width-dependent cyan/white interior. The
-reference-gamut and thin-interval GPU regressions now pass, including a mutation
-that restores the washout. Sonny accepted the narrowed
-white center in the live comparison, and it is installed. Exact color parity and
-broader track acceptance remain open. See the [release test guide](test-release-gate.md)
-for the corrected coverage and required frozen fixtures.
-The recognized MP3 source origin is coupled to native playback/seek/duration;
-unknown headers retain their old origin. Exact fallback equivalence, every
-codec/header variant, and long-session physical-panel acceptance remain outside
-these measurements. No whole-library invalidation or eager conversion is planned.
-
-## Device follow-up: observe playback; retain the durability finding
+## Device follow-up — deferred physical acceptance
 
 User reports stable playback so far with database auto-update off and preferences
 persisting after normal shutdown. Continue normal use; capture diagnostics and
@@ -96,8 +95,8 @@ iPod settings changes on September 28; no new firmware experiment is authorized.
   and restores missing owned Rockbox files. Installed and relaunched at 21:58
   with unchanged curation after 983 tests/four skips and the full render gate.
   Those development builds both derived number 115 from the same dirty Git
-  base; archived fingerprints distinguish them. The handoff records the final
-  release installation. The first real one-title
+  base; archived fingerprints distinguish them. The September 28 release handoff
+  in Git records that installation. The first real one-title
   incremental run committed generation 63 in 26.76 s (18.30 planning + 8.46 commit),
   reading 69.56 MB and retaining 2880 unchanged songs. The preceding two-title
   run took 1942.83 s and read 40.75 GB. This accepts that edit path; no-op,
@@ -120,7 +119,7 @@ iPod settings changes on September 28; no new firmware experiment is authorized.
 Completed disk/firmware/export checks and remaining boundaries:
 [Rockbox OOM investigation](rockbox-playlist-oom-2026-09.md).
 
-## 1. Close correctness gaps before structural extraction
+## 1. Completed correctness groundwork
 
 Findings and source evidence: [software audit](software-audit-2026-09.md).
 
@@ -145,9 +144,9 @@ Findings and source evidence: [software audit](software-audit-2026-09.md).
   disk-space pauses explain their cause and resume threshold. Rekordbox relocation
   continues to use stable IDs and refreshed paths; no database watcher was added.
 
-Exit: deterministic failure/race tests, full check gate and safe installed-app
-verification for runtime changes. Do not mix these fixes with device-format or
-renderer redesign.
+These correctness changes are shipped. Future runtime changes retain the
+deterministic failure/race tests, full release gate and safe installed-app
+verification; physical acceptance remains listed separately below.
 
 ## 2. Finish lifecycle integration and measure performance
 
@@ -193,8 +192,9 @@ The existing-feature public/personal split is implemented with explicit profiles
 a typed first-party provider boundary, command/scheduler admission and package
 inspection. Public excludes the existing SoundCloud implementation and `yt_dlp`;
 personal preserves the original workflows. Both retain the same core and state.
-See [the contract](release-boundaries.md) and [HANDOFF.md](HANDOFF.md) for final
-artifact/install evidence. Public distribution clearance remains a separate gate.
+See [the contract](release-boundaries.md) for composition and distribution
+boundaries; [HANDOFF.md](HANDOFF.md) records the current personal installation.
+Public distribution clearance remains a separate gate.
 
 - [x] A4 storage boundary: `soundbox.artwork` owns local ArtCache/results/default
   photos and works without provider imports/network. Compatibility re-exports

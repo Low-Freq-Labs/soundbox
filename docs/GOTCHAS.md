@@ -69,6 +69,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   allocation, file I/O, or blocking lock may enter `renderCallback`. Commands
   are atomics/generation-tagged; AVAudioFile runs only on the decode thread.
   Metal runs from CAMetalDisplayLink, not `PlayerBar._scroll_timer`.
+- **A future CoreAudio timestamp must not rewind a new playback run.** Keep
+  extrapolation for steady playback, but clamp its lower bound to the actual
+  Play/seek source frame until presentation catches up. At a nonzero start,
+  clamping only to zero caused a reproducible roughly 13-ms visual backstep.
+- **AVAudioFile can hide cloud ENEEDAUTH behind an opaque `wht?` error.** Probe
+  one source byte only on the decode thread for CloudStorage paths, then allow
+  at most two cancellable three-second ENEEDAUTH waits. Other failures surface
+  immediately. Cancellation/source replacement interrupts the waits; it cannot
+  forcibly interrupt an OS read. Reset transport/gain completions on failure,
+  expose the cause in status/tooltip, and let Play reopen the failed audio source.
 - **Autoplay intent is not the polled PLAY button state.** Native seek/refill
   can briefly report PAUSED, and activation can observe that interval. The
   terminal PAUSED snapshot and ended flag can also arrive on separate polls.
@@ -79,6 +89,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   before deferred advancement so source replacement cannot wait for a fade on
   an already stopped engine. A cue promoted with Play/Space is ordinary playback
   and retains autoplay eligibility after cue release.
+- **Browser replacement preserves intent before fading the old source.** Use
+  `play_track(autoplay=None)` for browser loads; False explicitly loads paused
+  and True explicitly plays. Preserve pending grid/media and replacement-fade
+  intent across rapid selections. Do not infer it from a polled native state or
+  let an unlatched CUE preview become ordinary playback.
 - **A static Metal deck must not own a permanent display loop.** Playback,
   loading, preview, and live resize wake the link; every other mutation marks
   one dirty frame and the link pauses again. Python snapshot polling is 8 ms
@@ -94,9 +109,26 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Imported analysis comes first.** Complete, equal-length 150-Hz PWV3/5/7 plus grid
   bypass FFT/filterbank analysis. Decode only the 1-ms signed midpoint supplement;
   persist its base once and build mips in memory. Compact V5 omits spectral_24.
-  Old V5 remains ready/playable; convert only selected local tracks on demand or
-  explicit reanalysis. Do not invalidate every cache at launch. Failure or
+  Old V5 remains ready/playable while eligible local records convert one at a
+  time in the background or on selection. Include the compact model in receipt
+  policy, recheck completed upgrades after waits, and never fall back to a full
+  analyzer for a failed compact replacement. Do not invalidate caches at launch. Failure or
   interruption preserves the prior record and manual/DB metadata authority.
+- **A worker upload can still stall Qt if delivery rebuilds its detail.** The
+  native host must skip the unused Qt `array` envelope, whose per-cell generator
+  ran on the UI thread. Keep packed color repair vectorized and check cancelled
+  workers after detail reads. Display-stream publication must reject stale
+  generations under the native render lock, just like signed detail. Cue-button
+  style polish is needed only when the filled property changes.
+- **libsndfile does not decode AAC/ALAC here.** Complete imports still need their
+  compact supplement. Use QAudioDecoder at native rate/channels and the same
+  1-ms reducer; never silently retry an unsupported primary decoder forever or
+  run full spectral analysis just to obtain that supplement.
+- **Zero compact height does not mean black RGB.** PWV5 can carry valid color
+  while its five-bit height rounds to zero and signed audio detail remains
+  visible. Cancel positive color weights exactly and use the authored RGB
+  color when weight is zero; never blend a fabricated black into quiet colors.
+  This is color recovery only, not permission to alter geometry or coverage.
 - **BLUE/RGB require signed intervals.** Filling back to zero destroys the thin
   carrier. Close cells are held on the song clock and resolved with the
   spatial profile integral. Current upload is linear with the existing 0.84
@@ -123,8 +155,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   one footprint-selected peak level, and one-pixel coverage. Signed intervals
   intersect before integration, as documented below. Compact
   mips are `1/2/3/4/6/8/12/16/24/32/48/64`; old V5 retains its persisted ladder.
-  The three widest and the 384–1500 close zooms use half a pixel of source
-  support; the middle family uses one pixel. This supersedes the four-pixel rule and artificial
+  The three widest zooms use half a pixel of source support; all stops from
+  64 through 1500 use one physical pixel. This supersedes the four-pixel rule and artificial
   divisor-dependent height compensation. Never blend adjacent mips or blur
   final pixels to hide sampling errors.
 - **Compact RGB codes are already PWV5 channel values.** SoundBox's
@@ -150,12 +182,22 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **The scrolling surface must be fixed in song space, not reconstructed at a
   new playback phase each frame.** Print height and amplitude-weighted RGB onto
   a private song-coordinate attribute lattice with four attributes per
-  physical pixel at every zoom. Whole-pixel close translation was exact after
-  integer alignment but made dense one-to-two-pixel spikes visibly strobe.
-  Interpolate attributes for continuous subpixel motion. The buffer needs a
+  physical pixel at every zoom. RGB/BLUE round only their display offset to
+  physical pixels through 384 points/s and logical points at 576–1500, paired
+  with the October 6 accepted RGB conservative column presentation. Using
+  logical points at 256/384 made visible steps; simply restoring fractional
+  motion with conservative columns brought severe fuzz back. The smaller
+  physical-pixel increment was accepted. 3BAND retains continuous subpixel motion. Historical
+  whole-pixel probes used different detail/coverage rules and were rejected.
+  Do not infer current acceptance from those old measurements. The buffer needs a
   generous guarded margin scaled by the attribute density and absolute
   integer-song-coordinate recentering so regeneration cannot create a viewport
   seam.
+- **Recenter tests must compare different overlapping origins.** Returning to
+  the identical origin misses floating-point source-cell boundary drift. Generate
+  attributes from canonical 128-attribute clock blocks, preserving the same
+  integer anchors and local phases across tiles. Never hide outline changes by
+  averaging source cells. See the [October 2 review](waveform-zoom-review-2026-10.md).
 - **Color's premultiplication weight is not reconstructed signed amplitude.**
   Keep `lowerAndColorWeight.y` with the amplitude-weighted RGB through every
   lattice interpolation. The magnitude of interpolated signed bounds can be
@@ -168,7 +210,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   and fails against the old formula; native motion checks cover the later fixes.
 - **The former four-pixel close footprint is historical.** That rule addressed
   the old dense detail ladder. The September 29 reference established held
-  1-ms cells, now with a half-pixel close footprint instead; do not restore the older
+  1-ms cells, selected against one physical pixel in the October 2 follow-up; do not restore the older
   broadening or compensate it with per-divisor height gain.
 - **Static drawable callbacks are not pixel acceptance.** macOS can expose the
   correct static Metal surface without a nonzero presentedTime callback.
@@ -186,12 +228,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   supplied `1536`
   references proved that monotone Hermite rounded the native straight-sided
   carrier peaks. Do not extend the averaging B-spline into the close range.
-- **Antialias coverage must remain continuous through final compositing.** A
+- **Keep coverage policy explicit and test the final compositor.** A
   hard minimum vividness for every nonzero fragment turns a contour crossing a
   pixel into an on/off color flash, even when the song coordinate itself is
   perfectly smooth. Use the cubic ease-out only for the small overview, where
-  true subpixel peaks need visibility. The scrolling lane must use continuous
-  geometric coverage without a visibility boost; at 24 px/s the ease-out exaggerated
+  true subpixel peaks need visibility. Do not apply that curve to the scrolling
+  lane; at 24 px/s the ease-out exaggerated
   20% physical coverage to nearly 49%, making saturated red/orange edges pulse.
   Coverage policy may change compositing only—never height, hue, LOD, detail
   density, or timing. This rule applies to both sides of a signed interval:
@@ -199,8 +241,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   coverage into fifths. Integrate the pointwise upper/lower intersection with
   the same clipped moments used for visible color. The older minimum of two
   separate edge integrals overfilled pixels and was removed October 2. Keep
-  the final fragment covered by a numerical oracle: a correct helper followed
-  by the old alpha override is still wrong. Mutation tests restore that error.
+  the final fragment covered by its declared numerical oracle: BLUE retains
+  exact joint area, while the October 6 RGB policy deliberately increases
+  coverage in occupied physical columns and retains conditional visible color.
+  It must never reduce a minimum-width stroke or fill zero-area pixels. This
+  is conservative presentation, not a fix to the exact-area mathematics.
+  Mutation tests protect both the exact BLUE resolve and the accepted RGB policy.
   The interval's minimum full width is one physical pixel before coverage;
   it must follow drawable scale, not the old fixed 3.6-point width. This keeps
   the two half-pixel AA supports from overlapping. The historical High & Scared close-RGB phase sweep cut the aligned
@@ -219,8 +265,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   exposes the same defect more strongly because its white/cyan/blue radial
   color depends on the moving signed center and width. Integrate clipped-linear
   coverage moments per quarter-pixel segment, accumulate only visible color in
-  premultiplied linear light, and evaluate BLUE's radial field at the local
-  coverage centroid. Resolve coverage and color together so neither can use an
+  premultiplied linear light. Split BLUE at coverage/radial branch changes and
+  integrate its nonlinear color field with four-point Gauss-Legendre quadrature;
+  evaluating only the coverage centroid is insufficient. Resolve coverage and color together so neither can use an
   independently averaged silhouette. A temporary flat BLUE fill
   can diagnose this class of defect but is not a fix because it discards PWV3
   depth information.
@@ -271,7 +318,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   reconstruction erased.
 - **Do not cure source aliasing by widening the final image filter.** The
   earlier four-pixel close-source rule is historical. Current compact detail
-  uses the half-pixel close source footprint and final pixel coverage. Keep any needed
+  uses the physical-pixel close source footprint and final pixel coverage. Keep any needed
   reconstruction in song space; no adjacent-LOD blends or temporal blur.
 - **Inactive preview is an idempotent native transition.** PlayerBar publishes
   coarse transport text positions during ordinary playback. Those
@@ -470,7 +517,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   reject reserved/unknown values, and preserve I–P even though the current
   panel shows A–H.
 - Player interaction and transport semantics are specified in `PLAYER.md`.
-  Keep double-click = the only browser load gesture (paused), Space =
+  Keep double-click = the only browser load gesture (preserving playback), Space =
   play/pause for the already-loaded deck only, C = momentary CUE, one decoder
   seek on drag release, and first-Rekordbox-beat loading when a valid imported
   grid exists. A missing/invalid imported grid uses the SoundBox fallback with
@@ -597,8 +644,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **A ready cache can still preserve an early Rekordbox fallback.** Rekordbox
   may finish PWV3/PWV5/PWV7 after SoundBox has already stored a structurally
   complete V5 record. The recurring scan must use stream provenance to keep
-  complete Rekordbox-backed modes on the manifest-only path; only modes still
-  marked as SoundBox fallbacks may probe the current read-only ANLZ payload.
+  current compact records on the manifest-only path. Legacy detail models and
+  modes still marked as SoundBox fallbacks may probe the read-only ANLZ payload;
+  receipts suppress repeated unchanged ineligible probes.
+  Eligibility uses packed-only stream/grid reads; never expand every track into
+  per-sample Python colors or generic ANLZ objects during discovery.
   A newly valid exact stream queues that one atomic V5 recook. The explicit
   track-row Reanalyze action remains the escape hatch and bypasses `is_ready`
   for only the requested track. Both routes retain the old playable cache until
@@ -781,8 +831,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 ## Python 3.14 / build
 - **`aifc`, `audioop`, `sunau` REMOVED in Python 3.13+** → can't decode AIFF with
   stdlib. Use `soundfile` (libsndfile) — reads WAV/AIFF/FLAC/MP3 (NOT ALAC/.m4a).
-- **ALAC/AAC V5 analysis uses `qt_detail_peaks()` (QAudioDecoder =
-  same ffmpeg backend that plays the file).** THREE traps, don't regress:
+- **ALAC/AAC V5 analysis uses `qt_detail_peaks()` (Qt/FFmpeg analysis only;
+  playback uses native AVAudioFile/CoreAudio).** THREE traps, don't regress:
   (1) an unreadable file reports
   its error SYNCHRONOUSLY inside `dec.start()` — check `done`/`dec.error()` BEFORE
   `loop.exec()` or the worker strands until process exit → SIGABRT; (2)
@@ -826,7 +876,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **A nearly full data volume must pause preparation, never trigger cache
   cleanup.** Full V5 audio cooking pauses below 20 GiB and resumes at
   25 GiB. A verified one-record V4→V5 reduction uses a 5/7 GiB guard because
-  it retires its larger V4 only after complete V5 verification. `library.json`,
+  it retires its larger V4 only after complete V5 verification. One-at-a-time
+  compact V5 replacements also use the migration reserve; they keep the prior
+  record until atomic publication and never escalate to full fallback cooking.
+  Schedule these ahead of full cooks that may be waiting for 25 GiB. `library.json`,
   its small rotating backups, art, and existing analysis are not expendable.
   Installer app rollbacks are temporary and only one may exist during
   verification.

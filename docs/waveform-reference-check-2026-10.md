@@ -100,3 +100,24 @@ contours and `blue-gamut-proof.json`. Recordings and source music stay outside
 version control. The test-strengthening and tiny-moment arithmetic correction
 are separate, installed work; see [test audit](waveform-test-audit-2026-10.md)
 and [HANDOFF](HANDOFF.md).
+
+## October 8 RGB color recovery — accepted
+
+The supplied SoundBox/rekordbox screenshots of HotinHere_Ruudy_Finalv2 expose
+quiet green rendered near (0,74,25) where PWV5 already carries (0,6,2)/7, or
+approximately (0,219,73). This is not evidence for a track-specific palette
+boost: compact five-bit height is zero across that passage, and the weighted
+color path fabricated black before the existing close-color blend. The quiet
+signed contour remains valid. Color-only recovery now divides every positive
+weight exactly and uses the authored color at zero weight. Source rows, contour,
+coverage, footprint, LOD, alpha and motion policies are unchanged; no recook.
+
+Sonny accepted B in the muted same-track comparison: **“B looks right.”** The
+Metal oracle covers all 512 encoded RGB combinations, thirteen zooms and five
+weights including zero/tiny values. A native drawable regression compares eight
+representative colors at zero versus full compact height with identical signed
+geometry at 32/128. Read-only same-track captures across thirteen zooms and five
+positions/phases per zoom retain all 65 BLUE and 65 3BAND frames byte-for-byte.
+The screenshots have different framing and no embedded ICC profile, so this is
+a demonstrated darkness correction, not a claim of exact RGB pixel parity with
+rekordbox. Evidence: ignored `build/palette-review/`.

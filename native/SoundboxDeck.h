@@ -127,6 +127,15 @@ int sb_deck_set_waveform_streams(
     const uint8_t *three_band_rows,
     size_t three_band_count,
     double samples_per_second);
+int sb_deck_set_waveform_streams_for_generation(
+    SBDeckRef deck, uint64_t generation,
+    const uint8_t *blue_rows,
+    size_t blue_count,
+    const uint8_t *rgb_rows,
+    size_t rgb_count,
+    const uint8_t *three_band_rows,
+    size_t three_band_count,
+    double samples_per_second);
 int sb_deck_set_waveform_mode(SBDeckRef deck, uint32_t mode);
 uint32_t sb_deck_waveform_mode(SBDeckRef deck);
 int sb_deck_set_spectral_analysis(

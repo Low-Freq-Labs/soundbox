@@ -839,7 +839,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.player_bar.toggle()
 
     def _play_row(self, index):
-        """Double-click a row → load that track without starting playback."""
+        """Double-click a row → load that track, preserving playback intent."""
         if not index.isValid() or index.row() >= len(self.model._rows):
             return
         tid = self.model._rows[index.row()].get("id")
@@ -849,7 +849,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_playback_error(self, msg: str):
         LOG.warning("Playback error: %s", msg)
-        self._flash_status("Playback error", 6)
+        status = ("Cloud file unavailable — check cloud storage"
+                  if msg.startswith("Cloud storage cannot provide ")
+                  else "Playback error — hover for details")
+        self._flash_status(status, 15)
+        if self.status_label.text() == status:
+            self.status_label.setToolTip(msg)
 
     def _player_order(self) -> list[str]:
         """Track ids in the order the user can currently see.
@@ -909,15 +914,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._play_track(track)
 
     def _load_track(self, t):
-        """Load a track paused at its first grid beat."""
-        self._open_track(t, autoplay=False, capture_autoplay=True)
+        """Load at the first grid beat, preserving ordinary playback intent."""
+        self._open_track(t, autoplay=None, capture_autoplay=True)
 
     def _play_track(self, t):
         """Load a track and start it at its first grid beat."""
         self._open_track(t, autoplay=True, capture_autoplay=True)
 
     def _open_track(
-            self, t, autoplay: bool,
+            self, t, autoplay: bool | None,
             capture_autoplay: bool = True) -> bool:
         try:
             ok = t.path.is_file()
@@ -1441,7 +1446,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context)  # edit or art
-        self.table.doubleClicked.connect(self._play_row)  # double-click = load paused
+        self.table.doubleClicked.connect(self._play_row)  # double-click preserves playback
         # ⌘R renames (inline-edits the Title of) the highlighted track.
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._rename_current)
         self.table.setAlternatingRowColors(True)

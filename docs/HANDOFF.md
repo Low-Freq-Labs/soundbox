@@ -1,112 +1,115 @@
 # SoundBox current handoff
 
-Updated October 2, 2026, America/Chicago.
+Updated October 9, 2026, America/Chicago.
 
-## Release state
+## Current release and next action
 
-Branch `main`; this handoff accompanies the coverage correction and strict release
-gate commit following **57931c8f5b16377c0c2e9494e1ca0c67cfd135b6**. Use
-`git rev-parse HEAD` for the containing repository revision. The earlier waveform,
-BLUE palette, compact import-first analysis, provider/build composition and device
-status changes remain included. The installed app's runtime fingerprint matches
-these runtime sources; its true build provenance is recorded below.
+Sonny accepted the installed build (“loving this build”) and requested wrap-up.
+The October 2–9 waveform/startup/palette/background-detail/rapid-load and
+playback-preserving browser-load work is complete. The release commit is
+identified by the subject **Stabilize waveform playback and complete background detail preparation**
+on `main`, tracking `origin/main`. No diagnostic window remains open.
 
-The old final fragment replaced correct joint interval coverage with the minimum
-of two separately averaged edges. That overfilled signed crossings. RGB/BLUE now
-composite the joint coverage and visible color directly. Source extrema, mips,
-LOD, palette, clocks and the one-pixel footprint are unchanged; no detail
-smoothing was added. 3BAND rendering is unchanged.
+Next: Sonny plans one to two weeks of normal use. Preserve this accepted build;
+respond to concrete new reports. No renderer experiment, manual cache rebuild,
+cloud download or device experiment is queued. [ROADMAP](ROADMAP.md) separates
+completed work from deferred implementation and physical/public-release gates.
 
-Sonny accepted the earlier BLUE white-center correction as “B looks right now.”
-For this additional coverage correction, his muted playback comparison feedback
-was **“hard to tell but B looks good.”** The preview is closed and the real app
-is running. This is visual feedback, not a claim of exact rekordbox parity.
+The installed personal app is **build 122**, built from dirty source based on
+`72d06f7c43abe51bb17a9939918a727b1f5e81b3`. Its signed source fingerprint is
+**4c34677dd9c7a4006b8a0cf86cebee93efab080f3ea49cdba9ec4c622550b260**.
+That fingerprint matches the released runtime sources. The repository release
+and installed signed Git revision are different: wrap-up changed documentation
+only, so the accepted app was retained without rebuilding or restamping it.
 
 ## Validation
 
-- Bare `./check.sh` passed, then final `./check.sh --native --render` passed on
-  October 2: **1076 tests, zero skips, zero expected failures**. The final run
-  includes two additional fixture-admission tests: 1035 offscreen + 41 Cocoa.
-  Native build, pyflakes and engine mypy passed; the offscreen render was
-  inspected. Build tools still emit ordinary compiler/PyInstaller warnings.
-- Both Qt phases are now mandatory in the default gate. Every discovered test
-  must run exactly once; inventories are reconciled. Missing fixtures, skipped
-  tests, expected failures and omitted tests fail the gate. The gate itself has
-  mutation tests for false success and incomplete/duplicate execution.
-- The former numerical expected failure is now a passing final-fragment oracle.
-  Independent quadrature covers signed crossings and random visible colors;
-  restoring the old alpha override demonstrably fails. GPU/compiler failures
-  remain real failures.
-- The nine offline iPod cases run against preserved metadata copies. Three
-  missing historical reference checks were replaced with a frozen current
-  Nuclear source/cache and supplied-recording frames for all three modes.
-  Hashes are pinned in `tests/fixtures/waveform-reference.json`. Private snapshots
-  are required; a checkout without them fails preflight. No routine test reads
-  the live library, source collection or devices. See
-  [test-release-gate.md](test-release-gate.md) for provisioning and scope.
-- Before/after native captures: **507 frames each**, all modes and thirteen zoom
-  stops, three song positions, four subpixel phases and recenter. All **169 3BAND
-  frames are pixel-identical**. Corrected recenter returns match exactly.
-  Mean RGB/BLUE change is below 0.55 codes/channel at each zoom; localized edge
-  differences reach 78 codes. Preview self-checks matched standalone captures.
-- Evidence: ignored `build/clean-release/`; final phase reports also retained in
-  the rollback directory's `coverage-check-reports/`. Earlier pulse/color evidence
-  remains in `build/waveform-test-audit/` and `build/waveform-pulse-investigation/`.
+Final October 9 **`./check.sh --render` passed all 1,104 tests** (1,053 offscreen
++ 51 Cocoa), zero skips/expected failures, reconciled inventories, native build,
+lint/types and visually inspected render. Runtime sources are unchanged from the
+accepted installation. Instruction-file byte parity, relative Markdown files/
+anchors, full intended diff review and `git diff --check` also pass.
+Regressions cover all-zoom drawable/Metal contracts, codec readiness and compact
+supplements, cancellation/generation rejection, automatic background upgrades,
+and playing/paused/rapid browser replacement including pending grid and CUE.
 
-## Installed app and curated state
+The earlier pre-install run failed the existing resize physical-screen-pixel
+assertion; its isolated rerun and the subsequent complete gate passed unchanged.
+Cause was not established; no assertion/threshold was weakened or skipped.
+Evidence: `build/playback-load-review/initial-native-failure.json` and
+`resize-pixels.png`. Keep this observation if that test fails again.
+The initial wrap-up gate also missed the terminal-edge event within its existing
+one-second timeout. Forty unchanged isolated repetitions passed; root cause is
+not established. Evidence: `build/wrap-oct9/initial-native-failure.json` and
+`terminal-repeat.json`. The subsequent complete release gate passed unchanged;
+no production/test code or threshold was changed.
 
-`/Applications/Soundbox.app`: personal **build 121**, ABI 5, signed
-**Soundbox Self-Signed**. Built from dirty source based on
-**57931c8f5b16377c0c2e9494e1ca0c67cfd135b6**; do not restamp it as the later
-release commit. Deep/strict signature verification passes. Installed executable
-and native bytes match signed dist, and the source fingerprint matches current
-runtime sources. Public artifact was not rebuilt for this correction.
+## Installed runtime and state
 
-- Runtime fingerprint: `3c93d989e580eba6cb20e0032e594d4f6ffb1e8e73a2dd708f7986f8f8542c39`
-- Executable SHA-256: `449247bd251ea97060cb34ce656d2e1e2a6cf1688336204af0e55a566d1611d2`
-- Native SHA-256: `6de2411a8a28e8f1860105a6b25a2b5dda36f0a2104b14107b992fbc2ad1deb5`
-- Startup October 2 **16:35:18 CDT**, native CoreAudio/Metal active **16:35:19**.
-  Fresh read-only rekordbox load: **3398 tracks / 75 playlists**. Reused 2889
-  analysis receipts; **zero preparation tasks**. No library/cache rebuild.
-- Verified installed provenance/state at **16:36:03 CDT**:
-  `coverage-installed-build.json` in the rollback directory.
-- Settings remain BLUE / 128. Prequit → postquit changes only
-  `/settings/columns_state`; exact curation is unchanged. Postquit and postlaunch
-  library bytes match: `8f724ab5dacb51bef596b699de9389462f6bf44def2e4c4b55d20a159cd783f6`.
-  Prequit hash: `5605e815417d600f68b1aba4c700687383c4d79229e919238e47da245d858fd8`.
-- Counts remain **2925 analysis / 3299 art / 7637 stock-art files**. All
-  path/size/mtime inventories and small-index bytes match from prequit through
-  postlaunch. Earlier preparation-index receipt renewal is disposable metadata,
-  not an analysis recook.
+Built with `./build_app.sh`; installed **2026-10-09T03:43:46.097655-05:00**, verified
+**2026-10-09T03:44:05.582782-05:00**. Signature passes (Soundbox Self-Signed), installed
+executable/native hashes match dist, and signed source fingerprint matches
+runtime sources. Startup/native-deck/library and preparation log checks are
+recorded in `build/playback-load-review/startup.log`: startup 03:43:48, native
+deck active 03:43:49, 3,398 tracks / 75 playlists loaded 03:43:52, and zero
+preparation tasks at 03:43:53 CDT. Native ABI remains 5.
 
-## Rollback and remaining boundaries
+- Executable SHA-256: `c9fe66384ecc915094740ea8ca10d118b02be604bf15d6c43797121bbb621d91`
+- Native SHA-256: `b330164985ddc343bf261852582c3f9da5fb7af521b1134fc1fa849923109185`
+- Prequit library SHA-256: `ee7de2b4691463a672d3f89adcd0faab540cc83c9a2706eeddd1797a60d5c0ad`
+- Post-quit/postlaunch library SHA-256: `68de3760676aeaafb5ba7de999c38ff887f485276bd32efd71eef14cc3780995`
+- **2,925 analysis / 3,300 art / 7,637 stock-art files**.
+  Final library bytes and all three cache inventories are unchanged after
+  relaunch. Only `/settings/columns_state` changed on graceful quit; curation
+  remained intact. The user's preexisting zoom
+  setting change since the prior verification is preserved. Exact quit-time
+  differences are in `build/playback-load-review/quit-state-diff.json`.
 
-Use only `/private/tmp/soundbox-lifecycle-rollback.18e3k4di/`.
-`before-coverage.app` preserves build 119, fingerprint
-`9b9d26debb84675ca361707730789b7d4b5b0b71afc769c92cc91e46508a0a9d`.
-All earlier rollback apps and evidence remain preserved. This installation used
-move + ditto after verified graceful exit. Apple quit returned “User canceled”
-despite verified exit; no force quit or AppData replacement occurred.
-Snapshots: `knots-coverage-before/`, `knots-coverage-prequit/`,
-`knots-coverage-postquit/`, `knots-coverage-postlaunch/`.
+Wrap-up reverified the running app at **2026-10-09T17:01:25-05:00**: PID 48341,
+valid strict/deep signature, matching executable/native hashes and source
+fingerprint. Library bytes still match the postlaunch baseline. Analysis/art/
+stock-art inventories are unchanged except the disposable preparation receipt:
+2,889 signature values refreshed, with no membership changes, consistent with
+its half-hour policy bucket. Exact receipt differences and runtime evidence are
+in ignored `build/wrap-oct9/`; snapshot: `knots-wrap-oct9/` in the rollback area.
+Current logs continue to report zero preparation tasks.
 
-Preserve generation-58 recovery **20260926-152340-47477cfa4a49** until separately
-reviewed hardware acceptance. Pristine offline iPod capture:
-`soundbox-ipod-ref/offline-lifecycle/20260926-163945/`. Never restore it to hardware
-without a separately reviewed recovery plan.
+## Completed preparation and remaining boundaries
 
-No known failing/omitted test remains in the release gate. That does not establish
-exact rekordbox pixel parity: BLUE radial-centroid and retained five-probe profile
-approximations, exact 3BAND layer-height/interpolation calibration, broader
-track/panel and long-session synchronization acceptance remain explicit in
-[PLAYER.md](PLAYER.md) and [ROADMAP.md](ROADMAP.md). Preserve source detail if
-further artifacts appear. Frozen-reference palette/integrity tests do not prove
-rendered pixel equivalence.
+The completed audit verified **2,712 compact upgrades**, no checksum/grid/cue
+failures, and **4,679,089,073 bytes reclaimed**: **2,795 compact / 129 older V5**
+records. The final eligible AAC record upgraded automatically at 02:14:25;
+subsequent scans queued zero tasks. Remaining old records are offloaded or lack
+complete imports; do not claim every cache converted. Evidence:
+`build/rapid-load-review/final-audit.json`. All 89 observed cloud placeholders
+stayed offloaded through that installation. Cold cloud-only playback still waits
+for the provider; Sonny confirmed the observed delay was SeaDrive hydration.
 
-Import-first compact V5 and recognized MPEG-1 LAME origins remain implemented;
-old caches upgrade only on selected local load or explicit reanalysis. Full
-fallback/encoder parity and exact zoom-window calibration remain open.
-Public clearance/notarization/clean-machine acceptance and the device physical
-reconnect/Sync/cancel/eject cases remain on ROADMAP. No device writes or firmware
-experiments were performed here. Source audio, rekordbox/ANLZ and `/PIONEER`
-remain read-only. Generic USB optimization and CDJ export are outside this change.
+Rapid-load foreground evidence: 72 requests across 24 local tracks, maximum
+synchronous open 6.9 ms and maximum 5-ms UI heartbeat gap 45.4 ms. Earlier
+non-foreground runs are not comparable. This is a measured workload, not a
+universal latency guarantee. No further UI hesitation is currently reported.
+
+Exact rekordbox/3BAND pixel calibration, five-probe profile approximation,
+fallback/codec equivalence and wider physical-panel workloads remain limits.
+Device lifecycle/controller extraction, further physical sync/reconnect/eject
+acceptance and public distribution clearance remain deferred in ROADMAP; none
+is newly certified by this player release.
+
+## Rollback and safety
+
+Use the existing rollback directory:
+`/private/tmp/soundbox-lifecycle-rollback.18e3k4di/`.
+`before-playback-load-oct9.app` is the immediately preceding installed app;
+older rollback/evidence remains untouched. Current install record:
+`playback-load-oct9-installed-build.json`. Original state snapshots:
+`knots-playback-load-oct9-prequit/`, `-postquit/`, `-progress/`.
+Installation verified graceful process exit before move + ditto; AppData was not
+replaced. AppleScript may report “User canceled” despite actual exit; verify the
+process before moving a bundle. Documentation-only wrap-up needed no reinstall.
+
+Preserve generation-58 recovery **20260926-152340-47477cfa4a49** and offline capture
+`soundbox-ipod-ref/offline-lifecycle/20260926-163945/` for separately reviewed
+hardware acceptance. No source audio, rekordbox/ANLZ, device payload or `/PIONEER`
+was written. Automated render/UI harnesses suppress live device discovery and
+use synthetic or frozen offline fixtures.

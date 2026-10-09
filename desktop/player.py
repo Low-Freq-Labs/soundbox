@@ -188,8 +188,8 @@ def _apply_loaded_grid_contract(
     }
 
 
-def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
-    """Full V5 analysis through Qt/FFmpeg for AAC/ALAC and friends.
+def qt_detail_peaks(path: str, checkpoint=None, *, supplement=False) -> dict | None:
+    """Full V5 analysis or a compact native-rate AAC/ALAC supplement.
 
     Signed stereo PCM is fed to the same streaming analyzer as WAV/AIFF/
     MP3/FLAC, so player-only set rips retain channel-safe waveform geometry,
@@ -203,6 +203,9 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
     import numpy as np
     from soundbox.track_analysis import StreamingAnalyzer
 
+    if (QThread.currentThread().isInterruptionRequested()
+            or (checkpoint is not None and not checkpoint())):
+        return None
     dec = QAudioDecoder()
     fmt = QAudioFormat()
     fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
@@ -210,13 +213,20 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
     # 24,576 Hz gives the ultra tier exactly four PCM samples per 6,144 Hz
     # envelope row while retaining enough bandwidth for useful RGB analysis.
     fmt.setSampleRate(24576)
-    dec.setAudioFormat(fmt)
+    if not supplement:
+        dec.setAudioFormat(fmt)
+    # Compact imports retain the decoder's native rate and channels. Only
+    # their signed 1-ms extrema are computed; no FFT/filter bank or resampling.
     dec.setSource(QUrl.fromLocalFile(str(path)))
 
     loop = QEventLoop()
     failed: list[str] = []
     done: list[int] = []
-    analyzer: list[StreamingAnalyzer] = []
+    from soundbox.waveform_detail import DetailSupplement
+    analyzer: list = []
+
+    def make_analyzer(rate):
+        return DetailSupplement(int(rate)) if supplement else StreamingAnalyzer(float(rate))
     pending: list = []
     pending_samples = [0]
     drain_scheduled = [False]
@@ -239,8 +249,11 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
         pending.clear()
         pending_samples[0] = 0
         if not analyzer:
-            analyzer.append(StreamingAnalyzer(24576.0))
-        analyzer[0].feed(values, owned=True)
+            analyzer.append(make_analyzer(24576.0))
+        if supplement:
+            analyzer[0].feed(values)
+        else:
+            analyzer[0].feed(values, owned=True)
         return checkpoint is None or checkpoint()
 
     def drain():
@@ -283,8 +296,7 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
             if channels > 1:
                 values = values.reshape(-1, channels)
             if not analyzer:
-                analyzer.append(StreamingAnalyzer(
-                    float(f.sampleRate() or 24576)))
+                analyzer.append(make_analyzer(f.sampleRate() or 24576))
             pending.append(np.asarray(values, dtype=np.float32))
             pending_samples[0] += len(values)
         if not feed_pending():
@@ -304,10 +316,14 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
     # Set rips can be hours long. Shutdown interruption and synchronous decoder
     # errors are the real cancellation paths; this is only a last-resort guard
     # against a backend that neither finishes nor errors.
-    QTimer.singleShot(6 * 60 * 60 * 1000, finish)
+    timeout = QTimer(dec)
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(lambda: (failed.append("decode timeout"), finish()))
+    timeout.start(6 * 60 * 60 * 1000)
     dec.start()
     if not done and dec.error() == QAudioDecoder.Error.NoError:
         loop.exec()
+    timeout.stop()
     dec.stop()
     elapsed = QElapsedTimer()
     elapsed.start()
@@ -316,8 +332,14 @@ def qt_detail_peaks(path: str, checkpoint=None) -> dict | None:
         QThread.msleep(5)
     drain()
     feed_pending(force=True)
-    if failed or not analyzer:
+    if (failed or not analyzer or QThread.currentThread().isInterruptionRequested()
+            or (checkpoint is not None and not checkpoint())):
         return None
+    if supplement:
+        minimum, maximum = analyzer[0].finish()
+        return {"detail_minimum_values": minimum,
+                "detail_maximum_values": maximum,
+                "timeline_sample_rate": analyzer[0].rate} if minimum else None
     result = analyzer[0].finish()
     if not result:
         return None
@@ -376,6 +398,8 @@ class WaveformWorker(QThread):
             return True, overview is not None, False
         detail = load_detail(
             self.track_analysis_dir, self.track_id, self.path)
+        if self.isInterruptionRequested():
+            return True, overview is not None, detail is not None
         if overview is not None and self.native_backend is not None:
             combined = {**manifest, **overview}
             if (detail is not None
@@ -428,7 +452,10 @@ class WaveformWorker(QThread):
             if self.analysis_path:
                 from soundbox.rekordbox_analysis import read
                 imported = read(self.analysis_path)
-            prepared = (analyze_imported(self.path, imported, checkpoint)
+            prepared = (analyze_imported(
+                    self.path, imported, checkpoint,
+                    lambda: qt_detail_peaks(
+                        self.path, checkpoint=checkpoint, supplement=True))
                         if complete_import(imported) else None)
             if prepared is None and not all(present) and checkpoint():
                 native = (
@@ -710,6 +737,12 @@ class WaveformBar(QWidget):
 
     def set_audio_detail(self, detail):
         """Install an additive Soundbox-owned high-resolution envelope."""
+        if self._native_rendering:
+            # Metal already owns the exact signed ranges. Materializing the
+            # unused Qt envelope here walks every 1-ms cell on the UI thread.
+            self._audio_detail = b""
+            self._audio_detail_rate = 0.0
+            return
         if isinstance(detail, dict):
             minimum_levels = detail.get("range_min_mips")
             maximum_levels = detail.get("range_max_mips")
@@ -1359,15 +1392,18 @@ class CuePanel(QWidget):
         self._refresh()
 
     def set_cues(self, cues: list[dict]):
-        self._cues = {"hot": [None] * 8, "memory": [None] * 8}
+        prepared = {"hot": [None] * 8, "memory": [None] * 8}
         for cue in cues or []:
             kind = cue.get("kind")
             try:
                 slot = int(cue.get("slot", -1))
             except (TypeError, ValueError):
                 continue
-            if kind in self._cues and 0 <= slot < 8:
-                self._cues[kind][slot] = cue
+            if kind in prepared and 0 <= slot < 8:
+                prepared[kind][slot] = dict(cue)
+        if prepared == self._cues:
+            return
+        self._cues = prepared
         self._refresh()
 
     def _refresh(self):
@@ -1376,7 +1412,9 @@ class CuePanel(QWidget):
             for slot, button in enumerate(buttons):
                 cue = self._cues[kind][slot]
                 label = chr(ord("A") + slot) if kind == "hot" else str(slot + 1)
-                button.setProperty("filled", cue is not None)
+                filled_changed = button.property("filled") != (cue is not None)
+                if filled_changed:
+                    button.setProperty("filled", cue is not None)
                 if cue is None:
                     button.setText(f"{label}   —")
                     button.setIcon(QIcon())
@@ -1401,8 +1439,9 @@ class CuePanel(QWidget):
                                "Hold to preview · Space latches"]
                     button.setToolTip(" · ".join(part for part in details if part))
                     button.setEnabled(self._loaded)
-                button.style().unpolish(button)
-                button.style().polish(button)
+                if filled_changed:
+                    button.style().unpolish(button)
+                    button.style().polish(button)
 
     def _press(self, kind: str, slot: int):
         cue = self._cues[kind][slot]
@@ -1694,20 +1733,32 @@ class PlayerBar(QWidget):
         return self.player.playbackState() == PlaybackState.PLAYING
 
     def play_track(self, track_id: str, path, title: str = "", bpm=None,
-                   analysis_path: str = "", autoplay: bool = True,
+                   analysis_path: str = "", autoplay: bool | None = True,
                    cues: list[dict] | None = None):
         """Load a track, optionally starting once its first grid beat is known.
 
         ``autoplay=False`` still waits for prepared analysis and positions the
-        paused deck on the first rekordbox beat. MainWindow uses that path for
-        double-click; previous/next track navigation retains autoplay.
+        paused deck on the first rekordbox beat. Browser loads use ``None`` to
+        retain ordinary playback intent; previous/next explicitly use True.
         """
         path = str(path)
         changed = (track_id != self._track_id or path != self._src_path
                    or analysis_path != self._analysis_path)
+        if autoplay is None:
+            # Resolve before the old source's fade clears its playback request.
+            # A polled PAUSED snapshot during refill is not a user pause; a
+            # momentary CUE preview is not ordinary playback either.
+            autoplay = bool(
+                (self._ordinary_playback_requested
+                 or (self._pending_autoplay and self._pending_should_play)
+                 or (self._pause_pending and self._transport_play_active))
+                and (not self._cue_preview_active or self._cue_preview_latched))
         if changed:
             self._ordinary_playback_requested = False
         if changed and (self.is_playing() or self._pause_pending):
+            # Preserve the newest replacement intent across repeated browser
+            # loads while the old source is still fading out.
+            self._transport_play_active = autoplay
             # Never tear a live decoder/source out from under an audible
             # buffer. Fade to silence, phase-lock the stopped transport, then
             # perform the source change and its normal clickless fade-in.
@@ -1777,7 +1828,16 @@ class PlayerBar(QWidget):
         self.next_btn.setEnabled(loaded and can_next)
 
     def _on_error(self, _err, err_string: str):
+        self._begin_transport_intent()
         self._ordinary_playback_requested = False
+        self._pending_autoplay = False
+        self._pending_start_ms = None
+        self._gain_completion = None
+        self._pause_pending = False
+        self._pause_clock.invalidate()
+        self._transport_play_active = False
+        self.player.pause()
+        self._reset_cue_preview()
         self.playback_error.emit(err_string or "Playback error")
 
     def _animate_gain(self, end: float, duration_ms: int, completion=None):

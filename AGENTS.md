@@ -367,8 +367,9 @@ rendering, clocks, transport behavior, analysis loading, or native code.
 Waveform preparation is import-first for complete PWV3/PWV5/PWV7 streams plus grid.
 Compact V5 stores one 1-ms signed-detail supplement and builds zoom mips in
 memory; incomplete imports retain the full fallback analyzer. Old V5 remains
-ready and upgrades only on selected local-track load or explicit reanalysis,
-never by invalidating the whole library at startup. Preserve manual grid/cue
+ready while eligible local records upgrade one at a time in background preparation
+or on selected-track load. Dataless sources defer until local; never invalidate
+the whole library at startup. Preserve manual grid/cue
 ownership and authoritative DB cues. MP3 source-origin changes must couple
 analysis, audible playback, duration and seeks; never shift only the waveform.
 Header probes belong to the native decode thread. See `docs/PLAYER.md`.

@@ -148,7 +148,8 @@ class DetailSupplement:
 
 
 def analyze_imported(path: str | Path, imported: dict,
-                     checkpoint: Callable[[], bool] | None = None) -> dict | None:
+                     checkpoint: Callable[[], bool] | None = None,
+                     decode_supplement: Callable[[], dict | None] | None = None) -> dict | None:
     """Decode only the supplemental contour; retain imported streams exactly."""
     if not complete_import(imported):
         return None
@@ -159,19 +160,33 @@ def analyze_imported(path: str | Path, imported: dict,
         source = Path(path)
         before = source.stat()
         hint = mp3_origin(source)
-        with sf.SoundFile(source) as audio:
-            lead = hint.lead_frames if (audio.frames == hint.decoded_frames and audio.samplerate == hint.sample_rate) else 0
-            detail = DetailSupplement(audio.samplerate)
-            if lead:
-                detail.feed(np.zeros(lead, dtype=np.float32))
-            while True:
-                if checkpoint is not None and not checkpoint():
-                    return None
-                block = audio.read(131072, dtype='float32', always_2d=True)
-                if not len(block):
-                    break
-                detail.feed(block)
-        minimum, maximum = detail.finish()
+        lead = 0
+        try:
+            audio = sf.SoundFile(source)
+        except (OSError, ValueError, RuntimeError):
+            if decode_supplement is None or (checkpoint is not None and not checkpoint()):
+                return None
+            decoded = decode_supplement()
+            if not decoded:
+                return None
+            minimum = decoded['detail_minimum_values']
+            maximum = decoded['detail_maximum_values']
+            decoded_rate = int(decoded['timeline_sample_rate'])
+        else:
+            with audio:
+                lead = hint.lead_frames if (audio.frames == hint.decoded_frames and audio.samplerate == hint.sample_rate) else 0
+                detail = DetailSupplement(audio.samplerate)
+                if lead:
+                    detail.feed(np.zeros(lead, dtype=np.float32))
+                while True:
+                    if checkpoint is not None and not checkpoint():
+                        return None
+                    block = audio.read(131072, dtype='float32', always_2d=True)
+                    if not len(block):
+                        break
+                    detail.feed(block)
+            minimum, maximum = detail.finish()
+            decoded_rate = detail.rate
         after = source.stat()
         if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
                 != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
@@ -194,7 +209,7 @@ def analyze_imported(path: str | Path, imported: dict,
             'overview_rgb': np.rint(np.stack((red, green, blue), axis=1) * 255).astype('u1').tobytes(),
             'sample_rate': 150.0,
             'timeline_lead_frames': lead,
-            'timeline_sample_rate': detail.rate,
+            'timeline_sample_rate': decoded_rate,
         }, imported)
         if result is not None:
             result.pop('spectral_bands', None)

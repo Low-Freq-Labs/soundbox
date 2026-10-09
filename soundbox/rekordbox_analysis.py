@@ -250,7 +250,7 @@ def resolve_dat_path(db_path: str | Path, analysis_data_path: str) -> Path | Non
     return candidate
 
 
-def read(dat_path: str | Path) -> dict:
+def read(dat_path: str | Path, *, packed_only: bool = False) -> dict:
     """Read one track's existing grid/cues and all detailed waveform modes.
 
     ``beats`` rows are ``[beat_in_bar, position_ms, bpm]``. ``heights`` are
@@ -258,10 +258,22 @@ def read(dat_path: str | Path) -> dict:
     ``_blue_detail``, ``_rgb_detail``, and ``_detail_bands`` retain exact
     PWV3/PWV5/PWV7 packed rows. All three streams use the format's 150 Hz song
     clock and are copied only into SoundBox-owned cache storage.
+
+    Discovery needs only packed streams and the grid. ``packed_only`` avoids
+    constructing per-sample Python colors and the generic ANLZ object graph
+    across the whole library; cue/display expansion remains an on-demand read.
     """
     dat = Path(dat_path)
     if dat.suffix.upper() != ".DAT" or not dat.is_file():
         return {}
+    if packed_only:
+        return {
+            "beats": read_beats(dat),
+            "_blue_detail": _read_pwv3(dat),
+            "_rgb_detail": _read_pwv5(dat),
+            "_detail_bands": _read_pwv7(dat),
+            "sample_rate": 150.0,
+        }
     try:
         from pyrekordbox.anlz import AnlzFile
 

@@ -3989,7 +3989,15 @@ class PlayerHardening(unittest.TestCase):
         # during this window (async, timing varies) — the wiring claim is:
         # every playback_error becomes exactly this status flash.
         self.assertTrue(hits)
-        self.assertEqual(set(hits), {"Playback error"})
+        self.assertEqual(set(hits), {"Playback error — hover for details"})
+
+    def test_cloud_playback_failure_explains_provider_readiness(self):
+        message = ("Cloud storage cannot provide set.m4a. Open your cloud storage "
+                   "app and check its sign-in/connection, then press Play to retry.")
+        _win._on_playback_error(message)
+        self.assertEqual(_win.status_label.text(),
+                         "Cloud file unavailable — check cloud storage")
+        self.assertEqual(_win.status_label.toolTip(), message)
 
     def test_16_beat_jump_math_and_boundaries(self):
         from desktop.player import PlayerBar
@@ -4536,6 +4544,38 @@ class PlayerHardening(unittest.TestCase):
             self.assertEqual(pb._cue_ms, 875)
             self.assertEqual(pb.wave._session_cue_ms, 875)
             self.assertFalse(pb._pending_autoplay)
+        finally:
+            pb.player = real_player
+            pb.shutdown_waveforms()
+
+    def test_failed_load_clears_play_and_pending_analysis_intent(self):
+        from desktop.player import PlayerBar
+
+        pb = PlayerBar()
+        real_player = pb.player
+        try:
+            pb.player = mock.Mock()
+            pb._src_path = "/tmp/unavailable.m4a"
+            pb._transport_play_active = True
+            pb._ordinary_playback_requested = True
+            pb._pending_autoplay = True
+            pb._pending_start_ms = 875
+            pb._pending_should_play = True
+            pb._pause_pending = True
+            pb._gain_completion = mock.Mock()
+            old_epoch = pb._transport_epoch
+            pb._on_error(None, "Cloud file unavailable")
+            pb._on_dur(60_000)  # late load/analysis must not restart playback
+            self.assertGreater(pb._transport_epoch, old_epoch)
+            self.assertFalse(pb._transport_play_active)
+            self.assertFalse(pb._ordinary_playback_requested)
+            self.assertFalse(pb._pending_autoplay)
+            self.assertFalse(pb._pause_pending)
+            self.assertIsNone(pb._gain_completion)
+            self.assertEqual(pb.play_btn.text(), "▶")
+            pb.player.pause.assert_called_once_with()
+            pb.player.play.assert_not_called()
+            pb.player.setPosition.assert_not_called()
         finally:
             pb.player = real_player
             pb.shutdown_waveforms()
@@ -5820,13 +5860,20 @@ class DoubleClickSemantics(unittest.TestCase):
     def tearDown(self):
         _win._load_track, _win._play_track = self._orig_load, self._orig_play
 
-    def test_table_double_click_loads_without_playing(self):
+    def test_browser_load_passes_preserve_intent_policy(self):
+        from desktop.app import MainWindow
+        with mock.patch.object(_win, "_open_track") as load:
+            MainWindow._load_track(_win, _win.lib.tracks_by_id["2"])
+        load.assert_called_once_with(_win.lib.tracks_by_id["2"],
+                                     autoplay=None, capture_autoplay=True)
+
+    def test_table_double_click_routes_to_browser_load(self):
         row = next(i for i, r in enumerate(_win.model._rows) if r["id"] == "2")
         _win._play_row(_win.model.index(row, 0))
         self.assertEqual(self._loaded, ["2"])
         self.assertEqual(self._played, [])
 
-    def test_artist_double_click_loads_without_playing(self):
+    def test_artist_double_click_routes_to_browser_load(self):
         from desktop.app import ARTIST_TRACK_ROLE
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))  # Artists
         _app.processEvents()
@@ -5882,6 +5929,40 @@ class QtWaveformFallback(unittest.TestCase):
         midpoint = len(heights) // 2
         self.assertGreater(int(max(heights[:midpoint - 30])), 63_000)
         self.assertLess(int(max(heights[midpoint + 30:])), 3_100)
+
+    def test_imported_aac_alac_compact_upgrade_preserves_streams_and_native_rate(self):
+        import hashlib
+        from pathlib import Path
+        from desktop.player import qt_detail_peaks
+        from soundbox.waveform_detail import analyze_imported, DETAIL_MODEL
+        from soundbox import track_analysis as ta
+        imported = {"sample_rate": 150.0, "beats": [[1, 0, 120]],
+                    "_blue_detail": bytes([31]) * 300,
+                    "_rgb_detail": bytes.fromhex("e47c") * 300,
+                    "_detail_bands": bytes([30, 40, 50]) * 300}
+        for codec in ("aac", "alac"):
+            with self.subTest(codec=codec):
+                path = Path(self.dir) / f"{codec}.m4a"
+                before = hashlib.sha256(path.read_bytes()).digest()
+                decode = lambda: qt_detail_peaks(str(path), supplement=True)
+                with mock.patch.object(ta, "StreamingAnalyzer", side_effect=AssertionError("full analyzer forbidden")):
+                    data = analyze_imported(path, imported, None, decode)
+                self.assertIsNotNone(data)
+                self.assertEqual(data["waveform_model"], DETAIL_MODEL)
+                self.assertEqual(data["timeline_sample_rate"], 44100)
+                self.assertAlmostEqual(len(data["detail_minimum_values"]) / 2, 2000, delta=25)
+                cache = Path(self.dir) / "compact"
+                self.assertTrue(ta.store(cache, codec, path, data))
+                self.assertTrue(ta.verify_complete(cache, codec, path))
+                loaded = ta.load_detail(cache, codec, path)
+                for key in ("_blue_detail", "_rgb_detail", "_detail_bands"):
+                    self.assertEqual(loaded[key], imported[key])
+                if codec == "alac":
+                    reference = analyze_imported(Path(self.dir) / "probe.wav", imported)
+                    for key in ("detail_minimum_values", "detail_maximum_values"):
+                        self.assertEqual(data[key], reference[key])
+                self.assertEqual(hashlib.sha256(path.read_bytes()).digest(), before)
+                self.assertIsNone(qt_detail_peaks(str(path), checkpoint=lambda: False, supplement=True))
 
     def test_alac_waveform(self):
         self._check("alac.m4a")
@@ -6393,6 +6474,148 @@ class WaveformFill(unittest.TestCase):
         self.assertTrue(ta.is_ready(canonical, "0", source))
         self.assertEqual(ta.load_manifest(canonical, "0", source)["waveform_model"], DETAIL_MODEL)
 
+    def _old_complete_cache(self):
+        from soundbox import track_analysis as ta
+        source = Path(self.paths[0])
+        dat = Path(self.cache) / "ANLZ.DAT"
+        dat.write_bytes(b"synthetic read-only analysis")
+        imported = {"sample_rate": 150, "beats": [[1, 0, 120]],
+                    "_blue_detail": bytes([31]) * 150,
+                    "_rgb_detail": bytes.fromhex("e47c") * 150,
+                    "_detail_bands": bytes([30, 40, 50]) * 150}
+        cues = [{"kind": "hot", "slot": 0, "position_ms": 500,
+                 "end_ms": -1, "type": "single", "label": "KEEP",
+                 "color": [255, 59, 125]}]
+        old = ta.with_imported_cues(
+            ta.merge_import(ta.analyze_soundfile(source), imported), cues)
+        canonical = Path(self.cache) / "analysis"
+        record = ta.store(canonical, "0", source, old)
+        track = Track("0", "Test", "Artist", source.as_uri(),
+                      source_analysis_path=str(dat))
+        return canonical, Library({"0": track}, [], source="synthetic"), imported, record
+
+    def test_background_upgrades_ready_legacy_without_selection_or_repeat_decode(self):
+        from desktop.workers import WaveformFillWorker
+        from desktop.player import WaveformWorker
+        from soundbox import track_analysis as ta
+        from soundbox.waveform_detail import DETAIL_MODEL
+        canonical, lib, imported, record = self._old_complete_cache()
+        source = Path(self.paths[0])
+        before_source = source.read_bytes()
+        before = ta.load_manifest(canonical, "0", source)
+        self.assertNotEqual(before["waveform_model"], DETAIL_MODEL)
+        totals, refreshed = [], []
+        worker = WaveformFillWorker(lib, canonical)
+        worker.tasks_ready.connect(totals.append)
+        worker.detail_ready.connect(refreshed.append)
+        with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+              mock.patch("soundbox.track_analysis.analyze_soundfile") as fallback,
+              mock.patch("desktop.player.qt_detail_peaks") as qt):
+            worker.run()
+        self.assertEqual(totals, [1])
+        self.assertEqual(refreshed, [str(source)])
+        fallback.assert_not_called(); qt.assert_not_called()
+        self.assertTrue(ta.verify_complete(canonical, "0", source))
+        after = ta.load_manifest(canonical, "0", source)
+        self.assertEqual(after["waveform_model"], DETAIL_MODEL)
+        self.assertEqual(after["cues"], before["cues"])
+        self.assertEqual(after["cue_import"], before["cue_import"])
+        self.assertEqual(after["beats"], before["beats"])
+        data = ta.load_detail(canonical, "0", source)
+        for key in ("_blue_detail", "_rgb_detail", "_detail_bands"):
+            self.assertEqual(data[key], imported[key])
+        saved = record.read_bytes()
+        with mock.patch("soundbox.waveform_detail.analyze_imported") as decode:
+            WaveformFillWorker(lib, canonical).run()
+            WaveformFillWorker(lib, canonical).run()
+            WaveformWorker(str(source), track_id="0",
+                           track_analysis_dir=canonical).run()
+        decode.assert_not_called()
+        self.assertEqual(record.read_bytes(), saved)
+        self.assertEqual(source.read_bytes(), before_source)
+
+    def test_background_compact_failure_keeps_cache_and_never_runs_full_analyzer(self):
+        from desktop.workers import WaveformFillWorker
+        canonical, lib, imported, record = self._old_complete_cache()
+        before = record.read_bytes()
+        for result in (None, {}):
+            worker = WaveformFillWorker(lib, canonical)
+            with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+                  mock.patch("soundbox.waveform_detail.analyze_imported", return_value=result),
+                  mock.patch("soundbox.track_analysis.analyze_soundfile") as fallback):
+                worker.run()
+            fallback.assert_not_called()
+            self.assertEqual(record.read_bytes(), before)
+
+    def test_background_compact_defers_cloud_and_rechecks_after_wait(self):
+        from desktop.workers import WaveformFillWorker
+        canonical, lib, imported, record = self._old_complete_cache()
+        before = record.read_bytes()
+        for flags in ([True], [False, True]):
+            (canonical / "preparation-index.json").unlink(missing_ok=True)
+            worker = WaveformFillWorker(lib, canonical)
+            with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+                  mock.patch("soundbox.rekordbox_analysis.read_beats", return_value=imported["beats"]),
+                  mock.patch("soundbox.track_analysis.is_dataless_source", side_effect=flags),
+                  mock.patch("soundbox.waveform_detail.analyze_imported") as decode):
+                worker.run()
+            decode.assert_not_called()
+            self.assertEqual(record.read_bytes(), before)
+
+    def test_background_compact_preserves_manual_metadata_and_uses_migration_reserve(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis as ta
+        canonical, lib, imported, record = self._old_complete_cache()
+        self.assertTrue(ta.update_user_data(
+            canonical, "0", self.paths[0], beats=[[1, 250, 128.0]]))
+        before = ta.load_manifest(canonical, "0", self.paths[0])
+        worker = WaveformFillWorker(lib, canonical)
+        with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+              mock.patch.object(worker, "isRunning", return_value=True),
+              mock.patch.object(worker, "_refresh_power_policy"),
+              mock.patch.object(worker, "_wait_for_storage", return_value=True) as storage):
+            worker.run()
+        storage.assert_called_once_with(reclaiming=True)
+        after = ta.load_manifest(canonical, "0", self.paths[0])
+        self.assertEqual(after["provenance"]["user_data"], "soundbox")
+        self.assertEqual(after["beats"], before["beats"])
+        self.assertEqual(after["cues"], before["cues"])
+
+    def test_background_compact_cancellation_keeps_old_record(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox.waveform_detail import analyze_imported
+        canonical, lib, imported, record = self._old_complete_cache()
+        before = record.read_bytes()
+        prepared = analyze_imported(self.paths[0], imported)
+        worker = WaveformFillWorker(lib, canonical)
+        cancelled = False
+        def cancel_after_decode(*args):
+            nonlocal cancelled
+            cancelled = True
+            return prepared
+        with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+              mock.patch("soundbox.waveform_detail.analyze_imported", side_effect=cancel_after_decode),
+              mock.patch.object(worker, "isInterruptionRequested", side_effect=lambda: cancelled)):
+            worker.run()
+        self.assertTrue(cancelled)
+        self.assertEqual(record.read_bytes(), before)
+
+    def test_compact_completed_during_queue_wait_is_not_decoded_again(self):
+        from desktop.workers import WaveformFillWorker
+        from soundbox import track_analysis as ta
+        from soundbox.waveform_detail import analyze_imported
+        canonical, lib, imported, record = self._old_complete_cache()
+        prepared = analyze_imported(self.paths[0], imported)
+        worker = WaveformFillWorker(lib, canonical)
+        def finish_foreground():
+            ta.store(canonical, "0", self.paths[0], prepared)
+        with (mock.patch("soundbox.rekordbox_analysis.read", return_value=imported),
+              mock.patch.object(worker, "_wait_for_playback", side_effect=finish_foreground),
+              mock.patch("soundbox.waveform_detail.analyze_imported") as decode):
+            worker.run()
+        decode.assert_not_called()
+        self.assertTrue(ta.verify_complete(canonical, "0", self.paths[0]))
+
     def test_discovery_receipts_reuse_headers_and_notice_late_sidecars(self):
         from soundbox import track_analysis as ta
         from desktop.workers import WaveformFillWorker
@@ -6674,13 +6897,15 @@ class WaveformFill(unittest.TestCase):
         quiet_worker = WaveformFillWorker(small_lib, canonical)
         quiet_totals = []
         quiet_worker.tasks_ready.connect(quiet_totals.append)
-        with patch(
-                "soundbox.rekordbox_analysis.read",
-                side_effect=AssertionError(
-                    "complete imported waveforms were polled")) as read:
+        # Imported modes alone do not prove compact-detail eligibility. Probe
+        # once; this intentionally incomplete fixture then gets a quiet receipt.
+        with patch("soundbox.rekordbox_analysis.read", return_value=imported) as read:
             quiet_worker.run()
+            read.assert_called_once()
+            read.reset_mock()
+            WaveformFillWorker(small_lib, canonical).run()
+            read.assert_not_called()
         self.assertEqual(quiet_totals, [0])
-        read.assert_not_called()
         self.assertEqual(Path(self.paths[0]).read_bytes(), before_audio)
 
     def test_recurring_scan_automatically_imports_late_waveforms(self):
@@ -7383,6 +7608,24 @@ class WaveformRapidLoad(unittest.TestCase):
         self.assertIsNone(self.pb._wf)
         self.assertEqual(self.pb._pending_start_ms, 625)
         self.assertEqual(self.pb.wave._beats[0][1], 625)
+
+    def test_cancelled_detail_read_never_enters_native_upload(self):
+        from desktop.player import WaveformWorker
+        backend = mock.Mock()
+        worker = WaveformWorker(self.paths[0], track_id="stale",
+                                track_analysis_dir=self.cache, native_backend=backend)
+        cancelled = False
+        def read_detail(*_args):
+            nonlocal cancelled
+            cancelled = True
+            return {"_audio_detail": {"rate": 1000}}
+        with (mock.patch("soundbox.track_analysis.load_manifest", return_value={}),
+              mock.patch("soundbox.track_analysis.load_overview", return_value={}),
+              mock.patch("soundbox.track_analysis.load_detail", side_effect=read_detail),
+              mock.patch.object(worker, "isInterruptionRequested", side_effect=lambda: cancelled)):
+            self.assertEqual(worker._load_stages(), (True, True, True))
+        backend.set_complete_analysis.assert_not_called()
+        backend.set_audio_detail.assert_not_called()
 
     def test_rapid_switch_interrupts_previous(self):
         # Fire uncached decodes back to back; each new start interrupts the last.

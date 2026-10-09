@@ -1,4 +1,5 @@
 #include "MP3Origin.h"
+#include "CloudReadiness.h"
 #import "SoundboxDeck.h"
 
 #import <AppKit/AppKit.h>
@@ -50,6 +51,7 @@ constexpr std::array<uint32_t, 18> kAudioDetailMipDivisors = {
 };
 constexpr float kWaveAttributeSmoothSamplesPerPixel = 4.0f;
 constexpr NSUInteger kWaveAttributeMarginPixels = 4096;
+constexpr NSUInteger kWaveAttributeClockBlock = 128;
 constexpr uint64_t kMaxFrameTraceBytes = 512ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxFrameTraceFrames = 600;
 // Persisted current geometry remains linear. A contrast-preserving display
@@ -194,6 +196,13 @@ struct FrameTraceState {
     uint64_t frameStride = 0;
     id<MTLBuffer> pixels = nil;
     std::vector<FrameTraceRecord> records;
+};
+
+struct WaveAttributeClock {
+    uint32_t waveIndex;
+    float wavePhase;
+    uint32_t detailIndex;
+    float detailPhase;
 };
 
 struct Uniforms {
@@ -401,6 +410,8 @@ public:
             seek(0);
         }
         playRequested_.store(true, std::memory_order_release);
+        visualStartFrame_.store(positionFrames_.load(std::memory_order_acquire),
+                                std::memory_order_release);
         visualClockValid_.store(false, std::memory_order_release);
         if (loaded_.load(std::memory_order_acquire)
                 && decodedSeekSerial_.load(std::memory_order_acquire)
@@ -430,6 +441,7 @@ public:
         playing_.store(false, std::memory_order_release);
         requestedSeek_.store(frame, std::memory_order_release);
         positionFrames_.store(frame, std::memory_order_release);
+        visualStartFrame_.store(frame, std::memory_order_release);
         ended_.store(false, std::memory_order_release);
         visualClockValid_.store(false, std::memory_order_release);
         seekSerial_.fetch_add(1, std::memory_order_acq_rel);
@@ -1705,9 +1717,6 @@ public:
         // PWV5 stores one compact RGB display color, not three independent
         // band heights. Expand each channel through its own encoded range:
         // red uses the even 0..14 codes while green and blue use 0..7.
-        // The measured Rekordbox display transfer leaves a little headroom
-        // above the nominal three-bit green/blue maxima; driving both to
-        // 1.0 makes the captured RGB lane too blue and slightly too green.
         return {
             displayWaveformHeight(
                 ((value & 0x007c) >> 2) / 31.0f),
@@ -1767,7 +1776,11 @@ public:
             const uint8_t *blueRows, size_t blueCount,
             const uint8_t *rgbRows, size_t rgbCount,
             const uint8_t *threeBandRows, size_t threeBandCount,
-            double samplesPerSecond) {
+            double samplesPerSecond, uint64_t expectedGeneration = 0) {
+        if (expectedGeneration && expectedGeneration !=
+                renderGeneration_.load(std::memory_order_acquire)) {
+            return false;
+        }
         if (!blueRows || !blueCount || !rgbRows || !rgbCount
                 || !threeBandRows || !threeBandCount
                 || samplesPerSecond <= 0.0) {
@@ -1814,6 +1827,10 @@ public:
                 static_cast<float>(samplesPerSecond);
         }
         std::lock_guard<std::mutex> lock(renderMutex_);
+        if (expectedGeneration && expectedGeneration !=
+                renderGeneration_.load(std::memory_order_acquire)) {
+            return false;
+        }
         displayWaveforms_ = std::move(prepared);
         return activateWaveformModeLocked();
     }
@@ -2452,12 +2469,14 @@ public:
         const NSUInteger visibleAttributeSamples =
             update.drawable.texture.width
             * static_cast<NSUInteger>(attributeSamplesPerPixel);
+        // Both the center and left edge must lie on canonical clock blocks.
+        const NSUInteger attributeAlignment = 2 * kWaveAttributeClockBlock;
         const NSUInteger desiredAttributeCount =
             ((visibleAttributeSamples
                 + kWaveAttributeMarginPixels
                     * static_cast<NSUInteger>(attributeSamplesPerPixel)
-                + 255)
-                / 256) * 256;
+                + attributeAlignment - 1)
+                / attributeAlignment) * attributeAlignment;
         if (!waveAttributeBuffer_
                 || waveAttributeCount_ != desiredAttributeCount) {
             waveAttributeBuffer_ = [device_
@@ -2494,8 +2513,12 @@ public:
                     - static_cast<double>(waveAttributeCenter_))
                     > availableMargin * 0.5);
         if (attributeNeedsPrint) {
-            waveAttributeCenter_ = static_cast<int64_t>(
-                std::llround(exactAttributeCenter));
+            // Every overlap uses the same canonical 128-attribute clock blocks.
+            // Recomputing a held source cell from different floating-point
+            // tile origins can select opposite sides of an exact cell boundary.
+            const int64_t nextAttributeCenter = static_cast<int64_t>(
+                std::floor(exactAttributeCenter / kWaveAttributeClockBlock))
+                * static_cast<int64_t>(kWaveAttributeClockBlock);
             Uniforms attributeUniforms = uniforms;
             attributeUniforms.waveAttributeCount =
                 static_cast<uint32_t>(std::min<NSUInteger>(
@@ -2503,16 +2526,35 @@ public:
                     std::numeric_limits<uint32_t>::max()));
             attributeUniforms.waveAttributeSamplesPerPixel =
                 attributeSamplesPerPixel;
-            const double attributeCenterFrame =
-                static_cast<double>(waveAttributeCenter_)
-                / std::max(
-                    1.0,
-                    static_cast<double>(uniforms.pixelsPerSecond)
-                    * static_cast<double>(drawableScale)
-                    * static_cast<double>(attributeSamplesPerPixel))
-                * rate;
-            setUniformPosition(
-                attributeUniforms, attributeCenterFrame, rate);
+            std::vector<WaveAttributeClock> clocks(
+                (waveAttributeCount_ + kWaveAttributeClockBlock - 1)
+                    / kWaveAttributeClockBlock);
+            const int64_t firstAttribute = nextAttributeCenter
+                - static_cast<int64_t>(waveAttributeCount_ / 2);
+            const double attributesPerSecond =
+                static_cast<double>(uniforms.pixelsPerSecond)
+                * drawableScale * attributeSamplesPerPixel;
+            for (size_t block = 0; block < clocks.size(); ++block) {
+                const int64_t songAttribute = firstAttribute
+                    + static_cast<int64_t>(block * kWaveAttributeClockBlock);
+                Uniforms clockUniforms = uniforms;
+                setUniformPosition(clockUniforms,
+                    static_cast<double>(songAttribute) / attributesPerSecond * rate,
+                    rate);
+                clocks[block] = {clockUniforms.waveCurrentIndex,
+                    clockUniforms.waveCurrentPhase,
+                    clockUniforms.audioDetailCurrentIndex,
+                    clockUniforms.audioDetailCurrentPhase};
+            }
+            id<MTLBuffer> clockBuffer = [device_
+                newBufferWithBytes:clocks.data()
+                length:clocks.size() * sizeof(WaveAttributeClock)
+                options:MTLResourceStorageModeShared];
+            if (!clockBuffer) {
+                setError(-43, "Metal waveform clock allocation failed");
+                return;
+            }
+            waveAttributeCenter_ = nextAttributeCenter;
             id<MTLComputeCommandEncoder> compute =
                 [commands computeCommandEncoder];
             [compute setComputePipelineState:attributePipeline_];
@@ -2524,6 +2566,7 @@ public:
                 (audioDetailBuffer ? audioDetailBuffer : waveBuffer)
                 offset:0 atIndex:4];
             [compute setBuffer:waveAttributeBuffer_ offset:0 atIndex:5];
+            [compute setBuffer:clockBuffer offset:0 atIndex:6];
             const NSUInteger threads = std::min<NSUInteger>(
                 256, attributePipeline_.maxTotalThreadsPerThreadgroup);
             [compute dispatchThreads:MTLSizeMake(
@@ -2539,8 +2582,17 @@ public:
             static_cast<uint32_t>(std::min<NSUInteger>(
                 waveAttributeCount_,
                 std::numeric_limits<uint32_t>::max()));
+        // Keep RGB/BLUE on a fixed physical raster phase. Wider zooms use
+        // one physical pixel per increment; close stops retain the accepted
+        // whole-logical-point motion. A two-pixel Retina step was visibly
+        // coarse at 256/384. Audio, seeks, grid and 3BAND remain continuous.
+        const double displayPixelStep = uniforms.pixelsPerSecond <= 384.0f
+            ? 1.0 : drawableScale;
         uniforms.waveAttributeCurrentOffset = static_cast<float>(
-            exactAttributeCenter
+            (uniforms.waveformMode == 3 ? exactAttributeCenter
+                : std::round(exactAttributeCenter
+                    / (attributeSamplesPerPixel * displayPixelStep))
+                    * attributeSamplesPerPixel * displayPixelStep)
             - static_cast<double>(waveAttributeCenter_));
         uniforms.waveAttributeSamplesPerPixel =
             attributeSamplesPerPixel;
@@ -3005,7 +3057,12 @@ private:
         const double predicted = anchor + delta * clockRate;
         const double duration = static_cast<double>(
             durationFrames_.load(std::memory_order_acquire));
-        return std::max(0.0, std::min(predicted, duration));
+        // A future hardware timestamp may extrapolate before the launch/seek
+        // point. Hold that point until audible time catches up; steady playback
+        // keeps the same continuous PLL and must not jump backward on Play.
+        const double start = static_cast<double>(
+            visualStartFrame_.load(std::memory_order_acquire));
+        return std::min(duration, std::max(start, predicted));
     }
 
     void updateVisualClock(uint64_t sourceFrame, uint64_t hostTime) {
@@ -3211,6 +3268,11 @@ struct CoverageMoments {
 struct IntervalSurface {
     float coverage;
     float3 premultipliedLinearColor;
+};
+constant uint kWaveAttributeClockBlock = 128u;
+struct WaveAttributeClock {
+    uint waveIndex; float wavePhase;
+    uint detailIndex; float detailPhase;
 };
 struct WaveAttribute {
     float4 colorAndUpper;
@@ -3516,6 +3578,14 @@ inline float3 linear_wave_color(
     return mix(float3(a.r, a.g, a.b), float3(b.r, b.g, b.b), local - floor(local));
 }
 
+inline float3 recover_rgb_color(
+        float3 weightedColor, float colorWeight, float3 authoredColor) {
+    // PWV5's five-bit height may round to zero while its RGB code and the
+    // independent signed detail remain valid. Zero weight is missing color
+    // evidence, not black. Positive weights must cancel exactly, even when tiny.
+    return colorWeight > 0.0 ? weightedColor / colorWeight : authoredColor;
+}
+
 inline WaveTap linear_wave_tap(
         const device WaveSample *samples,
         uint levelOffset, uint levelCount,
@@ -3644,16 +3714,18 @@ kernel void wave_attribute_kernel(
         constant Uniforms &u [[buffer(1)]],
         const device AudioEnvelopeSample *audioDetailSamples [[buffer(4)]],
         device WaveAttribute *attributes [[buffer(5)]],
+        const device WaveAttributeClock *clocks [[buffer(6)]],
         uint id [[thread_position_in_grid]]) {
     if (id >= u.waveAttributeCount
             || u.sampleCount == 0 || u.waveMipCount == 0) {
         return;
     }
+    const WaveAttributeClock clock = clocks[id / kWaveAttributeClockBlock];
     const float scale = max(1.0, u.drawableScale);
     const float samplesPerPixel =
         max(1.0, u.waveAttributeSamplesPerPixel);
     const float secondOffset =
-        (float(id) - float(u.waveAttributeCount) * 0.5)
+        float(id % kWaveAttributeClockBlock)
         / max(1.0, u.pixelsPerSecond * scale * samplesPerPixel);
     const float waveFootprint = u.samplesPerSecond
         / max(1.0, u.pixelsPerSecond * scale);
@@ -3666,15 +3738,15 @@ kernel void wave_attribute_kernel(
             samples,
             u.waveMipOffsets[waveLevel],
             u.waveMipCounts[waveLevel],
-            u.waveCurrentIndex,
-            u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+            clock.waveIndex,
+            clock.wavePhase + secondOffset * u.samplesPerSecond,
             waveLevel, u.pixelsPerSecond)
         : sharp_wave_tap(
             samples,
             u.waveMipOffsets[waveLevel],
             u.waveMipCounts[waveLevel],
-            u.waveCurrentIndex,
-            u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+            clock.waveIndex,
+            clock.wavePhase + secondOffset * u.samplesPerSecond,
             waveLevel);
     if (sharpWave.valid == 0.0) {
         attributes[id].colorAndUpper = float4(0.0);
@@ -3694,8 +3766,8 @@ kernel void wave_attribute_kernel(
         samples,
         u.waveMipOffsets[waveLevel],
         u.waveMipCounts[waveLevel],
-        u.waveCurrentIndex,
-        u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+        clock.waveIndex,
+        clock.wavePhase + secondOffset * u.samplesPerSecond,
         waveLevel);
     // The renderer accepts only the thirteen canonical zoom levels. The
     // midrange family uses one symmetric same-LOD [1, 2, 1] reconstruction;
@@ -3708,19 +3780,19 @@ kernel void wave_attribute_kernel(
     const float waveFilterOffset =
         filterSeconds * u.samplesPerSecond;
     const float waveLocal =
-        u.waveCurrentPhase + secondOffset * u.samplesPerSecond;
+        clock.wavePhase + secondOffset * u.samplesPerSecond;
     const WaveTap leftSmoothWave = wave_tap(
         samples,
         u.waveMipOffsets[waveLevel],
         u.waveMipCounts[waveLevel],
-        u.waveCurrentIndex,
+        clock.waveIndex,
         waveLocal - waveFilterOffset,
         waveLevel);
     const WaveTap rightSmoothWave = wave_tap(
         samples,
         u.waveMipOffsets[waveLevel],
         u.waveMipCounts[waveLevel],
-        u.waveCurrentIndex,
+        clock.waveIndex,
         waveLocal + waveFilterOffset,
         waveLevel);
     const float waveFilter = midrangeFilter
@@ -3758,11 +3830,11 @@ kernel void wave_attribute_kernel(
             samples,
             u.waveMipOffsets[waveLevel],
             u.waveMipCounts[waveLevel],
-            u.waveCurrentIndex,
-            u.waveCurrentPhase + secondOffset * u.samplesPerSecond,
+            clock.waveIndex,
+            clock.wavePhase + secondOffset * u.samplesPerSecond,
             waveLevel);
         color = mix(
-            color, crispColor,
+            recover_rgb_color(weightedColor, heightWeight, crispColor), crispColor,
             smoothstep(92.0, 184.0, u.pixelsPerSecond));
     }
     float height = mix(
@@ -3782,7 +3854,7 @@ kernel void wave_attribute_kernel(
         const float detailFootprint =
             u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
-        uint detailLevel = audio_detail_lod(
+        const uint detailLevel = audio_detail_lod(
             // The three widest stops integrate two extrema cells per pixel
             // on the existing four-sample song lattice. One max-pooled cell
             // inflated dense passages into flat slabs and hid narrow valleys.
@@ -3790,27 +3862,21 @@ kernel void wave_attribute_kernel(
             detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0),
             u.audioDetailMipDivisors,
             u.audioDetailMipCount);
-        if (u.pixelsPerSecond >= 384.0) {
-            detailLevel = audio_detail_lod(
-                detailFootprint * 0.5,
-                u.audioDetailMipDivisors,
-                u.audioDetailMipCount);
-        }
         const uint detailDivisor =
             u.audioDetailMipDivisors[detailLevel];
         const float detailLocal =
-            u.audioDetailCurrentPhase
+            clock.detailPhase
                 + secondOffset * u.audioDetailSamplesPerSecond;
-        // Close views retain up to two source cells per physical pixel.
-        // The four-attributes-per-pixel lattice and final spatial integral
-        // resolve them continuously; max-pooling earlier thickens the carrier
-        // and erases narrow valleys, especially at the 384-point stop.
+        // Reconstruct from the extrema level selected for the physical pixel.
+        // The close-view half-pixel override selected unresolvable cells at
+        // 384 points/s; the recorded RGB sweep instead supports a 2-ms level
+        // there, returning to full 1-ms detail as the screen can resolve it.
         EnvelopeTap sharpDetail = u.pixelsPerSecond >= 384.0
             ? held_envelope_tap(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
                 u.audioDetailMipCounts[detailLevel],
-                u.audioDetailCurrentIndex,
+                clock.detailIndex,
                 detailLocal,
                 detailDivisor)
             : (u.pixelsPerSecond >= 184.0
@@ -3818,14 +3884,14 @@ kernel void wave_attribute_kernel(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
                 u.audioDetailMipCounts[detailLevel],
-                u.audioDetailCurrentIndex,
+                clock.detailIndex,
                 detailLocal,
                 detailDivisor)
             : sharp_envelope_tap(
                 audioDetailSamples,
                 u.audioDetailMipOffsets[detailLevel],
                 u.audioDetailMipCounts[detailLevel],
-                u.audioDetailCurrentIndex,
+                clock.detailIndex,
                 detailLocal,
                 detailDivisor));
         // The signed interval owns BLUE/RGB geometry, so filtering only the
@@ -3843,14 +3909,14 @@ kernel void wave_attribute_kernel(
                     audioDetailSamples,
                     u.audioDetailMipOffsets[detailLevel],
                     u.audioDetailMipCounts[detailLevel],
-                    u.audioDetailCurrentIndex,
+                    clock.detailIndex,
                     detailLocal - detailPixel,
                     detailDivisor)
                 : sharp_envelope_tap(
                     audioDetailSamples,
                     u.audioDetailMipOffsets[detailLevel],
                     u.audioDetailMipCounts[detailLevel],
-                    u.audioDetailCurrentIndex,
+                    clock.detailIndex,
                     detailLocal - detailPixel,
                     detailDivisor);
             const EnvelopeTap rightDetail =
@@ -3859,14 +3925,14 @@ kernel void wave_attribute_kernel(
                     audioDetailSamples,
                     u.audioDetailMipOffsets[detailLevel],
                     u.audioDetailMipCounts[detailLevel],
-                    u.audioDetailCurrentIndex,
+                    clock.detailIndex,
                     detailLocal + detailPixel,
                     detailDivisor)
                 : sharp_envelope_tap(
                     audioDetailSamples,
                     u.audioDetailMipOffsets[detailLevel],
                     u.audioDetailMipCounts[detailLevel],
-                    u.audioDetailCurrentIndex,
+                    clock.detailIndex,
                     detailLocal + detailPixel,
                     detailDivisor);
             if (leftDetail.valid > 0.0 && rightDetail.valid > 0.0) {
@@ -4130,20 +4196,29 @@ inline IntervalSurface resolve_interval_surface(
         const float3 color1 =
             display_srgb_to_linear(saturate(encodedColors[segment + 1]));
 
-        // Split BLUE's smooth procedural field once per quarter-pixel
-        // segment. Also split wherever the queried row crosses the moving
-        // interval center, because the nearer signed boundary changes there.
-        float points[4] = {0.0, 0.5, 1.0, 1.0};
-        uint pointCount = blueMode ? 3u : 2u;
-        if (!blueMode) {
-            points[1] = 1.0;
-        }
+        // Split at every change in coverage or BLUE's radial/color branch.
+        // The color integral must follow the visible part of the pixel, not
+        // evaluate a nonlinear field only at its coverage centroid.
+        float points[12] = {0.0, 1.0};
+        uint pointCount = 2;
         const float centerSlope = center1 - center0;
         if (abs(centerSlope) > 1e-7) {
-            const float centerCrossing =
-                (signedPosition - center0) / centerSlope;
-            if (centerCrossing > 0.0 && centerCrossing < 1.0) {
-                points[pointCount++] = centerCrossing;
+            const float crossing = (signedPosition - center0) / centerSlope;
+            if (crossing > 0.0 && crossing < 1.0) points[pointCount++] = crossing;
+        }
+        if (blueMode) {
+            const float starts[7] = {
+                lower0 - band, lower0, lower0 + band,
+                upper0 - band, upper0, upper0 + band, halfWidth0};
+            const float ends[7] = {
+                lower1 - band, lower1, lower1 + band,
+                upper1 - band, upper1, upper1 + band, halfWidth1};
+            for (uint cut = 0; cut < 7; ++cut) {
+                const float slope = ends[cut] - starts[cut];
+                if (abs(slope) <= 1e-7) continue;
+                const float target = cut == 6 ? 0.28 : signedPosition;
+                const float crossing = (target - starts[cut]) / slope;
+                if (crossing > 0.0 && crossing < 1.0) points[pointCount++] = crossing;
             }
         }
         for (uint i = 1; i < pointCount; ++i) {
@@ -4189,34 +4264,29 @@ inline IntervalSurface resolve_interval_surface(
                     * segmentSpan;
                 continue;
             }
-            // BLUE's white/cyan/blue field depends on the same moving center
-            // and width as coverage. Evaluate it at the exact coverage
-            // centroid of each half-segment, then accumulate premultiplied
-            // linear-light energy. This keeps the smooth radial information
-            // without independently averaging a color that was not visible.
-            const float centroid = saturate(
-                moments.firstMoment / moments.area);
-            const float center =
-                mix(center0, center1, centroid);
-            const float halfWidth =
-                mix(halfWidth0, halfWidth1, centroid);
-            const float radial = saturate(
-                abs(signedPosition - center)
-                / max(halfWidth, 1e-5));
-            // A fixed white center washes out thin intervals, particularly
-            // when many fit inside a wide-view pixel. Reference fitting uses
-            // normalized source width, never zoom or a screen-pixel threshold.
-            // This changes only the continuous color field, not coverage.
-            const float whiteStrength = smoothstep(0.0, 0.28, halfWidth);
-            const float3 centerLinear = mix(
-                cyanLinear, whiteLinear, whiteStrength);
-            const float radialBlend =
-                smoothstep(0.0, 1.0, radial);
-            const float3 edgeLinear =
-                mix(color0, color1, centroid);
-            result.premultipliedLinearColor += mix(
-                centerLinear, edgeLinear, radialBlend)
-                * moments.area * segmentSpan;
+            // Gauss-Legendre integrates the smooth color field on each
+            // branch. Coverage remains the exact clipped linear integral.
+            const float nodes[4] = {
+                -0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116};
+            const float weights[4] = {
+                0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451};
+            const float halfSpan = (end - begin) * 0.5;
+            for (uint tap = 0; tap < 4; ++tap) {
+                const float position = midpoint + halfSpan * nodes[tap];
+                const float center = mix(center0, center1, position);
+                const float halfWidth = mix(halfWidth0, halfWidth1, position);
+                const float radial = saturate(
+                    abs(signedPosition - center) / max(halfWidth, 1e-5));
+                const float whiteStrength = smoothstep(0.0, 0.28, halfWidth);
+                const float3 centerLinear = mix(
+                    cyanLinear, whiteLinear, whiteStrength);
+                const float radialBlend = smoothstep(0.0, 1.0, radial);
+                const float3 edgeLinear = mix(color0, color1, position);
+                const float coverage = saturate(mix(value0, value1, position));
+                result.premultipliedLinearColor += mix(
+                    centerLinear, edgeLinear, radialBlend)
+                    * (coverage * weights[tap] * halfSpan * segmentSpan);
+            }
         }
     }
     const float normalization = 1.0 / max(totalSpan, 1e-6);
@@ -4463,8 +4533,8 @@ fragment float4 wave_surface_fragment(
         // Height and hue live on one fixed, oversampled global song
         // lattice. Interpolate those attributes first, then perform vertical
         // antialiasing once at the drawable. Unlike a translated RGBA
-        // waveform this never refilters coverage, and unlike one-pixel nearest
-        // translation it preserves continuous motion through dense contours.
+        // waveform this never refilters coverage. RGB/BLUE use a pixel-aligned
+        // display offset; 3BAND retains continuous subpixel translation.
         const float samplesPerPixel =
             max(1.0, u.waveAttributeSamplesPerPixel);
         const float tileX =
@@ -4566,12 +4636,34 @@ fragment float4 wave_surface_fragment(
                 profilePositions, profileCount,
                 signedPosition, heightScale, antialias,
                 u.waveformMode == 1);
+            if (u.waveformMode == 2 && interval.coverage > 0.0) {
+                // Accepted RGB column presentation: make occupied narrow
+                // detail solid without averaging or replacing source extrema.
+                // This is conservative coverage, not an exact pixel-area
+                // integral. Keep the joint integral's visible color and do
+                // not create pixels where its coverage was zero.
+                float low = min(blueMinimums[0], blueMaximums[0]);
+                float high = max(blueMinimums[0], blueMaximums[0]);
+                for (uint i = 1; i < profileCount; ++i) {
+                    low = min(low, min(blueMinimums[i], blueMaximums[i]));
+                    high = max(high, max(blueMinimums[i], blueMaximums[i]));
+                }
+                const float band = antialias / max(heightScale, 1e-5);
+                const float center = (low + high) * 0.5;
+                const float halfWidth = max((high - low) * 0.5, band);
+                // A minimum-width signed stroke may extend beyond the raw
+                // extrema. Its existing coverage must never be reduced.
+                const float columnCoverage = max(interval.coverage, saturate(
+                    (halfWidth + band - abs(signedPosition - center)) / (2.0 * band)));
+                interval.premultipliedLinearColor *= columnCoverage / interval.coverage;
+                interval.coverage = columnCoverage;
+            }
             if (interval.coverage <= 0.0) {
                 discard_fragment();
             }
-            // Coverage and visible color use the same pointwise interval
-            // intersection. Separately averaging the two edges overfills
-            // pixels when opposite edges cross at different horizontal phases.
+            // Visible color comes from the pointwise interval intersection.
+            // BLUE retains its exact area; RGB uses the explicitly conservative
+            // occupied-column coverage above without changing that color.
             return float4(
                 background * (1.0 - interval.coverage)
                     + interval.premultipliedLinearColor,
@@ -5061,6 +5153,30 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
             }
             if (!path.empty()) {
                 @autoreleasepool {
+                    file = nil;
+                    const int readiness = sbCloudReadiness(path,
+                        [&] { return sbReadSourceByte(path); },
+                        [&] {
+                            std::unique_lock<std::mutex> lock(wakeMutex_);
+                            return !decodeWake_.wait_for(lock,
+                                std::chrono::seconds(3), [&] {
+                                    return stopRequested_.load()
+                                        || generation != generation_.load();
+                                });
+                        });
+                    if (stopRequested_.load() || generation != generation_.load()) {
+                        continue;
+                    }
+                    if (readiness) {
+                        playRequested_.store(false, std::memory_order_release);
+                        const std::string name = std::filesystem::path(path).filename().string();
+                        const std::string message = readiness == ENEEDAUTH
+                            ? "Cloud storage cannot provide " + name
+                                + ". Open your cloud storage app and check its sign-in/connection, then press Play to retry."
+                            : "Cannot read " + name + ": " + std::strerror(readiness);
+                        setError(-24, message.c_str());
+                        continue;
+                    }
                     NSError *error = nil;
                     NSURL *url = [NSURL fileURLWithPath:
                         [NSString stringWithUTF8String:path.c_str()]];
@@ -5343,6 +5459,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     std::atomic<uint64_t> seekSerial_{0};
     std::atomic<uint64_t> decodedSeekSerial_{0};
     std::atomic<bool> visualClockValid_{false};
+    std::atomic<uint64_t> visualStartFrame_{0};
     std::atomic<uint64_t> visualClockSequence_{0};
     std::atomic<uint64_t> visualAnchorHostTime_{0};
     std::atomic<double> visualAnchorFrame_{0.0};
@@ -5608,6 +5725,26 @@ int sb_deck_set_waveform_streams(
         rgb_rows, rgb_count,
         three_band_rows, three_band_count,
         samples_per_second);
+    instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_set_waveform_streams_for_generation(
+    SBDeckRef deck, uint64_t generation,
+    const uint8_t *blue_rows,
+    size_t blue_count,
+    const uint8_t *rgb_rows,
+    size_t rgb_count,
+    const uint8_t *three_band_rows,
+    size_t three_band_count,
+    double samples_per_second) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setWaveformStreams(
+        blue_rows, blue_count,
+        rgb_rows, rgb_count,
+        three_band_rows, three_band_count,
+        samples_per_second, generation);
     instance->requestDisplay();
     return result;
 }

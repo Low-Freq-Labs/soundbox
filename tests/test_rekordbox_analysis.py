@@ -108,7 +108,9 @@ class ReadAnalysis(unittest.TestCase):
                     + rows
                 )
 
-            dat.write_bytes(b"PMAI")
+            grid = struct.pack(">HHI", 1, 12000, 50)
+            dat.write_bytes(b"PMAI" + b"PQTZ" + struct.pack(">II", 24, 32)
+                            + bytes(8) + struct.pack(">I", 1) + grid)
             ext.write_bytes(
                 b"prefix" + tag(b"PWV3", blue, 1)
                 + tag(b"PWV5", rgb, 2) + b"suffix")
@@ -118,6 +120,12 @@ class ReadAnalysis(unittest.TestCase):
             self.assertEqual(rekordbox_analysis._read_pwv5(dat), rgb)
             self.assertEqual(rekordbox_analysis._read_pwv7(dat), bands)
             self.assertEqual((ext.read_bytes(), two_ex.read_bytes()), before)
+            with patch("pyrekordbox.anlz.AnlzFile.parse_file",
+                       side_effect=AssertionError("discovery expanded ANLZ objects")):
+                packed = rekordbox_analysis.read(dat, packed_only=True)
+            self.assertEqual(packed, {"beats": [[1, 50, 120.0]],
+                                     "_blue_detail": blue, "_rgb_detail": rgb,
+                                     "_detail_bands": bands, "sample_rate": 150.0})
 
     def test_reads_grid_and_rgb_without_saving(self):
         class Grid:

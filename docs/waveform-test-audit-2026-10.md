@@ -41,8 +41,11 @@ all complete-corner branches at fractional phases and distant local coordinates,
 RGB color recovery across sign changes and silence, joint RGB coverage/color
 against independent dense quadrature, BLUE bounds and reversal symmetry.
 Quadrature computes pointwise membership without copying the shader's crossing
-partitions/moment formula. BLUE's radial centroid evaluation is an approximation;
-its bounds/symmetry tests do not claim exact radial quadrature.
+partitions/moment formula. At the October 1 checkpoint BLUE's radial centroid
+evaluation was an approximation; those bounds/symmetry tests did not establish
+radial quadrature accuracy. The October 2 [close-zoom follow-up](waveform-zoom-review-2026-10.md)
+replaces it with branch-split color integration and adds an independent full-color
+oracle plus subdivision invariance.
 
 Mutation checks deliberately restore the original missing-corner and incorrect
 color-weight expressions and prove that their outputs violate the numerical
@@ -105,3 +108,26 @@ Final validation, signed install and curated-state evidence are in HANDOFF.
 October 2 wrap-up also pins SciPy in the developer `requirements.txt`: the
 BLUE convex-hull oracle and motion-comparison utility require it. This test/tool
 dependency is not part of either application's runtime composition.
+
+
+## October 6 accepted contour presentation
+
+The user isolated the remaining artifact to the detailed solid-color contour,
+then accepted more-solid RGB columns without perceived loss of detail at 864.
+This introduces an explicit conservative presentation policy after the exact
+joint color integral; it must not be described as exact pixel-area coverage.
+The independent RGB oracle now tests the declared column contract, retaining
+conditional visible color, minimum-width strokes and empty pixels. BLUE retains
+its exact-area oracle and separate-edge mutation. An additional mutation removes
+RGB column presentation and must fail. The Cocoa all-zoom test now measures
+whole-logical-point translations and unchanged pixels within a rounded RGB/BLUE
+position, including fine contour as well as opaque fill. These regressions
+protect the accepted behavior; they do not replace physical visual acceptance.
+
+
+The subsequent 256/384 stepping report exposed a motion-policy gap: testing
+rounded-position identity alone did not reject an excessively large increment.
+After Sonny accepted one physical pixel through 384, the Cocoa regression added
+an explicit 0.75-physical-pixel displacement that must produce one-pixel travel
+with unchanged aligned detail. The old two-pixel Retina quantum would stay put.
+Close whole-point motion and 3BAND remain separate controls.

@@ -55,55 +55,28 @@ def _repair_pwv5_visibility(
     if count <= 0:
         return packed
 
-    values = [
-        int.from_bytes(packed[index * 2:index * 2 + 2], "big")
-        for index in range(count)
-    ]
-    audible = [
-        int.from_bytes(
-            overview_heights[index * width:(index + 1) * width],
-            "little" if width == 2 else "big") > 0
-        for index in range(count)
-    ]
-    valid = [(value & 0xff80) != 0 for value in values]
-    if not any(valid):
+    import numpy as np
+
+    values = np.frombuffer(packed, dtype=">u2", count=count)
+    audible = np.frombuffer(
+        overview_heights, dtype="<u2" if width == 2 else "u1", count=count) > 0
+    targets = np.flatnonzero(audible & ((values & 0x007c) == 0))
+    valid = np.flatnonzero((values & 0xff80) != 0)
+    if not len(targets) or not len(valid):
         return packed
 
-    previous = [-1] * count
-    source = -1
-    for index, is_valid in enumerate(valid):
-        if is_valid:
-            source = index
-        previous[index] = source
-    following = [-1] * count
-    source = -1
-    for index in range(count - 1, -1, -1):
-        if valid[index]:
-            source = index
-        following[index] = source
-
-    repaired = bytearray(packed)
-    changed = False
-    for index, value in enumerate(values):
-        if not audible[index] or (value & 0x007c) != 0:
-            continue
-        color_bits = value & 0xff80
-        if color_bits == 0:
-            before = previous[index]
-            after = following[index]
-            nearest = (
-                after if before < 0
-                else before if after < 0
-                else before if index - before <= after - index
-                else after
-            )
-            if nearest < 0:
-                continue
-            color_bits = values[nearest] & 0xff80
-        repaired[index * 2:index * 2 + 2] = (
-            color_bits | 0x0004).to_bytes(2, "big")
-        changed = True
-    return bytes(repaired) if changed else packed
+    # Search only rows needing a carrier. NumPy releases the GIL for the
+    # bulk work; Python row walks stall Qt during rapid loads and long sets.
+    insertions = np.searchsorted(valid, targets)
+    before = valid[np.maximum(insertions - 1, 0)]
+    after = valid[np.minimum(insertions, len(valid) - 1)]
+    nearest = np.where(
+        np.abs(targets - before) <= np.abs(after - targets), before, after)
+    colors = values[targets] & 0xff80
+    colors = np.where(colors != 0, colors, values[nearest] & 0xff80)
+    repaired = values.copy()
+    repaired[targets] = colors | 0x0004
+    return repaired.tobytes() + packed[count * 2:]
 
 
 def _repair_soundbox_pwv5_color(
@@ -321,6 +294,11 @@ def _bind(path: Path):
         ctypes.c_double,
     ]
     lib.sb_deck_set_waveform_streams.restype = ctypes.c_int
+    lib.sb_deck_set_waveform_streams_for_generation.argtypes = [
+        handle, ctypes.c_uint64,
+        *lib.sb_deck_set_waveform_streams.argtypes[1:],
+    ]
+    lib.sb_deck_set_waveform_streams_for_generation.restype = ctypes.c_int
     lib.sb_deck_set_waveform_mode.argtypes = [handle, ctypes.c_uint32]
     lib.sb_deck_set_waveform_mode.restype = ctypes.c_int
     lib.sb_deck_waveform_mode.argtypes = [handle]
@@ -612,6 +590,8 @@ class NativeDeckBackend(QObject):
         self._last_position_emit = 0.0
         self._duration_ms = 0
         self._loading = False
+        self._source_path = ""
+        self._source_failed = False
         self._sample_rate = 44100.0
         self._last_error: tuple[int, int] = (0, 0)
         self._ramp_token = 0
@@ -629,6 +609,8 @@ class NativeDeckBackend(QObject):
 
     def setSource(self, source: QUrl):
         path = source.toLocalFile()
+        self._source_path = path
+        self._source_failed = False
         self._end_emitted = False
         self._loading = bool(path)
         self._set_poll_interval(8)
@@ -653,6 +635,14 @@ class NativeDeckBackend(QObject):
 
     def play(self):
         self._set_poll_interval(8)
+        if self._source_failed and self._source_path:
+            # A failed cloud open is retryable after the provider recovers.
+            # Reload audio only: canonical waveform/cues remain resident.
+            self._source_failed = False
+            self._loading = True
+            self._end_emitted = False
+            self._lib.sb_deck_load(
+                self._handle, self._source_path.encode("utf-8"))
         self._lib.sb_deck_play(self._handle)
 
     def pause(self):
@@ -1043,7 +1033,9 @@ class NativeDeckBackend(QObject):
                 before = self.diagnostic_detail_shape()
                 streams_ok = self._set_waveform_streams(
                     detail, float(overview.get("sample_rate") or 150.0),
-                    overview)
+                    overview, generation)
+                if generation and generation != self._analysis_generation:
+                    return False, False
                 band_ok = streams_ok or self._set_detail_bands(
                     detail.get("_detail_bands"))
                 audio_detail = detail.get("_audio_detail")
@@ -1058,7 +1050,7 @@ class NativeDeckBackend(QObject):
 
     def _set_waveform_streams(
             self, detail: dict, rate: float,
-            overview: dict | None = None) -> bool:
+            overview: dict | None = None, generation: int = 0) -> bool:
         blue = detail.get("_blue_detail")
         rgb = detail.get("_rgb_detail")
         bands = detail.get("_detail_bands")
@@ -1087,8 +1079,8 @@ class NativeDeckBackend(QObject):
             rgb[:rgb_count * 2])
         band_arr = (ctypes.c_uint8 * (band_count * 3)).from_buffer_copy(
             bands[:band_count * 3])
-        return bool(self._lib.sb_deck_set_waveform_streams(
-            self._handle,
+        return bool(self._lib.sb_deck_set_waveform_streams_for_generation(
+            self._handle, int(generation or self._analysis_generation),
             blue_arr, blue_count,
             rgb_arr, rgb_count,
             band_arr, band_count,
@@ -1313,6 +1305,9 @@ class NativeDeckBackend(QObject):
         error_key = (int(snap.generation), int(snap.error_code))
         if snap.error_code and error_key != self._last_error:
             self._loading = False
+            self._source_failed = int(snap.error_code) in {-20, -21, -22, -23, -24}
+            self._ramp_token = 0
+            self._ramp_completion = None
             self._last_error = error_key
             message = bytes(snap.error_message).split(b"\0", 1)[0].decode(
                 "utf-8", "replace")

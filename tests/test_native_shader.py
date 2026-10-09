@@ -426,7 +426,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertAlmostEqual(values[0], left)
         self.assertAlmostEqual(values[-1], right)
 
-    def test_all_zooms_use_subpixel_song_attribute_motion(self):
+    def test_all_zooms_use_oversampled_song_attributes(self):
         native = self.source
         self.assertIn(
             "attributeSamplesPerPixel =\n"
@@ -728,10 +728,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "EnvelopeTap sharpDetail = u.pixelsPerSecond >= 384.0",
             kernel)
-        self.assertIn("if (u.pixelsPerSecond >= 384.0)", kernel)
-        self.assertIn(
-            "audio_detail_lod(\n"
-            "                detailFootprint * 0.5,", kernel)
+        self.assertNotIn("detailFootprint * 0.5", kernel)
         self.assertIn("held_envelope_tap(", kernel)
         self.assertIn(
             "u.audioDetailMipOffsets[detailLevel]", kernel)
@@ -784,8 +781,8 @@ class NativeWaveformShader(unittest.TestCase):
             " * moments.firstMoment)",
             resolve,
         )
-        self.assertIn(
-            "moments.firstMoment / moments.area", resolve)
+        self.assertNotIn("moments.firstMoment / moments.area", resolve)
+        self.assertIn("coverage * weights[tap] * halfSpan * segmentSpan", resolve)
         self.assertIn(
             "centerLinear, edgeLinear, radialBlend", resolve)
         self.assertNotIn("targeted_stop_filter(", resolve)

@@ -103,8 +103,13 @@ Cue panel:
 
 Loading semantics are deliberate:
 
-- Double-click is the only browser gesture that loads a track, and loads it
-  paused. Previous/next deck controls can still advance the loaded track.
+- Double-click is the only browser gesture that loads a track. It preserves
+  ordinary playback intent: a playing deck starts the new track at its first
+  grid beat; a paused/empty deck loads it paused. Rapid replacements retain the
+  newest request through fade-out and pending grid/media loading. A temporary
+  backend PAUSED snapshot does not cancel that intent. Momentary CUE previews
+  remain separate; only a preview latched with Play carries playback forward.
+  Previous/next deck controls explicitly start the selected track.
 - Space only toggles play/pause for the already-loaded track. Browser selection
   is ignored, and Space does nothing when the deck is empty.
 - A non-empty, successfully parsed Rekordbox beat grid is authoritative and a
@@ -113,6 +118,17 @@ Loading semantics are deliberate:
   exactly `0:00`. That decision is based on grid availability/provenance, never
   file extension. A loaded legacy fallback is zero-anchored for its first paint
   even if the incremental metadata migration has not reached that record yet.
+- CloudStorage audio admission reads one byte on the native decode thread before
+  opening AVAudioFile. ENEEDAUTH alone permits two cancellable three-second waits;
+  persistent failures name the cloud file and clear pending Play/cue intentions.
+  Play retries a failed audio source without rebuilding its resident waveform.
+  This is readiness handling, not a source-integrity proof or a cloud sign-in fix.
+  A cold cloud-only source can still delay first playback while its provider
+  supplies bytes; a ready waveform cache does not make source audio local.
+  Keeping intended tracks downloaded avoids that dependency.
+- Starting or resuming from a nonzero position holds that exact visual position
+  until CoreAudio's future presentation timestamp reaches it. It never extrapolates
+  backward before the start; steady playback retains the existing continuous PLL.
 - Rapid-fire source replacement is supported and tested.
 - The centered now-playing title has no duplicate hover tooltip. Clicking its
   box clears a hiding search and returns browser focus to the exact loaded
@@ -126,7 +142,8 @@ GPU numerical oracles, with a separate required Cocoa drawable gate. Tiny
 clipped color moments use stable local midpoint arithmetic; the accepted
 geometry and sampling footprint are unchanged. October 2 corrects the signed
 coverage intersection and retires its expected failure. The retained five-probe
-profile and BLUE radial-centroid approximations remain explicit. See the
+profile approximation remains explicit. The later October 2 close-zoom follow-up
+replaces BLUE radial-centroid evaluation with branch-split color quadrature. See the
 [test audit](waveform-test-audit-2026-10.md).
 
 September 30 installed correction: BLUE/RGB retain the original
@@ -176,8 +193,9 @@ unused lane height without changing the amplitude curve, cached data, horizontal
 detail. Close views gain a little height too, with more breathing room than
 wide views. It applies only to the large scrolling waveform.
 
-At 24/32/48 and 384–1500 points/s, BLUE/RGB select a half-pixel extrema
-footprint; the 64–256 middle stops select the physical-pixel footprint. One song-anchored mip and the final
+At 24/32/48 points/s, BLUE/RGB select a half-pixel extrema footprint;
+64–1500 select the physical-pixel footprint. The October 2 follow-up selects
+2-ms compact detail at Retina 384 and 1-ms at 576–1500. One song-anchored mip and the final
 one-pixel profile integral preserve detail without mixing adjacent mip levels.
 The former four-pixel close footprint and divisor-dependent height gain were
 removed after comparison with the new reference.
@@ -198,6 +216,14 @@ Settings exposes three persistent waveform displays:
   one compact height—not three band layers. PWV5 owns color and distant-scale
   amplitude. Its scrolling geometry uses the same signed min/max trace as
   BLUE, with linearly interpolated full-range PWV5 colors on their song clock.
+  Since October 6, occupied RGB pixel columns use conservative coverage to keep
+  narrow detail solid; conditional visible color still comes from the joint
+  interval integral. This is not an exact-area presentation or source smoothing.
+  October 8 color-only correction: a zero PWV5 compact height no longer turns
+  its valid RGB code black before blending at wider zooms. Positive color
+  weights cancel exactly; a zero weight uses the authored row color. Quiet
+  greens, blues and every other encoded hue retain their source colors.
+  Signed geometry, coverage, LOD and scrolling are unchanged; no recook.
 - `3BAND` uses the exact packed PWV7 display rows as three independent
   shapes. Empirically calibrated band scales are applied separately and composited as
   blue lows, brown mids, white highs, and the measured cream/pale-blue
@@ -213,7 +239,10 @@ filling positive and negative envelopes back to zero. That shared geometry
 keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
 Both use output-footprint-selected extrema. Compact supplements hold signed
-1-ms cells at close zoom; spatial antialiasing supplies continuous coverage.
+1-ms cells at close zoom; spatial antialiasing resolves their coverage.
+RGB/BLUE round display translation to physical pixels through 384 points/s,
+then logical points at 576–1500. Audio, seek and grid clocks remain continuous;
+3BAND retains subpixel translation.
 The minimum signed stroke is one physical pixel before antialiasing, replacing
 the fixed 3.6-point width that made thin carriers visibly thick on Retina.
 3BAND uses the original 150-Hz PWV7 rows and linear per-band interpolation,
@@ -372,8 +401,9 @@ Collection or other playlists. No cleanup touches source audio or read-only
 Rekordbox analysis.
 The recurring scan also detects the narrow late-Rekordbox case when sidecar
 identities change (with a bounded fallback retry), without polling all ANLZ bytes.
-A fully imported display mode stays on the small-manifest path, while a mode whose provenance still says `soundbox-analysis`
-may probe its current read-only PWV3/PWV5/PWV7 payload. A newly valid stream
+A current compact record stays on the small-manifest path. A legacy detail model
+or mode whose provenance still says `soundbox-analysis` may probe its current
+read-only PWV3/PWV5/PWV7 payload; unchanged ineligible records reuse receipts. A newly valid stream
 queues only that track for a normal atomic recook. The browser's per-track
 **Reanalyze Track** action remains the explicit recovery path and deliberately
 bypasses the ready-manifest shortcut for only the selected record. Both routes
@@ -392,7 +422,8 @@ transfer, overlap correction, green restraint, blue lift, and compact
 quantization. When no valid Rekordbox grid exists, the analyzer derives a
 constant-tempo grid from FFT autocorrelation and anchors beat 1 at exactly
 `0:00`. The fallback path is NumPy-only and has no runtime JIT.
-Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips. Export eligibility is
+For incomplete imports, Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips.
+Complete imports use the compact native-rate supplement below. Export eligibility is
 deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
 candidates; AAC/ALAC/M4A/MP4 are always player-only.
 
@@ -418,15 +449,40 @@ low-end shoulder; digital zero remains zero. The former `height^1.4` curve was
 superseded by the September 29 comparison. RGB channels use divisors 14/7/7.
 PWV7 retains its separate band scales and membership palette.
 
+Background eligibility discovery reads packed PWV3/PWV5/PWV7 rows and PQTZ
+directly; it never expands whole-library per-sample color lists or generic ANLZ
+objects just to schedule upgrades. Full cue/display parsing remains per-track.
+
 Compact V5 is distinguished by `soundbox-rekordbox-supplement-i16-v1` and
 `rekordbox-pwv5-rgb-v1`, not by a new file extension. It stores only divisor 1;
 load builds `1/2/3/4/6/8/12/16/24/32/48/64` mips in memory. It omits the unused
-24-band master. Legacy V5 remains ready/playable, so startup does not recook it.
-An interactive load first presents the existing record, then upgrades only that
-selected local track if a complete import is available. Cancellation/failure
-retains the prior record. Manual grid/cue ownership and authoritative DB cues
-survive conversion. Reanalyze Track and new background preparation use the same
-import-first path. Dataless old-cache upgrades are deferred.
+24-band master. Legacy V5 remains ready/playable while the recurring background
+worker upgrades eligible local records one at a time, without requiring selection.
+A complete import is required; incomplete imports retain their valid fallback.
+An interactive load can finish a selected upgrade ahead of the queue. The queue
+rechecks completion and dataless status after waiting, never runs a full analyzer
+when a compact upgrade fails, and retains the prior record on cancellation/failure.
+Manual grid/cue ownership and authoritative DB cues survive conversion. Preparation
+receipts include the compact model, so older ready receipts cannot suppress the
+new work. Reanalyze Track uses the same import-first path. Dataless old-cache
+upgrades defer until the source becomes local; no background download is requested.
+
+The compact import path also supports local AAC/ALAC through QAudioDecoder when
+libsndfile cannot open the source. It retains the decoder's native sample rate
+and channels and feeds the same absolute 1-ms signed-cell reducer, without a
+full analyzer or another spectral/color pass. Source identity is checked around
+the whole decode; cancellation/failure cannot publish partial detail.
+
+October 9 rapid-load correction: the native waveform host skips materializing
+an unused Qt envelope on the UI thread. Packed PWV5 visibility repair uses
+vector operations with the same nearest authored-color/tie behavior. Cancelled
+workers recheck after detail decompression, and native display-stream uploads
+check their track generation before preparation and again under the publication
+lock. Cue slots avoid repeated refreshes for equal data and repolish only when
+the filled state changes. Shader geometry, palettes, zoom levels and scrolling
+are unchanged.
+Regressions cover production native delivery of four-minute detail, stale stream
+rejection, scalar/vector color equivalence, and native-rate AAC/ALAC supplements.
 
 Tagged MPEG-1 Layer III LAME files have an explicit source origin derived from
 Info/Xing frame length, encoder delay and 529 synthesis samples. Both supplemental
@@ -487,8 +543,8 @@ The background `WaveformFillWorker`:
   Rekordbox objects or opens EXT/2EX waveform/color analysis just to determine
   grid ownership;
 - uses a 16 MiB worker stack and a 20/25 GiB full-cook pause/resume guard;
-  verified one-record V4 reductions use 5/7 GiB because each successful
-  migration immediately retires a larger source record;
+  one-record V4 reductions and compact replacements use the 5/7 GiB migration
+  reserve and run before full cooks; each keeps only one replacement in progress;
 - names low disk space in its pause status and exposes the applicable resume
   threshold on hover; status text fits its full message and the pause is restored
   after higher-priority device work finishes;
@@ -578,7 +634,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
   with `14 / 7 / 7` divisors and linear interpolation, and only PWV7 enters the
   layered 3BAND compositor.
 - `color_model` versions the persisted RGB analysis independently of the V5
-  container schema. Old records remain playable during selected-track upgrades; each temporary record lives beside
+  container schema. Old records remain playable during background or selected-track upgrades; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
 - Derive one footprint-matched LOD from source samples per physical pixel and
   select one peak level. The overview and main lane call the same sampler;
@@ -587,10 +643,13 @@ measurements. The compact-cache and source-clock contracts above take precedence
   attribute lattice, then translate those attributes. The lattice stores no
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
   the final drawable never refilters an already-antialiased edge. Every zoom
-  uses four attributes per physical pixel and linear subpixel translation.
-  The earlier one-attribute close mode preserved an identical raster after
-  integer motion alignment, but its 25/26-pixel maximum-zoom steps made dense
-  spikes visibly strobe and bend.
+  uses four attributes per physical pixel. RGB/BLUE round only the display
+  offset: physical-pixel increments through 384 points/s, whole logical points
+  at 576–1500. Position error is at most half the chosen increment; 3BAND
+  retains linear subpixel translation. The October 6 accepted RGB column
+  presentation is paired with this motion policy. Earlier one-attribute
+  integer-motion experiments had different source/coverage rules and were
+  rejected; their evidence is historical, not acceptance of the current path.
 - **The display-stream LOD is footprint-matched and `kLodBias` must stay 0.** A physical
   pixel cannot display more than about one envelope value. Selecting a mip
   two levels sharper (`kLodBias = 2`) was tried on the theory that
@@ -605,7 +664,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
   profile to integrate; they simply must not buy undisplayable detail.
 - **Select one conservative level for the physical source footprint.** Compact
   signed mips use integer millisecond divisors; legacy V5 uses its persisted
-  ladder. The three widest and close stops use the documented half-pixel footprint.
+  ladder. Only the three widest stops use the documented half-pixel footprint.
   Earlier power-of-two PWV alias measurements are historical, not a description
   of the compact signed ladder.
 - **Use one mip level, never a blend of two.** Levels remain song-anchored.
@@ -614,7 +673,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - **Preserve source cells at close zoom.** BLUE/RGB use held signed extrema;
   3BAND connects the original 150-Hz rows linearly. The former paired-row
   rule, four-pixel close footprint and height compensation are historical.
-- **Close detail uses a half-pixel source footprint.** One selected signed mip
+- **Close detail uses a physical-pixel source footprint.** One selected signed mip
   feeds the fixed four-attributes-per-pixel song lattice; it does not broaden
   the final spatial integral or apply divisor-dependent height gain.
 - Rebuild the small private attribute buffer only when analysis, zoom, Retina
@@ -622,11 +681,17 @@ measurements. The compact-cache and source-clock contracts above take precedence
   wider than the drawable, and every recenter is computed from an absolute
   integer song coordinate, so overlapping regions are identical and no tile
   seam can enter the viewport.
+  Each canonical 128-attribute clock block has CPU-double-derived sample anchors
+  and local phases. Different overlapping tile origins must reproduce the same
+  cells; recomputing large local phases per tile could round held cells onto
+  opposite sides of a boundary. The October 2 regression checks both origins.
 - Rasterize final vertical coverage exactly once at each Retina drawable
   pixel. There is no moving RGBA texture, coverage resampling, accumulated
   frame, or refresh seam. Height and hue move together, while final edge
   antialiasing remains tied to the destination pixel. The scrolling lane uses
-  joint signed-interval coverage without a vividness boost. Boosting 20% coverage to nearly 49%
+  joint signed-interval integration without the overview vividness curve.
+  BLUE composites its area directly; RGB applies the deliberate conservative
+  column coverage described below. Historically, boosting 20% coverage to nearly 49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
   overview alone retains the continuous cubic vividness curve for true
   subpixel peaks. This distinction affects only compositing, never height,
@@ -651,9 +716,16 @@ measurements. The compact-cache and source-clock contracts above take precedence
   intersect pointwise before integration, rather than after it. Within that coverage,
   clipped-linear moments integrate PWV5 color in premultiplied linear light;
   a horizontally hidden color sample can no longer tint a visible RGB edge.
+  RGB then increases coverage within occupied physical columns using their
+  extrema, retaining that conditional color. Existing minimum-width stroke
+  coverage cannot decrease, and zero joint coverage stays empty. This accepted
+  October 6 presentation can thicken fine detail; it is intentionally not an
+  exact pixel-area integral. Source cells, extrema, LOD and colors are retained.
   BLUE evaluates its white/cyan/blue radial transfer from the same local
-  signed center, width, and coverage centroid, then accumulates that energy in
-  premultiplied linear light. Averaging color independently from interval
+  signed center and width. It splits at coverage/radial branch changes and
+  integrates each smooth branch with four-point Gauss-Legendre quadrature in
+  premultiplied linear light; a single coverage-centroid color evaluation is
+  insufficient for the nonlinear field. Averaging color independently from interval
   coverage creates an internal brightness/color tick even when the silhouette
   itself is stationary.
 - **There is no temporal shutter. The integration window is the physical
@@ -679,7 +751,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   again.
 - The small overview alone composites coverage through a continuous cubic
   ease-out so one-physical-pixel quiet passages remain visible. The scrolling
-  lane uses its joint geometric coverage directly; applying overview vividness
+  lane uses joint geometric coverage with the explicit RGB column policy above;
+  applying overview vividness
   there made entering/leaving saturated edge pixels pulse.
 - Address audio detail and compact color with integer sample anchors plus local
   float phase. Never multiply a large absolute float time back into a sample
@@ -1891,6 +1964,10 @@ the result in premultiplied linear light. The already accepted continuous
 signed-boundary coverage is then reapplied exactly, so this is a color resolve,
 not a silhouette, LOD, reconstruction, timing, or cache change. 3BAND bypasses
 the helper and remained byte-for-byte identical in the six-case corpus.
+
+This is historical July evidence. The October 2 coverage correction removes the
+separately reapplied silhouette, and the later [close-zoom follow-up](waveform-zoom-review-2026-10.md)
+replaces BLUE centroid evaluation with branch-split color quadrature.
 
 The harness now supports `--position-count` and `--position-step-ms`, allowing
 motion sweeps to stay inside one native session. Two 32-position, 1 ms sweeps

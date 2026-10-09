@@ -601,7 +601,7 @@ class StockArtworkPrepWorker(QThread):
 
 
 class WaveformFillWorker(QThread):
-    """Prepare missing, stale, or explicitly requested canonical V5 records.
+    """Prepare missing, stale, and compact-upgrade canonical V5 records.
 
     Rekordbox analysis is imported read-only into SoundBox-owned records.
     Source audio is decoded by libsndfile or Qt's QAudioDecoder for AAC/ALAC.
@@ -846,10 +846,11 @@ class WaveformFillWorker(QThread):
         )
         from .player import qt_detail_peaks
         from soundbox import track_analysis as analysis
+        from soundbox.waveform_detail import analyze_imported, complete_import, DETAIL_MODEL
         from soundbox.preparation_inventory import PreparationInventory, signature
         inventory = (PreparationInventory(Path(self.track_analysis_dir) / 'preparation-index.json')
                      if self.track_analysis_dir else None)
-        policy = [1, int(time.time() // 1800), analysis.SCHEMA, analysis.COLOR_MODEL, analysis.WAVEFORM_MODEL,
+        policy = [2, int(time.time() // 1800), DETAIL_MODEL, analysis.SCHEMA, analysis.COLOR_MODEL, analysis.WAVEFORM_MODEL,
                   analysis.THREE_BAND_MODEL, analysis.DISPLAY_WAVEFORM_MODEL,
                   analysis.HEIGHT_ENCODING, analysis.RANGE_ENCODING,
                   analysis.RANGE_MIP_ENCODING, analysis.RANGE_MIP_DIVISORS]
@@ -939,8 +940,22 @@ class WaveformFillWorker(QThread):
                         and analysis_path and Path(analysis_path).is_file()
                         else ()
                     )
-                    if fallback_modes:
-                        current_import = read_analysis(analysis_path)
+                    compact_pending = bool(
+                        ready and not dataless and analysis_path
+                        and Path(analysis_path).is_file()
+                        and (analysis.load_manifest(
+                            self.track_analysis_dir, track_id, audio_path) or {}
+                             ).get("waveform_model") != DETAIL_MODEL)
+                    if fallback_modes or compact_pending:
+                        current_import = read_analysis(analysis_path, packed_only=True)
+                        if compact_pending and complete_import(current_import):
+                            # A playable legacy V5 is not finished preparation.
+                            # Upgrade local complete imports without waiting for
+                            # selection, keeping the old record until publication.
+                            todo.append((
+                                "compact", audio_path, str(analysis_path),
+                                track_id, bpm_hint, source_cues, None))
+                            continue
                         if imported_waveforms_need_sync(
                                 fallback_modes, current_import):
                             # Rekordbox can publish EXT/2EX after SoundBox's first
@@ -990,7 +1005,7 @@ class WaveformFillWorker(QThread):
         self._bulk_task_count = total
         task_counts = {
             kind: sum(task[0] == kind for task in todo)
-            for kind in ("v5", "v4-migrate", "grid-meta", "cue-meta")
+            for kind in ("v5", "v4-migrate", "compact", "grid-meta", "cue-meta")
         }
         if adopted_identities:
             LOG.info(
@@ -999,29 +1014,33 @@ class WaveformFillWorker(QThread):
                 adopted_identities)
         LOG.info(
             "Library preparation: %d task(s) "
-            "(%d analysis, %d grid metadata, %d cue metadata)",
+            "(%d analysis, %d compact upgrades, %d grid metadata, %d cue metadata)",
             total,
             task_counts["v5"] + task_counts["v4-migrate"],
+            task_counts["compact"],
             task_counts["grid-meta"],
             task_counts["cue-meta"],
         )
         self.tasks_ready.emit(total)
         done = 0
         i = 0
+        # Reclaiming replacements must not sit behind a full cook waiting for
+        # the larger disk reserve. Foreground selection still has priority.
+        todo.sort(key=lambda task: task[0] == "v5")
         while todo:
             priority = self._foreground_path()
             task_index = 0
             if priority:
                 task_index = next(
                     (j for j, task in enumerate(todo)
-                     if task[0] in {"v5", "v4-migrate"}
+                     if task[0] in {"v5", "v4-migrate", "compact"}
                      and task[1] == priority),
                     0,
                 )
             (kind, path, fallback_path, track_id, bpm_hint, imported_cues,
              imported_beats) = todo.pop(task_index)
             self._active_task_path = (
-                path if kind in {"v5", "v4-migrate"} else "")
+                path if kind in {"v5", "v4-migrate", "compact"} else "")
             i += 1
             if self._track_is_hidden(track_id):
                 if self.track_analysis_dir:
@@ -1035,16 +1054,25 @@ class WaveformFillWorker(QThread):
             if self.isInterruptionRequested():
                 break
             try:
-                if kind in {"v5", "v4-migrate"}:
+                if kind in {"v5", "v4-migrate", "compact"}:
                     # Unit tests exercise ``run`` synchronously. Production
                     # always reaches this path through QThread.start().
                     if self.isRunning() and not self._wait_for_storage(
-                            reclaiming=kind == "v4-migrate"):
+                            reclaiming=kind in {"v4-migrate", "compact"}):
                         break
                     # The source may have been evicted since planning or while
                     # waiting for playback/storage. Recheck at the I/O boundary.
                     if (track_id not in self.force_track_ids
                             and is_dataless_source(path)):
+                        self.progress.emit(i, total)
+                        self._active_task_path = ""
+                        continue
+                    existing = analysis.load_manifest(
+                        self.track_analysis_dir, track_id, path)
+                    if (kind == "compact" and (existing or {}).get(
+                            "waveform_model") == DETAIL_MODEL):
+                        # Interactive loading may have completed this while the
+                        # bulk worker waited. Never decode a finished upgrade.
                         self.progress.emit(i, total)
                         self._active_task_path = ""
                         continue
@@ -1067,10 +1095,13 @@ class WaveformFillWorker(QThread):
                         read_analysis(fallback_path)
                         if fallback_path and Path(fallback_path).is_file()
                         else None)
-                    from soundbox.waveform_detail import analyze_imported, complete_import
-                    prepared = (analyze_imported(path, imported, self._analysis_checkpoint)
+                    prepared = (analyze_imported(
+                        path, imported, self._analysis_checkpoint,
+                        lambda: qt_detail_peaks(
+                            path, checkpoint=self._analysis_checkpoint, supplement=True))
                                 if complete_import(imported) else None)
-                    if prepared is None and self._analysis_checkpoint():
+                    if (prepared is None and kind != "compact"
+                            and self._analysis_checkpoint()):
                         native = analyze_track(
                             path, bpm_hint, self._analysis_checkpoint
                         ) or qt_detail_peaks(
@@ -1078,6 +1109,9 @@ class WaveformFillWorker(QThread):
                         prepared = merge_import(native, imported) if native is not None else None
                     # Cancellation must never publish an imported-only shell.
                     if prepared is not None and not self.isInterruptionRequested():
+                        if (imported_cues is None and (existing or {}).get(
+                                "cue_import", {}).get("source") == "rekordbox-db"):
+                            imported_cues = existing.get("cues") or []
                         if prepared is not None and imported_cues is not None:
                             prepared = with_imported_cues(
                                 prepared, imported_cues)

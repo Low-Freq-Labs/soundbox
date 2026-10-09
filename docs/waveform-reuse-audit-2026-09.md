@@ -188,7 +188,9 @@ midpoint cells. No duplicate filter bank, spectral master or beat detection is
 run. The overview comes from PWV5. Incomplete/unsupported imports keep the full
 fallback. Compact V5 stores only one detail level and reconstructs its zoom mips
 in memory. It remains source-keyed, section-checksummed and atomically published.
-Old V5 remains ready; only selected local tracks upgrade on interactive load.
+At the September implementation, old V5 remained ready and only selected local
+tracks upgraded on interactive load. The October 9 follow-up adds automatic
+background upgrades for eligible local records; the old cache remains playable.
 New/missing tracks and explicit reanalysis use the same import-first route.
 
 Four complete records, generated only in the isolated developer cache:

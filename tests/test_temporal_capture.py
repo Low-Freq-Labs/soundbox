@@ -25,11 +25,11 @@ class TemporalCaptureAnalysis(unittest.TestCase):
         self.assertAlmostEqual(_fold_frequency(41.2, 60.0), -18.8)
 
     def test_mirrors_close_audio_detail_mip_choice(self):
-        for rate, expected in ((1000.0, 1), (6300.0, 8)):
-            for zoom in (384.0, 576.0, 864.0, 1152.0, 1500.0):
+        for rate, expected in ((1000.0, (2, 1, 1, 1, 1)), (6300.0, (8, 8, 8, 8, 8))):
+            for zoom, divisor in zip((384.0, 576.0, 864.0, 1152.0, 1500.0), expected):
                 summary = _signed_carrier_lattice_summary(rate, zoom, 2.0)
                 self.assertEqual(summary["selected_divisor"],
-                                 expected)
+                                 divisor)
                 self.assertAlmostEqual(summary["panel_alias_hz_signed"],
                                        _fold_frequency(rate / summary["selected_divisor"], 120.0))
 

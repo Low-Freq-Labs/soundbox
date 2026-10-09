@@ -195,19 +195,36 @@ The import-first path reads complete PWV3/PWV5/PWV7 plus grid data before select
 It produces only exact 1-ms signed stereo-midpoint extrema, with no duplicate
 filter bank, FFT or beat analysis, and builds its overview from PWV5.
 
+Background eligibility discovery reads packed PWV3/PWV5/PWV7 rows and PQTZ
+directly; it never expands whole-library per-sample color lists or generic ANLZ
+objects just to schedule upgrades. Full cue/display parsing remains per-track.
+
 Compact records use `soundbox-rekordbox-supplement-i16-v1` and
 `rekordbox-pwv5-rgb-v1`, store divisor 1 only, and omit the 24-band master. Loading
 builds `1/2/3/4/6/8/12/16/24/32/48/64` mips in memory. Incomplete imports and codecs
 not supported by the supplemental decoder retain full fallback analysis. Old
-V5 remains ready; startup does not force conversion. Interactive playback loads
-old analysis immediately and upgrades just that selected local track atomically.
+V5 remains ready while the recurring background worker queues eligible local
+records for compact conversion, one track at a time. Interactive playback still
+loads old analysis immediately and can finish a selected upgrade ahead of the queue.
 The old record survives interruption or failure; manual metadata ownership and
 DB cue authority survive replacement. Source changes, forced Reanalyze Track and
 late imports use the same preparation path. Dataless background reads remain
-deferred and per-track preparation receipts still avoid repeated work.
+deferred and per-track preparation receipts still avoid repeated work. The receipt
+policy includes the compact model so old ready receipts cannot hide pending
+upgrades. Compact tasks never fall back to a full analyzer after decode failure
+and recheck whether an interactive load already completed them. They use the
+5/7-GiB migration reserve and run ahead of non-foreground full cooks, which retain
+the 20/25-GiB reserve.
+
+AAC/ALAC compact supplements use QAudioDecoder at the native source rate when
+libsndfile cannot open the file. They retain imported streams/grid and do not run
+the full fallback analyzer.
 
 Loading remains generation-guarded: native decode, manifest, overview and detail.
-All cache decoding and waveform preparation stay off the UI thread. A complete
+All cache decoding and native waveform preparation stay off the UI thread.
+The native host never expands an unused Qt envelope during detail delivery.
+PWV5 carrier repair is vectorized without changing its output, and native
+display-stream publication checks the generation under its render lock. A complete
 native upload presents overview and all three display modes together. Source
 replacement rejects late generations. Native ABI 5 additionally accepts a tested
 timeline load contract. Tagged MPEG-1/LAME header facts are read on the decode
@@ -225,16 +242,22 @@ and divisor-dependent height compensation were removed after the September 29
 reference comparison. The 13 UI/native zoom stops end at 1500 points/s.
 
 One footprint-selected song-anchored mip feeds the fixed four-attributes-per-pixel
-lattice. The three widest stops and the 384–1500 close family use a half-pixel source
-footprint; the middle family keeps one pixel. Thin signed carriers use a
+lattice. The three widest stops use a half-pixel source footprint; all stops from
+64 through 1500 use one physical pixel. The October 2 close-zoom follow-up
+selects 2-ms compact detail at Retina 384, then 1-ms at 576–1500. Thin signed carriers use a
 one-physical-pixel minimum before coverage, replacing the former fixed
 3.6-point stroke. Color is
 premultiplied before the final one-pixel integral, with no adjacent-LOD blend or
 translated RGBA texture. Legacy/fallback spectral masters never recolor the
-imported display modes.
+imported display modes. RGB color recovery treats zero compact height as missing
+weighted evidence, using the existing authored color rather than black; positive
+weights cancel exactly. This October 8 correction affects colors only and needs
+no cache conversion.
 Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
-precision. The scrolling lane translates fixed height/hue attributes into each
+precision. Attribute generation uses absolute 128-attribute clock blocks, with
+CPU-double-derived anchors and phases, so overlapping tile rebuilds cannot
+round a held cell onto a different source sample. The scrolling lane translates fixed height/hue attributes into each
 final Retina drawable pixel. The fragment computes vertical silhouette
 coverage and composites the final color exactly once. The accepted
 quarter-pixel profile remains in use at 64–184 px/s for RGB/BLUE and below
@@ -243,21 +266,31 @@ quarter-pixel profile remains in use at 64–184 px/s for RGB/BLUE and below
 lattice to form the complete piecewise-linear profile; integrating those true
 segment spans avoids a hidden corner moving through a fixed probe interval.
 There is no translated RGBA texture or second coverage/color filter; every
-zoom retains fractional travel through the oversampled attribute lattice. The
-antialias window is exactly one physical pixel. The small overview applies
+zoom retains the oversampled attribute lattice. RGB/BLUE round the display
+offset to physical pixels through 384 points/s and whole logical points at
+576–1500; 3BAND retains fractional travel. Audio, grid and seek clocks remain
+continuous. Waveform-only position error is bounded by half a physical pixel
+through 384 and half a logical point at the close stops. The antialias window is exactly one physical pixel. The small overview applies
 continuous cubic vividness to true subpixel coverage; the scrolling lane uses
-geometric coverage rather than the overview's vividness transfer.
+mode-specific geometric coverage rather than the overview's vividness transfer.
 For BLUE/RGB signed intervals, the fragment integrates clipped linear coverage
 moments and visible color over the same pointwise intersection. It does not
 reapply the smaller of separately integrated upper/lower boundaries: that older
 approximation overfilled narrow diagonal traces and was removed October 2.
 PWV5 RGB and BLUE's center/width-dependent radial field accumulate in
-premultiplied linear light. Source extrema, mips and the one-pixel footprint are
-unchanged; the corrected alpha describes only the area actually covered.
+premultiplied linear light. BLUE splits at coverage and radial branch changes
+and uses four-point Gauss-Legendre quadrature within each branch; evaluating
+the nonlinear field only at the coverage centroid produced visible color error.
+BLUE composites that joint area directly. The October 6 accepted RGB policy
+makes occupied physical columns more solid using the existing extrema while
+preserving the joint integral's conditional color. It never creates a fragment
+where the joint area is zero or reduces the existing minimum-width stroke.
+This is intentionally conservative coverage, not an exact-area claim. Persisted
+extrema, mip data and the one-pixel source footprint remain unchanged.
 The canonical 64–256 px/s midrange family applies one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
 integration. The 24–48 distant stops and 384–1500 close family bypass it; it
-changes neither mip selection nor the continuous close-detail path.
+changes neither mip selection nor close source detail.
 Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
 hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:
@@ -265,9 +298,9 @@ display-authored waveform/grid RGB is decoded before the fragment result,
 coverage and fixed-function grid blending happen in linear light, and Metal
 encodes exactly once on store. Full colors and the `#0d0e12` clear remain
 unchanged while equal geometric edge phases retain equal displayed energy.
-Downbeat grid lines composite as opaque red over the waveform and ordinary
-beat lines as opaque gray. The grid is the final timing-reference layer; its
-color and contrast do not inherit the waveform underneath.
+The grid is the final timing-reference layer. Red downbeats and gray ordinary
+beats have density-controlled interior opacity and opaque edge ticks, with
+continuous analytic line coverage.
 There is no temporal shutter, so moving and paused contours have the same
 sharpness. Actual
 `MTLDrawable.presentedTime` callbacks, rather than display-link submissions,
@@ -291,7 +324,8 @@ pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
 carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
-uses continuous joint coverage/color integration directly. The installed September 30 correction additionally
+uses joint coverage/color integration, followed by the RGB-only conservative
+column presentation described above. The installed September 30 correction additionally
 retains the original color-premultiplication weight through attribute interpolation;
 reconstructing that weight from interpolated signed bounds spuriously brightens
 polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
@@ -684,3 +718,14 @@ the prior documented assumption; no device configuration was rewritten for the f
 
 Post-sync polling is held through the completion dialog only. Dismissal releases
 the hold so subsequent SoundBox edits can update drift without reconnecting.
+
+### Playback startup readiness (October 8)
+
+Native CloudStorage admission preserves POSIX read errors before AVAudioFile can
+obscure them. One-byte probes run only on the decode thread; ENEEDAUTH gets at
+most two cancellable three-second waits. This is transient readiness, not a
+content proof. Failed audio sources can reopen on Play while resident waveform
+buffers remain intact. PlayerBar cancels pending transport/cue/gain intentions on
+error; the bottom status exposes the cause. Visual prediction is bounded below
+by the current Play/seek frame until its CoreAudio presentation time arrives,
+preventing the initial backward jump without changing steady-state rendering.

@@ -66,7 +66,7 @@ def _signed_carrier_lattice_summary(
     footprint = (
         samples_per_second
         / max(1.0, pixels_per_second * drawable_scale)
-        * (0.5 if pixels_per_second < 64.0 or pixels_per_second >= 384.0
+        * (0.5 if pixels_per_second < 64.0
            else 1.0)
     )
     required = max(1.0, footprint * 0.94)

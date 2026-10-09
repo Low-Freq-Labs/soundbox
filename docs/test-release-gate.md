@@ -49,15 +49,22 @@ reference corpus, not recovery of the absent old screenshots or pixel parity.
 The old fragment replaced joint interval coverage with the minimum of two
 separately integrated edges. At a signed crossing, those edges can cover different
 horizontal parts of one pixel; taking the smaller average overfills it.
-The fragment now composites the joint coverage and visible color returned by
-`resolve_interval_surface`, with no later alpha replacement. Source extrema,
-color mapping, clock, LOD, reconstruction lattice and one-pixel footprint stay
-unchanged. No temporal or spatial detail smoothing was added.
+The October 2 correction made the fragment composite the joint coverage and
+visible color returned by `resolve_interval_surface`. BLUE retains that exact
+area contract. The October 6 accepted RGB presentation deliberately increases
+coverage in occupied columns, preserving the joint conditional color and existing
+minimum stroke; zero-area pixels stay empty. Its conservative presentation is
+not an exact-area claim. Source extrema, color mapping, LOD and one-pixel source
+footprint stay intact. RGB/BLUE use physical-pixel display increments through
+384 points/s and whole logical points at 576–1500, with continuous audio/grid/
+seek clocks. No temporal or spatial source smoothing was added.
 
 The former expected failure is now an ordinary passing numerical assertion.
 Tests execute the actual final fragment branch as well as its helper against
-independent pointwise quadrature. A mutation reinstates separate-edge averaging
-and must violate that oracle. Random profiles, sign crossings and tiny coverage
+independent pointwise quadrature and the explicit RGB column policy. A mutation
+reinstates separate-edge averaging in BLUE and must violate the exact-area oracle.
+Another removes RGB column presentation and must fail its conservative-coverage
+contract; thin-stroke and empty-pixel checks prevent overbroad implementations. Random profiles, sign crossings and tiny coverage
 pieces complement native translation/recenter tests across all modes and zooms.
 
 A 507-frame before/after comparison preserves all 169 3BAND frames exactly and
@@ -65,6 +72,46 @@ all recenter returns. Mean RGB/BLUE changes over the measured crop are below
 0.55 display-code values per channel at every zoom, with localized edge differences
 up to 78 codes. Evidence is in ignored `build/clean-release/`. These measurements
 are not a guarantee about every track, refresh mode or physical display.
-BLUE's radial-centroid color approximation and the accepted five-probe sampling
-branches remain design approximations; zero skipped tests does not establish
+The October 2 close-zoom follow-up replaces BLUE's radial-centroid color
+approximation with branch-split quadrature, checked against an independent dense
+color oracle and subdivision invariance. The accepted five-probe sampling
+branches remain approximations; zero skipped tests does not establish
 perfect rekordbox equivalence. Final installed state and validation: [HANDOFF.md](HANDOFF.md).
+
+October 8 playback regressions add native AAC/ALAC immediate Play and seek,
+retrying a failed source after it becomes readable, and nonzero-start visual
+monotonicity before the first audible timestamp. A pure C++ admission test injects
+CloudStorage ENEEDAUTH, permanent read errors and cancellation without contacting
+live cloud providers. UI tests require failed loads to cancel pending Play/cue/
+gain intentions and expose the failure in status plus its detailed tooltip.
+These tests do not certify cloud-service availability; the local Riddim reproduction and cloud-delay diagnosis were separate
+read-only investigations, not fixtures for this gate.
+
+The October 8 color-only regression exhausts all 512 PWV5 RGB codes at every
+zoom with zero, tiny and ordinary color weights. Native drawables require the
+same signed shape and color for zero/full compact height across primaries,
+secondary colors, white and the reported quiet green. The previous renderer
+fails this regression. This protects against fabricated black in valid quiet
+colors without changing source-detail or coverage expectations.
+
+### October 9 background compact-detail scheduling
+
+Hermetic worker regressions seed a valid legacy V5 with complete imported
+streams, then require upgrade without any player selection. Later scans and a
+first interactive load must not decode it again. Additional cases cover cloud
+deferral and eviction after waiting, cancellation/decode failure preserving the
+old bytes, DB cues/manual grids surviving replacement, migration-reserve routing,
+and an interactive upgrade completing while queued. Existing checks retain
+source immutability, hidden-track handling and bounded preparation receipts.
+The packed discovery-reader fixture verifies exact grid/stream bytes while
+forbidding generic ANLZ parsing, so the eligibility scan cannot accidentally
+expand the entire library into per-sample Python colors.
+
+
+October 9 rapid-load tests forbid unused Qt envelope expansion during native
+four-minute detail delivery, compare vectorized carrier repair with an independent
+scalar reference, reject late generation uploads, and exercise cancelled reads.
+Generated AAC/ALAC supplements preserve imported bytes and native sample rate;
+ALAC extrema match the generated WAV reference exactly. Muted native browser-load
+tests cover playing/paused replacement, rapid latest-request selection, pending
+grid/media, transient PAUSED reports, explicit pause fades and CUE latch policy.

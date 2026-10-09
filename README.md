@@ -47,7 +47,8 @@ library management available.
    Finder into Collection or a SoundBox playlist.
 2. Curate titles, artists, playlists, and cover art in SoundBox. Edits remain
    SoundBox-owned; they do not retag your source audio.
-3. Double-click a track to load it paused. **Space** toggles the loaded deck;
+3. Double-click a track to load it. Playing decks keep playing; paused decks stay
+   paused. **Space** toggles the loaded deck;
    **C** is momentary CUE. Use the waveform and overview to inspect the track.
 4. Connect a supported player and inspect its identity under **Devices**. Drag a
    playlist to the device and follow the displayed planning/confirmation flow.
@@ -245,7 +246,8 @@ It includes a whole-song overview, thirteen detail zoom levels from 24–1500
 px/s, bar/beat
 counting, previous/next, selectable beat/bar jumps, momentary CUE, clean
 play/pause/seek ramps, and precise pause-preview-resume scrubbing. Double-click
-is the only browser load gesture and loads paused; Space only toggles the
+is the only browser load gesture and preserves playback: a new track plays when
+the deck was playing, or loads paused when it was paused. Space only toggles the
 loaded deck, and C is momentary CUE. Grabbing the playing waveform pauses it
 immediately; releasing without moving resumes from the exact held timestamp.
 A native atomic hold uses the frame actually visible under the fixed playhead,
@@ -267,8 +269,9 @@ red upward arrow in both scales.
 Waveform colors and three-band shapes come directly from imported rekordbox
 analysis when complete. Compact caches store one signed detail base and build
 zoom levels in memory, omitting duplicate spectral analysis. Existing caches
-remain playable and upgrade individually when loaded; startup does not rebuild
-the library. Incomplete imports retain SoundBox's generated fallback colors.
+remain playable while eligible local tracks upgrade individually in the background;
+there is no need to load each song. Offloaded audio waits until it is local.
+Incomplete imports retain SoundBox's generated fallback colors.
 Rekordbox and source audio remain read-only. Native-deck failure disables
 playback with a diagnostic while library management remains available.
 
