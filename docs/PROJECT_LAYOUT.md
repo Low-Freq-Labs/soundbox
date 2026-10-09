@@ -34,6 +34,11 @@ Python/tool caches were moved reversibly to:
 
 `~/.Trash/Soundbox-project-cleanup-2026-10-09/`
 
+The first Trash batch was already absent by final verification; this cleanup did
+not empty Trash. Regenerated validation caches were subsequently moved into its
+`after-validation/` subdirectory. Do not depend on Trash for recovery evidence;
+all retained diagnostic evidence uses the separate archive below.
+
 Historical diagnostic scripts, captures, comparison libraries and audit reports
 were moved with their original `build/` subpaths into:
 

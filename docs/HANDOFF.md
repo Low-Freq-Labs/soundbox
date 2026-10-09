@@ -34,7 +34,16 @@ moved outside the checkout with original subpaths and a move manifest; see
 [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact locations. Earlier `build/` evidence
 references below now resolve under that archive. Current `build/native/` and
 `build/check/`, the development environment and required fixtures remain.
-Installed app, AppData and protected recovery are unchanged.
+Installed app, AppData and protected recovery are unchanged. The cleaned checkout
+passed bare `./check.sh`: 1,104 tests, zero skips/expected failures, plus native
+build and lint/types. All 130 relative Markdown references/anchors, instruction
+parity and diff whitespace checks passed. No UI/runtime source changed, so the
+already inspected render and accepted installed binary remain applicable.
+Generated tool/Python caches were moved to Trash again after validation.
+The initial cleanup moved 5,435,468,547 logical bytes out of the project.
+At final verification the first Trash batch was already absent; its removal was
+not performed by this cleanup. All 13 diagnostic archive directories remain.
+The external archive records this separately in `post-validation.json`.
 
 ## Validation
 
