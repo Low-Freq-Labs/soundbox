@@ -41,6 +41,15 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    settings_tab = None
+    for name in ("General", "Keyboard", "Connections", "Graveyard"):
+        flag = "--settings-" + name.lower()
+        if flag in sys.argv:
+            settings_tab = name
+            sys.argv.remove(flag)
+    credentials = "--credentials" in sys.argv
+    if credentials:
+        sys.argv.remove("--credentials")
     ready_device = "--ready-device" in sys.argv
     if ready_device:
         sys.argv.remove("--ready-device")
@@ -136,6 +145,15 @@ def _render() -> None:
     win.show()
     for _ in range(3):
         app.processEvents()
+    if settings_tab:
+        win.hidden = {"2", "4", "7"}
+        win.hidden_dates = {"2": "2026-10-24 06:30", "4": "2026-10-23 15:22", "7": "2026-10-22 09:04"}
+        win._refresh_graveyard()
+        win.body_stack.setCurrentIndex(1)
+        for index in range(win._settings_tabs.count()):
+            if win._settings_tabs.tabText(index) == settings_tab:
+                win._settings_tabs.setCurrentIndex(index)
+        app.processEvents()
     if sync_progress:
         from threading import Event
         from soundbox.device_operations import Phase
@@ -159,6 +177,15 @@ def _render() -> None:
         app.processEvents()
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/soundbox.png"
     win.grab().save(out)
+    if credentials:
+        from pathlib import Path
+        from desktop.connections import CredentialsDialog
+        dialog = CredentialsDialog(parent=win)
+        dialog.show()
+        app.processEvents()
+        target = Path(out)
+        dialog.grab().save(str(target.with_name(target.stem + "-credentials.png")))
+        dialog.close()
     win.shutdown()
     print("saved", out, "| devices:", win.device_tree.topLevelItemCount())
 

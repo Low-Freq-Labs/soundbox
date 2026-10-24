@@ -19,6 +19,17 @@ class TestCoreAndSplit(unittest.TestCase):
         self.assertEqual(
             _core_title_for_artist("CRASH TEST - WODD", "WODD"), "CRASH TEST")
 
+    def test_remixer_credit_does_not_reverse_original_artist_prefix(self):
+        for title, artist, expected in (
+            ("PHAROAHE MONCH - SIMON SAYS (MYTHM FLIP)", "MYTHM", "SIMON SAYS"),
+            ("Huey- Pop, Lock & Drop It - (SAINT MILLER REMIX)",
+             "SAINT MILLER", "Pop, Lock & Drop It"),
+            ("Usher, Lil Jon, Ludacris - Yeah! (Hairitage Edit)", "Hairitage", "Yeah!"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(_core_title_for_artist(title, artist), expected)
+        self.assertEqual(_core_title_for_artist("Self- Control", "An Artist"), "Self- Control")
+
     def test_split_artists(self):
         self.assertEqual(_split_artists("DENNETT x MACKAI"), ["DENNETT", "MACKAI"])
         self.assertEqual(_split_artists("FLY VS HORSE"), ["FLY", "HORSE"])
@@ -29,6 +40,92 @@ class TestCoreAndSplit(unittest.TestCase):
 
 
 class TestMatchScoreAccuracy(unittest.TestCase):
+    def _score(self, title, artist, candidate, uploader):
+        cleaned = clean(title)
+        return _match_score(cleaned, _core_title_for_artist(cleaned, artist),
+                            artist, candidate, uploader)
+
+    def test_own_account_omitted_original_artist_and_edit_credit(self):
+        cases = (
+            ("PHAROAHE MONCH - SIMON SAYS (MYTHM FLIP)", "MYTHM",
+             "SIMON SAYS (MYTHM FLIP) (FREE DL)", "MYTHM"),
+            ("Huey- Pop, Lock & Drop It - (SAINT MILLER REMIX)", "SAINT MILLER",
+             "Pop, Lock & Drop It", "SAINT MILLER"),
+        )
+        for args in cases:
+            with self.subTest(title=args[0]):
+                self.assertGreaterEqual(self._score(*args), MIN_CONFIDENCE)
+
+    def test_own_account_reordered_working_title_and_small_spelling_difference(self):
+        cases = (
+            ("OSSIEN - BLAST LIKE Sippy, Bear Gryllz (OSSIEN Remix) - FINAL", "OSSIEN",
+             "Sippy, Bear Grillz - Blast Like (OSSIEN Remix)", "OSSIEN"),
+            ("POP DAT THANGG (EYEWITNESS X DEBBIE CHECK REMIX)", "DEBBIE CHECK",
+             "GLORILLA - POP DAT THANG (DEBBIE CHECK X EYEWITNESS REMIX)", "Debbie Check"),
+        )
+        for args in cases:
+            with self.subTest(title=args[0]):
+                self.assertGreaterEqual(self._score(*args), MIN_CONFIDENCE)
+
+    def test_edit_rescue_rejects_wrong_artist_version_and_song(self):
+        title = "POP DAT THANGG (EYEWITNESS X DEBBIE CHECK REMIX)"
+        for candidate, uploader in (
+            ("GLORILLA - POP DAT THANG (DEBBIE CHECK X EYEWITNESS REMIX)", "Random Reposts"),
+            ("POP DAT THANGG (SOMEONE ELSE REMIX)", "Debbie Check"),
+            ("POP DAT THANGG (EYEWITNESS X DEBBIE CHECK FLIP)", "Debbie Check"),
+            ("STOP THAT THING (DEBBIE CHECK X EYEWITNESS REMIX)", "Debbie Check"),
+            ("POP DAT THANGG DOWN (DEBBIE CHECK X EYEWITNESS REMIX)", "Debbie Check"),
+        ):
+            with self.subTest(candidate=candidate, uploader=uploader):
+                self.assertLess(self._score(title, "DEBBIE CHECK", candidate, uploader),
+                                MIN_CONFIDENCE)
+        self.assertLess(self._score(
+            "PHAROAHE MONCH - SIMON SAYS (MYTHM FLIP)", "MYTHM",
+            "SIMON SAYS VIP", "MYTHM"), MIN_CONFIDENCE)
+
+    def test_fixed_song_core_drives_search_and_selection(self):
+        from unittest.mock import patch
+        from soundbox_personal import discovery as af
+        entry = {"title": "Pop, Lock & Drop It", "uploader": "SAINT MILLER",
+                 "webpage_url": "https://soundcloud.com/saint-baek/pop-lock-drop-it",
+                 "thumbnail": "https://example.invalid/cover.jpg"}
+
+        def search(query, n):
+            return [entry] if query == "SAINT MILLER Pop, Lock & Drop It" else []
+
+        with patch.object(af, "_flat_search", side_effect=search) as queries, \
+                patch.object(af, "_download", return_value=(b"cover", "image/jpeg")):
+            result = af.fetch_best(
+                "SAINT MILLER", "Huey- Pop, Lock & Drop It - (SAINT MILLER REMIX)")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.source_url, entry["webpage_url"])
+        self.assertEqual(queries.call_args_list[-1].args[0],
+                         "SAINT MILLER Pop, Lock & Drop It")
+
+    def test_label_artist_credits_rank_exact_song_above_repost_mashup(self):
+        from unittest.mock import patch
+        from soundbox_personal import discovery as af
+        label = {"title": "echo", "uploader": "Sweet Sounds Collective",
+                 "artists": [" huck.jorris x KiLO "],
+                 "webpage_url": "https://soundcloud.com/sweetsoundscollective/echo",
+                 "thumbnail": "https://example.invalid/original.jpg"}
+        mashup = {"title": "huck.jorris x KiLO- echo x Coast Modern- The Way It Was",
+                  "uploader": "Jasmine Nichole", "thumbnail": "https://example.invalid/mashup.jpg"}
+        with patch.object(af, "_flat_search", return_value=[mashup, label]), \
+                patch.object(af, "_download", return_value=(b"correct cover", "image/jpeg")):
+            picked = af.search_candidates("huck.jorris x KiLO", "huck.jorris x KiLO - echo")
+            result = af.fetch_best("huck.jorris x KiLO", "huck.jorris x KiLO - echo")
+        self.assertEqual(picked[0]["url"], label["webpage_url"])
+        self.assertEqual(result.source_url, label["webpage_url"])
+
+    def test_label_same_title_requires_structured_artist_credit_and_complete_core(self):
+        for credits, candidate in ((None, "echo"), (["Someone Else"], "echo"),
+                                   (["huck.jorris x KiLO"], "echo x Another Song")):
+            with self.subTest(credits=credits, candidate=candidate):
+                self.assertLess(_match_score(
+                    "huck.jorris x KiLO - echo", "echo", "huck.jorris x KiLO",
+                    candidate, "Sweet Sounds Collective", credits), MIN_CONFIDENCE)
+
     def test_uploader_same_account_rescues_prefixed_title(self):
         # Their OWN upload omits the "SAKURO -" prefix → low full ratio, but uploader
         # is Sakuro and the core song is present → confident.

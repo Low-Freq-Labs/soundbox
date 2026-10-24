@@ -1,25 +1,43 @@
 # SoundBox roadmap
 
-Updated October 9, 2026. Current priorities and remaining acceptance are below;
+Updated October 24, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
-## Current focus — normal use for one to two weeks
+## Current focus — artwork accuracy and Settings
 
-Sonny accepted the installed October 9 build and plans to use it normally for
-one to two weeks. The waveform, background preparation, rapid-load and
-playback-preserving replacement work is complete. No further renderer retuning,
-cache rebuild or device experiment is queued for this observation period.
-Investigate concrete new reports if they arise; do not turn the deferred items
-below into unsolicited changes to the accepted build.
+Sonny's October 24 report led to source changes for bracket-aware song matching,
+accountable label credits, and an optional personal SoundCloud connection that
+prioritizes liked tracks. Settings now separates General, Keyboard, Connections
+(personal), and an expanded Graveyard. Keyboard mappings support multiple bindings,
+conflict moves and safe held-cue routing; 1–8 use the active cue page, 9 selects
+Hot Cue and 0 selects Memory Cue. The five title-cleanup defaults use the requested
+concise labels and include exact `(Original Mix)` removal.
 
-Broader use is still the check for workload-specific UI hesitations and physical
-motion perception. Exact rekordbox pixel/3BAND calibration, the retained profile
-approximation and fallback/codec equivalence are not certified by the automated
-gate. Cloud-only tracks still depend on their provider supplying audio bytes.
-The separate device and public-release gates below remain future work.
-Retain the intermittent native-test observations in HANDOFF if they recur;
-passing reruns do not establish their cause.
+The personal app is installed as **build 126**, with the full offscreen/Cocoa
+release and render gates passing. Native synthetic acceptance covers numeric
+Hot/Memory cues, original-page release, Space latching and persisted remapping.
+Sonny accepted the Settings presentation and requested the full commit/push wrap-up.
+Real SoundCloud browser authorization/Keychain consent and the first actual likes
+scan remain user setup/acceptance; offline tests do not certify that external flow.
+See [HANDOFF](HANDOFF.md), [KEYBOARD](KEYBOARD.md), and
+[SoundCloud setup](soundcloud-connection.md) for current provenance and setup.
+
+Sonny also requested retaining only the current installed app. The older rollback,
+36 empty historical app shells, duplicate dist build, packaging intermediates and
+separately approved 3.5-GB diagnostic archive were removed. Required test/device
+fixtures and curation backups remain. About 4.55 GB of logical data was removed;
+free space was about 14 GiB afterward. Eleven tracks already lacked analysis caches
+before installation; preparation remains paused by the existing low-space policy.
+Sonny is updating macOS and expects more room after reboot; do not lower the guard
+or trigger a manual cache rebuild. See [PROJECT_LAYOUT](PROJECT_LAYOUT.md).
+
+The accepted October 9 renderer, background preparation and playback-preserving
+replacement remain unchanged. Further renderer retuning, cache rebuild and device
+experiments remain unqueued. The earlier native-test timing observations remain
+unresolved; passing reruns do not establish their cause. Exact rekordbox pixel/
+3BAND calibration, profile approximation, cloud-provider latency, device physical
+acceptance and public distribution clearance remain separate limits below.
 
 ## Completed player and preparation work — October 2–9
 

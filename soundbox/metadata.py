@@ -382,11 +382,12 @@ _RENDER_PATTERN = (
 
 BUILTIN_TITLE_RULES = (
     # (id, concise user-facing name, case-insensitive regex)
-    ("mixdown", "Mixdown markers  FINAL / MASTER / M#", _MIXDOWN_PATTERN),
-    ("version", "Copy/version tags  (1) [V3] v2.3", _VERSION_PATTERN),
-    ("bpmkey", "BPM/key tags  #bpm / [BPM-key] / 4A - 140 - …",
+    ("mixdown", "Mixdown Label", _MIXDOWN_PATTERN),
+    ("version", "Copy / Version tags", _VERSION_PATTERN),
+    ("bpmkey", "BPM / Key tags",
      _BPM_KEY_PATTERN),
-    ("render", "Render/file tags  (320) 24bit WAV MP3", _RENDER_PATTERN),
+    ("render", "Render / File tags", _RENDER_PATTERN),
+    ("drop", 'Drop "(Original Mix)"', "(Original Mix)"),
 )
 
 # Users may have disabled one of the old implementation-shaped rows. Merging
@@ -414,7 +415,13 @@ def junk_patterns(rules_off=(), words=()) -> list:
     """The effective pattern list from the user's rule toggles + custom words."""
     off = set(normalize_title_rules_off(rules_off))
     pats = [pat for rid, _name, pat in BUILTIN_TITLE_RULES if rid not in off]
-    return pats + [w.strip() for w in (words or ()) if w and w.strip()]
+    return pats + [w.strip() for w in (words or ()) if w and w.strip()
+                   and not is_default_title_drop(w)]
+
+
+def is_default_title_drop(word: str) -> bool:
+    """Legacy custom copies belong to the default toggle; retain saved data."""
+    return bool(re.fullmatch(r"\(\s*Original\s+Mix\s*\)", word.strip(), re.I))
 
 
 DEFAULT_TITLE_JUNK = tuple(junk_patterns())

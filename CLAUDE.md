@@ -292,6 +292,8 @@ unknown config lines; retain the established numbered playlist filenames.
 | `docs/archive/repeated-work-audit-2026-09.md` | Completed non-USB optimizations and before/after evidence |
 | `docs/software-audit-2026-09.md` | Architecture, lifecycle, persistence and performance findings with evidence |
 | `docs/release-boundaries.md` | Public/personal scope, provider contract and distribution boundaries |
+| `docs/KEYBOARD.md` | Keymap editor, action catalog, default numeric cues and held-key routing |
+| `docs/soundcloud-connection.md` | Personal OAuth/Keychain setup, likes index and acceptance boundary |
 | `docs/PLAYER.md` | Player behavior, native architecture, cache formats, cue/transport/render invariants, QA references, and deferred grid work |
 | `docs/archive/waveform-reuse-audit-2026-09.md` | Rekordbox-first waveform implementation, storage audit, diagnostic previews and remaining acceptance |
 | `docs/DEVICES.md` | Rockbox/stock/dual-boot/generic layouts, capability boundaries, and validation |
@@ -426,6 +428,13 @@ directory for the install, not a new trail of persistent backups.
 5. Verify the signature, relaunch, and confirm the native-deck startup log,
    library load, zero unnecessary preparation, and curated-state integrity.
 
+After the installed app passes verification and Sonny accepts it, retain only the
+current `/Applications/Soundbox.app` and active source checkout. Remove the prior
+rollback app, duplicate dist app and obsolete packaging intermediates; do not
+accumulate zombie `.app` directories. Keep small install/provenance records and
+curated library backups separately. Required offline fixtures and device recovery
+material are not application rollbacks and remain protected.
+
 Moving/replacing the `.app` bundle must never touch
 `~/Library/Application Support/LowFreqLabs/Soundbox/`.
 
@@ -480,9 +489,22 @@ artifact on Sonny's Mac. Frozen profiles come from the signed bundle manifest;
 user settings/environment cannot enable an excluded provider. Source runs may use
 `SOUNDBOX_PROFILE=public`. Existing SoundCloud discovery is in
 `soundbox_personal.discovery`; core `soundbox.providers` owns typed interfaces and
-explicit module/action admission. Core retains all state and device authority.
+explicit module/action admission. Core retains canonical library/artwork state and device authority.
 Online functionality is public-eligible only after service/content and dependency
 clearance; personal packaging does not waive those terms.
 `--isolated-check OUTPUT_DIRECTORY` launches an empty disposable-state packaged
 smoke check, suppresses library/device discovery, writes a screenshot/report and
 exits. It is not live-library or physical-device acceptance.
+
+
+Keyboard mappings use the shared `desktop.keyboard` action catalog and physical
+press/release router. Preserve text-focus boundaries, press-time cue page/slot,
+modifier-independent release, alias hold ownership and release on deactivation,
+shutdown or successful remap. Save before replacing the live map; restore reloads
+both router and editor. See `docs/KEYBOARD.md` before changing keyboard transport.
+
+Personal SoundCloud credentials and rotating OAuth tokens live only in Keychain.
+Never log or persist them in library state, backups, source or build output.
+The optional connection's disposable metadata/index is separate from curation;
+connecting never clears manual art, misses or blocks. Account jobs use TaskOwner,
+and test/isolated harnesses must never read live Keychain or auto-refresh accounts.

@@ -3,9 +3,9 @@
   "profile": "personal",
   "modules": [{
     "id": "lowfreqlabs.soundcloud",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "core_api": 1,
-    "actions": ["artwork.search", "artwork.url", "artists.suggest"],
+    "actions": ["artwork.search", "artwork.url", "artists.suggest", "connections.soundcloud"],
     "dependencies": ["yt-dlp==2026.8.19"]
   }]
 }

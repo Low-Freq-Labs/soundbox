@@ -1,6 +1,6 @@
 # Project layout and retention
 
-Updated October 9, 2026. This describes the checkout, not the installed app's
+Updated October 24, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 
 ## Active checkout
@@ -27,7 +27,34 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## October 9 cleanup
+## Current retention — October 24
+
+Only the current installed `/Applications/Soundbox.app` is retained. After build
+126 passed release/native/render checks and Sonny accepted the UI, he requested
+removing app/source rollback clutter and separately approved deleting the old
+diagnostic archive. Cleanup removed the preceding build-122 rollback, 36 empty
+historical `.app` shells, duplicate `dist/` app, `build/personal/` packaging
+intermediates, and `~/Library/Logs/Soundbox/development-archive-2026-10-09/`.
+The former `/private/tmp/soundbox-lifecycle-rollback.18e3k4di/` and the empty
+sync-performance rollback directory were removed. They are no longer recovery
+locations. No other installed SoundBox copy was found in the checked project,
+Downloads/Desktop/Applications/Trash locations and Spotlight results.
+
+Removed logical bytes: **4,549,925,705**; observed available space rose from about
+10.03 to 14.61 billion bytes (APFS availability can change independently).
+The final installed app was reverified before/after cleanup. Active checkout,
+`.venv`, `build/native`, current `build/check` and `build/artwork-review-oct24`
+validation evidence remain. Required `soundbox-ipod-ref`, `soundbox-waveform-ref`,
+`soundbox-cdj-ref`, generation-58 recovery and all live AppData remain protected.
+
+Small installation/provenance records and the preinstall/postquit library-state
+snapshots live in `~/Library/Logs/Soundbox/install-evidence-2026-10-24/`.
+Those are curation/review material, not duplicate app/source trees. The cleanup
+inventory is recorded there and under `build/artwork-review-oct24/cleanup.json`.
+Source revision history remains in Git; future accepted installs should not retain
+old apps or dist copies indefinitely.
+
+## Historical October 9 cleanup (archive deleted October 24)
 
 Obsolete root/public/personal packaged apps, PyInstaller intermediates and
 Python/tool caches were moved reversibly to:
@@ -44,10 +71,13 @@ were moved with their original `build/` subpaths into:
 
 `~/Library/Logs/Soundbox/development-archive-2026-10-09/`
 
-That archive contains `moves.json` with exact source/destination paths, file counts
-and logical sizes. Old `build/<investigation>/...` references in dated docs resolve
-under that archive. The scripts are retained as evidence and may contain old
-absolute paths; inspect/adapt them before rerunning. Latest gate reports remain
+That archive originally contained `moves.json` with exact source/destination paths,
+file counts and logical sizes. Sonny explicitly approved deleting the entire archive
+on October 24; those generated files and its manifest are no longer retained.
+Old `build/<investigation>/...` references in dated docs formerly resolved
+under that archive and now identify deleted historical evidence. They are not
+current operational paths. Required regression fixtures remain in the checkout.
+Latest gate reports remain
 at `build/check/`. Moving files out of this directory does not itself reclaim
 volume space; Trash can be emptied separately when desired.
 
@@ -56,6 +86,7 @@ there are in [player history](archive/player-history-2026-07-to-09.md). Complete
 reports are indexed in [the archive](archive/README.md). Exploratory concepts are
 in [IDEAS](IDEAS.md), separate from the committed [ROADMAP](ROADMAP.md).
 
-The installed `/Applications/Soundbox.app`, all live SoundBox AppData, source
-music, rekordbox data, required fixtures and generation-58 recovery were untouched.
+The October 9 cleanup left the then-installed app, live SoundBox AppData, source
+music, rekordbox data, required fixtures and generation-58 recovery untouched.
+The installed app was later updated to build 126 on October 24 as recorded above.
 Current installed provenance and recovery location remain in [HANDOFF](HANDOFF.md).

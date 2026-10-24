@@ -111,6 +111,22 @@ QComboBox QAbstractItemView {{
 }}
 
 /* settings page: section header + per-row title/subtitle (scales cleanly) */
+QTabWidget#SettingsTabs::pane {{ border: none; border-top: 1px solid {BORDER}; }}
+QTabWidget#SettingsTabs QTabBar::tab {{
+    background: {BG}; color: {TEXT_DIM}; border: none;
+    border-bottom: 2px solid transparent; padding: 10px 22px;
+}}
+QTabWidget#SettingsTabs QTabBar::tab:selected {{
+    color: {TEXT_HI}; border-bottom-color: {PURPLE_LIGHT};
+}}
+QTabWidget#SettingsTabs QTabBar::tab:hover {{ color: {TEXT_HI}; }}
+QTreeWidget#Graveyard {{ background: {ROW}; alternate-background-color: {ROW_ALT};
+    border: none; selection-background-color: {PURPLE_DARK}; }}
+#ShortcutRow {{ background: {ROW}; border-radius: 4px; }}
+#ShortcutCapture {{ font-size: 20px; color: {TEXT_HI}; background: {PANEL};
+    border: 1px solid {BORDER}; border-radius: 5px; }}
+QPushButton#ShortcutKey {{ background: {PANEL2}; color: {TEXT_HI}; }}
+QPushButton#ShortcutRemove {{ padding: 4px; color: {TEXT_DIM}; }}
 #SettingsSection {{ color: {TEXT_DIM}; font-size: 10px; font-weight: 700;
     letter-spacing: 1.5px; padding: 0 0 5px 0; border-bottom: 1px solid {BORDER}; }}
 #SettingsTitle {{ color: {TEXT_HI}; font-size: 13px; background: transparent; }}

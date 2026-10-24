@@ -97,8 +97,7 @@ from PySide6.QtCore import (
     QTimer,
 )
 from PySide6.QtGui import (
-    QColor, QFontDatabase, QIcon, QKeySequence, QPainter, QPixmap, QPolygonF,
-    QShortcut,
+    QColor, QFontDatabase, QIcon, QPainter, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QLineEdit,
@@ -139,6 +138,7 @@ from . import theme
 from .mount_watch import mounted_volume_snapshot
 from .artpicker import ArtPickerDialog
 from .task_owner import TaskOwner
+from .keyboard import KeyboardRouter, Keymap, event_binding
 from .model import (
     COLUMNS, TrackModel, row_display_value, row_matches as _row_matches,
 )
@@ -317,6 +317,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.playlist_additions: dict[str, list[str]] = {}
         self.aliases: dict[str, str] = {}    # artist merges: variant -> target
         self.settings: dict = dict(_DEFAULT_SETTINGS)
+        self._keyboard_router = KeyboardRouter(self._dispatch_keyboard_action)
         self.export_worker: ExportWorker | None = None
         self._backup_worker = None  # OneShotTask for backup zip / restore
         self._default_photo_worker = None  # managed pool image normalization
@@ -487,6 +488,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.settings.get("title_rules_off"))
         self.settings.pop("title_junk", None)  # v1 raw-pattern list — superseded
         self.settings.pop("deck_engine", None)  # retired Qt playback preference
+        self._keyboard_router.release_all()
+        self._keyboard_router.keymap = Keymap(self.settings.get("keyboard"))
+        self._keyboard_page.set_keymap(Keymap(self._keyboard_router.keymap.dump()))
         # Geometry must land before the splitter sizes. Restoring the panes into
         # the old hard-coded 1240x800 frame made Qt compress them, then resizing
         # the window redistributed them a second time.
@@ -698,9 +702,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._focus_now_playing()
             return True
 
-        # Space and C are deck controls only from browsing surfaces. Editors,
+        # Configurable shortcuts are deck controls only from browsing surfaces. Editors,
         # search, settings trees, dialogs, and the device browser keep their
-        # native text/toggle behavior. Modifier chords (Cmd+C) are never stolen.
+        # native text/toggle behavior. Text editing retains its standard chords.
         if ev.type() in (
                 QEvent.Wheel, QEvent.Resize, QEvent.ApplicationActivate,
                 QEvent.ApplicationDeactivate):
@@ -717,41 +721,92 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.player_bar.resynchronize_transport()
             return super().eventFilter(obj, ev)
         if ev.type() == QEvent.ApplicationDeactivate:
-            if getattr(self, "_cue_key_down", False):
-                self._cue_key_down = False
-                self.player_bar._cue_release()
+            self._keyboard_router.release_all()
             return super().eventFilter(obj, ev)
         if ev.type() not in (
                 QEvent.ShortcutOverride, QEvent.KeyPress, QEvent.KeyRelease):
             return super().eventFilter(obj, ev)
         focus = QApplication.focusWidget()
-        no_modifier = ev.modifiers() == Qt.NoModifier
         browsing = self._space_should_play(focus)
-        if (ev.key() == Qt.Key_C and no_modifier and browsing
-                and ev.type() == QEvent.ShortcutOverride):
-            # Keep the key application-owned if a widget shortcut is added in
-            # the future. This event does not control Cocoa press-and-hold;
-            # the packaged bundle policy and NoTypeAhead boundary do that.
-            ev.accept()
+        if (self._keyboard_router.keymap.action(event_binding(ev)) == "app.settings"
+                and not isinstance(focus, QLineEdit)):
+            browsing = True
+        browsing = (browsing and QApplication.activeModalWidget() is None
+                    and QApplication.activePopupWidget() is None
+                    and not self._shutting_down and not self._state_maintenance)
+        if self._keyboard_router.handle(ev, browsing):
             return True
-        if (ev.key() == Qt.Key_Space and no_modifier
-                and ev.type() == QEvent.KeyPress and not ev.isAutoRepeat()):
-            if browsing:
-                self._toggle_player()
-                return True
-        if ev.key() == Qt.Key_C:
-            if ev.type() == QEvent.KeyRelease and getattr(
-                    self, "_cue_key_down", False):
-                self._cue_key_down = False
-                self.player_bar._cue_release()
-                return True
-            if no_modifier and browsing and ev.type() == QEvent.KeyPress:
-                if (not ev.isAutoRepeat()
-                        and not getattr(self, "_cue_key_down", False)):
-                    self._cue_key_down = True
-                    self.player_bar._cue_press()
-                return True
         return super().eventFilter(obj, ev)
+
+    def _save_keyboard(self, state) -> bool:
+        previous = self.settings.get("keyboard")
+        self.settings["keyboard"] = state
+        if not self._save_state():
+            if previous is None:
+                self.settings.pop("keyboard", None)
+            else:
+                self.settings["keyboard"] = previous
+            return False
+        self._keyboard_router.release_all()
+        self._keyboard_router.keymap = Keymap(state)
+        return True
+
+    def _dispatch_keyboard_action(self, action):
+        pb = self.player_bar
+        if action == "transport.cue":
+            self._cue_key_down = True
+            pb._cue_press()
+            def release():
+                self._cue_key_down = False
+                pb._cue_release()
+            return release
+        if action.startswith(("cues.slot.", "hot.", "memory.")):
+            panel = pb.cue_panel
+            slot = int(action.rsplit(".", 1)[1])
+            if action.startswith("cues.slot."):
+                kind = "hot" if panel.pages.currentIndex() == 0 else "memory"
+            else:
+                kind = action.split(".")[0]
+            if panel._loaded and panel._cues[kind][slot] is not None:
+                for _held_action, held_release in self._keyboard_router.held.values():
+                    if getattr(held_release, "cue_control", None) == (kind, slot):
+                        return held_release
+                button = (panel.hot_slots if kind == "hot" else panel.memory_slots)[slot]
+                button.setDown(True)
+                panel._press(kind, slot)
+                def release_marker():
+                    button.setDown(False)
+                    pb._marker_cue_release(kind, slot)
+                release_marker.cue_control = (kind, slot)
+                return release_marker
+            return None
+        commands = {
+            "transport.play": self._toggle_player,
+            "transport.previous": lambda: pb.previous_btn.click(),
+            "transport.next": lambda: pb.next_btn.click(),
+            "transport.back": lambda: pb.beat_back_btn.click(),
+            "transport.forward": lambda: pb.beat_forward_btn.click(),
+            "cues.hot_page": lambda: pb.cue_panel.hot_tab.click(),
+            "cues.memory_page": lambda: pb.cue_panel.memory_tab.click(),
+            "browser.rename": self._rename_current,
+            "browser.load": lambda: self._play_row(self.table.currentIndex()),
+            "browser.search": lambda: self.search.setFocus(),
+            "browser.playing": self._focus_now_playing,
+            "library.refresh": self._refresh_rekordbox,
+            "library.playlist": self._new_custom,
+            "library.import": lambda: self._import_dialog(None),
+            "app.settings": self._open_settings,
+            "wave.zoom_in": lambda: pb.wave._step_zoom(1),
+            "wave.zoom_out": lambda: pb.wave._step_zoom(-1),
+            "autoplay.off": lambda: self._set_autoplay_mode(""),
+        }
+        if action.startswith("wave.") and action.split(".")[1] in ("BLUE", "RGB", "3BAND"):
+            self._on_waveform_mode_changed(action.split(".")[1])
+        elif action.startswith("autoplay.") and action != "autoplay.off":
+            self._toggle_autoplay_mode(action.split(".")[1])
+        elif action in commands:
+            commands[action]()
+        return None
 
     def _defer_library_prep(self, seconds: float = 0.75):
         worker = getattr(self, "_wf_fill_worker", None)
@@ -1447,8 +1502,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context)  # edit or art
         self.table.doubleClicked.connect(self._play_row)  # double-click preserves playback
-        # ⌘R renames (inline-edits the Title of) the highlighted track.
-        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._rename_current)
+        # Rename and transport shortcuts share the configurable keyboard router.
         self.table.setAlternatingRowColors(True)
         # Per-ITEM scrolling keeps table rows phase-locked to the sidebar's 24px
         # grid at every scroll position (top, bottom, anywhere) — pixel scrolling
@@ -5441,7 +5495,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._flash_status("No avatar art ✓", 6)
             return
         dlg = ArtistCatalogDialog(groups, on_action=self._on_catalog_action,
-                                  parent=self, allow_url=self.providers.allows("artwork.url"))
+                                  parent=self, allow_url=self.providers.allows("artwork.url"),
+                                  rename_bindings=self._keyboard_router.keymap.bindings("browser.rename"))
         dlg.exec()  # persistent: user fixes any number of artists, then closes
 
     def _open_default_photos(self):
@@ -6353,6 +6408,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         self._shutdown_waiting = True
         self._shutting_down = True
+        keyboard = getattr(self, "_keyboard_router", None)
+        if keyboard is not None:
+            keyboard.release_all()
         self._refresh_pending = False
         self._libcache_pending = None
         self._stock_view_pending.clear()

@@ -192,12 +192,13 @@ effective artist even when the source tag still names the original performer;
 generic labels such as `(Radio Edit)` leave that tag alone.
 Batch tools: **Suggest artist merges…** (fuzzy spelling dedup with in-dialog
 Unmerge), **Suggest artists for Unknowns…**, named **Title Cleanup** rules
-(four intent-based defaults for mixdown, version/copy, BPM/key, and render/file
-tags + exact custom words/bracket tags or validated regex), neat-title edge-artist
+(five defaults: Mixdown Label, Copy / Version tags, BPM / Key tags,
+Render / File tags, and Drop "(Original Mix)"; plus exact custom words/bracket
+tags or validated regex), neat-title edge-artist
 stripping. A track's context menu can copy its real on-disk filename or reveal
 the selected source directly in Finder. Removal has two explicit scopes: playlist menus offer
 both **Remove from Playlist** (only that playlist) and **Remove from Collection**
-(global hide, restorable from the dated **Graveyard** in Settings); Collection
+(global hide, restorable from the dated **Settings → Graveyard** tab); Collection
 offers only the latter. Graveyard restore is selection-scoped: select one,
 Shift/Cmd-select several, or use Cmd-A, then right-click **Restore**. There is
 no unconditional Restore All shortcut. A global Graveyard entry immediately
@@ -226,6 +227,18 @@ normalized, and deterministically randomized with exact-even distribution
 across visible tracks whose art is naturally missing or deliberately blocked.
 A real cover or artist avatar always wins; the fallback never rewrites the
 underlying miss/block. Pool changes rebalance only fallback assignments.
+Settings separates **General**, **Keyboard**, **Connections** (personal), and the
+full-width **Graveyard**. [Keyboard settings](docs/KEYBOARD.md) provide searchable,
+remappable actions with multiple bindings and explicit conflict moves. By default,
+1–8 preview the active Hot/Memory cue page, 9 selects Hot Cue, and 0 selects
+Memory Cue. In **Connections → SoundCloud**, **Connect** opens Client ID and
+Client Secret fields with **Save**. Saving opens browser authorization; **Edit…**
+can change saved credentials later. Credentials and OAuth tokens stay in macOS
+Keychain. A disposable liked-track index is refreshed at launch and with
+**Refresh likes**; confident liked matches precede general search. Existing
+manual art and known cache entries are not automatically replaced. See
+[SoundCloud connection setup](docs/soundcloud-connection.md).
+
 Everything in the cache is normalized to **baseline JPEG** as canonical app state.
 The Rockbox exporter
 derives 8-bit paletted BMPs per track: baseline 160×160/116×116 fast paths,

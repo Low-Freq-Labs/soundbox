@@ -140,7 +140,9 @@ provider imports, and the existing rekordbox modules remain concrete adapters.
 `app.py` = `MainWindow` core + orchestration. Mixins/modules: `devices`,
 `trees`, `workers` (every QThread), `settings_page` (`SettingsPageMixin`),
 `device_browser` (`DeviceBrowserMixin`), `artpicker`, `suggest`,
-`artistcatalog`, `model` (`TrackModel`), `player`, `theme`.
+`artistcatalog`, `connections` (owned account jobs), `keyboard` (action catalog,
+versioned map and physical-key router), `keyboard_page` (capture/conflict editor),
+`model` (`TrackModel`), `player`, `theme`.
 `class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow)`.
 `native_deck.py` adapts the native C ABI to PlayerBar's small transport
 protocol.
@@ -576,9 +578,34 @@ firmware-generated and absent from iTunesDB.
   imports files only; Artists (tag-derived) and read-only rekordbox views reject
   every drop (`TrackTable.resolve_drop` gates it — rekordbox is never written).
 
+## Settings, keyboard and optional account state
+
+Settings separates General, Keyboard, personal Connections, and a full-width
+Graveyard. The five title-cleanup defaults include the exact `(Original Mix)`
+tag; old custom copies remain in saved settings but belong to the default toggle.
+
+Keyboard routing and the editor share one action catalog. The portable
+`settings.keyboard` overlay supports multiple modifier combinations per action,
+explicit unbound lists and conflict moves, preserving unknown fields/actions.
+Physical key ownership retains the actual release callback across focus,
+modifier and cue-page changes. Held-control aliases share their release boundary;
+application deactivation, shutdown and successful remapping release them safely.
+Text/dialog/navigation handling stays with Qt. See [KEYBOARD](KEYBOARD.md).
+
+The personal connection factory is admitted by `connections.soundcloud` in the
+versioned provider manifest. It receives only an AppData root; the core section
+owns its worker admission, progress, browser opening and TaskOwner retirement.
+OAuth PKCE/state uses a temporary loopback callback. Client credentials and
+rotating tokens live in Keychain; disposable account/liked-track metadata lives
+under `connections/soundcloud/`, outside library backup/restore. Complete
+same-account scans publish atomically and canceled/failed scans preserve the old
+index. Unknown-account likes never carry across a reconnect. Discovery reads an
+in-memory index before general search; no provider gains source/device authority.
+See [SoundCloud setup](soundcloud-connection.md). Public omits this factory and UI.
+
 ## Persistence
 
-Everything user-made lives in one portable `library.json` (overrides,
+Library curation lives in one portable `library.json` (overrides,
 playlists, imported records, hides/removals, settings) at
 `~/Library/Application Support/LowFreqLabs/Soundbox/`, keyed by stable track
 IDs so a newer rekordbox library preserves all work. Atomic ordinary JSON saves, rotating

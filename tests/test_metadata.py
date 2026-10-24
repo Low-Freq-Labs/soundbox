@@ -459,6 +459,16 @@ class TidyTitle(unittest.TestCase):
         self.assertEqual(tidy_title("GUTTER FINAL v2", list(DEFAULT_TITLE_JUNK)),
                          "GUTTER")
 
+    def test_original_mix_default_toggle_owns_legacy_custom_copy(self):
+        from soundbox.metadata import BUILTIN_TITLE_RULES, junk_patterns, tidy_title
+        self.assertEqual([name for _rid, name, _pattern in BUILTIN_TITLE_RULES], [
+            "Mixdown Label", "Copy / Version tags", "BPM / Key tags", "Render / File tags",
+            'Drop "(Original Mix)"'])
+        self.assertEqual(tidy_title("LOUD (Original Mix)"), "LOUD")
+        self.assertEqual(tidy_title("LOUD (Original Mix)", junk_patterns(["drop"], ["(Original Mix)"])),
+                         "LOUD (Original Mix)")
+        self.assertEqual(tidy_title("LOUD (Original Mix Extended)"), "LOUD (Original Mix Extended)")
+
     def test_legacy_disabled_rule_ids_migrate_conservatively(self):
         from soundbox.metadata import normalize_title_rules_off
         self.assertEqual(normalize_title_rules_off(["final"]), ["mixdown"])

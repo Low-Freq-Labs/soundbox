@@ -108,9 +108,14 @@ def _core_title(clean: str) -> str:
     """The bare song name: drop bracket groups (VIP/remix/flip) and a leading
     'ARTIST - ' prefix. 'SAKURO - CORROSION' -> 'CORROSION'; 'GNARLY (DENNETT REMIX)'
     -> 'GNARLY'. Used to match an artist's own upload that omits the prefix."""
-    s = re.sub(r"[\[(][^\[\]()]*[\])]", " ", clean or "")
+    s = _unbracketed_title(clean)
     s = re.sub(r"^\s*[^-]{1,30}\s+-\s+", "", s)
     return re.sub(r"\s{2,}", " ", s).strip() or (clean or "")
+
+
+def _unbracketed_title(clean: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(
+        r"[\[(][^\[\]()]*[\])]", " ", clean or "")).strip(" -")
 
 
 def _core_title_for_artist(clean: str, artist: str) -> str:
@@ -122,7 +127,9 @@ def _core_title_for_artist(clean: str, artist: str) -> str:
     own-account 0.90 rescue.  Use the effective artist to orient the split and
     retain the conservative legacy fallback when neither edge is identifiable.
     """
-    parts = re.split(r"\s+-\s+", clean or "", maxsplit=1)
+    # A remixer inside brackets is not the artist edge of a hyphenated title.
+    # Otherwise "Huey - Song (SAINT MILLER REMIX)" yields the bogus core "Huey".
+    parts = re.split(r"\s+-\s*|(?<=\w)-\s+", _unbracketed_title(clean), maxsplit=1)
     if len(parts) == 2:
         left, right = (part.strip() for part in parts)
         na = _norm(artist)
@@ -132,6 +139,11 @@ def _core_title_for_artist(clean: str, artist: str) -> str:
                 return right or _core_title(clean)
             if na in right_norm and na not in left_norm:
                 return left or _core_title(clean)
+        # Loose "Huey- Song (EDITOR REMIX)" spelling is common in remix
+        # filenames. Without explicit edit credits, preserve a potentially
+        # meaningful hyphenated song name rather than stripping it blindly.
+        if len(left) <= 30 and _edit_signature(clean):
+            return right or _core_title(clean)
     return _core_title(clean)
 
 
@@ -149,7 +161,52 @@ def _split_artists(artist: str) -> list[str]:
     return out
 
 
-def _match_score(clean: str, core: str, artist: str, cand_title: str, uploader: str) -> float:
+_EDIT_CREDIT = re.compile(
+    r"[\[(]\s*([^()\[\]]+?)\s+"
+    r"(flip|remix|bootleg|edit|vip|mashup|rework|refix|blend|rmx|reboot|redux)"
+    r"\s*[\])]", re.I)
+
+
+def _edit_signature(title: str) -> tuple:
+    """Keep named versions distinct while allowing reordered collab credits."""
+    return tuple((tuple(sorted(_norm(p) for p in _split_artists(names))), kind.lower())
+                 for names, kind in _EDIT_CREDIT.findall(title))
+
+
+def _credited_title_score(clean: str, cand: str, artist: str) -> float:
+    """Compare reordered working names only with identical explicit edit credits.
+
+    Both full and prefix-free forms are needed for "EDITOR - SONG Original Artist
+    (EDITOR Remix)" versus "Original Artist - SONG (EDITOR Remix)". A separate
+    song-name check stops long matching credits from hiding a different song.
+    """
+    signature = _edit_signature(clean)
+    if not signature or signature != _edit_signature(cand):
+        return 0.0
+    core = _core_title_for_artist(clean, artist)
+    other = _core_title_for_artist(cand, artist)
+    nc, no = _norm(core), _norm(other)
+    if _ratio(core, other) < 0.90:
+        # Only tolerate an extra song suffix when the other title explicitly
+        # identifies that suffix as its original artist (including minor typos).
+        def has_original_suffix(song: str, shorter: str, title: str) -> bool:
+            parts = re.split(r"\s+-\s*|(?<=\w)-\s+", _unbracketed_title(title), maxsplit=1)
+            return (len(parts) == 2 and len(shorter) >= 6 and song.startswith(shorter)
+                    and _ratio(song[len(shorter):], parts[0]) >= 0.90)
+
+        if not (has_original_suffix(nc, no, cand) or has_original_suffix(no, nc, clean)):
+            return 0.0
+
+    def forms(title: str, song: str) -> list[str]:
+        brackets = " ".join(re.findall(r"[\[(][^\[\]()]*[\])]", title))
+        return [" ".join(sorted(re.findall(r"[^\W_]+", s.casefold())))
+                for s in (title, f"{song} {brackets}")]
+
+    return max(_ratio(a, b) for a in forms(clean, core) for b in forms(cand, other))
+
+
+def _match_score(clean: str, core: str, artist: str, cand_title: str, uploader: str,
+                 credited_artists: list[str] | None = None) -> float:
     """Confidence that a search result IS our track — accuracy-first (wrong art is worse
     than none). Two ways to earn it:
       1. Uploader IS the artist's own account AND the core song name is in the candidate
@@ -161,10 +218,29 @@ def _match_score(clean: str, core: str, artist: str, cand_title: str, uploader: 
          from being grabbed. A low-ratio megamix that merely lists the artist in a
          tracklist is rejected by the ratio floor, not accepted."""
     cand = _clean_search_title(cand_title)
+    ours, theirs = _edit_signature(clean), _edit_signature(cand)
+    if (ours and theirs and ours != theirs
+            or bool(re.search(r"\bvip\b", clean, re.I))
+            != bool(re.search(r"\bvip\b", cand, re.I))):
+        return 0.0
     t = _ratio(clean, cand)
     u = _ratio(artist, uploader)
     nc = _norm(core)
-    if u >= _UPLOADER_SAME and len(nc) >= 4 and nc in _norm(cand):
+    other_core = _core_title_for_artist(cand, artist)
+    # Label uploads often have only the song name in the title. SoundCloud's
+    # structured artist credit supplies accountability; arbitrary descriptions
+    # and tracklists never do. Require the complete song core, not containment.
+    expected = {_norm(p) for p in _split_artists(artist)}
+    credited = {_norm(p) for name in (credited_artists or []) for p in _split_artists(name)}
+    if expected and expected <= credited and len(nc) >= 4 and nc == _norm(other_core):
+        return max(t, 0.95)
+    if u >= _UPLOADER_SAME and ours and theirs:
+        credit_score = _credited_title_score(clean, cand, artist)
+        if credit_score >= 0.95:
+            return max(t, 0.9)
+        if not credit_score:
+            return 0.0
+    if u >= _UPLOADER_SAME and len(nc) >= 4 and nc == _norm(other_core):
         return max(t, 0.9)
     na = _norm(artist)
     accountable = u >= 0.6 or (len(na) >= 3 and na in _norm(cand_title))
@@ -252,7 +328,8 @@ def fetch_by_search(artist: str, title: str, min_conf: float = MIN_CONFIDENCE) -
 
     best, conf = None, 0.0
     for e in cands:
-        s = _match_score(clean, core, artist, e.get("title") or "", e.get("uploader") or "")
+        s = _match_score(clean, core, artist, e.get("title") or "", e.get("uploader") or "",
+                         e.get("artists"))
         if s > conf:
             conf, best = s, e
     if not best or conf < min_conf:
@@ -307,6 +384,14 @@ def fetch_best(artist: str, title: str) -> ArtResult | None:
     from soundbox.metadata import UNKNOWN_ARTIST
     if _norm(artist) == _norm(UNKNOWN_ARTIST):
         return None
+    liked = _liked_candidates(artist, title)
+    if (liked and liked[0]["score"] >= MIN_CONFIDENCE
+            and (len(liked) == 1 or liked[0]["score"] - liked[1]["score"] >= 0.04)):
+        best = liked[0]
+        result = fetch_thumb(best["thumb"], best["url"], best["title"])
+        if result:
+            result.confidence = round(best["score"], 2)
+            return result
     r = fetch_by_search(artist, title)
     if r:
         return r
@@ -332,6 +417,9 @@ def search_candidates(artist: str, title: str, n: int = 12) -> list[dict]:
     confidence gate (the auto-matcher's floor is exactly what makes vague-title
     exclusives unhittable; here the user clicks the right one). Best-guess first.
     Each: {title, uploader, thumb (t500), url, score}."""
+    liked = _liked_candidates(artist, title)
+    if liked and liked[0]["score"] >= MIN_CONFIDENCE:
+        return liked[:n]
     clean = _clean_search_title(title)
     core = _core_title_for_artist(clean, artist)
     na = _norm(artist)
@@ -359,10 +447,29 @@ def search_candidates(artist: str, title: str, n: int = 12) -> list[dict]:
                 "thumb": thumb,
                 "url": e.get("webpage_url") or e.get("url") or "",
                 "score": _match_score(clean, core, artist, e.get("title") or "",
-                                      e.get("uploader") or ""),
+                                      e.get("uploader") or "", e.get("artists")),
             })
     out.sort(key=lambda c: c["score"], reverse=True)
     return out[:n]
+
+
+def _liked_candidates(artist: str, title: str) -> list[dict]:
+    from .connection import liked_entries
+    clean = _clean_search_title(title)
+    artists = list(dict.fromkeys([artist, *_split_artists(artist)]))
+    cores = [(name, _core_title_for_artist(clean, name)) for name in artists]
+    out = []
+    for entry in liked_entries():
+        score = max((_match_score(clean, core, name, entry.get("title") or "",
+                                   entry.get("uploader") or "", entry.get("artists"))
+                     for name, core in cores), default=0.0)
+        thumb = _best_thumb(entry)
+        if score >= 0.60 and thumb:
+            out.append({"title": entry["title"], "uploader": entry["uploader"],
+                        "thumb": thumb, "url": entry["webpage_url"], "score": score,
+                        "liked": True})
+    out.sort(key=lambda candidate: candidate["score"], reverse=True)
+    return out
 
 
 def suggest_artist(title: str, min_ratio: float = 0.62,

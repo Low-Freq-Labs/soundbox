@@ -23,7 +23,8 @@ _ROLE = Qt.UserRole + 31  # (artist, [tids])
 
 
 class ArtistCatalogDialog(QDialog):
-    def __init__(self, groups, on_action=None, parent=None, *, allow_url=False):
+    def __init__(self, groups, on_action=None, parent=None, *, allow_url=False,
+                 rename_bindings=("Ctrl+R",)):
         """`groups` = [(artist, [track_ids], image_path_or_None), ...]
         `on_action(choice_dict, done_cb)` applies a change; done_cb(ok, img)."""
         super().__init__(parent)
@@ -63,11 +64,12 @@ class ArtistCatalogDialog(QDialog):
 
         # ⌘R renames the selected artist (SoundBox-side alias — rekordbox
         # untouched; applies everywhere: display, folders, future exports).
-        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._rename)
+        for binding in rename_bindings:
+            QShortcut(QKeySequence(binding), self, activated=self._rename)
 
         row = QHBoxLayout()
         row.addStretch(1)
-        self.rename_btn = QPushButton("Rename…  (⌘R)")
+        self.rename_btn = QPushButton("Rename…")
         self.rename_btn.clicked.connect(self._rename)
         row.addWidget(self.rename_btn)
         self.url_btn = QPushButton("Set from URL…")

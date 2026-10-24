@@ -1,8 +1,7 @@
 """Settings page (mixin for MainWindow).
 
-Layout: TWO centered fixed-width columns inside one scroll area —
-LIBRARY + ARTIST MERGES + BACKUP on the left, GRAVEYARD + TITLE CLEANUP on the
-right. The reusable framework: `_settings_section(title)` headers +
+Layout: General has two centered columns; Connections (personal) and Graveyard
+have dedicated tabs. The reusable framework: `_settings_section(title)` headers +
 `_settings_row(title, control, subtitle, indent)` rows — add future settings by
 dropping in more rows/sections, never hand-place widgets. Sub-options HIDE when
 their parent toggle is off. Panel widgets (graveyard/rules lists) refresh every
@@ -14,7 +13,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
-    QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
@@ -100,12 +99,10 @@ class SettingsPageMixin:
         cols.setAlignment(Qt.AlignTop)
         cols.addStretch(1)  # stretches both sides center the two columns
 
-        # RIGHT column (added second) — the GRAVEYARD: every Collection-removed track (and
-        # per-playlist removal), with its date. Sort either column to find the
-        # oldest/newest; right-click (or double-click) to resurrect.
-        left = QWidget(); left.setFixedWidth(440)  # both date + track stay visible
-        gl = QVBoxLayout(left); gl.setContentsMargins(0, 0, 0, 0); gl.setSpacing(2)
-        gl.setAlignment(Qt.AlignTop)
+        # Graveyard gets the whole tab; the track list expands with the window.
+        graveyard_page = QWidget()
+        gl = QVBoxLayout(graveyard_page)
+        gl.setContentsMargins(30, 6, 30, 30); gl.setSpacing(8)
         gl.addWidget(self._settings_section("GRAVEYARD"))
         self._grave = QTreeWidget()
         self._grave.setObjectName("Graveyard")
@@ -115,11 +112,14 @@ class SettingsPageMixin:
         self._grave.setSortingEnabled(True)  # click headers: oldest/newest first
         self._grave.sortByColumn(1, Qt.DescendingOrder)
         self._grave.setSelectionMode(QTreeWidget.ExtendedSelection)
-        self._grave.setFixedHeight(196)  # matches the LIBRARY group's footprint
-        self._grave.header().resizeSection(0, 296)
+        self._grave.setMinimumHeight(240)
+        from PySide6.QtWidgets import QHeaderView
+        self._grave.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._grave.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._grave.header().setStretchLastSection(False)
         self._grave.setContextMenuPolicy(Qt.CustomContextMenu)
         self._grave.customContextMenuRequested.connect(self._grave_menu)
-        gl.addWidget(self._grave)
+        gl.addWidget(self._grave, 1)
         gsub = QLabel("Tracks removed from Collection (and removed from playlists) "
                       "rest here — rekordbox and disk untouched. Select one or "
                       "Shift/Cmd-select several, then right-click to restore; "
@@ -128,6 +128,9 @@ class SettingsPageMixin:
         gl.addWidget(gsub)
 
         # --- TITLE CLEANUP (named, toggleable rules — no regex soup) --------
+        left = QWidget(); left.setFixedWidth(440)
+        gl = QVBoxLayout(left); gl.setContentsMargins(0, 0, 0, 0); gl.setSpacing(2)
+        gl.setAlignment(Qt.AlignTop)
         gl.addWidget(self._settings_section("TITLE CLEANUP"))
         self._rules = QTreeWidget()
         self._rules.setObjectName("TitleRules")
@@ -157,7 +160,7 @@ class SettingsPageMixin:
         bl = QVBoxLayout(col); bl.setContentsMargins(0, 0, 0, 0); bl.setSpacing(2)
         bl.setAlignment(Qt.AlignTop)
         cols.addWidget(col, 0, Qt.AlignTop)     # LIBRARY + BACKUP on the left
-        cols.addWidget(left, 0, Qt.AlignTop)    # GRAVEYARD on the right
+        cols.addWidget(left, 0, Qt.AlignTop)    # TITLE CLEANUP on the right
         cols.addStretch(1)
 
         # --- PLAYER --------------------------------------------------------
@@ -268,7 +271,28 @@ class SettingsPageMixin:
         self._sync_settings_controls()
         self._refresh_graveyard()
         scroll.setWidget(host)
-        v.addWidget(scroll, 1)
+        self._settings_tabs = QTabWidget()
+        self._settings_tabs.setObjectName("SettingsTabs")
+        self._settings_tabs.addTab(scroll, "General")
+        from .keyboard import Keymap
+        from .keyboard_page import KeyboardPage
+        self._keyboard_page = KeyboardPage(
+            Keymap(self._keyboard_router.keymap.dump()), self._save_keyboard)
+        self._settings_tabs.addTab(self._keyboard_page, "Keyboard")
+        if self.providers.allows("connections.soundcloud") and self.providers.connections is not None:
+            from .connections import SoundCloudSection
+            connections = QWidget()
+            connection_layout = QVBoxLayout(connections)
+            connection_layout.setContentsMargins(30, 24, 30, 30)
+            service = self.providers.connections.create(self._data_file.parent)
+            self._soundcloud_section = SoundCloudSection(
+                service, connections, isolated=self._isolated)
+            self._soundcloud_section.setFixedWidth(600)
+            connection_layout.addWidget(self._soundcloud_section, 0, Qt.AlignHCenter)
+            connection_layout.addStretch()
+            self._settings_tabs.addTab(connections, "Connections")
+        self._settings_tabs.addTab(graveyard_page, "Graveyard")
+        v.addWidget(self._settings_tabs, 1)
         return page
 
     # ---------- graveyard ----------
@@ -498,12 +522,16 @@ class SettingsPageMixin:
         g.clear()
         for rid, label, _pat in metadata.BUILTIN_TITLE_RULES:
             it = QTreeWidgetItem([label])
+            if rid == "drop":
+                it.setToolTip(0, "Remove the exact (Original Mix) tag.")
             it.setData(0, _GRAVE_ROLE, ("rule", rid))
             it.setCheckState(0, Qt.Unchecked if rid in off else Qt.Checked)
             g.addTopLevelItem(it)
         for w in self.settings.get("title_words") or []:
-            label = (f"Drop “{w}”  (yours)" if metadata.is_literal_drop(w)
-                     else f"Pattern  {w}  (yours, regex)")
+            if metadata.is_default_title_drop(w):
+                continue
+            label = (f"Drop “{w}”  (custom)" if metadata.is_literal_drop(w)
+                     else f"Pattern  {w}  (custom, regex)")
             it = QTreeWidgetItem([label])
             it.setData(0, _GRAVE_ROLE, ("word", w))
             it.setCheckState(0, Qt.Checked)
@@ -531,6 +559,13 @@ class SettingsPageMixin:
         a typo'd pattern is rejected loudly, never silently ignored."""
         w = self._word_edit.text().strip()
         if not w:
+            return
+        if metadata.is_default_title_drop(w):
+            self.settings["title_rules_off"] = [
+                rid for rid in self.settings.get("title_rules_off", []) if rid != "drop"]
+            self._word_edit.clear()
+            self._refresh_title_rules()
+            self._apply_and_refresh()
             return
         if not metadata.valid_pattern(w):
             from PySide6.QtWidgets import QMessageBox

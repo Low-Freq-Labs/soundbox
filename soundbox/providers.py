@@ -7,6 +7,7 @@ These trusted in-process interfaces are not an untrusted-code sandbox.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from functools import lru_cache
 import importlib
 import json
@@ -14,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 import sys
+from threading import Event
 from typing import Protocol, TypedDict, cast
 
 from .artwork import ArtResult
@@ -21,7 +23,11 @@ from .artwork import ArtResult
 LOG = logging.getLogger("soundbox.providers")
 API_VERSION = 1
 MODULE_ID = "lowfreqlabs.soundcloud"
-ACTIONS = ("artwork.search", "artwork.url", "artists.suggest")
+ACTIONS = ("artwork.search", "artwork.url", "artists.suggest", "connections.soundcloud")
+
+
+class ConnectionFailure(Exception):
+    """Provider errors safe to show in the connection UI (no credentials)."""
 
 
 class Candidate(TypedDict):
@@ -45,6 +51,19 @@ class ArtistProvider(Protocol):
     def suggest_artist(self, title: str) -> tuple[str, float] | None: ...
 
 
+class ConnectionService(Protocol):
+    def status(self) -> dict: ...
+    def credentials(self) -> tuple[str, str]: ...
+    def connect(self, client_id: str, client_secret: str, stop: Event,
+                browser: Callable[[str], None], progress: Callable[[str], None]) -> None: ...
+    def refresh(self, stop: Event, progress: Callable[[str], None]) -> None: ...
+    def disconnect(self, stop: Event, progress: Callable[[str], None]) -> None: ...
+
+
+class ConnectionFactory(Protocol):
+    def create(self, root: Path) -> ConnectionService: ...
+
+
 @dataclass(frozen=True)
 class Providers:
     profile: str
@@ -53,6 +72,7 @@ class Providers:
     modules: tuple[str, ...] = ()
     actions: tuple[str, ...] = ()
     diagnostic: str = ""
+    connections: ConnectionFactory | None = None
 
     def allows(self, action: str) -> bool:
         return action in self.actions
@@ -78,7 +98,7 @@ def validate_manifest(data: object) -> dict:
         raise ValueError("Duplicate or unsupported modules")
     for module in modules:
         if not isinstance(module, dict) or module != {
-            "id": MODULE_ID, "version": "1.0.0", "core_api": API_VERSION,
+            "id": MODULE_ID, "version": "1.1.0", "core_api": API_VERSION,
             "actions": list(ACTIONS), "dependencies": ["yt-dlp==2026.8.19"],
         }:
             raise ValueError("Unknown or incompatible provider manifest")
@@ -100,12 +120,16 @@ def resolve(manifest: dict) -> Providers:
         # music folders, manifest entry points or arbitrary plugin discovery.
         importlib.import_module("yt_dlp")
         module = importlib.import_module("soundbox_personal.discovery")
+        connection = importlib.import_module("soundbox_personal.connection")
+        if not callable(getattr(connection, "create", None)):
+            raise ValueError("Provider missing connection factory")
         for method in ("fetch_best", "search_candidates", "preview_image",
                        "fetch_thumb", "fetch_by_url", "suggest_artist"):
             if not callable(getattr(module, method, None)):
                 raise ValueError(f"Provider missing {method}")
         return Providers(profile, cast(ArtworkProvider, module),
-                         cast(ArtistProvider, module), (MODULE_ID,), ACTIONS)
+                         cast(ArtistProvider, module), (MODULE_ID,), ACTIONS,
+                         connections=cast(ConnectionFactory, connection))
     except Exception as exc:
         message = f"Online providers unavailable: {exc}"
         LOG.warning(message)

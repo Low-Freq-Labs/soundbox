@@ -700,8 +700,18 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   **OBJECTS**, not display-path strings. `SyncReport` has no `files_copied`
   (use `.playlists` / `.bytes_to_copy`).
 - `Playlist.display_path` joins with `" / "` (SPACES around slash), not `"/"`.
-- Settings page lives on `body_stack` (index 1); track table / device browser on
+- Settings page lives on `body_stack` (index 1); its tabs are General, Keyboard, personal
+  Connections, and full-width Graveyard. Track table / device browser use
   `stack` (0/1).
+- Keyboard defaults, dispatch and the editor share `desktop.keyboard.COMMANDS`.
+  Never add a competing hard-coded QShortcut for a catalog action. Momentary
+  controls retain their actual press-time release callback by physical key;
+  auto-repeat releases cannot end a hold, and modifier/page/focus changes cannot
+  strand it. Active-page numeric cues capture the original Hot/Memory identity;
+  aliases share the same control until the final physical key releases. Release
+  held controls on app deactivation, successful remapping and shutdown. Persist
+  the map before replacing the live snapshot, and reload it after restore.
+  Platform text editing/navigation is not an app mapping. See [KEYBOARD](KEYBOARD.md).
 - Splitting files with a script bypasses the Edit tool's read-tracking — Read
   again before Edit after any scripted rewrite.
 
@@ -814,10 +824,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - Title pipeline order: effective ARTIST is computed from the RAW/overridden name
   FIRST, then `effective_title = override | tidy(neat(name, artist), junk)`. Junk
   rules: `metadata.BUILTIN_TITLE_RULES` + user words; `Library.title_junk=None`
-  means defaults. The defaults are four intent groups (mixdown, copy/version,
-  BPM/key, render/file), not separate rows for regex position or spelling.
+  means defaults. The five defaults are mixdown, copy/version, BPM/key,
+  render/file, and exact `(Original Mix)` removal. Legacy custom copies of that
+  exact tag remain in saved state but are owned by the default toggle and hidden
+  from custom rows; disabling the default must not re-enable its legacy copy.
   `normalize_title_rules_off` conservatively migrates the former eight IDs. A
-  custom plain bracket tag such as `(Original Mix)` is one exact literal tag,
+  custom plain bracket tag such as `(Club Version)` is one exact literal tag,
   including its bracket type; it does not match bare text, longer content, or
   unrelated empty brackets. Other custom plain words/phrases likewise match
   only as a complete trailing unit or complete paired-bracket contents. Raw
@@ -980,6 +992,24 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   rows predate provenance and require a read-only confidence/source/image audit;
   never infer that a `blocked` row or a confidence-1.0 picker/URL result is safe
   to replace merely because an old automatic row looks suspicious.
+- **Remix credits are not hyphenated artist edges.** Remove bracket groups before
+  orienting the song core. `PHAROAHE MONCH - SIMON SAYS (MYTHM FLIP)` must yield
+  `SIMON SAYS`, and `Huey- Pop, Lock & Drop It - (SAINT MILLER REMIX)` must yield
+  `Pop, Lock & Drop It`. Reordered working names and small spelling differences
+  receive a separate own-account rescue only with matching named edit credits
+  and strong song evidence. Distinct remixers, edit types and VIPs stay distinct.
+  Structured SoundCloud artist credits can account for a label upload with an
+  exact song core; descriptions/tracklists cannot.
+- **SoundCloud connection credentials never enter library JSON or logs.** The
+  personal connection uses Keychain, OAuth PKCE/state, and a temporary loopback
+  callback. Paginated likes are read only from the exact API origin; rotating
+  refresh tokens persist immediately. Cancelled/failed scans retain the previous
+  same-account complete index; account changes clear it before scanning.
+  The disposable index lives separately under `connections/soundcloud/` and is
+  excluded from library backup/restore. Only confident, unambiguous liked matches
+  precede general search. Connecting never clears known misses, manual art or
+  blocks. Connection workers use TaskOwner; isolated/test harnesses never read
+  live Keychain or start account refresh. Setup: [connection guide](soundcloud-connection.md).
 - **Managed defaults are a fallback layer, never discovered or per-track art.**
   An `ok` track cover or artist avatar always wins. Both natural misses and
   deliberate `blocked` rows receive a pool picture when the pool is non-empty;

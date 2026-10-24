@@ -60,6 +60,10 @@ def setUpModule():
     # background scans synthetic; device-worker tests override this locally.
     unittest.enterModuleContext(mock.patch(
         "desktop.workers.list_devices", return_value=[]))
+    # Editing a synthetic title can schedule per-track discovery. Keep that
+    # provider offline too; isolated AppData alone does not isolate the network.
+    unittest.enterModuleContext(mock.patch(
+        "soundbox_personal.discovery.fetch_best", return_value=None))
     # MainWindow normally starts an immediate removable-device discovery before
     # the timer can be stopped. Keep the UI harness genuinely hermetic so a
     # mounted player is never inspected by tests running beside the real app.
@@ -205,6 +209,56 @@ class SortAndSearch(unittest.TestCase):
 
 
 class SettingsPage(unittest.TestCase):
+    def test_keyboard_cue_numbers_follow_page_and_release_original_page(self):
+        panel = _win.player_bar.cue_panel
+        previous_cues = {kind: list(cues) for kind, cues in panel._cues.items()}
+        previous_loaded = panel._loaded
+        panel.set_cues([
+            {"kind": kind, "slot": slot, "position_ms": (slot + 1) * (1000 if kind == "hot" else 2000)}
+            for kind in ("hot", "memory") for slot in range(8)])
+        panel.set_loaded(True)
+        try:
+            with mock.patch.object(_win, "_space_should_play", return_value=True), \
+                    mock.patch.object(_win.player_bar, "_start_cue_preview") as pressed, \
+                    mock.patch.object(_win.player_bar, "_release_cue_preview") as released:
+                for page_key, kind in ((Qt.Key_9, "hot"), (Qt.Key_0, "memory")):
+                    _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, page_key, Qt.NoModifier))
+                    for slot in range(8):
+                        code = Qt.Key_1 + slot
+                        _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, code, Qt.NoModifier))
+                        self.assertEqual(pressed.call_args.args[1], (kind, slot))
+                        _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, code, Qt.NoModifier))
+                        self.assertEqual(released.call_args.args[0], (kind, slot))
+                panel.hot_tab.click()
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_1, Qt.NoModifier))
+                panel.memory_tab.click()
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, Qt.Key_1, Qt.NoModifier))
+                self.assertEqual(released.call_args.args[0], ("hot", 0))
+                from desktop.keyboard import Keymap
+                original_map = _win._keyboard_router.keymap
+                alternate = Keymap(original_map.dump())
+                alternate.assign("hot.0", "F1")
+                _win._keyboard_router.keymap = alternate
+                try:
+                    panel.hot_tab.click()
+                    pressed.reset_mock()
+                    released.reset_mock()
+                    for code in (Qt.Key_1, Qt.Key_F1):
+                        _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, code, Qt.NoModifier))
+                    pressed.assert_called_once()
+                    _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, Qt.Key_1, Qt.NoModifier))
+                    released.assert_not_called()
+                    _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, Qt.Key_F1, Qt.NoModifier))
+                    released.assert_called_once_with(("hot", 0))
+                finally:
+                    _win._keyboard_router.release_all()
+                    _win._keyboard_router.keymap = original_map
+        finally:
+            _win._keyboard_router.release_all()
+            panel._cues = previous_cues
+            panel.set_loaded(previous_loaded)
+            panel.hot_tab.click()
+
     def test_gear_toggles_page(self):
         _win._open_settings()
         self.assertEqual(_win.body_stack.currentIndex(), 1)
@@ -3291,7 +3345,8 @@ class TitleJunkSetting(unittest.TestCase):
         _win._add_drop_word()
         labels = [_win._rules.topLevelItem(i).text(0)
                   for i in range(_win._rules.topLevelItemCount())]
-        self.assertIn("Drop “(Original Mix)”  (yours)", labels)
+        self.assertIn('Drop "(Original Mix)"', labels)
+        self.assertEqual(len(labels), 5)
         self.assertEqual(tidy_title("LOUD (Original Mix)", _win._title_junk()),
                          "LOUD")
         self.assertEqual(tidy_title("LOUD (Original Mix Extended)",
@@ -5037,9 +5092,10 @@ class QtTrapAudit(unittest.TestCase):
     def test_oneshots_pruned_after_finish(self):
         from desktop.workers import _OneShotArt
         w = _OneShotArt("1", lambda: None)
-        _win._oneshots = [w]
+        before = list(getattr(_win, "_oneshots", []))
+        _win._oneshots = [*before, w]
         _win._finish_oneshot(w)
-        self.assertEqual(_win._oneshots, [])
+        self.assertEqual(_win._oneshots, before)
 
     def test_space_only_plays_from_browsing_surfaces(self):
         # Policy tested directly (offscreen focus doesn't propagate reliably).

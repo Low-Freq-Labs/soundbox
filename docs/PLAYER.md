@@ -35,7 +35,7 @@ Transport controls:
   then clears only CUE. Paused transport is always a purple outline. The PLAY
   glyph becomes PAUSE only with that purple transport state; decoder playback
   during an unlatched cue preview continues to show the PLAY glyph.
-- `C` is the dedicated keyboard equivalent of pressing/releasing CUE while a
+- By default, `C` is the keyboard equivalent of pressing/releasing CUE while a
   browser surface has focus. The packaged entrypoint disables Cocoa
   press-and-hold for the Soundbox bundle before importing Qt; non-text browser
   views also opt out of the macOS text-input client, and SoundBox consumes
@@ -74,6 +74,15 @@ Transport controls:
   A newer terminal flag overrides a stale PLAYING snapshot before that deferred
   source swap. Cue playback promoted with Play/Space also advances after release;
   an unlatched cue preview does not. Device discovery does not gate advancement.
+
+Keyboard settings expose the transport and cue actions with remappable modifier
+combinations and multiple bindings per action. Space, C and Command-R retain
+their defaults. Numbers 1–8 preview slots on the selected Hot/Memory page;
+9 selects Hot Cue and 0 selects Memory Cue. These use the same gated-preview
+contract as mouse presses. A held slot retains its original page/control through
+page switches, modifier release and focus changes. Direct Hot/Memory bindings
+can target a slot independently of the selected page. Empty slots remain inert.
+See [keyboard settings](KEYBOARD.md) for editing and context boundaries.
 
 Cue panel:
 
@@ -793,7 +802,7 @@ Transport state has one authority boundary. Gain completions are tagged with a
 monotonic intent epoch, and the native snapshot owns actual playback/position.
 Returning from another application synchronously rejoins the Qt buttons and
 both waveform scales to that snapshot before the next focused command. Space
-and C remain focus-only and never steal shortcuts from Ableton, Terminal, or
+and C defaults remain focus-only and never steal shortcuts from Ableton, Terminal, or
 Rekordbox.
 
 ## Regression coverage and manual references

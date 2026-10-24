@@ -154,7 +154,8 @@ class ArtPickerDialog(QDialog):
         btn.setFixedSize(_THUMB + 20, _THUMB + 52)
         t, u = cand["title"], cand["uploader"]
         btn.setText(f"{t[:22]}…" if len(t) > 23 else t)
-        btn.setToolTip(f"{t}\nby {u}\n{cand['url']}")
+        liked = "Liked on SoundCloud\n" if cand.get("liked") else ""
+        btn.setToolTip(f"{liked}{t}\nby {u}\n{cand['url']}")
         btn.clicked.connect(lambda _=False, c=cand: self._use_thumb(c))
         self.grid.addWidget(btn, self._count // _COLS, self._count % _COLS)
         self._count += 1

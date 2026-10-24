@@ -10,7 +10,11 @@ access/content use and compatible dependency licenses remain public-eligible.
 This document records that allocation and the implemented first-party
 interface contract. The provider boundary and explicit public/personal build
 profiles are implemented. Core owns local artwork and resolved action availability;
-the existing online implementation is isolated in `soundbox_personal.discovery`.
+the online implementation is isolated in `soundbox_personal.discovery` and
+`soundbox_personal.connection`. The latter adds optional user-supplied API
+credentials, browser OAuth and a disposable likes index for personal artwork
+matching; canonical curation remains core-owned. This is not new distribution
+clearance. See [connection setup](soundcloud-connection.md).
 Build/install validation is recorded in the current handoff.
 
 ## Allocation
@@ -64,6 +68,7 @@ they are not a completed legal or dependency clearance.
 | Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Starts only with the personal provider |
 | Fetch cover art now / background / stop / re-scan | Omit online actions | Retain via provider | Gate command and scheduler, not just menu |
 | Online thumbnail candidate search in cover picker | Omit | Retain via provider | Local picker remains present in both |
+| SoundCloud connection and likes-first artwork matching | Omit | Optional Connections tab | User credentials/tokens in Keychain; read-only metadata index outside curation/backup; real account acceptance pending installation |
 | SoundCloud page URL cover/avatar actions | Omit | Retain via provider | Track picker and artist catalog gate URL controls and commands |
 | Suggest artists for Unknowns (online consensus) | Omit | Retain via provider | Separate from local merge suggestions |
 | `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Personal bundles it; public physically excludes it |
