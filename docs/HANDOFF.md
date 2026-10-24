@@ -6,8 +6,10 @@ Updated October 24, 2026, America/Chicago.
 
 Sonny accepted the Settings presentation, requested removal of redundant apps and
 old diagnostic outputs, then explicitly requested full wrap-up with commit/push.
-The completed artwork/Settings/keyboard release is on `main`, tracking
-`origin/main`; the containing release commit identifies this source revision.
+The completed artwork/Settings/keyboard source release is
+**7e5989da33409a274ee4744be7675a368ecf50d5** on `main`, tracking `origin/main`.
+This provenance follow-up changes documentation only; `git rev-parse HEAD`
+identifies its containing repository revision.
 The installed app's signed build revision is recorded separately below. No app
 rollback or duplicate dist build remains; preserve that retention preference.
 
@@ -72,6 +74,10 @@ Current harnesses use synthetic state, suppress real device discovery, and never
 access live Keychain/account credentials. No tests or assertions were weakened.
 Instruction-file byte parity, relative Markdown file/anchor checks and diff
 whitespace checks also pass. Current evidence: `build/artwork-review-oct24/`.
+
+Git SSH authentication had no loaded identity. Existing GitHub CLI keyring
+credentials authenticated successfully over HTTPS; publication uses a per-command
+credential helper, leaving the configured SSH remote/global configuration unchanged.
 
 ## Cleanup and retained evidence
 
