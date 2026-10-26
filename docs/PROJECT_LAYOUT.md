@@ -27,6 +27,18 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
+## Current retention — October 26
+
+The full wrap-up installed personal build 129 from release commit 81c0d6c and
+verified its real curated state. Only `/Applications/Soundbox.app` and the active
+source checkout remain. The two temporary prior apps, duplicate dist app and
+collection, and obsolete build/personal packaging intermediates were retired
+using exact-path/provenance guards. `build/native`, QA evidence, small state
+snapshots, offline fixtures and device recovery remain protected. Installation
+and cleanup records: `~/Library/Logs/Soundbox/wrap-2026-10-26/`.
+The subsequent documentation-only repository commit does not restamp the binary.
+See [HANDOFF](HANDOFF.md) for exact installed/runtime and state provenance.
+
 ## Accepted cleanup — October 24 (historical)
 
 Accepted releases retain only the installed `/Applications/Soundbox.app`. After build
