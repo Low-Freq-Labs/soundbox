@@ -1,6 +1,6 @@
 # Shared app and optional personal modules
 
-Updated September 29, 2026. Product direction requested by Sonny: one shared application,
+Updated October 26, 2026. Product direction requested by Sonny: one shared application,
 nearly identical public/personal UI, optional installed modules adding a small
 number of capabilities. Sonny clarified that the public product remains the
 complete music manager, spanning iPod/MP3 players and USB export. Personal
@@ -12,8 +12,10 @@ interface contract. The provider boundary and explicit public/personal build
 profiles are implemented. Core owns local artwork and resolved action availability;
 the online implementation is isolated in `soundbox_personal.discovery` and
 `soundbox_personal.connection`. The latter adds optional user-supplied API
-credentials, browser OAuth and a disposable likes index for personal artwork
-matching; canonical curation remains core-owned. This is not new distribution
+credentials, application-token access to public-profile likes and a disposable
+likes index for personal artwork matching. New connections need no browser
+authorization; legacy user-token compatibility remains in the backend.
+Canonical curation remains core-owned. This is not new distribution
 clearance. See [connection setup](soundcloud-connection.md).
 Build/install validation is recorded in the current handoff.
 

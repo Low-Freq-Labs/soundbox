@@ -1,6 +1,6 @@
 # SoundBox device layouts
 
-Current as of 2026-09-28. Dated hardware sections retain their historical
+Reviewed October 26, 2026. Dated hardware sections retain their historical
 observations; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
@@ -28,6 +28,18 @@ shared subset enters Apple's database.
 
 Non-FAT volumes remain browseable but do not accept the Rockbox-style drop.
 Unknown or failed probes never grant extra capability.
+
+### Future CDJ USB destination
+
+The Generic USB row describes filesystem/M3U8 export. Native rekordbox-compatible
+CDJ export requires a separately validated on-device library and analysis; it is
+not implemented by that profile. The retained prototype currently has a rejected
+generated database and historical folder-mode playback, not full CDJ acceptance.
+The [CDJ plan](cdj-usb-export.md) defines the model/firmware-specific control
+comparison, required performance features and safe incremental-export gates.
+This is the requested milestone after iPod acceptance and library refinement in
+the [roadmap](ROADMAP.md). It adds no write authority today: current exporters
+continue excluding `/PIONEER`, including on USBs that also hold rekordbox content.
 
 Connection presentation separates visibility from readiness. Debounced `/Volumes`
 notifications and a 250-ms cached kernel mount-table check request discovery even

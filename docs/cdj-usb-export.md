@@ -1,115 +1,151 @@
-# CDJ USB export (R&D)
+# Native CDJ USB export — research and acceptance plan
 
-**Goal:** let SoundBox write a USB stick a Pioneer **CDJ** reads natively —
-tracks, playlists, beatgrids, memory + RGB hot cues, color waveform — **without
-opening rekordbox**. Sonny performs on 4× CDJ-3000 off USB; today rekordbox is
-used only to set cues + export the stick. This closes that loop.
+Reviewed October 26, 2026. **Not shipped in either SoundBox profile.** Sonny's
+requested sequence is iPod hardware acceptance when the device returns, library
+management refinement, then this export milestone. See [ROADMAP](ROADMAP.md).
 
-Honors the same safety contract as the rest of SoundBox: writes land only under
-an explicit USB target, never `master.db`.
+## Product goal
 
-Prototype code: **`research/cdj_export/`** (`devicesql.py`, `rows.py`,
-`tracks.py`, `anlz_bridge.py`) — standalone, NOT wired into a USB workflow
-until proven.
+Export SoundBox's curated playlists to USB with the library and performance
+behavior of a rekordbox export on the supported CDJs: normal library browsing,
+playlist order, metadata/artwork, beatgrids, usable hot/memory cues and loops,
+and prepared waveforms. A USB that merely plays audio through folder browsing
+does not meet the goal. This is the reduced-function fallback Sonny describes
+as “limp mode,” not a formal device mode name.
 
-Related but separate: the shipped player reads PQTZ grids, PWV3/PWV5/PWV7
-waveforms and PCOB/PCO2 fallback cues, with live-DB cue rows authoritative.
-Read-only memory/hot-cue display ships in the player (`PLAYER.md`). The
-cue knowledge validated here can inform that reader, but CDJ export code remains
-standalone R&D and must not be pulled into the product wholesale.
+The original research records Sonny's setup as four CDJ-3000s; confirm the current
+models and firmware before the next campaign. Acceptance is against a real
+rekordbox-exported control on those decks, not just our own parser's output.
+The output need not reproduce irrelevant stale bytes, but all required structures,
+references and observable features must work. Rekordbox's desktop database and
+source audio remain read-only.
 
-## The format (Deep-Symmetry `crate-digger` spec)
+## Where the existing work lives
 
-A CDJ reads, off the stick:
-- `PIONEER/rekordbox/export.pdb` — a **DeviceSQL** database (the library:
-  tracks, playlists, keys, colors, …). 20 tables, 4096-byte pages.
-- `PIONEER/rekordbox/exportExt.pdb` — extended DB (RGB hot cues etc.).
-- `PIONEER/USBANLZ/**/ANLZ0000.{DAT,EXT,2EX}` — per-track analysis: beatgrid
-  (`PQTZ`), cues (`PCOB` classic, `PCO2` RGB with explicit `color_red/green/blue`),
-  waveforms incl. **RGB color** (`PWV4/PWV5`, and `PWV6/PWV7/PWVC` for CDJ-3000).
-- `PIONEER/*.DAT` — player/mixer settings (auto-cue, jog, RGB, DJM curves).
-- `exportLibrary.db` — **SQLCipher-encrypted** "Device Library Plus" sidecar.
-  **Optional** — a CDJ plays fine without it (classic `export.pdb` path). It
-  carries the device *name* + background *color* (Sonny's purple).
+| Location | What exists | Limit |
+| --- | --- | --- |
+| [research/cdj_export](../research/cdj_export/README.md) | Standalone DeviceSQL reader/writer, string/simple-row and track-row codecs, small-file assembler | Excluded from installed apps; not a production exporter |
+| `research/cdj_export/anlz_bridge.py` | Pure mapping of canonical beats, cues and waveform fields | Synthetic tests; no complete ANLZ file writer or hardware proof |
+| `soundbox-cdj-ref/ref-usb-empty/` | Retained empty rekordbox USB scaffold | Private, read-only reference |
+| `soundbox-cdj-ref/ref-usb-full/` | Three-track rekordbox export and Test playlist | Private, read-only control |
+| `soundbox-cdj-ref/stage-A-clone/` | Byte-identical control database | Historical experiment |
+| `soundbox-cdj-ref/stage-B-scratch/` | Generated compact database rejected in the recorded CDJ test | Historical experiment, not an accepted export |
 
-Byte-level notes learned: file header = 7×u4 then 16-byte table pointers; each
-data page has a 40-byte header, a heap growing UP from offset 40, and a **row
-index growing DOWN from the end** in groups of 16 (present-flag bitmask at
-`base-4`, offsets at `base-6-2i`, `base = len_page - group*0x24`). Rows are
-4-byte aligned. rekordbox pre-allocates pages and does NOT zero deleted rows
-("ghost" bytes). Each table is a 2-page chain: a non-data index/`first_page`
-(flags `0x64`, templated `ff1ff8ff…` filler) + a data `last_page` (flags `0x24`).
-`track_row` = 136-byte scalar header (tempo = BPM×100, etc.) + 21
-`device_sql_string` pointers. Strings: short-ASCII (odd length byte) / long-ASCII
-(`0x40`) / long-UTF-16LE (`0x90`).
+All of these locations are in this checkout. The reference root is git-ignored;
+do not commit audio/captures, mutate pristine references or overwrite a working
+performance USB to run an experiment.
 
-## Status
+## Library formats and analysis
 
-### Analysis-side foundation ✅
+Classic Device Library uses `/PIONEER/rekordbox/export.pdb`; newer extensions
+include `exportExt.pdb`. Database rows connect metadata, playlists, artwork and
+audio/analysis paths. ANLZ `.DAT`, `.EXT` and `.2EX` containers carry grid, cue and
+waveform data. Settings files are separate from library acceptance. Primary
+reverse-engineering references: Deep-Symmetry's [database structures](https://djl-analysis.deepsymmetry.org/rekordbox-export-analysis/exports.html)
+and [analysis structures](https://djl-analysis.deepsymmetry.org/rekordbox-export-analysis/anlz.html).
+These describe structures; they are not certification of our writer.
 
-- Shipped canonical analysis records contain the future export allowlist, beat grid, every
-  memory/hot cue, RGB overview, 24-band master, and ultra amplitude contour.
-- `anlz_bridge.py` maps that record without writing files into PQTZ tempo/time
-  units, PCOB/PCO2 cue semantics, PWV5 RGB bytes, and PWV7 mid/high/low bytes.
-- MP3, WAV, AIFF/AIF, and FLAC can be candidates. AAC/ALAC/M4A/MP4 are
-  explicitly player-only and must never enter a CDJ export.
-- This does not claim that a newly assembled ANLZ container or compact PDB is
-  hardware-valid. The validated scaffold-and-inject campaign below remains the
-  gate before any app-visible USB export.
+The local classic references have 20 tables and 4,096-byte pages. The prototype
+preserves a 40-byte page header, upward-growing row heap, backward row indexes
+and original padding/deleted-row bytes on round-trip. Track rows have a 136-byte
+header and 21 string offsets. The observed index/data page arrangement is a
+property of the small reference exports, not a universal two-page-per-table rule.
+The current `build_file` assembler has one data page per table and is explicitly
+for small libraries; full-library pagination/capacity remains unimplemented.
 
-### Proven ✅ (all on Sonny's real files, on real hardware)
-- **Read** the entire format via `pyrekordbox` + our reader — beatgrid, memory +
-  RGB hot cues (exact RGB), color waveform, settings.
-- **Write byte-identical** — round-trip every real `.pdb` through our
-  reader→writer, SHA-identical.
-- **All row codecs** — strings + keys/colors/artists/albums/labels/genres +
-  `track_row` (decode + generate) + `playlist_tree`/`playlist_entries`.
-- **Generate a `.pdb` from scratch** — page assembler builds a fresh file; our
-  reader reads back all tracks/playlists/keys/colors, content equivalent.
-- **Mounted + played on a CDJ-3000** — a stick our pipeline assembled mounts and
-  plays audio.
+OneLibrary, formerly Device Library Plus (`exportLibrary.db`), is a different
+compatibility target, not a universally optional cosmetic sidecar. AlphaTheta's
+[January 7, 2026 notice](https://www.pioneerdj.com/en/news/2026/cdj-3000-firmware-ver330-important-notice/)
+describes classic Device Library for CDJ-3000 and OneLibrary requirements for
+CDJ-3000X and other named newer products. Consult the current
+[USB export compatibility guide](https://rekordbox.com/en/support/usb-export/)
+before each hardware campaign; record the exact model, firmware, rekordbox version,
+filesystem and library format. No OneLibrary writer is implemented here. A
+classic-only result must not be presented as support for every CDJ/XDJ.
 
-### The decisive isolation test
-A stick with **rekordbox's real `export.pdb` and NO sidecar → fully works**
-(playlists, cues trigger, tracks color-analyzed). This proved three things:
-1. our stick-assembly/copy pipeline is correct;
-2. `exportLibrary.db` is **optional** (not the blocker);
-3. **our from-scratch `export.pdb` is the sole remaining fix target** — with our
-   compact pdb the CDJ says *"no rekordbox database found"* and drops to
-   folder-mode (no playlists; cues show as inert ghosts; live-analyzed waveform).
+The shipped player already imports rekordbox analysis and authoritative live-DB
+cues; see [PLAYER](PLAYER.md). Those readers and SoundBox's canonical analysis
+provide useful inputs, not proof of valid device files. The bridge expresses
+PQTZ units, cue semantics and proposed waveform streams; complete container/tag
+encoding, path consistency and actual on-deck behavior still need validation.
+Its synthetic RGB field output must not be treated as already serialized PWV5.
 
-### Known / cosmetic
-- Device name + background color live in the encrypted `exportLibrary.db`
-  (stripped in the test) → restore the sidecar later for name + purple.
-- A track loading "blue" once was transient CDJ paint-while-loading — all 3
-  tracks' ANLZ are intact (color `PWV4/5` + `.2EX` present).
+Current SoundBox candidate policy allows MP3, WAV, AIFF/AIF and FLAC; it excludes
+AAC/ALAC/M4A/MP4 from future CDJ export. This is SoundBox's present policy in
+`track_analysis.export_eligibility`, not a claim that CDJs cannot play those codecs.
+A filename allowlist does not replace per-model codec/sample-rate/bit-depth checks.
 
-## Next campaign — scaffold-and-inject
+## What the recorded experiments establish
 
-Our *aggressive compact* pdb was rejected (122 KB vs rekordbox's 164 KB; we
-dropped pre-allocated pages and stale-copied the index pages). The strategy:
+Historical work round-tripped the reference PDBs byte-identically, decoded and
+regenerated track/simple rows, and built a compact PDB readable by our own reader.
+The recorded CDJ-3000 test played audio but rejected that generated database with
+“no rekordbox database found”: playlists were absent, cue markers were inert and
+the deck used its fallback waveform behavior. **Native library acceptance failed.**
 
-> Start from a known-good rekordbox `.pdb` **scaffold** — keep every structural
-> page byte-exact (the `first_page` index pages, pre-allocation, pre-alloc
-> `num_row_offsets`) — and **inject only the library's rows** into the data
-> pages. That is almost certainly what the CDJ validates against, and it doubles
-> as the product approach: SoundBox ships a canonical scaffold and fills it from
-> the live library. Then binary-search what's actually essential.
+A control using rekordbox's own PDB without the Plus database reportedly restored
+playlists, working cues and prepared color waveforms on that tested setup. This
+isolates the generated classic PDB as the next investigation target for that
+fixture. It does not prove that all media-copy paths are correct, that no other
+writer bugs exist, or that Plus/OneLibrary is optional on other hardware.
+Device name/background-color behavior was not independently isolated; do not
+assume the encrypted database is purely cosmetic.
 
-This is a hardware-gated loop: build a candidate → walk it to the CDJ → read the
-result → adjust. Best done with the decks nearby.
+October 26 read-only metadata recheck (no USB/device or source-audio access):
 
-## Reference material (local project workspace, git-ignored)
+| Retained database | Size | Recheck |
+| --- | --- | --- |
+| Empty reference | 167,936 bytes / 41 pages | Byte-identical reader/writer round-trip |
+| Full reference and A control | 167,936 bytes / 41 pages each | Same SHA-256; three track string-codec round-trips each |
+| B generated candidate | 122,880 bytes / 30 pages | Byte-identical reader/writer and three track string-codec round-trips |
 
-`soundbox-cdj-ref/` at the project root holds the golden-master snapshots and
-staged test sticks (large audio — the whole directory is git-ignored and must
-never be committed):
-- `ref-usb-empty/` — a blank rekordbox scaffold (just from plugging a stick in).
-- `ref-usb-full/` — 3 tracks + playlist "Test" + memory/RGB hot cues.
-- `stage-A-clone/` (byte-identical control) + `stage-B-scratch/` (from-scratch).
+The two synthetic ANLZ-bridge tests also passed. These checks confirm retained
+research inputs/code, not a fresh CDJ run or an accepted generated library.
 
-Run the prototype under the app's own venv (`pyrekordbox` is already a dep):
-`.venv/bin/python`.
+## Next experiment — scaffold and inject
 
-Spec source: Deep-Symmetry `crate-digger` (`rekordbox_pdb.ksy` /
-`rekordbox_anlz.ksy`) — note the org slug is hyphenated (`Deep-Symmetry`).
+Start from a copy of the known-good small rekordbox scaffold. Preserve structural
+pages, pre-allocation and row-index bookkeeping, and change only a bounded set
+of library rows. Compare it with an untouched control on a separately selected
+test USB. If accepted, vary one structural detail at a time to find what matters.
+Pre-allocation/index handling is a hypothesis prompted by the rejected compact
+file, not an established explanation. A scaffold is an experiment, not yet the
+chosen production architecture or an approved redistributable asset.
+
+Record candidate hashes, intended row/path changes, model/firmware and the exact
+observed results. A parser round-trip or successful audio load cannot close the
+database-acceptance gate. After small-fixture acceptance, design scalable page
+allocation, IDs/references, artwork and complete ANLZ publication before testing
+larger collections and updates.
+
+## Acceptance before product integration
+
+Use matching content and settings on a rekordbox control and candidate USB.
+Record pass/fail and any unsupported feature explicitly for the declared device.
+
+| Gate | Required evidence |
+| --- | --- |
+| Library recognition | Normal library browsing, playlists/folders, exact order, artist/BPM/key metadata and supported search/sort; no folder-mode fallback |
+| Prepared analysis | Expected overview/detail and supported color/3BAND modes; grid/downbeats match the control without fallback analysis |
+| Performance controls | Hot/memory cue positions, slots, colors/comments where supported, saved loops, quantize and beat-sync behavior match the control |
+| Media and artwork | Correct recording/duration/seeks, readable artwork, Unicode/long paths, duplicate references and honest reporting of unsupported media |
+| Linked decks and persistence | USB sharing/loading over PRO DJ LINK, supported phase/waveform views, normal eject/reinsert and deck restart retain the library |
+| Export lifecycle | First export, additions, changed grids/cues/art/metadata, playlist reorder/removal, shared-track retention and unchanged re-export behave as planned without duplicates or stale references |
+| Failure and recovery | Cancellation, full target, interrupted publication/remount and retry preserve or recover the last accepted library; unrelated files remain untouched |
+
+Before a product writer exists, define explicit target confirmation, mount identity,
+source/target separation, ownership/coexistence with existing rekordbox exports,
+space planning, recovery and final publication order. No existing production
+exporter gains `/PIONEER` authority from this document. Any future exception needs
+a dedicated reviewed contract, tests and hardware acceptance; ordinary stock,
+dual and generic exporters retain their present guard. Do not borrow iPod recovery
+as permission to modify a CDJ USB.
+
+Once the declared device/feature matrix passes, wire the backend into the shared
+app with honest capability reporting and the normal release/install gates.
+Distribution review of any scaffold/spec/dependency is separate from personal
+hardware acceptance. Manual grid editing and writing playlists into rekordbox's
+desktop DB are separate features, not prerequisites silently included in this task.
+
+Run research with the project's `.venv/bin/python`; see the
+[prototype README](../research/cdj_export/README.md) for the pure test command.

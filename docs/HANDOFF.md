@@ -4,9 +4,18 @@ Updated October 26, 2026, America/Chicago.
 
 ## Published source and installed runtime
 
+The documentation audit follows release-record commit
+**12f65293ab13831964c2e953718d5fde628a7d5c** on `main`; the documentation commit
+is the repository revision, separate from the installed runtime below. Sonny
+requested final wrap-up after the audit. These changes are documentation only;
+they do not change or reinstall build 129. The prior runtime recheck at
+02:18:29 confirmed the installed fingerprint/signature, exact curated library,
+artwork and review state, with no runtime errors since launch. Evidence:
+`~/Library/Logs/Soundbox/wrap-2026-10-26/stability-recheck.json`.
+
 Sonny explicitly requested the full wrap-up. Runtime release commit:
 **81c0d6c4bada0a48712dddcfe948384aa62a1eb1**, on `main`. The later repository HEAD is a
-documentation-only installation/cleanup record; it does not change the installed
+documentation-only installation/cleanup and roadmap record; it does not change the installed
 runtime revision or require restamping/rebuilding the unchanged binary.
 
 Installed `/Applications/Soundbox.app`: personal **build 129**, built from
@@ -105,8 +114,9 @@ source checkout remain; build/native, QA evidence and small state/provenance
 records remain available. The temporary rollback directory is gone. No AppData
 or protected fixture/recovery material was part of cleanup. No active app rollback
 remains; prior release code is in Git and can be rebuilt. cleanup.json records
-all retired paths. Main is published with a clean worktree after the final
-documentation-only follow-up; HTTPS uses the existing gh credential helper since
+all retired paths. The release was published with a clean worktree after its final
+documentation-only follow-up; the later documentation audit is separate. HTTPS
+uses the existing gh credential helper since
 the SSH agent has no loaded identity. Credentials never enter Git or output.
 
 The sole full ZIP remains the deliberately created October 25 backup:
@@ -118,7 +128,7 @@ metadata, and exact original recovery remains under art/review and
 art/source-recovery. No duplicate full artwork cache or replacement ZIP was
 created merely to install the app.
 
-No implementation/release work from this session remains. The artwork audit is
+No implementation/release work from the build-129 wrap-up remains. The artwork audit is
 still a human process: unknown alternate accounts are possibilities, not certified
 official accounts; intentional cross-song artwork reuse is not song identity.
 The unavailable artist profile may need manual correction. Selecting a different
@@ -133,3 +143,29 @@ availability and public service/distribution clearance remain separate. Two olde
 native timing misses remain under build/review-controls-validation; later full
 gates pass without weaker thresholds, but that earlier flakiness is not certified
 fixed. Existing device recovery/acceptance work stays on ROADMAP.
+
+## Next session — product sequence and documentation audit
+
+Sonny wants to use build 129 for a while. Resume physical iPod acceptance when
+the device returns, refine music-library management from normal-use findings,
+then develop full-function rekordbox-compatible CDJ USB export. The exact next
+tests and retained recovery are in [ROADMAP](ROADMAP.md). Confirm the returned
+iPod's identity/generation before selecting tests; confirm home CDJ models and
+firmware before a separate USB campaign. No live device write is authorized by
+this documentation work.
+
+Existing CDJ work is in [research/cdj_export](../research/cdj_export/README.md)
+and the protected local `soundbox-cdj-ref/` workspace. The generated database's
+historical CDJ rejection is still open; folder-mode audio playback is not native
+export acceptance. [CDJ USB research](cdj-usb-export.md) now records library-format
+boundaries, a control-comparison matrix, incremental export/recovery gates and
+the scaffold hypothesis without claiming it is the production solution.
+
+Documentation audit: checked all 167 relative file/heading links across 29 tracked
+Markdown files and instruction parity; corrected stale browser-login/current-storage descriptions and roadmap
+sequencing. Four retained PDBs round-tripped byte-identically in a read-only
+metadata check; all nine present track rows preserved string-codec round-trips.
+Two pure ANLZ-bridge tests passed. Diff whitespace passed; all changes are Markdown.
+Installed build 129's strict/deep signature verification, revision and fingerprint
+still match the release above. No app/source-audio/device/AppData changes or new
+hardware acceptance; the full build-129 gate above remains the runtime evidence.

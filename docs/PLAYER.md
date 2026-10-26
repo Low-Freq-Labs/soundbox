@@ -453,7 +453,9 @@ constant-tempo grid from FFT autocorrelation and anchors beat 1 at exactly
 For incomplete imports, Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips.
 Complete imports use the compact native-rate supplement below. Export eligibility is
 deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
-candidates; AAC/ALAC/M4A/MP4 are always player-only.
+candidates; AAC/ALAC/M4A/MP4 are player-only under the current SoundBox policy.
+This is not a statement of every CDJ's codec support, nor proof of a valid device
+export. The separate [CDJ acceptance plan](cdj-usb-export.md) governs that work.
 
 Fallback/legacy geometry is analyzed at approximately 6144 cells/second from the
 stereo midpoint, which preserves the

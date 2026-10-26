@@ -4,7 +4,44 @@ Updated October 26, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
-## Current focus — artwork accuracy and Settings
+## Next sequence — iPod acceptance, library management, CDJ USB export
+
+Sonny confirmed this order on October 26. Build 129 stays available for ordinary
+use while the next work is prepared; the completed artwork/Settings release below
+is not a new implementation queue. These phases guide product work; the existing
+correctness, lifecycle and public-distribution gates later in this document still
+apply where relevant.
+
+1. **Resume physical iPod testing when Sonny's iPod returns.** Record its actual
+   identity, firmware and managed generation before choosing tests. Recheck
+   reconnect during playback, unchanged Sync reads/writes/timing, overlapping
+   playlist drops, cancel/retry and normal eject after success/failure. Use the
+   existing [device follow-up](#device-follow-up--physical-acceptance-when-the-ipod-returns)
+   and [sync audit](sync-performance-audit-2026-09.md); retain generation-58
+   recovery until separately reviewed acceptance. No firmware-preference changes
+   or restoration of a historical capture is implied.
+2. **Refine music-library management through normal use.** Collect concrete
+   friction around importing/refreshing tracks, title/artist identity, playlist
+   order/membership, missing links, artwork decisions and backup/restore. Verify
+   real rekordbox grid/cue edits on refresh/reopen. Preserve saved reviews/manual
+   art, source files and read-only rekordbox access. Prioritize observed problems
+   with Sonny rather than implementing every item in [IDEAS](IDEAS.md).
+3. **Develop native rekordbox-compatible CDJ USB export.** Start from the retained
+   [prototype and reference exports](cdj-usb-export.md), then test on Sonny's home
+   CDJs. Target normal library browsing and performance features matching a
+   rekordbox-exported control, including playlists, grids, hot/memory cues, loops,
+   waveform modes and artwork. Audio playing in folder mode fails acceptance.
+   Record model/firmware and required library format; test initial export,
+   incremental updates, unchanged re-export, removals, interruption/recovery and
+   linked-player use before production integration. Current generic USB export
+   does not provide this. `/PIONEER` remains protected in the installed app;
+   a dedicated writer/ownership/recovery contract must precede any product writes.
+
+The CDJ phase is a requested product milestone after iPod/library work, not an
+uncommitted UX idea or a shipped capability. It does not require completing every
+optional refactor or public-distribution task before research can resume.
+
+## Completed artwork, Settings and player release — October 26
 
 Current release: Suggested now checks the whole active cover library, including
 manual and unrecorded entries. The loading wheel precedes initial results; live
@@ -70,18 +107,22 @@ external flow or private-account access.
 See [HANDOFF](HANDOFF.md), [KEYBOARD](KEYBOARD.md), and
 [SoundCloud setup](soundcloud-connection.md) for current provenance and setup.
 
-Sonny also requested retaining only the current installed app. The older rollback,
+Historical October 24 cleanup: Sonny requested retaining only the current
+installed app. The older rollback,
 36 empty historical app shells, duplicate dist build, packaging intermediates and
 separately approved 3.5-GB diagnostic archive were removed. Required test/device
 fixtures and curation backups remain. About 4.55 GB of logical data was removed;
 free space was about 14 GiB afterward. Eleven tracks already lacked analysis caches
-before installation; preparation remains paused by the existing low-space policy.
-Sonny is updating macOS and expects more room after reboot; do not lower the guard
-or trigger a manual cache rebuild. See [PROJECT_LAYOUT](PROJECT_LAYOUT.md).
+before that installation; preparation was paused by the existing low-space policy.
+The low-space observations above belong to that installation, not a current
+storage measurement. Do not lower the guard or trigger a manual cache rebuild.
+The later build-129 installation/cleanup and retained paths are in
+[PROJECT_LAYOUT](PROJECT_LAYOUT.md) and [HANDOFF](HANDOFF.md).
 
 The accepted October 9 renderer, background preparation and playback-preserving
-replacement remain unchanged. Further renderer retuning, cache rebuild and device
-experiments remain unqueued. The earlier native-test timing observations remain
+replacement remain foundations; the October 26 overview/transport corrections
+above extend them. Further renderer retuning and cache rebuild remain unqueued;
+device acceptance follows the sequence above. Earlier native-test timing observations remain
 unresolved; passing reruns do not establish their cause. Exact rekordbox pixel/
 3BAND calibration, profile approximation, cloud-provider latency, device physical
 acceptance and public distribution clearance remain separate limits below.
@@ -131,10 +172,11 @@ See the [feature allocation and module contract](release-boundaries.md).
 
 Reliable supported-device management remains the release prerequisite. The
 original MA446 workflow has physical acceptance; newer lifecycle/performance
-corrections still have the gates below. Expansion toward a rekordbox export-mode
-alternative remains a later direction, not permission to ship CDJ research.
+corrections still have the gates below. The requested rekordbox-style CDJ export
+phase follows iPod/library work; research must pass its own hardware and safe-write
+gates before becoming a shared product feature.
 
-## Device follow-up — deferred physical acceptance
+## Device follow-up — physical acceptance when the iPod returns
 
 User reports stable playback so far with database auto-update off and preferences
 persisting after normal shutdown. Continue normal use; capture diagnostics and
@@ -323,8 +365,6 @@ manifest/cache schemas, native timing and visible behavior in each slice.
   validation and physical acceptance before broadening the MA446 allowlist.
 - Windows: a real native-player/device/bookmark/packaging port. Not a prerequisite
   for the first macOS public release; validate rekordbox versions explicitly.
-- CDJ export: retain separate [research plan](cdj-usb-export.md); no production
-  `/PIONEER` ownership until independently designed and accepted.
 - Complete Rockbox Track ReplayGain, including WAV: upstream parser path first;
   reference-validated ReplayGain 2.0 / ITU-R BS.1770 gated analysis at -18 LUFS
   plus true peak, checked against independent scanners and official vectors;

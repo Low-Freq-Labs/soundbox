@@ -11,14 +11,16 @@ Full plan, status, and next steps: [CDJ export research](../../docs/cdj-usb-expo
 ## What's here
 
 - `devicesql.py` — DeviceSQL `.pdb` reader + writer (pages, table directory, the
-  backward-growing row index) and a from-scratch file/page assembler.
+  backward-growing row index) and a small-file assembler with one data page per
+  table. Scalable pagination and hardware-valid generation remain open.
 - `rows.py` — `device_sql_string` codec (short-ASCII / long-ASCII / UTF-16LE)
   and simple-row codecs (keys, colors, artists, albums, labels, genres,
   playlist_tree, playlist_entries).
 - `tracks.py` — the `track_row` codec (136-byte scalar header + 21 string
   pointers): decode to fields, and generate a valid row.
 - `anlz_bridge.py` — a pure mapping from canonical SoundBox analysis to the
-  proposed ANLZ export contract; covered by synthetic tests, not a device writer.
+  proposed ANLZ field contract; covered by synthetic tests, not a complete
+  binary tag/container encoder or a device writer.
 
 ## Checking it
 
@@ -36,7 +38,10 @@ are large audio binaries and live in the project-local, fully git-ignored
 
 ## Status in one line
 
-Reads + writes rekordbox `.pdb` byte-identical; generates a full `.pdb` from
-scratch; a code-built stick **mounts and plays on a CDJ-3000** but the CDJ does
-not yet accept our from-scratch database (folder-mode fallback). Next campaign:
-**scaffold-and-inject** (see the doc).
+Reference PDBs round-trip byte-identically, including the October 26 read-only
+recheck. The historical compact generated PDB is readable by our reader but was
+**rejected by the CDJ-3000**; audio played through folder-mode fallback. Full
+library/performance acceptance has not passed. Next experiment: **scaffold and
+inject**, with its structural explanation still a hypothesis. See the plan for
+the model/firmware matrix, normal export/update behavior and recovery gates.
+This research follows iPod acceptance and library refinement in the roadmap.

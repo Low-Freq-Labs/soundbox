@@ -1,6 +1,6 @@
 # Project layout and retention
 
-Updated October 24, 2026. This describes the checkout, not the installed app's
+Reviewed October 26, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 
 ## Active checkout
@@ -21,6 +21,13 @@ The three reference directories are intentionally retained, not disposable build
 output. The release gate requires the offline iPod and frozen waveform fixtures.
 Do not remove or replace them to make tests pass. Native source runs also need
 `build/native/`; `./build_native.sh` can regenerate it.
+
+CDJ work is already here: tracked codecs/field mapping live in
+[`research/cdj_export/`](../research/cdj_export/README.md); the private
+`soundbox-cdj-ref/` root retains `ref-usb-empty`, `ref-usb-full`, `stage-A-clone`
+and the rejected `stage-B-scratch` candidate. The [CDJ plan](cdj-usb-export.md)
+separates retained experiments from hardware acceptance still needed. These are
+not an installed USB-export feature or disposable packaging output.
 
 `./build_app.sh` recreates packaging work under `build/` and output under `dist/`.
 Python, mypy and Hypothesis also recreate their ignored caches during development.

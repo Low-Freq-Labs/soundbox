@@ -6,6 +6,13 @@ Browse the live rekordbox library, curate it without ever touching it, and drag
 playlists onto a device with exact order, per-track cover art, and honest sync
 semantics. Built by Sonny (Low Freq Labs) with Claude and Codex.
 
+Product sequence confirmed October 26: physical iPod acceptance when Sonny's
+device returns, music-library management refinement, then native CDJ USB export
+with full library/performance acceptance against a rekordbox control. See
+`docs/ROADMAP.md` and `docs/cdj-usb-export.md`. Existing `research/cdj_export/`
+is standalone and its generated database has not passed CDJ acceptance. The
+installed app's `/PIONEER` exclusion remains in force.
+
 ## Runtime instruction parity
 
 `AGENTS.md` and `CLAUDE.md` are runtime equivalents and intentionally contain

@@ -32,6 +32,14 @@ or reset curation, provider namespaces, images, sticky removals or analysis.
                 See research/cdj_export/.
     docs/       this documentation.
 
+The CDJ prototype is not an exporter backend in either installed profile.
+Its DeviceSQL codecs and synthetic ANLZ field bridge are research foundations;
+neither proves a hardware-valid generated library. A future CDJ backend needs
+its own explicit target, ownership and recovery design before integration. The
+existing `/PIONEER` guard stays in place. Product sequencing and the hardware
+acceptance contract live in [ROADMAP](ROADMAP.md) and
+[CDJ USB research](cdj-usb-export.md).
+
 ## Engine modules (`soundbox/`)
 
 `library` (source-neutral `Track` / `Playlist` / `Library` model) ·

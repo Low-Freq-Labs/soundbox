@@ -63,6 +63,14 @@ library management available.
 | Other stock iPod models | Read-only; stock writes are not enabled |
 | rekordbox/CDJ `/PIONEER` tree | Reserved and excluded from ordinary SoundBox writes; CDJ export remains separate R&D |
 
+The next product sequence is physical iPod acceptance when Sonny's device returns,
+music-library management refinement, then native rekordbox-compatible CDJ USB
+export. That final milestone requires full library/performance behavior on the
+tested CDJs; folder-mode audio playback is insufficient. The existing prototype
+is in [`research/cdj_export/`](research/cdj_export/README.md), with its hardware
+findings and acceptance plan in [CDJ USB research](docs/cdj-usb-export.md).
+See the [roadmap](docs/ROADMAP.md) for sequencing and remaining gates.
+
 Background upkeep reuses unchanged analysis and prepared artwork, title edits
 refresh only their display row, and idle device watching waits for mount changes.
 Ordinary player preferences save in a short batch; library edits still save
