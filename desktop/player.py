@@ -1698,6 +1698,53 @@ class PlayerBar(QWidget):
     def current_track(self) -> str | None:
         return self._track_id
 
+    def refresh_live_cues(self, track_id: str, path, cues):
+        """Publish a fresh DB snapshot without reloading or moving the deck."""
+        if (track_id != self._track_id or str(path) != self._src_path
+                or cues is None):
+            return
+        self._live_cues = list(cues)
+        self._analysis_parts["cues"] = list(cues)
+        self.wave.set_cues(self._live_cues)
+        self.cue_panel.set_cues(self._live_cues)
+        self.player.set_cues(self._live_cues)
+
+    def review_transport_state(self) -> dict:
+        """Read-only compact transport view over the same native playback source."""
+        # A transient PAUSED/refill snapshot can clear button intent while
+        # audio resumes. Audible playback must still expose a working Pause;
+        # an explicit pending pause takes precedence for a quick resume.
+        return dict(track_id=self._track_id, position=self.player.position(), duration=self._dur,
+                    requested=bool(self._pending_should_play if self._pending_autoplay
+                                   else self._transport_play_active
+                                   or (self.is_playing() and not self._pause_pending)),
+                    loading=self._pending_autoplay, available=not self._native_error)
+
+    def pause(self):
+        """Pause with the ordinary gain ramp and cancel pending load/play intent."""
+        self._begin_transport_intent()
+        self._pending_should_play = False
+        self._ordinary_playback_requested = False
+        self._transport_play_active = False
+        self._reset_cue_preview()
+        self._pause_clean(lambda: None)
+        self._sync_deck_button_states()
+
+    def resume(self):
+        """Keep a pending grid/source load authoritative when resuming review."""
+        if self._pending_autoplay:
+            self._pending_should_play = True
+            self._transport_play_active = True
+            self._try_pending_autoplay()
+            self._sync_deck_button_states()
+        elif self._pause_pending or not self.is_playing():
+            self.toggle()
+
+    def seek_ms(self, position: int):
+        """Seek through the same clickless transport as the deck waveform."""
+        if self._dur > 0 and not self._pending_autoplay:
+            self._move_clean(max(0, min(self._dur, int(position))))
+
     def set_jump_mode(self, mode: str, emit: bool = True):
         """Select the grid-aware transport jump and refresh edge availability."""
         mode = mode if mode in _JUMP_MODES else "16 BEATS"

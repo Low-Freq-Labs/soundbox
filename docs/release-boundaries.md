@@ -50,7 +50,7 @@ they are not a completed legal or dependency clearance.
 | Capability / current surface | Public | Personal | Current boundary / work needed |
 |---|---|---|---|
 | App layout, theme, search, tables, sidebar, saved columns/window | Keep | Same | Shared shell |
-| Read-only live rekordbox and XML refresh | Keep | Same | Shared adapters; validate supported versions |
+| Read-only live rekordbox and XML refresh | Keep | Same | Core Connections card; validated database-location selection; shared snapshot/XML adapters; validate supported versions |
 | Collection, artists, custom playlists, ordering, drag/drop | Keep | Same | Shared library/curation controller |
 | Local audio import, bookmarks, bounded missing-link repair | Keep | Same | Shared imports; no source moves/retags |
 | Title/artist overrides, cleanup rules, aliases | Keep | Same | Shared curation; personal values are data |
@@ -68,7 +68,7 @@ they are not a completed legal or dependency clearance.
 | Automatic online cover discovery for new tracks | Omit | Retain via optional provider | Starts only with the personal provider |
 | Fetch cover art now / background / stop / re-scan | Omit online actions | Retain via provider | Gate command and scheduler, not just menu |
 | Online thumbnail candidate search in cover picker | Omit | Retain via provider | Local picker remains present in both |
-| SoundCloud connection and likes-first artwork matching | Omit | Optional Connections tab | User credentials/tokens in Keychain; read-only metadata index outside curation/backup; real account acceptance pending installation |
+| SoundCloud connection and likes-first artwork matching | Omit | Optional SoundCloud card in Connections | App credentials/tokens in Keychain; public-profile likes aid general artwork search without browser authorization or website redirect changes; metadata index outside curation/backup; live service acceptance is separate from offline validation |
 | SoundCloud page URL cover/avatar actions | Omit | Retain via provider | Track picker and artist catalog gate URL controls and commands |
 | Suggest artists for Unknowns (online consensus) | Omit | Retain via provider | Separate from local merge suggestions |
 | `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Personal bundles it; public physically excludes it |

@@ -27,9 +27,9 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## Current retention — October 24
+## Accepted cleanup — October 24 (historical)
 
-Only the current installed `/Applications/Soundbox.app` is retained. After build
+Accepted releases retain only the installed `/Applications/Soundbox.app`. After build
 126 passed release/native/render checks and Sonny accepted the UI, he requested
 removing app/source rollback clutter and separately approved deleting the old
 diagnostic archive. Cleanup removed the preceding build-122 rollback, 36 empty
@@ -53,6 +53,12 @@ Those are curation/review material, not duplicate app/source trees. The cleanup
 inventory is recorded there and under `build/artwork-review-oct24/cleanup.json`.
 Source revision history remains in Git; future accepted installs should not retain
 old apps or dist copies indefinitely.
+
+The October 26 full wrap-up includes the later Settings/connections/artwork
+follow-up. Its installation, scoped app/packaging cleanup and final retained paths
+are recorded in [HANDOFF](HANDOFF.md). Keep small provenance/state snapshots and
+protected fixtures/recovery separately; accepted releases retain only the current
+installed app and active source checkout.
 
 ## Historical October 9 cleanup (archive deleted October 24)
 

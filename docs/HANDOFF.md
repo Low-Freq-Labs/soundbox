@@ -1,106 +1,109 @@
 # SoundBox current handoff
 
-Updated October 24, 2026, America/Chicago.
+Updated October 26, 2026, America/Chicago.
 
-## Current release
+## Release in progress
 
-Sonny accepted the Settings presentation, requested removal of redundant apps and
-old diagnostic outputs, then explicitly requested full wrap-up with commit/push.
-The completed artwork/Settings/keyboard source release is
-**7e5989da33409a274ee4744be7675a368ecf50d5** on `main`, tracking `origin/main`.
-This provenance follow-up changes documentation only; `git rev-parse HEAD`
-identifies its containing repository revision.
-The installed app's signed build revision is recorded separately below. No app
-rollback or duplicate dist build remains; preserve that retention preference.
+Sonny explicitly requested a **full wrap-up**, including final validation,
+commit/push, safe installation, runtime/state verification and scoped cleanup.
+`main` starts from `17da99e5aecd74fac7a264ff3243be412ee79c68`.
+The complete Settings/connections/artwork/player follow-up is ready for its
+release commit. Final installation evidence will be a documentation-only follow-up;
+never relabel an older binary as that follow-up revision.
 
-**Next user setup:** Settings → Connections → SoundCloud → Connect. Enter the
-Client ID/Secret locally, Save, and complete browser authorization. The SoundCloud
-app must register exactly `http://127.0.0.1:53927/soundcloud/callback`.
-Actual Keychain consent, browser authorization and the user's first likes scan
-remain external acceptance, not something the offline mocks certify.
-[Connection setup](soundcloud-connection.md), [keyboard behavior](KEYBOARD.md),
-and [ROADMAP](ROADMAP.md) hold the implementation/remaining acceptance details.
+Current installed app is still personal build **128**, dirty source fingerprint
+`1d2e9bf257181c970decb97637446a49802ef3c3b0e8a43f69aa1088e87cb94d`,
+based on the old HEAD above. Installed 01:25:06, launched 01:25:07 and verified
+01:25:51 on October 26, PID 55000 then. Evidence:
+`~/Library/Logs/Soundbox/artwork-review-2026-10-25/review-overview-fix/`.
+Do not confuse this preceding installed app with the upcoming release commit.
 
-Sonny is updating macOS and expects more space after reboot. Eleven tracks lacked
-analysis caches **before** installation; existing caches were preserved. Normal
-preparation remains paused by the existing low-space guard (13.6 GiB observed,
-20 GiB required). Do not lower the guard or manually rebuild the library.
+## Completed behavior
 
-## Installed runtime and curation
+- Settings uses one centered header: General, Keyboard, Graveyard, Connections;
+  Back at left, no Settings label. General balances its columns. Connections has
+  read-only rekordbox source/status/location/selection at left, optional personal
+  SoundCloud public likes at right. Failed DB reads/settings saves retain the
+  previous source. Source snapshots and ANLZ lookup use the selected DB root.
+- Keyboard uses active-page cue slots 1–8, pages 9/0 and zoom =/-. Old direct
+  Hot/Memory binding IDs remain preserved but inactive.
+- Public likes use app credentials plus public profile, with no browser sign-in
+  or website callback changes. Credentials/tokens stay in Keychain under stable
+  bundle/signing identity. A 6,057-track scan succeeded October 25. Always Allow
+  was chosen by Sonny; no Keychain ACL workaround or credential extraction.
+  Valid application tokens without refresh tokens now reuse until expiry.
+- Artwork review checks every active cover, including manual/legacy art, and
+  restores exact saved contexts before online work. Suggested contains ready
+  different comparisons; All supports individual browsing. Loading/progress,
+  resumable metadata and bounded previews avoid repeating completed requests.
+  Keep/Replace persist exact cover SHA/entry plus artist/title; Next is session
+  only. Actions advance down from the selection. Searches never change images.
+  More has artist-profile preview/approval, manual choices, one persistent
+  Exclude Uploader manager, refresh controls and no Undo item. Exact original
+  recovery remains in art/review; seller-policy originals in art/source-recovery.
+- Approved artwork stays protected from background races. The explicitly
+  authorized excluded-source policy hides seller sources and uses only strictly
+  matched artist-profile art. An unavailable profile stays hidden; unrelated
+  manual/unrecorded art remains protected. Version creators, Unicode identities,
+  alternate-account possibilities, source/pixel deduplication and seller rules
+  are shared rather than per-song exceptions. Cross-track learning is not shipped;
+  decision findings and intentional cross-song artwork reuse are in IDEAS.
+- Review audition shares the native deck, with pause/scrub/time and no playlist
+  autoplay. Actual playback keeps Pause working after transient state reports;
+  quick resume cancels a pause fade. Selection/close cancels pending playback.
+- BLUE/RGB overview fills quantized-zero compact passages using the resident
+  precise audio envelope and authored hue. Real silence stays background; PWV7
+  remains independent. Cash Out, Depth, Machaki Remix and Voartyx Flip before/after
+  cache renders verify the reported cases; main-lane interior pixels and all four
+  canonical cache hashes stayed identical. Evidence: build/overview-evidence-oct26.
+- Successful library refresh now publishes fresh authoritative cues immediately
+  to an already-loaded matching track/source, including deletions, without audio
+  reload/seek. Queued old manifests cannot restore stale cues. Beatgrid changes
+  keep the fingerprinted metadata-only background refresh with waveform payload
+  bytes preserved. This closes the loaded-track caveat reported before wrap-up.
 
-Installed **personal build 126** at **2026-10-24T07:33:57.057121-05:00**; relaunched
-at **07:43:56-05:00**, finally verified **07:45:24-05:00**, PID 12556 then.
-Signed source base: **e08a9b0b4fe9910a3d6c81e08a31f898e290e65d**, dirty source.
-Runtime fingerprint:
-**57a01e2e24df64f49b534abadfd23a26c841310cb2e5b1eafdbc121142f55dac**.
-It matches the released runtime sources; later documentation/Git commits do not
-restamp that older signed revision or require rebuilding unchanged runtime code.
-Strict/deep signature, executable and native hashes match the built artifact:
+## Validation and preceding state baseline
 
-- Executable: `cdabe5a05220706a23bbc51ede895a202a595138bfab93cc2f8efa4ae86416ef`
-- Native: `b7c394ec50f0be62c9b9db9be3a2e856de216cdb18573ebc794761da863c826e`
-- Preinstall library: `8173cd0289f3560fcc367d686ef7552d2295ce2a7605f54369a6b4385555a455`
-- Post-quit/postlaunch library: `648f9adddfdd6c6856158af4a4c0a0848333417ff26e827e7dd092f1a478f335`
+October 26 final source gate: **./check.sh --render**, all **1,221 tests** passed
+(1,168 offscreen + 53 Cocoa), zero skips/expected failures, reconciled inventories,
+lint/types/native build. Final Settings, review/menu/profile/block-manager renders
+were inspected: /tmp/soundbox-wrap-*.png. Harnesses suppress real source/device/
+Keychain discovery and use isolated AppData; the separately invoked real-cache
+renderer reads only the four explicit canonical records, never source audio.
 
-The only library difference is `/settings/columns_state`, inspected explicitly;
-curation is unchanged: 10 custom playlists, 84 imported records, 487 artist
-and 1,090 title overrides, 517 hidden tracks and 24 aliases. Artwork/default index
-bytes and all **3,643 art files** are unchanged. Analysis/stock inventories retain
-**3,266 / 8,459 files**; only their two disposable preparation-index files changed.
-No waveform/art payload was deleted or rebuilt by this installation.
+The preceding install preserved all **413 decisions**, **3,092 checks**, and
+**4,040 art files**, with **3,277 analysis / 8,957 stock-art files**. Library SHA:
+`43c866f73f97fe25afec5dde23cd1616c646acbf0313b985db313b54e27f5f3e`.
+Counts: 488 artist overrides, 1,094 titles, 10 custom playlists, 84 imports,
+517 hidden tracks, 24 aliases. Two user-added title overrides explain its change
+from the earlier install baseline. Capture fresh post-quit/postlaunch state for
+the release; never restore old state to erase subsequent user choices.
 
-Final real startup: native deck active 07:43:57; 3,740 tracks / 75 playlists loaded
-07:44:00; 3,226 unchanged analysis receipts reused; 11 genuinely uncached tracks
-paused for space. Stock prep reused all 3,109 curated inputs with zero work; art
-fill had zero eligible tracks. Logs: `build/artwork-review-oct24/real-startup.log`.
+## Remaining release steps and protected material
 
-## Validation
+Commit the reviewed source/docs, build that committed revision, safely install
+with ditto after graceful quit and a fresh library/hash/queue baseline, verify
+signature/native startup/zero unnecessary preparation and curation, then update
+this handoff with actual installed provenance. Remove scoped prior app/dist/
+packaging duplicates after verification. Commit installation evidence, push main,
+and verify remote HEAD and a clean worktree. HTTPS via the existing gh credential
+helper works; SSH has no loaded agent identity. No credentials belong in output.
 
-October 24 **bare `./check.sh` and `./check.sh --render` passed all 1,138 tests**:
-1,087 offscreen + 51 Cocoa, zero skips/expected failures, reconciled inventories,
-native build, lint/types and visually inspected render. General, Keyboard,
-Connections/credentials and expanded Graveyard renders were also inspected.
-A separate native Cocoa smoke test using only a generated silent WAV passed
-numeric Hot/Memory preview, original-page release, Space latch, remap/save/reload,
-and source-byte immutability. Packaged isolated check confirmed personal actions,
-native deck active, no library/device discovery and no art worker.
+The sole full ZIP remains the deliberately created October 25 backup:
+`/Users/sonnypiccolo/Desktop/{SUBYATA.music}/Tools/SoundBox Backup/soundbox-backup-2026-10-25.zip`,
+283,779,506 bytes, SHA
+`462132f816d40301bcf932e6247b593d352b0748531c0f2cdbecbbde9ea9f3c1`.
+It predates later review choices; fresh small install snapshots and exact original
+recovery are separate. Do not create duplicate full artwork backups casually.
+Current temporary app rollback: the shared temporary rollback directory's
+Soundbox-before-overview-fix.app (fingerprint d5371173…); retire only after the
+release verifies. Keep all state snapshots and provenance records.
 
-Initial compilation was blocked by the new Xcode license; Sonny accepted it and
-both complete gates subsequently passed. An earlier broad attempt also exposed
-a keyboard shutdown assumption on a minimal test host; it is guarded correctly
-and the real worker-drain regression passes. UI harnesses now mock per-track
-online discovery and retain unrelated worker ownership during pruning tests.
-Current harnesses use synthetic state, suppress real device discovery, and never
-access live Keychain/account credentials. No tests or assertions were weakened.
-Instruction-file byte parity, relative Markdown file/anchor checks and diff
-whitespace checks also pass. Current evidence: `build/artwork-review-oct24/`.
-
-Git SSH authentication had no loaded identity. Existing GitHub CLI keyring
-credentials authenticated successfully over HTTPS; publication uses a per-command
-credential helper, leaving the configured SSH remote/global configuration unchanged.
-
-## Cleanup and retained evidence
-
-Sonny explicitly approved deleting the old 3.5-GB diagnostic archive in addition
-to redundant app/build rollbacks. Removed **4,549,925,705 logical bytes**, including
-the preceding build-122 rollback, 36 empty app shells, duplicate dist app,
-`build/personal/` intermediates and the old external diagnostic archive. Available
-space rose from about 10.03 to 14.61 billion bytes; APFS availability can vary.
-Only `/Applications/Soundbox.app` remains among inspected app copies. Active source,
-venv, current small validation/native outputs and required fixtures remain.
-
-Small install records and preinstall/postquit library snapshots now live at
-`~/Library/Logs/Soundbox/install-evidence-2026-10-24/`. The former lifecycle rollback
-and empty sync-performance rollback directories were removed. Do not refer to
-them as live recovery locations or retain new zombie app/source copies after
-accepted future installs. [PROJECT_LAYOUT](PROJECT_LAYOUT.md) records the cleanup;
-old dated build-evidence references now identify intentionally deleted history.
-
-Preserve generation-58 recovery **20260926-152340-47477cfa4a49** and offline capture
-`soundbox-ipod-ref/offline-lifecycle/20260926-163945/`, frozen waveform fixtures,
-CDJ research fixtures and curated library backups. No source audio, rekordbox/ANLZ,
-device payload or `/PIONEER` was written. Prior October 9 resize/terminal timing
-observations remain unresolved, though unchanged reruns passed; their old diagnostic
-archive was deleted at Sonny's request. This release does not newly certify wider
-waveform equivalence, cloud availability, physical device lifecycle or public
-service/distribution clearance.
+Preserve generation-58 recovery **20260926-152340-47477cfa4a49**, offline capture
+soundbox-ipod-ref/offline-lifecycle/20260926-163945, frozen waveform/CDJ fixtures
+and curated backups. No source audio, rekordbox/ANLZ, device payload or /PIONEER
+writes are part of this release. Wider device/hardware acceptance, cloud-source
+availability, public service/distribution clearance and per-cover human review
+remain distinct from automated validation. Two earlier native timing misses
+remain recorded under build/review-controls-validation; later full gates pass
+without weaker thresholds, but the earlier flakiness is not certified fixed.

@@ -28,7 +28,18 @@ def audit_shader(source):
     # Execute the production final fragment branch in a compute-callable wrapper.
     # Discard is equivalent to the untouched background for this opaque surface.
     compositor = compositor.replace('discard_fragment();', 'return float4(background, 1.0);')
+    overview_start = shader.index('        if (surface.valid == 0.0 || surface.coverage <= 0.0')
+    overview_end = shader.index('    if (yPoints < 49.0)', overview_start)
+    overview = shader[overview_start:overview_end].rsplit('    }', 1)[0]
+    overview = overview.replace('discard_fragment();', 'return float4(background, 1.0);')
     wrapper = r'''
+inline float4 audit_overview(float3 weighted, float weight, float coverage) {
+    Uniforms u{};
+    WaveSurface surface{coverage, weighted, weight, 1.0};
+    float3 background = display_srgb_to_linear(float3(13.0, 14.0, 18.0) / 255.0);
+    OVERVIEW
+}
+'''.replace('OVERVIEW', overview) + r'''
 inline float4 audit_composite(thread const float *blueMinimums,
         thread const float *blueMaximums, thread const float3 *intervalEncodedColors,
         thread const float *profilePositions, uint profileCount, float signedPosition,
@@ -43,6 +54,20 @@ inline float4 audit_composite(thread const float *blueMinimums,
     selection = shader[selection_start:selection_end].replace(
         'u.audioDetailMipDivisors', 'auditDivisors').replace('u.audioDetailMipCount', '12u')
     return shader + wrapper + r'''
+constexpr Uniforms overview_test_uniforms(uint kind) {
+    Uniforms u{};
+    u.sampleCount = 4; u.waveMipCount = 1; u.waveMipCounts[0] = 4;
+    u.samplesPerSecond = 150;
+    u.audioDetailSampleCount = 4; u.audioDetailMipCount = 1;
+    u.audioDetailMipCounts[0] = 4; u.audioDetailMipDivisors[0] = 1;
+    u.audioDetailSamplesPerSecond = 150;
+    if (kind == 1) u.audioDetailSampleCount = 0;
+    if (kind == 2) u.threeBandActive = 1;
+    return u;
+}
+constant Uniforms overviewTestUniforms = overview_test_uniforms(0);
+constant Uniforms overviewNoDetail = overview_test_uniforms(1);
+constant Uniforms overviewThreeBand = overview_test_uniforms(2);
 constant uint auditDivisors[12] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
 kernel void audit_math(device const float *inputs [[buffer(0)]],
                        device float *outputs [[buffer(1)]], uint id [[thread_position_in_grid]]) {
@@ -93,6 +118,19 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         out[1] = tap.weightedColor.g;
         out[2] = tap.weightedColor.b;
         out[3] = tap.height;
+    } else if (op == 8) {
+        device const WaveSample *samples = (device const WaveSample *)(a + 8);
+        device const AudioEnvelopeSample *audio = (device const AudioEnvelopeSample *)(a + 24);
+        WaveSurface v = a[4] == 1
+            ? overview_wave_surface(samples, audio, overviewNoDetail, a[1], a[2], a[3], 0.5)
+            : a[4] == 2
+            ? overview_wave_surface(samples, audio, overviewThreeBand, a[1], a[2], a[3], 0.5)
+            : overview_wave_surface(samples, audio, overviewTestUniforms, a[1], a[2], a[3], 0.5);
+        float4 pixel = audit_overview(v.weightedColor, v.colorWeight, v.coverage);
+        out[0] = pixel.r; out[1] = pixel.g; out[2] = pixel.b;
+    } else if (op == 7) {
+        float4 v = audit_overview(float3(a[1], a[2], a[3]), a[4], a[5]);
+        out[0] = v.r; out[1] = v.g; out[2] = v.b;
     } else if (op == 3) {
         WaveAttribute attribute;
         attribute.colorAndUpper = float4(a[1], a[2], a[3], a[4]);
@@ -280,6 +318,48 @@ class WaveformGPUMath(unittest.TestCase):
                 expected.append(palette)
         np.testing.assert_allclose(self.execute(np.vstack(rows))[:, :3],
                                    np.vstack(expected), atol=2e-6, rtol=0)
+
+    def test_overview_quiet_color_and_silence_execute_production_compositor(self):
+        palette = np.array([[1, 0, 0], [0, 1, 1], [.2, .7, 1]])
+        rows, expected = [], []
+        background = linear_color(np.array([13, 14, 18]) / 255)
+        for weight in (0, 1e-8, 1e-5, .1, 1):
+            for coverage in (.1, .5, 1):
+                for color in palette:
+                    row = np.zeros(64)
+                    row[:6] = [7, *(color * weight), weight, coverage]
+                    rows.append(row)
+                    vivid = 1 - (1 - coverage) ** 3
+                    expected.append(background if weight == 0 else
+                                    background * (1-vivid) + linear_color(color) * vivid)
+        actual = self.execute(rows)[:, :3]
+        np.testing.assert_allclose(actual, expected, atol=2e-6, rtol=0)
+        old = self.source.replace('/ surface.colorWeight;', '/ max(surface.colorWeight, 0.0001);')
+        self.assertNotEqual(old, self.source)
+        self.assertGreater(np.max(np.abs(self.execute(rows, old)[:, :3] - expected)), .1)
+
+    def test_overview_uses_signed_audio_when_compact_height_rounds_to_zero(self):
+        colors = [[1, 0, 0], [0, 1, 1], [.2, .7, 1]]
+        rows, expected = [], []
+        background = linear_color(np.array([13, 14, 18]) / 255)
+        for height in (0, 1, 100, 2000):
+            for distance in (0, .2, .5, 1):
+                for color in colors:
+                    row = np.zeros(64, dtype=np.float32)
+                    row[:4] = [8, 1.5, .8, distance]
+                    row[8:24] = np.tile([0, *color], 4)
+                    # Production packed envelopes: upper/lower/minimum/maximum.
+                    row[24:32].view(np.uint16)[:] = np.tile([height, height, 0, 0], 4)
+                    rows.append(row)
+                    coverage = np.clip(height/65535*11-distance+.5, 0, 1) if height else 0
+                    vivid = 1-(1-coverage)**3
+                    expected.append(background*(1-vivid)+linear_color(color)*vivid)
+        np.testing.assert_allclose(self.execute(rows)[:, :3], expected, atol=2e-6, rtol=0)
+        for kind in (1, 2):  # No independent proof; PWV7 retains its own geometry.
+            gated = np.array(rows)
+            gated[:, 4] = kind
+            np.testing.assert_allclose(self.execute(gated)[:, :3],
+                                       np.tile(background, (len(rows), 1)), atol=2e-6, rtol=0)
 
     def test_three_band_close_tap_preserves_independent_150_hz_layer_detail(self):
         # Alternating narrow peaks in different bands expose pair pooling,

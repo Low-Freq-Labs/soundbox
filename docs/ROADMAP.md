@@ -1,25 +1,72 @@
 # SoundBox roadmap
 
-Updated October 24, 2026. Current priorities and remaining acceptance are below;
+Updated October 26, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
 ## Current focus — artwork accuracy and Settings
 
+Current release: Suggested now checks the whole active cover library, including
+manual and unrecorded entries. The loading wheel precedes initial results; live
+progress continues after the first comparisons become usable. Completed metadata
+checks resume from a small disposable SQLite cache; thumbnails remain bounded in
+memory and a separate 8-MiB / 128-entry preview LRU. Reopening restores saved contexts and comparisons before online work,
+and progress counts only pending checks. Keep and accepted replacements retain exact context decisions. Failed
+lookups are retriable, never cached misses; repeated failures pause the pass.
+Main controls remain Keep/Replace/Next, All remains optional browsing, and no
+scan changes images. Settings order is General, Keyboard, Graveyard, Connections.
+A successful source refresh now updates authoritative cues for the loaded track
+without audio reload/seek; queued stale manifests cannot put old cues back.
+Grid corrections retain the existing metadata-only background refresh path.
+Review Pause follows actual native playback even after transient state reports;
+quick resume cancels a pending pause fade. The overview compositor preserves
+quiet-section hue and uses resident high-precision audio geometry when compact
+PWV5 height rounds to zero. True silence remains background, without cache recooking.
+Review now has compact local Play/Pause, click/drag scrubbing and time beside the
+decision buttons. It shares the native deck and cancels on row change/close.
+Keep/Replace/Next advance downward from the selection without resetting to the
+first suggestion. Saved queue metadata survives preview eviction.
+Review titles support selection/copy. More offers a previewed artist-profile
+choice and one Exclude Uploader manager for saved additions/removals and known
+automatic blocks. The Undo menu item is removed; original recovery is retained.
+The decision audit prompted duplicate-source filtering across SoundCloud tracking
+links and equivalent resized/recompressed images. Source exclusions also cover
+Plate Selling / plate-role variants reported during SPASS review. Saved decisions
+are per-track protection; cross-track learning remains exploratory in
+[IDEAS](IDEAS.md), with intentional artwork reuse distinct from song identity.
+Version/artist matching, strict excluded-source profile fallback and recovery
+remain as documented in HANDOFF. The wider audit is a human review process,
+not a certificate that every cover is correct.
+
 Sonny's October 24 report led to source changes for bracket-aware song matching,
 accountable label credits, and an optional personal SoundCloud connection that
-prioritizes liked tracks. Settings now separates General, Keyboard, Connections
-(personal), and an expanded Graveyard. Keyboard mappings support multiple bindings,
+prioritizes liked tracks. Settings now separates General, Keyboard, Graveyard
+and Connections. Keyboard mappings support multiple bindings,
 conflict moves and safe held-cue routing; 1–8 use the active cue page, 9 selects
 Hot Cue and 0 selects Memory Cue. The five title-cleanup defaults use the requested
 concise labels and include exact `(Original Mix)` removal.
+The follow-up layout centers the tabs across a single header with Back on the left
+and removes the redundant Settings label,
+recovering the separate tab row's height for content.
+Connections retains its dedicated tab. New SoundCloud setup uses the app's
+credentials and a public profile URL; no browser authorization or registered
+redirect change is needed. Public likes help rank art matches while general
+search continues supplying the broader candidate set.
+Keyboard now shows only active-page cue bindings and page selectors; the separate
+Direct Hot Cues and Direct Memory Cues sections/actions are retired.
+Zoom uses `=` / `-` by default. General balances the columns with Cover Art beneath
+Title Cleanup and a content-sized rule list, reclaiming the formerly empty space.
+Connections now shows core rekordbox on the left and optional personal SoundCloud
+on the right. The rekordbox card exposes active source/status, database location,
+refresh, validated source selection/default reset and the existing XML fallback.
 
-The personal app is installed as **build 126**, with the full offscreen/Cocoa
-release and render gates passing. Native synthetic acceptance covers numeric
+The preceding personal release passed the full offscreen/Cocoa release and render
+gates. Native synthetic acceptance covers numeric
 Hot/Memory cues, original-page release, Space latching and persisted remapping.
-Sonny accepted the Settings presentation and requested the full commit/push wrap-up.
-Real SoundCloud browser authorization/Keychain consent and the first actual likes
-scan remain user setup/acceptance; offline tests do not certify that external flow.
+See HANDOFF for the exact installed source revision, build and validation. The live personal connection successfully completed
+application-token exchange and a public-likes scan on October 25; current count
+and restart verification are in HANDOFF. Offline tests do not certify that
+external flow or private-account access.
 See [HANDOFF](HANDOFF.md), [KEYBOARD](KEYBOARD.md), and
 [SoundCloud setup](soundcloud-connection.md) for current provenance and setup.
 

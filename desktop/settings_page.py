@@ -1,7 +1,8 @@
 """Settings page (mixin for MainWindow).
 
-Layout: General has two centered columns; Connections (personal) and Graveyard
-have dedicated tabs. The reusable framework: `_settings_section(title)` headers +
+Layout: tabs are centered across the header with Back on the left. General has two balanced columns;
+Keyboard, Graveyard, and Connections have dedicated tabs. The reusable framework:
+`_settings_section(title)` headers +
 `_settings_row(title, control, subtitle, indent)` rows — add future settings by
 dropping in more rows/sections, never hand-place widgets. Sub-options HIDE when
 their parent toggle is off. Panel widgets (graveyard/rules lists) refresh every
@@ -12,8 +13,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
-    QScrollArea, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QScrollArea, QStackedWidget, QTabBar, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
@@ -81,15 +83,28 @@ class SettingsPageMixin:
         page = QWidget()
         v = QVBoxLayout(page); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
 
-        head = QWidget(); head.setObjectName("DeviceHeader")
+        head = QWidget(); head.setObjectName("SettingsHeader")
         head.setAttribute(Qt.WA_StyledBackground, True); head.setFixedHeight(40)
-        hh = QHBoxLayout(head); hh.setContentsMargins(14, 0, 14, 0); hh.setSpacing(10)
+        hh = QGridLayout(head); hh.setContentsMargins(14, 0, 14, 0); hh.setSpacing(0)
         back = QPushButton("←  Back"); back.setObjectName("BackBtn")
         back.setCursor(Qt.PointingHandCursor); back.clicked.connect(self._close_settings)
-        hh.addWidget(back, 0)
-        title = QLabel("SETTINGS"); title.setObjectName("SectionLabel")
-        hh.addWidget(title, 1)
+        hh.addWidget(back, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        # Equal side columns keep the tabs centered on the whole header.
+        for side in (0, 2):
+            hh.setColumnStretch(side, 1)
+            hh.setColumnMinimumWidth(side, back.sizeHint().width())
+        self._settings_tabs = QTabBar()
+        self._settings_tabs.setObjectName("SettingsTabs")
+        self._settings_tabs.setExpanding(False)
+        self._settings_tabs.currentChanged.connect(lambda _index: self._sync_rekordbox_connection())
+        hh.addWidget(self._settings_tabs, 0, 1, Qt.AlignCenter)
         v.addWidget(head)
+        pages = QStackedWidget()
+        self._settings_tabs.currentChanged.connect(pages.setCurrentIndex)
+
+        def add_tab(widget: QWidget, label: str) -> None:
+            pages.addWidget(widget)
+            self._settings_tabs.addTab(label)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -97,7 +112,6 @@ class SettingsPageMixin:
         cols = QHBoxLayout(host)
         cols.setContentsMargins(30, 6, 30, 30); cols.setSpacing(40)
         cols.setAlignment(Qt.AlignTop)
-        cols.addStretch(1)  # stretches both sides center the two columns
 
         # Graveyard gets the whole tab; the track list expands with the window.
         graveyard_page = QWidget()
@@ -128,7 +142,7 @@ class SettingsPageMixin:
         gl.addWidget(gsub)
 
         # --- TITLE CLEANUP (named, toggleable rules — no regex soup) --------
-        left = QWidget(); left.setFixedWidth(440)
+        left = QWidget(); left.setMinimumWidth(400); left.setMaximumWidth(600)
         gl = QVBoxLayout(left); gl.setContentsMargins(0, 0, 0, 0); gl.setSpacing(2)
         gl.setAlignment(Qt.AlignTop)
         gl.addWidget(self._settings_section("TITLE CLEANUP"))
@@ -136,7 +150,6 @@ class SettingsPageMixin:
         self._rules.setObjectName("TitleRules")
         self._rules.setHeaderHidden(True)
         self._rules.setRootIsDecorated(False)
-        self._rules.setFixedHeight(214)
         self._rules.itemChanged.connect(self._on_rule_toggled)
         self._rules.setContextMenuPolicy(Qt.CustomContextMenu)
         self._rules.customContextMenuRequested.connect(self._rules_menu)
@@ -156,12 +169,11 @@ class SettingsPageMixin:
         self._refresh_title_rules()
 
 
-        col = QWidget(); col.setFixedWidth(440)
+        col = QWidget(); col.setMinimumWidth(400); col.setMaximumWidth(600)
         bl = QVBoxLayout(col); bl.setContentsMargins(0, 0, 0, 0); bl.setSpacing(2)
         bl.setAlignment(Qt.AlignTop)
-        cols.addWidget(col, 0, Qt.AlignTop)     # LIBRARY + BACKUP on the left
-        cols.addWidget(left, 0, Qt.AlignTop)    # TITLE CLEANUP on the right
-        cols.addStretch(1)
+        cols.addWidget(col, 1, Qt.AlignTop)     # PLAYER + LIBRARY + BACKUP
+        cols.addWidget(left, 1, Qt.AlignTop)    # TITLE CLEANUP + COVER ART
 
         # --- PLAYER --------------------------------------------------------
         bl.addWidget(self._settings_section("PLAYER"))
@@ -249,10 +261,18 @@ class SettingsPageMixin:
             "folder. Your current library is snapshotted first."))
 
         # --- COVER ART -------------------------------------------------------
-        bl.addWidget(self._settings_section("COVER ART"))
+        gl.addWidget(self._settings_section("COVER ART"))
+        review = QPushButton("Review covers…")
+        review.setCursor(Qt.PointingHandCursor)
+        review.clicked.connect(self._open_art_review)
+        gl.addWidget(self._settings_row(
+            "Review existing cover artwork", review,
+            "Suggested highlights flagged sources and different matches. All "
+            "lets you browse every cover. Approve changes one track at a time, "
+            "with recoverable originals; existing artwork stays protected."))
         cat = QPushButton("Open catalog…"); cat.setCursor(Qt.PointingHandCursor)
         cat.clicked.connect(self._open_artist_catalog)
-        bl.addWidget(self._settings_row(
+        gl.addWidget(self._settings_row(
             "Auto-selected artist pictures", cat,
             "See which profile picture each avatar-fallback artist got, and "
             "replace it or choose a local image — applies to all their avatar "
@@ -261,7 +281,7 @@ class SettingsPageMixin:
         defaults = QPushButton("Manage photos…")
         defaults.setCursor(Qt.PointingHandCursor)
         defaults.clicked.connect(self._open_default_photos)
-        bl.addWidget(self._settings_row(
+        gl.addWidget(self._settings_row(
             "Default photos", defaults,
             "Your managed picture pool for tracks whose art is missing or was "
             "deliberately removed. Pictures are copied into SoundBox, balanced "
@@ -271,28 +291,33 @@ class SettingsPageMixin:
         self._sync_settings_controls()
         self._refresh_graveyard()
         scroll.setWidget(host)
-        self._settings_tabs = QTabWidget()
-        self._settings_tabs.setObjectName("SettingsTabs")
-        self._settings_tabs.addTab(scroll, "General")
+        add_tab(scroll, "General")
         from .keyboard import Keymap
         from .keyboard_page import KeyboardPage
         self._keyboard_page = KeyboardPage(
             Keymap(self._keyboard_router.keymap.dump()), self._save_keyboard)
-        self._settings_tabs.addTab(self._keyboard_page, "Keyboard")
+        add_tab(self._keyboard_page, "Keyboard")
+        add_tab(graveyard_page, "Graveyard")
+        from .connections import RekordboxSection
+        connections = QWidget()
+        connection_layout = QHBoxLayout(connections)
+        connection_layout.setContentsMargins(30, 24, 30, 30)
+        connection_layout.setSpacing(40)
+        self._rekordbox_section = RekordboxSection(
+            self._choose_rekordbox_database, self._use_default_rekordbox_database,
+            self._open_dialog, self._refresh_rekordbox, connections)
+        connection_layout.addWidget(self._rekordbox_section, 1, Qt.AlignTop)
         if self.providers.allows("connections.soundcloud") and self.providers.connections is not None:
             from .connections import SoundCloudSection
-            connections = QWidget()
-            connection_layout = QVBoxLayout(connections)
-            connection_layout.setContentsMargins(30, 24, 30, 30)
             service = self.providers.connections.create(self._data_file.parent)
             self._soundcloud_section = SoundCloudSection(
                 service, connections, isolated=self._isolated)
-            self._soundcloud_section.setFixedWidth(600)
-            connection_layout.addWidget(self._soundcloud_section, 0, Qt.AlignHCenter)
-            connection_layout.addStretch()
-            self._settings_tabs.addTab(connections, "Connections")
-        self._settings_tabs.addTab(graveyard_page, "Graveyard")
-        v.addWidget(self._settings_tabs, 1)
+            connection_layout.addWidget(self._soundcloud_section, 1, Qt.AlignTop)
+        else:
+            connection_layout.addStretch(1)
+        add_tab(connections, "Connections")
+        v.addWidget(pages, 1)
+        self._sync_rekordbox_connection()
         return page
 
     # ---------- graveyard ----------
@@ -536,6 +561,8 @@ class SettingsPageMixin:
             it.setData(0, _GRAVE_ROLE, ("word", w))
             it.setCheckState(0, Qt.Checked)
             g.addTopLevelItem(it)
+        rows = min(8, max(1, g.topLevelItemCount()))
+        g.setFixedHeight(rows * max(20, g.sizeHintForRow(0)) + 2 * g.frameWidth())
         g.blockSignals(False)
 
     def _on_rule_toggled(self, item, _col):
@@ -598,6 +625,7 @@ class SettingsPageMixin:
     def _open_settings(self):
         # The gear toggles: on Settings it returns to the main view (like Back).
         on_settings = self.body_stack.currentIndex() == 1
+        self._sync_rekordbox_connection()
         if not on_settings:
             self._refresh_graveyard()  # the graveyard reflects the latest deletes
             self._refresh_title_rules()

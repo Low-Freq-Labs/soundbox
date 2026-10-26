@@ -264,6 +264,46 @@ class TrackMapping(unittest.TestCase):
         out = _read_tracks(FakeDB(tracks=[self._track()]))
         self.assertEqual(out["265095720"].source_cues, [])
 
+    def test_selected_database_owns_the_analysis_root(self):
+        source = Path("/synthetic/relocated/rekordbox/master.db")
+        out = _read_tracks(FakeDB(tracks=[self._track()]), source)
+        self.assertEqual(out["265095720"].source_analysis_path,
+                         "/synthetic/relocated/rekordbox/share/PIONEER/USBANLZ/x/ANLZ0000.DAT")
+
+
+class SelectedDatabase(unittest.TestCase):
+    def test_explicit_database_snapshots_only_selected_source_and_never_modifies_it(self):
+        from soundbox import rekordbox_db
+        with tempfile.TemporaryDirectory() as area:
+            source = Path(area) / "relocated" / "master.db"
+            source.parent.mkdir()
+            source.write_bytes(b"selected database")
+            wal = source.with_name("master.db-wal")
+            wal.write_bytes(b"matching WAL")
+            shm = source.with_name("master.db-shm")
+            shm.write_bytes(b"source locking state")
+            before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (source, wal, shm)}
+            snapshots = []
+            def open_snapshot(*, path):
+                snapshot = Path(path)
+                self.assertNotEqual(snapshot, source)
+                self.assertEqual(snapshot.read_bytes(), b"selected database")
+                self.assertEqual(snapshot.with_name("master.db-wal").read_bytes(), b"matching WAL")
+                self.assertFalse(snapshot.with_name("master.db-shm").exists())
+                snapshots.append(snapshot)
+                return FakeDB()
+            with mock.patch.object(rekordbox_db, "REKORDBOX_DB", Path(area) / "missing-default.db"), \
+                    mock.patch("pyrekordbox.Rekordbox6Database", side_effect=open_snapshot), \
+                    mock.patch.object(rekordbox_db, "_read_playlists", return_value=[]):
+                self.assertFalse(rekordbox_db.db_available())
+                self.assertTrue(rekordbox_db.db_available(source))
+                library = rekordbox_db.load_live(source)
+            self.assertEqual(library.source, source)
+            self.assertEqual(library.source_kind, "rekordbox-db")
+            self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}, before)
+            self.assertTrue(snapshots)
+            self.assertFalse(snapshots[0].parent.exists())
+
 
 class CueMapping(unittest.TestCase):
     def test_rekordbox_reserved_kind_gap_maps_exact_a_through_p(self):

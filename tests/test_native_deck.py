@@ -159,6 +159,83 @@ class NativeDeckContract(unittest.TestCase):
             elapsed += 10
         self.assertTrue(predicate(), f"condition missed after {timeout_ms} ms")
 
+    def test_review_pause_seek_resume_and_cancellation_of_pending_source_change(self):
+        from desktop.player import PlayerBar
+        pb=PlayerBar()
+        pb._deck_volume=0.0
+        pb.track_analysis_dir=Path(self.temp.name)/"review-analysis"
+        try:
+            pb.play_track("review",self.audio,autoplay=True)
+            self._wait_until(lambda: pb.is_playing() and pb._dur>0)
+            pb.pause()
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            pb.seek_ms(700)
+            self._wait_until(lambda: abs(pb.review_transport_state()["position"]-700)<30)
+            pb.resume()
+            self._wait_until(pb.is_playing)
+            pb.play_track("replacement",self.audio,autoplay=True)
+            self.assertTrue(pb._pause_pending)
+            pb.pause()
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            QTest.qWait(80)
+            self.assertEqual(pb.current_track(),"review")
+            pb._pending_autoplay=True
+            pb._pending_start_ms=None
+            pb._pending_should_play=True
+            pb.pause()
+            pb._pending_start_ms=0
+            pb._try_pending_autoplay()
+            self.assertFalse(pb.review_transport_state()["requested"])
+            self.assertFalse(pb.is_playing())
+        finally:
+            pb.shutdown()
+            pb.close()
+
+    def test_review_button_pauses_after_transient_state_and_during_modal_dialog(self):
+        from desktop.player import PlayerBar
+        from desktop.reviewplayer import ReviewPlayer
+        from PySide6.QtWidgets import QDialog, QVBoxLayout
+        pb = PlayerBar()
+        pb._deck_volume = 0.0
+        pb.track_analysis_dir = Path(self.temp.name) / "modal-review-analysis"
+        dialog = QDialog()
+        dialog.setModal(True)
+        audition = ReviewPlayer(player=pb, start=lambda tid: (
+            pb.play_track(tid, self.audio, autoplay=True) or True))
+        QVBoxLayout(dialog).addWidget(audition)
+        try:
+            dialog.show()
+            audition.set_track("review")
+            audition.play.click()
+            self._wait_until(lambda: pb.is_playing() and pb._dur > 0)
+            # A refill/activation PAUSED report can clear the button intent
+            # before the real engine reports PLAYING again.
+            pb._on_state(PlaybackState.PAUSED)
+            pb._on_state(PlaybackState.PLAYING)
+            self.assertFalse(pb._transport_play_active)
+            audition._sync()
+            self.assertEqual(audition.play.text(), "❚❚")
+            audition.play.click()
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            position = pb.player.position()
+            QTest.qWait(80)
+            self.assertLess(abs(pb.player.position() - position), 10)
+            audition.play.click()
+            self._wait_until(pb.is_playing)
+            # A second click during fade-out must cancel that pause, rather
+            # than leave the resume button inert until another click.
+            audition.play.click()
+            self.assertTrue(pb._pause_pending)
+            audition.play.click()
+            self._wait_until(lambda: pb.is_playing() and not pb._pause_pending)
+            audition.shutdown()
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+        finally:
+            audition.shutdown()
+            dialog.close()
+            pb.shutdown()
+            pb.close()
+
     def test_library_exists_and_has_stable_abi(self):
         self.assertTrue(native_library_path().is_file())
 

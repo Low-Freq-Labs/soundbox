@@ -27,6 +27,17 @@ class ArtResult:
     matched_title: str
 
 
+@dataclass(frozen=True)
+class CoverSnapshot:
+    """One displayed cover, bound to its exact metadata and bytes."""
+    entry: dict
+    data: bytes
+
+    @property
+    def digest(self) -> str:
+        return hashlib.sha256(self.data).hexdigest()
+
+
 def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[Concatenate[Any, P], R]:
     """Compose and publish one artwork mutation under the shared state owner."""
     @wraps(method)
@@ -351,6 +362,8 @@ class ArtCache:
     def status_kind(self, track_id: str) -> str:
         """UI status: cover/avatar/default/miss/blocked/unfetched."""
         e = self.index.get(track_id)
+        if self.source_excluded(track_id):
+            return "blocked"  # quarantined, without rewriting the historical row
         if (e or {}).get("status") == "ok":
             return "avatar" if self._is_avatar(e) else "cover"
         if self.default_image_path(track_id) is not None:
@@ -366,6 +379,11 @@ class ArtCache:
     @_art_read
     def canonical_image_path(self, track_id: str) -> Path | None:
         """The real per-track cover/avatar only (never a generic fallback)."""
+        if self.source_excluded(track_id):
+            return None
+        return self._stored_image_path(track_id)
+
+    def _stored_image_path(self, track_id: str) -> Path | None:
         e = self.index.get(track_id) or {}
         if e.get("status") == "ok":
             p = self.root / f"{track_id}.{e.get('ext', 'jpg')}"
@@ -380,6 +398,9 @@ class ArtCache:
     @_art_mutation
     def store_ok(self, track_id: str, res: ArtResult, *, origin: str = "manual",
                  rebalance_defaults: bool = True):
+        from .art_sources import excluded_source
+        if excluded_source(url=res.source_url, excluded_accounts=self.source_exclusions()):
+            raise ValueError("This artwork uploader is excluded")
         # Normalize to baseline JPEG at the cache boundary — Rockbox renders
         # nothing else (progressive JPEG / PNG show blank on the iPod).
         from . import artencode
@@ -437,6 +458,236 @@ class ArtCache:
         self._save()
 
     @_art_mutation
+    def store_auto_if_unfetched(self, track_id: str, res: ArtResult | None) -> bool:
+        """Publish a background result only while the track is still unfetched.
+
+        A manual edit, removal or miss recorded during the network request wins.
+        The check and publication share the state lock, including other caches.
+        """
+        if track_id in self.index:
+            return False
+        from .art_sources import excluded_source
+        if res is not None and excluded_source(
+                url=res.source_url, excluded_accounts=self.source_exclusions()):
+            return False
+        if res is None:
+            self.store_none(track_id)
+        else:
+            self.store_ok(track_id, res, origin="auto", rebalance_defaults=False)
+        return True
+
+    @_art_read
+    def cover_snapshot(self, track_id: str) -> CoverSnapshot:
+        # Quarantined bytes remain available for exact recovery, never display/export.
+        path = self._stored_image_path(track_id)
+        if path is None:
+            raise ValueError("This track no longer has a cover to review")
+        return CoverSnapshot(copy.deepcopy(self.index[track_id]), path.read_bytes())
+
+    def _review_paths(self, track_id: str) -> tuple[Path, Path]:
+        if not track_id or Path(track_id).name != track_id or track_id in (".", ".."):
+            raise ValueError("Invalid artwork track ID")
+        paths = (self.root / "review" / f"{track_id}.json",
+                 self.root / "review" / f"{track_id}.image")
+        for path in paths:
+            self._area.path(str(path.relative_to(self._area.root)))
+        return paths
+
+    def _require_cover(self, track_id: str, expected: CoverSnapshot) -> None:
+        current = self.cover_snapshot(track_id)
+        if current.entry != expected.entry or current.digest != expected.digest:
+            raise ValueError("The cover changed since it was displayed. Select the track again.")
+
+    @_art_read
+    def has_review_undo(self, track_id: str) -> bool:
+        receipt, _ = self._review_paths(track_id)
+        return receipt.is_file()
+
+    @_art_read
+    def source_exclusions(self) -> tuple[str, ...]:
+        path = self.root / "source-policy.json"
+        self._area.path(str(path.relative_to(self._area.root)))
+        if not path.exists():
+            return ()
+        from .art_sources import parse_exclusions
+        return parse_exclusions(json.loads(path.read_text()))
+
+    @_art_read
+    def source_excluded(self, track_id: str) -> bool:
+        from .art_sources import excluded_source
+        entry = self.index.get(track_id) or {}
+        return entry.get("status") == "ok" and excluded_source(
+            url=entry.get("src", ""), excluded_accounts=self.source_exclusions())
+
+    @_art_read
+    def excluded_accounts(self) -> tuple[str, ...]:
+        """Known blocked handles: explicit preferences and observed seller sources."""
+        from .art_sources import account_name, excluded_source
+        custom = self.source_exclusions()
+        accounts = set(custom)
+        entries = list(self.index.values())
+        for path in (self.root / "source-recovery").glob("*.json"):
+            self._area.path(str(path.relative_to(self._area.root)))
+            value = json.loads(path.read_text())
+            if isinstance(value, dict) and isinstance(value.get("before"), dict):
+                entries.append(value["before"])
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            source = entry.get("src", "")
+            if excluded_source(url=source, excluded_accounts=custom) and (account := account_name(source)):
+                accounts.add(account)
+        return tuple(sorted(accounts))
+
+    @_art_read
+    def kept_covers(self) -> dict:
+        path = self.root / "review-kept.json"
+        self._area.path(str(path.relative_to(self._area.root)))
+        if not path.exists():
+            return {}
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            raise ValueError("Invalid artwork review decisions")
+        return value
+
+    @_art_mutation
+    def keep_review(self, track_id: str, expected: CoverSnapshot, artist: str, title: str) -> None:
+        self._require_cover(track_id, expected)
+        kept = self.kept_covers()
+        kept[track_id] = {"entry": expected.entry, "digest": expected.digest, "artist": artist, "title": title}
+        self._write(self.root / "review-kept.json", json.dumps(kept, ensure_ascii=False).encode())
+
+    @_art_mutation
+    def apply_excluded_profile(self, track_id: str, expected: CoverSnapshot,
+                               res: ArtResult, artist: str) -> bool:
+        """Authorized source policy: hide seller art, use a verified artist avatar.
+
+        Preserve the historical bytes/index and any existing review recovery in
+        a separate small transaction, so later human Undo restores the profile
+        cover and never silently restores a quarantined seller image.
+        """
+        from . import artencode
+        from .art_sources import profile_source
+        current = self.index.get(track_id) or {}
+        if not self.source_excluded(track_id) and current.get("fallback") != "excluded-source":
+            return False  # a manual edit during the request wins
+        self._require_cover(track_id, expected)
+        if not profile_source(res.source_url) or res.confidence < .9 or not artist.strip():
+            return False
+        safe = artencode.ensure_device_safe(res.data)
+        if not artencode.is_device_safe(safe):
+            return False
+        receipt, original = self._review_paths(track_id)
+        recovery = self.root / "source-recovery"
+        policy_receipt = recovery / receipt.name
+        policy_image = recovery / original.name
+        for path in (policy_receipt, policy_image):
+            self._area.path(str(path.relative_to(self._area.root)))
+        if not policy_receipt.exists():
+            self._write(policy_image, expected.data)
+            self._write(policy_receipt, json.dumps({
+                "before": expected.entry, "before_sha256": expected.digest,
+                "reason": "excluded-source", "artist": artist}, ensure_ascii=False).encode())
+        else:
+            prior = json.loads(policy_receipt.read_text())
+            if hashlib.sha256(policy_image.read_bytes()).hexdigest() != prior["before_sha256"]:
+                raise ValueError("Source recovery image changed; profile replacement stopped")
+        if receipt.exists():
+            archive_receipt = recovery / f"{track_id}.review.json"
+            archive_image = recovery / f"{track_id}.review.image"
+            if archive_receipt.exists() or archive_image.exists():
+                raise ValueError("Existing source/review recovery needs inspection")
+            self._write(archive_receipt, receipt.read_bytes())
+            self._write(archive_image, original.read_bytes())
+            self._write(receipt, None)
+            self._write(original, None)
+        self.store_ok(track_id, ArtResult(safe, "image/jpeg", res.confidence,
+                                          res.source_url, res.matched_title), origin="auto")
+        self.index[track_id].update(fallback="excluded-source", fallback_artist=artist)
+        self._save()
+        if expected.entry.get("ext", "jpg") != "jpg":
+            self._write(self.root / f"{track_id}.{expected.entry['ext']}", None)
+        return True
+
+    @_art_mutation
+    def exclude_source(self, url: str) -> str:
+        """Persist an explicit uploader exclusion, without changing any cover."""
+        from .art_sources import account_name
+        account = account_name(url)
+        if not account:
+            raise ValueError("This suggestion has no SoundCloud uploader account")
+        accounts = sorted(set(self.source_exclusions()) | {account})
+        self._write(self.root / "source-policy.json", json.dumps(
+            {"schema": 1, "accounts": accounts}, ensure_ascii=False).encode())
+        return account
+
+    @_art_mutation
+    def allow_source(self, account: str) -> None:
+        accounts = sorted(set(self.source_exclusions()) - {account})
+        self._write(self.root / "source-policy.json", json.dumps(
+            {"schema": 1, "accounts": accounts}, ensure_ascii=False).encode())
+
+    @_art_mutation
+    def apply_review(self, track_id: str, expected: CoverSnapshot, res: ArtResult, *,
+                     context: tuple[str, str] | None = None) -> None:
+        """Explicit approval only. Preserve one exact original per changed track.
+
+        Receipt, recovery bytes and new cover publish in one state transaction.
+        Further review replacements retain the first original, without a chain
+        of images. External edits invalidate that recovery instead of overwriting it.
+        """
+        from . import artencode
+        self._require_cover(track_id, expected)
+        safe = artencode.ensure_device_safe(res.data)
+        if not artencode.is_device_safe(safe):
+            raise ValueError("The suggested image could not be decoded")
+        receipt, original = self._review_paths(track_id)
+        if receipt.exists():
+            recovery = json.loads(receipt.read_text())
+            if (recovery["after"] != expected.entry or
+                    recovery["after_sha256"] != expected.digest or
+                    hashlib.sha256(original.read_bytes()).hexdigest() != recovery["before_sha256"]):
+                raise ValueError("An earlier review recovery no longer matches. No artwork was changed.")
+        else:
+            recovery = {"before": expected.entry, "before_sha256": expected.digest}
+            self._write(original, expected.data)
+        self.store_ok(track_id, ArtResult(safe, "image/jpeg", res.confidence,
+                                         res.source_url, res.matched_title))
+        if expected.entry.get("ext", "jpg") != "jpg":
+            self._write(self.root / f"{track_id}.{expected.entry['ext']}", None)
+        recovery.update(after=copy.deepcopy(self.index[track_id]),
+                        after_sha256=hashlib.sha256(safe).hexdigest())
+        self._write(receipt, json.dumps(recovery, ensure_ascii=False).encode())
+        if context is not None:
+            kept = self.kept_covers()
+            kept[track_id] = {"entry": copy.deepcopy(self.index[track_id]),
+                              "digest": recovery["after_sha256"], "artist": context[0], "title": context[1]}
+            self._write(self.root / "review-kept.json", json.dumps(kept, ensure_ascii=False).encode())
+
+    @_art_mutation
+    def undo_review(self, track_id: str, expected: CoverSnapshot) -> None:
+        """Restore the exact pre-review bytes/metadata; refuse stale recovery."""
+        self._require_cover(track_id, expected)
+        receipt, original = self._review_paths(track_id)
+        recovery = json.loads(receipt.read_text())
+        data = original.read_bytes()
+        if (recovery["after"] != expected.entry or
+                recovery["after_sha256"] != expected.digest or
+                hashlib.sha256(data).hexdigest() != recovery["before_sha256"]):
+            raise ValueError("The cover or its Undo copy changed. No artwork was changed.")
+        before = recovery["before"]
+        old_path = self.root / f"{track_id}.{before.get('ext', 'jpg')}"
+        if old_path.name != f"{track_id}.{before.get('ext', 'jpg')}":
+            raise ValueError("Invalid recovery image path")
+        self._write(old_path, data)
+        if expected.entry.get("ext", "jpg") != before.get("ext", "jpg"):
+            self._write(self.root / f"{track_id}.{expected.entry.get('ext', 'jpg')}", None)
+        self.index[track_id] = before
+        self._save()
+        self._write(receipt, None)
+        self._write(original, None)
+
+    @_art_mutation
     def retry_misses(self) -> int:
         """Clear all 'no art found' marks so they'll be re-attempted. User-blocked
         entries are NOT touched — a deliberate removal survives every re-scan."""
@@ -460,11 +711,14 @@ class ArtCache:
 
     @_art_mutation
     def retry_weak(self) -> int:
-        """Clear misses AND artist-avatar fallbacks so they re-attempt for a real
-        track cover — keeps confirmed real covers. Deletes the stale avatar image
-        so it's re-fetched cleanly. Returns how many were cleared."""
+        """Retry misses and explicitly automatic avatars only.
+
+        Manual and historically unrecorded images are protected, including
+        profile pictures. Confidence and URL shape cannot prove user intent.
+        """
         weak = [tid for tid, e in self.index.items()
-                if (e or {}).get("status") == "none" or self._is_avatar(e)]
+                if (e or {}).get("status") == "none" or
+                (e.get("origin") == "auto" and e.get("fallback") != "excluded-source" and self._is_avatar(e))]
         for tid in weak:
             e = self.index.pop(tid, None)
             if e and e.get("status") == "ok" and e.get("ext"):

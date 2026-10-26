@@ -223,14 +223,14 @@ def _split_hyphen_artist(n: str) -> str | None:
 
 
 # Words that mean "someone transformed this track" — the name before them is the editor.
-_EDIT_KW = r"(?:flip|remix|bootleg|edit|vip|mashup|rework|refix|blend|rmx|reboot|redux)"
+_EDIT_KW = r"(?:flip|remix|bootleg|edit|edition|vip|mashup|rework|refix|blend|rmx|reboot|redux|version)"
 # Style words that ride along with an editor name ("Netgate TECHNO Edit") — part of
 # the edit's description, not the person. Trimmed from the captured name's tail.
 _STYLE = {"techno", "house", "dubstep", "riddim", "trap", "dnb", "halftime",
           "drumstep", "tearout", "brostep", "bass"}
 # Match (name <kw>) or [name <kw>]; capture the name before the keyword.
 _EDITOR_RE = re.compile(
-    r"[(\[]\s*([^()\[\]]+?)\s+" + _EDIT_KW + r"\b[^()\[\]]*[)\]]",
+    r"[(\[]\s*([^()\[\]]+?)\s+(" + _EDIT_KW + r")\b[^()\[\]]*[)\]]",
     re.IGNORECASE,
 )
 # Generic descriptors that precede a transformation word but aren't a person.
@@ -238,12 +238,32 @@ _GENERIC = {
     "radio", "clean", "dirty", "short", "extended", "club", "original",
     "instrumental", "acapella", "intro", "outro", "album", "single", "main",
     "explicit", "quick", "rough", "final", "master", "vocal", "dub", "re",
-    "official",
+    "official", "deluxe", "special", "limited", "anniversary", "expanded",
+    "standard", "alternate", "alternative", "bonus", "international",
 }
 
 
 def _ok(name: str) -> bool:
     return bool(name) and name.lower() not in _GENERIC and len(name) <= _MAX_ARTIST_LEN
+
+
+def editor_credits(title: str) -> tuple[tuple[str, str], ...]:
+    """Named version creators shared by artist derivation and artwork matching.
+
+    Preserve order: the final transformation identifies the effective artist.
+    Generic release descriptors never become people.
+    """
+    out = []
+    for name, kind in _EDITOR_RE.findall(title or ""):
+        words = name.strip(" -–—|").split()
+        while words and words[-1].casefold() in _STYLE:
+            words.pop()
+        candidate = " ".join(words)
+        generic = all(word.casefold() in _GENERIC or re.fullmatch(r"\d+(?:st|nd|rd|th)?", word)
+                      for word in words)
+        if _ok(candidate) and not generic:
+            out.append((candidate, kind.casefold()))
+    return tuple(out)
 
 
 # Junk that trails an artist name at the END of a "TITLE - ARTIST junk" string
@@ -555,7 +575,7 @@ def effective_artist(track_id: str, name: str, artist_tag: str,
         # (never a rekordbox tag), only when the left side isn't itself trusted,
         # and only toward a human-confirmed artist. "I Wanna Rock - ZONDO final"
         # → ZONDO once ZONDO is tagged or overridden anywhere.
-        if origin == NAME and not registry.is_trusted(base):
+        if origin == NAME and not registry.is_trusted(base) and not editor_credits(name):
             flip = _flip_candidate(name)
             if flip and _fold(flip) != _fold(base) and registry.is_trusted(flip):
                 return registry.canonical(flip)
@@ -581,14 +601,9 @@ def derive_artist(name: str, artist_tag: str) -> tuple[str, str]:
     # Take the LAST valid one (the most recent edit). This makes a tagged
     # "DON'T CHA (WHALES REMIX)" behave like an otherwise-identical untagged
     # edit instead of silently reverting to THE PUSSYCAT DOLLS.
-    for cand in reversed(_EDITOR_RE.findall(n)):
-        cand = cand.strip(" -–—|")
-        words = cand.split()
-        while words and words[-1].lower() in _STYLE:  # "(Netgate Techno Edit)" → Netgate
-            words.pop()
-        cand = " ".join(words)
-        if _ok(cand):
-            return cand, NAME
+    credits = editor_credits(n)
+    if credits:
+        return credits[-1][0], NAME
 
     # 2) No named transformation credit: keep the source artist tag.
     if artist_tag and artist_tag.strip():

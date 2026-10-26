@@ -122,11 +122,12 @@ class Keychain:
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ConnectionError("SoundCloud returned an unexpected redirect. Try reconnecting.")
+        return None  # expose HTTPError; never forward credentials automatically
 
 
 def _json_request(url: str, *, token: str = "", form: dict | None = None,
-                  post: bool = False) -> dict:
+                  post: bool = False, basic: tuple[str, str] | None = None,
+                  resolve_user: bool = False) -> dict:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or parsed.netloc not in ("api.soundcloud.com", "secure.soundcloud.com"):
         raise ConnectionError("SoundCloud returned an invalid API address.")
@@ -134,6 +135,9 @@ def _json_request(url: str, *, token: str = "", form: dict | None = None,
     data = None
     if token:
         headers["Authorization"] = "OAuth " + token
+    if basic is not None:
+        headers["Authorization"] = "Basic " + base64.b64encode(
+            (basic[0] + ":" + basic[1]).encode()).decode()
     if form is not None:
         data = urllib.parse.urlencode(form).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -150,9 +154,21 @@ def _json_request(url: str, *, token: str = "", form: dict | None = None,
             raise ValueError()
         return result
     except urllib.error.HTTPError as exc:
+        if resolve_user and exc.code == 302 and parsed.netloc == "api.soundcloud.com" and parsed.path == "/resolve":
+            location = exc.headers.get("Location", "")
+            exc.close()
+            target = urllib.parse.urlsplit(location)
+            parts = target.path.split("/")
+            if (target.scheme == "https" and target.netloc == "api.soundcloud.com"
+                    and len(parts) == 3 and parts[1] == "users" and parts[2]
+                    and not target.query and not target.fragment):
+                return _json_request(location, token=token)
+            raise ConnectionError("SoundCloud did not resolve that address to a user profile.") from None
         messages = {401: "SoundCloud authorization expired. Connect again.",
                     429: "SoundCloud is rate limiting requests. Try refreshing likes later."}
-        message = messages.get(exc.code, f"SoundCloud request failed (HTTP {exc.code}).")
+        message = ("SoundCloud returned an unexpected redirect. Try reconnecting."
+                   if 300 <= exc.code < 400 else
+                   messages.get(exc.code, f"SoundCloud request failed (HTTP {exc.code})."))
         exc.close()
         raise ConnectionError(message, status=exc.code) from None
     except (OSError, ValueError):
@@ -200,9 +216,53 @@ class SoundCloudConnection:
         with self._lock:
             return self._entries
 
-    def credentials(self) -> tuple[str, str]:
+    def credentials(self) -> tuple[str, str, str]:
         saved = self.store.read()
-        return str(saved.get("client_id", "")), str(saved.get("client_secret", ""))
+        return (str(saved.get("client_id", "")), str(saved.get("client_secret", "")),
+                str(saved.get("public_profile", "")))
+
+    def connect_public(self, client_id: str, client_secret: str, profile: str,
+                       stop: threading.Event, progress: Callable[[str], None]) -> None:
+        """Read a public profile without sharing the website's OAuth session."""
+        profile = public_profile_url(profile)
+        with self._operations:
+            _check(stop)
+            client_id, client_secret = client_id.strip(), client_secret.strip()
+            if not client_id or not client_secret:
+                raise ConnectionError("Enter both the Client ID and Client Secret.")
+            old = self.store.read()
+            saved = {"client_id": client_id, "client_secret": client_secret,
+                     "mode": "public", "public_profile": profile}
+            if (old.get("mode") == "public" and old.get("client_id") == client_id
+                    and old.get("client_secret") == client_secret):
+                saved = {**old, **saved}
+            self.store.write(saved)
+            if (old.get("mode") != "public" or old.get("client_id") != client_id
+                    or old.get("client_secret") != client_secret or old.get("public_profile") != profile):
+                with self._lock:
+                    self._entries = ()
+                (self.root / "likes.json").unlink(missing_ok=True)
+                self._set_state(configured=True, connected=False, mode="public")
+            progress("Reading public SoundCloud likes…")
+            saved = self._ready_tokens(saved, stop)
+            _check(stop)
+            self._refresh(saved, stop, progress)
+
+    def _ready_tokens(self, saved: dict, stop: threading.Event) -> dict:
+        _check(stop)
+        if saved.get("mode") == "public" and not saved.get("refresh_token"):
+            if saved.get("access_token") and float(saved.get("expires_at", 0)) > time.time() + 60:
+                return saved
+            return self._tokens(saved, _json_request(_AUTH + "/oauth/token",
+                form={"grant_type": "client_credentials"},
+                basic=(saved["client_id"], saved["client_secret"])))
+        if not saved.get("refresh_token"):
+            raise ConnectionError("Your credentials are saved. Connect to read public likes.")
+        if not saved.get("access_token") or float(saved.get("expires_at", 0)) <= time.time() + 60:
+            return self._tokens(saved, _json_request(_AUTH + "/oauth/token", form={
+                "grant_type": "refresh_token", "client_id": saved["client_id"],
+                "client_secret": saved["client_secret"], "refresh_token": saved["refresh_token"]}))
+        return saved
 
     def _set_state(self, **state) -> None:
         _publish(self.root / "connection.json", {"schema": 1, **state})
@@ -306,18 +366,21 @@ class SoundCloudConnection:
                 with self._lock:
                     self._entries = tuple(e for e in cached["entries"] if isinstance(e, dict))
             saved = self.store.read()
-            if not saved.get("refresh_token"):
-                raise ConnectionError("Your credentials are saved. Connect to authorize access to your likes.")
-            if float(saved.get("expires_at", 0)) <= time.time() + 60:
-                saved = self._tokens(saved, _json_request(_AUTH + "/oauth/token", form={
-                    "grant_type": "refresh_token", "client_id": saved["client_id"],
-                    "client_secret": saved["client_secret"], "refresh_token": saved["refresh_token"]}))
+            saved = self._ready_tokens(saved, stop)
             _check(stop)
             self._refresh(saved, stop, progress)
 
     def _refresh(self, saved: dict, stop: threading.Event, progress: Callable[[str], None]) -> None:
         token = saved["access_token"]
-        user = _json_request(_API + "/me", token=token)
+        public = saved.get("mode") == "public"
+        if public:
+            profile = public_profile_url(saved.get("public_profile", ""))
+            user = _json_request(_API + "/resolve?" + urllib.parse.urlencode({"url": profile}),
+                                 token=token, resolve_user=True)
+            if user.get("kind") != "user":
+                raise ConnectionError("Enter a SoundCloud user profile, rather than a track or playlist.")
+        else:
+            user = _json_request(_API + "/me", token=token)
         _check(stop)
         user_id = str(user.get("urn") or user.get("id") or "")
         if not user_id:
@@ -327,10 +390,12 @@ class SoundCloudConnection:
             with self._lock:
                 self._entries = ()
             (self.root / "likes.json").unlink(missing_ok=True)
-        self._set_state(configured=True, connected=True, user_id=user_id,
+        facts = {"mode": "public", "public_profile": profile} if public else {}
+        self._set_state(configured=True, connected=True, user_id=user_id, **facts,
                         username=str(user.get("username") or "SoundCloud"),
                         count=len(self.entries()), updated=self.status().get("updated", 0))
-        url = _API + "/me/likes/tracks?limit=200&linked_partitioning=true"
+        path = "/users/" + urllib.parse.quote(user_id, safe="") if public else "/me"
+        url = _API + path + "/likes/tracks?limit=200&linked_partitioning=true"
         entries, visited = {}, set()
         while url:
             _check(stop)
@@ -356,7 +421,7 @@ class SoundCloudConnection:
         _publish(self.root / "likes.json", snapshot)
         with self._lock:
             self._entries = tuple(entries.values())
-        self._set_state(configured=True, connected=True, user_id=user_id,
+        self._set_state(configured=True, connected=True, user_id=user_id, **facts,
                         username=str(user.get("username") or "SoundCloud"),
                         count=len(entries), updated=time.time())
 
@@ -364,7 +429,7 @@ class SoundCloudConnection:
         with self._operations:
             _check(stop)
             saved = self.store.read()
-            if saved.get("access_token"):
+            if saved.get("access_token") and saved.get("mode") != "public":
                 progress("Disconnecting SoundCloud…")
                 try:
                     _json_request(_API + "/disconnect", token=saved["access_token"], post=True)
@@ -376,6 +441,21 @@ class SoundCloudConnection:
             with self._lock:
                 self._entries = ()
             (self.root / "likes.json").unlink(missing_ok=True)
+
+
+def public_profile_url(value: str) -> str:
+    """Accept only a direct public SoundCloud user URL before doing any I/O."""
+    try:
+        url = urllib.parse.urlsplit(value.strip())
+        name = url.path.strip("/")
+        valid = (url.scheme == "https" and url.netloc in ("soundcloud.com", "www.soundcloud.com")
+                 and name and all(c.isascii() and (c.isalnum() or c in "-_") for c in name)
+                 and not url.query and not url.fragment)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ConnectionError("Enter your profile URL, such as https://soundcloud.com/your-name.")
+    return "https://soundcloud.com/" + name
 
 
 def _track_entry(track: dict) -> dict | None:

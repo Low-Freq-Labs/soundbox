@@ -6,6 +6,12 @@ from soundbox.metadata import (
 
 
 class TestDeriveArtist(unittest.TestCase):
+    def test_named_edition_is_the_artist_for_tagged_and_untagged_imports(self):
+        for tag in ("", "ADÉLA"):
+            self.assertEqual(derive_artist("Adéla - Nicole Kidman (So Sus Edition)", tag), ("So Sus", NAME))
+        for descriptor in ("Deluxe Edition", "Special Edition", "10th Anniversary Edition", "Original Version"):
+            self.assertEqual(derive_artist(f"Song ({descriptor})", "Artist"), ("Artist", TAG))
+
     def test_named_editor_wins_over_original_artist_tag(self):
         self.assertEqual(
             derive_artist("Song (XOTIX flip)", "Real Artist"), ("XOTIX", NAME))
@@ -61,6 +67,11 @@ class TestDeriveArtist(unittest.TestCase):
 
 
 class TestEffectiveArtist(unittest.TestCase):
+    def test_named_edition_respects_manual_override_and_beats_reversed_original_artist(self):
+        self.assertEqual(effective_artist("1", "Nicole Kidman (So Sus Edition)", "ADÉLA", {}), "So Sus")
+        self.assertEqual(effective_artist("1", "Nicole Kidman (So Sus Edition)", "ADÉLA", {"1": "Chosen"}), "Chosen")
+        registry = build_registry(["ADÉLA"], ["ADÉLA"])
+        self.assertEqual(effective_artist("1", "Nicole Kidman (So Sus Edition) - ADÉLA", "ADÉLA", {}, registry=registry), "So Sus")
     def test_override_wins(self):
         self.assertEqual(
             effective_artist("42", "Song (XOTIX flip)", "Tagged", {"42": "Manual"}), "Manual")

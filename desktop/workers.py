@@ -220,12 +220,21 @@ class RefreshWorker(QThread):
     done = Signal(object)
     failed = Signal(str)
 
+    def __init__(self, database_path=None):
+        super().__init__()
+        self.database_path = database_path
+        self.selection_path = None
+        self.result = None
+        self.error = ""
+
     def run(self):
         try:
-            lib = rekordbox_db.load_live()
+            lib = rekordbox_db.load_live(self.database_path)
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            self.error = f"{type(exc).__name__}: {exc}"
+            self.failed.emit(self.error)
             return
+        self.result = lib
         self.done.emit(lib)
 
 
@@ -420,6 +429,7 @@ class ArtFillWorker(QThread):
     so matches (and the artist-avatar fallback) keep improving over time."""
     progress = Signal(int, int)  # done, total
     failed = Signal(str)
+    profile_changed = Signal(str)
 
     DELAY = 1.6  # seconds between fetches — polite, never a burst
 
@@ -459,8 +469,45 @@ class ArtFillWorker(QThread):
         if self.provider is None:
             return
         import time
-        todo = []
+        profile_fetch = getattr(self.provider, "fetch_profile_art", None)
+        profiles = {}
         hidden = getattr(self.lib, "hidden_ids", set())
+        if callable(profile_fetch):
+            replaced = attempted = 0
+            for track in self.lib.tracks_by_id.values():
+                self._wait_for_playback()
+                if self._stop:
+                    return
+                tid = track.track_id
+                if tid in hidden:
+                    continue
+                entry = self.cache.index.get(tid) or {}
+                if not self.cache.source_excluded(tid) and entry.get("fallback") != "excluded-source":
+                    continue
+                title = (self.title_overrides or {}).get(tid) or track.name
+                artist = metadata.effective_artist(
+                    tid, title, track.artist, self.artist_overrides, True,
+                    self.lib.artist_registry, stem=track.path.stem)
+                if entry.get("fallback") == "excluded-source" and entry.get("fallback_artist") == artist:
+                    continue
+                snapshot = self.cache.cover_snapshot(tid)
+                attempted += 1
+                try:
+                    if artist not in profiles:
+                        profiles[artist] = profile_fetch(artist)
+                    result = profiles[artist]
+                except Exception as exc:
+                    LOG.warning("Artist profile lookup unavailable for %r: %s", artist, exc)
+                    profiles[artist] = result = None
+                if self._stop:
+                    return
+                if result and self.cache.apply_excluded_profile(tid, snapshot, result, artist):
+                    replaced += 1
+                    self.profile_changed.emit(tid)
+                time.sleep(self.DELAY)
+            if attempted:
+                LOG.info("Excluded artwork profiles: %d replaced / %d checked; unavailable profiles stay hidden", replaced, attempted)
+        todo = []
         for t in self.lib.tracks_by_id.values():
             if t.track_id in hidden:
                 continue  # deleted from SoundBox — don't fetch for it
@@ -492,12 +539,9 @@ class ArtFillWorker(QThread):
                     LOG.warning("Art fetch failed for %r: %r", title[:40], exc)
             if self._stop:
                 break
-            if res:
-                self.cache.store_ok(
-                    t.track_id, res, origin="auto", rebalance_defaults=False)
+            stored = self.cache.store_auto_if_unfetched(t.track_id, res)
+            if stored and res:
                 ok += 1
-            else:
-                self.cache.store_none(t.track_id)
             self.progress.emit(i, total)
             time.sleep(self.DELAY)
         self.cache.rebalance_default_photos()

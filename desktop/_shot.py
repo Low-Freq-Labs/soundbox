@@ -19,7 +19,7 @@ from PySide6.QtCore import QStandardPaths
 QStandardPaths.setTestModeEnabled(True)  # sandbox saves; never the real library.json
 
 from soundbox import engine, rekordbox_db
-rekordbox_db.db_available = lambda: False  # never auto-read the live DB here
+rekordbox_db.db_available = lambda *_args: False  # never auto-read the live DB here
 
 from desktop.app import MainWindow, make_app
 from soundbox.library import Library, Playlist, Track
@@ -41,6 +41,9 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    art_review = "--art-review" in sys.argv
+    if art_review:
+        sys.argv.remove("--art-review")
     settings_tab = None
     for name in ("General", "Keyboard", "Connections", "Graveyard"):
         flag = "--settings-" + name.lower()
@@ -177,6 +180,130 @@ def _render() -> None:
         app.processEvents()
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/soundbox.png"
     win.grab().save(out)
+    if art_review:
+        import io
+        from pathlib import Path
+        from PIL import Image, ImageDraw
+        from desktop.artreview import ArtReviewDialog
+        from soundbox.artwork import ArtResult
+        from PySide6.QtCore import QObject, Signal
+
+        class ReviewDeck(QObject):
+            playback_error = Signal(str)
+            def __init__(self):
+                super().__init__()
+                self.state=dict(track_id=None,position=42000,duration=175000,requested=False,
+                                loading=False,available=True)
+            def review_transport_state(self):
+                return self.state
+            def pause(self):
+                self.state["requested"]=False
+            def resume(self):
+                self.state["requested"]=True
+            def seek_ms(self, ms):
+                self.state["position"]=ms
+            def start(self, tid):
+                self.state.update(track_id=tid,requested=True)
+                return True
+        review_deck=ReviewDeck()
+
+        def cover(color, text):
+            image = Image.new("RGB", (400, 400), color)
+            ImageDraw.Draw(image).text((35, 180), text, fill="white", font_size=32)
+            output = io.BytesIO()
+            image.save(output, "JPEG")
+            return output.getvalue()
+
+        win.art_cache.store_ok("review-fixture", ArtResult(
+            cover("#48315f", "CURRENT COVER"), "image/jpeg", 1,
+            "https://soundcloud.com/wodd", "Current cover"), origin="auto")
+        win.art_cache.store_ok("review-manual", ArtResult(
+            cover("#322a4d", "MANUAL COVER"), "image/jpeg", 1,
+            "file:///Pictures/my-chosen-cover.jpg", "Manual cover"))
+        candidate = dict(title="WODD - GHOST PROTOCOL (Original Mix)", uploader="WODD",
+                         thumb="synthetic", url="https://soundcloud.com/example/ghost-protocol",
+                         liked=True, score=.95)
+        preview = cover("#155b65", "SUGGESTED COVER")
+        from threading import Event
+        release = Event()
+        provider = SimpleNamespace(search_candidates=lambda *_: [candidate] if release.wait(3) else [],
+                                   preview_image=lambda _: preview,
+                                   fetch_profile_art=lambda _: ArtResult(cover("#38502f","ARTIST PROFILE"),
+                                       "image/jpeg",.98,"https://soundcloud.com/example-artist","Example artist"))
+        dialog = ArtReviewDialog(win.art_cache, [
+            ("review-fixture", "WODD", "WODD - GHOST PROTOCOL (Original Mix)", "Automatic"),
+            ("review-manual", "Example", "Example - Manually chosen cover", "Manual"),
+        ], win, provider=provider, player=review_deck,play_track=review_deck.start)
+        # Real queue preparation against deterministic local providers only.
+        import time
+        dialog._scan()
+        dialog.show()
+        app.processEvents()
+        target = Path(out)
+        dialog.grab().save(str(target.with_name(target.stem + "-art-review-loading.png")))
+        release.set()
+        deadline = time.monotonic() + 3
+        while dialog._tasks.pending and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.001)
+        assert not dialog._tasks.pending
+        dialog.show()
+        app.processEvents()
+        dialog.audition._toggle()
+        dialog.grab().save(str(target.with_name(target.stem + "-art-review.png")))
+        dialog.tabs.setCurrentIndex(1)
+        app.processEvents()
+        dialog.grab().save(str(target.with_name(target.stem + "-art-review-all.png")))
+        menu=dialog.more.menu()
+        menu.show()
+        app.processEvents()
+        menu.grab().save(str(target.with_name(target.stem+"-art-review-menu.png")))
+        menu.hide()
+        from PySide6.QtWidgets import QMessageBox
+        def profile_preview(box):
+            box.show()
+            app.processEvents()
+            box.grab().save(str(target.with_name(target.stem+"-artist-profile.png")))
+            box.reject()
+            return 0
+        with mock.patch.object(QMessageBox,"exec",profile_preview):
+            dialog._use_profile()
+            deadline=time.monotonic()+3
+            while dialog._tasks.pending and time.monotonic()<deadline:
+                app.processEvents()
+                time.sleep(.001)
+            assert not dialog._tasks.pending
+        dialog.reject()
+        dialog.shutdown()
+        win.art_cache.keep_review("review-fixture",win.art_cache.cover_snapshot("review-fixture"),
+                                  "WODD","WODD - GHOST PROTOCOL (Original Mix)")
+        def unexpected_search(*_):
+            raise AssertionError("Reopening completed checks must not search")
+        provider.search_candidates=unexpected_search
+        resumed=ArtReviewDialog(win.art_cache,[
+            ("review-fixture","WODD","WODD - GHOST PROTOCOL (Original Mix)","Automatic"),
+            ("review-manual","Example","Example - Manually chosen cover","Manual"),
+        ],win,provider=provider,player=review_deck,play_track=review_deck.start)
+        resumed._scan()
+        resumed.show()
+        deadline=time.monotonic()+3
+        while resumed._tasks.pending and time.monotonic()<deadline:
+            app.processEvents()
+            time.sleep(.001)
+        assert not resumed._tasks.pending
+        assert resumed._saved_count==2 and resumed._reviewed_count==1
+        assert resumed._last_progress==(0,0)
+        app.processEvents()
+        resumed.grab().save(str(target.with_name(target.stem+"-art-review-resumed.png")))
+        resumed.reject()
+        resumed.shutdown()
+        from desktop.uploader_exclusions import UploaderExclusionsDialog
+        win.art_cache.exclude_source("https://soundcloud.com/example-repost")
+        manager=UploaderExclusionsDialog(win.art_cache,win,selected_url=candidate["url"],observed=("plate-selling",))
+        manager.show()
+        app.processEvents()
+        manager.grab().save(str(target.with_name(target.stem+"-uploader-exclusions.png")))
+        manager.close()
     if credentials:
         from pathlib import Path
         from desktop.connections import CredentialsDialog

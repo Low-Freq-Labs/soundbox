@@ -29,8 +29,6 @@ COMMANDS = (
     Command("cues.memory_page", "Cue pages", "Show Memory Cues", ("0",)),
     *(Command(f"cues.slot.{i}", "Cue pages", f"Cue {i + 1} · active page", (str(i + 1),), True)
       for i in range(8)),
-    *(Command(f"hot.{i}", "Direct Hot Cues", f"Hot Cue {chr(65 + i)}", hold=True) for i in range(8)),
-    *(Command(f"memory.{i}", "Direct Memory Cues", f"Memory Cue {i + 1}", hold=True) for i in range(8)),
     Command("browser.rename", "Library", "Rename selected item", ("Ctrl+R",)),
     Command("browser.load", "Library", "Load selected track"),
     Command("browser.search", "Library", "Focus search"),
@@ -39,8 +37,8 @@ COMMANDS = (
     Command("library.playlist", "Library", "New SoundBox playlist"),
     Command("library.import", "Library", "Import audio files"),
     Command("app.settings", "Application", "Open / close Settings"),
-    Command("wave.zoom_in", "Waveform", "Zoom in"),
-    Command("wave.zoom_out", "Waveform", "Zoom out"),
+    Command("wave.zoom_in", "Waveform", "Zoom in", ("=",)),
+    Command("wave.zoom_out", "Waveform", "Zoom out", ("-",)),
     *(Command(f"wave.{mode}", "Waveform", f"{mode} display") for mode in ("BLUE", "RGB", "3BAND")),
     *(Command(f"autoplay.{mode}", "Autoplay", label) for mode, label in (
         ("up", "Autoplay upward"), ("random", "Autoplay random"), ("down", "Autoplay downward"))),

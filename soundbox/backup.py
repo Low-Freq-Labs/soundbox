@@ -69,6 +69,10 @@ def _validate_bundle(root: Path) -> None:
     sizes = [p.stat().st_size for p in files]
     if sum(sizes) > _MAX_BYTES or any(n > _MAX_FILE_BYTES for n in sizes):
         raise ValueError("Backup exceeds the state size limit")
+    policy = root / "art/source-policy.json"
+    if policy.exists():
+        from .art_sources import parse_exclusions
+        parse_exclusions(json.loads(policy.read_text(encoding="utf-8")))
     for relative in ("art/index.json", "art/defaults/index.json"):
         path = root / relative
         if not path.exists():

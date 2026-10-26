@@ -21,6 +21,8 @@ class Keymaps(unittest.TestCase):
             self.assertEqual(mapping.action(str(i + 1)), f"cues.slot.{i}")
         self.assertEqual(mapping.action("9"), "cues.hot_page")
         self.assertEqual(mapping.action("0"), "cues.memory_page")
+        self.assertEqual(mapping.action("="), "wave.zoom_in")
+        self.assertEqual(mapping.action("-"), "wave.zoom_out")
         for command in COMMANDS:
             for binding in mapping.bindings(command.id):
                 self.assertEqual(mapping.conflicts(binding), [command.id])
@@ -54,6 +56,19 @@ class Keymaps(unittest.TestCase):
         with self.assertRaises(ValueError):
             mapping.reset("transport.cue")
         self.assertEqual(mapping.action("C"), "transport.play")
+
+    def test_retired_direct_cue_bindings_are_preserved_but_never_execute(self):
+        legacy = {"hot.0": ["F1"], "memory.0": ["F2"]}
+        mapping = Keymap({"schema": 1, "bindings": legacy})
+        self.assertNotIn("Direct Hot Cues", {command.group for command in COMMANDS})
+        self.assertNotIn("Direct Memory Cues", {command.group for command in COMMANDS})
+        self.assertIsNone(mapping.action("F1"))
+        self.assertIsNone(mapping.action("F2"))
+        self.assertEqual(mapping.action("1"), "cues.slot.0")
+        self.assertEqual(mapping.dump()["bindings"], legacy)
+        mapping.assign("cues.slot.0", "F1")
+        self.assertEqual(mapping.action("F1"), "cues.slot.0")
+        self.assertEqual(mapping.dump()["bindings"]["hot.0"], ["F1"])
 
 
 class KeyboardRouting(unittest.TestCase):

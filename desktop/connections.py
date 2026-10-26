@@ -13,20 +13,61 @@ from PySide6.QtWidgets import (
 from soundbox.providers import ConnectionFailure
 from .task_owner import TaskOwner
 
-# This registered loopback address is part of the sign-in setup, not a secret.
-_CALLBACK = "http://127.0.0.1:53927/soundcloud/callback"
+
+class RekordboxSection(QWidget):
+    """Core source controls; showing this card never probes a database."""
+    def __init__(self, choose, default, xml, refresh, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        heading = QLabel("REKORDBOX")
+        heading.setObjectName("SettingsSection")
+        layout.addWidget(heading)
+        text = QLabel("Read-only library snapshots. Your rekordbox database and source audio are never changed.")
+        text.setWordWrap(True)
+        layout.addWidget(text)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        self.path = QLabel()
+        self.source = QLabel()
+        for label in (self.path, self.source):
+            label.setObjectName("SettingsSub")
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(label)
+        self.controls = []
+        buttons = QHBoxLayout()
+        for title, callback in (("Choose database…", choose), ("Default location", default),
+                                ("Open XML…", xml), ("Refresh", refresh)):
+            button = QPushButton(title)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(callback)
+            self.controls.append(button)
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+    def set_state(self, status, database_path, source, *, busy=False, custom=False):
+        self.status.setText(status)
+        self.path.setText("Database: " + database_path)
+        self.source.setText("Loaded source: " + source if source else "No source loaded")
+        for button in self.controls:
+            button.setEnabled(not busy)
+        self.controls[1].setEnabled(not busy and custom)
 
 
 class CredentialsDialog(QDialog):
-    def __init__(self, client_id: str = "", secret: str = "", parent=None):
+    def __init__(self, client_id: str = "", secret: str = "", profile: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle("Connect SoundCloud")
         self.setMinimumWidth(490)
         layout = QVBoxLayout(self)
-        text = QLabel("Save your app credentials, then sign in with SoundCloud in your browser.")
+        text = QLabel("Read your public likes for cover-art matching. Keep your existing SoundCloud app and website redirect URL.")
         text.setWordWrap(True)
         layout.addWidget(text)
         form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.client_id = QLineEdit(client_id)
         self.client_id.setObjectName("SoundCloudClientID")
         self.client_id.setPlaceholderText("Client ID")
@@ -36,27 +77,29 @@ class CredentialsDialog(QDialog):
         self.secret.setEchoMode(QLineEdit.Password)
         form.addRow("Client ID", self.client_id)
         form.addRow("Client Secret", self.secret)
+        self.profile = QLineEdit(profile)
+        self.profile.setObjectName("SoundCloudProfile")
+        self.profile.setPlaceholderText("https://soundcloud.com/your-name")
+        self.profile.setMinimumWidth(320)
+        form.addRow("Profile URL", self.profile)
         layout.addLayout(form)
-        hint = QLabel("In your SoundCloud app settings, set the redirect URI to:")
-        layout.addWidget(hint)
-        callback = QLabel(_CALLBACK)
-        callback.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        callback.setObjectName("SettingsSub")
-        layout.addWidget(callback)
-        note = QLabel("Credentials are saved in macOS Keychain.")
+        note = QLabel("Credentials are saved in macOS Keychain. No browser sign-in or redirect change is needed. Only public liked tracks are included.")
+        note.setWordWrap(True)
         note.setObjectName("SettingsSub")
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         self.save_button = buttons.button(QDialogButtonBox.Save)
         self.client_id.textChanged.connect(self._validate)
         self.secret.textChanged.connect(self._validate)
+        self.profile.textChanged.connect(self._validate)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._validate()
 
     def _validate(self):
-        self.save_button.setEnabled(bool(self.client_id.text().strip() and self.secret.text().strip()))
+        self.save_button.setEnabled(bool(self.client_id.text().strip() and self.secret.text().strip()
+                                         and self.profile.text().strip()))
 
 
 class _ConnectionJob(QThread):
@@ -90,10 +133,10 @@ class SoundCloudSection(QWidget):
         self._worker = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        heading = QLabel("SOUNDCLOUD")
+        heading = QLabel("SOUNDCLOUD PUBLIC LIKES")
         heading.setObjectName("SettingsSection")
         layout.addWidget(heading)
-        text = QLabel("Use your liked tracks to find more accurate cover art.")
+        text = QLabel("Optional: prioritize confident matches from your public likes, then search SoundCloud when needed.")
         text.setWordWrap(True)
         layout.addWidget(text)
         self.status = QLabel()
@@ -136,10 +179,11 @@ class SoundCloudSection(QWidget):
             button.setEnabled(not busy)
         if not busy:
             if connected:
-                self.status.setText(f"Connected as {state.get('username', 'SoundCloud')} · "
+                label = "Public likes for" if state.get("mode") == "public" else "Connected as"
+                self.status.setText(f"{label} {state.get('username', 'SoundCloud')} · "
                                     f"{state.get('count', 0):,} liked tracks")
             else:
-                self.status.setText("Credentials saved · Sign in to read your likes" if configured else "Not connected")
+                self.status.setText("Credentials saved · Connect to read public likes" if configured else "Not connected")
 
     def _cancel(self):
         if self._worker is not None:
@@ -187,8 +231,9 @@ class SoundCloudSection(QWidget):
             dialog = CredentialsDialog(*credentials, parent=self)
             if dialog.exec() == QDialog.Accepted and not self._tasks.stopping:
                 client_id, secret = dialog.client_id.text().strip(), dialog.secret.text().strip()
+                profile = dialog.profile.text().strip()
                 self._run(lambda stop, progress, browser:
-                          self.service.connect(client_id, secret, stop, browser, progress))
+                          self.service.connect_public(client_id, secret, profile, stop, progress))
             dialog.secret.clear()
             dialog.deleteLater()
         self._run(lambda stop, progress, browser: self.service.credentials(), show)

@@ -38,19 +38,20 @@ _HOT_CUE_COLORS = (
 )
 
 
-def db_available() -> bool:
+def db_available(path: str | Path | None = None) -> bool:
     """True if a rekordbox database exists to read."""
-    return REKORDBOX_DB.is_file()
+    return Path(path or REKORDBOX_DB).is_file()
 
 
 def _camelot(scale: str) -> str:
     return _CAMELOT.get((scale or "").strip(), scale or "")
 
 
-def load_live() -> Library:
+def load_live(path: str | Path | None = None) -> Library:
     """Snapshot the live rekordbox DB and parse it (read-only). Raises on failure."""
-    if not REKORDBOX_DB.is_file():
-        raise FileNotFoundError(f"rekordbox database not found: {REKORDBOX_DB}")
+    source = Path(path or REKORDBOX_DB).expanduser()
+    if not source.is_file():
+        raise FileNotFoundError(f"rekordbox database not found: {source}")
     from pyrekordbox import Rekordbox6Database  # imported lazily (heavy dep)
 
     tmp = Path(tempfile.mkdtemp(prefix="soundbox_rb_"))
@@ -59,11 +60,11 @@ def load_live() -> Library:
         # READ-ONLY snapshot: copy stable database/WAL bytes; never open the
         # originals. The SHM file is process-local lock/index state and must not
         # be carried into the disposable reader.
-        _copy_stable_snapshot(REKORDBOX_DB, copy)
+        _copy_stable_snapshot(source, copy)
 
         db = Rekordbox6Database(path=str(copy))
         try:
-            tracks_by_id = _read_tracks(db)
+            tracks_by_id = _read_tracks(db, source)
             playlists = _read_playlists(db, set(tracks_by_id))
         finally:
             try:
@@ -78,7 +79,7 @@ def load_live() -> Library:
         return Library(
             tracks_by_id=tracks_by_id,
             playlists=playlists,
-            source=REKORDBOX_DB,
+            source=source,
             source_kind="rekordbox-db",
         )
     finally:
@@ -136,7 +137,7 @@ def _deleted(row) -> bool:
     return bool(getattr(row, "rb_local_deleted", 0))
 
 
-def _read_tracks(db) -> dict[str, Track]:
+def _read_tracks(db, source: Path | None = None) -> dict[str, Track]:
     cues_by_track = _read_cues(db)
     out: dict[str, Track] = {}
     for c in db.get_content():
@@ -172,7 +173,7 @@ def _read_tracks(db) -> dict[str, Track]:
             rating=str(c.Rating or ""),
             year=str(c.ReleaseYear or ""),
             source_analysis_path=str(resolve_dat_path(
-                REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
+                source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
             source_cues=cues_by_track.get(str(c.ID), []),
         )
     return out

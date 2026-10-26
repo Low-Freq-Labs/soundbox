@@ -227,16 +227,68 @@ normalized, and deterministically randomized with exact-even distribution
 across visible tracks whose art is naturally missing or deliberately blocked.
 A real cover or artist avatar always wins; the fallback never rewrites the
 underlying miss/block. Pool changes rebalance only fallback assignments.
-Settings separates **General**, **Keyboard**, **Connections** (personal), and the
-full-width **Graveyard**. [Keyboard settings](docs/KEYBOARD.md) provide searchable,
+**Settings → General → Review covers…** opens **Suggested**, automatically
+checking every existing cover in the active library, including manual and
+pre-provenance artwork. A loading wheel appears before the first comparisons,
+then progress stays visible while the rest are checked; **All** remains optional browsing. The main actions are **Keep**,
+**Replace**, and **Next**. Keep remembers the exact cover/artist/title decision;
+Next skips for this session; Replace is individual approval, with originals kept
+for recovery. The track title is selectable for copying. **More… → Use artist
+profile…** finds an artist picture and previews it before approval. **Exclude
+Uploader…** opens one saved block-list manager with add/remove controls; known
+automatic seller/dealer blocks are listed separately. Manual URL/file choices
+remain under More. Undo is not offered in that menu.
+The compact player beside these actions plays the selected local library track,
+with pause, click/drag scrubbing and elapsed/duration time. Changing review tracks
+or closing the window stops its audition. Keep/Replace/Next continue downward
+from the selected position without jumping back to the first suggestion.
+Completed checks resume across closing/reopening without repeating searches.
+Saved checks, review decisions and prepared comparisons restore before any new
+search; progress counts only the remaining work, with saved/reviewed counts shown
+separately. Reopening never queues an unchanged completed cover for online search.
+Small comparison previews also reuse a separate disposable cache capped at 8 MiB /
+128 images; evicting a thumbnail never removes a saved suggestion or decision.
+Exact Keep/Replace decisions stay honored until the cover or artist/title changes;
+More → Recheck whole library starts a fresh search pass. An empty completed queue
+shows a clear result instead of blank comparison panels. Searches never change
+artwork. Tracking-link duplicates and equivalent resized/recompressed copies
+of the current design are omitted from review suggestions. Strong exact matches and clearly labeled possible
+artist-anchored matches are both selectable; automatic fetching remains stricter.
+Edition/remix credits identify the version creator, Unicode accents normalize
+consistently, and exact short titles from a collaborator's account are supported.
+Named editions such as `(So Sus Edition)` also derive **So Sus** as the artist
+for imports/existing rows, while manual artist overrides retain priority.
+Dubplate seller/dealer/shop/trader patterns and custom excluded uploaders are
+never displayed/exported as artwork sources. Existing excluded-source images
+are quarantined and replaced with strictly matched **artist-profile art**, not a
+guessed public track. Originals remain recoverable under SoundBox's state;
+if the profile is unavailable the excluded image stays hidden. Other manual and
+unrecorded artwork stays protected. Additional source controls are under More.
+The bulk re-scan retries misses and explicitly automatic avatars; it preserves
+manual and unrecorded images. In-flight background results cannot overwrite an edit.
+Settings orders its tabs **General**, **Keyboard**, **Graveyard**, **Connections**,
+with tabs centered across one header and Back on the left; Graveyard retains its
+full-width page.
+[Keyboard settings](docs/KEYBOARD.md) provide searchable,
 remappable actions with multiple bindings and explicit conflict moves. By default,
 1–8 preview the active Hot/Memory cue page, 9 selects Hot Cue, and 0 selects
-Memory Cue. In **Connections → SoundCloud**, **Connect** opens Client ID and
-Client Secret fields with **Save**. Saving opens browser authorization; **Edit…**
-can change saved credentials later. Credentials and OAuth tokens stay in macOS
-Keychain. A disposable liked-track index is refreshed at launch and with
-**Refresh likes**; confident liked matches precede general search. Existing
-manual art and known cache entries are not automatically replaced. See
+Memory Cue; `=` / `-` zoom in/out. General balances Player/Library/Backup on the
+left with Title Cleanup/Cover Art on the right. **Connections** shows rekordbox
+on the left: loaded source/status, database location, Refresh, Choose database,
+Default location, and Open XML fallback. Database choices persist only after a
+successful read-only snapshot and save; failure retains the previous library.
+Reopening or refreshing reads saved rekordbox hot/memory cue changes, including
+deletions, and checks changed beatgrids. Fresh cues reach an already-loaded player
+without reloading audio; grid metadata refreshes in the background without
+recooking waveform data.
+The personal build adds SoundCloud on the right. **Connect** opens Client ID and
+Client Secret and public profile URL fields with **Save**. No browser sign-in or
+redirect change is needed; **Edit…** changes saved credentials or profile later.
+Credentials and application tokens stay in macOS Keychain. A disposable public
+liked-track index is refreshed at launch and with **Refresh likes**; confident
+liked matches help prioritize art while general search supplies other candidates. Existing
+artwork is not refreshed merely by connecting; exclusions follow the explicit
+artist-profile fallback policy above. See
 [SoundCloud connection setup](docs/soundcloud-connection.md).
 
 Everything in the cache is normalized to **baseline JPEG** as canonical app state.

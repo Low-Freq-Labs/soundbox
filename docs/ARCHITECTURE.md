@@ -253,8 +253,12 @@ premultiplied before the final one-pixel integral, with no adjacent-LOD blend or
 translated RGBA texture. Legacy/fallback spectral masters never recolor the
 imported display modes. RGB color recovery treats zero compact height as missing
 weighted evidence, using the existing authored color rather than black; positive
-weights cancel exactly. This October 8 correction affects colors only and needs
-no cache conversion.
+weights cancel exactly. The October 26 follow-up also makes the whole-track
+overview divide every positive color weight exactly. A compact zero can be
+height quantization rather than silence: BLUE/RGB overview coverage falls back
+to the resident high-precision audio envelope while retaining authored hue.
+True zero audio remains background, and PWV7 geometry remains independent.
+These compositor corrections need no cache conversion.
 Metal receives integer sample anchors plus
 small local phases for both geometry and color, retaining long-track subpixel
 precision. Attribute generation uses absolute 128-attribute clock blocks, with
@@ -511,10 +515,24 @@ canonical identity and the planner removes both representations together.
 Music, Movies, TV Shows, and Audiobooks remain immutable; On-The-Go is
 firmware-generated and absent from iTunesDB.
 
+### Loaded-track cue refresh
+
+After a successful source load/refresh, MainWindow passes the matching loaded
+track/source's authoritative DB cues directly to PlayerBar. Empty lists clear
+removed cues; absent authority and mismatched identities leave the deck alone.
+This updates the live cue override, panel, and both waveform markers without
+seeking or reloading audio. Later queued cache manifests use that latest override.
+Grid metadata continues through the existing fingerprinted, atomic background
+refresh, preserving compressed waveform payloads.
+
 ## Data model
 
-- **Reads the LIVE rekordbox DB** (`~/Library/Pioneer/rekordbox/master.db`) via
-  a read-only temp copy through `pyrekordbox`; XML export is a fallback.
+- **Reads the LIVE rekordbox DB** (default `~/Library/Pioneer/rekordbox/master.db`)
+  via a read-only temp copy through `pyrekordbox`; XML export is a fallback.
+  Connections can validate/select another DB; `settings.rekordbox_db_path`
+  persists only after read and save succeed. The explicit path travels through
+  RefreshWorker, snapshot acquisition and relative analysis-path resolution;
+  the module's default path is never mutated.
 - **The temp snapshot is a verified DB/WAL pair.** SoundBox copies only
   `master.db` and its WAL, compares both source identities before and after,
   and retries a concurrent checkpoint/update. SQLite's process-local SHM is
@@ -534,6 +552,8 @@ firmware-generated and absent from iTunesDB.
 - **Refresh results are monotonic.** A refresh click during an active database
   read queues one immediate follow-up snapshot, and instant-paint cache writes
   are serialized so an older result can never overwrite a newer result on disk.
+  Results and errors publish only after QThread.finished retires the captured
+  worker. Failed source reads/selections preserve the active library and curation.
 - **Two planes.** rekordbox is king (the mirror); SoundBox keeps its own plane
   on top: imported audio (referenced in place, never copied), per-track
   title/artist overrides, custom playlists, and deletes/removals that act as
@@ -580,13 +600,28 @@ firmware-generated and absent from iTunesDB.
 
 ## Settings, keyboard and optional account state
 
-Settings separates General, Keyboard, personal Connections, and a full-width
-Graveyard. The five title-cleanup defaults include the exact `(Original Mix)`
+Settings orders its tabs General, Keyboard, Graveyard, Connections; Graveyard
+uses the full width. A QTabBar is centered across the 40-pixel header, with Back on the left
+and no redundant Settings label. Equal outer grid columns keep its center
+independent of the Back button's width. It selects a
+QStackedWidget below it, leaving the remaining height for page content.
+General uses equal expanding columns capped at 600 pixels: Player/Library/Backup
+on the left, Title Cleanup/Cover Art on the right. The cleanup list sizes to its
+rows up to eight visible entries, then scrolls.
+Connections uses equal columns with core rekordbox source controls on the left
+and the optional personal SoundCloud card on the right. Cached source presentation
+is explicitly unverified until this session's actual read succeeds; the status
+card never probes the database merely to display it. Public keeps Connections
+and rekordbox while omitting the SoundCloud card/provider.
+The five title-cleanup defaults include the exact `(Original Mix)`
 tag; old custom copies remain in saved settings but belong to the default toggle.
 
 Keyboard routing and the editor share one action catalog. The portable
 `settings.keyboard` overlay supports multiple modifier combinations per action,
 explicit unbound lists and conflict moves, preserving unknown fields/actions.
+Only active-page cue slots and page selectors are offered; retired direct
+Hot/Memory action IDs survive saved-state round trips but cannot execute.
+Waveform zoom defaults to `=` / `-`; existing explicit overrides are preserved.
 Physical key ownership retains the actual release callback across focus,
 modifier and cue-page changes. Held-control aliases share their release boundary;
 application deactivation, shutdown and successful remapping release them safely.
@@ -594,14 +629,108 @@ Text/dialog/navigation handling stays with Qt. See [KEYBOARD](KEYBOARD.md).
 
 The personal connection factory is admitted by `connections.soundcloud` in the
 versioned provider manifest. It receives only an AppData root; the core section
-owns its worker admission, progress, browser opening and TaskOwner retirement.
-OAuth PKCE/state uses a temporary loopback callback. Client credentials and
-rotating tokens live in Keychain; disposable account/liked-track metadata lives
+owns its worker admission, progress and TaskOwner retirement. New connections
+use the client-credentials grant with HTTP Basic authentication, resolve a public
+profile, and read its public likes without a browser or callback. Existing website
+redirects and authorizations are unchanged; public disconnect clears local state
+without revocation. Legacy user-authorized tokens retain backend refresh/revocation
+compatibility. Client credentials and rotating tokens live in Keychain; disposable
+profile/liked-track metadata lives
 under `connections/soundcloud/`, outside library backup/restore. Complete
 same-account scans publish atomically and canceled/failed scans preserve the old
-index. Unknown-account likes never carry across a reconnect. Discovery reads an
-in-memory index before general search; no provider gains source/device authority.
+index. Unknown-profile likes never carry across a reconnect. Discovery reads an
+in-memory index before general search; the manual picker merges both result sets
+with eligible artist-name-matched uploads first, then likes within the same
+tier, then score. No provider gains source/device authority.
 See [SoundCloud setup](soundcloud-connection.md). Public omits this factory and UI.
+
+`desktop.artreview` automatically checks every cover listed in All, regardless
+of provenance or old confidence, and prepares comparisons in the background. Suggested contains only ready different alternatives, All permits
+individual browsing, and foreground selection queries can be cancelled/coalesced
+without assigning stale results to the next row. Main actions are Keep, Replace,
+Next. Keep persists an exact entry/image-SHA plus artist/title stamp in
+`art/review-kept.json`; Next dismisses only this session. Replace itself is
+individual approval, with no second modal. The title supports mouse selection
+and normal copying, matching the source/evidence labels without a text caret.
+More contains a preview-before-approval artist-profile
+choice, a single Exclude Uploader manager, refresh/source controls and manual
+image/URL selection; no Undo menu item. The block manager lists saved custom and
+known automatic accounts, permits explicit additions/removals, and preserves
+unrelated prepared comparisons when preferences change. The initial loading page has an animated wheel and checked/total progress; the
+first usable comparison reveals the review page while an inline indicator keeps
+the full scan visible. Completed empty/error states are explicit. Browsing All
+can prioritize a pending track. The session preview cache is bounded to 256 entries /
+16 MiB, each preview to 512 KiB. A separate confirmed
+fetch retires through TaskOwner before publication.
+`soundbox.art_review_scan` checkpoints disposable metadata in AppData
+`art_review_scan/checks.sqlite3`, outside canonical art/ and full backups. It
+stores candidate descriptions plus a separate LRU of small comparison previews
+(8 MiB / 128 images, at most 512 KiB each), never audio. Preview eviction cannot
+remove suggestion metadata or canonical art; final replacement still uses a
+separate guarded fetch. Context stamps bind
+entry/image SHA, artist/title, exclusions and matching-policy version; unchanged
+checks (including misses) resume without online work. A fresh pass advances its
+epoch without touching curated data. Failed requests are not cached as misses;
+five consecutive failures pause with resumable progress. Kept/accepted decisions
+remain canonical art state and are backed up. On a cached proposal, only its
+small preview is fetched if absent from the bounded memory cache. New online
+checks are paced; cached and saved decisions incur no delay.
+Reopening first validates and restores all saved contexts locally, including
+ready comparisons later in the list, before starting any online search. Only
+uncompleted or changed contexts enter the pending queue. Progress counts this
+remaining queue and shows saved/reviewed totals separately. A decision made while
+the queue runs is checked again before its row can start a request. Local image
+SHA validation and exact publication baselines remain mandatory; resuming is not
+authority to reuse changed bytes. No matching-policy bump is needed for this
+scheduling/presentation change.
+`desktop.reviewplayer` adds compact local audition controls beside the decision
+buttons, reusing PlayerBar/CoreAudio through a read-only snapshot and clickless
+pause/resume/seek APIs. The compact snapshot includes actual native playback,
+so a transient PAUSED/refill report cannot leave running audio with an inert
+Play button. Resume can cancel a pending pause fade. Selecting a row alone is
+silent; moving rows or closing
+review cancels owned playback, including pending grid/source changes. Review
+audition does not capture/advance playlist autoplay, and shuts down before native
+teardown. Keep/Replace/Next retain the next visible position below the selection;
+reaching the end does not implicitly wrap to the first remaining suggestion.
+Review normalizes SoundCloud source identity across tracking links and mobile/
+web aliases before fetching a preview. A bounded coarse colour/layout comparison
+also suppresses equivalent resized/recompressed artwork. These checks do not
+infer publisher trust. Keep/Replace persist per-track protection, not a learned
+global ranking model; deliberate cross-song artwork choices do not establish
+song identity.
+`ArtCache.apply_review` checks exact displayed metadata/image SHA under the state
+owner and atomically preserves one original per changed track in `art/review/`.
+Backend recovery survives restart and refuses changed/corrupt state. An accepted replacement
+also stamps its new cover/context as reviewed in the same transaction. Browsing/searching never
+publish images; manual artist overrides remain authoritative.
+
+Matching uses the same `metadata.editor_credits` parser as artist derivation:
+named Edition/Version credits outrank original tags, generic Deluxe/Radio/etc.
+descriptors do not. Unicode identities use normalization/accent folding. The
+requested version must agree; the original or a different named edit cannot
+receive an own-artist rescue. Exact song cores of three or more letters can
+match one contributor of a collaboration. Review additionally admits labeled
+possibilities supported by an artist word in the uploader identity and strong
+song-word evidence (including colloquial in/ing forms). These never enter
+unattended selection. Queries include version creators and bounded wording
+variants; no account-specific aliases are hard-coded.
+
+Pure `art_sources` rules and core-owned `art/source-policy.json` fence every
+discovery path and new publication. `canonical_image_path`/`image_path` quarantine
+historical excluded-source art, while `cover_snapshot` can still read its exact
+bytes for recovery. The authorized excluded-source policy uses only strictly
+matched artist-profile images (confidence >= .90, profile URL), captured through
+the ordinary artwork worker ownership. It compares the old snapshot again, so
+intervening manual changes win. Original bytes/index and any previous review
+recovery are atomically preserved under `art/source-recovery/`. Intentional
+profile defaults carry `fallback=excluded-source` and effective artist identity;
+they do not remain Suggested issues or get cleared by normal re-scans. Missing
+profiles leave excluded images hidden. No source audio/rekordbox write occurs.
+New uncached artwork still uses `store_auto_if_unfetched` to avoid overwriting
+intervening manual edits/misses/blocks. The runtime provider receives immutable
+source preferences and never writes them. Custom exclusions can be reversed.
+This is not complete reseller detection or proof of account authenticity.
 
 ## Persistence
 

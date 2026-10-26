@@ -111,15 +111,28 @@ QComboBox QAbstractItemView {{
 }}
 
 /* settings page: section header + per-row title/subtitle (scales cleanly) */
-QTabWidget#SettingsTabs::pane {{ border: none; border-top: 1px solid {BORDER}; }}
-QTabWidget#SettingsTabs QTabBar::tab {{
-    background: {BG}; color: {TEXT_DIM}; border: none;
-    border-bottom: 2px solid transparent; padding: 10px 22px;
+#SettingsHeader {{ background: {PANEL2}; border-bottom: 1px solid {BORDER}; }}
+QTabBar#SettingsTabs::tab {{
+    background: {PANEL2}; color: {TEXT_DIM}; border: none;
+    border-bottom: 2px solid transparent; padding: 0 22px; height: 38px;
 }}
-QTabWidget#SettingsTabs QTabBar::tab:selected {{
+QTabBar#SettingsTabs::tab:selected {{
     color: {TEXT_HI}; border-bottom-color: {PURPLE_LIGHT};
 }}
-QTabWidget#SettingsTabs QTabBar::tab:hover {{ color: {TEXT_HI}; }}
+QTabBar#SettingsTabs::tab:hover {{ color: {TEXT_HI}; }}
+/* Draw review tabs completely; mixed Cocoa frames leave corner fragments. */
+QTabBar#ReviewTabs {{ background: transparent; border: none; }}
+QTabBar#ReviewTabs::tab {{
+    background: {PANEL}; color: {TEXT_DIM}; padding: 5px 14px;
+    border: 1px solid {BORDER}; border-right: none;
+}}
+QTabBar#ReviewTabs::tab:first {{ border-top-left-radius: 5px; border-bottom-left-radius: 5px; }}
+QTabBar#ReviewTabs::tab:last {{
+    border-right: 1px solid {BORDER}; border-top-right-radius: 5px; border-bottom-right-radius: 5px;
+}}
+QTabBar#ReviewTabs::tab:selected {{ background: {PURPLE}; border-color: {PURPLE}; color: {TEXT_HI}; }}
+QTabBar#ReviewTabs::tab:hover:!selected {{ color: {TEXT_HI}; background: {PANEL2}; }}
+QPushButton#ReviewMoreButton::menu-indicator {{ image: none; width: 0; height: 0; }}
 QTreeWidget#Graveyard {{ background: {ROW}; alternate-background-color: {ROW_ALT};
     border: none; selection-background-color: {PURPLE_DARK}; }}
 #ShortcutRow {{ background: {ROW}; border-radius: 4px; }}

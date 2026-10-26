@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-09-30. This is the player reference: shipped behavior,
+Current as of 2026-10-26. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -78,10 +78,11 @@ Transport controls:
 Keyboard settings expose the transport and cue actions with remappable modifier
 combinations and multiple bindings per action. Space, C and Command-R retain
 their defaults. Numbers 1–8 preview slots on the selected Hot/Memory page;
-9 selects Hot Cue and 0 selects Memory Cue. These use the same gated-preview
+9 selects Hot Cue and 0 selects Memory Cue. `=` zooms in and `-` zooms out by
+default. Cue keys use the same gated-preview
 contract as mouse presses. A held slot retains its original page/control through
-page switches, modifier release and focus changes. Direct Hot/Memory bindings
-can target a slot independently of the selected page. Empty slots remain inert.
+page switches, modifier release and focus changes. Keyboard cue bindings use the
+active page; the separate direct Hot/Memory actions are retired. Empty slots remain inert.
 See [keyboard settings](KEYBOARD.md) for editing and context boundaries.
 
 Cue panel:
@@ -100,7 +101,11 @@ Cue panel:
 - Labels, loops, positions, and verified color information are preserved.
   ANLZ PCOB/PCO2 remains a fallback when no live database cue source exists.
 - The loaded, source-normalized `Track.source_cues` rows are injected directly
-  into the deck and override cache/ANLZ sidecars. Exact cue identity therefore
+  into the deck and override cache/ANLZ sidecars. A successful library refresh
+  immediately updates an already-loaded track's cue panel and waveform markers,
+  including deletions, without seeking or reloading audio. A queued older cache
+  manifest cannot restore stale cues; different track/source identities are ignored.
+  Exact cue identity therefore
   does not wait
   for background waveform preparation; V5 still receives the same rows atomically
   for long-term SoundBox ownership.
@@ -280,6 +285,20 @@ Main-waveform scrubbing is relative and precise:
   whole-track overview remains an absolute click/drag navigation lane.
 
 ## Native playback boundary
+
+Artwork review exposes a compact Play/Pause, click/drag scrubber and time display
+beside Keep/Replace/Next. It auditions the selected local library track through
+the existing PlayerBar/CoreAudio deck and its normal load/grid/origin rules.
+Selecting a review row alone never loads audio. Changing rows, closing review,
+or application shutdown cancels the audition and pending play/source-change
+intent; no second audio engine or SoundCloud audio is opened. Review playback
+does not capture the playlist autoplay context, and terminal playback cannot
+advance it. Ordinary playback is not stopped merely by opening review.
+The public compact transport snapshot, pause/resume and bounded seek entrypoints
+retain clickless ramps and pending grid-load ownership. The review
+button also follows actual native playback if a transient PAUSED/refill snapshot
+clears its button intent, so running audio always offers Pause. A quick resume
+can cancel an in-flight pause fade.
 
 `PlayerBar` owns the transport behavior; one native backend owns playback and
 the scrolling waveform. There is no engine selector and no compatibility
@@ -582,6 +601,17 @@ before those reads. Every stage carries a monotonic track generation;
 session marker, and detail before the replacement source appears. Late stages
 from an older track are rejected in both Python and native code. No phase
 expands packed cache rows into nested Python lists.
+
+The whole-track overview normalizes every positive amplitude color weight
+exactly, including quiet tails. Imported PWV5 can round height down to zero
+while preserving valid color; the imported compact overview may contain that
+same zero, so it cannot independently prove silence. When compact color weight
+is zero, BLUE/RGB overview coverage uses the existing high-precision audio
+envelope and retains authored hue. True zero audio stays background; PWV7
+3BAND keeps its independent geometry. Existing nonzero compact shapes, the main
+waveform, clocks, canonical cache bytes and source audio remain unchanged.
+The correction applies to all tracks through the shared runtime compositor,
+without recooking or per-track exceptions.
 
 Legacy V4 records with an audible height and zero RGB are repaired at load by
 borrowing the nearest valid hue. New analysis clamps filterbank group-delay

@@ -4437,6 +4437,55 @@ inline float filtered_envelope_coverage(
         distance, heightScale, antialias);
 }
 
+inline WaveSurface overview_wave_surface(
+        const device WaveSample *samples,
+        const device AudioEnvelopeSample *audioDetailSamples,
+        constant Uniforms &u, float position, float footprint,
+        float distance, float antialias) {
+    const uint anchor = min(uint(floor(position)), u.sampleCount - 1);
+    const float phase = position - floor(position);
+    WaveSurface surface = filtered_wave_surface(
+        samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
+        anchor, phase, footprint, footprint, distance, 11.0, antialias);
+    if (surface.colorWeight > 0.0 || u.threeBandActive != 0
+            || u.audioDetailSampleCount == 0 || u.audioDetailMipCount == 0) {
+        return surface;
+    }
+    // Imported PWV5 height can quantize to zero with valid authored hue and
+    // audible signed detail. The main lane already uses that independent
+    // geometry; use it here too rather than treating compact zero as silence.
+    const float ratio = u.audioDetailSamplesPerSecond / u.samplesPerSecond;
+    const float audioPosition = position * ratio;
+    const uint audioAnchor = uint(floor(audioPosition));
+    const float audioPhase = audioPosition - floor(audioPosition);
+    const float audioFootprint = footprint * ratio;
+    const uint boundLevel = audio_detail_bound_lod(
+        audioFootprint, u.audioDetailMipDivisors, u.audioDetailMipCount);
+    const float2 bound = envelope_support_max(
+        audioDetailSamples, u.audioDetailMipOffsets[boundLevel],
+        u.audioDetailMipCounts[boundLevel], audioAnchor, audioPhase,
+        u.audioDetailMipDivisors[boundLevel]);
+    if (max(bound.x, bound.y) <= 0.0) {
+        surface.coverage = 0.0;
+        return surface;
+    }
+    const float upper = filtered_envelope_coverage(
+        audioDetailSamples, u.audioDetailMipOffsets, u.audioDetailMipCounts,
+        u.audioDetailMipDivisors, u.audioDetailMipCount, audioAnchor, audioPhase,
+        audioFootprint, audioFootprint, true, distance, 11.0, antialias);
+    const float lower = filtered_envelope_coverage(
+        audioDetailSamples, u.audioDetailMipOffsets, u.audioDetailMipCounts,
+        u.audioDetailMipDivisors, u.audioDetailMipCount, audioAnchor, audioPhase,
+        audioFootprint, audioFootprint, false, distance, 11.0, antialias);
+    surface.coverage = max(upper, lower);
+    const uint colorLevel = biased_lod(footprint, u.waveMipCount);
+    surface.weightedColor = linear_wave_color(
+        samples, u.waveMipOffsets[colorLevel], u.waveMipCounts[colorLevel],
+        anchor, phase, colorLevel);
+    surface.colorWeight = 1.0;
+    return surface;
+}
+
 fragment float4 wave_surface_fragment(
         Out in [[stage_in]],
         const device WaveSample *samples [[buffer(0)]],
@@ -4494,22 +4543,23 @@ fragment float4 wave_surface_fragment(
                 xPoints / max(1.0, u.widthPoints),
                 0.0, 0.999999)
             * float(u.sampleCount);
-        const uint anchor = min(
-            uint(floor(position)), u.sampleCount - 1);
         const float footprint =
             float(u.sampleCount)
             / max(1.0, float(u.drawableWidthPixels));
         const float distance = abs(yPoints - 14.0);
-        const WaveSurface surface = filtered_wave_surface(
-            samples, u.waveMipOffsets, u.waveMipCounts, u.waveMipCount,
-            anchor, position - floor(position), footprint, footprint,
-            distance, 11.0, antialias);
-        if (surface.valid == 0.0 || surface.coverage <= 0.0) {
+        const WaveSurface surface = overview_wave_surface(
+            samples, audioDetailSamples, u, position, footprint,
+            distance, antialias);
+        if (surface.valid == 0.0 || surface.coverage <= 0.0
+                || surface.colorWeight <= 0.0) {
             discard_fragment();
         }
+        // Positive amplitude weights cancel exactly, including quiet tails.
+        // Zero weight is silence: leave the background instead of painting
+        // an antialiased black center line where no waveform exists.
         const float3 encodedColor =
             surface.weightedColor
-            / max(surface.colorWeight, 0.0001);
+            / surface.colorWeight;
         const float3 color = display_srgb_to_linear(
             u.threeBandActive != 0
             ? three_band_color(encodedColor)

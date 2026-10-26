@@ -700,8 +700,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   **OBJECTS**, not display-path strings. `SyncReport` has no `files_copied`
   (use `.playlists` / `.bytes_to_copy`).
 - `Playlist.display_path` joins with `" / "` (SPACES around slash), not `"/"`.
-- Settings page lives on `body_stack` (index 1); its tabs are General, Keyboard, personal
-  Connections, and full-width Graveyard. Track table / device browser use
+- Settings page lives on `body_stack` (index 1); its tabs are General, Keyboard,
+  Graveyard, Connections; Graveyard uses the full width. Connections keeps core rekordbox on the
+  left and adds SoundCloud on the right only in personal builds. Database changes
+  retain the current library until a successful worker retirement and settings
+  save; database snapshots and ANLZ resolution use the selected source path.
+  XML parse failures likewise retain the previous library. A refreshed matching
+  track/source must publish the newest DB cues to PlayerBar's live cue authority
+  immediately, including an empty list; refreshing only the cache leaves its old
+  live-cue override masking the update. Never seek/reload audio for a cue refresh.
+  Track table / device browser use
   `stack` (0/1).
 - Keyboard defaults, dispatch and the editor share `desktop.keyboard.COMMANDS`.
   Never add a competing hard-coded QShortcut for a catalog action. Momentary
@@ -984,6 +992,91 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   it coverless for a manual artist correction/picker/URL. Manual art remains
   available and is recorded with `origin=manual`; the background worker records
   `origin=auto` for new cache rows.
+- **Missing provenance is protected artwork.** `retry_weak` may clear misses and
+  explicitly automatic avatars only; URL/confidence cannot identify manual work.
+  Background completion must use `store_auto_if_unfetched` under the shared lock,
+  never an earlier todo-list decision to overwrite a now-curated entry.
+- **Artwork review is read-only until individual approval.** Compare exact
+  displayed metadata/bytes before publication. Preserve the original and receipt
+  in the same transaction as the approved replacement, retain one original per
+  track, and refuse stale/corrupt recovery. The review More menu deliberately
+  omits Undo. Artist-profile lookup is a worker-owned strict profile fetch,
+  previewed for approval before using the same exact-baseline replacement path.
+  Missing/excluded profiles, changed selections and closing cannot publish it.
+  The single Exclude Uploader manager retains explicit preferences and lists
+  known seller-rule matches; automatic seller blocks cannot be removed there.
+  Preference changes filter only blocked proposals in the open queue, without
+  clearing unrelated previews, checks or session decisions. Cancellation closes admission and drains
+  TaskOwner; a finished-but-undelivered fetch must not apply after dialog close.
+- **Suggested contains prepared alternatives, not a library-sized task list.**
+  Check every All entry, including manual and unrecorded art, while keeping
+  scans read-only. Show the initial loading wheel before revealing ready
+  comparisons, keep whole-library progress visible, and explain empty results. Keep stamps
+  exact cover metadata/SHA plus artist/title; Next is only a session dismissal.
+  Replace is already explicit approval and stamps the accepted context too.
+  Completed metadata checks resume from disposable `art_review_scan/` SQLite
+  state, not from duplicated images. Restore every exact saved context before
+  the first online request, so an uncached first row cannot block cached
+  comparisons later in the list. Show pending-work progress separately from
+  saved checks/review decisions; recheck decisions before a queued search starts.
+  Never cache a failed request as a miss;
+  pause after repeated failures. Bump its matching-policy version when matching
+  semantics change. More can explicitly start a fresh pass. Preserve stale-result generation checks,
+  exact baseline checks, memory bounds and TaskOwner lifetime through shutdown.
+- **A compact overview zero is not independent silence proof.** Imported
+  overview heights can be the very same quantized PWV5 heights. A repair gated
+  only on those heights misses quiet audible passages. At zero compact weight,
+  BLUE/RGB overview rendering uses resident high-precision audio geometry with
+  authored hue; do not fabricate color or sound from a source-specific exception.
+  True zero audio stays background; PWV7 remains independent. Check both whole-track
+  overview and main lane against the real reported cache, not only positive-weight
+  synthetic compositor inputs. Do not rewrite caches or sources to fix rendering.
+- **Review audio shares the native deck.** It plays only the selected local
+  track on explicit Play, uses the ordinary grid/origin load and gain-ramped
+  pause/seek, and suppresses playlist autoplay. A source-change fade and a pending
+  grid load must remain cancellable when selecting another row or closing review.
+  The review snapshot must include actual native playback as well as button
+  intent: a transient PAUSED/refill report can clear the latter while audio runs.
+  Explicit pause-in-progress wins, and resume can cancel that fade.
+  Stop review transport timers/intent before native teardown. Keep/Replace/Next
+  advance below the selected row; later scan callbacks must not reset an end
+  cursor to the first suggestion. Explicit browsing can choose earlier rows.
+- **Preview eviction never evicts queue metadata.** Comparison thumbnails may
+  persist separately in `art_review_scan/` SQLite, capped at 8 MiB / 128 entries,
+  at most 512 KiB per image. They are disposable, outside full backups and never
+  canonical artwork/publication authority. Exact suggestion contexts and review
+  decisions remain separate; adding this cache does not bump matching policy.
+- **A tracking URL or smaller JPEG is not a new artwork suggestion.** Review
+  compares SoundCloud upload identity without tracking query/fragment or mobile/
+  web host aliases, before downloading previews. Other providers retain their
+  query semantics. Equivalent resized/recompressed designs are omitted using
+  bounded colour/layout comparison. Different artwork remains selectable;
+  source identity is not publisher trust or authority to overwrite anything.
+  Keep/Replace currently save exact per-track decisions, not global ranking
+  feedback. A deliberately chosen image from another song must never train
+  a false song identity or blanket trust in its uploader.
+- **Artist derivation and artwork share version credits.** `(So Sus Edition)`
+  derives So Sus ahead of an original-artist tag, while manual overrides win.
+  Normalize Unicode identities: precomposed ADÉLA and decomposed Adéla cannot
+  disagree. A requested named version must not rescue the original or another
+  edit. Exact short titles may match one collaborator; review-only alternate
+  accounts/wording need independent artist and song evidence, not hard-coded aliases.
+- **Excluded-source fallback is separately authorized policy.** Never display or
+  export the historical excluded image; retain it for exact recovery. Fetch only
+  a strictly matched artist profile, not a guessed public song for an unreleased
+  purchase. Apply under the state owner with a fresh baseline; a manual edit made
+  during the request wins. Preserve originals/index and earlier review recovery
+  under `art/source-recovery/`. These intentional profile defaults stay out of
+  Suggested and bulk avatar re-scans. Unavailable profiles remain hidden. Other
+  manual and unrecorded art is still protected from automatic replacement.
+- **Source exclusion fences every boundary.** Seller/dealer patterns include
+  Plate Selling and related plate/dubplate role variants; a bare plate/dubplate
+  word or a title mentioning sales never excludes an artist. The rules apply to
+  likes, search, avatars, suggestions, previews, URLs and final publication.
+  Titles mentioning dubplates are not uploader identities. Preferences live in
+  backed-up `art/source-policy.json`; provider receives only the runtime set.
+  Review may show artist-anchored possibilities below the automatic threshold,
+  clearly labeled. Uploader similarity is never official-account proof.
 - **Orient hyphenated working titles with the effective artist.** Libraries use
   both `ARTIST - TITLE` and `TITLE - ARTIST`. Unconditionally dropping the left
   side made `CRASH TEST - WODD` use `WODD` as its song core, so any upload from
@@ -1001,13 +1094,17 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   Structured SoundCloud artist credits can account for a label upload with an
   exact song core; descriptions/tracklists cannot.
 - **SoundCloud connection credentials never enter library JSON or logs.** The
-  personal connection uses Keychain, OAuth PKCE/state, and a temporary loopback
-  callback. Paginated likes are read only from the exact API origin; rotating
+  personal connection uses Keychain and client-credentials public-profile reads;
+  new setup has no browser/loopback authorization (legacy OAuth remains backend
+  compatibility). Choose Always Allow on the app-specific macOS Keychain prompt
+  to remember approval; Allow grants one access. Do not loosen the item to trust
+  every application. Paginated likes are read only from the exact API origin; rotating
   refresh tokens persist immediately. Cancelled/failed scans retain the previous
   same-account complete index; account changes clear it before scanning.
   The disposable index lives separately under `connections/soundcloud/` and is
-  excluded from library backup/restore. Only confident, unambiguous liked matches
-  precede general search. Connecting never clears known misses, manual art or
+  excluded from library backup/restore. Only confident, unambiguous artist-name-
+  matched liked uploads precede general search; other accountable likes remain
+  fallback evidence, including online-search failure. Connecting never clears known misses, manual art or
   blocks. Connection workers use TaskOwner; isolated/test harnesses never read
   live Keychain or start account refresh. Setup: [connection guide](soundcloud-connection.md).
 - **Managed defaults are a fallback layer, never discovered or per-track art.**

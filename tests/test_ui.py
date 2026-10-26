@@ -46,7 +46,7 @@ def _make_lib() -> Library:
 
 def setUpModule():
     global _app, _win
-    rekordbox_db.db_available = lambda: False  # tests never read the live DB
+    rekordbox_db.db_available = lambda *_args: False  # tests never read the live DB
     from desktop.app import MainWindow, make_app
     _app = make_app()
     area = unittest.enterModuleContext(tempfile.TemporaryDirectory(
@@ -237,7 +237,7 @@ class SettingsPage(unittest.TestCase):
                 from desktop.keyboard import Keymap
                 original_map = _win._keyboard_router.keymap
                 alternate = Keymap(original_map.dump())
-                alternate.assign("hot.0", "F1")
+                alternate.assign("cues.slot.0", "F1")
                 _win._keyboard_router.keymap = alternate
                 try:
                     panel.hot_tab.click()
@@ -5703,11 +5703,16 @@ class AutoplaySemantics(unittest.TestCase):
         try:
             _win._advance_autoplay("old-track")
             self.assertEqual(opened, [])
+            _win._review_audition_active = True
+            _win._advance_autoplay("3")
+            self.assertEqual(opened, [])
+            _win._review_audition_active = False
             _win._advance_autoplay("3")
             self.assertEqual(opened, [("1", True, False)])
             self.assertEqual(_win._autoplay_order, ["3", "1"])
             self.assertEqual(_win._autoplay_index, 1)
         finally:
+            _win._review_audition_active = False
             _win._autoplay_playable = real_playable
             _win._open_track = real_open
             _win.player_bar._track_id = current
@@ -7498,6 +7503,83 @@ class LibraryInstantPaint(unittest.TestCase):
 class RekordboxRefreshOrdering(unittest.TestCase):
     """Refresh clicks and results cannot silently land out of order."""
 
+    def test_invalid_xml_retains_previous_library_and_remembered_source(self):
+        previous, previous_xml = _win.lib, _win._last_xml
+        with mock.patch("desktop.app.engine.load_library", side_effect=ValueError("Invalid XML")), \
+                mock.patch("desktop.app.QMessageBox.critical") as error:
+            _win.open_library("/synthetic/invalid.xml")
+        error.assert_called_once()
+        self.assertIs(_win.lib, previous)
+        self.assertEqual(_win._last_xml, previous_xml)
+
+    def test_selected_source_publishes_and_saves_only_after_worker_retirement(self):
+        from desktop.workers import RefreshWorker
+        path = Path("/synthetic/relocated/master.db")
+        original = _win.lib
+        settings = dict(_win.settings)
+        replacement = _make_lib()
+        def publish(library):
+            self.assertIsNone(_win._refresh_worker)
+            self.assertEqual(_win.settings["rekordbox_db_path"], str(path))
+            self.assertIs(library, replacement)
+        try:
+            with mock.patch.object(RefreshWorker, "start"), \
+                    mock.patch.object(_win, "_save_state", return_value=True) as save, \
+                    mock.patch.object(_win, "_on_refresh_done", side_effect=publish) as done:
+                _win._start_rekordbox_refresh(path, selection=True)
+                worker = _win._refresh_worker
+                worker.result = replacement
+                worker.done.emit(replacement)
+                done.assert_not_called()
+                save.assert_not_called()
+                self.assertIs(_win.lib, original)
+                worker.finished.emit()
+                save.assert_called_once()
+                done.assert_called_once_with(replacement)
+        finally:
+            _win.settings = settings
+            _win._sync_rekordbox_connection()
+
+    def test_failed_read_or_save_keeps_previous_source_and_curation(self):
+        from desktop.workers import RefreshWorker
+        original = _win.lib
+        settings = dict(_win.settings)
+        for failed_read in (True, False):
+            try:
+                with self.subTest(failed_read=failed_read), mock.patch.object(RefreshWorker, "start"), \
+                        mock.patch.object(_win, "_save_state", return_value=False), \
+                        mock.patch.object(_win, "_on_refresh_done") as done, \
+                        mock.patch.object(_win, "_on_refresh_fail") as failure:
+                    _win._start_rekordbox_refresh(Path("/synthetic/new/master.db"), selection=True)
+                    worker = _win._refresh_worker
+                    worker.result = None if failed_read else _make_lib()
+                    worker.error = "Cannot read selected database" if failed_read else ""
+                    worker.finished.emit()
+                    done.assert_not_called()
+                    failure.assert_called_once()
+                    self.assertEqual(_win.settings, settings)
+                    self.assertIs(_win.lib, original)
+            finally:
+                _win.settings = dict(settings)
+
+    def test_source_card_distinguishes_cached_library_and_verified_source_without_probing(self):
+        verified, error = _win._rekordbox_source_verified, _win._rekordbox_connection_error
+        try:
+            with mock.patch("desktop.app.rekordbox_db.db_available", side_effect=AssertionError("display must not probe source")):
+                _win._rekordbox_connection_error = ""
+                _win._rekordbox_source_verified = False
+                _win._sync_rekordbox_connection()
+                self.assertIn("source not yet verified", _win._rekordbox_section.status.text())
+                _win._rekordbox_source_verified = True
+                _win._sync_rekordbox_connection()
+                self.assertIn("loaded", _win._rekordbox_section.status.text())
+                _win._rekordbox_connection_error = "Source unavailable"
+                _win._sync_rekordbox_connection()
+                self.assertIn("Last refresh failed", _win._rekordbox_section.status.text())
+        finally:
+            _win._rekordbox_source_verified, _win._rekordbox_connection_error = verified, error
+            _win._sync_rekordbox_connection()
+
     def test_click_during_refresh_queues_one_follow_up(self):
         class OwnedWorker:
             @staticmethod
@@ -7789,6 +7871,39 @@ class RefreshWhileViewingCollection(unittest.TestCase):
         Qt slots swallow exceptions)."""
         _win.lib = fresh
         _win._apply_loaded_library()
+
+    def test_loaded_deck_receives_cue_edits_and_deletions_without_reload(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        live = [{"kind": "hot", "slot": 1, "position_ms": 9000,
+                 "label": "New drop", "color": [1, 2, 3]},
+                {"kind": "memory", "slot": 0, "position_ms": 4000}]
+        try:
+            pb._track_id, pb._src_path = "1", str(_make_lib().tracks_by_id["1"].path)
+            with mock.patch.object(_win, "player_bar", pb), \
+                    mock.patch.object(pb.player, "set_cues") as publish, \
+                    mock.patch.object(pb, "play_track") as load, \
+                    mock.patch.object(pb.player, "setPosition") as seek:
+                for cues in (live, []):
+                    fresh = _make_lib()
+                    fresh.tracks_by_id["1"].source_cues = cues
+                    self._refresh_lands(fresh)
+                    self.assertEqual(pb._live_cues, cues)
+                    self.assertCountEqual(pb.wave._cues, cues)
+                    publish.assert_called_with(cues)
+                    # An older queued manifest cannot put stale cues back.
+                    pb._on_analysis_manifest(pb._src_path, pb._analysis_path,
+                        pb._analysis_generation, {"beats": [], "cues": live})
+                    self.assertCountEqual(pb.wave._cues, cues)
+                load.assert_not_called()
+                seek.assert_not_called()
+                pb.refresh_live_cues("other", pb._src_path, live)
+                pb.refresh_live_cues("1", "/different/source.wav", live)
+                pb.refresh_live_cues("1", pb._src_path, None)
+                self.assertEqual(pb._live_cues, [])
+        finally:
+            pb.shutdown()
+            pb.close()
 
     def test_new_track_appears_without_switching_views(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))

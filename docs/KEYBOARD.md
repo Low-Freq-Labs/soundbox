@@ -17,6 +17,8 @@ Additional cue defaults:
 | 1–8 | Preview A–H on Hot Cue, or Memory Cues 1–8 on Memory Cue |
 | 9 | Select the Hot Cue page |
 | 0 | Select the Memory Cue page |
+| = | Zoom in |
+| - | Zoom out |
 
 Cue keys use press/release, including latching through the configured Play action.
 Empty slots do nothing. A held active-page cue remembers its original page and
@@ -25,8 +27,11 @@ the wrong cue. Focus loss, shutdown and a successfully changed keymap release
 held keyboard controls. Repeated key events never retrigger commands. Multiple
 bindings sharing the same control keep it held until the final key releases.
 
-The catalog also exposes unassigned actions for direct Hot/Memory cues independent
-of the current page, track navigation, beat jumps, waveform zoom/display, autoplay,
+The cue controls use the active page only; the separate Direct Hot Cues and Direct
+Memory Cues sections have been removed. Any older saved direct-cue bindings remain
+preserved as inactive extension data and cannot trigger a hidden shortcut.
+The catalog also exposes unassigned actions for track navigation, beat jumps,
+waveform zoom/display, autoplay,
 loading/renaming, search/now-playing, library refresh/import/new playlist, and
 Settings. Available actions share one catalog in `desktop/keyboard.py`; adding an
 action requires a real dispatcher and tests, not only an editor row.

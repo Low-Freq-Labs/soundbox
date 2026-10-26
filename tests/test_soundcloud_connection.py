@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -216,7 +217,163 @@ class SoundCloudConnection(unittest.TestCase):
                 patch.object(discovery, "_download", return_value=(b"cover", "image/jpeg")):
             result = discovery.fetch_best("Artist", "Artist - Song")
             self.assertEqual(result.source_url, liked["webpage_url"])
-            self.assertTrue(discovery.search_candidates("Artist", "Artist - Song")[0]["liked"])
+        with patch.object(sc, "liked_entries", return_value=(liked,)), \
+                patch.object(discovery, "_flat_search", return_value=[{
+                    **track("general", "Song"), "webpage_url": "https://soundcloud.com/artist/general",
+                    "uploader": "Artist", "thumbnail": "https://i1.sndcdn.com/general.jpg"}]) as search:
+            candidates = discovery.search_candidates("Artist", "Artist - Song")
+            search.assert_called()
+            self.assertEqual(len(candidates), 2)
+            self.assertTrue(candidates[0]["liked"])
+            self.assertEqual(candidates[1]["url"], "https://soundcloud.com/artist/general")
+        with patch.object(sc, "liked_entries", return_value=(liked,)), \
+                patch.object(discovery, "_flat_search", side_effect=RuntimeError("search offline")):
+            candidates = discovery.search_candidates("Artist", "Artist - Song")
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(candidates[0]["url"], liked["webpage_url"])
         vip = {**liked, "title": "Song VIP"}
         with patch.object(sc, "liked_entries", return_value=(vip,)):
             self.assertEqual(discovery._liked_candidates("Artist", "Artist - Song"), [])
+
+    def test_public_likes_use_client_credentials_without_callback_or_me_and_reuse_tokens(self):
+        calls = []
+        def api(url, **kwargs):
+            calls.append((url, kwargs))
+            if url.endswith("/oauth/token"):
+                self.assertEqual(kwargs["basic"], ("public-id", "public-secret"))
+                self.assertEqual(kwargs["form"], {"grant_type": "client_credentials"})
+                self.assertNotIn("redirect_uri", kwargs["form"])
+                return {"access_token": "app-access", "refresh_token": "app-refresh", "expires_in": 3600}
+            self.assertEqual(kwargs["token"], "app-access")
+            if "/resolve?" in url:
+                self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query),
+                                 {"url": ["https://soundcloud.com/test-user"]})
+                return {"kind": "user", "urn": "soundcloud:users:42", "username": "Test user"}
+            self.assertIn("/users/soundcloud%3Ausers%3A42/likes/tracks?", url)
+            return {"collection": [track()]}
+        with patch.object(sc, "_json_request", side_effect=api), \
+                patch.object(self.connection, "_authorize", side_effect=AssertionError("browser authorization")):
+            for _ in range(2):
+                self.connection.connect_public("public-id", "public-secret", "https://soundcloud.com/test-user",
+                                               self.stop, self.progress.append)
+            self.connection.refresh(self.stop, self.progress.append)
+        self.assertEqual(sum(url.endswith("/oauth/token") for url, _ in calls), 1)
+        self.assertEqual(self.connection.credentials(), ("public-id", "public-secret", "https://soundcloud.com/test-user"))
+        self.assertEqual(self.connection.status()["mode"], "public")
+        self.assertEqual(len(self.connection.entries()), 1)
+        for path in self.connection.root.rglob("*.json"):
+            for secret in ("public-id", "public-secret", "app-access", "app-refresh"):
+                self.assertNotIn(secret, path.read_text())
+        with patch.object(sc, "_json_request", side_effect=AssertionError("must not revoke website tokens")):
+            self.connection.disconnect(self.stop, self.progress.append)
+        self.assertEqual(self.store.value, {})
+
+    def test_public_likes_refresh_rotation_persists_before_scan(self):
+        self.store.value.update(mode="public", public_profile="https://soundcloud.com/test-user", expires_at=0)
+        def api(url, **kwargs):
+            if url.endswith("/oauth/token"):
+                self.assertEqual(kwargs["form"]["grant_type"], "refresh_token")
+                return {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600}
+            self.assertEqual(self.store.value["refresh_token"], "new-refresh")
+            if "/resolve?" in url:
+                return {"kind": "user", "id": 42, "username": "Test user"}
+            return {"collection": [track()]}
+        with patch.object(sc, "_json_request", side_effect=api):
+            self.connection.refresh(self.stop, self.progress.append)
+
+    def test_public_application_token_without_refresh_token_reuses_until_expiry(self):
+        self.store.value.update(mode="public", public_profile="https://soundcloud.com/test-user",
+                                access_token="valid-app-token", expires_at=time.time()+3600)
+        self.store.value.pop("refresh_token", None)
+        with patch.object(sc, "_json_request") as request:
+            self.assertEqual(self.connection._ready_tokens(self.store.value, self.stop)["access_token"],
+                             "valid-app-token")
+            request.assert_not_called()
+            self.store.value["expires_at"] = 0
+            request.return_value = {"access_token": "renewed-app-token", "refresh_token": "renewed-refresh", "expires_in": 3600}
+            renewed = self.connection._ready_tokens(self.store.value, self.stop)
+            self.assertEqual(renewed["access_token"], "renewed-app-token")
+            self.assertEqual(request.call_args.kwargs["form"], {"grant_type": "client_credentials"})
+
+    def test_public_profile_validation_fails_before_credentials_or_network_change(self):
+        before = dict(self.store.value)
+        for profile in ("", "http://soundcloud.com/user", "https://example.invalid/user",
+                        "https://soundcloud.com/user/likes", "https://soundcloud.com/user?token=secret",
+                        "https://soundcloud.com@evil.invalid/user", "https://soundcloud.com/user#fragment"):
+            with self.subTest(profile=profile), patch.object(sc, "_json_request") as request:
+                with self.assertRaises(sc.ConnectionError):
+                    self.connection.connect_public("id", "secret", profile, self.stop, self.progress.append)
+                request.assert_not_called()
+                self.assertEqual(self.store.value, before)
+
+    def test_public_profile_change_failure_discards_old_likes_but_keeps_reusable_app_token(self):
+        self.store.value.update(mode="public", public_profile="https://soundcloud.com/old-user")
+        with patch.object(sc, "_json_request", side_effect=lambda url, **kw:
+                {"kind": "user", "id": 1, "username": "Old user"} if "/resolve?" in url else {"collection": [track()]}):
+            self.connection.refresh(self.stop, self.progress.append)
+        with patch.object(sc, "_json_request", side_effect=sc.ConnectionError("offline")), self.assertRaises(sc.ConnectionError):
+            self.connection.connect_public("private-id", "private-secret", "https://soundcloud.com/new-user",
+                                           self.stop, self.progress.append)
+        self.assertEqual(self.connection.entries(), ())
+        self.assertFalse(self.connection.status()["connected"])
+        self.assertFalse((self.connection.root / "likes.json").exists())
+        self.assertEqual(self.store.value["refresh_token"], "private-refresh")
+
+    def test_public_cancel_and_invalid_resolved_resource_fail_closed(self):
+        before = dict(self.store.value)
+        self.stop.set()
+        with patch.object(sc, "_json_request") as request, self.assertRaises(sc.Cancelled):
+            self.connection.connect_public("id", "secret", "https://soundcloud.com/test-user", self.stop, self.progress.append)
+        request.assert_not_called()
+        self.assertEqual(self.store.value, before)
+        self.stop.clear()
+        self.store.value.update(mode="public", public_profile="https://soundcloud.com/test-user")
+        with patch.object(sc, "_json_request", return_value={"kind": "track", "id": 42}) as request, \
+                self.assertRaises(sc.ConnectionError):
+            self.connection.refresh(self.stop, self.progress.append)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(self.connection.entries(), ())
+
+    def test_basic_auth_and_resolve_redirect_only_forward_to_exact_api_user_endpoint(self):
+        from email.message import Message
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"kind":"user","id":42}'
+        for location, allowed in (("https://api.soundcloud.com/users/42", True),
+                                  ("https://evil.invalid/users/42", False),
+                                  ("http://api.soundcloud.com/users/42", False),
+                                  ("https://api.soundcloud.com/tracks/42", False),
+                                  ("https://api.soundcloud.com/users/42?token=x", False)):
+            headers = Message()
+            headers["Location"] = location
+            redirect = urllib.error.HTTPError("https://api.soundcloud.com/resolve", 302, "Found", headers, io.BytesIO())
+            opener = MagicMock()
+            opener.open.side_effect = [redirect, response]
+            with self.subTest(location=location), patch.object(sc.urllib.request, "build_opener", return_value=opener):
+                if allowed:
+                    self.assertEqual(sc._json_request("https://api.soundcloud.com/resolve?url=profile", token="secret-token",
+                                                      resolve_user=True)["id"], 42)
+                    self.assertEqual(opener.open.call_count, 2)
+                    request = opener.open.call_args.args[0]
+                    self.assertEqual(request.full_url, location)
+                    self.assertEqual(request.get_header("Authorization"), "OAuth secret-token")
+                else:
+                    with self.assertRaises(sc.ConnectionError):
+                        sc._json_request("https://api.soundcloud.com/resolve?url=profile", token="secret-token", resolve_user=True)
+                    self.assertEqual(opener.open.call_count, 1)
+        opener = MagicMock()
+        opener.open.return_value = response
+        with patch.object(sc.urllib.request, "build_opener", return_value=opener):
+            sc._json_request("https://secure.soundcloud.com/oauth/token", form={"grant_type": "client_credentials"},
+                             basic=("id", "secret"))
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Basic " + base64.b64encode(b"id:secret").decode())
+        self.assertEqual(request.data, b"grant_type=client_credentials")
+
+    def test_unmatched_or_ambiguous_likes_fall_back_to_general_art_search(self):
+        for candidates in ([], [{"score": 0.99}, {"score": 0.98}]):
+            with self.subTest(candidates=candidates), \
+                    patch.object(discovery, "_liked_candidates", return_value=candidates), \
+                    patch.object(discovery, "fetch_by_search", return_value="general art") as search:
+                self.assertEqual(discovery.fetch_best("Artist", "Song"), "general art")
+                search.assert_called_once_with("Artist", "Song")

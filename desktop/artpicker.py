@@ -33,12 +33,13 @@ class _CandidateSearch(QThread):
     found = Signal(dict, bytes)
     done = Signal(int)  # how many results total
 
-    def __init__(self, artist: str, title: str, provider: ArtworkProvider):
+    def __init__(self, artist: str, title: str, provider: ArtworkProvider, *, limit=None):
         super().__init__()
         self.provider = provider
         self.artist = artist
         self.title = title
         self._stop = False
+        self.limit = limit
 
     def stop(self):
         self._stop = True
@@ -51,7 +52,7 @@ class _CandidateSearch(QThread):
         except Exception:  # noqa: BLE001 — offline/blocked: URL + file still work
             cands = []
         n = 0
-        for c in cands:
+        for c in cands[:self.limit]:
             if self._stop:
                 break
             try:
@@ -78,7 +79,7 @@ class ArtPickerDialog(QDialog):
         self._count = 0
 
         v = QVBoxLayout(self)
-        head = QLabel(f"Cover art for:  {artist or 'Unknown Artist'} — {title}")
+        head = QLabel(f"Cover art for:  {title}")
         head.setWordWrap(True)
         v.addWidget(head)
 

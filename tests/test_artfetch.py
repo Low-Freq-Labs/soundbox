@@ -547,28 +547,12 @@ class ArtWorkerProvenance(unittest.TestCase):
         from soundbox_personal import discovery as artfetch
         from soundbox.library import Library, Track
 
-        class Cache:
-            def __init__(self):
-                self.stores = []
-
-            def status(self, _track_id):
-                return None
-
-            def store_ok(self, track_id, result, **kwargs):
-                self.stores.append((track_id, result, kwargs))
-
-            def store_none(self, _track_id):
-                self.fail("automatic fetch unexpectedly missed")
-
-            def rebalance_default_photos(self):
-                pass
-
         with tempfile.TemporaryDirectory() as td:
             audio = Path(td) / "song.mp3"
             audio.touch()
             track = Track("1", "Artist - Song", "Artist", audio.as_uri())
             lib = Library({"1": track}, [], "test")
-            cache = Cache()
+            cache = artfetch.ArtCache(Path(td) / "art")
             result = artfetch.ArtResult(
                 b"image", "image/jpeg", 0.9,
                 "https://soundcloud.com/artist/song", "Artist - Song")
@@ -580,6 +564,4 @@ class ArtWorkerProvenance(unittest.TestCase):
                 worker.run()
             finally:
                 artfetch.fetch_best = real
-            self.assertEqual(cache.stores[0][0], "1")
-            self.assertEqual(cache.stores[0][2], {
-                "origin": "auto", "rebalance_defaults": False})
+            self.assertEqual(cache.index["1"]["origin"], "auto")

@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import sys
 from threading import Event
-from typing import Protocol, TypedDict, cast
+from typing import NotRequired, Protocol, TypedDict, cast
 
 from .artwork import ArtResult
 
@@ -36,6 +36,13 @@ class Candidate(TypedDict):
     thumb: str
     url: str
     score: float
+    liked: NotRequired[bool]
+    artist_upload: NotRequired[bool]
+    excerpt: NotRequired[bool]
+    version_upload: NotRequired[bool]
+    publisher_rank: NotRequired[int]
+    possible: NotRequired[bool]
+    reason: NotRequired[str]
 
 
 class ArtworkProvider(Protocol):
@@ -53,7 +60,9 @@ class ArtistProvider(Protocol):
 
 class ConnectionService(Protocol):
     def status(self) -> dict: ...
-    def credentials(self) -> tuple[str, str]: ...
+    def credentials(self) -> tuple[str, str, str]: ...
+    def connect_public(self, client_id: str, client_secret: str, profile: str,
+                       stop: Event, progress: Callable[[str], None]) -> None: ...
     def connect(self, client_id: str, client_secret: str, stop: Event,
                 browser: Callable[[str], None], progress: Callable[[str], None]) -> None: ...
     def refresh(self, stop: Event, progress: Callable[[str], None]) -> None: ...

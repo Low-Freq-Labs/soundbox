@@ -323,6 +323,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._default_photo_worker = None  # managed pool image normalization
         self._refresh_worker: RefreshWorker | None = None
         self._refresh_pending = False
+        self._rekordbox_source_verified = False
+        self._rekordbox_connection_error = ""
         self._libcache_worker = None
         self._libcache_pending = None
         self._import_location_worker = None
@@ -457,6 +459,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._state_repository = StateRepository(self._data_file)
         data = self._state_repository.load()
         self.art_cache.read_only = not self._state_repository.writable
+        self._configure_art_sources()
         recovery = self._state_repository.recovery
         if recovery is not None:
             message = (f"Restored {recovery.backup.name}. Recent edits may be missing."
@@ -482,6 +485,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         }
         self.aliases = data.get("artist_aliases") or {}
         self._last_xml = data.get("last_xml") or ""
+        self._rekordbox_source_verified = False
+        self._rekordbox_connection_error = ""
         # User settings (extensible — this is the runway for future toggles).
         self.settings = {**_DEFAULT_SETTINGS, **(data.get("settings") or {})}
         self.settings["title_rules_off"] = metadata.normalize_title_rules_off(
@@ -518,12 +523,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # Auto-load on launch: live rekordbox DB first, else the last XML
         # fallback. This runs REGARDLESS of the snapshot paint above — the
         # snapshot is a stand-in until the authoritative source loads over it.
+        self._sync_rekordbox_connection()
         if self._isolated:
             return
-        if rekordbox_db.db_available():
+        if rekordbox_db.db_available(self._rekordbox_database_path()):
             self._refresh_rekordbox()
         elif self._last_xml and Path(self._last_xml).is_file():
             self.open_library(self._last_xml)
+        self._sync_rekordbox_connection()
 
     def _save_state(self) -> bool:
         """Write the portable SoundBox library (overrides + custom playlists)."""
@@ -760,13 +767,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._cue_key_down = False
                 pb._cue_release()
             return release
-        if action.startswith(("cues.slot.", "hot.", "memory.")):
+        if action.startswith("cues.slot."):
             panel = pb.cue_panel
             slot = int(action.rsplit(".", 1)[1])
-            if action.startswith("cues.slot."):
-                kind = "hot" if panel.pages.currentIndex() == 0 else "memory"
-            else:
-                kind = action.split(".")[0]
+            kind = "hot" if panel.pages.currentIndex() == 0 else "memory"
             if panel._loaded and panel._cues[kind][slot] is not None:
                 for _held_action, held_release in self._keyboard_router.held.values():
                     if getattr(held_release, "cue_control", None) == (kind, slot):
@@ -1077,7 +1081,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _advance_autoplay(self, ended_track_id: str):
         """Advance only after an ordinary playing transport reaches its end."""
-        if (not self._autoplay_mode
+        if (getattr(self, "_review_audition_active", False)
+                or not self._autoplay_mode
                 or self.lib is None
                 or self.player_bar.current_track() != ended_track_id
                 or self._autoplay_index is None
@@ -1696,6 +1701,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     # ---------- open / load ----------
     def _open_dialog(self):
+        if self._refresh_worker is not None or self._state_maintenance or self._device_operation_owned():
+            return
         start = str(Path.home() / "Desktop")
         path, _ = QFileDialog.getOpenFileName(self, "Open Rekordbox XML", start,
                                               "rekordbox XML (*.xml)")
@@ -1705,15 +1712,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def open_library(self, path: str):
         try:
             self.lib = engine.load_library(path)
-        except (FileNotFoundError, OSError) as exc:
+        except Exception as exc:  # parser failures also retain the previous library
             LOG.exception("Load failed: %s", path)
             QMessageBox.critical(self, "Load failed", str(exc))
             return
         LOG.info("Loaded %s: %d tracks, %d playlists",
                  Path(path).name, self.lib.track_count, len(self.lib.playlists))
         self._last_xml = path  # remember for next launch
+        self._rekordbox_source_verified = True
+        self._rekordbox_connection_error = ""
         self._save_state()
         self._apply_loaded_library()
+        self._sync_rekordbox_connection()
         self._refresh_devices()
         self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
@@ -1740,6 +1750,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             LOG.info("Repaired duration/size metadata for %d imported track(s)",
                      repaired)
             self._save_state()
+        loaded = self.lib.tracks_by_id.get(self.player_bar.current_track())
+        if loaded is not None:
+            self.player_bar.refresh_live_cues(
+                loaded.track_id, loaded.path, getattr(loaded, "source_cues", None))
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
@@ -1878,8 +1892,46 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._accordion_guard = False
 
     # ---------- live rekordbox refresh ----------
+    def _rekordbox_database_path(self) -> Path:
+        return Path(self.settings.get("rekordbox_db_path") or rekordbox_db.REKORDBOX_DB).expanduser()
+
+    def _sync_rekordbox_connection(self):
+        section = getattr(self, "_rekordbox_section", None)
+        if section is None:
+            return
+        busy = (self._refresh_worker is not None or self._state_maintenance
+                or self._shutting_down or self._device_operation_owned())
+        source = str(self.lib.source) if self.lib else ""
+        if self._refresh_worker is not None:
+            status = "Reading database snapshot…"
+        elif self._rekordbox_connection_error:
+            status = "Last refresh failed · " + self._rekordbox_connection_error
+        elif self.lib and self._rekordbox_source_verified:
+            kind = "XML export" if self.lib.source_kind == "rekordbox-xml" else "Database"
+            status = f"{kind} loaded · {self.lib.track_count:,} tracks · {len(self.lib.playlists):,} playlists"
+        elif self.lib:
+            status = "Saved snapshot · source not yet verified this session"
+        else:
+            status = "Not loaded · choose a database or XML export"
+        section.set_state(status, str(self._rekordbox_database_path()), source,
+                          busy=busy, custom=bool(self.settings.get("rekordbox_db_path")))
+
+    def _choose_rekordbox_database(self):
+        if self._refresh_worker is not None or self._state_maintenance or self._device_operation_owned():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose rekordbox database", str(self._rekordbox_database_path().parent),
+            "rekordbox database (*.db)")
+        if path:
+            self._start_rekordbox_refresh(Path(path), selection=True)
+
+    def _use_default_rekordbox_database(self):
+        if self._refresh_worker is not None or self._state_maintenance or self._device_operation_owned():
+            return
+        self._start_rekordbox_refresh(rekordbox_db.REKORDBOX_DB, selection=True)
+
     def _refresh_rekordbox(self):
-        if getattr(self, "_state_maintenance", False):
+        if self._shutting_down or getattr(self, "_state_maintenance", False):
             return
         if self._refresh_worker is not None:
             # A click during the snapshot is a request for a newer point in
@@ -1889,20 +1941,45 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # so ownership—not isRunning()—is the serialization boundary.
             self._refresh_pending = True
             return
+        self._start_rekordbox_refresh(self._rekordbox_database_path())
+
+    def _start_rekordbox_refresh(self, path: Path, *, selection=False):
+        if self._shutting_down or self._state_maintenance or self._refresh_worker is not None:
+            return
         if not self._device_operation_owned():
             self._start_pulse("Loading")
-        w = RefreshWorker()
+        w = RefreshWorker(path)
+        if selection:
+            w.selection_path = str(path)
         self._refresh_worker = w
-        w.done.connect(self._on_refresh_done)
-        w.failed.connect(self._on_refresh_fail)
         w.finished.connect(lambda ww=w: self._finish_refresh_worker(ww))
+        self._sync_rekordbox_connection()
         w.start()
 
     def _finish_refresh_worker(self, w):
         current = self._refresh_worker is w
+        result, error = getattr(w, "result", None), getattr(w, "error", "")
+        selection = getattr(w, "selection_path", None)
         self._finish_worker("_refresh_worker", w)
         if not current:
             return
+        if not self._shutting_down:
+            if result is not None:
+                if selection is not None:
+                    previous = dict(self.settings)
+                    if Path(selection) == rekordbox_db.REKORDBOX_DB:
+                        self.settings.pop("rekordbox_db_path", None)
+                    else:
+                        self.settings["rekordbox_db_path"] = selection
+                    if not self._save_state():
+                        self.settings = previous
+                        result = None
+                        error = "Database selection could not be saved; the previous library is retained."
+                if result is not None:
+                    self._on_refresh_done(result)
+            if error:
+                self._on_refresh_fail(error)
+            self._sync_rekordbox_connection()
         pending = self._refresh_pending
         self._refresh_pending = False
         if pending and not self._shutting_down:
@@ -1912,10 +1989,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not self._device_operation_owned():
             self._stop_pulse()
         self.lib = lib
+        self._rekordbox_source_verified = True
+        self._rekordbox_connection_error = ""
         self._apply_loaded_library()
         self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
+        self._sync_rekordbox_connection()
         if not self._device_operation_owned():
             self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
@@ -1926,6 +2006,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _on_refresh_fail(self, err):
+        self._rekordbox_connection_error = err
+        self._sync_rekordbox_connection()
         if not self._device_operation_owned():
             self._set_status_text("Ready")
         LOG.error("rekordbox refresh failed: %s", err)
@@ -1944,7 +2026,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 menu.addAction("Stop fetching cover art", self._stop_art_fill)
             else:
                 menu.addAction("Fetch cover art (background)", self._start_art_fill)
-            menu.addAction("Re-scan covers (missing + upgrade avatars)", self._rescan_covers)
+            menu.addAction("Re-scan missing covers + automatic avatars", self._rescan_covers)
         if self.providers.allows("artists.suggest"):
             menu.addAction("Suggest artists for Unknowns…", self._suggest_artists)
         menu.addAction("Suggest artist merges…", self._suggest_merges)
@@ -2048,10 +2130,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     @_art_ui_action
     @_provider_action("artwork.search")
     def _rescan_covers(self):
-        """One button: re-attempt tracks with no art AND upgrade artist-avatar
-        fallbacks toward a real track cover. Keeps confirmed real covers, reuses
-        your artist corrections, and restarts any in-progress fill so the freshly
-        cleared entries actually get picked up."""
+        """Retry misses and explicitly automatic avatars. Manual and unrecorded
+        artwork are protected, regardless of confidence or source URL."""
         cleared = self.art_cache.retry_weak()
         LOG.info("Re-scan: cleared %d (missing + avatars) for a fresh pass", cleared)
         self._start_art_fill(restart=True)
@@ -5499,6 +5579,55 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                                   rename_bindings=self._keyboard_router.keymap.bindings("browser.rename"))
         dlg.exec()  # persistent: user fixes any number of artists, then closes
 
+    def _configure_art_sources(self):
+        configure = getattr(self.providers.artwork, "configure_source_exclusions", None)
+        if callable(configure):
+            configure(self.art_cache.source_exclusions())
+        if getattr(self, "lib", None) is not None and not getattr(self, "_shutting_down", False):
+            self.model.refresh_art(self.art_cache.status_kind)
+            if any(self.art_cache.source_excluded(tid) for tid in self.lib.tracks_by_id):
+                self._start_art_fill(restart=True)
+
+    def _open_art_review(self):
+        from .artreview import ArtReviewDialog
+        if self.lib is None:
+            self._flash_status("Load a library to review covers", 6)
+            return
+        rows = []
+        for tid, track in self.lib.tracks_by_id.items():
+            if tid in self.lib.hidden_ids or self.art_cache.status(tid) != "ok":
+                continue
+            title = self.titles.get(tid) or track.name
+            artist = metadata.effective_artist(
+                tid, title, track.artist, self.overrides, True,
+                self.lib.artist_registry, stem=track.path.stem)
+            origin = self.art_cache.index[tid].get("origin")
+            label = {"manual": "Manual", "auto": "Automatic"}.get(origin, "Unrecorded history")
+            priority = 0 if origin == "auto" else 2 if origin == "manual" else 1
+            rows.append((priority, tid, artist, title, label))
+        rows.sort(key=lambda row: (row[0], row[2].casefold(), row[3].casefold()))
+        provider = self.providers.artwork if self.providers.allows("artwork.search") else None
+        def audition(tid):
+            track = self.lib.tracks_by_id.get(tid) if self.lib else None
+            if track is None:
+                return False
+            self._review_audition_active = True
+            return self._open_track(track, autoplay=True, capture_autoplay=False)
+        dlg = ArtReviewDialog(self.art_cache, [row[1:] for row in rows], self, provider=provider,
+                             player=self.player_bar, play_track=audition)
+        dlg.audition.stopped.connect(lambda: setattr(self, "_review_audition_active", False))
+        dlg.changed.connect(self._review_art_changed)
+        dlg.exclusions_changed.connect(self._configure_art_sources)
+        try:
+            dlg.exec()
+        finally:
+            dlg.shutdown()
+            self._review_audition_active = False
+
+    def _review_art_changed(self, tid):
+        self.model.refresh_art(self.art_cache.status_kind)
+        self._queue_stock_artwork((tid,))
+
     def _open_default_photos(self):
         from .defaultphotos import DefaultPhotosDialog
 
@@ -5765,7 +5894,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         idx = self.art_cache.index
         fresh = sum(1 for tid in self.lib.tracks_by_id if tid not in idx)
-        if fresh:
+        excluded = sum(self.art_cache.source_excluded(tid) for tid in self.lib.tracks_by_id)
+        if fresh or excluded:
             LOG.info("Art fill autostart: %d new track(s) without cache entries", fresh)
             self._start_art_fill()
 
@@ -5793,8 +5923,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         w.set_playback_active(self.player_bar.is_playing())
         w.progress.connect(self._on_art_progress)
         w.failed.connect(self._on_art_persistence_failed)
+        w.profile_changed.connect(self._on_profile_art_changed)
         w.finished.connect(lambda ww=w: self._on_art_finished(ww))
         w.start()
+
+    def _on_profile_art_changed(self, tid):
+        self.model.refresh_art(self.art_cache.status_kind)
+        from .artreview import ArtReviewDialog
+        for dialog in self.findChildren(ArtReviewDialog):
+            dialog.refresh_profile(tid)
 
     def _on_art_persistence_failed(self, message):
         LOG.error("Artwork pass stopped: %s", message)
@@ -6429,6 +6566,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             pass
         self._art_restart = False  # don't let a pending re-scan restart during teardown
         self._stock_art_rescan = False
+        from .reviewplayer import ReviewPlayer
+        for audition in self.findChildren(ReviewPlayer):
+            audition.shutdown()
         self._device_coordinator.cancel(shutdown=True)
         self._pending_device_operation = None
         self._dual_sync_queue.clear()

@@ -1,6 +1,6 @@
 # SoundBox exploratory ideas
 
-Reviewed October 9, 2026. These are concepts requiring a UX workshop with Sonny,
+Reviewed October 25, 2026. These are concepts requiring a UX workshop with Sonny,
 not active tasks or approved changes. Committed sequencing belongs in
 [ROADMAP](ROADMAP.md); current player behavior belongs in [PLAYER](PLAYER.md).
 The original July 22 proposal is preserved in Git history.
@@ -8,6 +8,33 @@ The original July 22 proposal is preserved in Git history.
 Keep the existing interface focused. Choose small, useful additions rather than
 implementing this list wholesale. Preserve source audio and the read-only
 rekordbox boundary.
+
+## Artwork decisions as ranking evidence — October 25 findings
+
+Sonny asked whether Keeps and replacements can improve future selection. A local
+read-only audit of saved decisions and prepared candidates found useful patterns:
+existing artist/label art often beats a repost; matching artist prefixes can
+inflate the score for a different song; nested or informal edit credits can be
+lost; stripping years can equate distinct live-event recordings; genuine
+profile-to-track-cover upgrades are useful. Some replacements
+intentionally use another song's artwork, as Sonny explicitly confirmed. Keep
+means the current image is preferred in this context, not that every alternate
+is bad or the uploader should be excluded.
+The reported SPASS candidate came from the explicitly named Plate Selling
+account; the seller-role rules now include bare plate plus selling/trading forms.
+
+Shipped per-track decisions protect approved covers. Duplicate tracking links
+and equivalent resized/recompressed images are separately filtered from review.
+Cross-track learning is not implemented. Possible future work: retain a small
+local decision record with the exact displayed candidate and action, distinguish
+artwork preference from recording identity, compare candidate evidence against
+the existing source before suggesting a downgrade, and evaluate ranking changes
+against both accepted and rejected examples. Never infer blanket publisher trust,
+new artist aliases or song equivalence from an artwork choice. Keep broad manual
+choices available and preserve explicit decisions across matcher changes.
+
+These are evidence-led design findings, not authorization for automatic cover
+replacement or an implemented training system.
 
 | Idea | Existing foundation | Possible future addition |
 | --- | --- | --- |
