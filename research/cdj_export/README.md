@@ -18,9 +18,11 @@ Full plan, status, and next steps: [CDJ export research](../../docs/cdj-usb-expo
   playlist_tree, playlist_entries).
 - `tracks.py` — the `track_row` codec (136-byte scalar header + 21 string
   pointers): decode to fields, and generate a valid row.
-- `anlz_bridge.py` — a pure mapping from canonical SoundBox analysis to the
-  proposed ANLZ field contract; covered by synthetic tests, not a complete
-  binary tag/container encoder or a device writer.
+- `anlz_bridge.py` — strict candidate grid/cue field validation, separately typed
+  display intermediates and unmodified packed waveform streams. It rejects
+  invalid musical values instead of clamping/substituting them; it does not
+  encode native tags/containers or authorize a device write. Fresh DB cues are
+  required for future export because source ANLZ cues can lag accepted DB edits.
 
 ## Checking it
 

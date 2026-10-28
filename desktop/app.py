@@ -93,7 +93,7 @@ def setup_logging() -> Path | None:
     return logpath
 
 from PySide6.QtCore import (
-    QEvent, QFileSystemWatcher, QPointF, QProcess, QRect, QSize, Qt, QThread,
+    QEvent, QFileSystemWatcher, QPointF, QProcess, QRect, QRectF, QSize, Qt, QThread,
     QTimer, QItemSelectionModel,
 )
 from PySide6.QtGui import (
@@ -109,7 +109,7 @@ from PySide6.QtWidgets import (
 
 
 from soundbox import (
-    engine, file_locations, imports, libcache,
+    browser_cache, engine, file_locations, imports, libcache,
     manifest as device_manifest, metadata, paths, rekordbox_db,
     rockbox_config, track_analysis,
 )
@@ -224,6 +224,58 @@ def _autoplay_arrow_icon(direction: int) -> QIcon:
     painter.drawPolygon(QPolygonF(points))
     painter.end()
     return QIcon(pixmap)
+
+class InfoPlaceholderButton(QPushButton):
+    """Reserved information control; paint from live theme roles, not an asset."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("InfoPlaceholder")
+        self.setFixedSize(29, 34)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAccessibleName("Track information")
+        self.setToolTip("Track information · Coming soon")
+        self.setEnabled(False)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        center = self.rect().center()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(theme.TEXT_DIM))
+        painter.drawEllipse(QRectF(center.x() - 8, center.y() - 8, 16, 16))
+        font = painter.font()
+        font.setPixelSize(13)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(theme.PANEL2))
+        painter.drawText(self.rect(), Qt.AlignCenter, "i")
+
+
+def _cap_browser_scrollbar(view, header):
+    """Reserve the header row above the actual vertical scrollbar hit area."""
+    cap = QWidget(view)
+    cap.setObjectName("BrowserScrollCap")
+    cap.setAttribute(Qt.WA_StyledBackground, True)
+    cap.setFixedHeight(header.height())
+    view.addScrollBarWidget(cap, Qt.AlignTop)
+
+
+class FooterBar(QWidget):
+    """Keep the footer divider under content, with a seamless utility corner."""
+
+    def __init__(self, rail, parent=None):
+        super().__init__(parent)
+        self._rail = rail
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        inset = self._rail.width() if self._rail.isVisible() else 0
+        painter = QPainter(self)
+        painter.setPen(QColor(theme.BORDER))
+        painter.drawLine(0, 0, self.width() - inset - 1, 0)
+
 
 def _art_ui_action(method):
     @wraps(method)
@@ -383,10 +435,16 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._deleting = False
         self._pending_device_operation = None
         self._accordion_guard = False
+        self._prep_update_message = ''
         self.tag_controller = TagEditController(data_dir, self)
         self.grid_controller = GridEditController(self.tag_controller, self,
                                                   cache_dir=self._track_analysis_dir,
                                                   prepare_cache=self._prepare_grid_cache)
+        # Apply saved chrome before building thousands of child widgets. Loading
+        # state again later would also lose the repository's recovery receipt.
+        self._initial_state = self._state_repository.load()
+        self.settings.update(self._initial_state.get('settings') or {})
+        self._apply_theme_color(self.settings.get('theme_accent'), save=False)
         self._build_ui()
         self.player_bar.analysis_cache_admitted = lambda tid: not self.grid_controller.pending(tid)
         self.tag_controller.changed.connect(self._sync_tags)
@@ -402,7 +460,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.grid_controller.saved.connect(self._grid_saved)
         self.grid_controller.failed.connect(self._tag_failed)
         self.grid_controller.rejected.connect(lambda text: self._flash_status(text, 10))
-        QApplication.instance().installEventFilter(self)  # Space transport + C cue
         # Animated dots for transient states (FINALIZING…, Cancelling…).
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(300)
@@ -419,7 +476,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._settings_save_timer = QTimer(self)
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.setInterval(400)
-        self._settings_save_timer.timeout.connect(self._save_state)
+        self._settings_save_timer.timeout.connect(
+            lambda: self._save_state(invalidate_views=False))
         self._art_status_timer = QTimer(self)
         self._art_status_timer.setSingleShot(True)
         self._art_status_timer.setInterval(500)
@@ -466,11 +524,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # filesystem walk. Legacy records use one strict indexed migration.
         QTimer.singleShot(0, self._repair_import_locations)
         self.table.setFocus()  # open browsing (transport keys, arrows), not typing
+        # Startup geometry/style restoration emits thousands of child events.
+        # Input routing begins once construction is complete; the native host's
+        # own geometry filter remains active throughout initialization.
+        QApplication.instance().installEventFilter(self)
 
     # ---------- persistence ----------
     def _load_state(self):
-        self._state_repository = StateRepository(self._data_file)
-        data = self._state_repository.load()
+        if hasattr(self, '_initial_state'):
+            data = self._initial_state
+            del self._initial_state
+        else:
+            self._state_repository = StateRepository(self._data_file)
+            data = self._state_repository.load()
         self.art_cache.read_only = not self._state_repository.writable
         self._configure_art_sources()
         recovery = self._state_repository.recovery
@@ -547,12 +613,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.open_library(self._last_xml)
         self._sync_rekordbox_connection()
 
-    def _save_state(self) -> bool:
+    def _save_state(self, *, invalidate_views=True) -> bool:
         """Write the portable SoundBox library (overrides + custom playlists)."""
         timer = getattr(self, "_settings_save_timer", None)
         if timer is not None:
             timer.stop()
-        self._sync_playlists_cache = None
+        if invalidate_views:
+            self._sync_playlists_cache = None
         try:
             if self._state_publication:
                 return False
@@ -609,9 +676,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _annotate_art(self, rows: list[dict]) -> list[dict]:
         """Stamp each row with cover/avatar/default/blank status for Art."""
+        kinds = self.art_cache.status_kinds(r.get('id', '') for r in rows)
         for r in rows:
-            r["art"] = self.art_cache.status_kind(r.get("id", ""))
+            r["art"] = kinds[r.get('id', '')]
         return rows
+
+    def _refresh_model_art(self):
+        kinds = self.art_cache.status_kinds(r.get('id', '') for r in self.model._all_rows)
+        self.model.refresh_art(lambda tid: kinds.get(tid, ''))
 
     # ---------- computed-row cache (fast playlist clicks) ----------
     def _row_for(self, t) -> dict:
@@ -641,6 +713,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         A generation change rejects old worker results; the next warm computes
         only missing rows and preserves unaffected cached values.
         """
+        self._browser_cache_key = None  # never checkpoint rows under stale inputs
         if track_ids is None:
             self._row_cache.clear()
         else:
@@ -662,7 +735,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         lib, ov, ti, junk = self.lib, dict(self.overrides), dict(self.titles), self._title_junk()
         reg = lib.artist_registry
         tracks = [t for t in lib.tracks_by_id.values()
-                  if t.track_id not in self._row_cache]
+                  if t.track_id not in self._row_cache and t.track_id not in lib.hidden_ids]
         if not tracks:
             return
 
@@ -679,7 +752,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _finish_row_warm(self, worker):
         self._finish_worker("_warm_worker", worker)
         if (not self._shutting_down and not self._state_maintenance and self.lib
-                and self._row_cache.keys() < self.lib.tracks_by_id.keys()):
+                and (self.lib.tracks_by_id.keys() - self.lib.hidden_ids
+                     - self._row_cache.keys())):
             self._warm_timer.start()
 
     def _on_rows_warmed(self, res, gen: int) -> None:
@@ -716,8 +790,41 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                       and (t := self.lib.tracks_by_id.get(i))]
             self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, '_browser_columns_shown', False):
+            self._browser_columns_shown = True
+            if not self.settings.get('columns_state'):
+                header = self.table.horizontalHeader()
+                fixed = sum(header.sectionSize(i) for i in range(1, len(COLUMNS)))
+                header.resizeSection(0, max(header.minimumSectionSize(),
+                                            self.table.viewport().width() - fixed))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if (getattr(self, '_browser_columns_shown', False)
+                and event.oldSize().isValid() and not self.table.isColumnHidden(0)):
+            delta = event.size().width() - event.oldSize().width()
+            if delta > 0:
+                self._resize_title(delta)
+
+    def _resize_title(self, delta):
+        header = self.table.horizontalHeader()
+        header.resizeSection(0, max(header.minimumSectionSize(),
+                                    header.sectionSize(0) + delta))
+
     # ---------- player ----------
     def eventFilter(self, obj, ev):
+        if (obj is self and ev.type() == QEvent.Resize
+                and getattr(self, '_browser_columns_shown', False)
+                and ev.oldSize().isValid() and not self.table.isColumnHidden(0)):
+            delta = ev.size().width() - ev.oldSize().width()
+            if delta < 0:
+                # QMainWindow lays out its children before resizeEvent runs.
+                # Shrink Title here, before that narrower viewport can briefly
+                # overflow and flash a horizontal scrollbar. Growth follows
+                # layout in resizeEvent, after the extra room exists.
+                self._resize_title(delta)
         if (getattr(self, "now_playing", None) is obj
                 and ev.type() == QEvent.MouseButtonRelease
                 and ev.button() == Qt.LeftButton):
@@ -988,7 +1095,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         pb.set_track_navigation(idx > 0, idx + 1 < len(order))
 
     def _play_relative(self, direction: int):
-        """Play the previous/next visible track without wrapping at the ends."""
+        """Load the adjacent visible track, preserving ordinary playback intent."""
         if self.lib is None:
             return
         order = self._player_order()
@@ -1003,7 +1110,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         track = self.lib.tracks_by_id.get(order[target])
         if track is not None:
-            self._play_track(track)
+            self._load_track(track)
 
     def _load_track(self, t):
         """Load at the first grid beat, preserving ordinary playback intent."""
@@ -1244,6 +1351,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         divider.setAttribute(Qt.WA_StyledBackground, True)
         bl.addWidget(divider)
         bl.addWidget(self._main_stack(), 1)
+        self.info_rail = QWidget()
+        self.info_rail.setObjectName("InfoRail")
+        self.info_rail.setAttribute(Qt.WA_StyledBackground, True)
+        self.info_rail.setFixedWidth(30)
+        rail = QVBoxLayout(self.info_rail)
+        rail.setContentsMargins(1, 0, 0, 0)
+        rail.setSpacing(0)
+        rail.addStretch(1)
+        self.info_placeholder = InfoPlaceholderButton(self.info_rail)
+        rail.addWidget(self.info_placeholder)
+        rail.addStretch(1)
+        bl.addWidget(self.info_rail)
         self.body_stack.addWidget(body)
 
         # page 1: full-page Settings
@@ -1409,15 +1528,27 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.bpm_value.invalid.connect(lambda message: self._flash_status(message, 8))
         for index, button in enumerate(self.grid_edit_buttons):
             row.addWidget(button)
+            row.addStretch(1)
             if index == 0:
                 row.addWidget(self.bpm_value)
+                row.addStretch(1)
         self.quantize_btn = quantize_button(prep)
         self.quantize_btn.toggled.connect(self._set_quantize)
         row.addWidget(self.quantize_btn)
         row.addStretch(1)
-        self.tag_status = QLabel("")
-        self.tag_status.setObjectName("TagStatus")
-        row.addWidget(self.tag_status)
+        self.playback_time = QLabel(self.player_bar.playback_time_text)
+        self.playback_time.setObjectName("PlaybackTime")
+        self.playback_time.setAccessibleName("Playback time")
+        clock_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        clock_font.setPixelSize(13)
+        self.playback_time.setFont(clock_font)
+        self.playback_time.setAlignment(Qt.AlignCenter)
+        self.playback_time.setFixedHeight(28)
+        self.playback_time.setMinimumWidth(
+            self.playback_time.fontMetrics().horizontalAdvance("00:00:00/00:00:00") + 12)
+        self.player_bar.playback_time_changed.connect(self.playback_time.setText)
+        row.addWidget(self.playback_time)
+        row.addStretch(1)
         self.my_tags = MyTagsButton()
         self.my_tags.setFixedHeight(28)
         self.my_tags.setFixedWidth(self.player_bar.cue_panel.width() - 6)
@@ -1425,6 +1556,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.my_tags.popup.aboutToShow.connect(self._probe_tags)
         self.my_tags.assignment_requested.connect(self._assign_tag)
         row.addWidget(self.my_tags)
+        row.addStretch(1)
         row.addWidget(gear)
         row.addSpacing(10)  # Gear ends at the waveform edge; Search starts at the cue slots.
         row.addWidget(self.search)
@@ -1465,9 +1597,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not reason and (pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
                            or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox'):
             reason = 'This track has a SoundBox manual grid'
-        for button in self.grid_edit_buttons:
+        step = pb.grid_nudge_ms()
+        for index, button in enumerate(self.grid_edit_buttons):
             button.setEnabled(not reason)
-            button.setToolTip(button.accessibleName() + ('\n' + reason if reason else ''))
+            detail = f'\n{step} ms · Shift: {step * 3} ms' if index in (1, 2) else ''
+            button.setToolTip(button.accessibleName() + detail + ('\n' + reason if reason else ''))
         bpm_reason = reason or self.grid_controller.bpm_reason(pb.current_track())
         self.bpm_value.set_editable(not bpm_reason, bpm_reason)
         self._sync_prep_bpm()
@@ -1481,6 +1615,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if track is not None and view is not None and not manual:
             pb.refresh_live_grid(track_id, track.path, view[0], view[1])
         self._sync_grid()
+        self._sync_edit_status()
 
     def _edit_grid(self, operation, value=0, *, track_id=None):
         self._sync_grid()
@@ -1509,7 +1644,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             LOG.info('Grid bar start requested: track=%s target_ms=%s visible_ms=%s backend_ms=%s',
                      tid, value, pb.wave._position_ms, pb.player.position())
         elif operation in ('left', 'right'):
-            step = 3 if QApplication.keyboardModifiers() & Qt.ShiftModifier else 1
+            step = pb.grid_nudge_ms()
+            if QApplication.keyboardModifiers() & Qt.ShiftModifier:
+                step *= 3
             value, operation = (-step if operation == 'left' else step), 'shift'
         return self.grid_controller.request(tid, operation, value,
                                             preview_rows=pb._analysis_parts.get('beats'))
@@ -1539,8 +1676,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                                          QItemSelectionModel.Select | QItemSelectionModel.Rows)
         if not self.tag_controller.owned:
             self._cache_library()
-            self._flash_status('Grid saved', 4)
             self._finish_tag_refresh()
+        self._finish_edit_status()
 
     def _sync_tags(self):
         if not hasattr(self, "my_tags"):
@@ -1554,7 +1691,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         lib = controller.lib
         assigned = controller.selected_tags(ids)
         self.my_tags.set_state(lib.source_tags if lib else [], assigned, reason)
-        self.tag_status.setText(controller.status_text)
+        self._sync_edit_status()
+
+    def _sync_edit_status(self):
+        if not hasattr(self, 'status_label'):
+            return
+        message = self.tag_controller.update_status_text
+        if message and (message != self._prep_update_message
+                        or self.status_label.text() != message):
+            self._prep_update_message = message
+            self._set_status_text(message)
+
+    def _finish_edit_status(self):
+        """Only verified save callbacks can report completion, never probes."""
+        if self.tag_controller.update_status_text:
+            self._sync_edit_status()
+        elif self._prep_update_message:
+            self._prep_update_message = ''
+            self._flash_status('Done', 2)
 
     def _sync_cue_editing(self):
         pb = self.player_bar
@@ -1616,25 +1770,30 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 if data.get("id") in selected:
                     selection.select(self.model.index(row, 0),
                                      QItemSelectionModel.Select | QItemSelectionModel.Rows)
-        self._flash_status('Cues saved' if self.tag_controller.last_operation == 'cues' else 'Tags saved', 4)
         self._finish_tag_refresh()
+        self._finish_edit_status()
 
     def _cue_saved(self, lib, track_id):
         self.lib = lib
         if self.tag_controller.owned:
+            self._finish_edit_status()
             return
         self._cache_library()
-        self._flash_status('Cues saved', 4)
         self._finish_tag_refresh()
+        self._finish_edit_status()
 
     def _cue_changed(self, track_id):
         controller = self.tag_controller
         track = controller.lib.tracks_by_id.get(track_id) if controller.lib else None
         if track is not None:
             self.player_bar.refresh_live_cues(track_id, track.path, controller.session_cues(track_id))
+        self._sync_edit_status()
 
     def _tag_failed(self, error):
-        self._flash_status(f'Couldn’t save {self.tag_controller.last_operation}: ' + error, 20)
+        label = (self._prep_update_message.removeprefix('Updating ').removesuffix('…')
+                 or self.tag_controller.last_operation)
+        self._prep_update_message = ''
+        self._flash_status(f'Couldn’t update {label}: ' + error, 20)
         self._finish_tag_refresh()
         # Reconcile stale selection values after a conflict or an uncertain
         # receipt. The next write still requires the backend's recovery proof.
@@ -1669,6 +1828,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_waveform_zoom_changed(self, pixels_per_second: float):
         self.settings["waveform_zoom"] = pixels_per_second
+        self._sync_grid()
         self._schedule_settings_save()
 
     def _toggle_autoplay_mode(self, mode: str):
@@ -1806,6 +1966,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         page = QWidget(); pl = QVBoxLayout(page)
         pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(0)
         self.table = TrackTable()
+        self.table.setObjectName("TrackTable")
         self.model = TrackModel()
         self.table.setModel(self.model)
         self.model.modelReset.connect(self._update_player_navigation)
@@ -1823,6 +1984,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # grid at every scroll position (top, bottom, anywhere) — pixel scrolling
         # let the two panes drift out of alignment.
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
+        # The scrollbar stays beside the rows, before the separate utility rail.
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(24)
@@ -1842,9 +2005,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         hh.setSectionResizeMode(QHeaderView.Interactive)  # all columns drag-resizable
         hh.setStretchLastSection(False)
         hh.setMinimumSectionSize(46)
-        # Track Title (col 0) absorbs all extra width; the rest keep their size.
-        hh.setSectionResizeMode(0, QHeaderView.Stretch)
         hh.setFixedHeight(26)  # match the sidebar section-header height so they line up
+        _cap_browser_scrollbar(self.table, hh)
         hh.setContextMenuPolicy(Qt.CustomContextMenu)
         hh.customContextMenuRequested.connect(self._header_menu)
         # Click-to-sort (VIEW ONLY — exports always keep sacred rekordbox order).
@@ -1939,15 +2101,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         ])
         self.artists_view.setAlternatingRowColors(True)
         self.artists_view.setUniformRowHeights(True)
+        self.artists_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         ah = self.artists_view.header()
         ah.setSectionResizeMode(QHeaderView.Interactive)
         ah.setStretchLastSection(False)
         ah.setMinimumSectionSize(46)
-        # This header mirrors the normal track table exactly. Artist/Track
-        # absorbs the same slack as Track Title; every other visible/hidden
-        # section keeps the table's saved width.
-        ah.setSectionResizeMode(0, QHeaderView.Stretch)
+        # Every column, including Artist/Track, mirrors the shared saved widths.
         ah.setFixedHeight(26)
+        _cap_browser_scrollbar(self.artists_view, ah)
         self.artists_view.setIndentation(16)
         # Editing works like Collection: no stray double-click editing — the
         # right-click menu / ⌘R open the editor (pre-filled, cursor at end).
@@ -1973,8 +2134,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         return self.stack
 
     def _bottom_bar(self) -> QWidget:
-        bar = QWidget(); bar.setObjectName("BottomBar")
+        bar = FooterBar(self.info_rail); bar.setObjectName("BottomBar")
         bar.setAttribute(Qt.WA_StyledBackground, True)
+        self.body_stack.currentChanged.connect(lambda _index: bar.update())
         # A touch more left padding so status text (EXPORTING/DELETING/…) isn't jammed
         # against the window edge.
         h = QHBoxLayout(bar); h.setContentsMargins(20, 6, 12, 6); h.setSpacing(8)
@@ -2071,8 +2233,32 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.player_bar.refresh_live_cues(
                 loaded.track_id, loaded.path, getattr(loaded, "source_cues", None))
         self._sync_prep_bpm()
-        self._build_artist_registry()
-        self._apply_settings_to_lib()
+        # Presentation reuse is independent of source authority. Cue/tag edit
+        # identities are refreshed above even when every browser input matches.
+        display_inputs = (
+            frozenset(tuple(getattr(t, f) for f in (
+                'track_id', 'name', 'artist', 'location_uri', 'bpm', 'key',
+                'total_time', 'date_added', 'added_ts', 'genre', 'kind',
+                'size', 'bitrate', 'rating', 'year', 'imported'))
+                for t in self.lib.tracks_by_id.values()),
+            tuple(sorted(self.overrides.items())), tuple(sorted(self.titles.items())),
+            tuple(sorted(self.aliases.items())), tuple(self._title_junk()),
+        )
+        reuse = display_inputs == getattr(self, '_display_inputs', None)
+        if reuse:
+            self.lib.artist_registry = self._display_registry
+        else:
+            self._build_artist_registry()
+        self._apply_settings_to_lib(invalidate_rows=not reuse)
+        self._display_inputs = display_inputs
+        self._display_registry = self.lib.artist_registry
+        self._browser_cache_key = browser_cache.fingerprint(display_inputs)
+        if not reuse:
+            prepared_rows = browser_cache.load(
+                self._data_file.with_name('browsercache.json'), self._browser_cache_key)
+            if prepared_rows is not None:
+                self._row_cache.update({tid: row for tid, row in prepared_rows.items()
+                                        if tid in self.lib.tracks_by_id})
         self._populate_tree(engine.summary(self.lib))
         self._default_to_collection()
         # _refresh_custom restores the sidebar selection with signals BLOCKED
@@ -2115,7 +2301,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         from .workers import OneShotTask
         path = self._libcache_path
-        w = OneShotTask(lambda: libcache.dump(lib, path),
+        key = getattr(self, '_browser_cache_key', None)
+        rows = {tid: dict(row) for tid, row in self._row_cache.items()}
+        def save():
+            libcache.dump(lib, path)
+            if key is not None:
+                browser_cache.dump(self._data_file.with_name('browsercache.json'), key, rows)
+        w = OneShotTask(save,
                         log_label="Library snapshot cache")
         self._libcache_worker = w
         self._oneshots = getattr(self, "_oneshots", [])
@@ -2547,15 +2739,31 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         tracks by their DB created_at, imports by their SoundBox import time (both
         carried in Track.added_ts, with time-of-day precision so a set added right
         after a track sorts above it). Falls back to the file's birthtime only
-        when the add-time is unknown (e.g. XML-loaded libraries). Cached per path
-        for the session — the pool re-sorts on every Collection render."""
+        when the add-time is unknown (e.g. XML-loaded libraries). Only that
+        fallback is cached per path; known dates never resolve media paths."""
+        added = getattr(t, "added_ts", 0.0)
+        if added:
+            return added
         cache = self._landed_cache
         key = str(t.path)
         v = cache.get(key)
         if v is None:
-            v = getattr(t, "added_ts", 0.0) or paths.file_landed_time(key)
+            v = paths.file_landed_time(key)
             cache[key] = v
         return v
+
+    def _visible_collection_tracks(self) -> list:
+        """Filter Collection membership without sorting or resolving file paths."""
+        if self.lib is None:
+            return []
+        lib = self.lib
+        tracks = [t for t in lib.tracks_by_id.values()
+                  if t.track_id not in lib.hidden_ids]
+        if getattr(lib, "hide_untracked", False):
+            tracks = [t for t in tracks
+                      if not t.is_untracked(nokey=lib.hide_nokey, short=lib.hide_short,
+                                            short_secs=lib.hide_short_secs)]
+        return tracks
 
     def _collection_tracks(self) -> list:
         """Every loaded track (all playlists pooled), honoring the hide-untracked
@@ -2563,15 +2771,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         collection (see _landed_time) — one timeline across rekordbox adds and
         SoundBox imports alike. Ties break by title A→Z; tracks with no known
         add-time and a missing file (0) sort last."""
-        if self.lib is None:
-            return []
-        lib = self.lib
-        tracks = [t for t in lib.tracks_by_id.values()
-                  if t.track_id not in lib.hidden_ids]  # deleted-from-SoundBox
-        if getattr(lib, "hide_untracked", False):
-            tracks = [t for t in tracks
-                      if not t.is_untracked(nokey=lib.hide_nokey, short=lib.hide_short,
-                                            short_secs=lib.hide_short_secs)]
+        tracks = self._visible_collection_tracks()
         return sorted(tracks, key=lambda t: (-self._landed_time(t), t.name.lower()))
 
     def _refresh_custom(self):
@@ -2587,7 +2787,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # Built-in "Collection" pinned first: every track in one view. No
             # CUSTOM_ROLE (can't be renamed/deleted/reordered), but draggable
             # onto a device as a whole-pool playlist (sbview mime).
-            tracks = self._collection_tracks()
+            tracks = self._visible_collection_tracks()
             coll = QTreeWidgetItem([f"⌂  Collection  ({len(tracks)})"])
             coll.setData(0, COLLECTION_ROLE, True)
             self.sb_tree.addTopLevelItem(coll)
@@ -2595,10 +2795,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self.sb_tree.setCurrentItem(coll)
             # Built-in "Artists": opens the BROWSER-side folder view (artist
             # names only; drop one down to see their songs). Count = distinct.
-            counts = {}
-            for r in self._artist_rows(tracks):
-                counts[r["artist"]] = counts.get(r["artist"], 0) + 1
-            arts = QTreeWidgetItem([f"♪  Artists  ({len(counts)})"])
+            generation = (self._cache_gen, tuple(t.track_id for t in tracks))
+            cached_count = getattr(self, '_artist_count_cache', None)
+            if cached_count is None or cached_count[0] != generation:
+                names = set()
+                for t in tracks:
+                    cached = self._row_cache.get(t.track_id)
+                    names.add(cached['artist'] if cached and 'artist' in cached else
+                              metadata.effective_artist(
+                                  t.track_id, self.titles.get(t.track_id) or t.name, t.artist,
+                                  self.overrides, True, self.lib.artist_registry, stem=t.path.stem))
+                cached_count = self._artist_count_cache = (generation, len(names))
+            arts = QTreeWidgetItem([f"♪  Artists  ({cached_count[1]})"])
             arts.setData(0, ARTISTS_ROLE, True)
             self.sb_tree.addTopLevelItem(arts)
             if keep_artists:
@@ -5559,7 +5767,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         for i, w in enumerate([360, 170, 64, 70, 56, 64, 84, 80, 150, 110]):
             self.table.setColumnWidth(i, w)
 
-    def _sync_artist_columns(self, *_args):
+    def _sync_artist_columns(self, *resized):
         """Mirror every table section boundary into the Artists browser."""
         if getattr(self, "_artist_column_sync", False):
             return
@@ -5567,21 +5775,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         try:
             table_header = self.table.horizontalHeader()
             artist_header = self.artists_view.header()
-            for column in range(len(COLUMNS)):
-                self.artists_view.setColumnHidden(
-                    column, self.table.isColumnHidden(column))
-                if column:
-                    artist_header.resizeSection(
-                        column, table_header.sectionSize(column))
-            artist_header.setSectionResizeMode(QHeaderView.Interactive)
-            artist_header.setSectionResizeMode(0, QHeaderView.Stretch)
+            columns = (resized[0],) if resized else range(len(COLUMNS))
+            for column in columns:
+                hidden = self.table.isColumnHidden(column)
+                if self.artists_view.isColumnHidden(column) != hidden:
+                    self.artists_view.setColumnHidden(column, hidden)
+                width = table_header.sectionSize(column)
+                if artist_header.sectionSize(column) != width:
+                    artist_header.resizeSection(column, width)
         finally:
             self._artist_column_sync = False
 
     def _on_artist_column_resized(
             self, column: int, _old_size: int, new_size: int):
         """A resize made on Artists becomes the normal shared column width."""
-        if getattr(self, "_artist_column_sync", False) or column == 0:
+        if getattr(self, "_artist_column_sync", False):
             return
         self.table.setColumnWidth(column, new_size)
 
@@ -5903,7 +6111,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if callable(configure):
             configure(self.art_cache.source_exclusions())
         if getattr(self, "lib", None) is not None and not getattr(self, "_shutting_down", False):
-            self.model.refresh_art(self.art_cache.status_kind)
+            self._refresh_model_art()
             if any(self.art_cache.source_excluded(tid) for tid in self.lib.tracks_by_id):
                 self._start_art_fill(restart=True)
 
@@ -5944,7 +6152,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._review_audition_active = False
 
     def _review_art_changed(self, tid):
-        self.model.refresh_art(self.art_cache.status_kind)
+        self._refresh_model_art()
         self._queue_stock_artwork((tid,))
 
     def _open_default_photos(self):
@@ -6007,7 +6215,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # The pool methods rebalance the already-configured live universe.
         # Repaint statuses, recompute device drift, and warm each unique
         # canonical pool JPEG through the ordinary stock-iPod derivative cache.
-        self.model.refresh_art(self.art_cache.status_kind)
+        self._refresh_model_art()
         if self.lib is not None:
             self._reload_current_view()
         self._refresh_devices()
@@ -6043,7 +6251,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             # they must never crawl back on a relaunch or re-scan.
             for tid in tids:
                 self.art_cache.block(tid)
-            self.model.refresh_art(self.art_cache.status_kind)
+            self._refresh_model_art()
             done(True, None)
             return
         if c["kind"] == "file":
@@ -6094,7 +6302,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         to Rockbox-safe baseline JPEG per track)."""
         for tid in tids:
             self.art_cache.store_ok(tid, res)
-        self.model.refresh_art(self.art_cache.status_kind)
+        self._refresh_model_art()
         self._queue_stock_artwork(tids)
         self._flash_status(f"Art set on {len(tids)} ✓", 8)
 
@@ -6103,7 +6311,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # BLOCK, not forget: a deliberate removal must never be undone by the
         # background fill on the next launch (it was — infuriating).
         self.art_cache.block(tid)
-        self.model.refresh_art(self.art_cache.status_kind)
+        self._refresh_model_art()
 
     @_art_ui_action
     def _art_pick(self, tid):
@@ -6140,7 +6348,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 data=data, mime=mime, confidence=1.0,
                 source_url=p.as_uri(), matched_title=p.name))
             self._flash_status("Art set ✓", 5)
-            self.model.refresh_art(self.art_cache.status_kind)
+            self._refresh_model_art()
             self._queue_stock_artwork((tid,))
 
     def _run_oneshot(self, tid, fn):
@@ -6183,7 +6391,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         else:
             if self._background_status_available():
                 self._flash_status("No art found", 5)
-        self.model.refresh_art(self.art_cache.status_kind)  # update the Art column
+        self._refresh_model_art()  # update the Art column
 
     @_provider_action("artwork.search")
     def _art_fetch_one(self, tid):
@@ -6212,8 +6420,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self.lib is None:
             return
         idx = self.art_cache.index
-        fresh = sum(1 for tid in self.lib.tracks_by_id if tid not in idx)
-        excluded = sum(self.art_cache.source_excluded(tid) for tid in self.lib.tracks_by_id)
+        visible_ids = [tid for tid in self.lib.tracks_by_id
+                       if tid not in self.lib.hidden_ids]
+        fresh = sum(1 for tid in visible_ids if tid not in idx)
+        excluded = any(kind == 'blocked' for kind in
+                       self.art_cache.status_kinds(
+                           tid for tid in visible_ids
+                           if (idx.get(tid) or {}).get('status') == 'ok').values())
         if fresh or excluded:
             LOG.info("Art fill autostart: %d new track(s) without cache entries", fresh)
             self._start_art_fill()
@@ -6247,7 +6460,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         w.start()
 
     def _on_profile_art_changed(self, tid):
-        self.model.refresh_art(self.art_cache.status_kind)
+        self._refresh_model_art()
         from .artreview import ArtReviewDialog
         for dialog in self.findChildren(ArtReviewDialog):
             dialog.refresh_profile(tid)
@@ -6265,7 +6478,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._art_restart = False
             return
         self._art_status_timer.start()
-        QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
+        self._queue_stock_artwork(getattr(worker, 'changed_track_ids', ()))
         if getattr(self, "_art_restart", False):  # a re-scan asked to restart
             self._art_restart = False
             self._start_art_fill()
@@ -6388,6 +6601,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _background_status_available(self) -> bool:
         """Background upkeep never takes over a foreground device operation."""
         return (not self._shutting_down and not self._cancelling
+                and not getattr(self, '_prep_update_message', '')
                 and not self._device_operation_owned()
                 and self._refresh_worker is None
                 and self._pulse_word not in {"Loading", "Scanning", "Searching"})
@@ -6509,7 +6723,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _on_art_progress(self, done, total):
         if not self.player_bar.is_playing():
-            self.model.refresh_art(self.art_cache.status_kind)
+            self._refresh_model_art()
         else:
             self._art_status_timer.start()
         if self._background_status_available() and not self._preparing_library:
@@ -6526,7 +6740,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self.player_bar.is_playing():
             self._art_status_timer.start()
         else:
-            self.model.refresh_art(self.art_cache.status_kind)
+            self._refresh_model_art()
 
     def _header_menu(self, pos):
         menu = QMenu(self)
@@ -6615,7 +6829,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if hh.restoreState(QByteArray.fromBase64(state.encode("ascii"))):
             hh.setSortIndicator(-1, Qt.AscendingOrder)
             hh.setSectionResizeMode(QHeaderView.Interactive)
-            hh.setSectionResizeMode(0, QHeaderView.Stretch)  # Title keeps absorbing slack
+            hh.setStretchLastSection(False)
         self._sync_artist_columns()
 
     # ---------- export (auto on drop) ----------
@@ -7123,6 +7337,10 @@ def make_app() -> QApplication:
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == '--benchmark-startup':
+        from .startup_check import run
+        run(Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve())
+        return
     # Explicit packaged smoke check: fresh disposable state, no library/device
     # discovery, no production log. The report is the only retained output.
     if len(sys.argv) == 3 and sys.argv[1] == "--isolated-check":

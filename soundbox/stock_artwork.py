@@ -22,21 +22,6 @@ from typing import Any
 
 from .preparation_inventory import PreparationInventory, signature
 
-from clickwheel.ipod.artworkdb_writer.artwork_writer import (  # type: ignore[import-untyped]
-    ArtworkEntry,
-    _read_existing_artwork,
-    _write_mhfd,
-    _write_mhla,
-    _write_mhlf,
-    _write_mhli,
-    _write_mhsd,
-)
-from clickwheel.ipod.artworkdb_writer.rgb565 import (  # type: ignore[import-untyped]
-    IPOD_STRIDE_OVERRIDE,
-    convert_art_for_ipod,
-)
-
-
 PROFILE = "ma446-video-rgb565-v1"
 FORMATS: dict[int, tuple[int, int]] = {
     1028: (100, 100),
@@ -337,6 +322,10 @@ class StockArtworkCache:
             if save_index:
                 self._save_source_index()
             return ready
+
+        # Cache hits need no image-conversion runtime. In particular, keep
+        # NumPy/Clickwheel's artwork writer out of ordinary desktop startup.
+        from clickwheel.ipod.artworkdb_writer.rgb565 import convert_art_for_ipod  # type: ignore[import-untyped]
 
         entry = self._entry(cache_key)
         rows: list[dict[str, Any]] = []
@@ -732,6 +721,12 @@ def render_stock_artwork(
     existing_artwork_dir: str | Path,
 ) -> RenderedStockArtwork | None:
     """Plan MA446 ArtworkDB/ithmb bytes and update staged TrackInfo links."""
+    from clickwheel.ipod.artworkdb_writer.artwork_writer import (  # type: ignore[import-untyped]
+        ArtworkEntry, _read_existing_artwork, _write_mhfd, _write_mhla,
+        _write_mhlf, _write_mhli, _write_mhsd,
+    )
+    from clickwheel.ipod.artworkdb_writer.rgb565 import IPOD_STRIDE_OVERRIDE
+
     artwork_dir = Path(existing_artwork_dir)
     artwork_db_path = artwork_dir / "ArtworkDB"
     existing = _read_existing_artwork(str(artwork_db_path), str(artwork_dir))
@@ -884,6 +879,11 @@ def render_incremental_stock_artwork(
     at EOF, so the currently published database remains valid until the new
     ArtworkDB/iTunesDB pair is published.
     """
+    from clickwheel.ipod.artworkdb_writer.artwork_writer import (
+        ArtworkEntry, _write_mhfd, _write_mhla, _write_mhlf, _write_mhli, _write_mhsd,
+    )
+    from clickwheel.ipod.artworkdb_writer.rgb565 import IPOD_STRIDE_OVERRIDE
+
     artwork_dir = Path(existing_artwork_dir)
     reference, existing, file_state = read_stock_artwork_slots(artwork_dir)
     if not reference:

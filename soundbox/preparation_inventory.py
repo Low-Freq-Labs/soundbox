@@ -59,6 +59,11 @@ class PreparationInventory:
             del self.rows[key]
         self.dirty |= bool(stale)
 
+    def forget(self, key: str) -> None:
+        if key in self.rows:
+            del self.rows[key]
+            self.dirty = True
+
     def flush(self) -> None:
         if not self.dirty:
             return

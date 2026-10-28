@@ -1,8 +1,60 @@
 # SoundBox roadmap
 
-Updated October 27, 2026. Current priorities and remaining acceptance are below;
+Updated October 28, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
+
+Historical October27 checkpoints: Sonny requested a fresh efficiency review. The
+[measured audit](efficiency-audit-2026-10.md) led to an approved implementation:
+browser counts/batched artwork policy, scoped source reads, unchanged display
+reuse and narrower background retries. The implementation follow-up separates
+measured changes from packaged launch and installed verification. The target is
+warm p95 <1.5 s to a populated responsive browser, with source verification timed
+separately. Sonny accepted waveform C at RGB 384: exact joint pixel-area coverage
+plus continuous translation, retaining source detail. One additional refinement
+showed no meaningful actual-track benefit and was not retained. The final release
+gate passed and personal build 133 is installed. Twenty warm packaged snapshot-browser
+launches measured 1,402-ms median / 1,414-ms p95; the first prepared-row-cache miss
+was 3,103 ms. This meets the warm target, with fresh source/compositor/OS-cold
+readiness remaining separate measurements. Curation/art preservation passed. CDJ
+field contracts are stricter, but native USB writing remains the later hardware gate.
+
+The historical October27 player follow-up implemented centered/larger cue pads with cue-colored
+rims, play-intent-preserving navigation/playing hot cues, zoom-scaled grid steps
+and faint-only RGB visibility outside October27 coverage C (distinct from the rejected October28 lift trial). RGB translation is continuous
+at every zoom. The final 1,452-test gate passed and the signed follow-up is
+installed; warm snapshot-browser p95 remains below 1.5 s (1,464 ms). Provenance
+and installed verification are in HANDOFF. A populated-window
+trace still shows occasional missed presentations; the residual scrolling hitch
+remains open and must not be marked solved by the pixel-step correction.
+
+October28: original RGB-edge B is implemented, tested and installed.
+Only main-lane edge color/coverage blending changes to encoded-channel space;
+both visibility lifts are explicitly retained. Later C/D/E trials are set aside.
+The prep strip also has an elapsed/total clock with hour formatting and evenly
+spaced controls, reusing existing transport updates.
+Center glistening/native appearance equivalence remain open; current release and
+installed provenance are recorded in HANDOFF.
+
+The browser follow-up adds a scrollbar beside the track area, a footer-colored
+right utility rail and a borderless inactive circle-i placeholder. The scrollbar
+starts below the headers. Header drags resize columns independently, while window
+width changes grow/shrink Title and retain other column widths. Prep-edit progress now
+uses the existing bottom-left footer style with specific beatgrid/BPM/Hot Cue/
+Memory Cue/My Tag labels, verified `Done` and a timed return to `Ready`.
+Focus-return saved-grid checks remain silent. Release/install state is in HANDOFF.
+The rail/header/footer junctions are seamless. Resize follow-up coordinates Title
+before shrinking child layout, removes redundant Artists section updates and
+declines unsupported table paint roles early. This removes transient horizontal-
+scrollbar flashing; compositor cadence and live-drag smoothness remain separate
+from the synthetic resize/geometry measurements recorded in HANDOFF.
+
+October28 manual-BPM correction resolves disputed terminal beats using a bounded,
+read-only PCM header proof in the accepted source worker. Native STOP CAPPIN at
+138.00 includes its exact 128,750-ms EOF beat; full DAT/EXT parity is verified on
+isolated bytes. Integer/one-decimal/two-decimal entry normalize alike. Unsupported
+ambiguous endpoints remain blocked; no new format or write domain is authorized.
+The thin black text-outline preview was rejected and never shipped.
 
 ## Next sequence — iPod acceptance, library management, CDJ USB export
 

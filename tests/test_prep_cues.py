@@ -69,6 +69,7 @@ class CueEditingInterface(unittest.TestCase):
                     return CueSnapshot(dict(ID='1', UUID='track-one', FolderPath='/synthetic/one.wav'), (), None)
             controller = TagEditController(Path(td), store_factory=lambda _lib: None,
                 cue_store_factory=lambda _lib, _tid: Store(), loader=lambda _path: lib)
+            self.addCleanup(lambda: (release.set(), controller.shutdown()))
             controller.configure(lib, True)
             self.assertTrue(controller.request_cue('1', 'memory', 0, 'add', 19021))
             lib.tracks_by_id['1'].source_cue_revision = 'b' * 64
@@ -76,7 +77,7 @@ class CueEditingInterface(unittest.TestCase):
             self.assertEqual(received[0].revision, 'a' * 64)
             self.assertEqual((received[0].page, received[0].slot, received[0].position_ms),
                              ('memory', 0, 19021))
-            self.assertEqual(controller.status_text, 'Saving cues…')
+            self.assertEqual(controller.status_text, 'Updating memory cue…')
             self.assertFalse(controller.request(['1'], 'tag', True))
             self.assertTrue(controller.request_cue('1', 'hot', 0, 'add', 1))
             self.assertEqual(len(controller.session_cues('1')), 2)

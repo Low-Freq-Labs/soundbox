@@ -18,6 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProviderComposition(unittest.TestCase):
+    def test_dependency_presence_is_checked_without_initializing_extractor(self):
+        with mock.patch.object(providers.importlib, 'import_module',
+                               wraps=providers.importlib.import_module) as imports:
+            result = providers.resolve(composition('personal')['manifest'])
+        self.assertIsNotNone(result.artwork)
+        self.assertNotIn(mock.call('yt_dlp'), imports.call_args_list)
+        with mock.patch.object(providers.importlib.util, 'find_spec', return_value=None):
+            self.assertEqual(providers.resolve(composition('personal')['manifest']).actions, ())
     def test_public_never_imports_optional_packages(self):
         with mock.patch.object(providers.importlib, "import_module",
                                side_effect=AssertionError("optional import")):

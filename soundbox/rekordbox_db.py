@@ -69,12 +69,12 @@ def load_live(path: str | Path | None = None) -> Library:
             tags, memberships = _read_tags(db)
             identities = list(db.get_property())
             library_id = str(identities[0].DBID) if len(identities) == 1 else ""
-            tracks_by_id = _read_tracks(db, source, memberships)
-            playlists = _read_playlists(db, set(tracks_by_id))
+            active_ids = _active_track_ids(db)
+            playlists = _read_playlists(db, active_ids)
             # Preserve playlist scope before collecting edit identities. This
             # metadata never adds tracks or schedules preparation.
             referenced = {k for pl in playlists for k in pl.keys}
-            tracks_by_id = {tid: t for tid, t in tracks_by_id.items() if tid in referenced}
+            tracks_by_id = _read_tracks(db, source, memberships, track_ids=referenced)
             try:
                 _populate_cue_edit_state(db, tracks_by_id)
             except Exception as exc:  # optional write identity must not disable browsing
@@ -249,12 +249,42 @@ def _read_tags(db) -> tuple[list[LibraryTag], dict[str, list[str]]]:
                   for tid, assigned in memberships.items()}
 
 
+def _active_track_ids(db) -> set[str]:
+    from pyrekordbox.db6.tables import DjmdContent
+    from sqlalchemy import func
+    query = db.get_content()
+    if hasattr(query, 'with_entities'):
+        return {str(row[0]) for row in query.with_entities(DjmdContent.ID).filter(
+            func.coalesce(DjmdContent.rb_local_deleted, 0) == 0)}
+    return {str(row.ID) for row in query if not _deleted(row)}
+
+
+def _content_rows(db, track_ids):
+    from pyrekordbox.db6.tables import DjmdContent
+    from sqlalchemy.orm import joinedload
+    query = db.get_content()
+    if not hasattr(query, 'options'):  # source-neutral reader fixtures
+        yield from query
+        return
+    query = query.options(joinedload(DjmdContent.Artist),
+                          joinedload(DjmdContent.Key), joinedload(DjmdContent.Genre))
+    if track_ids is None:
+        yield from query
+    else:
+        # Bound parameters for libraries larger than SQLite's variable limit.
+        ids = sorted(track_ids)
+        for start in range(0, len(ids), 500):
+            yield from query.filter(DjmdContent.ID.in_(ids[start:start + 500]))
+
+
 def _read_tracks(db, source: Path | None = None,
-                 tag_memberships: dict[str, list[str]] | None = None) -> dict[str, Track]:
+                 tag_memberships: dict[str, list[str]] | None = None, *,
+                 track_ids: set[str] | None = None) -> dict[str, Track]:
     cues_by_track = _read_cues(db)
     out: dict[str, Track] = {}
-    for c in db.get_content():
-        if _deleted(c):
+    share = ((source or REKORDBOX_DB).expanduser().parent / 'share').resolve()
+    for c in _content_rows(db, track_ids):
+        if _deleted(c) or (track_ids is not None and str(c.ID) not in track_ids):
             continue
         loc = c.FolderPath or ""
         uri = "file://localhost" + quote(loc) if loc else ""
@@ -286,7 +316,8 @@ def _read_tracks(db, source: Path | None = None,
             rating=str(c.Rating or ""),
             year=str(c.ReleaseYear or ""),
             source_analysis_path=str(resolve_dat_path(
-                source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
+                source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "",
+                resolved_share=share) or ""),
             source_cues=cues_by_track.get(str(c.ID), []),
             source_uuid=str(getattr(c, "UUID", "") or ""),
             source_tag_ids=(list(tag_memberships.get(str(c.ID), []))

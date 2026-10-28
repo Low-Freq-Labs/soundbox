@@ -32,7 +32,6 @@ from typing import Any, Callable, cast
 
 import mutagen
 from mutagen.mp3 import MP3
-import soundfile as sf
 
 from clickwheel.ipod import (  # type: ignore[import-untyped]
     get_ipod_tracks,
@@ -503,6 +502,7 @@ def _stock_media_omission(path: Path) -> str:
             return f"{bitrate // 1000} kbps MP3; stock limit is 8–320 kbps"
         return ""
     if suffix == ".wav":
+        import soundfile as sf
         try:
             info = sf.info(str(path))
         except (OSError, RuntimeError) as exc:

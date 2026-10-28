@@ -16,7 +16,7 @@ Additional cue defaults:
 
 | Key | Action |
 | --- | --- |
-| 1–8 | Preview a populated active-page cue; set an empty cue at the playhead, or nearest beat with Q on |
+| 1–8 | Trigger a populated active-page cue; set an empty cue at the playhead, or nearest beat with Q on |
 | Command-1–8 | Delete the corresponding active-page cue |
 | 9 | Select the Hot Cue page |
 | 0 | Select the Memory Cue page |
@@ -26,11 +26,13 @@ Additional cue defaults:
 Cue keys use press/release, including latching through the configured Play action.
 On an accepted library with rekordbox/agent closed, empty slots create without
 starting preview. Q off keeps the exact captured playhead; Q on snaps new cues to
-the nearest current beat. Existing cues always preview their saved positions.
+the nearest current beat. Existing cues always trigger their exact saved positions. Hot cues keep ordinary
+playback running; while paused they retain hold-preview and Space-latch behavior.
 The Q button is global and persistent. **Beatgrid** provides bindable actions
 for Set bar start, Shift left/right, Double/Halve BPM and Toggle Quantize. These
 start unassigned; BPM Value has no shortcut action. They share mouse-button
-guards and settings, including Shift’s 3-ms nudge step. Memory numbers sort chronologically; Hot letters
+guards and settings, including zoom-scaled grid nudges and Shift’s triple-size step (1/3 ms at
+1152–1500 points/s). Memory numbers sort chronologically; Hot letters
 stay fixed. Creation remains inert on release even if its save finishes while
 the key is held. A held active-page cue remembers its original page and
 slot, so switching pages or releasing modifiers first cannot strand or release

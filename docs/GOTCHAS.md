@@ -135,6 +135,43 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   its one synchronous C call commits the AppKit child frame and Retina
   `drawableSize` before requesting a frame. Returning to generic resize wakes
   causes both a request storm and a one-frame small/stretched waveform.
+- **The track scrollbar begins below the headers.** Keep its persistent gutter
+  on TrackTable with ScrollBarAlwaysOn, before the utility rail. Reserve a header-
+  height widget above the actual bar using addScrollBarWidget(AlignTop), rather
+  than just hiding a thumb that can still enter the header's hit area. Artists
+  uses the same gutter/cap. The separate 30-point footer-colored rail does not
+  own scrolling or wrap the player; its circle-i is borderless disabled chrome.
+  Keep the rail's left edge and scrollbar cap borderless. FooterBar's separator
+  ends before the visible rail, joining its lower corner without a seam; retain
+  the existing footer margins/height rather than adding a second border pixel.
+- **Header drags and window resizing have different width ownership.** Keep
+  every browser column Interactive, including Title, even after restoring an old
+  Stretch state. A manual drag changes only that section and moves following
+  columns. MainWindow width changes go to Title, clamped to its minimum; other
+  widths stay intact. Never use Stretch for that behavior: it takes width back
+  from Title during unrelated column drags. Mirror Title into Artists as well.
+- **QMainWindow can lay out children before resizeEvent.** Shrink Title in the
+  main window's own Resize event filter, then let the narrower viewport land.
+  Grow Title after layout, when that extra room exists. Doing both afterward
+  makes a fitted table briefly overflow, toggling its horizontal scrollbar and
+  changing viewport height during successive shrink frames. Never apply the
+  width delta for unrelated child Resize events or bypass the native host filter.
+  Mirror only the changed header section; don't reset every section's mode on
+  each frame. TrackModel's fixed role constants belong outside its hot data()
+  callback; unsupported paint roles need no row/key work or Qt enum lookup.
+- **Worker ownership does not mean an edit is saving.** Focus return rechecks
+  the saved grid through the shared lane. Show footer progress only for accepted
+  edit intents, using the existing status label/style; never show `Saving grid…`
+  for that check. Only verified save callbacks may show `Done`. Idle/changed
+  notifications also occur on failure, so they cannot establish success. Retain
+  the existing status-generation guard so an old timeout cannot clear a new edit.
+- **The elapsed/total clock reuses transport updates.** Publish only changed
+  whole-second text, preserve the mouse-owned drag preview against late backend
+  polls, and format BOTH sides with hours for tracks at least one hour long.
+  Keep a monospaced width reservation and flexible toolbar gaps so changing
+  digits cannot move the grid controls. Never add a polling timer or library/
+  audio read just to update the label. Hermetic renders pin a synthetic clock
+  after event settling; their unavailable offscreen backend is not a clock proof.
 - **Imported analysis comes first.** Complete, equal-length 150-Hz PWV3/5/7 plus grid
   bypass FFT/filterbank analysis. Decode only the 1-ms signed midpoint supplement;
   persist its base once and build mips in memory. Compact V5 omits spectral_24.
@@ -203,7 +240,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   surfaces in all three modes, then inspect moving frames as well as stills.
 - **Waveform primaries are authored for the built-in Display-P3 surface.**
   Keep `CAMetalLayer.colorspace` explicitly set to Display P3 while retaining
-  the sRGB-transfer Metal attachment for linear-light coverage blending.
+  the sRGB-transfer Metal attachment. Main-lane RGB decodes its final encoded-
+  space blend; BLUE,3BAND,overview and the grid retain linear-light compositing.
   Leaving the layer color space implicit converts Rekordbox red `255/0/0` into
   `234/51/35` and high blue `127/162/255` into `134/162/248` on capture. In
   3BAND, preserve the measured flat membership palette rather than
@@ -211,12 +249,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **The scrolling surface must be fixed in song space, not reconstructed at a
   new playback phase each frame.** Print height and amplitude-weighted RGB onto
   a private song-coordinate attribute lattice with four attributes per
-  physical pixel at every zoom. RGB/BLUE round only their display offset to
-  physical pixels through 384 points/s and logical points at 576–1500, paired
-  with the October 6 accepted RGB conservative column presentation. Using
-  logical points at 256/384 made visible steps; simply restoring fractional
-  motion with conservative columns brought severe fuzz back. The smaller
-  physical-pixel increment was accepted. 3BAND retains continuous subpixel motion. Historical
+  physical pixel at every zoom. RGB now uses continuous fractional translation
+  at every stop; RGB 384 retains October27 coverage C's exact area, and other RGB stops
+  use only the bounded faint-detail shoulder below 18% coverage. 3BAND also
+  stays continuous. BLUE alone rounds its display offset to physical pixels
+  through 384 points/s and logical points at 576–1500. Historically, logical points at
+  256/384 made visible steps, and fractional motion paired with conservative
+  RGB coverage brought fuzz back. C removes that partial-pixel brightness boost
+  at RGB 384 instead of changing detail. Never confuse those combinations. Historical
   whole-pixel probes used different detail/coverage rules and were rejected.
   Do not infer current acceptance from those old measurements. The buffer needs a
   generous guarded margin scaled by the attribute density and absolute
@@ -271,11 +311,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   the same clipped moments used for visible color. The older minimum of two
   separate edge integrals overfilled pixels and was removed October 2. Keep
   the final fragment covered by its declared numerical oracle: BLUE retains
-  exact joint area, while the October 6 RGB policy deliberately increases
-  coverage in occupied physical columns and retains conditional visible color.
-  It must never reduce a minimum-width stroke or fill zero-area pixels. This
-  is conservative presentation, not a fix to the exact-area mathematics.
-  Mutation tests protect both the exact BLUE resolve and the accepted RGB policy.
+  exact joint area, as does RGB 384. Other RGB stops now boost only faint coverage
+  below 0.18, using c′=c×(1+1.5×(1−c/0.18)²); normal coverage is untouched.
+  This monotonic shoulder adds at most 0.04, joins exact area smoothly and never
+  fills zero-area pixels or changes hue. The broad October 6 occupied-column
+  policy was removed. Independent area/color and mutation oracles protect C
+  and the faint-only behavior across red, blue, green and orange.
   The interval's minimum full width is one physical pixel before coverage;
   it must follow drawable scale, not the old fixed 3.6-point width. This keeps
   the two half-pixel AA supports from overlapping. The historical High & Scared close-RGB phase sweep cut the aligned
@@ -294,7 +335,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   exposes the same defect more strongly because its white/cyan/blue radial
   color depends on the moving signed center and width. Integrate clipped-linear
   coverage moments per quarter-pixel segment, accumulate only visible color in
-  premultiplied linear light. Split BLUE at coverage/radial branch changes and
+  premultiplied display channels for RGB, linear light for BLUE. Split BLUE at
+  coverage/radial branch changes and
   integrate its nonlinear color field with four-point Gauss-Legendre quadrature;
   evaluating only the coverage centroid is insufficient. Resolve coverage and color together so neither can use an
   independently averaged silhouette. A temporary flat BLUE fill
@@ -316,16 +358,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   analytic box coverage in physical pixels in the fragment. This applies to
   both downbeats and ordinary scrolling beats; color/opacity policy is
   separate from edge coverage.
-- **Final coverage must be composited in linear light, not patched per
-  primitive in BGRA8Unorm.** A two-pixel line alternates between coverage
-  distributions `[0.5, 1.0, 0.5]` and `[1.0, 1.0]`; waveform contours have the
-  same problem. Their areas match, but blending display-code RGB directly
-  gives unequal SDR energy. A line-only `coverage^(1/2.2)` compensation proved
-  the diagnosis but left waveform edges in the wrong color space. Keep the
-  layer/pipeline BGRA8Unorm_sRGB, decode display-authored RGB in both final
-  fragments, blend linear coverage, and let Metal encode once on store.
-  Clear-color components are also linear inputs for an sRGB attachment: use
-  the decoded values for `#0d0e12`, not `13/255, 14/255, 18/255`.
+- **RGB edge blending is deliberately mode-specific.** Sonny selected original
+  October28 B and explicitly retained BOTH existing visibility lifts. Main-lane
+  RGB integrates encoded channels jointly with coverage, blends the encoded
+  background, then decodes that opaque result for BGRA8Unorm_sRGB. Do not decode
+  RGB channel endpoints first or let the sRGB attachment encode an already-encoded
+  result. BLUE,3BAND,overview and grid retain their linear-light behavior. Keep
+  Display-P3 primaries and the linear clear for `#0d0e12`. The earlier universal
+  linear-light guidance described the preceding renderer and no longer applies
+  to main-lane RGB. Source samples, height transfer, footprint, LOD and timing
+  are unchanged; later C/D/E lift-removal/direct-cell trials were set aside.
 - **Do not insert a translated RGBA waveform texture between song data and the
   drawable.** It filters already-antialiased coverage and hue a second time,
   making contours and adjacent colors breathe. A `float4` attribute buffer is
@@ -711,10 +753,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **A new per-track `Track` field that affects a view MUST survive two caches or
   it silently reverts on the instant paint.** (1) Add it to `libcache._TRACK_FIELDS`
   and bump `SCHEMA` — else the on-disk snapshot drops it and every track loads with
-  the default. (2) `_landed_cache` (path → landed time) is cleared in
-  `_apply_loaded_library` — else a value computed off the instant-paint snapshot
-  sticks after the live rekordbox read replaces it. This is exactly how `added_ts`
-  (Collection newest-added sort) got defeated twice before it worked.
+  the default. (2) Clear any derived fallback when the live library replaces the
+  snapshot. `_landed_cache` now stores only unknown-date path → birthtime fallback
+  and is cleared in `_apply_loaded_library`; known `added_ts` returns directly,
+  without resolving a media path. Historically caching known dates by path let an
+  instant-paint value defeat fresh add times and conflated separate track records
+  sharing one source path. Sidebar counts use unsorted visible membership, never
+  the Collection's newest-added sorting path.
 - **Restoring a tree selection with signals BLOCKED re-renders NOTHING.** The
   two sidebars are asymmetric: `_populate_tree` re-selects an rb playlist with
   signals LIVE (fires `_on_rb_select` → fresh rows), but `_refresh_custom`
@@ -1701,3 +1746,27 @@ Never pace unchanged art with per-image sleeps.
   writing separately, bind the file row into recovery, and keep browser BPM on
   the verified-save signal. A focused BPM editor must retain typed text through
   grid/status refreshes and abandon it when the loaded track changes.
+
+- **Hot-cue playback intent is distinct from a paused audition.** A hot cue
+  pressed during ordinary playback must retain that intent across its 3-ms seek
+  fade and release, including repeated taps before the native PLAYING poll.
+  Paused hot cues and session/memory cues retain hold-preview. Previous/next
+  uses the same intent-preserving load path as browser activation. A new Pause
+  during a pending seek must replace its gain completion even with no `after`:
+  keeping the old epoch/completion can strand `_pause_pending` or restart audio.
+- **Smooth source translation is not proof of perfect presentation cadence.**
+  The October 27 populated-window probe removed RGB 1500 pixel-step error, but
+  both builds still had zero-time dropped drawables and occasional 16.667-ms
+  presented gaps. Keep those rows and the actual presentation/target timestamps;
+  do not claim the residual hitch is fixed from arithmetic tests or mean FPS.
+
+## Manual BPM terminal-row evidence — October28
+
+`138`, `138.0` and `138.00` already parse to identical hundredths. STOP CAPPIN's
+apparent 138.01 lock was an EOF proof failure: a proposed beat at 128,750 ms sat
+inside the 150-Hz PWV3 uncertainty interval. Native 138.00 keeps that exact-EOF
+beat. `AmbiguousGridEnd` now permits a bounded PCM header proof only in the source
+worker. Existing final rows inside the interval need the same proof for subsequent
+edits. Never round an unsupported endpoint or weaken the pure planner's guard.
+No payload read/decode or source audio changes; journal and revalidate the proof
+through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).

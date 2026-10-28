@@ -84,6 +84,11 @@ def _member(pl, content, trackno, deleted=0):
 
 
 class SacredOrder(unittest.TestCase):
+    def test_unreferenced_track_is_not_normalized(self):
+        # Missing metadata would fail normalization; excluded tracks need only ID.
+        unwanted = Row(ID='unreferenced')
+        self.assertEqual(_read_tracks(FakeDB(tracks=[unwanted]), track_ids=set()), {})
+
     def test_track_order_is_trackno_not_contentid(self):
         # ContentIDs descend while TrackNo ascends — TrackNo must win.
         db = FakeDB(nodes=[_node("10", "SET")],

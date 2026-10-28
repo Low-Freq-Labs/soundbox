@@ -34,7 +34,9 @@ QLabel {{ background: transparent; }}
 /* top + bottom bars */
 #TopBar, #BottomBar {{ background: {PANEL2}; border: none; }}
 #TopBar {{ border-bottom: 1px solid {BORDER}; }}
-#BottomBar {{ border-top: 1px solid {BORDER}; }}
+#InfoRail {{ background: {PANEL2}; border: none; }}
+#InfoPlaceholder {{ background: transparent; border: none; padding: 0; }}
+#BrowserScrollCap {{ background: {PANEL2}; border: none; }}
 #NowPlayingFrame {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 5px;
 }}
@@ -175,7 +177,8 @@ QPushButton#Ghost {{ background: transparent; }}
 #CueColumn, #CuePages, #CuePage {{ background: transparent; }}
 QPushButton#CueSlot {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 3px;
-    color: #515661; font-size: 9px; padding: 0 4px; text-align: left;
+    color: #515661; font-size: 12px; font-weight: 600;
+    padding: 0 3px; text-align: center;
 }}
 QPushButton#CueSlot[filled="true"] {{
     color: {TEXT_HI}; border-color: #414652;
@@ -280,6 +283,7 @@ QTableView {{
     selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@;
 }}
 QTableView::item {{ padding: 0px 6px; border: none; }}
+#TrackTable QHeaderView, #ArtistsBrowser QHeaderView {{ background: {PANEL2}; }}
 QHeaderView::section {{
     background: {PANEL2}; color: {TEXT_DIM}; padding: 4px 6px;
     border: none; border-right: 1px solid {BORDER}; border-bottom: 1px solid {BORDER};
@@ -291,6 +295,7 @@ QMenu {{ background: {PANEL}; border: 1px solid {BORDER}; }}
 QMenu::item {{ padding: 5px 22px 5px 14px; }}
 QMenu::item:selected {{ background: {PURPLE}; color: @ON_ACCENT@; }}
 #PrepToolbar {{ background: {PANEL2}; border: none; }}
+#PlaybackTime {{ color: {TEXT_HI}; font-size: 13px; font-weight: 600; }}
 QLineEdit#PrepBpmValue {{ background: {BG}; color: {TEXT_HI};
     border: 1px solid {BORDER}; border-radius: 3px; padding: 2px 5px;
     font-size: 13px; }}
@@ -306,7 +311,6 @@ QToolButton#MyTagsButton {{ background: {BG}; border: 1px solid {BORDER};
 QToolButton#MyTagsButton::menu-indicator {{ image: none; width: 0; height: 0; }}
 QToolButton#MyTagsButton:hover {{ border-color: {PURPLE_LIGHT}; color: {TEXT_HI}; }}
 QToolButton#MyTagsButton:disabled {{ color: {TEXT_DIM}; }}
-#TagStatus {{ color: {TEXT_DIM}; font-size: 11px; }}
 #MyTagsMenu QWidget {{ background: {PANEL}; }}
 #MyTagsSummary {{ color: {TEXT_DIM}; font-size: 11px; }}
 QCheckBox#MyTagCheck {{ spacing: 8px; padding: 0; margin: 0; }}

@@ -3,7 +3,7 @@ app. Uses a SYNTHETIC library (no rekordbox, no network) and a sandboxed
 AppData dir (QStandardPaths test mode) so it can never touch real user state.
 
 Usage: PYTHONPATH=. .venv/bin/python -m desktop._shot [out.png] [zoom] [--loading-device]
-       Add --analysis-paused, --sync-progress or --ready-device for status QA.
+       Add --analysis-paused, --sync-progress, --edit-status or --ready-device for status QA.
 """
 import os
 
@@ -44,6 +44,12 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    edit_status = '--edit-status' in sys.argv
+    if edit_status:
+        sys.argv.remove('--edit-status')
+    long_playback = '--long-playback' in sys.argv
+    if long_playback:
+        sys.argv.remove('--long-playback')
     text_menu = '--theme-text-menu' in sys.argv
     if text_menu:
         sys.argv.remove('--theme-text-menu')
@@ -167,6 +173,9 @@ def _render() -> None:
     # Center the synthetic D/drop cue so the render gate always exercises the
     # main-waveform box/stem seam as well as the whole-track marker.
     pb._on_pos(44_000)
+    if long_playback:
+        pb._on_dur(3_723_000)
+        pb._on_pos(83_000)
     pb.set_track_navigation(True, True)
     if loading_device or ready_device:
         win._on_devices_discovered([
@@ -276,7 +285,23 @@ def _render() -> None:
         app.processEvents()
         target = Path(out)
         win.my_tags.popup.grab().save(str(target.with_name(target.stem + "-my-tags.png")))
+    # The offscreen backend has no running audio clock. Pin this synthetic
+    # display value after event settling rather than treating its zero poll as
+    # a playback reference.
+    pb._emit_playback_time(83_000 if long_playback else 44_000)
     win.grab().save(out)
+    if edit_status:
+        from pathlib import Path
+        target = Path(out)
+        # Presentation fixtures only: no source edit or worker admission.
+        for name, message in (('beatgrid', 'Updating beatgrid…'),
+                              ('bpm', 'Updating BPM…'), ('hot', 'Updating hot cue…'),
+                              ('memory', 'Updating memory cue…'),
+                              ('tags', 'Updating My Tags…'), ('done', 'Done'),
+                              ('ready', 'Ready')):
+            win._set_status_text(message)
+            app.processEvents()
+            win.grab().save(str(target.with_name(target.stem + '-' + name + '.png')))
     if art_review:
         import io
         from pathlib import Path

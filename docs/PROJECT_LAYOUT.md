@@ -1,6 +1,6 @@
 # Project layout and retention
 
-Reviewed October 27, 2026. This describes the checkout, not the installed app's
+Reviewed October 28, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 
 ## Active checkout
@@ -37,9 +37,9 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## Current retention — October 27 accepted prep release
+## Current retention — October28 efficiency/player release
 
-Sonny accepted the My Tag/cue/grid/appearance build and is playing with it.
+Sonny requested wrap-up of the efficiency/player/browser changes and manual-BPM fix.
 The final wrap-up retires superseded rollback apps and duplicate dist/personal
 packaging, retaining the installed app, active checkout, build/native, build/check,
 and small QA/install/state records. Protected native-source references, encrypted

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from functools import lru_cache
 import importlib
+import importlib.util
 import json
 import logging
 import os
@@ -127,7 +128,10 @@ def resolve(manifest: dict) -> Providers:
             return Providers(profile)
         # The import targets are fixed by core, not supplied by library settings,
         # music folders, manifest entry points or arbitrary plugin discovery.
-        importlib.import_module("yt_dlp")
+        # Discovery imports the extractor only when a search actually needs it.
+        # Presence checking must not initialize that heavy package on launch.
+        if importlib.util.find_spec('yt_dlp') is None:
+            raise ModuleNotFoundError('yt_dlp')
         module = importlib.import_module("soundbox_personal.discovery")
         connection = importlib.import_module("soundbox_personal.connection")
         if not callable(getattr(connection, "create", None)):

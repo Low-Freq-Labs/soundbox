@@ -103,6 +103,28 @@ class ArtColumn(unittest.TestCase):
         self.assertEqual(m.data(m.index(1, ART_COL)), "●")
 
 
+class DisplayRoles(unittest.TestCase):
+    def test_display_edit_alignment_and_default_paint_roles_retain_their_meaning(self):
+        from PySide6.QtCore import QModelIndex
+        m = TrackModel(_rows())
+        self.assertEqual(m.data(m.index(0, _col('title'))), 'Bravo')
+        empty_artist = m.index(2, _col('artist'))
+        self.assertEqual(m.data(empty_artist), '—')
+        self.assertEqual(m.data(empty_artist, Qt.EditRole), '')
+        self.assertEqual(m.data(m.index(0, ART_COL), Qt.TextAlignmentRole),
+                         int(Qt.AlignHCenter | Qt.AlignVCenter))
+        self.assertEqual(m.data(m.index(0, _col('bpm')), Qt.TextAlignmentRole),
+                         int(Qt.AlignRight | Qt.AlignVCenter))
+        self.assertIsNone(m.data(empty_artist, Qt.TextAlignmentRole))
+        for role in (Qt.FontRole, Qt.BackgroundRole, Qt.ForegroundRole,
+                     Qt.DecorationRole, Qt.CheckStateRole, Qt.UserRole):
+            self.assertIsNone(m.data(m.index(0, 0), role))
+            self.assertIsNone(m.data(QModelIndex(), role))
+        self.assertIsNone(m.data(QModelIndex()))
+        self.assertEqual(m.headerData(0, Qt.Horizontal), 'Track Title')
+        self.assertIsNone(m.headerData(0, Qt.Vertical))
+
+
 class SortValueEdges(unittest.TestCase):
     def test_non_camelot_key_after_wheel(self):
         self.assertLess(_sort_value("key", {"key": "12B"}),

@@ -16,7 +16,7 @@ from desktop.tag_controller import TagEditController
 from desktop.analysis_fence import AnalysisWriteFence
 from soundbox import rekordbox_db
 from soundbox.library import Library, Track
-from soundbox.rekordbox_grid import Beat, GridSnapshot, plan_grid_edit, read_grid, transform_grid
+from soundbox.rekordbox_grid import AmbiguousGridEnd, Beat, GridSnapshot, plan_grid_edit, read_grid, transform_grid
 from soundbox.rekordbox_cues import CueIdentities
 from tests.test_rekordbox_grid import primary
 from tests import test_rekordbox_grid as grid_fixture
@@ -61,7 +61,11 @@ class GridInterface(unittest.TestCase):
                 outer.release.wait(5)
                 if outer.save_error:
                     raise RuntimeError(outer.save_error)
-                candidate = plan_grid_edit(self.snapshot(), outer.counter, request, timestamp=STAMP)
+                try:
+                    candidate = plan_grid_edit(self.snapshot(), outer.counter, request, timestamp=STAMP)
+                except AmbiguousGridEnd:
+                    candidate = plan_grid_edit(self.snapshot(), outer.counter, request,
+                                               timestamp=STAMP, exact_end_ms=128750)
                 outer.dat, outer.ext = candidate.dat, candidate.ext
                 if candidate.changes:
                     outer.state = replace(outer.state, track=candidate.changes[0].after)
@@ -126,6 +130,40 @@ class GridInterface(unittest.TestCase):
         self.assertEqual(read_grid(self.dat)[0].time_ms, 40)
         self.assertEqual(self.errors, [])
 
+    def test_focus_style_reprobes_have_no_edit_status_or_write(self):
+        entered, release = threading.Event(), threading.Event()
+        self.probe_gate = entered, release
+        self.grid.set_current('7', force=True)
+        self.wait_for(entered.is_set)
+        self.assertTrue(self.shared.busy)
+        self.assertEqual(self.shared.update_status_text, '')
+        self.assertEqual(self.shared.status_text, 'Checking saved grid…')
+        self.assertEqual(self.requests, [])
+        release.set()
+        self.wait_for(lambda: not self.shared.owned)
+        self.grid.set_current('7', force=True)
+        self.assertEqual(self.shared.update_status_text, '')
+        self.wait_for(lambda: not self.shared.owned)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.dat, self.original)
+
+    def test_accepted_grid_and_bpm_intents_report_specific_update_status(self):
+        for operation, value, message in (
+                ('shift', 1, 'Updating beatgrid…'),
+                ('double', 0, 'Updating BPM…'),
+                ('halve', 0, 'Updating BPM…'),
+                ('bpm', 9100, 'Updating BPM…')):
+            self.release.clear()
+            self.entered.clear()
+            self.assertTrue(self.grid.request('7', operation, value))
+            self.assertEqual(self.shared.update_status_text, message)
+            self.wait_for(self.entered.is_set)
+            self.assertEqual(self.shared.status_text, message)
+            self.release.set()
+            self.wait_for(lambda: not self.shared.owned)
+            self.assertEqual(self.shared.update_status_text, '')
+        self.assertEqual(self.errors, [])
+
     def test_grouped_opposite_nudges_preserve_zero_boundary_clipping(self):
         self.dat = primary(tuple(Beat(i % 4 + 1, 9000, i * 2000 // 3) for i in range(252)))
         self.grid.configure()
@@ -168,6 +206,55 @@ class GridInterface(unittest.TestCase):
         self.assertEqual(confirmed, [])
         self.assertIn('Close rekordbox', self.errors)
 
+    def test_disputed_terminal_beat_queues_then_reconciles_verified_endpoint(self):
+        import struct
+        rows = tuple(Beat(i % 4 + 1, 13801, 54 + (i * 6000000 + 6900) // 13801)
+                     for i in range(297))
+        self.dat = primary(rows)
+        self.ext = grid_fixture.container(
+            grid_fixture.section(b'PQT2', bytes.fromhex('000000000100000200000000') + bytes(32), 56),
+            grid_fixture.section(b'PWV3', struct.pack('>III', 1, 19313, 0x960000) + bytes(19313), 24))
+        self.state.track['BPM'] = 13801
+        self.shared.lib.tracks_by_id['7'].source_cue_revision = self.state.revision
+        self.file = grid_fixture.content_file(self.state.track, self.dat)
+        self.grid.set_current('7', force=True)
+        self.wait_for(lambda: not self.shared.owned)
+        self.release.clear()
+        self.assertTrue(self.grid.request('7', 'bpm', 13800))
+        self.assertEqual(self.grid.view('7')[1], 138.0)
+        self.wait_for(self.entered.is_set)
+        self.release.set()
+        self.wait_for(lambda: not self.shared.owned)
+        self.assertEqual(read_grid(self.dat)[-1], Beat(1, 13800, 128750))
+        self.assertEqual(self.shared.lib.tracks_by_id['7'].bpm, '138.00')
+        self.assertEqual(self.errors, [])
+
+    def test_bpm_shorthand_normalizes_and_invalid_entry_does_not_lock_editor(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from desktop.prep_grid import BpmValue
+        field = BpmValue()
+        self.addCleanup(field.close)
+        field.set_bpm('138.01', track_id='7')
+        field.set_editable(True)
+        submitted, invalid = [], []
+        def accepted(tid, bpm):
+            submitted.append((tid, bpm))
+            field.set_bpm(bpm / 100, track_id=tid)
+        field.requested.connect(accepted)
+        field.invalid.connect(invalid.append)
+        field.show()
+        self.app.processEvents()
+        for text in ('138', '138.0', '138.00', '1,38', '138'):
+            field.setFocus()
+            field.setText(text)
+            field.setModified(True)
+            QTest.keyClick(field, Qt.Key_Return)
+            if text != '1,38':
+                self.assertEqual(field.text(), '138.00')
+        self.assertEqual(submitted, [('7', 13800)] * 4)
+        self.assertEqual(len(invalid), 1)
+
     def test_browser_bpm_confirms_each_verified_save_without_track_reload(self):
         from types import SimpleNamespace
         from desktop.app import MainWindow
@@ -176,7 +263,8 @@ class GridInterface(unittest.TestCase):
         host = SimpleNamespace(lib=self.shared.lib, model=model, tag_controller=self.shared,
             _row_cache={'7': dict(bpm='90.00')}, _selected_ids=lambda: [],
             _cache_gen=8, _warm_timer=mock.Mock(), _sync_playlists_cache=None,
-            _cache_library=mock.Mock(), _flash_status=mock.Mock(), _finish_tag_refresh=mock.Mock())
+            _cache_library=mock.Mock(), _flash_status=mock.Mock(), _finish_tag_refresh=mock.Mock(),
+            _finish_edit_status=mock.Mock())
         host._invalidate_rows = lambda ids: MainWindow._invalidate_rows(host, ids)
         confirmed, painted = [], []
         column = next(i for i, row in enumerate(COLUMNS) if row[0] == 'bpm')
@@ -349,7 +437,8 @@ class GridInterface(unittest.TestCase):
             tag_controller=self.shared, _sync_prep_bpm=lambda: None,
             grid_edit_buttons=buttons, bpm_value=mock.Mock(), _refresh_worker=None,
             _state_maintenance=False, _shutting_down=False,
-            _device_operation_owned=lambda: False, _flash_status=mock.Mock())
+            _device_operation_owned=lambda: False, _flash_status=mock.Mock(),
+            _sync_edit_status=mock.Mock())
         host._sync_grid = lambda: MainWindow._sync_grid(host)
         self.grid.changed.connect(lambda tid: MainWindow._grid_changed(host, tid))
         host._sync_grid()

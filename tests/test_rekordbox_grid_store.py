@@ -17,6 +17,7 @@ from soundbox import rekordbox_write as offline
 from soundbox.rekordbox_grid import Beat, GridEdit, read_grid
 from tests.test_rekordbox_grid import primary, container, section, content_file
 from tests.test_rekordbox_grid_proof import fixture
+from tests.test_pcm_endpoint import wave_bytes
 
 UID = '11111111-2222-4333-8444-555555555555'
 ANALYSIS = f'/PIONEER/USBANLZ/{UID[:3]}/{UID[3:]}/ANLZ0000.DAT'
@@ -113,16 +114,7 @@ class GridSourceTransactions(unittest.TestCase):
         with self.assertRaisesRegex(offline.WriteProofError, 'separate native acceptance'):
             self.store.apply(self.request('bpm', 9100))
         self.assertEqual(self.store.snapshot(), before)
-        conn = offline._connect(self.source)
-        file = content_file(before.track, before.dat, str(self.dat_path))
-        columns = ','.join('"' + k + '"' for k in file)
-        conn.execute('CREATE TABLE contentFile (' + columns + ')')
-        conn.execute('INSERT INTO contentFile VALUES (' + ','.join('?' for _ in file) + ')',
-                     tuple(file.values()))
-        schema = tags._schema(conn)
-        conn.close()
-        self.authority = replace(self.authority, schema_sha256=schema, manual_bpm_accepted=True)
-        self.store = grids.PilotGridStore(self.authority, self.root)
+        self.enable_manual_bpm()
         before = self.store.snapshot()
         for phase in ('published-DAT', 'after-commit'):
             self.crash('bpm', phase, wal=True)
@@ -137,6 +129,83 @@ class GridSourceTransactions(unittest.TestCase):
                                   current.track['TrackInfoUpdated'], current.track['rb_local_usn']),
                                  (9100, '3', '7', 45))
         self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
+
+    def enable_manual_bpm(self):
+        before = self.store.snapshot()
+        conn = offline._connect(self.source)
+        file = content_file(before.track, before.dat, str(self.dat_path))
+        columns = ','.join('"' + k + '"' for k in file)
+        conn.execute('CREATE TABLE contentFile (' + columns + ')')
+        conn.execute('INSERT INTO contentFile VALUES (' + ','.join('?' for _ in file) + ')',
+                     tuple(file.values()))
+        schema = tags._schema(conn)
+        conn.close()
+        self.authority = replace(self.authority, schema_sha256=schema, manual_bpm_accepted=True)
+        self.store = grids.PilotGridStore(self.authority, self.root)
+
+    def ambiguous_fixture(self):
+        audio = self.base / 'synthetic.wav'
+        audio.write_bytes(wave_bytes())
+        conn = offline._connect(self.source)
+        conn.execute("UPDATE djmdContent SET FolderPath=?, BPM=13801 WHERE ID='2'", (str(audio),))
+        conn.close()
+        rows = tuple(Beat(i % 4 + 1, 13801, 54 + (i * 6000000 + 6900) // 13801)
+                     for i in range(297))
+        self.dat = primary(rows)
+        self.ext = container(section(b'PQT2', bytes.fromhex('000000000100000200000000') + bytes(32), 56),
+                        section(b'PWV3', struct.pack('>III', 1, 19313, 0x960000)
+                                     + bytes(19313), 24), section(b'PCOB', b'unchanged cue'))
+        self.dat_path.write_bytes(self.dat)
+        self.ext_path.write_bytes(self.ext)
+        self.enable_manual_bpm()
+        return audio
+
+    def test_exact_pcm_eof_save_and_wal_recovery_preserve_audio_and_metadata_contract(self):
+        audio = self.ambiguous_fixture()
+        original_audio = audio.read_bytes()
+        before = self.store.snapshot()
+        for phase in ('published-DAT', 'after-commit'):
+            self.crash('bpm', phase, wal=True, value=13800)
+            self.store = grids.PilotGridStore(self.authority, self.root)
+            self.assertEqual(self.store.recover(),
+                             'committed' if phase == 'after-commit' else 'rolled-back')
+            current = self.store.snapshot()
+            if phase == 'published-DAT':
+                self.assertEqual(current, before)
+            else:
+                self.assertEqual(current.track['BPM'], 13800)
+                self.assertEqual(read_grid(current.dat)[-1], Beat(1, 13800, 128750))
+                self.assertEqual(current.track['rb_local_usn'], before.track['rb_local_usn'] + 4)
+                self.assertNotEqual(current.content_file['Hash'], before.content_file['Hash'])
+                receipt = json.loads(self.store.completed.read_text())
+                self.assertEqual(receipt['exact_pcm_end']['end_ms'], 128750)
+                self.assertEqual(receipt['counter_after']['int_1'] - receipt['counter_before']['int_1'], 4)
+        self.assertTrue(self.store.apply(self.request('bpm', 13900)))
+        self.assertEqual(self.store.snapshot().track['BPM'], 13900)
+        self.assertEqual(audio.read_bytes(), original_audio)
+        self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
+        self.assertFalse(self.store.journal.exists())
+
+    def test_changed_pcm_proof_blocks_publication_and_recovery_without_more_writes(self):
+        audio = self.ambiguous_fixture()
+        before = self.state()
+        def changed(phase):
+            if phase == 'journal-ready':
+                audio.touch()
+        with mock.patch.object(grids, '_fault', side_effect=changed):
+            with self.assertRaises(offline.RecoveryRequired):
+                self.store.apply(self.request('bpm', 13800))
+        self.assertEqual(self.state(), before)
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        self.assertEqual(self.ext_path.read_bytes(), self.ext)
+        with self.assertRaises(offline.RecoveryRequired):
+            self.store.recover()
+        self.assertTrue(self.store.journal.exists())
+
+    def test_ordinary_bpm_does_not_probe_audio(self):
+        self.enable_manual_bpm()
+        with mock.patch.object(grids, 'capture_pcm_endpoint', side_effect=AssertionError('unneeded audio read')):
+            self.assertTrue(self.store.apply(self.request('bpm', 9100)))
 
     def test_stale_identity_and_analysis_lock_fail_without_writes(self):
         edit = self.request()
@@ -153,7 +222,7 @@ class GridSourceTransactions(unittest.TestCase):
         self.assertEqual(self.dat_path.read_bytes(), self.dat)
         self.assertEqual(self.ext_path.read_bytes(), self.ext)
 
-    def crash(self, operation, phase, wal=False):
+    def crash(self, operation, phase, wal=False, value=None):
         if wal:
             conn = offline._connect(self.source)
             conn.execute('PRAGMA journal_mode=WAL')
@@ -169,14 +238,17 @@ authority=grids.GridWriteAuthority(**json.loads(sys.argv[1]))
 store=grids.PilotGridStore(authority,Path(sys.argv[2]))
 snapshot=store.snapshot()
 edit=GridEdit(authority.pilot_track_id,authority.track_uuid,snapshot.revision,sys.argv[3],
-              1 if sys.argv[3]=='shift' else 9100 if sys.argv[3]=='bpm' else 0)
+              int(sys.argv[5]))
 def fault(phase):
     if phase==sys.argv[4]:os._exit(86)
 grids._fault=fault
 store.apply(edit)
 '''
         result = subprocess.run([sys.executable, '-c', script, json.dumps(asdict(self.authority)),
-                                 str(self.root), operation, phase], capture_output=True, text=True, timeout=30)
+                                 str(self.root), operation, phase,
+                                 str(value if value is not None else
+                                     1 if operation == 'shift' else 9100 if operation == 'bpm' else 0)],
+                                capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 86, result.stdout + result.stderr)
 
     def test_real_exit_recovers_file_only_and_sql_operations(self):

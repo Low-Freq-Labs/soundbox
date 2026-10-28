@@ -77,16 +77,10 @@ class ArtistRegistry:
         # most specific artist wins ("Dirt Monkey" before "Dirt"). Alias KEYS are
         # included so junk spellings in titles ("unownn") still rescue to their
         # merge target (the canon lookup resolves them).
-        names = sorted({c for c in canon_by_fold.values() if len(c) >= 3}
+        self._rescue_names = sorted({c for c in canon_by_fold.values() if len(c) >= 3}
                        | {k for k in canon_by_fold if len(k) >= 3},
                        key=len, reverse=True)
-        self._rescue_re = None
-        if names:
-            # Boundaries are "not alphanumeric" ([^\W_] = word char minus underscore),
-            # so junk like 'dennett_' / '-dennett' still matches the artist 'Dennett'.
-            self._rescue_re = re.compile(
-                r"(?<![^\W_])(" + "|".join(re.escape(n) for n in names) + r")(?![^\W_])",
-                re.IGNORECASE)
+        self._rescue_re: re.Pattern[str] | None = None
 
     def canonical(self, name: str) -> str:
         return self._canon.get(_fold(name)) or clean_artist(name)
@@ -99,8 +93,14 @@ class ArtistRegistry:
         return _fold(name) in self._trusted
 
     def rescue_from_title(self, title: str) -> str | None:
-        if not (self._rescue_re and title):
+        if not title or not self._rescue_names:
             return None
+        if self._rescue_re is None:
+            # Cached browser rows need no title rescue. Compile only when a
+            # genuinely missing/changed row needs this exact existing policy.
+            self._rescue_re = re.compile(
+                r"(?<![^\W_])(" + "|".join(re.escape(n) for n in self._rescue_names)
+                + r")(?![^\W_])", re.IGNORECASE)
         m = self._rescue_re.search(title)
         if not m:
             return None

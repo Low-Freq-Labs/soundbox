@@ -87,8 +87,26 @@ class _FakeArt:
     def status_kind(self, tid):
         return self.kinds.get(tid, "")
 
+    def status_kinds(self, tids):
+        return {tid: self.status_kind(tid) for tid in tids}
+
 
 class CollectionView(unittest.TestCase):
+    def test_sidebar_count_never_formats_titles_or_reads_art(self):
+        _win._artist_count_cache = None
+        with mock.patch.object(_win, '_artist_rows', side_effect=AssertionError('full rows')), \
+                mock.patch.object(_win, '_landed_time', side_effect=AssertionError('sort')), \
+                mock.patch.object(_win.art_cache, 'status_kinds', side_effect=AssertionError('art')), \
+                mock.patch('soundbox.engine.track_row', side_effect=AssertionError('titles')):
+            _win._refresh_custom()
+        self.assertIn('(3)', _win.sb_tree.topLevelItem(1).text(0))
+
+    def test_sidebar_count_reuses_names_until_row_inputs_change(self):
+        _win._artist_count_cache = None
+        _win._refresh_custom()
+        with mock.patch('soundbox.metadata.effective_artist', side_effect=AssertionError('recount')):
+            _win._refresh_custom()
+
     def test_test_mode_never_opens_the_production_log(self):
         from desktop.app import LOG
         self.assertFalse(any(isinstance(h, logging.FileHandler)
@@ -3556,6 +3574,134 @@ class ColumnPersistence(unittest.TestCase):
         _win._save_columns()
 
 
+class BrowserColumnInteraction(unittest.TestCase):
+    def setUp(self):
+        self.header = _win.table.horizontalHeader()
+        self.original = (self.header.saveState(), dict(_win.settings),
+                         _win.size(), _win.isVisible(), _win.stack.currentIndex())
+        self.addCleanup(self.restore)
+        _win.show()
+        _win._show_collection()
+        _win._apply_default_columns()
+        _win.table.horizontalScrollBar().setValue(0)
+        _app.processEvents()
+
+    def restore(self):
+        state, settings, size, visible, page = self.original
+        _win.settings.clear()
+        _win.settings.update(settings)
+        _win.resize(size)
+        self.header.restoreState(state)
+        _win._show_collection()
+        _win._sync_artist_columns()
+        _win.stack.setCurrentIndex(page)
+        _win.setVisible(visible)
+        _app.processEvents()
+
+    def test_dragging_title_and_bpm_only_resizes_the_dragged_column(self):
+        from PySide6.QtTest import QTest
+        from desktop.model import COLUMNS
+        for column, delta in ((0, 65), (3, 45)):
+            before = [self.header.sectionSize(i) for i in range(len(COLUMNS))]
+            following = self.header.sectionViewportPosition(column + 1)
+            edge = self.header.sectionViewportPosition(column) + before[column] - 1
+            start = QPoint(edge, self.header.height() // 2)
+            end = start + QPoint(delta, 0)
+            QTest.mouseMove(self.header.viewport(), start)
+            QTest.mousePress(self.header.viewport(), Qt.LeftButton, Qt.NoModifier, start)
+            QTest.mouseMove(self.header.viewport(), end)
+            QTest.mouseRelease(self.header.viewport(), Qt.LeftButton, Qt.NoModifier, end)
+            _app.processEvents()
+            self.assertEqual(self.header.sectionSize(column), before[column] + delta)
+            for other in range(len(COLUMNS)):
+                if other != column:
+                    self.assertEqual(self.header.sectionSize(other), before[other])
+            self.assertEqual(self.header.sectionViewportPosition(column + 1), following + delta)
+            self.assertEqual(self.header.sortIndicatorSection(), -1)
+
+    def test_legacy_restore_keeps_manual_widths_and_window_growth_expands_only_title(self):
+        from PySide6.QtWidgets import QHeaderView
+        self.header.setSectionResizeMode(0, QHeaderView.Stretch)
+        _win.settings['columns_state'] = bytes(self.header.saveState().toBase64()).decode('ascii')
+        _win._restore_columns()
+        self.assertEqual(self.header.sectionResizeMode(0), QHeaderView.Interactive)
+        self.header.resizeSection(0, 250)
+        self.header.resizeSection(3, 120)
+        _win.settings['columns_state'] = bytes(self.header.saveState().toBase64()).decode('ascii')
+        self.header.resizeSection(0, 400)
+        _win._restore_columns()
+        before = [self.header.sectionSize(i) for i in range(self.header.count())]
+        _win.resize(_win.width() + 100, _win.height())
+        _app.processEvents()
+        self.assertEqual(self.header.sectionSize(0), 350)
+        self.assertEqual(self.header.sectionSize(3), 120)
+        self.assertEqual([self.header.sectionSize(i) for i in range(1, self.header.count())],
+                         before[1:])
+        _win.resize(_win.width() - 100, _win.height())
+        _app.processEvents()
+        self.assertEqual(self.header.sectionSize(0), 250)
+        _win.artists_view.setColumnWidth(0, 275)
+        self.assertEqual(self.header.sectionSize(0), 275)
+        _win._show_artists()
+        _win.resize(_win.width() + 80, _win.height())
+        _app.processEvents()
+        self.assertEqual(self.header.sectionSize(0), 355)
+        self.assertEqual(_win.artists_view.columnWidth(0), 355)
+
+    def test_scrollbar_track_starts_below_header_with_overflow_and_at_both_ends(self):
+        from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+        _win.model.set_rows([{'id': str(i), 'title': f'Track {i}'} for i in range(300)])
+        self.header.resizeSection(0, _win.table.width() + 100)
+        _app.processEvents()
+        self.assertTrue(_win.table.horizontalScrollBar().isVisible())
+        self.assertGreater(_win.table.verticalScrollBar().maximum(), 0)
+        for view, header in ((_win.table, self.header),
+                             (_win.artists_view, _win.artists_view.header())):
+            bar = view.verticalScrollBar()
+            header_bottom = header.mapTo(view, QPoint(0, header.height())).y()
+            self.assertEqual(bar.mapTo(view, QPoint(0, 0)).y(), header_bottom)
+            for position in (bar.minimum(), bar.maximum(), bar.minimum()):
+                bar.setValue(position)
+                option = QStyleOptionSlider()
+                option.initFrom(bar)
+                option.orientation = Qt.Vertical
+                option.minimum, option.maximum = bar.minimum(), bar.maximum()
+                option.sliderPosition, option.sliderValue = position, position
+                option.pageStep = bar.pageStep()
+                handle = bar.style().subControlRect(
+                    QStyle.CC_ScrollBar, option, QStyle.SC_ScrollBarSlider, bar)
+                self.assertGreaterEqual(bar.mapTo(view, handle.topLeft()).y(), header_bottom)
+        self.assertEqual(_win.table.rowAt(0), 0)
+
+    def test_fitted_columns_do_not_flash_horizontal_scrollbar_during_window_resize(self):
+        from PySide6.QtCore import QObject
+        class Probe(QObject):
+            def __init__(self):
+                super().__init__()
+                self.visibility_events = []
+            def eventFilter(self, obj, event):
+                if event.type() in (QEvent.Show, QEvent.Hide):
+                    self.visibility_events.append(event.type())
+                return False
+        header = self.header
+        fixed = sum(header.sectionSize(i) for i in range(1, header.count()))
+        header.resizeSection(0, _win.table.viewport().width() - fixed)
+        _app.processEvents()
+        bar = _win.table.horizontalScrollBar()
+        self.assertFalse(bar.isVisible())
+        probe = Probe()
+        bar.installEventFilter(probe)
+        try:
+            width, height = _win.width(), _win.table.viewport().height()
+            for delta in (30, 60, 10, 0):
+                _win.resize(width + delta, _win.height())
+                _app.processEvents()
+                self.assertEqual(_win.table.viewport().height(), height)
+            self.assertEqual(probe.visibility_events, [])
+        finally:
+            bar.removeEventFilter(probe)
+
+
 class ArtistMerges(unittest.TestCase):
     def tearDown(self):
         _win.aliases.clear()
@@ -3730,6 +3876,155 @@ class TaskOwnership(unittest.TestCase):
         finally:
             release.set()
             pb.shutdown()
+
+
+class PlaybackTime(unittest.TestCase):
+    def setUp(self):
+        from desktop.player import PlayerBar
+        self.pb = PlayerBar()
+
+    def tearDown(self):
+        self.pb.shutdown()
+
+    def test_elapsed_total_and_hour_formats_follow_duration_and_seeks(self):
+        pb = self.pb
+        self.assertEqual(pb.playback_time_text, '0:00/0:00')
+        for duration, position, expected in (
+                (195_000, 83_000, '1:23/3:15'),
+                (3_599_999, 3_598_000, '59:58/59:59'),
+                (3_600_000, 83_000, '0:01:23/1:00:00'),
+                (3_723_000, 3_601_000, '1:00:01/1:02:03'),
+                (363_723_000, 360_001_000, '100:00:01/101:02:03'),
+                (195_000, -1, '0:00/3:15'),
+                (195_000, 200_000, '3:15/3:15')):
+            pb._on_dur(duration)
+            pb._on_pos(position)
+            self.assertEqual(pb.playback_time_text, expected)
+        pb._pos = pb._dur = 0
+        pb._emit_playback_time(0)
+        self.assertEqual(pb.playback_time_text, '0:00/0:00')
+
+    def test_position_polling_publishes_only_when_the_display_changes(self):
+        events = []
+        pb = self.pb
+        pb.playback_time_changed.connect(events.append)
+        pb._on_dur(195_000)
+        for position in (83_000, 83_001, 83_250, 83_999):
+            pb._on_pos(position)
+        self.assertEqual(events, ['0:00/3:15', '1:23/3:15'])
+        pb._on_pos(84_000)
+        pb._on_pos(13_000)  # A paused cue/seek updates immediately too.
+        self.assertEqual(events[-2:], ['1:24/3:15', '0:13/3:15'])
+
+    def test_drag_preview_is_not_overwritten_by_a_late_backend_tick(self):
+        pb = self.pb
+        pb._on_dur(195_000)
+        pb._on_pos(83_000)
+        pb._deck_drag_active = True
+        pb.wave._drag_origin_ms = 83_000
+        pb.wave._drag_preview_ms = 84_000
+        pb._on_wave_preview(84_000)
+        pb._paint_position(83_500)
+        pb._on_dur(196_000)
+        self.assertEqual(pb.playback_time_text, '1:24/3:16')
+        pb._deck_drag_active = False
+        pb.wave._drag_origin_ms = None
+        pb.wave._drag_preview_ms = None
+        pb._on_pos(84_000)
+        self.assertEqual(pb.playback_time_text, '1:24/3:16')
+
+    def test_toolbar_receives_clock_text_and_reserves_space_for_hours(self):
+        pb = _win.player_bar
+        position, duration = pb._pos, pb._dur
+        size = _win.size()
+        visible = _win.isVisible()
+        try:
+            _win.resize(1240, 800)
+            _win.show()
+            _app.processEvents()
+            pb._dur = 3_723_000
+            pb._emit_playback_time(3_601_000)
+            label = _win.playback_time
+            label.parentWidget().layout().activate()
+            self.assertEqual(label.text(), '1:00:01/1:02:03')
+            self.assertGreaterEqual(label.width(), label.fontMetrics().horizontalAdvance(label.text()))
+            widgets = [*_win.grid_edit_buttons, _win.bpm_value,
+                       _win.quantize_btn, label, _win.my_tags]
+            ordered = sorted(widgets, key=lambda widget: widget.geometry().left())
+            for left, right in zip(ordered, ordered[1:]):
+                self.assertLess(left.geometry().right(), right.geometry().left())
+        finally:
+            pb._pos, pb._dur = position, duration
+            pb._time_signature = (-1, -1)
+            pb._emit_playback_time()
+            _win.resize(size)
+            _win.setVisible(visible)
+
+
+class PrepEditStatus(unittest.TestCase):
+    def setUp(self):
+        from desktop.tag_controller import TagEditController
+        self.original = (_win._prep_update_message, _win.status_label.text(),
+                         _win._preparing_library)
+        self.status_patch = mock.patch.object(
+            TagEditController, 'update_status_text', new_callable=mock.PropertyMock)
+        self.status = self.status_patch.start()
+        self.addCleanup(self.status_patch.stop)
+        self.addCleanup(self.restore)
+        self.status.return_value = ''
+        _win._prep_update_message = ''
+        _win._preparing_library = False
+        _win._set_status_text('Ready')
+
+    def restore(self):
+        message, text, preparing = self.original
+        _win._prep_update_message = message
+        _win._preparing_library = preparing
+        _win._set_status_text(text)
+
+    def test_probe_notifications_stay_quiet_and_verified_edits_finish_done_ready(self):
+        label = _win.status_label
+        style, font = label.styleSheet(), label.font()
+        _win._sync_edit_status()
+        self.assertEqual(label.text(), 'Ready')
+        for message in ('Updating beatgrid…', 'Updating BPM…', 'Updating hot cue…',
+                        'Updating memory cue…', 'Updating My Tags…'):
+            self.status.return_value = message
+            _win._sync_edit_status()
+            self.assertEqual(label.text(), message)
+            self.assertEqual(label.styleSheet(), style)
+            self.assertEqual(label.font(), font)
+            self.status.return_value = ''
+            _win._sync_edit_status()  # An idle/probe signal is not save confirmation.
+            self.assertEqual(label.text(), message)
+            with mock.patch('desktop.app.QTimer.singleShot') as later:
+                _win._finish_edit_status()
+                self.assertEqual(label.text(), 'Done')
+                self.assertEqual(later.call_args.args[0], 2000)
+                later.call_args.args[-1]()
+            self.assertEqual(label.text(), 'Ready')
+
+    def test_old_done_timeout_cannot_clear_a_new_accepted_edit(self):
+        self.status.return_value = 'Updating beatgrid…'
+        _win._sync_edit_status()
+        self.status.return_value = ''
+        with mock.patch('desktop.app.QTimer.singleShot') as later:
+            _win._finish_edit_status()
+            clear_old = later.call_args.args[-1]
+        self.status.return_value = 'Updating hot cue…'
+        _win._sync_edit_status()
+        clear_old()
+        self.assertEqual(_win.status_label.text(), 'Updating hot cue…')
+
+    def test_failed_edit_reports_the_specific_operation_without_done(self):
+        self.status.return_value = 'Updating BPM…'
+        _win._sync_edit_status()
+        self.status.return_value = ''
+        with mock.patch.object(_win, '_finish_tag_refresh'), \
+                mock.patch.object(_win, '_start_rekordbox_refresh'):
+            _win._tag_failed('Synthetic failure')
+        self.assertEqual(_win.status_label.text(), 'Couldn’t update BPM: Synthetic failure')
+        self.assertEqual(_win._prep_update_message, '')
 
 
 class PlayerHardening(unittest.TestCase):
@@ -4124,7 +4419,7 @@ class PlayerHardening(unittest.TestCase):
         finally:
             pb.shutdown_waveforms()
 
-    def test_cue_press_during_latch_starts_a_new_momentary_gate(self):
+    def test_hot_cue_during_latched_playback_keeps_transport_running(self):
         from desktop.player import PlayerBar
 
         pb = PlayerBar()
@@ -4160,11 +4455,11 @@ class PlayerHardening(unittest.TestCase):
             self.assertTrue(pb._cue_preview_latched)
 
             pb.cue_panel.hot_slots[1].pressed.emit()
-            self.assertFalse(pb._cue_preview_latched)
+            self.assertTrue(pb._cue_preview_latched)
             self.assertTrue(state["playing"])
             pb.cue_panel.hot_slots[1].released.emit()
-            self.assertFalse(state["playing"])
-            self.assertEqual(events[-1], ("seek", 2_000))
+            self.assertTrue(state["playing"])
+            self.assertEqual(events[-2:], [("seek", 2_000), ("play",)])
         finally:
             pb.shutdown_waveforms()
 
@@ -5374,16 +5669,46 @@ class PlayerHardening(unittest.TestCase):
         _app.processEvents()
         self.assertEqual(_win._player_order(), ["2", "1", "3"])
         played = []
-        real = _win._play_track
-        _win._play_track = lambda t: played.append(t.track_id)
+        real = _win._load_track
+        _win._load_track = lambda t: played.append(t.track_id)
         try:
             _win.player_bar._track_id = "1"
             _win._play_relative(-1)
             _win._play_relative(1)
         finally:
-            _win._play_track = real
+            _win._load_track = real
             _win.player_bar._track_id = None
         self.assertEqual(played, ["2", "3"])
+
+    def test_grid_nudges_scale_by_zoom_and_keep_closest_views_precise(self):
+        from desktop.player import PlayerBar
+        from desktop.app import MainWindow
+        from types import SimpleNamespace
+        pb = PlayerBar()
+        saved = []
+        track = Track('nudge', 'Synthetic', '', 'file:///synthetic.wav')
+        fake = SimpleNamespace(
+            _sync_grid=lambda: None, player_bar=pb, _refresh_worker=None,
+            _state_maintenance=False, _shutting_down=False,
+            _device_operation_owned=lambda: False,
+            tag_controller=SimpleNamespace(lib=Library({'nudge': track}, [], 'synthetic')),
+            grid_controller=SimpleNamespace(reason=lambda *_a, **_k: '',
+                request=lambda *a, **k: saved.append((a, k)) or True))
+        try:
+            pb._track_id='nudge'; pb._src_path=str(track.path)
+            pb._native_error = ''; pb._pending_autoplay = False
+            pb.cue_panel.set_loaded(True)
+            for zoom, step in ((24,50),(32,50),(48,25),(64,25),(92,10),(128,10),
+                               (184,5),(256,5),(384,3),(576,3),(864,2),(1152,1),(1500,1)):
+                pb.wave.set_zoom(zoom, emit=False)
+                self.assertEqual(pb.grid_nudge_ms(),step)
+                for direction, sign in (('left',-1),('right',1)):
+                    for modifier, multiplier in ((Qt.NoModifier,1),(Qt.ShiftModifier,3)):
+                        with mock.patch('desktop.app.QApplication.keyboardModifiers',return_value=modifier):
+                            self.assertTrue(MainWindow._edit_grid(fake,direction))
+                        self.assertEqual(saved[-1][0],('nudge','shift',sign*step*multiplier))
+        finally:
+            pb.shutdown_waveforms()
 
     def test_track_buttons_emit_direction_requests(self):
         from desktop.player import PlayerBar
@@ -6786,6 +7111,21 @@ class SidebarSplit(unittest.TestCase):
 
 
 class ArtFetchHonesty(unittest.TestCase):
+    def test_provider_failure_never_persists_a_miss(self):
+        from types import SimpleNamespace
+        from desktop.workers import ArtFillWorker
+        from soundbox.artwork import ArtCache
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            source = root / 'track.wav'; source.write_bytes(b'fixture')
+            cache = ArtCache(root / 'art')
+            lib = Library({'1': Track('1', 'Title', 'Artist', source.as_uri())}, [], 'fixture')
+            provider = SimpleNamespace(fetch_best=mock.Mock(side_effect=RuntimeError('dependency failed')))
+            worker = ArtFillWorker(lib, cache, {}, {}, provider=provider)
+            worker.DELAY = 0
+            worker.run()
+            self.assertEqual(cache.index, {})
+
     """A broken fetch must say 'failed', never masquerade as 'no art found'."""
 
     def test_oneshot_passes_exception_through(self):
@@ -6817,6 +7157,25 @@ class ArtFetchHonesty(unittest.TestCase):
 
 
 class WaveformFill(unittest.TestCase):
+    def test_complete_receipt_survives_half_hour_without_opening_record(self):
+        from soundbox import track_analysis as ta
+        from desktop.workers import WaveformFillWorker
+        canonical = Path(self.cache) / 'complete-receipt'
+        source = Path(self.paths[0])
+        record = ta.store(canonical, '0', source, ta.analyze_soundfile(source))
+        track = Track('0', 'Test', 'Artist', source.as_uri())
+        lib = Library({'0': track}, [], source='synthetic')
+        with mock.patch('desktop.workers.time.time', return_value=1800):
+            WaveformFillWorker(lib, canonical).run()
+        original = Path.open
+        def opening(path, *args, **kwargs):
+            if path in (record, source):
+                raise AssertionError('Unchanged completed record/audio reopened')
+            return original(path, *args, **kwargs)
+        with mock.patch('desktop.workers.time.time', return_value=3600), \
+                mock.patch.object(Path, 'open', opening):
+            WaveformFillWorker(lib, canonical).run()
+
     """Canonical V5 preparation is resumable, safe, and metadata-aware."""
 
     @classmethod
@@ -7711,6 +8070,17 @@ class CollectionLandedOrder(unittest.TestCase):
         order = [t.track_id for t in _win._collection_tracks()]
         self.assertEqual(order, ["late_set", "early_rb"])  # by add-time, not file age
 
+    def test_known_add_times_do_not_resolve_paths_or_merge_shared_source_dates(self):
+        from unittest.mock import PropertyMock
+        tracks = _win.lib.tracks_by_id
+        tracks['1'].added_ts = 3000.0
+        tracks['2'].added_ts = 2000.0
+        tracks['3'].added_ts = 1000.0
+        tracks['2'].location_uri = tracks['1'].location_uri
+        with mock.patch.object(Track, 'path', new_callable=PropertyMock,
+                               side_effect=AssertionError('Known date needs no path')):
+            self.assertEqual([t.track_id for t in _win._collection_tracks()], ['1', '2', '3'])
+
     def test_missing_add_time_falls_back_to_birthtime(self):
         # No added_ts (e.g. an XML-loaded library) -> file birthtime still orders.
         from soundbox.library import Track
@@ -8154,6 +8524,20 @@ class RowCache(unittest.TestCase):
         self.assertIsNot(r1, _win._row_cache["1"])   # returns a COPY (safe to mutate)
         r1["title"] = "MUT"
         self.assertNotEqual(_win._row_cache["1"]["title"], "MUT")  # cache untouched
+
+    def test_background_warm_skips_graveyard_tracks(self):
+        hidden = set(_win.lib.hidden_ids)
+        worker = _win._warm_worker
+        try:
+            _win.lib.hidden_ids = {'1'}
+            _win._warm_worker = None
+            with mock.patch('desktop.workers.OneShotTask') as task:
+                _win._do_warm()
+                rows = task.call_args.args[0]()
+            self.assertEqual(set(rows), set(_win.lib.tracks_by_id) - {'1'})
+        finally:
+            _win.lib.hidden_ids = hidden
+            _win._warm_worker = worker
 
     def test_invalidate_clears_and_bumps_generation(self):
         _win._row_for(_win.lib.tracks_by_id["1"])

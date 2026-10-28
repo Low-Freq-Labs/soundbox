@@ -15,10 +15,11 @@ creation remains a subsequent milestone.
   button. Originally display-only, it now accepts manual constant BPM after
   separate native acceptance (milestone 4). Deck previews update immediately;
   browser BPM confirms each verified background save.
-  Default nudge 1 ms, Shift 3 ms. Preserve variable-tempo structure,
+  Zoom-scaled nudges: 50/25/10/5/3/2/1 ms from widest to closest; Shift triples
+  the current step, retaining 1/3 ms at 1152–1500 points/s. Preserve variable-tempo structure,
   audio timing and saved cue positions; respect analysis locks.
-- Numbers 1–8 use the active Hot/Memory page: populated cues retain the existing
-  held-preview/Space-latch behavior; empty slots create at the exact playhead
+- Numbers 1–8 use the active Hot/Memory page: paused populated cues retain
+  held-preview/Space-latch behavior; playing hot cues jump and keep playing; empty slots create at the exact playhead
   by default, or the nearest beat with the subsequently requested Q toggle on.
   Creation does not start preview. Command-1–8 deletes the
   corresponding cue. Hot letters stay fixed; Memory cues sort chronologically.
@@ -337,7 +338,9 @@ certify the source protocol, separately from installed desktop interaction revie
 
 ### Native format and metadata contract
 
-- Whole-grid nudges are 1 ms (Shift uses 3 ms in SoundBox). Rows translated below
+- Native references use 1-ms whole-grid nudges; SoundBox's later zoom-scaled UI
+  dispatches exact integer deltas (50/25/10/5/3/2/1 ms, Shift×3). The writer
+  and ordered clipping/recovery protocol are unchanged. Rows translated below
   zero are discarded without rephasing retained rows. Setting a downbeat moves
   the nearest beat to the playhead and rephases labels, retaining earlier beats.
   Opening partial bars are bar 0; the first full downbeat starts bar 1.
@@ -353,6 +356,17 @@ certify the source protocol, separately from installed desktop interaction revie
   at the new tempo, then extends from the rounded rebuilt tail to native EOF
   bounds. This tail restart matters at fractional millisecond positions. Native
   references include 90→90.03, 45.01→90 and 90→91→90. Constant grids only.
+  October28 STOP CAPPIN reference confirms a beat exactly at PCM EOF is included:
+  138.00 ends at 128,750 ms, and the complete candidate DAT/EXT matches native.
+  If an existing or proposed final row lies inside PWV3's uncertain EOF interval,
+  the shared source worker may resolve it with a bounded read-only PCM WAVE
+  header proof. This path accepts only exact integral-millisecond PCM endpoints
+  agreeing with PWV3 bounds; unsupported/fractional/redirected/changed sources
+  still fail closed. It skips audio payloads and performs no decode. The proof
+  binds canonical path, file epoch, framing digest, frames and rate, is journaled,
+  and is revalidated before publication/commit and recovery. Ordinary edits do
+  not open audio. RAM-only previews may omit the disputed trailing row until
+  the verified worker result arrives; previews never authorize source writes.
   Manual saves additionally increment AnalysisUpdated, update the exact primary
   DAT contentFile Hash (MD5), Size, rb_local_usn and updated_at, and advance
   the shared counter by four: file revision +2, track revision +4. All other file

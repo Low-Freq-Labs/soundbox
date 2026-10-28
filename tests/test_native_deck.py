@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
 import math
 import struct
@@ -181,6 +182,8 @@ class NativeDeckContract(unittest.TestCase):
                 # measure an interactive loaded deck, not window construction.
                 self._wait_until(lambda: win._warm_worker is None and not win._warm_timer.isActive())
                 QTest.qWait(100)
+                pb.toggle()
+                self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
                 pb._set_session_cue(200)
                 latencies = []
                 with mock.patch.object(win.model, 'refresh_art') as art, \
@@ -215,6 +218,42 @@ class NativeDeckContract(unittest.TestCase):
                 win.shutdown()
                 win.close()
                 self.app.processEvents()
+
+    def test_playing_hot_cues_and_navigation_preserve_intent_through_seek_fades(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb.track_analysis_dir = Path(self.temp.name) / 'hot-navigation-cache'
+        pb._deck_volume = 0
+        pb.show()
+        try:
+            pb.play_track('first', self.audio, autoplay=True)
+            self._wait_until(pb.is_playing)
+            for slot, target in ((0, 300), (1, 500), (2, 700)):
+                pb._marker_cue_press('hot', slot, target)
+                pb._marker_cue_release('hot', slot)  # release before fade/poll completes
+            self._wait_until(lambda: pb.is_playing() and pb.player.position() >= 700)
+            self.assertTrue(pb._ordinary_playback_requested)
+            self.assertTrue(pb.play_btn.property('playing'))
+            self.assertFalse(pb._cue_preview_active)
+            pb.play_track('next', self.audio, autoplay=None)
+            self._wait_until(lambda: pb.current_track() == 'next' and pb.is_playing())
+            pb._marker_cue_press('hot', 0, 300)
+            pb.toggle()  # Explicit pause during the hot-cue fade must win.
+            pb._marker_cue_release('hot', 0)
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            QTest.qWait(80)
+            self.assertFalse(pb.is_playing())
+            pb.play_track('paused-next', self.audio, autoplay=None)
+            self._wait_until(lambda: not pb._pending_autoplay)
+            self.assertFalse(pb.is_playing())
+            pb._marker_cue_press('hot', 1, 500)
+            self._wait_until(pb.is_playing)
+            pb._marker_cue_release('hot', 1)
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            self.assertEqual(pb.player.position(), 500)
+        finally:
+            pb.shutdown_waveforms()
+            pb.close()
 
     def test_sub_poll_cue_taps_cancel_decoder_start_and_latest_gate_wins(self):
         from desktop.player import PlayerBar
@@ -1307,6 +1346,8 @@ class NativeDeckContract(unittest.TestCase):
         parent_width, _, drawable_width = self.deck.diagnostic_view_geometry()
         scale = drawable_width / parent_width
 
+        last_record = {}
+
         def capture(position):
             self.deck.set_visual_position(position, True)
             QTest.qWait(25)
@@ -1322,6 +1363,9 @@ class NativeDeckContract(unittest.TestCase):
             self.deck.diagnostic_finish_frame_trace(output)
             info = json.loads((output / "manifest.json").read_text())
             self.assertEqual(info["gpu_completed_frames"], 1)
+            with (output / "frames.csv").open() as handle:
+                last_record.clear()
+                last_record.update(next(csv.DictReader(handle)))
             return np.frombuffer((output / "frames.bgra").read_bytes(), dtype="u1").reshape(
                 info["crop_height_pixels"], 512, 4).copy()
 
@@ -1334,6 +1378,8 @@ class NativeDeckContract(unittest.TestCase):
                     # stop: exact-second phases alone can miss a cell boundary.
                     for base in ((50000, 42704) if zoom == 864 else (50000,)):
                         first = capture(base)
+                        first_record = dict(last_record)
+                        continuous_rgb = mode == "RGB"
                         point_rate = round(zoom)
                         common = math.gcd(44100, point_rate)
                         shift = round(point_rate / common * scale)
@@ -1352,10 +1398,25 @@ class NativeDeckContract(unittest.TestCase):
                             # and the logical-point close quantum on this screen.
                             # Opaque fill AND fine contour retain their pixels.
                             phase = capture(base + 200.0 / zoom)
-                            np.testing.assert_array_equal(
-                                first[30:-30, 5:105, :3],
-                                phase[30:-30, 5:105, :3])
-                        if mode in ("RGB", "BLUE") and zoom <= 384 and base == 50000:
+                            if continuous_rgb:
+                                # Read the rendered frame's own clock ledger:
+                                # subpixel travel must follow source samples,
+                                # without quantizing back onto physical pixels.
+                                frames = (int(last_record['source_frame'])
+                                          - int(first_record['source_frame']))
+                                expected = frames / 44100 * zoom * scale * 4
+                                actual = (float(last_record['attribute_offset'])
+                                          - float(first_record['attribute_offset']))
+                                self.assertAlmostEqual(actual, expected, delta=.001)
+                                self.assertFalse(np.array_equal(
+                                    first[30:-30, 5:105, :3],
+                                    phase[30:-30, 5:105, :3]))
+                            else:
+                                np.testing.assert_array_equal(
+                                    first[30:-30, 5:105, :3],
+                                    phase[30:-30, 5:105, :3])
+                        if (mode in ("RGB", "BLUE") and zoom <= 384
+                                and base == 50000 and not continuous_rgb):
                             # A 0.75-physical-pixel move must advance exactly one
                             # pixel, not remain frozen at the old two-pixel Retina
                             # quantum. The aligned contour must retain its pixels.

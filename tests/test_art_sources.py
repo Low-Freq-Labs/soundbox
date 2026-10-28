@@ -10,6 +10,24 @@ from soundbox_personal import discovery as discovery
 
 
 class SourceExclusions(unittest.TestCase):
+    def test_batch_status_uses_one_policy_snapshot_and_notices_replacement(self):
+        import json
+        with tempfile.TemporaryDirectory() as area:
+            cache = ArtCache(Path(area) / 'art')
+            cache.index = {str(i): {'status': 'ok', 'src': 'https://soundcloud.com/artist/song'}
+                           for i in range(100)}
+            with patch.object(cache, 'source_exclusions', wraps=cache.source_exclusions) as policy:
+                self.assertEqual(set(cache.status_kinds(cache.index).values()), {'cover'})
+                policy.assert_called_once()
+            path = cache.root / 'source-policy.json'
+            path.write_text(json.dumps({'schema': 1, 'accounts': ['artist']}))
+            self.assertEqual(set(cache.status_kinds(cache.index).values()), {'blocked'})
+            path.unlink()
+            self.assertEqual(set(cache.status_kinds(cache.index).values()), {'cover'})
+            path.symlink_to(Path(area) / 'missing')
+            with self.assertRaises(ValueError):
+                cache.status_kinds(cache.index)
+
     def test_review_source_identity_ignores_soundcloud_tracking_but_not_different_uploads(self):
         source = "https://soundcloud.com/rissrossmusic/who-is-she"
         for alias in (source + "?utm_source=api&utm_campaign=social_sharing",

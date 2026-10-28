@@ -63,7 +63,12 @@ repository can answer the question.
   may change the four native djmdContent fields and local counter. Manual BPM
   requires separate manual_bpm_accepted authority; it additionally updates
   AnalysisUpdated and only the primary DAT contentFile hash/size/history, with
-  the native +4 counter sequence. Its recovery binds that exact metadata row. Respect
+  the native +4 counter sequence. Its recovery binds that exact metadata row.
+  Ambiguous manual-BPM terminal rows may use a bounded read-only PCM WAVE
+  header proof in that worker: exact integral milliseconds within native PWV3
+  bounds, stable canonical identity/framing, journaled and revalidated through
+  publication/commit/recovery. Exact-EOF inclusion passed native reference
+  October28; unsupported endpoints fail closed. No audio payload read or decode. Respect
   Analysis Lock, preserve unknown metadata, reject unverified tempo/sync states,
   and retain encrypted DB plus exact analysis before/after backups. Shared
   Tag/Cue/Grid lock/journal recovery validates the whole set before publication;
@@ -431,9 +436,16 @@ or on selected-track load. Dataless sources defer until local; never invalidate
 the whole library at startup. Preserve manual grid/cue
 ownership and authoritative DB cues. MP3 source-origin changes must couple
 analysis, audible playback, duration and seeks; never shift only the waveform.
-Header probes belong to the native decode thread. See `docs/PLAYER.md`.
+Playback-origin header probes belong to the native decode thread; the bounded
+manual-grid PCM endpoint proof uses the shared source worker. See `docs/PLAYER.md`.
 
 ## Development
+
+Prepared browser rows live only in disposable `browsercache.json`, bound to
+complete display inputs and a versioned checksum. They never supply native edit
+or device-export authority. Bump `soundbox.browser_cache.SCHEMA` whenever display
+derivation semantics change. Invalidating rows must also retire their checkpoint
+key; artwork policy/visibility and source authority remain independently fresh.
 
 Desktop accent roles come from `desktop.theme`, persisted as `settings.theme_accent`.
 Use those roles for UI chrome rather than fixed purple values. The supplied SVG

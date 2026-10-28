@@ -445,6 +445,7 @@ class ArtFillWorker(QThread):
         self.artist_overrides = artist_overrides
         self.title_overrides = title_overrides
         self.provider = provider
+        self.changed_track_ids: set[str] = set()
         self._stop = False
         self._playback_active = threading.Event()
 
@@ -507,6 +508,7 @@ class ArtFillWorker(QThread):
                     return
                 if result and self.cache.apply_excluded_profile(tid, snapshot, result, artist):
                     replaced += 1
+                    self.changed_track_ids.add(tid)
                     self.profile_changed.emit(tid)
                 time.sleep(self.DELAY)
             if attempted:
@@ -541,11 +543,17 @@ class ArtFillWorker(QThread):
                 err += 1
                 if err <= 3:
                     LOG.warning("Art fetch failed for %r: %r", title[:40], exc)
+                # Dependency initialization/network errors are retryable failures,
+                # never a durable claim that this track has no artwork.
+                self.progress.emit(i, total)
+                time.sleep(self.DELAY)
+                continue
             if self._stop:
                 break
             stored = self.cache.store_auto_if_unfetched(t.track_id, res)
             if stored and res:
                 ok += 1
+                self.changed_track_ids.add(t.track_id)
             self.progress.emit(i, total)
             time.sleep(self.DELAY)
         self.cache.rebalance_default_photos()
@@ -899,7 +907,8 @@ class WaveformFillWorker(QThread):
         from soundbox.preparation_inventory import PreparationInventory, signature
         inventory = (PreparationInventory(Path(self.track_analysis_dir) / 'preparation-index.json')
                      if self.track_analysis_dir else None)
-        policy = [2, int(time.time() // 1800), DETAIL_MODEL, analysis.SCHEMA, analysis.COLOR_MODEL, analysis.WAVEFORM_MODEL,
+        retry_epoch = str(int(time.time() // 1800))
+        policy = [3, DETAIL_MODEL, analysis.SCHEMA, analysis.COLOR_MODEL, analysis.WAVEFORM_MODEL,
                   analysis.THREE_BAND_MODEL, analysis.DISPLAY_WAVEFORM_MODEL,
                   analysis.HEIGHT_ENCODING, analysis.RANGE_ENCODING,
                   analysis.RANGE_MIP_ENCODING, analysis.RANGE_MIP_DIVISORS]
@@ -938,8 +947,11 @@ class WaveformFillWorker(QThread):
                         paths += [dat, dat.with_suffix('.EXT'), dat.with_suffix('.2EX')]
                     inputs = [policy, source_cues, getattr(t, 'bpm', '')]
                     before = signature(paths, inputs)
+                    retry_key = 'fallback:' + track_id
                     if (inventory is not None and track_id not in self.force_track_ids
-                            and inventory.matches(track_id, before)):
+                            and inventory.matches(track_id, before)
+                            and (retry_key not in inventory.rows
+                                 or inventory.matches(retry_key, retry_epoch))):
                         reused += 1
                         continue
                     audio_path = str(t.path) if t.path.is_file() else ""
@@ -1041,10 +1053,15 @@ class WaveformFillWorker(QThread):
                         continue
                     if inventory is not None and ready:
                         inventory.remember(track_id, before, signature(paths, inputs))
+                        if fallback_modes or compact_pending:
+                            inventory.remember(retry_key, retry_epoch, retry_epoch)
+                        else:
+                            inventory.forget(retry_key)
             except OSError:
                 continue
         if inventory is not None:
-            inventory.prune(str(tid) for tid in self.lib.tracks_by_id if str(tid) not in hidden)
+            inventory.prune(key for tid in self.lib.tracks_by_id if str(tid) not in hidden
+                            for key in (str(tid), 'fallback:' + str(tid)))
             try:
                 inventory.flush()
             except OSError as exc:

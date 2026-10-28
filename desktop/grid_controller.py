@@ -10,7 +10,8 @@ from PySide6.QtCore import QEventLoop, QObject, QTimer, Signal
 
 from soundbox import rekordbox_db, track_analysis
 from soundbox.rekordbox_grid import (
-    Beat, GridEdit, clear_secondary_grid, read_grid, transform_beats, transform_grid,
+    AmbiguousGridEnd, Beat, GridEdit, clear_secondary_grid, read_grid, replace_grid,
+    transform_beats, transform_grid,
 )
 from soundbox.rekordbox_grid_store import PilotGridStore, load_grid_authority
 from soundbox.rekordbox_write import ConflictError
@@ -157,11 +158,22 @@ class GridEditController(QObject):
         bpm = snapshot.track['BPM'] / 100
         for group in self._queue:
             if group.track_id == tid:
-                dat, ext = transform_grid(dat, ext, group.operation, group.value,
-                                           tuple(group.nudges))
+                dat, ext = self._preview_transform(dat, ext, group.operation, group.value,
+                                                   tuple(group.nudges))
                 if group.operation in ('double', 'halve', 'bpm'):
                     bpm = read_grid(dat)[0].tempo / 100
         return dat, ext, bpm
+
+    @staticmethod
+    def _preview_transform(dat, ext, operation, value, nudges=()):
+        try:
+            return transform_grid(dat, ext, operation, value, nudges)
+        except AmbiguousGridEnd:
+            # The accepted source worker must verify the disputed endpoint.
+            # This RAM-only preview omits that uncertain trailing row, as it
+            # already does before initial native EOF metadata is available.
+            beats = transform_beats(read_grid(dat), operation, value, nudges)
+            return replace_grid(dat, beats), clear_secondary_grid(ext)
 
     def view(self, tid):
         result = self._view_bytes(tid)
@@ -194,7 +206,7 @@ class GridEditController(QObject):
             if (operation not in ('downbeat', 'shift', 'double', 'halve', 'bpm')
                     or type(value) is not int):
                 raise ValueError('Invalid grid operation or millisecond value')
-            after = transform_grid(current[0], current[1], operation, value) if current else None
+            after = self._preview_transform(current[0], current[1], operation, value) if current else None
             if current is None:
                 if tid not in self._preview_bases and preview_rows:
                     beats = tuple(Beat(r[0], round(r[2] * 100), r[1]) for r in preview_rows)
@@ -239,6 +251,9 @@ class GridEditController(QObject):
 
     def _set_owned(self):
         self.shared.grid_waiting = bool(self._queue or self._probe_wanted)
+        self.shared.grid_update_status = (
+            'Updating BPM…' if self._queue[0].operation in ('bpm', 'double', 'halve')
+            else 'Updating beatgrid…') if self._queue else ''
 
     def _ready_tail(self):
         if self._queue:

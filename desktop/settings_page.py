@@ -38,7 +38,9 @@ class SettingsPageMixin:
         text_color = {'white': '#ffffff', 'black': '#000000', 'custom': custom}[mode]
         color = theme.set_accent(value, text_color)
         self.settings['theme_accent'] = color
-        QApplication.instance().setStyleSheet(theme.QSS)
+        app = QApplication.instance()
+        if app.styleSheet() != theme.QSS:
+            app.setStyleSheet(theme.QSS)
         if hasattr(self, 'wordmark'):
             self.wordmark.set_accent(color)
         if hasattr(self, '_theme_color'):
@@ -85,7 +87,7 @@ class SettingsPageMixin:
         if color.isValid():
             self._apply_theme_text('custom', color.name(), save=True)
 
-    def _apply_settings_to_lib(self):
+    def _apply_settings_to_lib(self, *, invalidate_rows=True):
         """Push current settings onto the loaded library (a pure display/export
         filter — never modifies rekordbox)."""
         if self.lib is not None:
@@ -109,7 +111,8 @@ class SettingsPageMixin:
             except (OSError, ValueError) as exc:
                 LOG.error("Default artwork assignments were not saved: %s", exc)
                 self._flash_status("Default artwork assignments NOT saved — check space/permissions", 20)
-            self._invalidate_rows()  # title-junk feeds effective_title
+            if invalidate_rows:
+                self._invalidate_rows()  # title-junk feeds effective_title
 
     def _settings_section(self, text: str) -> QWidget:
         """A section header (small caps + divider). First thing above a group of rows."""

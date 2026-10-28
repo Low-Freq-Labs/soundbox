@@ -68,7 +68,17 @@ cues; see [PLAYER](PLAYER.md). Those readers and SoundBox's canonical analysis
 provide useful inputs, not proof of valid device files. The bridge expresses
 PQTZ units, cue semantics and proposed waveform streams; complete container/tag
 encoding, path consistency and actual on-deck behavior still need validation.
-Its synthetic RGB field output must not be treated as already serialized PWV5.
+The October 27 strict research contract separates `DisplayWaveformFields` from
+byte-preserving `NativeWaveformStreams`. It no longer labels three-byte display
+RGB as packed PWV5 or averages spectral bands into a purported exact PWV7.
+Invalid beat numbers, nonrepresentable tempos, cue identities, endpoints and
+out-of-range values are rejected instead of substituted or clamped. These are
+field/provenance boundaries, not a complete binary encoder or hardware proof.
+Future export must capture fresh authoritative DB cues: accepted cue edits can
+be DB-only, leaving ANLZ cue sections stale. Drain accepted saves before capture;
+bind verified grids, original waveform sections and cue identities to the same
+track/audio source. Display palettes, GPU mips and RAM-only previews confer no
+device serialization authority. Unknown original sections remain preserved.
 
 Current SoundBox candidate policy allows MP3, WAV, AIFF/AIF and FLAC; it excludes
 AAC/ALAC/M4A/MP4 from future CDJ export. This is SoundBox's present policy in

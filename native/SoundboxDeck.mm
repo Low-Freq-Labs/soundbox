@@ -2607,14 +2607,14 @@ public:
             static_cast<uint32_t>(std::min<NSUInteger>(
                 waveAttributeCount_,
                 std::numeric_limits<uint32_t>::max()));
-        // Keep RGB/BLUE on a fixed physical raster phase. Wider zooms use
-        // one physical pixel per increment; close stops retain the accepted
-        // whole-logical-point motion. A two-pixel Retina step was visibly
-        // coarse at 256/384. Audio, seeks, grid and 3BAND remain continuous.
+        // RGB uses continuous translation with area-based compositing at every
+        // zoom. BLUE retains physical-pixel steps wide, logical-point steps close.
         const double displayPixelStep = uniforms.pixelsPerSecond <= 384.0f
             ? 1.0 : drawableScale;
         uniforms.waveAttributeCurrentOffset = static_cast<float>(
-            (uniforms.waveformMode == 3 ? exactAttributeCenter
+            ((uniforms.waveformMode == 3
+                    || uniforms.waveformMode == 2)
+                ? exactAttributeCenter
                 : std::round(exactAttributeCenter
                     / (attributeSamplesPerPixel * displayPixelStep))
                     * attributeSamplesPerPixel * displayPixelStep)
@@ -3292,7 +3292,7 @@ struct CoverageMoments {
 };
 struct IntervalSurface {
     float coverage;
-    float3 premultipliedLinearColor;
+    float3 premultipliedColor;
 };
 constant uint kWaveAttributeClockBlock = 128u;
 struct WaveAttributeClock {
@@ -4216,10 +4216,14 @@ inline IntervalSurface resolve_interval_surface(
         const float lower1 = center1 - halfWidth1;
         const float upper0 = center0 + halfWidth0;
         const float upper1 = center1 + halfWidth1;
-        const float3 color0 =
-            display_srgb_to_linear(saturate(encodedColors[segment]));
-        const float3 color1 =
-            display_srgb_to_linear(saturate(encodedColors[segment + 1]));
+        // RGB integrates authored display channels before decoding the final
+        // opaque pixel. BLUE keeps its existing linear-light radial field.
+        const float3 color0 = blueMode
+            ? display_srgb_to_linear(saturate(encodedColors[segment]))
+            : saturate(encodedColors[segment]);
+        const float3 color1 = blueMode
+            ? display_srgb_to_linear(saturate(encodedColors[segment + 1]))
+            : saturate(encodedColors[segment + 1]);
 
         // Split at every change in coverage or BLUE's radial/color branch.
         // The color integral must follow the visible part of the pixel, not
@@ -4281,9 +4285,9 @@ inline IntervalSurface resolve_interval_surface(
             result.coverage += moments.area * segmentSpan;
             if (!blueMode) {
                 // PWV5 color and signed coverage are both piecewise linear
-                // over this song-space segment. Integrate their product in
-                // linear light so a hidden tap cannot tint a visible one.
-                result.premultipliedLinearColor +=
+                // over this song-space segment. Integrate display channels
+                // jointly so a hidden tap cannot tint a visible one.
+                result.premultipliedColor +=
                     (color0 * moments.area
                         + (color1 - color0) * moments.firstMoment)
                     * segmentSpan;
@@ -4308,7 +4312,7 @@ inline IntervalSurface resolve_interval_surface(
                 const float radialBlend = smoothstep(0.0, 1.0, radial);
                 const float3 edgeLinear = mix(color0, color1, position);
                 const float coverage = saturate(mix(value0, value1, position));
-                result.premultipliedLinearColor += mix(
+                result.premultipliedColor += mix(
                     centerLinear, edgeLinear, radialBlend)
                     * (coverage * weights[tap] * halfSpan * segmentSpan);
             }
@@ -4316,7 +4320,7 @@ inline IntervalSurface resolve_interval_surface(
     }
     const float normalization = 1.0 / max(totalSpan, 1e-6);
     result.coverage = saturate(result.coverage * normalization);
-    result.premultipliedLinearColor *= normalization;
+    result.premultipliedColor *= normalization;
     return result;
 }
 
@@ -4520,8 +4524,9 @@ fragment float4 wave_surface_fragment(
     const float scale = max(1.0, u.drawableScale);
     const float xPoints = in.position.x / scale;
     const float yPoints = in.position.y / scale;
-    const float3 background = display_srgb_to_linear(float3(
-        13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0));
+    const float3 encodedBackground = float3(
+        13.0 / 255.0, 14.0 / 255.0, 18.0 / 255.0);
+    const float3 background = display_srgb_to_linear(encodedBackground);
     if (u.frameTraceMarkerActive != 0) {
         // Two tiny repeated Gray-code strips bind a photographed panel frame
         // to this exact submitted drawable. Ten Gray bits cover the bounded
@@ -4608,8 +4613,8 @@ fragment float4 wave_surface_fragment(
         // Height and hue live on one fixed, oversampled global song
         // lattice. Interpolate those attributes first, then perform vertical
         // antialiasing once at the drawable. Unlike a translated RGBA
-        // waveform this never refilters coverage. RGB/BLUE use a pixel-aligned
-        // display offset; 3BAND retains continuous subpixel translation.
+        // waveform this never refilters coverage. BLUE uses a pixel-aligned
+        // display offset; RGB and 3BAND stay continuous.
         const float samplesPerPixel =
             max(1.0, u.waveAttributeSamplesPerPixel);
         const float tileX =
@@ -4711,37 +4716,34 @@ fragment float4 wave_surface_fragment(
                 profilePositions, profileCount,
                 signedPosition, heightScale, antialias,
                 u.waveformMode == 1);
-            if (u.waveformMode == 2 && interval.coverage > 0.0) {
-                // Accepted RGB column presentation: make occupied narrow
-                // detail solid without averaging or replacing source extrema.
-                // This is conservative coverage, not an exact pixel-area
-                // integral. Keep the joint integral's visible color and do
-                // not create pixels where its coverage was zero.
-                float low = min(blueMinimums[0], blueMaximums[0]);
-                float high = max(blueMinimums[0], blueMaximums[0]);
-                for (uint i = 1; i < profileCount; ++i) {
-                    low = min(low, min(blueMinimums[i], blueMaximums[i]));
-                    high = max(high, max(blueMinimums[i], blueMaximums[i]));
-                }
-                const float band = antialias / max(heightScale, 1e-5);
-                const float center = (low + high) * 0.5;
-                const float halfWidth = max((high - low) * 0.5, band);
-                // A minimum-width signed stroke may extend beyond the raw
-                // extrema. Its existing coverage must never be reduced.
-                const float columnCoverage = max(interval.coverage, saturate(
-                    (halfWidth + band - abs(signedPosition - center)) / (2.0 * band)));
-                interval.premultipliedLinearColor *= columnCoverage / interval.coverage;
-                interval.coverage = columnCoverage;
+            if (u.waveformMode == 2 && interval.coverage > 0.0
+                    && u.pixelsPerSecond != 384.0 && interval.coverage < 0.18) {
+                // Help only genuinely faint subpixel detail, regardless of hue.
+                // The smooth, monotonic shoulder joins exact area at 18%:
+                // no visibility floor, no broad occupied-column opacity boost.
+                // Preserve accepted C's exact-area presentation at 384.
+                const float fade = 1.0 - interval.coverage / 0.18;
+                const float faintCoverage = interval.coverage * (1.0 + 1.5 * fade * fade);
+                interval.premultipliedColor *= faintCoverage / interval.coverage;
+                interval.coverage = faintCoverage;
             }
             if (interval.coverage <= 0.0) {
                 discard_fragment();
             }
             // Visible color comes from the pointwise interval intersection.
-            // BLUE retains its exact area; RGB uses the explicitly conservative
-            // occupied-column coverage above without changing that color.
+            // Preserve the joint integral and its conditional color. Only faint
+            // RGB detail outside 384 receives the bounded shoulder above.
+            if (u.waveformMode == 2) {
+                // Match the accepted B preview: retain both visibility lifts,
+                // blend RGB edges in display space, then decode once for the
+                // sRGB attachment. Geometry, BLUE and the overview stay intact.
+                return float4(display_srgb_to_linear(
+                    encodedBackground * (1.0 - interval.coverage)
+                        + interval.premultipliedColor), 1.0);
+            }
             return float4(
                 background * (1.0 - interval.coverage)
-                    + interval.premultipliedLinearColor,
+                    + interval.premultipliedColor,
                 1.0);
         }
         const float coverage = positioned_profile_coverage(

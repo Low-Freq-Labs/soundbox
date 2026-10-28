@@ -1438,6 +1438,7 @@ class CuePanel(QWidget):
                 if cue is None:
                     button.setText(f"{label}   —")
                     button.setIcon(QIcon())
+                    button.setStyleSheet('')
                     button.setToolTip(
                         'Set at the current position' if self._editable else
                         self._edit_reason or f"{'Hot' if kind == 'hot' else 'Memory'} cue {label}")
@@ -1449,15 +1450,20 @@ class CuePanel(QWidget):
                                  else self._HOT_COLORS[slot])
                     color = (QColor(*raw_color) if isinstance(raw_color, list)
                              else QColor(raw_color))
-                    pixmap = QPixmap(12, 12)
+                    pixmap = QPixmap(20, 20)
                     pixmap.setDevicePixelRatio(2.0)
                     pixmap.fill(color)
                     button.setIcon(QIcon(pixmap))
-                    button.setIconSize(QSize(6, 6))
+                    button.setIconSize(QSize(10, 10))
+                    rim = color.darker(160).name()
+                    button.setStyleSheet(
+                        f'QPushButton {{ border-color: {rim}; }}'
+                        f'QPushButton:hover, QPushButton:pressed {{ border-color: {color.name()}; }}')
                     details = [cue.get("label") or "",
                                f"{'Loop' if cue.get('type') == 'loop' else 'Cue'}"
                                f" at {_fmt(position)}",
-                               "Hold to preview · Space latches"]
+                               ("Jump while playing · Hold to preview while paused"
+                                if kind == 'hot' else "Hold to preview · Space latches")]
                     button.setToolTip(" · ".join(part for part in details if part))
                     button.setEnabled(self._loaded)
                 if filled_changed:
@@ -1513,6 +1519,7 @@ class PlayerBar(QWidget):
     track_ended = Signal(str)
     now_playing_changed = Signal(str)
     playback_active_changed = Signal(bool)
+    playback_time_changed = Signal(str)
     source_changed = Signal(str)
     jump_mode_changed = Signal(str)
     waveform_zoom_changed = Signal(float)
@@ -1544,6 +1551,8 @@ class PlayerBar(QWidget):
         self.quantize_enabled = False
         self._dur = 0
         self._pos = 0
+        self.playback_time_text = "0:00/0:00"
+        self._time_signature = (0, 0)
         self._bpm = 0.0
         self._cue_ms = 0
         self._session_cue_state = SessionCueState.UNSET
@@ -1908,6 +1917,22 @@ class PlayerBar(QWidget):
     def is_playing(self) -> bool:
         return self.player.playbackState() == PlaybackState.PLAYING
 
+    def grid_nudge_ms(self) -> int:
+        """Coarse-to-fine source-grid steps; the closest views retain 1 ms."""
+        zoom = self.wave.PIXELS_PER_SECOND
+        for limit, step in ((32, 50), (64, 25), (128, 10), (256, 5),
+                            (576, 3), (864, 2)):
+            if zoom <= limit:
+                return step
+        return 1
+
+    def _wants_ordinary_playback(self) -> bool:
+        return bool(
+            (self._ordinary_playback_requested
+             or (self._pending_autoplay and self._pending_should_play)
+             or (self._pause_pending and self._transport_play_active))
+            and (not self._cue_preview_active or self._cue_preview_latched))
+
     def play_track(self, track_id: str, path, title: str = "", bpm=None,
                    analysis_path: str = "", autoplay: bool | None = True,
                    cues: list[dict] | None = None):
@@ -1915,7 +1940,7 @@ class PlayerBar(QWidget):
 
         ``autoplay=False`` still waits for prepared analysis and positions the
         paused deck on the first rekordbox beat. Browser loads use ``None`` to
-        retain ordinary playback intent; previous/next explicitly use True.
+        retain ordinary playback intent, including previous/next navigation.
         """
         path = str(path)
         changed = (track_id != self._track_id or path != self._src_path
@@ -1924,11 +1949,7 @@ class PlayerBar(QWidget):
             # Resolve before the old source's fade clears its playback request.
             # A polled PAUSED snapshot during refill is not a user pause; a
             # momentary CUE preview is not ordinary playback either.
-            autoplay = bool(
-                (self._ordinary_playback_requested
-                 or (self._pending_autoplay and self._pending_should_play)
-                 or (self._pause_pending and self._transport_play_active))
-                and (not self._cue_preview_active or self._cue_preview_latched))
+            autoplay = self._wants_ordinary_playback()
         if changed:
             self._ordinary_playback_requested = False
         if changed and (self.is_playing() or self._pause_pending):
@@ -1953,6 +1974,7 @@ class PlayerBar(QWidget):
             self._analysis_path = analysis_path or ""
             self._pos = 0
             self._dur = 0
+            self._emit_playback_time(0)
             self._cue_ms = 0
             self._session_cue_state = SessionCueState.UNSET
             self._analysis_parts = {}
@@ -2066,13 +2088,14 @@ class PlayerBar(QWidget):
         """Fade out, pause, and pin backend + visual clocks to one position."""
         self._ordinary_playback_requested = False
         if self._pause_pending:
-            if after is not None:
-                finish = lambda: self._complete_pause(after, pin_position=pin_position)
-                if fade_ms is not None:
-                    self._animate_gain(0.0, fade_ms, finish)
-                else:
-                    self._gain_epoch = self._transport_epoch
-                    self._gain_completion = finish
+            # An explicit pause can supersede a cue's pending seek/start.
+            # Retire that completion even when the new command has no `after`.
+            finish = lambda: self._complete_pause(after, pin_position=pin_position)
+            if fade_ms is not None:
+                self._animate_gain(0.0, fade_ms, finish)
+            else:
+                self._gain_epoch = self._transport_epoch
+                self._gain_completion = finish
             return
         if not self.is_playing():
             if after is not None:
@@ -2133,7 +2156,7 @@ class PlayerBar(QWidget):
 
     def toggle(self):
         self._begin_transport_intent()
-        if self._cue_preview_active:
+        if self._cue_preview_active and not self._cue_preview_latched:
             # Pressing play/Space while a cue is held converts the momentary
             # preview into normal playback. Releasing the cue will no longer
             # stop or return it.
@@ -2149,6 +2172,7 @@ class PlayerBar(QWidget):
             # The next play/Space press ends latched playback at its current
             # position; it deliberately does not jump back to the cue.
             self._ordinary_playback_requested = False
+            self._cue_preview_active = False
             self._cue_preview_latched = False
             self._session_cue_state = (
                 SessionCueState.SET if self._src_path
@@ -2194,25 +2218,29 @@ class PlayerBar(QWidget):
         self._release_cue_preview(("session", -1))
 
     def _marker_cue_press(self, kind: str, slot: int, target: int):
-        """Gate playback from one imported hot or memory cue."""
+        """Hot cues preserve ordinary playback; paused cues retain hold-preview."""
+        keep_playing = kind == 'hot' and self._wants_ordinary_playback()
         self._begin_transport_intent()
-        self._start_cue_preview(target, (kind, slot))
+        if keep_playing:
+            self._start_cue_preview(target, (kind, slot), keep_playing=True)
+        else:
+            self._start_cue_preview(target, (kind, slot))
 
     def _marker_cue_release(self, kind: str, slot: int):
         self._release_cue_preview((kind, slot))
 
     def _start_cue_preview(
-            self, target: int, control: tuple[str, int]):
+            self, target: int, control: tuple[str, int], *, keep_playing: bool = False):
         if not self._src_path:
             return
         target = max(0, min(int(target), self._dur) if self._dur else int(target))
         self._cue_preview_token += 1
         token = self._cue_preview_token
         self._cue_preview_active = True
-        self._cue_preview_latched = False
+        self._cue_preview_latched = keep_playing
         if control == ("session", -1):
             self._session_cue_state = SessionCueState.PREVIEWING
-        self._transport_play_active = False
+        self._transport_play_active = keep_playing
         self._cue_preview_target = target
         self._cue_preview_control = control
 
@@ -2446,6 +2474,7 @@ class PlayerBar(QWidget):
         if (self._deck_drag_active
                 and hasattr(self.player, "set_visual_position")):
             self.player.set_visual_position(target, True)
+            self._emit_playback_time(target)
 
     def _after_drag_paused(self):
         if not self._deck_drag_active and self._deck_drag_target is not None:
@@ -2485,10 +2514,31 @@ class PlayerBar(QWidget):
             self.wave.is_dragging() or self._deck_drag_target is not None)
         if not visual_owned:
             self.wave.set_timing(ms, self._dur)
+            self._emit_playback_time(ms)
         if not visual_owned and hasattr(self.player, "set_visual_position"):
             self.player.set_visual_position(ms, False)
         if update_transport:
             self._update_transport()
+
+    def _emit_playback_time(self, position_ms: int | float | None = None):
+        """Reuse transport updates; publish only when a displayed second changes."""
+        total = max(0, int(self._dur)) // 1000
+        position = max(0, self._pos if position_ms is None else position_ms)
+        if self._dur > 0:
+            position = min(position, self._dur)
+        signature = (int(position) // 1000, total)
+        if signature == self._time_signature:
+            return
+        self._time_signature = signature
+        hours = max(signature) >= 3600
+
+        def clock(seconds):
+            if hours:
+                return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
+            return f"{seconds // 60}:{seconds % 60:02d}"
+
+        self.playback_time_text = f"{clock(signature[0])}/{clock(total)}"
+        self.playback_time_changed.emit(self.playback_time_text)
 
     def _anchor_transport(self, ms: int | float, running: bool):
         self._transport_anchor_ms = float(max(0, ms))
@@ -2527,6 +2577,9 @@ class PlayerBar(QWidget):
     def _on_dur(self, ms: int):
         self._dur = ms
         self.wave.set_timing(self._pos, ms)
+        preview = (self.wave._drag_preview_ms if self.wave.is_dragging()
+                   else self._deck_drag_target)
+        self._emit_playback_time(preview)
         self._update_transport()
         self._try_pending_autoplay()
 

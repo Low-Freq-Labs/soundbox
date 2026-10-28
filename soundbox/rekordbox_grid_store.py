@@ -18,7 +18,8 @@ import sqlite3
 from uuid import UUID, uuid4
 
 from .rekordbox_cue_store import CueWriteAuthority, PilotCueStore, _encode_row
-from .rekordbox_grid import GridEdit, GridSnapshot, plan_grid_edit
+from .rekordbox_grid import AmbiguousGridEnd, GridEdit, GridSnapshot, plan_grid_edit
+from .pcm_endpoint import capture_pcm_endpoint
 from .rekordbox_write import (
     ConflictError, RecoveryRequired, WriteProofError, _directory,
     _inactive_journal_proof, _json, _quote, _regular,
@@ -242,6 +243,7 @@ class PilotGridStore:
         return path
 
     def _publish(self, role, raw, record):
+        self._exact_end(record)
         target = Path(record['files'][role]['path'])
         staged = self._copy_for_publish(role, raw, record)
         if self._file(target) == raw:
@@ -271,7 +273,15 @@ class PilotGridStore:
                 counter = self._counter(conn)
                 now = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
                 now = now.replace('T', ' ').replace('+00:00', ' +00:00')
-                candidate = plan_grid_edit(before, counter, edit, timestamp=now)
+                endpoint = None
+                try:
+                    candidate = plan_grid_edit(before, counter, edit, timestamp=now)
+                except AmbiguousGridEnd:
+                    # Only the disputed terminal row needs a stronger, read-only
+                    # source proof. Ordinary probes/saves never open audio.
+                    endpoint = capture_pcm_endpoint(before.track['FolderPath'])
+                    candidate = plan_grid_edit(before, counter, edit, timestamp=now,
+                                               exact_end_ms=endpoint['end_ms'])
                 if (candidate.dat, candidate.ext) == (before.dat, before.ext):
                     conn.rollback()
                     return False
@@ -300,6 +310,8 @@ class PilotGridStore:
                     record['content_file_before'] = _encode_row(before.content_file)
                     record['content_file_after'] = _encode_row(
                         file_delta.after if file_delta else before.content_file)
+                if endpoint is not None:
+                    record['exact_pcm_end'] = endpoint
                 for role, old, new in (('DAT', before.dat, candidate.dat), ('EXT', before.ext, candidate.ext)):
                     atomic_bytes(self.payloads / ('before.' + role), old)
                     atomic_bytes(self.payloads / ('after.' + role), new)
@@ -308,6 +320,7 @@ class PilotGridStore:
                 atomic_bytes(self.journal, _json(record))
                 _fault('journal-ready')
                 self.lease._guard()
+                self._exact_end(record)
                 if self._snapshot(conn).revision != before.revision or self._counter(conn) != counter:
                     raise ConflictError('Grid changed before transaction publication')
                 conn.set_authorizer(self._authorizer)
@@ -318,6 +331,7 @@ class PilotGridStore:
                     self._publish(role, raw, record)
                     _fault('published-' + role)
                 self.lease._guard()
+                self._exact_end(record)
                 _fault('before-commit')
                 conn.commit()
                 _fault('after-commit')
@@ -333,6 +347,18 @@ class PilotGridStore:
             finally:
                 conn.close()
             return True
+
+    @staticmethod
+    def _exact_end(record):
+        if 'exact_pcm_end' not in record:
+            return None
+        try:
+            proof = capture_pcm_endpoint(_decode_row(record['track_before'])['FolderPath'])
+        except (OSError, WriteProofError) as exc:
+            raise RecoveryRequired('Audio endpoint cannot be reverified; grid evidence preserved') from exc
+        if proof != record['exact_pcm_end']:
+            raise RecoveryRequired('Audio endpoint identity changed; grid evidence preserved')
+        return proof['end_ms']
 
     def _record(self):
         try:
@@ -367,7 +393,8 @@ class PilotGridStore:
                                  _decode_row(record['content_file_before'])
                                  if 'content_file_before' in record else None)
             candidate = plan_grid_edit(snap, _decode_row(record['counter_before']),
-                                       GridEdit(**record['request']), timestamp=record['timestamp'])
+                                       GridEdit(**record['request']), timestamp=record['timestamp'],
+                                       exact_end_ms=self._exact_end(record))
             after_track = candidate.changes[0].after if candidate.changes else track
             after_counter = (candidate.changes[1].after if candidate.changes
                              else _decode_row(record['counter_before']))

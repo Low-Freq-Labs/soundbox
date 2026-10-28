@@ -51,23 +51,27 @@ separately integrated edges. At a signed crossing, those edges can cover differe
 horizontal parts of one pixel; taking the smaller average overfills it.
 The October 2 correction made the fragment composite the joint coverage and
 visible color returned by `resolve_interval_surface`. BLUE retains that exact
-area contract. The October 6 accepted RGB presentation deliberately increases
-coverage in occupied columns, preserving the joint conditional color and existing
-minimum stroke; zero-area pixels stay empty. Its conservative presentation is
-not an exact-area claim. Source extrema, color mapping, LOD and one-pixel source
-footprint stay intact. RGB/BLUE use physical-pixel display increments through
-384 points/s and whole logical points at 576–1500, with continuous audio/grid/
-seek clocks. No temporal or spatial source smoothing was added.
+area contract. The October6 conservative occupied-column RGB presentation is
+historical: current RGB384 uses exact area, other stops retain only the monotonic
+faint-coverage shoulder below0.18. RGB now translates continuously at every zoom;
+BLUE retains physical-pixel increments through384 and logical points at576–1500.
+The October28 RGB edge update integrates encoded channels and decodes the final
+encoded-space background blend for Metal; BLUE remains linear-light. Both existing
+height/coverage visibility lifts, source extrema/colors, LOD, clocks and one-pixel
+footprint stay intact. No temporal blur or source smoothing was added.
 
 The former expected failure is now an ordinary passing numerical assertion.
 Tests execute the actual final fragment branch as well as its helper against
 independent pointwise quadrature and the explicit RGB column policy. A mutation
 reinstates separate-edge averaging in BLUE and must violate the exact-area oracle.
-Another removes RGB column presentation and must fail its conservative-coverage
-contract; thin-stroke and empty-pixel checks prevent overbroad implementations. Random profiles, sign crossings and tiny coverage
+Another removes the retained faint-coverage lift and must fail its bounded-
+shoulder contract. Encoded RGB edge tests exercise every zoom and a nonblack
+background; restoring endpoint decoding must violate their independent oracle.
+Thin-stroke and empty-pixel checks prevent overbroad implementations. Random profiles, sign crossings and tiny coverage
 pieces complement native translation/recenter tests across all modes and zooms.
 
-A 507-frame before/after comparison preserves all 169 3BAND frames exactly and
+The historical October2 507-frame before/after comparison preserved all169
+3BAND frames exactly and
 all recenter returns. Mean RGB/BLUE changes over the measured crop are below
 0.55 display-code values per channel at every zoom, with localized edge differences
 up to 78 codes. Evidence is in ignored `build/clean-release/`. These measurements

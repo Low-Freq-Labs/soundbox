@@ -20,10 +20,12 @@ requires an explicitly accepted library on rekordbox 6.8.7.0303. Close rekordbox
 and its background agent before saving. Cue editing supports WAV/MP3/AIFF with
 verified metadata. Grid controls support setting a bar start, whole-grid nudges,
 and constant-tempo double/half under the same accepted source boundary. Manual
-BPM entry requires its separate native acceptance flag.
+BPM entry requires its separate native acceptance flag; `138`, `138.0` and
+`138.00` all submit the same two-decimal value.
 Smart-list creation remains a subsequent milestone.
 New cues appear and become usable immediately in the playing session while
-guarded database saves run in the background. “Cues saved” confirms persistence;
+guarded database saves run in the background. The existing bottom-left footer
+names the edit being updated, then shows “Done” after verified persistence;
 normal quit finishes the queue, and a failed save restores verified cue state.
 Grid edits also update the loaded session immediately, including during the
 initial source check; verified saving remains in the background.
@@ -70,7 +72,8 @@ header footprint.
    SoundBox-owned; they do not retag your source audio.
 3. Double-click a track to load it. Playing decks keep playing; paused decks stay
    paused. **Space** toggles the loaded deck;
-   **C** is momentary CUE. Use the waveform and overview to inspect the track.
+   **C** is momentary CUE. Use the waveform and overview to inspect the track. The
+   prep-strip clock shows elapsed/total time, including hours for long sets.
 4. Connect a supported player and inspect its identity under **Devices**. Drag a
    playlist to the device and follow the displayed planning/confirmation flow.
 5. After later edits, use **Sync** when the device shows **Sync needed**. Review
@@ -166,8 +169,10 @@ in [the documentation archive](docs/archive/README.md).
   workshop before roadmap commitment.
 - **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ USB export R&D (prototype in `research/cdj_export/`).
 
-The current [software audit](docs/software-audit-2026-09.md) records architecture,
-lifecycle and performance gaps. The [release boundary](docs/release-boundaries.md)
+The [October efficiency audit](docs/efficiency-audit-2026-10.md) measures startup,
+browser and recurring work and separates candidate improvements from shipped behavior.
+The [software audit](docs/software-audit-2026-09.md) records architecture and
+lifecycle gaps. The [release boundary](docs/release-boundaries.md)
 defines the shared app and optional personal providers. The public build excludes
 the current SoundCloud provider and `yt_dlp`; the personal build retains them.
 Both use the same library format, local artwork controls, player and device guards.

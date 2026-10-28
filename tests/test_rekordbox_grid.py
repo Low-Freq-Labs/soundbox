@@ -6,9 +6,9 @@ from dataclasses import replace
 from urllib.parse import quote
 
 from soundbox.rekordbox_grid import (
-    AnalysisImage, Beat, GridEdit, GridSnapshot, clear_secondary_grid, double_grid,
+    AmbiguousGridEnd, AnalysisImage, Beat, GridEdit, GridSnapshot, clear_secondary_grid, double_grid,
     duration_bounds, halve_grid, plan_grid_edit, read_grid, replace_grid, set_bar_start, shift_grid,
-    set_grid_bpm,
+    set_grid_bpm, transform_grid,
 )
 from soundbox.rekordbox_write import WriteProofError
 
@@ -43,6 +43,31 @@ def content_file(track, dat, local_path='/synthetic/ANLZ0000.DAT'):
 
 
 class GridPlanningTests(unittest.TestCase):
+    def test_manual_bpm_includes_exact_eof_only_with_stronger_evidence(self):
+        rows = tuple(Beat(i % 4 + 1, 13801, 54 + (i * 6000000 + 6900) // 13801)
+                     for i in range(297))
+        dat = primary(rows)
+        ext = container(section(b'PQT2', bytes.fromhex('000000000100000200000000') + bytes(32), 56),
+                        section(b'PWV3', struct.pack('>III', 1, 19313, 0x960000)
+                                + bytes(19313), 24))
+        self.assertEqual(duration_bounds(ext), (128746, 128754))
+        with self.assertRaises(AmbiguousGridEnd):
+            transform_grid(dat, ext, 'bpm', 13800)
+        after, _ = transform_grid(dat, ext, 'bpm', 13800, exact_end_ms=128750)
+        self.assertEqual(len(read_grid(after)), 297)
+        self.assertEqual(read_grid(after)[-1], Beat(1, 13800, 128750))
+        with self.assertRaises(AmbiguousGridEnd):
+            transform_grid(after, ext, 'bpm', 13801)
+        restored, _ = transform_grid(after, ext, 'bpm', 13801, exact_end_ms=128750)
+        self.assertEqual(restored, dat)
+        shorter, _ = transform_grid(dat, ext, 'bpm', 13800, exact_end_ms=128749)
+        self.assertEqual(len(read_grid(shorter)), 296)
+        for end in (True, 128750.0, 128745, 128755):
+            with self.subTest(end=end), self.assertRaises(WriteProofError):
+                transform_grid(dat, ext, 'bpm', 13800, exact_end_ms=end)
+        with self.assertRaises(WriteProofError):
+            transform_grid(dat, ext, 'double', exact_end_ms=128750)
+
     def test_manual_bpm_rebuilds_then_extends_from_rounded_tail(self):
         rows = tuple(Beat((i + 3) % 4 + 1, 9000, 39 + i * 2000 // 3) for i in range(252))
         result = set_grid_bpm(rows, 9100, end_bounds_ms=(167613, 167620))

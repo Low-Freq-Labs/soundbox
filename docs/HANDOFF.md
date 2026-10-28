@@ -1,132 +1,164 @@
 # SoundBox current handoff
 
-Updated October 27, 2026, America/Chicago. Sonny accepted this build and is playing
-with it. Wrap-up publishes the completed prep/player/appearance work on `main`.
+Updated October 28, 2026, America/Chicago.
 
-## Installed app and source provenance
+## Release and runtime
 
-Installed personal **1.0.0 build 131**, signed and running; no reinstall or restart
-was needed for this documentation/cleanup wrap-up. The app remains the accepted
-binary, with embedded base revision `87687337f9b4ad526e7a9af1e14d9889546721fb`,
-dirty=true, and runtime-source fingerprint:
-`b276d6a9aa002877767759c8589b522b70f4c33fd3fb700595843cfa904e62d0`.
-Repository runtime source release: `fee2b394fd467892c63153dff7b87d79d53960fd` on `main`; this handoff is
-a documentation-only follow-up. That release has the same runtime fingerprint.
-Do not restamp the older binary with the repository commit; resolve current HEAD
-with Git.
-Installed **2026-10-27T19:31:57.205780-05:00**, launched
-**2026-10-27T19:31:57.206243-05:00**. Stable signature, personal composition,
-packaged field instructions, isolated native launch and real window verified.
-PID 26286/window 15181 were observed; resolve fresh IDs for later inspection.
+Sonny requested wrap-up. Efficiency/player/browser work and the manual-BPM EOF
+fix are complete, tested, installed and relaunched. Repository branch `main`;
+release commit: PUBLICATION_REVISION. The final documentation-only follow-up does
+not restamp the installed binary.
 
-## Completed and accepted
+Installed `/Applications/Soundbox.app`, personal **1.0.0 build 133**.
+True signed base revision `a25de73b341eedacbdc72c7bedf4d66ea66e0f39`, dirty=true,
+application source fingerprint:
+`cbd50fccf4fa9c99669b09db49037be62196f57ea3e3fdfe13ca51a1d246f2be`.
+Installed **2026-10-28T04:53:57.510539-05:00**; launch requested **2026-10-28T04:53:57.510679-05:00**.
+Signature, personal composition and source fingerprint verified against the tested
+checkout. Native source SHA remains
+`e475b3c7525ad967f74e22f2b967063824fa330e807b46fc91403a6cc5bfc345`;
+native binary outside renewed signing bytes is identical to the preceding build.
+Actual Cocoa window and offscreen release render inspected. Startup log confirms
+CoreAudio/Metal, snapshot and fresh source load: 3,740 tracks / 75 playlists;
+Collection 3,228 rows. Preparation reused 3,236 tracks and performed only one grid-
+metadata update for the native edit, with zero analysis or compact upgrades.
+Stock artwork reused all 3,106; zero new covers fetched. Ready footer and actual
+138.00 browser row observed. Resolve process/window IDs fresh.
 
-- Existing My Tags edit selected native tracks in a flat, button-width two-column
-  menu, ordered down the left column then down the right. Native acceptance passed.
-- Empty Hot/Memory slots create immediately usable session cues; populated slots
-  preview exactly. Command-1–8 deletes. A shared FIFO saves verified native rows
-  without reloading audio/library. Normal quit drains accepted intents; an abrupt
-  exit can lose not-yet-started RAM intents. Unknown recovery blocks all domains.
-- First grid clicks work during the initial source probe. Captured track/UUID/path
-  and loaded RAM rows preview immediately; source checks still precede saving.
-  Set bar start preserves earlier bars; shifts, double/half and manual constant
-  BPM share the source lane. Verified saves update browser BPM immediately and
-  reject stale row-cache results. Variable-tempo scaling remains blocked.
-- BPM entry uses Enter to submit, Escape/focus loss to cancel. Track changes
-  discard unfinished input; status refreshes preserve typing. Empty deck `000.00`.
-- Q is independently persistent in SoundBox: red on/grey off, semibold lettering.
-  New cues snap to current RAM beats when on; existing triggers stay exact. Never
-  read/change rekordbox's global Quantize preference. Grid/Q shortcuts are bindable.
-- Wordmark remains 270×55; General provides accent and White/Black/Custom selection
-  text. Title/grid/waveform edges align; cue panel spans header/deck; My Tags,
-  Settings/Search share the prep strip. Transport gaps match at 5px. The layout
-  selector has rounded ends, inset arrow and 11px text inset. Additional layouts
-  are disabled placeholders. Sonny confirmed manual BPM and final layout work.
-- Cue/scroll responsiveness passed live review. Transport edges no longer scan
-  art or discover devices. Verified encrypted backups avoid offline inventories;
-  bounded library-cache encoding avoids a full-library GIL hold. The requested
-  active-save sampler missed the edits; no live profile is claimed.
+The canceled thin black text-outline experiment never changed production source,
+launched a live viewer or reached an installed build. Scratch moved reversibly to
+Trash; receipt: `~/Library/Logs/Soundbox/text-outline-discarded-2026-10-28/`.
+The prior app and duplicate dist/build packaging moved reversibly to
+`~/.Trash/Soundbox-wrap-20261028-045509/`; exact moves are in `cleanup.json`.
+The 2fed… prior app is `previous-Soundbox.app` there; its former temporary rollback
+path is empty. Only the current installed app and active checkout remain active. Preserve all source/native
+recovery and offline fixtures; cleanup never targets AppData or media.
 
-## Final verification and preserved state
+## Current behavior
 
-Wrap-up bare `./check.sh --render` passed **1,433 tests**: 1,377 offscreen plus
-56 Cocoa, zero skips/expected failures, complete inventories reconciled. Relevant
-Cocoa controls/popups/editor, geometry, packaged smoke and actual runtime renders
-were inspected. An earlier padding-release run had one 110.924-FPS cadence miss
-against 114 minimum; its full strict rerun and the final full wrap-up run passed
-without threshold/code changes. Cause remains unestablished; no cadence fix claimed.
-Real startup: 3,740 tracks/75 playlists, zero preparation tasks, zero artwork
-fetched, 3,106 stock-art derivatives reused. No new physical-device acceptance.
+- **Original October 28 RGB B; keep BOTH visibility lifts unchanged.** Main-lane
+  RGB integrates encoded channels jointly with signed coverage, blends the encoded
+  background and decodes the final opaque pixel for Metal. BLUE/3BAND/overview/grid
+  keep their compositors. Source detail/extrema, height transfer, LOD, mips,
+  footprint and clocks are unchanged. October 27 coverage C at 384 is retained
+  underneath B; it is distinct from rejected October 28 C/D/E lift-removal/direct-
+  cell trials. Do not revive those trials or change lift/detail without instruction.
+- Elapsed/total clock uses `M:SS/M:SS`, with `H:MM:SS/H:MM:SS` on BOTH sides for
+  hour-plus tracks. Existing transport updates publish only changed seconds;
+  drag-owned preview survives late backend polls. No added polling or source reads.
+- Centered larger cue pads/color rims, intent-preserving next/previous and playing
+  hot cues, precise paused hold-preview and zoom-scaled grid nudges remain.
+- Specific prep-edit progress uses the existing bottom-left status label/style:
+  beatgrid/BPM/hot cue/memory cue/My Tags `Updating…`, then verified `Done` for 2 seconds,
+  then `Ready`. Focus-only saved-grid checks stay silent. Errors name the operation;
+  older timeouts cannot clear newer edits. Shared worker/recovery ownership stays.
+- A 30-point footer-colored right rail has a borderless inactive circle-i placeholder.
+  The actual scrollbar begins below the 26-point header. Rail/cap/footer junctions
+  have no extra separators; Settings retains a full-width footer divider.
+- Every column drags independently, including Title. Window width goes to Title
+  first when growing/shrinking, retaining other widths. Shrink precedes child layout
+  to prevent temporary horizontal-scrollbar flashes; growth follows layout. Artists
+  mirrors only changed sections; TrackModel declines unused paint roles early.
+- Startup batches art-policy reads, scopes Track construction to playlist members,
+  reuses unchanged display rows/registry, defers heavy imports and only retries
+  incomplete preparation at the bounded epoch. `browsercache.json` is disposable
+  display state; version its policy and never treat it as edit/export authority.
+- CDJ research now separates display fields from byte-preserving native streams and
+  rejects invalid musical values. It remains standalone, not an installed writer.
 
-Installation evidence: `~/Library/Logs/Soundbox/layout-text-2026-10-27/`.
-Prequit SHA `e9e042fb8308aaeb7ac7358d4a39419a2acbe04e692dae1be98d517400ca35ec`;
-quit changed only settings/columns_state. Postquit/postlaunch/post-startup SHA:
-`f6cd3f1dbae016243d091f70a11e8e9b4d68194fe4b3a9ecd254d82fa5ad0a6d`.
-That final startup snapshot was 2026-10-27T19:32:35.120413-05:00. Source DB/WAL,
-ten sampled DAT/EXT/2EX sets and all authorities stayed exact across that install.
+## Manual BPM fix and native reference
 
-Wrap-up read-only snapshot at **2026-10-27T19:42:58.016353-05:00** has SHA:
-`276fed975e79d4a5bc2500e2221e014da5e1aef4d4d4fec6389232bf16f76527`.
-Since installation, only Sonny's settings changed: Q false→true and zoom
-92→1152. Curation and all 4,040 art/review hashes remain exact; 3,277 analysis files.
-Counts: 10 custom playlists, 84 imports, 489 artist overrides, 1,101 title edits,
-517 hidden tracks, 1 removal group, 0 additions, 24 aliases, 22 settings. This is
-an as-of disk snapshot while the accepted app stays open; later prep may supersede it.
+`138`, `138.0` and `138.00` submit the same 13800 hundredths and display 138.00.
+The apparent 138.01 lock was a terminal-row proof failure, not a decimal parser bug.
+STOP CAPPIN (track 228450310, UUID a191ffb9-1cf5-4166-b61b-97cb453a311b) has
+5,677,875 PCM frames at 44,100 Hz: exactly 128,750 ms. PWV3 bounds EOF to
+128746–128754 ms. Sonny set 138.00 in rekordbox and closed it. Native retains its
+297th beat exactly at 128750 ms. Complete native DAT SHA:
+`715850b961c1ae5caebc941bd390a9c87699ec51401d3521f168e7832312a872`.
+An isolated reconstruction reproduced the earlier 138.01 receipt hash, then the
+fixed transform matched the complete native 138.00 DAT/EXT bytes exactly.
 
-## Cleanup and evidence
+`AmbiguousGridEnd` admits only a provisional RAM preview; the accepted source
+worker resolves disputed existing/proposed terminal rows using a bounded read-only
+PCM WAVE framing proof. It skips payloads/decoding, requires exact integral
+milliseconds agreeing with native bounds, and binds canonical path, stable file
+epoch, header digest, frames and rate. Journaled proof is revalidated before
+publication/commit and during recovery. Unsupported/fractional/redirected/changed
+sources fail closed. Ordinary edits never open audio. Existing backup, +4 counter,
+manual authority, metadata, shared lock/journal and closed-app guards remain.
 
-Wrap-up retired the exact prior rollback app, duplicate dist app/collection and
-build/personal intermediates reversibly to Trash. The empty rollback directory
-was removed. Keep only the installed app and active checkout; retain build/native,
-build/check and required fixtures. AppData/source/device recovery were untouched.
-Exact cleanup destinations, final gate reports/render, state comparison and Git
-publication receipts: `~/Library/Logs/Soundbox/wrap-2026-10-27/`.
-Earlier retirement receipts remain in layout-selector/layout-text evidence roots.
-Trash is not retained recovery. No superseded app rollback is required after
-Sonny's acceptance. Manual-BPM native/copy/source proofs and install evidence
-remain in `~/Library/Logs/Soundbox/manual-bpm-2026-10-27/` and protected AppData.
+**Live source remains at Sonny's native 138.00 edit.** No old DAT, native counters,
+metadata or source audio were restored. This fix was exercised on isolated source
+transactions plus the native read-only reference; no new actual-source writer
+acceptance is implied. Fresh installed snapshot confirms 138.00.
 
-## Manual BPM acceptance and source safety
+## Validation and state
 
-Native No Trust captures90→91→90 supplement prior90→90.03 and45.01→90 references.
-All four complete DAT/EXT replays match exactly. Native manual entry rebuilds the
-existing row count, then extrapolates from its rounded tail; one unbroken formula
-is wrong by milliseconds. Constant grids only. Native timestamps for file/track
-may differ because it defers persistence; SoundBox uses one transaction timestamp.
+Final bare `./check.sh --render`: 1,477 tests, 1,420 offscreen + 57 Cocoa; zero skips/expected failures, inventories
+reconciled. Lint, native build, types and required frozen fixtures passed. The 59
+focused checks cover shorthand/retry, endpoint bounds, framing-only reads,
+malformed/redirected/changed sources, source WAL exits before/after commit, ordinary
+edits avoiding audio, subsequent BPM edits and verified preview reconciliation.
+Release render and installed window inspected; native player/GPU gates pass.
+AGENTS/CLAUDE parity, relative Markdown links and `git diff --check` pass.
 
-Four encrypted private source-layout replays and full OfflineGridWorkspace
-inventories passed. Actual-source writer90→91→90 verified complete SQL inventory:
-only the target track, primary contentFile and local counter changed. Whole DAT/
-EXT matched native controls; audio and2EX were hash-preserved. Sonny confirmed
-91.00 and normal grid loading in rekordbox, then closed it. Reverse90.00 was
-verified against the native capture. The original primary DAT was restored under
-the existing narrow grant; no native counters/history or file metadata were
-rolled back. That historical restore can leave native file hashes describing its
-prior native-saved grid, as before. Do not broaden its scope.
+Release evidence:
+`~/Library/Logs/Soundbox/manual-bpm-recovery-2026-10-28/` contains native 138.00
+captures, verified-native-parity.json, source.json, targeted-final.log, full release
+log/inventories, app-build.log, installed receipt/provenance/native preservation,
+startup log/window, state verification and scoped cleanup receipt.
+Earlier resize/footer/RGB evidence remains in rail-seams-2026-10-28,
+browser-columns-2026-10-28, browser-footer-2026-10-28 and waveform-rgb-edge-2026-10-28
+under the same private Logs root; small private harnesses remain under build/.
 
-Source `~/Library/Pioneer/rekordbox/master.db`; exact authority is rekordbox
-6.8.7.0303, DBVersion6000, library629922790, schema
-`c3255e959e179e46cd15e6ae2da50543427c03c8399b11b7a6809515f06e8c08`.
-No Cloud/Mobile Library Sync. Closed rekordbox/agent, Analysis Lock, UUID/path,
-regular owner-controlled files, backups and shared Tag/Cue/Grid recovery remain
-mandatory. Manual metadata rejects unknown sync states; variable tempo is blocked.
-Missing primary file registration blocks manual entry, preserving original grid
-operations. Audio/XML/2EX and unrelated ANLZ sections stay untouched.
+Fresh state backups:
+`~/Library/Logs/Soundbox/efficiency-implementation-2026-10-27/install/manual-bpm-`
+prequit/postquit/postlaunch/settled library/state records. Sonny had already closed
+the app for the native reference before both quit baselines. Prequit time
+**2026-10-28T04:46:50.597653-05:00**, SHA `1bddad40428bc18220ca9b0a71d4f39e376c15b646f48644333e17a7c9fcfb1c`.
+Postquit **2026-10-28T04:52:32.307464-05:00**, SHA `1bddad40428bc18220ca9b0a71d4f39e376c15b646f48644333e17a7c9fcfb1c`.
+Settled **2026-10-28T04:54:24.559899-05:00**, SHA `1bddad40428bc18220ca9b0a71d4f39e376c15b646f48644333e17a7c9fcfb1c`.
+Curation excluding settings remained
+`a32587405b5432d55c16c7a3b5c8dc4113c2217f7785533af90deaf051cc5cc6`.
+All 4,041 art/review hashes, 3
+authorities and symlink inventory preserved. Library/settings bytes are identical
+across all four stages; installed-state-verification.json records empty differences. Counts: 10 custom, 84 imports,
+489 artist overrides, 1101 title edits, 517 hidden, 1 removal group, 0 additions,
+24 aliases, 22 settings; analysis count 3276.
+These are dated baselines; preserve subsequent user edits.
 
-Protected AppData roots: rekordbox_recovery/native-grid-pilot-20261027,
+## Remaining work and safety
+
+Center glistening/native appearance equivalence and occasional scrolling hitch
+remain open. Original B's 39-frame/13-zoom preview parity is implementation parity,
+not native appearance acceptance. Earlier populated traces retained occasional
+16.667-ms presented gaps, roughly 117 fps and zero audio underruns. Keep zero-time
+rows in cadence evidence. No fill, temporal blur, source smoothing or lift removal.
+MOONLIGHT 576 reference work remains in build/efficiency-implementation-2026-10-27/
+moonlight-576; Sonny's recordings/max-zoom stills are retained. No preview is running.
+
+Synthetic 3000-row/240-step resize wall times improved median 46.931→36.265 ms,
+p95 60.522→45.186 ms; horizontal-bar Show/Hide 119/118→0/0. This is not live-drag or
+compositor 120 fps proof. Earlier 764d… build measured 20 warm packaged sanitized
+snapshot launches at median 1402 ms / p95 1424 ms; not repeated on this BPM build.
+This is a Qt-paint proxy, not OS-cold or fresh-source readiness.
+
+Next approved milestones: single-tag intelligent playlists, then default-off
+full-Collection setting. Variable-tempo scaling deferred. MiniMeters canceled.
+Physical iPod acceptance awaits its return; CDJ USB is later and `/PIONEER` stays
+excluded. No new intelligent-playlist, physical-device or CDJ acceptance.
+
+Source authority remains rekordbox 6.8.7.0303, DBVersion 6000, library 629922790,
+schema `c3255e959e179e46cd15e6ae2da50543427c03c8399b11b7a6809515f06e8c08`.
+Sonny alone operates rekordbox reference UI. Source audio is immutable. Closed
+rekordbox/agent, Analysis Lock, exact track/UUID/path, backups and Tag/Cue/Grid
+recovery remain mandatory. Native Quantize is global/user-owned; never read/write
+it. SoundBox Q is separate and affects only newly captured cue placement.
+Preserve AppData rekordbox_recovery/native-grid-pilot-20261027,
 native-grid-initial-state-pilot-20261027, native-grid-historical-pilot-20261027,
-earlier cue/tag baselines, generation58 recovery20260926-152340-47477cfa4a49.
-Preserve offline iPod20260926-163945, waveform/CDJ fixtures and curated artwork.
-No Trust original DAT hash:
+cue/tag baselines and generation 58 recovery 20260926-152340-47477cfa4a49.
+Historical No Trust primary-only restore permission does not authorize another
+track or secondary cache; original DAT SHA
 `f82e11d7a7f0d4a8a1150ae28bfcc4168602f187064ddebd2b7822fb32b9db71`.
-Incomplete*.pending captures are not baselines. Never restore older tests over
-Sonny's subsequent prep. Native Quantize is global/user-owned: never read/write it.
-SoundBox Q is independent, persistent and snaps only newly captured cue positions.
-
-## Remaining product work
-
-Next approved milestone: single-tag source intelligent-playlist creation,
-then the default-off full-Collection setting. Variable-tempo scaling remains
-deferred. MiniMeters was cancelled. Playlist-only ALL LOCAL remains default.
-Physical iPod acceptance awaits its return; CDJ export is later and device/PIONEER
-remains excluded. No new physical-device or intelligent-playlist acceptance.
+Preserve offline iPod 20260926-163945 and waveform/CDJ fixtures. Never restore old
+reference state over Sonny's later prep.

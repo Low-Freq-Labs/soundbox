@@ -361,8 +361,23 @@ class ArtCache:
     @_art_read
     def status_kind(self, track_id: str) -> str:
         """UI status: cover/avatar/default/miss/blocked/unfetched."""
-        e = self.index.get(track_id)
-        if self.source_excluded(track_id):
+        exclusions = (self.source_exclusions()
+                      if (self.index.get(track_id) or {}).get('status') == 'ok' else ())
+        return self._status_kind(track_id, exclusions)
+
+    @_art_read
+    def status_kinds(self, track_ids) -> dict[str, str]:
+        """One guarded policy snapshot for a presentation batch; never write authority."""
+        track_ids = tuple(track_ids)
+        exclusions = (self.source_exclusions() if any(
+            (self.index.get(tid) or {}).get('status') == 'ok' for tid in track_ids) else ())
+        return {tid: self._status_kind(tid, exclusions) for tid in track_ids}
+
+    def _status_kind(self, track_id: str, exclusions: tuple[str, ...]) -> str:
+        from .art_sources import excluded_source
+        e = self.index.get(track_id) or {}
+        if (e or {}).get('status') == 'ok' and excluded_source(
+                url=e.get('src', ''), excluded_accounts=exclusions):
             return "blocked"  # quarantined, without rewriting the historical row
         if (e or {}).get("status") == "ok":
             return "avatar" if self._is_avatar(e) else "cover"

@@ -73,10 +73,28 @@ class TagEditController(QObject):
         self._cue_aliases = {}
         self._closing = False
         self.grid_waiting = False
+        self.grid_update_status = ''
 
     @property
     def status_text(self):
-        return f'Saving {self._busy_kind}…' if self.busy else ''
+        if not self.busy:
+            return ''
+        return self.update_status_text or 'Checking saved grid…'
+
+    @property
+    def update_status_text(self):
+        """Accepted edit intents only; a worker owning the lane is not a save."""
+        if self.busy and self._busy_kind == 'tags':
+            return 'Updating My Tags…'
+        if self._cue_queue and self.busy and self._busy_kind == 'cues':
+            page = self._cue_queue[0].page
+            return 'Updating hot cue…' if page == 'hot' else 'Updating memory cue…'
+        if self.grid_update_status:
+            return self.grid_update_status
+        if self._cue_queue:
+            page = self._cue_queue[0].page
+            return 'Updating hot cue…' if page == 'hot' else 'Updating memory cue…'
+        return ''
 
     @property
     def owned(self):

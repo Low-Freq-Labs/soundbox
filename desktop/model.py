@@ -32,6 +32,17 @@ _RIGHT = {"bpm", "time", "bitrate"}
 
 _EDITABLE = {"title", "artist"}
 
+# These are fixed Qt roles. Resolve the binding's enum aliases once rather than
+# on every delegate request; most paint roles have no custom value at all.
+_DISPLAY_ROLE = int(Qt.DisplayRole)
+_EDIT_ROLE = int(Qt.EditRole)
+_TOOLTIP_ROLE = int(Qt.ToolTipRole)
+_ALIGNMENT_ROLE = int(Qt.TextAlignmentRole)
+_DATA_ROLES = (_DISPLAY_ROLE, _EDIT_ROLE, _TOOLTIP_ROLE, _ALIGNMENT_ROLE)
+_HORIZONTAL = Qt.Horizontal
+_CENTER_ALIGNMENT = int(Qt.AlignHCenter | Qt.AlignVCenter)
+_RIGHT_ALIGNMENT = int(Qt.AlignRight | Qt.AlignVCenter)
+
 # Fields the search bar looks in — the whole musically-meaningful row, not just
 # the title. Matching an artist, genre, key, BPM or format is the whole point
 # (searching "rezz" must find Rezz's sets even when her name isn't in the title).
@@ -203,21 +214,21 @@ class TrackModel(QAbstractTableModel):
     def columnCount(self, parent=None) -> int:
         return len(COLUMNS)
 
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid():
+    def data(self, index, role=_DISPLAY_ROLE):
+        if role not in _DATA_ROLES or not index.isValid():
             return None
         key = COLUMNS[index.column()][0]
-        if role == Qt.DisplayRole:
+        if role == _DISPLAY_ROLE:
             return row_display_value(self._rows[index.row()], key)
-        if role == Qt.EditRole:  # editing starts from the real value, not "—"
+        if role == _EDIT_ROLE:  # editing starts from the real value, not "—"
             return self._rows[index.row()].get(key, "")
-        if role == Qt.ToolTipRole and key == "art":
+        if role == _TOOLTIP_ROLE and key == "art":
             return _ART_TIP.get(self._rows[index.row()].get(key, ""), "")
-        if role == Qt.TextAlignmentRole:
+        if role == _ALIGNMENT_ROLE:
             if key == "art":
-                return int(Qt.AlignHCenter | Qt.AlignVCenter)
+                return _CENTER_ALIGNMENT
             if key in _RIGHT:
-                return int(Qt.AlignRight | Qt.AlignVCenter)
+                return _RIGHT_ALIGNMENT
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
@@ -234,7 +245,7 @@ class TrackModel(QAbstractTableModel):
         return True
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+        if orientation == _HORIZONTAL and role == _DISPLAY_ROLE:
             return COLUMNS[section][1]
         return None
 

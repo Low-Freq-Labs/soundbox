@@ -233,17 +233,18 @@ def read_beats(dat_path: str | Path) -> list[list]:
         cursor = offset + 4
 
 
-def resolve_dat_path(db_path: str | Path, analysis_data_path: str) -> Path | None:
+def resolve_dat_path(db_path: str | Path, analysis_data_path: str, *,
+                     resolved_share: Path | None = None) -> Path | None:
     """Resolve a DB ``AnalysisDataPath`` safely beneath ``<db dir>/share``.
 
-    Returns None for blank or traversal-style paths. Pure path resolution; the
-    target need not exist yet, which keeps the live DB load free of thousands
-    of extra file stats.
+    Returns None for blank or traversal-style paths. Resolution checks filesystem
+    ancestors; a reader may reuse its resolved root within one snapshot load.
     """
     raw = (analysis_data_path or "").strip().strip("\\/")
     if not raw:
         return None
-    share = (Path(db_path).expanduser().parent / "share").resolve()
+    share = (resolved_share if resolved_share is not None else
+             (Path(db_path).expanduser().parent / "share").resolve())
     candidate = (share / raw).resolve()
     if candidate != share and share not in candidate.parents:
         return None

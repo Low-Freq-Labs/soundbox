@@ -3,6 +3,33 @@
 ## Repo layout
 
 Current debt and staged extraction plan: [September software audit](software-audit-2026-09.md).
+Measured startup/browser/recurring-work findings and unshipped candidates:
+[October efficiency audit](efficiency-audit-2026-10.md).
+Its implementation follow-up batches artwork policy reads and source relationships,
+constructs playlist-scoped Track rows, counts visible membership without sorting,
+and preserves unchanged display inputs
+across source refreshes. These caches never replace fresh source/edit authority.
+Developer startup/player probes use disposable state and explicitly separate
+snapshot usability, current-source readiness and physical-player acceptance.
+`browsercache.json` is a separate versioned, checksummed display-row cache keyed
+to all effective metadata/curation/title-policy inputs. Rows are restored only
+after rebuilding the current registry and applying current visibility settings;
+artwork and edit authority remain separate. Missing/malformed/stale caches fall
+back to reconstruction. Row invalidation retires the checkpoint key, preventing
+new rows from being saved under an old input fingerprint. Cache publication is
+serialized with the existing background snapshot lane and uses bounded row
+encoding. Metadata derivation changes must bump `browser_cache.SCHEMA`.
+Saved theme application precedes child-widget construction, and unchanged QSS
+does not repolish every widget. The global input filter attaches after startup
+restoration; the native waveform host keeps its geometry filter throughout.
+Artist title-rescue regexes compile on first actual rescue, and the optional
+extractor is presence-checked at composition but imports only on first search.
+Provider initialization/search exceptions remain retryable, never sticky misses.
+Stock artwork converters/writers import only on actual conversion/rendering;
+unchanged derivative-cache warming does not initialize them. The WAV compatibility
+probe imports libsndfile only for WAV inspection. Ordinary desktop construction
+therefore avoids those NumPy dependencies. Grid glyphs use the system font directly
+rather than triggering generic-family alias discovery.
 The [shared-core / personal-module boundary](release-boundaries.md) uses
 `soundbox.providers` for typed artwork/artist interfaces and startup admission.
 The versioned `profiles/*.json` manifests select an allowlisted first-party module;
@@ -173,6 +200,40 @@ boundaries.
 The complete player reference, including interaction semantics and committed
 next work, is in `PLAYER.md`.
 
+The browser body ends with a 30-point utility rail using the footer's PANEL2
+background without a left divider. Its centered circle-i button is an inactive track-
+information placeholder: it opens no pane and performs no metadata/source reads.
+The track table owns a persistent 10-point vertical-scrollbar gutter at its right
+edge, before that rail. An inert header-height scroll-bar widget reserves the
+top of the gutter, so the actual scrollbar and hit area begin below the headers.
+Artists reserves the same gutter/cap and shares every column width. All headers
+are Interactive, including Title: manual dragging changes only that column.
+MainWindow resize events give their width difference to Title, clamped to its
+minimum, while other widths remain intact. First-show default widths fill the
+viewport; saved widths retain their manual layout. Legacy header states restore
+into Interactive mode. ScrollPerItem keeps 24-point rows aligned with the sidebar.
+The circle-i and scrollbar cap have no enclosing/divider borders. FooterBar paints
+the normal top separator only below content, ending before the visible rail so
+its bottom corner joins seamlessly. Footer/status geometry is unchanged; Settings
+uses the full-width separator while the rail is hidden.
+
+Width shrinking adjusts Title in the main window's own Resize filter before
+QMainWindow lays out its children. Growth follows layout in resizeEvent, once
+the extra viewport width exists. This prevents transient horizontal-scrollbar
+show/hide cycles while a fitted table resizes. Section-resized signals mirror
+only the changed column into Artists; full visibility/restoration calls still
+reconcile all columns. TrackModel resolves its fixed Qt role/alignment values
+once and immediately declines unsupported paint roles, retaining the same display,
+edit, tooltip and alignment results without adding a row cache or source reads.
+
+Prep edit feedback uses the existing lower-left status label and status helpers.
+`TagEditController.update_status_text` distinguishes accepted tag/cue/grid intents
+from mere worker ownership; `GridEditController` supplies beatgrid/BPM intent
+labels without changing shared-lane admission or recovery. Focus-return grid
+checks remain silent. Verified save callbacks alone finish the edit status with
+`Done`, then the existing generation-guarded timeout returns to `Ready` without
+clearing a newer message. Failed edits retain an operation-specific error.
+
 Qt remains the application shell. Playback is native-only; Qt Multimedia is
 used only by `QAudioDecoder` while analyzing AAC/ALAC. If the native deck cannot
 start, SoundBox keeps the library available, disables player controls, and
@@ -182,7 +243,10 @@ authoritative sample clock. A background AVAudioFile decoder fills a lock-free
 ring buffer; the callback never decodes, allocates, locks, or calls Python.
 Metal receives waveform/grid buffers once per track and translates them from
 the CoreAudio host/sample anchor on each CAMetalDisplayLink update. Python
-polling updates coarse labels and buttons only—there is no Python repaint timer
+polling updates coarse labels and buttons only. The prep-strip elapsed/total
+clock uses those existing updates and emits only when its seconds/duration signature
+changes; waveform drag previews own that label during a grab. It adds no timer or
+source/library reads. There is no Python repaint timer
 for native scrolling. CoreAudio presentation timestamps feed a continuous
 phase-locked visual clock: device-rate and phase errors are corrected through a
 tiny velocity bias, never a callback-boundary position step. The predicted
@@ -286,26 +350,27 @@ quarter-pixel profile remains in use at 64–184 px/s for RGB/BLUE and below
 lattice to form the complete piecewise-linear profile; integrating those true
 segment spans avoids a hidden corner moving through a fixed probe interval.
 There is no translated RGBA texture or second coverage/color filter; every
-zoom retains the oversampled attribute lattice. RGB/BLUE round the display
-offset to physical pixels through 384 points/s and whole logical points at
-576–1500; 3BAND retains fractional travel. Audio, grid and seek clocks remain
-continuous. Waveform-only position error is bounded by half a physical pixel
-through 384 and half a logical point at the close stops. The antialias window is exactly one physical pixel. The small overview applies
+zoom retains the oversampled attribute lattice. RGB at every zoom and 3BAND
+retain fractional travel. BLUE rounds only its display offset to physical pixels
+through 384 points/s and logical points at 576–1500, bounding its waveform-only
+error by half that increment. Audio, grid and seek clocks remain
+continuous in every mode. The antialias window is exactly one physical pixel. The small overview applies
 continuous cubic vividness to true subpixel coverage; the scrolling lane uses
 mode-specific geometric coverage rather than the overview's vividness transfer.
 For BLUE/RGB signed intervals, the fragment integrates clipped linear coverage
 moments and visible color over the same pointwise intersection. It does not
 reapply the smaller of separately integrated upper/lower boundaries: that older
 approximation overfilled narrow diagonal traces and was removed October 2.
-PWV5 RGB and BLUE's center/width-dependent radial field accumulate in
-premultiplied linear light. BLUE splits at coverage and radial branch changes
+PWV5 RGB accumulates premultiplied display-encoded channels; BLUE's center/width-
+dependent radial field retains premultiplied linear light. BLUE splits at coverage and radial branch changes
 and uses four-point Gauss-Legendre quadrature within each branch; evaluating
 the nonlinear field only at the coverage centroid produced visible color error.
-BLUE composites that joint area directly. The October 6 accepted RGB policy
-makes occupied physical columns more solid using the existing extrema while
-preserving the joint integral's conditional color. It never creates a fragment
-where the joint area is zero or reduces the existing minimum-width stroke.
-This is intentionally conservative coverage, not an exact-area claim. Persisted
+BLUE retains linear-light joint-area compositing. RGB384 keeps the geometric
+coverage of Sonny's October27 C, with the selected October28 encoded-color blend. Other RGB stops apply only a smooth monotonic faint-detail shoulder
+below 18% coverage: c′=c×(1+1.5×(1−c/0.18)²), with premultiplied color scaled by
+c′/c. It adds at most 0.04 coverage, leaves zero empty and joins exact area at 18%.
+All RGB stops use fractional translation. The broad occupied-column boost is
+removed; normal coverage and hue are not brightened. Persisted
 extrema, mip data and the one-pixel source footprint remain unchanged.
 The canonical 64–256 px/s midrange family applies one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
@@ -314,10 +379,12 @@ changes neither mip selection nor close source detail.
 Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
 hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:
-display-authored waveform/grid RGB is decoded before the fragment result,
-coverage and fixed-function grid blending happen in linear light, and Metal
-encodes exactly once on store. Full colors and the `#0d0e12` clear remain
-unchanged while equal geometric edge phases retain equal displayed energy.
+main-lane RGB blends its encoded color/coverage with the encoded background,
+then decodes that final opaque pixel. BLUE,3BAND,overview and fixed-function grid
+blending retain linear light. Metal encodes exactly once on store. Full colors and the `#0d0e12` clear remain
+unchanged. The October28 RGB edge update retains both visibility lifts and the
+existing source/height/LOD/clock contracts; it does not promise equal linear-light
+energy for different RGB edge-coverage distributions.
 The grid is the final timing-reference layer. Red downbeats and gray ordinary
 beats have density-controlled interior opacity and opaque edge ticks, with
 continuous analytic line coverage.
@@ -344,8 +411,8 @@ pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
 carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
-uses joint coverage/color integration, followed by the RGB-only conservative
-column presentation described above. The installed September 30 correction additionally
+uses joint coverage/color integration and continuous RGB translation. RGB 384
+keeps exact area; other RGB stops use only the faint shoulder described above. The installed September 30 correction additionally
 retains the original color-premultiplication weight through attribute interpolation;
 reconstructing that weight from interpolated signed bounds spuriously brightens
 polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
@@ -656,7 +723,8 @@ refresh, preserving compressed waveform payloads.
 - **Collection order = newest-ADDED first**, one timeline across both planes:
   `Track.added_ts` = rekordbox `created_at` for mirror tracks, SoundBox import
   time for imported audio (falls back to file birthtime when unknown). See the
-  GOTCHAS caching note — the field must ride through `libcache` + `_landed_cache`.
+  GOTCHAS caching note: `added_ts` must survive `libcache`; known dates do not
+  resolve media paths. Only unknown-date birthtime fallback uses `_landed_cache`.
 - **Drag-to-add works on the sidebar AND the main browser.** Dropping tracks or
   Finder audio onto the open view adds to the playlist it shows; Collection
   imports files only; Artists (tag-derived) and read-only rekordbox views reject
@@ -987,6 +1055,14 @@ The head requests its probe before saving, requires that loaded base to match
 the source grid exactly, and validates native metadata. Failed checks cancel the
 tail and restore its base; shutdown drains admitted probe-bound work. Provisional
 doubling omits final half-beat extrapolation until native end bounds arrive.
+Manual-BPM terminal-row ambiguity similarly stays provisional in RAM. The source
+worker alone may resolve `AmbiguousGridEnd` using `pcm_endpoint`'s bounded PCM
+WAVE framing proof: exact integral milliseconds, native-bound agreement, stable
+canonical file identity and header digest. No audio payload is read or decoded.
+The optional journal proof is revalidated before publication, commit and recovery;
+unsupported endpoints fail closed. Exact-EOF inclusion matches the October28
+STOP CAPPIN native control. Ordinary edits retain their existing source reads
+and do not open audio.
 
 MainWindow places the cue panel beside both header and deck rows; standalone
 PlayerBar instances keep their embedded cue panel. The title frame shares the

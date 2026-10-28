@@ -43,9 +43,10 @@ inline float4 audit_overview(float3 weighted, float weight, float coverage) {
 inline float4 audit_composite(thread const float *blueMinimums,
         thread const float *blueMaximums, thread const float3 *intervalEncodedColors,
         thread const float *profilePositions, uint profileCount, float signedPosition,
-        float heightScale, float antialias, uint mode) {
-    Uniforms u{}; u.waveformMode = mode;
-    float3 background = float3(0.0);
+        float heightScale, float antialias, uint mode, float zoom,
+        float3 encodedBackground) {
+    Uniforms u{}; u.waveformMode = mode; u.pixelsPerSecond = zoom;
+    float3 background = display_srgb_to_linear(encodedBackground);
     COMPOSITOR
 }
 '''.replace('COMPOSITOR', compositor)
@@ -94,11 +95,12 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         IntervalSurface v = resolve_interval_surface(lower, upper, colors, positions,
             count, a[2], a[3], a[4], a[5] != 0);
         out[0] = v.coverage;
-        out[1] = v.premultipliedLinearColor.r;
-        out[2] = v.premultipliedLinearColor.g;
-        out[3] = v.premultipliedLinearColor.b;
+        out[1] = v.premultipliedColor.r;
+        out[2] = v.premultipliedColor.g;
+        out[3] = v.premultipliedColor.b;
         float4 final = audit_composite(lower, upper, colors, positions,
-            count, a[2], a[3], a[4], a[5] != 0 ? 1u : 2u);
+            count, a[2], a[3], a[4], a[5] != 0 ? 1u : 2u, a[6],
+            float3(a[50], a[51], a[52]));
         out[4] = final.r; out[5] = final.g; out[6] = final.b;
     } else if (op == 5) {
         Uniforms u{}; u.audioDetailSamplesPerSecond = a[1];
@@ -151,6 +153,12 @@ def linear_color(rgb):
     return np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
 
 
+def encoded_color(linear):
+    linear = np.clip(linear, 0, 1)
+    return np.where(linear <= .0031308, linear * 12.92,
+                    1.055 * linear ** (1 / 2.4) - .055)
+
+
 def interval_oracle(row, samples=4096):
     """Midpoint quadrature of pointwise interval membership and visible color.
 
@@ -162,7 +170,9 @@ def interval_oracle(row, samples=4096):
     centers = (low + high) / 2
     widths = np.maximum((high-low)/2, aa/scale)
     positions = row[22:22+count].astype(float)
-    colors = linear_color(row[29:29+3*count].reshape(-1, 3).astype(float))
+    colors = np.clip(row[29:29+3*count].reshape(-1, 3).astype(float), 0, 1)
+    if row[5]:
+        colors = linear_color(colors)
     t = (np.arange(samples)+.5)/samples
     total = np.zeros(4); span_sum = 0
     for i, span in enumerate(np.diff(positions)):
@@ -185,26 +195,16 @@ def interval_oracle(row, samples=4096):
     return total/span_sum
 
 
-def rgb_column_oracle(row):
-    """Independent area/color quadrature plus the declared column policy.
-
-    The exact joint integral determines visibility and conditional color. A
-    constant white rectangle spanning every endpoint supplies the conservative
-    column bound; it cannot reduce the minimum-width contour's coverage.
-    """
+def rgb_faint_oracle(row):
+    """Independent encoded-color quadrature, retained lift and final decoding."""
     integral = interval_oracle(row)
-    if integral[0] == 0:
-        return np.zeros(3)
-    count = int(row[1])
-    endpoints = np.r_[row[8:8+count], row[15:15+count]]
-    rectangle = np.zeros(64, dtype=np.float32)
-    rectangle[:5] = [2, 2, *row[2:5]]
-    rectangle[8:10] = endpoints.min()
-    rectangle[15:17] = endpoints.max()
-    rectangle[22:24] = [0, 1]
-    rectangle[29:35] = 1
-    coverage = max(integral[0], interval_oracle(rectangle)[0])
-    return integral[1:] / integral[0] * coverage
+    coverage = integral[0]
+    if coverage == 0:
+        return linear_color(row[50:53])
+    if row[6] != 384 and coverage < .18:
+        coverage += 1.5 * coverage * (1-coverage/.18)**2
+    return linear_color(row[50:53] * (1 - coverage)
+                        + integral[1:] / integral[0] * coverage)
 
 
 @unittest.skipUnless(platform.system() == 'Darwin' and platform.machine() == 'arm64',
@@ -408,6 +408,19 @@ class WaveformGPUMath(unittest.TestCase):
         self.assertTrue((actual[:, :5] >= -2e-6).all())
         self.assertTrue((actual[:, :5] <= 1+2e-6).all())
 
+    def test_rgb_384_uses_exact_visible_pixel_area_across_colors_and_signed_profiles(self):
+        rows = self.interval_cases()
+        rows[:, 6] = 384
+        expected = np.array([rgb_faint_oracle(row) for row in rows])
+        actual = self.execute(rows)[:, 4:7]
+        np.testing.assert_allclose(actual, expected, atol=3e-5, rtol=0)
+        # Accidentally enabling the faint shoulder at accepted C must fail
+        # the independent exact-area oracle without changing geometry or hue.
+        old = self.source.replace('&& u.pixelsPerSecond != 384.0', '')
+        self.assertNotEqual(old, self.source)
+        boosted = self.execute(rows, old)[:, 4:7]
+        self.assertGreater(float(np.max(encoded_color(boosted) - encoded_color(actual))), .02)
+
     def test_blue_thin_intervals_keep_cyan_instead_of_a_fixed_white_core(self):
         rows = []
         for width in (.004, .01, .04, .15, .3, .8):
@@ -505,22 +518,51 @@ class WaveformGPUMath(unittest.TestCase):
             self.assertGreaterEqual(divisor, max(1, .94*row[1]/(row[2]*row[3])))
         np.testing.assert_array_equal(actual[5:], [2, 1, 1, 1, 1])
 
-    def test_signed_crossing_retains_exact_color_integral_and_solid_rgb_column(self):
+    def test_signed_crossing_retains_area_without_broad_rgb_brightness_boost(self):
         row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
         row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
         row[22:24] = [0, 1]; row[29:35] = 1
         expected = interval_oracle(row)
         actual = self.execute([row])[0]
         np.testing.assert_allclose(actual[:4], expected, atol=3e-5, rtol=0)
-        # White on black exposes the deliberate conservative presentation:
-        # the crossing occupies this column, which must now be solid. The
-        # underlying exact area above is still tested independently.
-        np.testing.assert_allclose(actual[4:7], [1, 1, 1], atol=3e-5, rtol=0)
+        np.testing.assert_allclose(actual[4:7], rgb_faint_oracle(row), atol=3e-5, rtol=0)
+        self.assertLess(float(actual[4]), .2)  # formerly forced to solid white
 
     def test_final_rgb_fragment_matches_independent_visible_color(self):
         rows = self.interval_cases()
-        expected = np.array([rgb_column_oracle(row) for row in rows])
+        expected = np.array([rgb_faint_oracle(row) for row in rows])
         np.testing.assert_allclose(self.execute(rows)[:, 4:7], expected, atol=6e-5, rtol=0)
+
+    def test_rgb_edges_blend_display_channels_before_final_attachment_decoding(self):
+        # Exercise the actual final fragment branch with a nonblack background,
+        # all zoom stops, partial/full coverage, mixed hues and the retained lift.
+        background = np.array([13, 14, 18]) / 255
+        colors = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, .5, 0),
+                  (2/7, 6/7, 1), (.2, .2, .2), (1, 1, 1)]
+        rows, expected = [], []
+        for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500):
+            for coverage in (0, .025, .06, .18, .5, 1):
+                for color in colors:
+                    row = np.zeros(64, dtype=np.float32)
+                    row[:7] = [2, 2, .3 + (.5/60)*(1-2*coverage), 60, .5, 0, zoom]
+                    row[8:10] = -.3; row[15:17] = .3
+                    row[22:24] = [0, 1]; row[29:35] = [*color, *color]
+                    row[50:53] = background
+                    rows.append(row)
+                    lifted = coverage
+                    if zoom != 384 and coverage < .18:
+                        lifted += 1.5 * coverage * (1-coverage/.18)**2
+                    expected.append(linear_color(background*(1-lifted)
+                                                 + np.array(color)*lifted))
+        actual = self.execute(rows)[:, 4:7]
+        np.testing.assert_allclose(actual, expected, atol=3e-6, rtol=0)
+        old = self.source.replace(
+            ': saturate(encodedColors[segment]);',
+            ': display_srgb_to_linear(saturate(encodedColors[segment]));').replace(
+            ': saturate(encodedColors[segment + 1]);',
+            ': display_srgb_to_linear(saturate(encodedColors[segment + 1]));')
+        self.assertNotEqual(old, self.source)
+        self.assertGreater(float(np.max(np.abs(self.execute(rows, old)[:, 4:7]-expected))), .1)
 
     def test_restoring_separate_edge_averages_breaks_blue_final_fragment_oracle(self):
         row = np.zeros(64, dtype=np.float32); row[:6] = [2, 2, 0, 60, .5, 1]
@@ -534,7 +576,7 @@ class WaveformGPUMath(unittest.TestCase):
                     signedPosition * heightScale, heightScale, antialias),
                 positioned_profile_coverage(inverted, profilePositions, profileCount,
                     -signedPosition * heightScale, heightScale, antialias));
-            interval.premultipliedLinearColor *= oldCoverage / max(interval.coverage, 1e-6);
+            interval.premultipliedColor *= oldCoverage / max(interval.coverage, 1e-6);
             interval.coverage = oldCoverage;
 '''
         anchor = '            if (interval.coverage <= 0.0) {'
@@ -555,17 +597,33 @@ class WaveformGPUMath(unittest.TestCase):
             row[22:24] = [0, 1]; row[29:35] = 1
             rows.append(row)
         actual = self.execute(rows)
-        self.assertTrue(np.all(actual[:, 4] >= actual[:, 0] - 1e-6))
+        displayed = encoded_color(actual[:, 4:7])
+        self.assertTrue(np.all(displayed[:, 0] >= actual[:, 0] - 1e-6))
         np.testing.assert_array_equal(actual[actual[:, 0] == 0, 4:7], 0)
-        self.assertGreater(np.count_nonzero(actual[:, 4] > actual[:, 0] + .1), 5)
+        self.assertGreater(np.count_nonzero(displayed[:, 0] > actual[:, 0] + .001), 5)
+        visible = actual[:, 0] >= .18
+        np.testing.assert_allclose(displayed[visible, 0], actual[visible, 0], atol=3e-5)
 
-    def test_removing_rgb_column_policy_loses_accepted_solid_detail(self):
-        row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]
-        row[8:10] = [-.8, .6]; row[15:17] = [-.6, .8]
-        row[22:24] = [0, 1]; row[29:35] = 1
-        old = self.source.replace(
-            'if (u.waveformMode == 2 && interval.coverage > 0.0)',
-            'if (false)')
-        self.assertNotEqual(old, self.source)
-        np.testing.assert_allclose(self.execute([row])[0, 4:7], 1, atol=1e-6)
-        self.assertLess(float(self.execute([row], old)[0, 4]), .2)
+    def test_faint_rgb_shoulder_is_monotonic_bounded_and_hue_independent(self):
+        rows = []
+        for color in ((1, 0, 0), (0, 1, 0), (0, 0, 1), (1, .5, 0)):
+            for y in np.linspace(.28, .32, 81):
+                row = np.zeros(64, dtype=np.float32)
+                row[:5] = [2, 2, y, 60, .5]
+                row[8:10] = -.3; row[15:17] = .3
+                row[22:24] = [0, 1]; row[29:35] = [*color, *color]
+                rows.append(row)
+        actual = self.execute(rows)
+        expected = np.array([rgb_faint_oracle(row) for row in rows])
+        np.testing.assert_allclose(actual[:, 4:7], expected, atol=6e-5, rtol=0)
+        # The red channel of the white-equivalent contour cannot reverse as
+        # coverage increases, jump at the threshold, or brighten visible areas.
+        for block in actual.reshape(4, 81, -1):
+            channel = np.argmax(block[0, 4:7])
+            values = encoded_color(block[:, 4+channel])
+            self.assertTrue((np.diff(values) <= 2e-6).all())
+            self.assertLessEqual(float(np.max(values-block[:, 0])), .041)
+        mutation = self.source.replace('1.5 * fade * fade', '0.0 * fade * fade')
+        self.assertNotEqual(mutation, self.source)
+        self.assertGreater(float(np.max(encoded_color(actual[:, 4:7])
+                                       - encoded_color(self.execute(rows, mutation)[:, 4:7]))), .02)

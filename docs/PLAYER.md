@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-10-27. This is the player reference: shipped behavior,
+Current as of 2026-10-28. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -16,11 +16,43 @@ The player has a header, a deck, and a prep strip beneath it:
 - Deck: centered transport stack on the left, waveform in the middle, and the
   two-page cue panel on the right, spanning the header and deck height.
 - Prep strip: five grid buttons (enabled for a ready accepted track) and a BPM entry field on the left;
-  a Q Quantize toggle after the grid buttons. The first grid button aligns with
+  a Q Quantize toggle after the grid buttons, then an elapsed/total playback clock.
+  Controls use evenly distributed flexible gaps across the waveform width. The first grid button aligns with
   the waveform's left edge. My Tags, Settings and Search occupy the right end;
   Search aligns beneath the cue panel, and My Tags sits to Settings' left.
   Settings ends at the waveform's right edge. There is no separator before
   My Tags; space outside cue buttons matches the surrounding header panel.
+
+The playback clock shows `M:SS/M:SS` (for example `1:23/3:15`). Tracks at least
+one hour long show hours on both sides, such as `0:01:23/1:02:03`. Its monospaced
+label reserves room for hours; seeks, cue jumps, duration updates and waveform
+drag previews use the existing transport updates. Only a changed displayed second
+publishes new label text; no extra polling timer, audio load or library read is
+introduced. A source change resets it to `0:00/0:00` while duration loads.
+
+Below the player, the browser's scrollbar sits at the right edge of the track
+area, before a narrow footer-colored utility rail. Its track and thumb start
+below the column-header row. The rail's borderless circle-i is an inactive
+track-information placeholder.
+The rail, scrollbar cap and rail/footer corner have no separator seams; the normal
+footer divider remains below the main content.
+
+All columns, including Track Title, resize independently when their header edges
+are dragged: following columns move, and overflow uses the horizontal scrollbar.
+Resizing the window gives the width difference to Title, shrinking it first when
+narrowing the window and keeping other widths intact. The saved widths and
+visibility survive restart; Artists shares all column widths, including Title.
+Window shrink is coordinated before child layout and growth after layout, avoiding
+temporary horizontal-scrollbar flashes. Header synchronization updates only the
+changed section; unsupported table paint roles return immediately. Text, colors,
+sorting, editing and the per-item scrolling contract remain unchanged.
+
+Accepted edits use the existing bottom-left footer label, with its normal font,
+color and spacing: `Updating beatgrid…`, `Updating BPM…`, `Updating hot cue…`,
+`Updating memory cue…` or `Updating My Tags…`. Verified completion shows `Done`
+for two seconds, then returns to `Ready` (or ongoing preparation). Queued edits
+retain progress until the last verified save; failures show the operation and
+error instead. Focus-return saved-grid checks are silent and never report a save.
 
 The transport layout field has matching rounded corners and an inset chevron;
 its menu retains native behavior. The field text has an 11-pixel left inset.
@@ -61,7 +93,15 @@ Transport controls:
   no layout-switching behavior or saved layout setting is implemented. The
   transport column/divider spans the waveform and prep rows.
   Its field uses matching rounded corners and an inset chevron; the popup remains native.
-- Previous/next track follows the active table/view order.
+- Previous/next track follows the active table/view order and preserves ordinary
+  playback intent: paused stays paused; playing continues at the next first beat.
+- Cue pads center their icon/letter/time group, use 12px semibold text and 10px
+  color squares, and outline populated slots with their cue identity color.
+  Empty/disabled slots retain their distinct inactive presentation.
+- Grid left/right steps follow zoom: 50 ms at 24–32, 25 ms at 48–64, 10 ms at 92–128,
+  5 ms at 184–256, 3 ms at 384–576, 2 ms at 864 and 1 ms at 1152–1500 points/s.
+  Shift triples that step. Tooltips show the current amounts; each click captures
+  its integer delta before entering the existing ordered background save queue.
 - Back/forward jump uses a persistent selector: 4 beats, 8 beats, 16 beats,
   4 bars, 8 bars, or 16 bars.
 - Grid-aware jumps preserve the current offset inside the beat and follow
@@ -71,16 +111,19 @@ Transport controls:
   jump counting, so a forward jump from audio zero or a cue just before the
   grid start can return backward. This extrapolates transport arithmetic only;
   it never changes stored grid rows or enables a seek outside the audio.
-- CUE, populated hot cues, and populated memory cues share one gated-preview
-  contract: press starts from that cue, holding keeps it playing, and release
-  pauses and returns to that exact cue.
+- Session CUE and memory cues use gated preview. Paused hot cues do too: press
+  starts from the exact saved cue, holding previews, release pauses and returns.
+  During ordinary playback, hot cues jump and keep playing after release. A
+  transient backend PAUSED state during refill does not cancel that intent.
 - Pressing Space/play while any cue is held latches the preview into normal
   playback. Releasing the cue then leaves it running; Space/play stops it at
-  its current position, while pressing another cue begins a new momentary gate.
+  its current position. Another hot cue keeps ordinary playback; a session/memory
+  cue begins a new momentary gate.
   Session CUE state is never written to Rekordbox or the audio file.
-- The transport state is visually unambiguous: every cue-family press lights
-  the white CUE label on an orange fill while PLAY remains an outline. Space
-  promotes a held preview into transport playback, filling PLAY with the accent; release
+- The transport state is visually unambiguous: every held cue lights the white
+  CUE label on an orange fill. During a paused audition PLAY stays an outline;
+  a playing hot-cue jump keeps PLAY filled. Space promotes a held audition into
+  transport playback, filling PLAY with the accent; release
   then clears only CUE. Paused transport uses the accent outline (purple by default). The PLAY
   glyph becomes PAUSE only with that filled transport state; decoder playback
   during an unlatched cue preview continues to show the PLAY glyph.
@@ -131,11 +174,11 @@ Transport controls:
 
 Keyboard settings expose the transport and cue actions with remappable modifier
 combinations and multiple bindings per action. Space, C and Command-R retain
-their defaults. Numbers 1–8 preview populated slots on the selected Hot/Memory
+their defaults. Numbers 1–8 trigger populated slots on the selected Hot/Memory
 page, or create empty slots at the captured native playhead (nearest beat when Q
 is on); Command-1–8 deletes.
 9 selects Hot Cue and 0 selects Memory Cue. `=` zooms in and `-` zooms out by
-default. Cue keys use the same gated-preview
+default. Cue keys use the same playback-preserving hot-cue and paused-preview
 contract as mouse presses. A held slot retains its original page/control through
 page switches, modifier release and focus changes. Keyboard cue bindings use the
 active page; the separate direct Hot/Memory actions are retired. Creation does
@@ -208,7 +251,7 @@ Loading semantics are deliberate:
   newest request through fade-out and pending grid/media loading. A temporary
   backend PAUSED snapshot does not cancel that intent. Momentary CUE previews
   remain separate; only a preview latched with Play carries playback forward.
-  Previous/next deck controls explicitly start the selected track.
+  Previous/next deck controls use that same intent-preserving load path.
 - Space only toggles play/pause for the already-loaded track. Browser selection
   is ignored, and Space does nothing when the deck is empty.
 - A non-empty, successfully parsed Rekordbox beat grid is authoritative and a
@@ -235,6 +278,16 @@ Loading semantics are deliberate:
   back to the SoundBox Collection.
 
 ## Waveform interaction
+
+October 28 RGB edge update implements Sonny's selected original B: main-lane
+RGB integrates display-encoded channels with joint pixel coverage, blends the
+opaque background in that same space, then decodes the final pixel for Metal's
+sRGB attachment. This reduces edge glare while retaining both existing visibility
+lifts, source colors, signed extrema, LOD, song lattice and timing. BLUE,3BAND and
+the overview retain their existing compositors. Later lift-removal/direct-pixel
+C/D/E trials are set aside at Sonny's request. Center glistening and full native
+appearance equivalence remain unresolved. Release/installation status is in
+[HANDOFF](HANDOFF.md).
 
 October 1 test audit: production Metal helpers now run against independent
 GPU numerical oracles, with a separate required Cocoa drawable gate. Tiny
@@ -299,6 +352,23 @@ one-pixel profile integral preserve detail without mixing adjacent mip levels.
 The former four-pixel close footprint and divisor-dependent height gain were
 removed after comparison with the new reference.
 
+October 27 historical coverage follow-up: Sonny accepted C in the live STOP CAPPIN RGB 384
+comparison: exact joint pixel-area coverage plus continuous fractional translation
+removed the distracting red/dark-red oscillation while preserving detail. The
+October27 C coverage combination (distinct from rejected October28 C lift trial)
+initially changed only RGB 384. The later player follow-up
+extends continuous RGB translation to every zoom and removes broad RGB column
+brightening elsewhere. Samples, source extrema, LOD, colors, caches, clocks and
+export data remain unchanged. BLUE/3BAND retain their policies. The full release gate and installed
+curated-runtime checks passed; see HANDOFF. A final minimum-stroke refinement was
+not retained: across 96 actual track phase captures it changed at most two display codes in 0.0051% of pixels,
+with no meaningful improvement over C.
+`scripts/profile_player.py` exercises hash-verified offline fixtures with muted
+audio, bounded native frame captures and repeated-load memory observations.
+Those controls diagnose color versus contour motion; they do not establish a new
+palette, exact rekordbox appearance or CDJ-export acceptance. Presentation changes
+must never alter authoritative musical samples or become native export payloads.
+
 Settings exposes three persistent waveform displays:
 
 - `BLUE` uses the exact packed PWV3 stream when Rekordbox supplies one. Its
@@ -315,9 +385,10 @@ Settings exposes three persistent waveform displays:
   one compact height—not three band layers. PWV5 owns color and distant-scale
   amplitude. Its scrolling geometry uses the same signed min/max trace as
   BLUE, with linearly interpolated full-range PWV5 colors on their song clock.
-  Since October 6, occupied RGB pixel columns use conservative coverage to keep
-  narrow detail solid; conditional visible color still comes from the joint
-  interval integral. This is not an exact-area presentation or source smoothing.
+  At 384 points/s, exact joint pixel area is composited directly and the display
+  offset stays continuous. Other RGB stops apply only a faint-detail shoulder below 18% exact coverage;
+  ordinary coverage stays exact. Conditional visible color comes from the
+  joint interval integral. Neither policy smooths or changes source detail.
   October 8 color-only correction: a zero PWV5 compact height no longer turns
   its valid RGB code black before blending at wider zooms. Positive color
   weights cancel exactly; a zero weight uses the authored row color. Quiet
@@ -339,9 +410,8 @@ keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
 Both use output-footprint-selected extrema. Compact supplements hold signed
 1-ms cells at close zoom; spatial antialiasing resolves their coverage.
-RGB/BLUE round display translation to physical pixels through 384 points/s,
-then logical points at 576–1500. Audio, seek and grid clocks remain continuous;
-3BAND retains subpixel translation.
+RGB at every zoom and 3BAND use continuous fractional display translation. BLUE
+rounds to physical pixels through 384 points/s, then logical points at 576–1500. Audio, seek and grid clocks remain continuous in every mode.
 The minimum signed stroke is one physical pixel before antialiasing, replacing
 the fixed 3.6-point width that made thin carriers visibly thick on Retina.
 3BAND uses the original 150-Hz PWV7 rows and linear per-band interpolation,
@@ -770,11 +840,13 @@ measurements. The compact-cache and source-clock contracts above take precedence
   attribute lattice, then translate those attributes. The lattice stores no
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
   the final drawable never refilters an already-antialiased edge. Every zoom
-  uses four attributes per physical pixel. RGB/BLUE round only the display
-  offset: physical-pixel increments through 384 points/s, whole logical points
-  at 576–1500. Position error is at most half the chosen increment; 3BAND
-  retains linear subpixel translation. The October 6 accepted RGB column
-  presentation is paired with this motion policy. Earlier one-attribute
+  uses four attributes per physical pixel. RGB at every zoom and 3BAND use
+  continuous fractional translation. BLUE rounds only its display offset:
+  physical-pixel increments through 384 points/s, logical points at 576–1500.
+  Its position error is at most half the chosen increment.
+  RGB 384's exact-area compositor and continuous translation are one accepted
+  combination; neither the earlier brightness boost plus continuous motion nor
+  a detail-replacing envelope is that correction. Earlier one-attribute
   integer-motion experiments had different source/coverage rules and were
   rejected; their evidence is historical, not acceptance of the current path.
 - **The display-stream LOD is footprint-matched and `kLodBias` must stay 0.** A physical
@@ -817,8 +889,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   frame, or refresh seam. Height and hue move together, while final edge
   antialiasing remains tied to the destination pixel. The scrolling lane uses
   joint signed-interval integration without the overview vividness curve.
-  BLUE composites its area directly; RGB applies the deliberate conservative
-  column coverage described below. Historically, boosting 20% coverage to nearly 49%
+  BLUE and RGB 384 composite their exact area directly. Other RGB stops retain
+  exact area except for the bounded faint-detail shoulder described below. Historically, boosting 20% coverage to nearly 49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
   overview alone retains the continuous cubic vividness curve for true
   subpixel peaks. This distinction affects only compositing, never height,
@@ -841,13 +913,16 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - BLUE/RGB interval color must be conditioned on the portion of the signed
   interval that actually covers the destination pixel. Upper/lower boundaries
   intersect pointwise before integration, rather than after it. Within that coverage,
-  clipped-linear moments integrate PWV5 color in premultiplied linear light;
-  a horizontally hidden color sample can no longer tint a visible RGB edge.
-  RGB then increases coverage within occupied physical columns using their
-  extrema, retaining that conditional color. Existing minimum-width stroke
-  coverage cannot decrease, and zero joint coverage stays empty. This accepted
-  October 6 presentation can thicken fine detail; it is intentionally not an
-  exact pixel-area integral. Source cells, extrema, LOD and colors are retained.
+  clipped-linear moments integrate PWV5 display channels with premultiplied coverage;
+  a horizontally hidden color sample cannot tint a visible RGB edge. RGB blends
+  that encoded result with the encoded background and decodes the final opaque
+  pixel once for the sRGB attachment. BLUE retains linear-light integration.
+  RGB 384 keeps that exact area. Other RGB stops apply a hue-independent
+  visibility shoulder only when exact coverage c is below 0.18:
+  c′ = c × (1 + 1.5 × (1−c/0.18)²). It is smooth and monotonic, adds at most
+  0.04 coverage, leaves zero empty and joins unmodified exact area at 0.18.
+  Premultiplied color scales by c′/c, preserving hue. The prior broad occupied-
+  column boost is removed. All source cells, extrema, LOD and colors remain.
   BLUE evaluates its white/cyan/blue radial transfer from the same local
   signed center and width. It splits at coverage/radial branch changes and
   integrates each smooth branch with four-point Gauss-Legendre quadrature in
@@ -956,12 +1031,17 @@ not current implementation instructions or pending work.
 The October 26 [prep plan](rekordbox-prep.md) now includes accepted My Tag,
 Hot/Memory cue and grid source protocols. Installed provenance and user review
 status are in HANDOFF. Grid controls set a bar start, nudge the entire grid by
-1 ms (Shift: 3 ms), double or halve constant BPM. Buttons require the loaded
+the zoom-scaled 50/25/10/5/3/2/1-ms step (Shift triples it), double or halve
+constant BPM. The closest 1152–1500 views retain 1/3-ms precision. Buttons require the loaded
 accepted track, exact source identity, a valid grid and Analysis Lock off.
 The BPM field shows `000.00` while empty and loaded/session BPM with two decimals.
-Manual entry requires separate native acceptance for the library and a constant
+Inputs such as `138`, `138.0` and `138.00` submit the same exact hundredths and
+reconcile to `138.00`. Manual entry requires separate native acceptance for the library and a constant
 grid. Enter submits the captured track/value; Escape or focus loss cancels typing.
-Track changes abandon unfinished input. The grid previews immediately, while the
+Track changes abandon unfinished input. A disputed final beat can use the source
+worker's bounded PCM header endpoint proof, with native-tested exact-EOF inclusion;
+the RAM preview reconciles its terminal row after verification. Other source
+formats or nonintegral endpoints remain guarded when PWV3 cannot prove the row. The grid previews immediately, while the
 browser BPM updates only after each successful background save verifies, without
 loading another song. Failed saves restore the confirmed deck grid and leave the
 browser value unchanged. Browser selection alone does not change the deck field.

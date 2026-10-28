@@ -24,6 +24,10 @@ class Beat:
     time_ms: int
 
 
+class AmbiguousGridEnd(WriteProofError):
+    """A manual-BPM row needs stronger EOF evidence than the 150-Hz stream."""
+
+
 @dataclass(frozen=True)
 class GridSnapshot:
     track: dict[str, Any]
@@ -271,8 +275,10 @@ def set_grid_bpm(beats: tuple[Beat, ...], tempo: int, *,
         return beats
     lower, upper = end_bounds_ms if end_bounds_ms is not None else (beats[-1].time_ms,) * 2
     if (type(lower) is not int or type(upper) is not int
-            or not 0 <= lower <= upper <= 0xffffffff or beats[-1].time_ms > lower):
+            or not 0 <= lower <= upper <= 0xffffffff or beats[-1].time_ms > upper):
         raise WriteProofError('Unverified grid/audio end bounds')
+    if beats[-1].time_ms > lower:
+        raise AmbiguousGridEnd('Saved final beat falls in an unverified audio-end interval')
     result: list[Beat] = []
     anchor, base_index = beats[0].time_ms, 0
     # The extension starts from the rounded rebuilt tail, rather than carrying
@@ -283,7 +289,7 @@ def set_grid_bpm(beats: tuple[Beat, ...], tempo: int, *,
         time_ms = anchor + ((index - base_index) * 12000000 + tempo) // (2 * tempo)
         if time_ms > lower:
             if time_ms <= upper:
-                raise WriteProofError('Final beat falls in an unverified audio-end interval')
+                raise AmbiguousGridEnd('Final beat falls in an unverified audio-end interval')
             break
         result.append(Beat((beats[0].number - 1 + index) % 4 + 1, tempo, time_ms))
     return _validated(tuple(result))
@@ -315,10 +321,16 @@ def transform_beats(beats: tuple[Beat, ...], operation: str, value: int = 0,
 
 
 def transform_grid(dat: bytes, ext: bytes, operation: str, value: int = 0,
-                   nudges: tuple[int, ...] = ()) -> tuple[bytes, bytes]:
+                   nudges: tuple[int, ...] = (), *,
+                   exact_end_ms: int | None = None) -> tuple[bytes, bytes]:
     """Source planning always supplies the verified native duration bounds."""
     beats = read_grid(dat)
     bounds = duration_bounds(ext) if operation in ('double', 'bpm') else None
+    if exact_end_ms is not None:
+        if (operation != 'bpm' or type(exact_end_ms) is not int or bounds is None
+                or not bounds[0] <= exact_end_ms <= bounds[1]):
+            raise WriteProofError('Exact PCM endpoint disagrees with native analysis bounds')
+        bounds = exact_end_ms, exact_end_ms
     edited = transform_beats(beats, operation, value, nudges, end_bounds_ms=bounds)
     if edited == beats:
         return dat, ext
@@ -326,7 +338,7 @@ def transform_grid(dat: bytes, ext: bytes, operation: str, value: int = 0,
 
 
 def plan_grid_edit(snapshot: GridSnapshot, counter: dict[str, Any], edit: GridEdit,
-                   *, timestamp: str) -> GridCandidate:
+                   *, timestamp: str, exact_end_ms: int | None = None) -> GridCandidate:
     """Plan exact target-only bytes/rows; callers own authority and durability."""
     track = snapshot.track
     if (not edit.track_id or not edit.track_uuid or track.get('ID') != edit.track_id
@@ -339,7 +351,8 @@ def plan_grid_edit(snapshot: GridSnapshot, counter: dict[str, Any], edit: GridEd
         raise WriteProofError('Analysis Lock is on')
     if type(track.get('FileType')) is not int or track['FileType'] not in (1, 11, 12):
         raise WriteProofError('Unverified grid format')
-    dat, ext = transform_grid(snapshot.dat, snapshot.ext, edit.operation, edit.value, edit.nudges)
+    dat, ext = transform_grid(snapshot.dat, snapshot.ext, edit.operation, edit.value, edit.nudges,
+                              exact_end_ms=exact_end_ms)
     if (dat, ext) == (snapshot.dat, snapshot.ext):
         return GridCandidate(dat, ext, ())
     beats, edited = read_grid(snapshot.dat), read_grid(dat)

@@ -538,7 +538,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("resolve_interval_surface(", fragment)
         self.assertIn(
             "background * (1.0 - interval.coverage)\n"
-            "                    + interval.premultipliedLinearColor",
+            "                    + interval.premultipliedColor",
             fragment,
         )
         self.assertNotIn("scrolling_wave_coverage", self.shader)
@@ -615,7 +615,7 @@ class NativeWaveformShader(unittest.TestCase):
             "display_srgb_to_linear(in.color.rgb)", grid)
         self.assertNotIn("round(", grid)
 
-    def test_final_wave_and_grid_compositing_is_linear_light(self):
+    def test_srgb_attachment_encodes_final_rgb_blend_and_linear_blue_grid(self):
         native = (
             Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
         ).read_text()

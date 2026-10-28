@@ -3,7 +3,7 @@ import math
 from decimal import Decimal, InvalidOperation
 
 from PySide6.QtCore import QLocale, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QDoubleValidator, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF, QTransform
+from PySide6.QtGui import QColor, QDoubleValidator, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QPolygonF, QTransform
 from PySide6.QtWidgets import QLineEdit, QToolButton
 
 from . import theme
@@ -35,7 +35,7 @@ def _grid_icon(action: str) -> QIcon:
             painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in points]))
         else:
             painter.setPen(QColor(theme.TEXT_HI))
-            font = QFont()
+            font = QFontDatabase.systemFont(QFontDatabase.GeneralFont)
             font.setPixelSize(12)
             font.setWeight(QFont.DemiBold)
             painter.setFont(font)
@@ -76,7 +76,9 @@ class BpmValue(QLineEdit):
         self.setToolTip("Saved BPM of the loaded track")
         validator = QDoubleValidator(0.01, 655.35, 2, self)
         validator.setNotation(QDoubleValidator.StandardNotation)
-        validator.setLocale(QLocale.c())
+        locale = QLocale.c()
+        locale.setNumberOptions(QLocale.RejectGroupSeparator)
+        validator.setLocale(locale)
         self.setValidator(validator)
         self._track_id = ''
         self._display = '000.00'
@@ -118,12 +120,16 @@ class BpmValue(QLineEdit):
                     return
                 try:
                     hundredths = Decimal(self.text()) * 100
-                    if hundredths == hundredths.to_integral_value() and 1 <= hundredths <= 65535:
-                        self.setModified(False)
-                        self.requested.emit(self._track_id, int(hundredths))
-                        self.clearFocus()
+                    if hundredths != hundredths.to_integral_value() or not 1 <= hundredths <= 65535:
+                        raise InvalidOperation
                 except InvalidOperation:
-                    pass
+                    self.invalid.emit('Enter 0.01–655.35 BPM, with up to two decimal places')
+                    self.selectAll()
+                    event.accept()
+                    return
+                self.setModified(False)
+                self.requested.emit(self._track_id, int(hundredths))
+                self.clearFocus()
             event.accept()
             return
         super().keyPressEvent(event)
