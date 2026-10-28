@@ -10,8 +10,10 @@ was needed for this documentation/cleanup wrap-up. The app remains the accepted
 binary, with embedded base revision `87687337f9b4ad526e7a9af1e14d9889546721fb`,
 dirty=true, and runtime-source fingerprint:
 `b276d6a9aa002877767759c8589b522b70f4c33fd3fb700595843cfa904e62d0`.
-The published source release has the same runtime fingerprint; do not restamp the
-older binary with the new repository commit. Resolve repository HEAD with Git.
+Repository runtime source release: `fee2b394fd467892c63153dff7b87d79d53960fd` on `main`; this handoff is
+a documentation-only follow-up. That release has the same runtime fingerprint.
+Do not restamp the older binary with the repository commit; resolve current HEAD
+with Git.
 Installed **2026-10-27T19:31:57.205780-05:00**, launched
 **2026-10-27T19:31:57.206243-05:00**. Stable signature, personal composition,
 packaged field instructions, isolated native launch and real window verified.
