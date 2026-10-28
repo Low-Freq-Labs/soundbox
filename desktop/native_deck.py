@@ -378,6 +378,15 @@ def _bind(path: Path):
         ctypes.c_size_t,
     ]
     lib.sb_deck_set_cues.restype = ctypes.c_int
+    lib.sb_deck_set_grid_for_generation.argtypes = [
+        handle, ctypes.c_uint64, ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t, ctypes.c_int,
+    ]
+    lib.sb_deck_set_grid_for_generation.restype = ctypes.c_int
+    lib.sb_deck_grid_position.argtypes = [
+        handle, ctypes.c_double, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint8),
+    ]
+    lib.sb_deck_grid_position.restype = ctypes.c_int
     lib.sb_deck_set_session_cue.argtypes = [
         handle, ctypes.c_uint32, ctypes.c_int,
     ]
@@ -543,6 +552,9 @@ class UnavailableDeckBackend(QObject):
 
     def set_cues(self, _cues):
         pass
+
+    def set_grid(self, _beats, _generation: int = 0, *, pinned=True):
+        return False
 
     def set_session_cue(self, _position_ms):
         pass
@@ -744,6 +756,13 @@ class NativeDeckBackend(QObject):
     def diagnostic_cue_marker_count(self) -> int:
         return int(self._lib.sb_deck_cue_marker_count(self._handle))
 
+    def diagnostic_grid_position(self, position_ms: int) -> tuple[int, int] | None:
+        bar, beat = ctypes.c_uint32(), ctypes.c_uint8()
+        if self._lib.sb_deck_grid_position(self._handle, position_ms / 1000,
+                                          ctypes.byref(bar), ctypes.byref(beat)):
+            return int(bar.value), int(beat.value)
+        return None
+
     def diagnostic_zoom(self) -> float:
         return float(self._lib.sb_deck_pixels_per_second(self._handle))
 
@@ -922,11 +941,13 @@ class NativeDeckBackend(QObject):
                 rgb_arr = (ctypes.c_uint8 * (count * 3)).from_buffer_copy(
                     packed_rgb[:count * 3])
                 expected = int(generation or self._analysis_generation)
-                return bool(
+                result = bool(
                     self._lib.sb_deck_set_packed_analysis_for_generation(
                         self._handle, expected, h_arr, rgb_arr, count,
                         float(data.get("sample_rate") or 150.0),
                         seconds_arr, beat_arr, beat_count))
+                self.set_cues(data.get('cues') or [])
+                return result
         raw_heights = list(data.get("heights") or [])
         raw_colors = list(data.get("colors") or [])
         raw_count = min(len(raw_heights), len(raw_colors))
@@ -1094,6 +1115,16 @@ class NativeDeckBackend(QObject):
         # Keep imported RGB as metadata, but render the stable A–H identity
         # palette so a letter never changes color between tracks.
         return _HOT_CUE_FALLBACKS[slot]
+
+    def set_grid(self, beats, generation: int = 0, *, pinned=True):
+        """Replace only grid geometry/ruler positions; preserve audio and waves."""
+        rows = list(beats or [])
+        count = len(rows)
+        seconds = (ctypes.c_double * count)(*(float(r[1]) / 1000 for r in rows)) if count else None
+        numbers = (ctypes.c_uint8 * count)(*(int(r[0]) for r in rows)) if count else None
+        expected = int(generation or self._analysis_generation)
+        return bool(self._lib.sb_deck_set_grid_for_generation(
+            self._handle, expected, seconds, numbers, count, int(pinned)))
 
     def set_cues(self, cues):
         """Upload colored hot-cue boxes and red memory-cue arrows to Metal."""

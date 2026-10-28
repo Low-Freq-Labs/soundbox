@@ -57,6 +57,10 @@ generic USB and future CDJ capabilities remain distinct.
 
 ## SoundBox playlists in rekordbox — September 26 concept
 
+The October 26 [approved prep plan](rekordbox-prep.md) now includes creating real
+single-My-Tag intelligent playlists, behind explicit validation/review gates.
+Transferring ordinary SoundBox playlists remains the separate concept below.
+
 Sonny wants SoundBox-curated playlists available in rekordbox for DJ use,
 potentially through explicit database writing. Workshop the transfer UX,
 supported integration route, conflicts and recovery before implementation.

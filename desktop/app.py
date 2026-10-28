@@ -94,14 +94,14 @@ def setup_logging() -> Path | None:
 
 from PySide6.QtCore import (
     QEvent, QFileSystemWatcher, QPointF, QProcess, QRect, QSize, Qt, QThread,
-    QTimer,
+    QTimer, QItemSelectionModel,
 )
 from PySide6.QtGui import (
     QColor, QFontDatabase, QIcon, QPainter, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QLineEdit,
-    QFileDialog, QFileSystemModel, QHBoxLayout,
+    QFileDialog, QFileSystemModel, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
     QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget,
     QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -138,6 +138,11 @@ from . import theme
 from .mount_watch import mounted_volume_snapshot
 from .artpicker import ArtPickerDialog
 from .task_owner import TaskOwner
+from .tag_controller import TagEditController
+from .prep_tags import MyTagsButton
+from .prep_grid import BpmValue, grid_edit_buttons, quantize_button
+from .grid_controller import GridEditController
+from .wordmark import Wordmark
 from .keyboard import KeyboardRouter, Keymap, event_binding
 from .model import (
     COLUMNS, TrackModel, row_display_value, row_matches as _row_matches,
@@ -170,24 +175,6 @@ _DUAL_PLAN_SHARE_OF_PREFINAL = (
     _DUAL_PLAN_PROGRESS_END / _DEVICE_WORK_PROGRESS_END)
 
 
-# Wordmark as ASCII art (SOUND = white, BOX = purple), shown in the top bar.
-SOUND_ART = r"""
- ____   ___  _   _ _   _ ____
-/ ___| / _ \| | | | \ | |  _ \
-\___ \| | | | | | |  \| | | | |
- ___) | |_| | |_| | |\  | |_| |
-|____/ \___/ \___/|_| \_|____/
-""".strip("\n")
-
-BOX_ART = r"""
- ____   _____  __
-| __ ) / _ \ \/ /
-|  _ \| | | \  /
-| |_) | |_| /  \
-|____/ \___/_/\_\
-""".strip("\n")
-
-
 # Persisted app settings + their defaults (both-on/5s reproduces the original single
 # "hide cue tracks" behavior). Merged over saved values in _load_state.
 _DEFAULT_SETTINGS = {
@@ -202,6 +189,10 @@ _DEFAULT_SETTINGS = {
     "waveform_zoom": 92.0,
     "waveform_mode": "3BAND",
     "autoplay_mode": "",
+    "quantize": False,
+    "theme_accent": theme.DEFAULT_ACCENT,
+    "theme_text_mode": "white",
+    "theme_text_custom": theme.DEFAULT_ACCENT_TEXT,
     "stock_ipod_models": {},  # stable device identity -> confirmed model
     "stock_ipod_identity": {},  # observed display facts, never write authority
 }
@@ -392,7 +383,25 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._deleting = False
         self._pending_device_operation = None
         self._accordion_guard = False
+        self.tag_controller = TagEditController(data_dir, self)
+        self.grid_controller = GridEditController(self.tag_controller, self,
+                                                  cache_dir=self._track_analysis_dir,
+                                                  prepare_cache=self._prepare_grid_cache)
         self._build_ui()
+        self.player_bar.analysis_cache_admitted = lambda tid: not self.grid_controller.pending(tid)
+        self.tag_controller.changed.connect(self._sync_tags)
+        self.tag_controller.changed.connect(self._sync_cue_editing)
+        self.tag_controller.changed.connect(self._sync_rekordbox_connection)
+        self.tag_controller.idle.connect(self._finish_tag_refresh)
+        self.tag_controller.saved.connect(self._tag_saved)
+        self.tag_controller.cue_saved.connect(self._cue_saved)
+        self.tag_controller.cue_changed.connect(self._cue_changed)
+        self.tag_controller.failed.connect(self._tag_failed)
+        self.tag_controller.changed.connect(self._sync_grid)
+        self.grid_controller.changed.connect(self._grid_changed)
+        self.grid_controller.saved.connect(self._grid_saved)
+        self.grid_controller.failed.connect(self._tag_failed)
+        self.grid_controller.rejected.connect(lambda text: self._flash_status(text, 10))
         QApplication.instance().installEventFilter(self)  # Space transport + C cue
         # Animated dots for transient states (FINALIZING…, Cancelling…).
         self._pulse_timer = QTimer(self)
@@ -411,6 +420,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.setInterval(400)
         self._settings_save_timer.timeout.connect(self._save_state)
+        self._art_status_timer = QTimer(self)
+        self._art_status_timer.setSingleShot(True)
+        self._art_status_timer.setInterval(500)
+        self._art_status_timer.timeout.connect(self._flush_art_status)
         # A successful source load/import arms a recurring identity scan. It is
         # single-shot and rearmed only after the previous worker has finished,
         # so scans never overlap and a large cook cannot create a timer storm.
@@ -489,6 +502,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._rekordbox_connection_error = ""
         # User settings (extensible — this is the runway for future toggles).
         self.settings = {**_DEFAULT_SETTINGS, **(data.get("settings") or {})}
+        self._apply_theme_color(self.settings.get("theme_accent"), save=False)
         self.settings["title_rules_off"] = metadata.normalize_title_rules_off(
             self.settings.get("title_rules_off"))
         self.settings.pop("title_junk", None)  # v1 raw-pattern list — superseded
@@ -506,6 +520,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             float(self.settings.get("waveform_zoom", 92.0)), emit=False)
         self.player_bar.set_waveform_mode(
             str(self.settings.get("waveform_mode", "3BAND")))
+        self._set_quantize(self.settings.get('quantize') is True, save=False)
         self._set_autoplay_mode(
             str(self.settings.get("autoplay_mode", "")), save=False)
         self._sync_settings_controls()  # reflect saved values in the Settings page
@@ -726,6 +741,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
         if ev.type() == QEvent.ApplicationActivate:
             self.player_bar.resynchronize_transport()
+            self.grid_controller.set_current(self.player_bar.current_track(), force=True)
             return super().eventFilter(obj, ev)
         if ev.type() == QEvent.ApplicationDeactivate:
             self._keyboard_router.release_all()
@@ -780,9 +796,20 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 panel._press(kind, slot)
                 def release_marker():
                     button.setDown(False)
-                    pb._marker_cue_release(kind, slot)
+                    panel._release(kind, slot)
                 release_marker.cue_control = (kind, slot)
                 return release_marker
+            if panel._loaded and self._edit_cue(kind, slot, 'add'):
+                # Keep this physical press owned until release. A save that
+                # finishes while held must not turn creation into preview.
+                def release_created():
+                    pass
+                release_created.cue_control = (kind, slot)
+                return release_created
+            return None
+        if action.startswith('cues.delete.'):
+            kind = 'hot' if pb.cue_panel.pages.currentIndex() == 0 else 'memory'
+            self._edit_cue(kind, int(action.rsplit('.', 1)[1]), 'delete')
             return None
         commands = {
             "transport.play": self._toggle_player,
@@ -790,6 +817,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             "transport.next": lambda: pb.next_btn.click(),
             "transport.back": lambda: pb.beat_back_btn.click(),
             "transport.forward": lambda: pb.beat_forward_btn.click(),
+            "grid.downbeat": lambda: self._edit_grid('downbeat'),
+            "grid.left": lambda: self._edit_grid('left'),
+            "grid.right": lambda: self._edit_grid('right'),
+            "grid.double": lambda: self._edit_grid('double'),
+            "grid.halve": lambda: self._edit_grid('halve'),
+            "grid.quantize": lambda: self.quantize_btn.click(),
             "cues.hot_page": lambda: pb.cue_panel.hot_tab.click(),
             "cues.memory_page": lambda: pb.cue_panel.memory_tab.click(),
             "browser.rename": self._rename_current,
@@ -1003,7 +1036,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             t.track_id, t.path, title=label, bpm=t.bpm,
             analysis_path=getattr(t, "source_analysis_path", ""),
             autoplay=autoplay,
-            cues=getattr(t, "source_cues", None))
+            cues=(self.tag_controller.session_cues(t.track_id)
+                  if self.tag_controller.lib is self.lib else getattr(t, "source_cues", None)))
         self._highlight_now_playing(t.track_id)
         self._update_player_navigation()
         return True
@@ -1229,15 +1263,19 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # geometrically centered; the header keeps its own breathing room.
         outer.setContentsMargins(0, 5, 4, 5)
         outer.setSpacing(3)
+        upper = QGridLayout()
+        upper.setContentsMargins(0, 0, 4, 0)
+        upper.setHorizontalSpacing(0)
+        upper.setVerticalSpacing(3)
+        upper.setColumnMinimumWidth(1, 12)
+        upper.setColumnMinimumWidth(3, 6)
+        upper.setColumnStretch(2, 1)
+        upper.setRowStretch(1, 1)
         h = QHBoxLayout(); h.setSpacing(10)
-        h.setContentsMargins(14, 0, 18, 0)
-        sound = QLabel(SOUND_ART); sound.setObjectName("AsciiSound")
-        sound.setAlignment(Qt.AlignVCenter)
-        box = QLabel(BOX_ART); box.setObjectName("AsciiBox")
-        box.setAlignment(Qt.AlignVCenter)
-        h.addWidget(sound, 0, Qt.AlignVCenter)
-        h.addWidget(box, 0, Qt.AlignVCenter)
-        h.addSpacing(28)
+        h.setContentsMargins(14, 0, 4, 0)
+        self.wordmark = Wordmark()
+        h.addWidget(self.wordmark, 0, Qt.AlignVCenter)
+        h.addSpacing(4)  # With layout spacing, match the logo's 14px left inset.
         self.now_playing_frame = QWidget()
         self.now_playing_frame.setObjectName("NowPlayingFrame")
         self.now_playing_frame.setFixedHeight(44)
@@ -1289,46 +1327,49 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.now_playing = QLabel("SELECT A TRACK")
         self.now_playing.setObjectName("NowPlaying")
         self.now_playing.setAlignment(Qt.AlignCenter)
-        # Long metadata must never squeeze the fixed search/settings controls.
+        # Keep the title inside its header lane as metadata grows.
         self.now_playing.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.now_playing.setCursor(Qt.PointingHandCursor)
         self.now_playing.setToolTip("")
         now_layout.addWidget(self.now_playing, 1)
         h.addWidget(self.now_playing_frame, 1, Qt.AlignVCenter)
-        h.addSpacing(28)
         self.search = QLineEdit()
         self.search.setObjectName("Search")
         self.search.setPlaceholderText("Search title, artist, genre…")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(165)  # slimmer → more room for the waveform
+        self.search.setFixedHeight(28)
         # Click-to-focus only: as the first focusable widget it grabbed keyboard
         # focus at launch, so the app opened "typing into search" instead of
         # ready to browse (transport keys, arrows). Startup focus goes to the table.
         self.search.setFocusPolicy(Qt.ClickFocus)
         self.search.textChanged.connect(self._on_search)
-        h.addWidget(self.search, 0, Qt.AlignVCenter)
-        h.addSpacing(4)  # tight: search↔gear
-        gear = QPushButton("⚙")  # opposite end from the ASCII wordmark
+        gear = QPushButton("⚙")
         gear.setObjectName("GearBtn")
-        gear.setFixedSize(42, 34)
+        gear.setFixedSize(42, 28)
         gear.setToolTip("Settings")
         gear.setCursor(Qt.PointingHandCursor)
         gear.clicked.connect(self._open_settings)
-        h.addWidget(gear, 0, Qt.AlignVCenter)
-        outer.addLayout(h)
+        upper.addLayout(h, 0, 0, 1, 3)
 
-        # Full-width deck row: controls at the left, then a zoomed waveform that
-        # owns all remaining width. Logo/search/settings stay above it instead
-        # of squeezing the player into the same horizontal strip.
+        # Title and waveform share a right edge. Cues span both lanes, using
+        # the space freed by moving Search and Settings into the prep strip.
         self.player_bar = PlayerBar(
             jump_mode=str(self.settings.get("beat_jump_mode", "16 BEATS")),
             waveform_zoom=float(self.settings.get("waveform_zoom", 92.0)),
             waveform_mode=str(
-                self.settings.get("waveform_mode", "3BAND")))
+                self.settings.get("waveform_mode", "3BAND")),
+            embedded_cues=False, embedded_transport=False)
         self.player_bar.track_analysis_dir = self._track_analysis_dir
         self.player_bar.playback_error.connect(self._on_playback_error)
         self.player_bar.now_playing_changed.connect(self._set_now_playing)
+        self.player_bar.now_playing_changed.connect(lambda *_: self._sync_prep_bpm())
+        self.player_bar.now_playing_changed.connect(lambda *_: self._sync_cue_editing())
+        self.player_bar.now_playing_changed.connect(
+            lambda *_: self.grid_controller.set_current(self.player_bar.current_track()))
+        self.player_bar.track_ready.connect(lambda: self._grid_changed(self.player_bar.current_track()))
+        self.player_bar.cue_panel.empty_pressed.connect(
+            lambda kind, slot: self._edit_cue(kind, slot, 'add'))
         self.player_bar.playback_active_changed.connect(self._on_playback_active)
         self.player_bar.source_changed.connect(self._on_player_source_changed)
         self.player_bar.jump_mode_changed.connect(self._on_jump_mode_changed)
@@ -1338,8 +1379,276 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.player_bar.next_requested.connect(lambda: self._play_relative(1))
         self.player_bar.track_ended.connect(self._advance_autoplay)
         self.player_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        outer.addWidget(self.player_bar, 1)
+        upper.addWidget(self.player_bar, 1, 2)
+        upper.addWidget(self.player_bar.transport_deck, 1, 0, 2, 1)
+        cue_column = QWidget()
+        cue_column.setObjectName('CueColumn')
+        cue_column.setFixedWidth(self.player_bar.cue_panel.width())
+        cue_layout = QVBoxLayout(cue_column)
+        cue_layout.setContentsMargins(0, 5, 0, 4)
+        cue_layout.setSpacing(0)
+        cue_layout.addWidget(self.player_bar.cue_panel)
+        upper.addWidget(cue_column, 0, 4, 2, 1)
+        outer.addLayout(upper, 1)
+        prep = QWidget()
+        prep.setObjectName("PrepToolbar")
+        prep.setAttribute(Qt.WA_StyledBackground, True)
+        row = QHBoxLayout(prep)
+        # This grid column shares the waveform origin and the cue column's right edge.
+        row.setContentsMargins(0, 3, 0, 3)
+        row.setSpacing(6)
+        self.grid_edit_buttons = grid_edit_buttons(prep)
+        for button, operation in zip(self.grid_edit_buttons,
+                                     ('downbeat', 'left', 'right', 'double', 'halve')):
+            button.clicked.connect(lambda _checked=False, op=operation: self._edit_grid(op))
+        self.grid_edit_buttons[0].pressed.connect(
+            lambda: LOG.info('Grid bar-start button pressed: track=%s', self.player_bar.current_track()))
+        self.bpm_value = BpmValue(prep)
+        self.bpm_value.requested.connect(
+            lambda tid, value: self._edit_grid('bpm', value, track_id=tid))
+        self.bpm_value.invalid.connect(lambda message: self._flash_status(message, 8))
+        for index, button in enumerate(self.grid_edit_buttons):
+            row.addWidget(button)
+            if index == 0:
+                row.addWidget(self.bpm_value)
+        self.quantize_btn = quantize_button(prep)
+        self.quantize_btn.toggled.connect(self._set_quantize)
+        row.addWidget(self.quantize_btn)
+        row.addStretch(1)
+        self.tag_status = QLabel("")
+        self.tag_status.setObjectName("TagStatus")
+        row.addWidget(self.tag_status)
+        self.my_tags = MyTagsButton()
+        self.my_tags.setFixedHeight(28)
+        self.my_tags.setFixedWidth(self.player_bar.cue_panel.width() - 6)
+        self.search.setFixedWidth(self.my_tags.width())
+        self.my_tags.popup.aboutToShow.connect(self._probe_tags)
+        self.my_tags.assignment_requested.connect(self._assign_tag)
+        row.addWidget(self.my_tags)
+        row.addWidget(gear)
+        row.addSpacing(10)  # Gear ends at the waveform edge; Search starts at the cue slots.
+        row.addWidget(self.search)
+        upper.addWidget(prep, 2, 2, 1, 3)
         return bar
+
+    def _sync_prep_bpm(self):
+        track_id = self.player_bar.current_track()
+        track = self.lib.tracks_by_id.get(track_id) if self.lib else None
+        value = track.bpm if track is not None else self.player_bar._bpm
+        view = self.grid_controller.view(track_id) if track_id else None
+        if view is not None:
+            value = view[1]
+        self.bpm_value.set_bpm(value if track_id else 0, track_id=track_id or '')
+
+    def _set_quantize(self, enabled, *, save=True):
+        enabled = enabled is True
+        self.player_bar.quantize_enabled = enabled
+        blocked = self.quantize_btn.blockSignals(True)
+        try:
+            self.quantize_btn.setChecked(enabled)
+        finally:
+            self.quantize_btn.blockSignals(blocked)
+        self.settings['quantize'] = enabled
+        if save:
+            self._schedule_settings_save()
+
+    def _sync_grid(self):
+        if not hasattr(self, 'grid_edit_buttons'):
+            return
+        pb = self.player_bar
+        reason = self.grid_controller.reason(pb.current_track(), allow_checking=True)
+        if not reason and (self._refresh_worker is not None or self._state_maintenance
+                           or self._device_operation_owned() or self._shutting_down):
+            reason = 'Library operation in progress'
+        if not reason and (pb._pending_autoplay or pb._native_error or not pb.cue_panel._loaded):
+            reason = 'Wait for the track to finish loading'
+        if not reason and (pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
+                           or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox'):
+            reason = 'This track has a SoundBox manual grid'
+        for button in self.grid_edit_buttons:
+            button.setEnabled(not reason)
+            button.setToolTip(button.accessibleName() + ('\n' + reason if reason else ''))
+        bpm_reason = reason or self.grid_controller.bpm_reason(pb.current_track())
+        self.bpm_value.set_editable(not bpm_reason, bpm_reason)
+        self._sync_prep_bpm()
+
+    def _grid_changed(self, track_id):
+        pb = self.player_bar
+        track = self.tag_controller.lib.tracks_by_id.get(track_id) if self.tag_controller.lib else None
+        view = self.grid_controller.view(track_id)
+        provenance = pb._analysis_parts.get('provenance', {})
+        manual = provenance.get('grid') == 'soundbox-manual' or provenance.get('user_data') == 'soundbox'
+        if track is not None and view is not None and not manual:
+            pb.refresh_live_grid(track_id, track.path, view[0], view[1])
+        self._sync_grid()
+
+    def _edit_grid(self, operation, value=0, *, track_id=None):
+        self._sync_grid()
+        pb = self.player_bar
+        if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
+                or self._device_operation_owned() or pb._pending_autoplay or pb._native_error
+                or not pb.cue_panel._loaded
+                or pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
+                or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox'):
+            return False
+        tid = pb.current_track()
+        if track_id is not None and tid != track_id:
+            return False
+        track = self.tag_controller.lib.tracks_by_id.get(tid) if self.tag_controller.lib else None
+        if track is None or str(track.path) != pb._src_path:
+            return False
+        reason = self.grid_controller.reason(tid, allow_checking=True)
+        if reason:
+            self._flash_status(reason, 10)
+            return False
+        if operation == 'downbeat':
+            value = pb.capture_grid_position()
+            if value is None:
+                self._flash_status('Wait for the track to finish loading before setting a bar start', 8)
+                return False
+            LOG.info('Grid bar start requested: track=%s target_ms=%s visible_ms=%s backend_ms=%s',
+                     tid, value, pb.wave._position_ms, pb.player.position())
+        elif operation in ('left', 'right'):
+            step = 3 if QApplication.keyboardModifiers() & Qt.ShiftModifier else 1
+            value, operation = (-step if operation == 'left' else step), 'shift'
+        return self.grid_controller.request(tid, operation, value,
+                                            preview_rows=pb._analysis_parts.get('beats'))
+
+    def _prepare_grid_cache(self, track_id):
+        # Source worker only: fence old preparation publications without
+        # stopping playback, deleting a cache or waiting in the GUI thread.
+        workers = list(self.player_bar._wf_pending)
+        bulk = self._wf_fill_worker
+        if bulk is not None:
+            workers.append(bulk)
+        for worker in workers:
+            worker.cache_writes.protect(track_id)
+
+    def _grid_saved(self, lib, track_id):
+        self.lib = lib
+        track = lib.tracks_by_id.get(track_id)
+        if track is not None:
+            self._invalidate_rows([track_id])
+            selected = set(self._selected_ids())
+            reset = self.model.update_bpm(track_id, track.bpm)
+            if reset and selected:
+                selection = self.table.selectionModel()
+                for row, data in enumerate(self.model._rows):
+                    if data.get('id') in selected:
+                        selection.select(self.model.index(row, 0),
+                                         QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        if not self.tag_controller.owned:
+            self._cache_library()
+            self._flash_status('Grid saved', 4)
+            self._finish_tag_refresh()
+
+    def _sync_tags(self):
+        if not hasattr(self, "my_tags"):
+            return
+        controller = self.tag_controller
+        ids = self._selected_ids() if hasattr(self, "table") and self.stack.currentIndex() == 0 else []
+        reason = controller.reason(ids)
+        if not reason and (self._refresh_worker is not None or self._state_maintenance
+                           or self._device_operation_owned()):
+            reason = "Library operation in progress"
+        lib = controller.lib
+        assigned = controller.selected_tags(ids)
+        self.my_tags.set_state(lib.source_tags if lib else [], assigned, reason)
+        self.tag_status.setText(controller.status_text)
+
+    def _sync_cue_editing(self):
+        pb = self.player_bar
+        reason = self.tag_controller.cue_reason(pb.current_track())
+        if not reason and (self._refresh_worker is not None or self._state_maintenance
+                           or self._device_operation_owned()):
+            reason = 'Library operation in progress'
+        pb.cue_panel.set_editable(not reason, reason)
+
+    def _edit_cue(self, kind, slot, operation):
+        pb = self.player_bar
+        if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
+                or self._device_operation_owned()):
+            return False
+        track_id = pb.current_track()
+        track = self.lib.tracks_by_id.get(track_id) if self.lib else None
+        if not track or str(track.path) != pb._src_path:
+            return False
+        if operation == 'delete' and pb.cue_panel._cues[kind][slot] is None:
+            return False
+        reason = self.tag_controller.cue_reason(track_id)
+        if reason:
+            self._flash_status(reason, 10)
+            return False
+        position = pb.capture_cue_position() if operation == 'add' else None
+        if operation == 'add' and (position is None or track_id != pb.current_track()):
+            self._flash_status('Wait for the track to finish loading before setting a cue', 8)
+            return False
+        if operation == 'add':
+            position = pb.quantize_cue_position(position)
+        return self.tag_controller.request_cue(track_id, kind, slot, operation, position)
+
+    def _assign_tag(self, tag_id, present):
+        if (self._refresh_worker is not None or self._state_maintenance
+                or self._shutting_down or self._device_operation_owned()):
+            self._sync_tags()
+            return
+        self.tag_controller.request(self._selected_ids(), tag_id, present)
+        self._sync_rekordbox_connection()
+        self._sync_tags()
+
+    def _probe_tags(self):
+        if (self._refresh_worker is not None or self._state_maintenance
+                or self._shutting_down or self._device_operation_owned()):
+            self._sync_tags()
+            return
+        self.tag_controller.probe()
+        self._sync_tags()
+
+    def _tag_saved(self, lib):
+        # The worker includes a fresh authoritative snapshot; never reconstruct
+        # smart memberships by patching a stale browser cache.
+        selected = set(self._selected_ids()) if self.stack.currentIndex() == 0 else set()
+        self._on_refresh_done(lib)
+        if selected and self.stack.currentIndex() == 0:
+            selection = self.table.selectionModel()
+            selection.clearSelection()
+            for row, data in enumerate(self.model._rows):
+                if data.get("id") in selected:
+                    selection.select(self.model.index(row, 0),
+                                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        self._flash_status('Cues saved' if self.tag_controller.last_operation == 'cues' else 'Tags saved', 4)
+        self._finish_tag_refresh()
+
+    def _cue_saved(self, lib, track_id):
+        self.lib = lib
+        if self.tag_controller.owned:
+            return
+        self._cache_library()
+        self._flash_status('Cues saved', 4)
+        self._finish_tag_refresh()
+
+    def _cue_changed(self, track_id):
+        controller = self.tag_controller
+        track = controller.lib.tracks_by_id.get(track_id) if controller.lib else None
+        if track is not None:
+            self.player_bar.refresh_live_cues(track_id, track.path, controller.session_cues(track_id))
+
+    def _tag_failed(self, error):
+        self._flash_status(f'Couldn’t save {self.tag_controller.last_operation}: ' + error, 20)
+        self._finish_tag_refresh()
+        # Reconcile stale selection values after a conflict or an uncertain
+        # receipt. The next write still requires the backend's recovery proof.
+        if self.lib is not None and self.lib.source_kind == "rekordbox-db":
+            self._start_rekordbox_refresh(Path(self.lib.source))
+
+    def _finish_tag_refresh(self):
+        self._sync_rekordbox_connection()
+        self._sync_tags()
+        self._sync_cue_editing()
+        self._sync_grid()
+        if self._refresh_pending and not self._shutting_down:
+            self._refresh_pending = False
+            QTimer.singleShot(0, self._refresh_rekordbox)
 
     def _set_now_playing(self, text: str):
         """Show artist/title in the open header lane, never over the waveform."""
@@ -1397,9 +1706,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 self._wf_fill_worker, self._art_worker, self._stock_art_worker):
             if worker is not None:
                 worker.set_playback_active(active)
-        if not active:
-            self.model.refresh_art(self.art_cache.status_kind)
-            self._refresh_devices()
+        # Cue gates can cross this edge several times a second. Library-wide
+        # artwork reads and device scans do not belong on a transport edge.
+        # Artwork completion/progress owns its presentation; mount notices and
+        # the independent device timers own discovery, during playback too.
 
     def _on_player_source_changed(self, path: str):
         worker = self._wf_fill_worker
@@ -1545,6 +1855,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # Selection must survive re-sorting (and search — same disease): remember
         # the selected track id, re-seat it after the model reshuffles.
         self.table.selectionModel().currentChanged.connect(self._remember_current)
+        self.table.selectionModel().selectionChanged.connect(lambda *_: self._sync_tags())
+        self.stack.currentChanged.connect(lambda *_: self._sync_tags())
         hh.sortIndicatorChanged.connect(
             lambda *_: QTimer.singleShot(0, self._reseat_selection))
         pl.addWidget(self.table)
@@ -1742,6 +2054,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # (the instant-paint snapshot vs the live rekordbox read), so the per-path
         # landed-time cache MUST be dropped — otherwise a birthtime computed off
         # the snapshot sticks and defeats the newest-added sort.
+        self.tag_controller.configure(self.lib, self._rekordbox_source_verified)
+        if not self.grid_controller.pending(self.player_bar.current_track()):
+            self.player_bar.clear_live_grid()
+        self.grid_controller.configure()
         self._landed_cache.clear()
         self._sync_playlists_cache = None
         sb_cur = self.sb_tree.currentItem()  # selection BEFORE the rebuild
@@ -1754,6 +2070,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if loaded is not None:
             self.player_bar.refresh_live_cues(
                 loaded.track_id, loaded.path, getattr(loaded, "source_cues", None))
+        self._sync_prep_bpm()
         self._build_artist_registry()
         self._apply_settings_to_lib()
         self._populate_tree(engine.summary(self.lib))
@@ -1899,7 +2216,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         section = getattr(self, "_rekordbox_section", None)
         if section is None:
             return
-        busy = (self._refresh_worker is not None or self._state_maintenance
+        busy = (self._refresh_worker is not None or self.tag_controller.owned or self._state_maintenance
                 or self._shutting_down or self._device_operation_owned())
         source = str(self.lib.source) if self.lib else ""
         if self._refresh_worker is not None:
@@ -1917,7 +2234,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                           busy=busy, custom=bool(self.settings.get("rekordbox_db_path")))
 
     def _choose_rekordbox_database(self):
-        if self._refresh_worker is not None or self._state_maintenance or self._device_operation_owned():
+        if self._refresh_worker is not None or self.tag_controller.owned or self._state_maintenance or self._device_operation_owned():
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose rekordbox database", str(self._rekordbox_database_path().parent),
@@ -1926,14 +2243,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._start_rekordbox_refresh(Path(path), selection=True)
 
     def _use_default_rekordbox_database(self):
-        if self._refresh_worker is not None or self._state_maintenance or self._device_operation_owned():
+        if self._refresh_worker is not None or self.tag_controller.owned or self._state_maintenance or self._device_operation_owned():
             return
         self._start_rekordbox_refresh(rekordbox_db.REKORDBOX_DB, selection=True)
 
     def _refresh_rekordbox(self):
         if self._shutting_down or getattr(self, "_state_maintenance", False):
             return
-        if self._refresh_worker is not None:
+        if self._refresh_worker is not None or self.tag_controller.owned:
             # A click during the snapshot is a request for a newer point in
             # time, not a no-op. Coalesce repeated clicks into one immediate
             # follow-up read when the current worker's finished callback lands.
@@ -1944,16 +2261,18 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._start_rekordbox_refresh(self._rekordbox_database_path())
 
     def _start_rekordbox_refresh(self, path: Path, *, selection=False):
-        if self._shutting_down or self._state_maintenance or self._refresh_worker is not None:
+        if self._shutting_down or self._state_maintenance or self._refresh_worker is not None or self.tag_controller.owned:
             return
         if not self._device_operation_owned():
             self._start_pulse("Loading")
         w = RefreshWorker(path)
+        w.preflight = self.tag_controller.recover_before_read
         if selection:
             w.selection_path = str(path)
         self._refresh_worker = w
         w.finished.connect(lambda ww=w: self._finish_refresh_worker(ww))
         self._sync_rekordbox_connection()
+        self._sync_tags()
         w.start()
 
     def _finish_refresh_worker(self, w):
@@ -5945,6 +6264,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._shutting_down:
             self._art_restart = False
             return
+        self._art_status_timer.start()
         QTimer.singleShot(0, lambda: self._maybe_prepare_stock_artwork(True))
         if getattr(self, "_art_restart", False):  # a re-scan asked to restart
             self._art_restart = False
@@ -6027,6 +6347,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         if self.lib is None:
             return
+        if self.tag_controller.owned:
+            self._waveform_rescan_pending = True
+            return
         if _running(self._wf_fill_worker):
             # A live rekordbox refresh can replace the library while a pass is
             # running. Its cue fingerprints belong to the old snapshot, so
@@ -6045,7 +6368,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._wf_fill_worker = w
         w.set_playback_active(self.player_bar.is_playing())
         w.prioritize(self.player_bar._src_path or "")
-        w.detail_ready.connect(self.player_bar.refresh_audio_detail)
+        w.detail_ready.connect(lambda path: self.player_bar.refresh_audio_detail(path)
+                               if not self.tag_controller.owned else None)
         w.storage_paused.connect(self._on_analysis_storage_paused)
         w.tasks_ready.connect(self._on_analysis_tasks_ready)
         w.progress.connect(self._on_analysis_progress)
@@ -6186,6 +6510,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def _on_art_progress(self, done, total):
         if not self.player_bar.is_playing():
             self.model.refresh_art(self.art_cache.status_kind)
+        else:
+            self._art_status_timer.start()
         if self._background_status_available() and not self._preparing_library:
             # A device op (export/sync/delete) owns the status bar; don't fight it.
             if done >= total:
@@ -6193,6 +6519,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             else:
                 self._start_pulse("Fetching artwork", keep_count=True)
                 self._set_status_count(done, total)
+
+    def _flush_art_status(self):
+        if self._shutting_down:
+            return
+        if self.player_bar.is_playing():
+            self._art_status_timer.start()
+        else:
+            self.model.refresh_art(self.art_cache.status_kind)
 
     def _header_menu(self, pos):
         menu = QMenu(self)
@@ -6555,6 +6889,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         for t in (getattr(self, "_dev_timer", None), getattr(self, "_pulse_timer", None),
                   getattr(self, "_warm_timer", None),
                   getattr(self, "_settings_save_timer", None),
+                  getattr(self, "_art_status_timer", None),
                   getattr(self, "_volume_refresh_timer", None),
                   getattr(self, "_mount_table_timer", None),
                   getattr(self, "_waveform_recheck_timer", None)):
@@ -6572,6 +6907,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._device_coordinator.cancel(shutdown=True)
         self._pending_device_operation = None
         self._dual_sync_queue.clear()
+        # Session cue edits are already visible/usable. Finish their accepted
+        # FIFO before the generic owner stop closes replacement admission.
+        self.grid_controller.shutdown()
+        self.tag_controller.shutdown()
         # Child dialogs/player own threads outside the window's attributes.
         # Close their admission before dispatching any queued completion work.
         task_owners = self.findChildren(TaskOwner)
@@ -6732,7 +7071,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         generation = self._status_generation
         QTimer.singleShot(
-            seconds * 1000,
+            seconds * 1000, self,
             lambda: self._set_status_text("Ready")
             if (self._status_generation == generation
                 and self.status_label.text() == msg) else None,

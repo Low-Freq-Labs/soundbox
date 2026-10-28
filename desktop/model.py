@@ -177,6 +177,26 @@ class TrackModel(QAbstractTableModel):
                                   self.index(len(self._rows) - 1, ART_COL),
                                   [Qt.DisplayRole, Qt.ToolTipRole])
 
+    def update_bpm(self, track_id: str, bpm: str) -> bool:
+        """Update one track; reset only when filtering/BPM sorting can move it."""
+        changed = False
+        for row in self._all_rows:
+            if row.get('id') == track_id and row.get('bpm') != bpm:
+                row['bpm'] = bpm
+                row.pop('_hay', None)
+                changed = True
+        if not changed:
+            return False
+        if self._filter or self._sort and self._sort[0] == 'bpm':
+            self._apply_filter()
+            return True
+        column = next(i for i, (key, _label, _hidden) in enumerate(COLUMNS) if key == 'bpm')
+        for index, row in enumerate(self._rows):
+            if row.get('id') == track_id:
+                self.dataChanged.emit(self.index(index, column), self.index(index, column),
+                                      [Qt.DisplayRole, Qt.ToolTipRole])
+        return False
+
     def rowCount(self, parent=None) -> int:
         return len(self._rows)
 

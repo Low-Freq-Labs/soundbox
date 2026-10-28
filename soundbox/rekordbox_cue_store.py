@@ -1,0 +1,448 @@
+"""Unintegrated cue transaction pilot; explicit per-library authority required.
+
+Use the SAME recovery root as LiveTagStore for a library. The shared lock and
+journal serialize domains; an unresolved other-domain journal blocks admission.
+Nothing here writes audio, analysis, XML, playlists or device storage.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import fcntl
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import sqlite3
+from uuid import uuid4
+
+from .rekordbox_cues import CueEdit, CueIdentities, CueSnapshot, plan_cue_edit
+from .rekordbox_tags import NATIVE_VERSION, _file_sha, _installed_version, _schema
+from .rekordbox_write import (
+    ConflictError, RecoveryRequired, WriteProofError, assert_rekordbox_closed, encrypted_backup,
+    _cell, _guard_grid_recovery, _identity, _inactive_journal_proof, _json,
+    _owned_inactive_journal, _quote, _regular,
+)
+from .state_io import atomic_bytes, sync_dir
+
+_FORMAT = 'soundbox-native-cues-v1'
+_TABLES = frozenset(('djmdCue', 'djmdContent', 'contentCue', 'agentRegistry'))
+
+
+@dataclass(frozen=True)
+class CueLibraryAuthority:
+    """Acceptance-bound library permission; every store still binds one track."""
+    database: str
+    library_id: str
+    schema_sha256: str
+    accepted: bool
+    application_version: str = NATIVE_VERSION
+
+    def __post_init__(self):
+        if self.accepted is not True:
+            raise WriteProofError('Cue writing requires native acceptance')
+        CueWriteAuthority(self.database, self.library_id, self.schema_sha256,
+                          'validate-library-authority', self.application_version)
+
+    def bind(self, track_id: str) -> CueWriteAuthority:
+        return CueWriteAuthority(self.database, self.library_id, self.schema_sha256,
+                                  track_id, self.application_version)
+
+
+def load_cue_authority(path: Path, source: Path, library_id: str) -> CueLibraryAuthority | None:
+    try:
+        _regular(path)
+        authority = CueLibraryAuthority(**json.loads(path.read_bytes()))
+        if authority.database != str(source) or authority.library_id != library_id:
+            return None
+        return authority
+    except (OSError, ValueError, KeyError, TypeError, WriteProofError):
+        return None
+
+
+@dataclass(frozen=True)
+class CueWriteAuthority:
+    database: str
+    library_id: str
+    schema_sha256: str
+    # Keep the first real write restricted to a reviewed control track.
+    pilot_track_id: str
+    application_version: str = NATIVE_VERSION
+
+    def __post_init__(self):
+        if (any(type(v) is not str or not v for v in
+                (self.database, self.library_id, self.pilot_track_id))
+                or not Path(self.database).is_absolute()
+                or len(self.schema_sha256) != 64
+                or any(c not in '0123456789abcdef' for c in self.schema_sha256)
+                or self.application_version != NATIVE_VERSION):
+            raise WriteProofError('Invalid pilot cue-write authority')
+
+
+def _closed():
+    assert_rekordbox_closed()
+
+
+def _fault(_phase: str):
+    """Synthetic tests only; never fault-inject a live library."""
+
+
+def _encode_row(row):
+    return {k: _cell(v) for k, v in row.items()} if row is not None else None
+
+
+def _pk(table):
+    return 'registry_id' if table == 'agentRegistry' else 'ID'
+
+
+class PilotCueStore:
+    """Pilot-only source writer. Source selection cannot manufacture authority."""
+
+    def __init__(self, authority: CueWriteAuthority, recovery_root: Path):
+        self.authority = authority
+        self.database = Path(authority.database)
+        self.root = Path(recovery_root).absolute()
+        if (self.root != self.root.resolve()
+                or self.root.is_relative_to(self.database.parent)
+                or self.database.is_relative_to(self.root)):
+            raise WriteProofError('Cue recovery overlaps or redirects the source library')
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.root.stat().st_mode & 0o077:
+            raise WriteProofError('Cue recovery directory must be private')
+        self.journal = self.root / 'transaction.json'
+        self._last_counter = None
+        self._backup_proof = None
+        self._backup_sha = ''
+
+    def _guard_other_recovery(self):
+        _guard_grid_recovery(self.root, self.journal)
+
+    def _guard(self):
+        if (not self.database.is_absolute() or self.database != self.database.resolve()
+                or self.database.name != 'master.db' or self.database.is_relative_to('/Volumes')):
+            raise WriteProofError('Cue writes require the explicitly enabled local database')
+        _regular(self.database)
+        if self.database.stat().st_uid != os.getuid():
+            raise WriteProofError('Source database is not owned by the current user')
+        if self.root != self.root.resolve() or self.root.stat().st_mode & 0o077:
+            raise WriteProofError('Cue recovery directory changed')
+        self._guard_other_recovery()
+        for suffix in ('-wal', '-shm', '-journal'):
+            p = self.database.with_name(self.database.name + suffix)
+            if p.exists() or p.is_symlink():
+                _regular(p)
+        for name in ('baseline.db', 'baseline.json', 'transaction.json', 'last-result.json'):
+            p = self.root / name
+            if p.exists() or p.is_symlink():
+                _regular(p)
+        if _installed_version() != self.authority.application_version:
+            raise WriteProofError('This rekordbox version has no cue-write authority')
+        _closed()
+        if self.journal.exists():
+            self._record()  # validate evidence before admitting hot-journal recovery
+
+    @contextmanager
+    def _lock(self):
+        self._guard()
+        fd = os.open(self.root / 'writer.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            _regular(self.root / 'writer.lock')
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise WriteProofError('Another rekordbox operation is finishing') from exc
+            self._guard()
+            yield
+        finally:
+            os.close(fd)
+
+    def _connect(self):
+        from pyrekordbox.db6.database import BLOB
+        from pyrekordbox.utils import deobfuscate
+        from sqlcipher3 import dbapi2 as sqlcipher
+        self._guard()
+        if (self.database.with_name('master.db-journal').exists() and not self.journal.exists()
+                and not _owned_inactive_journal(self.database, self.root, self.authority.library_id)):
+            raise RecoveryRequired('An unowned SQLite journal needs rekordbox recovery first')
+        conn = sqlcipher.connect(f'{self.database.as_uri()}?mode=rw', uri=True,
+                                 isolation_level=None, timeout=0.5)
+        try:
+            key = deobfuscate(BLOB)
+            conn.execute("PRAGMA key='" + key.replace("'", "''") + "'")
+            conn.execute('PRAGMA trusted_schema=OFF')
+            conn.execute('PRAGMA synchronous=FULL')
+            if (_identity(conn) != (self.authority.library_id, '6000')
+                    or _schema(conn) != self.authority.schema_sha256):
+                raise ConflictError('The enabled rekordbox identity/schema changed')
+            return conn
+        except BaseException:
+            conn.close()
+            raise
+
+    @staticmethod
+    def _rows(conn, table, where='', params=()):
+        cur = conn.execute(f'SELECT * FROM {_quote(table)}' + where, params)
+        names = [v[0] for v in cur.description]
+        return [dict(zip(names, row, strict=True)) for row in cur]
+
+    def _snapshot(self, conn) -> CueSnapshot:
+        tid = self.authority.pilot_track_id
+        tracks = self._rows(conn, 'djmdContent', ' WHERE ID=?', (tid,))
+        if len(tracks) != 1 or tracks[0]['rb_local_deleted']:
+            raise ConflictError('The pilot track is missing or deleted')
+        aggregates = self._rows(conn, 'contentCue', ' WHERE ContentID=?', (tid,))
+        if len(aggregates) > 1:
+            raise WriteProofError('Multiple cue aggregates for the pilot track')
+        rows = self._rows(conn, 'djmdCue', ' WHERE ContentID=?', (tid,))
+        # Deleted/history rows are not silently discarded from a write baseline.
+        return CueSnapshot(tracks[0], tuple(rows), aggregates[0] if aggregates else None)
+
+    def snapshot(self) -> CueSnapshot:
+        with self._lock():
+            conn = self._connect()
+            try:
+                self._recover(conn)
+                conn.execute('BEGIN')
+                return self._snapshot(conn)
+            finally:
+                conn.close()
+
+    def _baseline_identity(self):
+        return tuple((p.stat().st_dev, p.stat().st_ino, p.stat().st_size,
+                      p.stat().st_mtime_ns, p.stat().st_ctime_ns)
+                     for p in (self.root / 'baseline.db', self.root / 'baseline.json'))
+
+    def _verify_backup(self, sha):
+        try:
+            proof = self._baseline_identity()
+            if proof == self._backup_proof and sha == self._backup_sha:
+                return
+            record = json.loads((self.root / 'baseline.json').read_bytes())
+            if (record['source'] != str(self.database) or record['library_id'] != self.authority.library_id
+                    or record['sha256'] != sha or _file_sha(self.root / 'baseline.db') != sha
+                    or proof != self._baseline_identity()):
+                raise RecoveryRequired('Cue recovery backup does not verify')
+            self._backup_proof, self._backup_sha = proof, sha
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RecoveryRequired('Cue recovery backup is missing or damaged') from exc
+
+    def _backup(self, counter):
+        if counter == self._last_counter:
+            try:
+                self._verify_backup(self._backup_sha)
+                return
+            except RecoveryRequired:
+                pass  # no pending journal: replace damaged backup with current verified source
+        self._guard()
+        with encrypted_backup(self.database) as baseline:
+            temp = self.root / 'baseline-new.db'
+            if temp.exists() or temp.is_symlink():
+                raise RecoveryRequired('An unfinished baseline publication is preserved')
+            with baseline.open('rb') as src, temp.open('xb') as dst:
+                os.chmod(temp, 0o600)
+                shutil.copyfileobj(src, dst, 1024 * 1024)
+                dst.flush()
+                os.fsync(dst.fileno())
+            sha = _file_sha(baseline)
+            if _file_sha(temp) != sha:
+                raise WriteProofError('Encrypted cue backup did not verify')
+            os.replace(temp, self.root / 'baseline.db')
+            sync_dir(self.root)
+            atomic_bytes(self.root / 'baseline.json', _json({
+                'format': _FORMAT, 'source': str(self.database), 'library_id': self.authority.library_id,
+                'sha256': sha, 'counter': counter}))
+            self._last_counter = counter
+            self._backup_proof, self._backup_sha = self._baseline_identity(), sha
+
+    def _record(self):
+        try:
+            record = json.loads(self.journal.read_bytes())
+            info = self.database.stat()
+            if (record['format'] != _FORMAT or record['source'] != str(self.database)
+                    or record['library_id'] != self.authority.library_id
+                    or record.get('source_file_id') != [info.st_dev, info.st_ino]
+                    or record['track_id'] != self.authority.pilot_track_id
+                    or not isinstance(record['changes'], list) or len(record['changes']) != 4
+                    or {d['table'] for d in record['changes']} != _TABLES
+                    or any(not d['key'] or 'before' not in d or 'after' not in d for d in record['changes'])):
+                raise RecoveryRequired('Cue recovery identity/shape mismatch; evidence preserved')
+            edit = CueEdit(**record['request'])
+            delta = {d['table']: d for d in record['changes']}
+            track = delta['djmdContent']
+            aggregate = delta['contentCue']
+            cue = delta['djmdCue']
+            registry = delta['agentRegistry']
+            if (edit.track_id != self.authority.pilot_track_id
+                    or track['key'] != edit.track_id
+                    or any(track[side]['ID'] != edit.track_id or track[side]['UUID'] != edit.track_uuid
+                           for side in ('before', 'after'))
+                    or aggregate['key'] != edit.track_uuid
+                    or aggregate['after']['ContentID'] != edit.track_id
+                    or aggregate['after']['ID'] != edit.track_uuid
+                    or registry['key'] != 'localUpdateCount'
+                    or registry['before']['registry_id'] != 'localUpdateCount'
+                    or registry['after'] != {**registry['before'], 'int_1': registry['before']['int_1'] + 2}
+                    or (cue['before'] is None) == (cue['after'] is None)
+                    or any(row is not None and (row['ID'] != cue['key'] or row['ContentID'] != edit.track_id
+                                               or row['ContentUUID'] != edit.track_uuid)
+                           for row in (cue['before'], cue['after']))
+                    or any(not isinstance(record[k], str) or len(record[k]) != 64
+                           or any(c not in '0123456789abcdef' for c in record[k])
+                           for k in ('before_revision', 'after_revision', 'baseline_sha256'))):
+                raise RecoveryRequired('Cue recovery target/delta mismatch; evidence preserved')
+            self._verify_backup(record['baseline_sha256'])
+            return record
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise RecoveryRequired('Cue recovery record is damaged or belongs to another operation') from exc
+
+    def _matches(self, conn, record, side):
+        if self._snapshot(conn).revision != record[side + '_revision']:
+            return False
+        for d in record['changes']:
+            rows = self._rows(conn, d['table'], f' WHERE {_quote(_pk(d["table"]))}=?', (d['key'],))
+            if len(rows) > 1 or _encode_row(rows[0] if rows else None) != d[side]:
+                return False
+        return True
+
+    def _recover(self, conn):
+        if not self.journal.exists():
+            return None
+        record = self._record()
+        conn.execute('BEGIN IMMEDIATE')
+        try:
+            self._guard()
+            if self._matches(conn, record, 'after'):
+                outcome = 'committed'
+            elif self._matches(conn, record, 'before'):
+                outcome = 'rolled-back'
+            else:
+                raise RecoveryRequired('Unexpected cue state during recovery; evidence preserved')
+            # Let SQLite recover hot journals itself. A zero-header leftover
+            # requires no rollback; retain its exact identity in the receipt so
+            # either save domain can recognize it. Never delete it manually.
+            proof = _inactive_journal_proof(self.database)
+            atomic_bytes(self.root / 'last-result.json', _json(
+                {**record, 'outcome': outcome, 'inactive_sqlite_journal': proof}))
+            self.journal.unlink()
+            sync_dir(self.root)
+            conn.commit()
+            return outcome
+        except BaseException:
+            conn.rollback()
+            raise
+
+    @staticmethod
+    def _authorizer(action, table, column, database, trigger):
+        if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_DELETE, sqlite3.SQLITE_UPDATE):
+            if trigger or database != 'main':
+                return sqlite3.SQLITE_DENY
+            if table == 'djmdCue' and action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_DELETE):
+                return sqlite3.SQLITE_OK
+            if table == 'contentCue' and action == sqlite3.SQLITE_INSERT:
+                return sqlite3.SQLITE_OK
+            allowed = {'djmdContent': ('CueUpdated', 'rb_local_usn', 'updated_at'),
+                       'contentCue': ('Cues', 'rb_local_usn', 'updated_at'),
+                       'agentRegistry': ('int_1',)}
+            if action == sqlite3.SQLITE_UPDATE and column in allowed.get(table, ()):
+                return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
+        if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_PRAGMA):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    @staticmethod
+    def _apply(conn, delta):
+        for d in delta:
+            table, pk = _quote(d.table), _quote(_pk(d.table))
+            if d.after is None:
+                conn.execute(f'DELETE FROM {table} WHERE {pk}=?', (d.key,))
+            elif d.before is None:
+                columns = ','.join(_quote(k) for k in d.after)
+                values = ','.join('?' for _ in d.after)
+                conn.execute(f'INSERT INTO {table} ({columns}) VALUES ({values})', tuple(d.after.values()))
+            else:
+                names = [k for k in d.after if d.after[k] != d.before[k]]
+                assignments = ','.join(_quote(k) + '=?' for k in names)
+                conn.execute(f'UPDATE {table} SET {assignments} WHERE {pk}=?',
+                             (*[d.after[k] for k in names], d.key))
+
+    def apply(self, edit: CueEdit) -> bool:
+        if edit.track_id != self.authority.pilot_track_id:
+            raise WriteProofError('This cue authority is limited to the reviewed pilot track')
+        with self._lock():
+            conn = self._connect()
+            try:
+                self._recover(conn)
+                conn.execute('BEGIN IMMEDIATE')
+                self._guard()
+                if (_identity(conn) != (self.authority.library_id, '6000')
+                        or _schema(conn) != self.authority.schema_sha256):
+                    raise ConflictError('The source identity/schema changed before the cue transaction')
+                file_id = self.database.stat().st_dev, self.database.stat().st_ino
+                before = self._snapshot(conn)
+                counters = self._rows(conn, 'agentRegistry', " WHERE registry_id='localUpdateCount'")
+                if len(counters) != 1:
+                    raise WriteProofError('Ambiguous local update counter')
+                identities = None
+                if edit.operation == 'add':
+                    for _ in range(32):
+                        identities = CueIdentities(str(secrets.randbelow(2**32 - 1) + 1),
+                                                   str(uuid4()), str(uuid4()) if before.aggregate is None else '')
+                        if not conn.execute('SELECT 1 FROM djmdCue WHERE ID=? OR UUID=?',
+                                            (identities.cue_id, identities.cue_uuid)).fetchone():
+                            if not identities.aggregate_uuid or not conn.execute(
+                                    'SELECT 1 FROM contentCue WHERE UUID=?', (identities.aggregate_uuid,)).fetchone():
+                                break
+                    else:
+                        raise WriteProofError('Could not allocate unique cue identities')
+                delta = plan_cue_edit(before, counters[0], edit, now=datetime.now(timezone.utc), identities=identities)
+                if not delta:
+                    conn.rollback()
+                    return False
+                # Derive the exact expected snapshot without executing any SQL.
+                cue_rows = {r['ID']: r for r in before.cues}
+                cue_change = delta[0]
+                if cue_change.after is None:
+                    del cue_rows[cue_change.key]
+                else:
+                    cue_rows[cue_change.key] = cue_change.after
+                assert delta[1].after is not None and delta[2].after is not None
+                after = CueSnapshot(delta[1].after, tuple(cue_rows.values()), delta[2].after)
+                self._backup(counters[0]['int_1'])
+                record = {'format': _FORMAT, 'source': str(self.database),
+                          'library_id': self.authority.library_id, 'track_id': edit.track_id,
+                          'source_file_id': list(file_id),
+                          'operation_id': str(uuid4()), 'baseline_sha256': self._backup_sha,
+                          'request': asdict(edit), 'before_revision': before.revision,
+                          'after_revision': after.revision,
+                          'changes': [{'table': d.table, 'key': d.key,
+                                       'before': _encode_row(d.before), 'after': _encode_row(d.after)} for d in delta]}
+                atomic_bytes(self.journal, _json(record))
+                _fault('journal-ready')
+                self._guard()
+                conn.set_authorizer(self._authorizer)
+                self._apply(conn, delta)
+                if not self._matches(conn, record, 'after'):
+                    raise WriteProofError('Cue changes differ from the intended exact rows')
+                self._guard()
+                if file_id != (self.database.stat().st_dev, self.database.stat().st_ino):
+                    raise ConflictError('The source database file was replaced during the cue operation')
+                _fault('before-commit')
+                conn.commit()
+                _fault('after-commit')
+                conn.close()
+                conn = None
+                conn = self._connect()
+                if self._recover(conn) != 'committed':
+                    raise RecoveryRequired('Cue commit could not be independently verified')
+                self._last_counter = counters[0]['int_1'] + 2
+                return True
+            except BaseException:
+                if conn is not None:
+                    conn.rollback()
+                raise
+            finally:
+                if conn is not None:
+                    conn.close()

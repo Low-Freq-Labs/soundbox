@@ -25,9 +25,17 @@ COMMANDS = (
     Command("transport.next", "Transport", "Next track"),
     Command("transport.back", "Transport", "Jump backward"),
     Command("transport.forward", "Transport", "Jump forward"),
+    Command("grid.downbeat", "Beatgrid", "Set bar start at playhead"),
+    Command("grid.left", "Beatgrid", "Shift grid left"),
+    Command("grid.right", "Beatgrid", "Shift grid right"),
+    Command("grid.double", "Beatgrid", "Double BPM"),
+    Command("grid.halve", "Beatgrid", "Halve BPM"),
+    Command("grid.quantize", "Beatgrid", "Toggle Quantize"),
     Command("cues.hot_page", "Cue pages", "Show Hot Cues", ("9",)),
     Command("cues.memory_page", "Cue pages", "Show Memory Cues", ("0",)),
     *(Command(f"cues.slot.{i}", "Cue pages", f"Cue {i + 1} · active page", (str(i + 1),), True)
+      for i in range(8)),
+    *(Command(f"cues.delete.{i}", "Cue pages", f"Delete cue {i + 1} · active page", (f"Ctrl+{i + 1}",))
       for i in range(8)),
     Command("browser.rename", "Library", "Rename selected item", ("Ctrl+R",)),
     Command("browser.load", "Library", "Load selected track"),
@@ -77,6 +85,12 @@ class Keymap:
         raw = self.overrides.get(action, BY_ID[action].defaults)
         if not isinstance(raw, (list, tuple)):
             raw = BY_ID[action].defaults
+        if action.startswith('cues.delete.') and action not in self.overrides:
+            # New defaults cannot displace a user's preexisting explicit map.
+            assigned = {canonical(value) for other, values in self.overrides.items()
+                        if other in BY_ID and other != action and isinstance(values, (list, tuple))
+                        for value in values if isinstance(value, str)}
+            raw = [value for value in raw if canonical(value) not in assigned]
         return list(dict.fromkeys(canonical(value) for value in raw
                                   if isinstance(value, str) and canonical(value)))
 

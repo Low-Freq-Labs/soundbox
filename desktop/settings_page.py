@@ -12,8 +12,9 @@ time the gear opens.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton,
     QScrollArea, QStackedWidget, QTabBar, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -23,11 +24,67 @@ _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
 import logging
 
 from soundbox import engine, metadata
+from . import theme
 
 LOG = logging.getLogger("soundbox")
 
 
 class SettingsPageMixin:
+    def _apply_theme_color(self, value, *, save=False):
+        mode = self.settings.get('theme_text_mode', 'white')
+        mode = mode if mode in ('white', 'black', 'custom') else 'white'
+        custom = theme.normalize_accent_text(self.settings.get('theme_text_custom'))
+        self.settings.update(theme_text_mode=mode, theme_text_custom=custom)
+        text_color = {'white': '#ffffff', 'black': '#000000', 'custom': custom}[mode]
+        color = theme.set_accent(value, text_color)
+        self.settings['theme_accent'] = color
+        QApplication.instance().setStyleSheet(theme.QSS)
+        if hasattr(self, 'wordmark'):
+            self.wordmark.set_accent(color)
+        if hasattr(self, '_theme_color'):
+            swatch = QPixmap(16, 16)
+            swatch.fill(QColor(color))
+            self._theme_color.setIcon(QIcon(swatch))
+            self._theme_color.setText(color.upper())
+        self._sync_theme_text_controls()
+        self.update()
+        if hasattr(self, 'my_tags'):
+            self.my_tags._size_popup()
+        if save:
+            self._schedule_settings_save()
+
+    def _choose_theme_color(self):
+        color = QColorDialog.getColor(QColor(theme.PURPLE), self, 'Theme color')
+        if color.isValid():
+            self._apply_theme_color(color.name(), save=True)
+
+    def _apply_theme_text(self, mode, custom=None, *, save=False):
+        self.settings['theme_text_mode'] = mode
+        if custom is not None:
+            self.settings['theme_text_custom'] = theme.normalize_accent_text(custom)
+        self._apply_theme_color(self.settings.get('theme_accent'), save=save)
+
+    def _sync_theme_text_controls(self):
+        if not hasattr(self, '_theme_text_mode'):
+            return
+        mode = self.settings.get('theme_text_mode', 'white')
+        self._theme_text_mode.blockSignals(True)
+        self._theme_text_mode.setCurrentIndex(max(0, self._theme_text_mode.findData(mode)))
+        self._theme_text_mode.blockSignals(False)
+        custom = theme.normalize_accent_text(self.settings.get('theme_text_custom'))
+        swatch = QPixmap(16, 16)
+        swatch.fill(QColor(custom))
+        self._theme_text_color.setIcon(QIcon(swatch))
+        self._theme_text_color.setText(custom.upper())
+        self._theme_text_color.setVisible(mode == 'custom')
+
+    def _choose_theme_text_color(self):
+        color = QColorDialog.getColor(
+            QColor(self.settings.get('theme_text_custom', theme.DEFAULT_ACCENT_TEXT)),
+            self, 'Theme text color')
+        if color.isValid():
+            self._apply_theme_text('custom', color.name(), save=True)
+
     def _apply_settings_to_lib(self):
         """Push current settings onto the loaded library (a pure display/export
         filter — never modifies rekordbox)."""
@@ -174,6 +231,47 @@ class SettingsPageMixin:
         bl.setAlignment(Qt.AlignTop)
         cols.addWidget(col, 1, Qt.AlignTop)     # PLAYER + LIBRARY + BACKUP
         cols.addWidget(left, 1, Qt.AlignTop)    # TITLE CLEANUP + COVER ART
+
+        # --- APPEARANCE ----------------------------------------------------
+        bl.addWidget(self._settings_section("APPEARANCE"))
+        appearance = QWidget()
+        appearance_row = QHBoxLayout(appearance)
+        appearance_row.setContentsMargins(0, 0, 0, 0)
+        appearance_row.setSpacing(6)
+        self._theme_color = QPushButton(theme.PURPLE.upper())
+        self._theme_color.setCursor(Qt.PointingHandCursor)
+        self._theme_color.setToolTip('Choose the app accent color')
+        self._theme_color.clicked.connect(self._choose_theme_color)
+        reset_color = QPushButton("Reset")
+        reset_color.setCursor(Qt.PointingHandCursor)
+        reset_color.setToolTip('Restore the default purple accent')
+        reset_color.clicked.connect(lambda: self._apply_theme_color(theme.DEFAULT_ACCENT, save=True))
+        appearance_row.addWidget(self._theme_color)
+        appearance_row.addWidget(reset_color)
+        bl.addWidget(self._settings_row("Theme color", appearance,
+            'Changes selections, controls, highlights and the BOX wordmark.'))
+        text_appearance = QWidget()
+        text_row = QHBoxLayout(text_appearance)
+        text_row.setContentsMargins(0, 0, 0, 0)
+        text_row.setSpacing(6)
+        self._theme_text_mode = QComboBox()
+        # Cocoa's checked-menu gutter needs room beyond the displayed value;
+        # its native popup otherwise clips even these short option labels.
+        self._theme_text_mode.setMinimumContentsLength(10)
+        self._theme_text_mode.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        for label, mode in (('White', 'white'), ('Black', 'black'), ('Custom', 'custom')):
+            self._theme_text_mode.addItem(label, mode)
+        self._theme_text_color = QPushButton()
+        self._theme_text_color.setCursor(Qt.PointingHandCursor)
+        self._theme_text_color.setToolTip('Choose text color for theme-colored selections and buttons')
+        self._theme_text_color.clicked.connect(self._choose_theme_text_color)
+        self._theme_text_mode.currentIndexChanged.connect(
+            lambda _index: self._apply_theme_text(self._theme_text_mode.currentData(), save=True))
+        text_row.addWidget(self._theme_text_mode)
+        text_row.addWidget(self._theme_text_color)
+        bl.addWidget(self._settings_row('Text color', text_appearance,
+            'Text on theme-colored selections and buttons.'))
+        self._sync_theme_text_controls()
 
         # --- PLAYER --------------------------------------------------------
         bl.addWidget(self._settings_section("PLAYER"))
@@ -422,12 +520,15 @@ class SettingsPageMixin:
                 else:
                     worker.requestInterruption()
         self._start_pulse("Finishing background work")
-        if any(_running(w) for w in workers):
+        tag_busy = lambda: bool(getattr(getattr(self, "tag_controller", None), "owned",
+                                       getattr(getattr(self, "tag_controller", None), "busy", False)))
+        if any(_running(w) for w in workers) or tag_busy():
             loop = QEventLoop()
             timer = QTimer()
             timer.setInterval(20)
             timer.timeout.connect(lambda: loop.quit()
-                                  if not any(_running(w) for w in workers) else None)
+                                  if not any(_running(w) for w in workers)
+                                  and not tag_busy() else None)
             timer.start()
             loop.exec(QEventLoop.ExcludeUserInputEvents)
             timer.stop()
@@ -677,6 +778,7 @@ class SettingsPageMixin:
         firing their change handlers."""
         if not hasattr(self, "_chk_hide"):
             return
+        self._sync_theme_text_controls()
         for w, val in ((self._chk_hide, self.settings.get("hide_untracked")),
                        (self._chk_nokey, self.settings.get("hide_nokey", True)),
                        (self._chk_short, self.settings.get("hide_short", True))):

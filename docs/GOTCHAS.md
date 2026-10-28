@@ -28,6 +28,32 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   replace or clear SoundBox AppData as part of an app install.
 
 ## Qt / PySide6 (these bite HARD)
+- **Cocoa combo popups need space for their checkmark gutter.** The Text color
+  combo's content-only width clipped White/Custom in its native checked menu.
+  Keep an explicit minimum contents length and the icon-aware size policy;
+  inspect the open Cocoa popup, not only the closed control or offscreen page.
+  The hermetic render harness supports `--settings-general --theme-text-menu`.
+- **Native checkbox layout margins can overlap custom menu rows.** My Tags
+  gives its checkbox cells explicit rectangles inside the QWidgetAction, instead
+  of allowing macOS layout-item margins to compress the grid. Its two-column
+  menu matches the deck button width and fills down the left column, then down
+  the right in source order; long labels use one column and tooltips.
+  QMenu caches its first action size, so update the frame from content geometry
+  plus native menu metrics. Verify catalog/layout changes on Cocoa, not only
+  offscreen.
+- **SVG CSS custom properties need a Qt adapter.** Keep the supplied SVG intact
+  in assets; Wordmark resolves SOUND/BOX fills in memory and crops its viewBox
+  to the outline. Preserve the former 270×55 header footprint. Include the SVG
+  in both PyInstaller data and the source fingerprint; source-only tests that
+  copy desktop code must also provision that asset.
+- **Accent changes must update existing chrome.** Regenerate theme QSS, refresh
+  the wordmark and dynamic painters. Persist the accent in `settings.theme_accent`
+  and lettering independently in `theme_text_mode` / `theme_text_custom`; never
+  replace the user's text choice with a luminance-based black/white decision.
+  Saved-state reload/restore applies the same path. Fixed cue/analysis colors are
+  data, not theme chrome. The render harness takes `--accent=#RRGGBB` and
+  `--theme-text=white|black|#RRGGBB` and always
+  resets its default to avoid prior fake-state colors leaking into snapshots.
 - **A tooltip must add information.** Never assign a cell's displayed string as
   its tooltip just to repeat fully visible text on hover. Keep tooltips for icon
   meaning, warnings, hidden diagnostics, or genuinely richer content.
@@ -473,6 +499,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `WaveformBar._repaint()` exists for the same reason: `paintEvent`
   early-returns under Metal, so a Qt repaint composites for nothing.
 - **Measure renderer changes in the real app, not only in a deck harness.**
+  Cue PLAYING/PAUSED edges must not scan the library's artwork or launch device
+  discovery. An October 27 full-library synthetic profile measured about 38 ms
+  in `refresh_art` per cue release; the live sample also showed repeated scan
+  launches during tapping. Mount/device timers already run independently of
+  playback. Removing this work preserves discovery while avoiding input stalls.
+  A short cue tap can release before Python receives PLAYING: explicitly cancel
+  the pending native start, not just its current sampled state.
   A bare `QWidget` host with hand-uploaded analysis ran 118-120 fps while the
   real app ran 107-113 on the same machine and build, and the harness could
   not see the cue-panel cost at all because nothing was connected to
@@ -547,8 +580,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   must group both native uploads while presentation is suspended and commit
   them together. Painting the overview while a long ultra section is still
   decompressing/building makes the waveform visibly change size on promotion.
-- No manual SoundBox grid editor is shipped. V5 has a storage-only ownership
-  boundary for later work, but current precedence is simple: a valid read-only
+- Prep grid buttons use the accepted source writer; independent SoundBox manual
+  V5 ownership remains protected. Import precedence is unchanged: a valid
   Rekordbox grid wins exactly; otherwise use the zero-anchored fallback. Never
   infer that boundary from AAC/ALAC/WAV or a filename—those only happened to
   identify Sonny's current sets. Player load must apply the same zero-anchor
@@ -643,7 +676,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   deck worker can already be decoding when the UI removal lands. Restore uses
   the normal bounded preparation path. Do not apply this rule to a
   playlist-only removal: that track remains browsable elsewhere and still owns
-  its cache. Source audio and Rekordbox ANLZ data remain read-only.
+  its cache. These preparation/removal paths never write source audio or ANLZ.
+  The separate accepted grid source writer and historical restore grant are documented in
+  [the prep plan](rekordbox-prep.md); it grants no preparation-writer authority.
 - **A ready cache can still preserve an early Rekordbox fallback.** Rekordbox
   may finish PWV3/PWV5/PWV7 after SoundBox has already stored a structurally
   complete V5 record. The recurring scan must use stream provenance to keep
@@ -876,7 +911,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   legacy grid migration bounds-checks and decodes only the eight-byte PQTZ rows
   from `ANLZ0000.DAT`. It must never call the generic parser or open EXT/2EX;
   thousands of tiny metadata migrations otherwise become a needless energy
-  spike. Every Rekordbox path remains read-only.
+  spike. Every path in this migration remains read-only.
 - **A V4 cache hit is playable but still V5-upgrade-pending.** Only
   `track_analysis.is_ready()` (or its unchanged preparation receipt) decides
   whether background preparation is done;
@@ -927,14 +962,58 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `~/Library/Logs/Soundbox/soundbox.log` (Python errors here; C++ Qt fatals also
   leave `crash-stacks.log` / macOS crash reports).
 
-## rekordbox DB (pyrekordbox) — SACRED, read-only temp copy ONLY
+## rekordbox DB — snapshots and narrowly accepted prep writes
+- **Cue aggregates are ordered records, not display slots.** Native JSON keeps
+  insertion order while Memory numbers sort chronologically. `CueUpdated` is a
+  string counter, and each cue edit advances the global counter twice. Native
+  preserves older aggregate sync flag 1, UUID and creation time. Legacy empty
+  Comments may be absent from JSON; preserve that representation and all other
+  existing fields. `rekordbox_cues` plans rows only; the separate accepted writer
+  owns transactions. DB-only native cue add/delete acceptance passed; none of this
+  grants ANLZ permission: only the separate accepted grid API may publish its
+  exact DAT/PQTZ and EXT/PQT2 delta.
+- **Recover before copying a source after a crash.** A spilled rollback journal
+  can leave uncommitted pages in master.db; copying DB/WAL alone cannot repair
+  them. Refresh preflight uses only a prior explicit authority to recover its
+  pending operation. Journals bind the source inode before SQLite opens it;
+  replaced files fail closed. Unknown/nonzero rollback journals stop the snapshot.
+  Verified inactive zero-header journals remain untouched. Never manufacture a
+  data mutation or manually delete a journal to clear this state.
+- **Cue edit identity must not recook audio.** Raw source revisions and native
+  IDs live outside normalized display dictionaries. Cache schema 7 retains those
+  fields; older cache paints remain read-only until a fresh source read. Cue saves
+  publish a new target Track/Library view on the GUI thread and update markers
+  directly; tags still require full smart-membership refresh. Never read a native
+  cue timestamp from the 20-Hz visual clock or let a save finishing under a held
+  creation key start preview on release.
+- **The copy-only proof must stay isolated from the live API.**
+  `soundbox.rekordbox_write` admits only its marked private temporary copies;
+  even its SQL connection helper rejects non-temporary paths. Complete logical
+  deltas are verified on an encrypted stage before the working copy is changed.
+  Recovery proves exact before/after state and never overwrites an unexpected
+  database. Hot rollback journals require a writable connection to the guarded
+  copy; read-only SQLite cannot recover spilled dirty pages. See
+  [the milestone gates](rekordbox-prep.md). Normal reads still use snapshots.
+- **Live My Tag flags follow native evidence, not the offline prototype.**
+  On accepted rekordbox 6.8.7.0303, removing an unsynced link with NULL `usn`
+  hard-deletes it; removing an older synced link tombstones it while preserving
+  `rb_local_synced=1`. The local counter advances without changing its timestamp.
+  Adds use new ID/UUID, NULL TrackNo/usn and millisecond UTC timestamps. Unknown
+  sync metadata fails closed. `rekordbox_tags` alone owns this API, restricted by
+  source identity, exact schema/version authority, expected rows and closed native
+  processes. Never generalize to cloud sync or a new version without evidence.
+  Sonny operates rekordbox UI for native references and acceptance.
+- **Tag saves and readiness checks own a TaskOwner lane.** Retain through finished
+  delivery and join; source selection/refresh/backup/restore must wait. A committed
+  write followed by refresh failure is an error requiring reconciliation, never
+  permission to retry stale expected membership or blindly restore a whole DB.
 - **`db.get_playlist_contents()` returns tracks sorted by ContentID, NOT playlist
   order.** For track order use `DjmdSongPlaylist.TrackNo`. (Sonny's order is
   sacred — this was a real bug.)
 - **SMART playlists (Attribute 4) have ZERO `DjmdSongPlaylist` rows** (computed) →
   for them use `get_playlist_contents()`. Attribute: 0=normal, 1=folder, 4=smart,
   -128=cloud(skip).
-- **Removed My Tags remain as soft-deleted `djmdSongMyTag` history.**
+- **Older removed My Tags can remain as soft-deleted `djmdSongMyTag` history.**
   `pyrekordbox 0.4.4` does not include `rb_local_deleted` in its My Tag
   smart-list predicate, so calling `get_playlist_contents()` directly
   resurrects old genre memberships and also breaks `not contains`. SoundBox
@@ -1573,3 +1652,52 @@ coalesce for 400 ms; curation, backup/restore and shutdown still flush immediate
 Stock-art preparation receipts are metadata-only scheduling hints; selected sync
 continues checking payload hashes. Deleted/changed derivatives invalidate receipts.
 Never pace unchanged art with per-image sleeps.
+
+
+- **Grid-only edits cannot upload waves or reset clocks.** Use the native
+  generation-bound grid setter and keep the override through late overview/full
+  uploads; clear it only on beginTrack. Reapply live cue rows after late overview
+  metadata too. Partial opening bars count as 0, not 1.
+- **Native grid boundaries use saved intervals.** Midpoint insertion and leading/
+  trailing extrapolation use adjacent saved timestamps, not nominal BPM math.
+  Half truncates integer hundredths (90.03→45.01). Grouped nudges retain ordered
+  steps: a clipped row cannot return merely because net offset is zero.
+- **Fence stale preparation before saving a source grid.** Wait out publication
+  under its worker fence from the source thread, then suppress that worker's old
+  target publications. Never use Graveyard's discard operation for grid edits:
+  its delayed deletion could erase a freshly verified V5 record. A status-clear
+  timer has the window as QObject context so destroyed windows cannot receive it.
+
+
+- **Paused bar-start editing follows the visible cursor.** Do not reuse cue
+  authoring's forced native poll for a paused grid edit: a decoder/visual position
+  mismatch can turn the click into an apparent no-op at the old beat. Read the
+  displayed millisecond position after normal loaded-track guards. Playing
+  placement still uses fresh native time. Quantize affects cue creation, never
+  the grid-edit target. Keep a one-click, zero-before-first-row regression and
+  distinguish installed user acceptance from a simulated stale-clock case.
+- **Do not drop clicks during the saved-grid probe.** A loaded deck can be
+  seekable before the separate source identity/grid check finishes. Keeping a
+  visually unchanged button disabled through that gap swallowed the first
+  click. Capture its immutable intent and preview from loaded RAM rows immediately.
+  Those rows grant no source authority: require an exact checked-base match before saving,
+  cancel on failed checks, and drain accepted intents on normal shutdown. A
+  disabled-button timing trace is distinct from a cursor-capture mismatch.
+
+- **A worker thread still competes for the Python GIL.** Live encrypted backup
+  capture must not call OfflineWorkspace's complete `_state` research inventory
+  or create its unused working database. Use the dedicated encrypted DB/WAL
+  capture, retaining SQLite integrity/identity and exact publication hashes. The
+  full semantic inventory remains mandatory for offline proofs. Closed-app
+  guards use a fresh exact-name OS query at every original check boundary;
+  never replace them with cached process absence. Snapshot-cache JSON encodes
+  individual records and writes bounded chunks; one whole-library C encoding
+  can block table model callbacks even from a background thread.
+
+- **Manual BPM is not the double/half protocol.** Native entry also changes
+  AnalysisUpdated and the primary contentFile hash/size/history, with +4 local
+  counters. It rebuilds the existing row count before extrapolating from the
+  rounded tail; a single unbroken formula differs by milliseconds. Gate manual
+  writing separately, bind the file row into recovery, and keep browser BPM on
+  the verified-save signal. A focused BPM editor must retain typed text through
+  grid/status refreshes and abandon it when the loaded track changes.

@@ -31,6 +31,7 @@ from soundbox.stock_ipod_info import stock_ipod_device_key
 from .devices import (
     device_facts, device_profile, list_devices, refresh_device_mount,
 )
+from .analysis_fence import AnalysisWriteFence
 
 LOG = logging.getLogger("soundbox")
 
@@ -223,12 +224,15 @@ class RefreshWorker(QThread):
     def __init__(self, database_path=None):
         super().__init__()
         self.database_path = database_path
+        self.preflight = None
         self.selection_path = None
         self.result = None
         self.error = ""
 
     def run(self):
         try:
+            if self.preflight is not None:
+                self.preflight(self.database_path or rekordbox_db.REKORDBOX_DB)
             lib = rekordbox_db.load_live(self.database_path)
         except Exception as exc:  # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
@@ -684,6 +688,7 @@ class WaveformFillWorker(QThread):
             str(track_id) for track_id in force_track_ids if str(track_id)
         }
         self.completed_forced_track_ids: set[str] = set()
+        self.cache_writes = AnalysisWriteFence()
         self._playback_active = threading.Event()
         self._priority_lock = threading.Lock()
         self._priority_path = ""
@@ -1122,8 +1127,8 @@ class WaveformFillWorker(QThread):
                         continue
                     if (
                             kind == "v4-migrate"
-                            and migrate_v4(
-                                self.track_analysis_dir, track_id, path)):
+                            and self.cache_writes.publish(track_id, lambda: migrate_v4(
+                                self.track_analysis_dir, track_id, path))):
                         if self._track_is_hidden(track_id):
                             discard_records(
                                 self.track_analysis_dir, (track_id,))
@@ -1162,9 +1167,9 @@ class WaveformFillWorker(QThread):
                         if (
                                 prepared
                                 and not self._track_is_hidden(track_id)
-                                and track_store(
+                                and self.cache_writes.publish(track_id, lambda: track_store(
                                 self.track_analysis_dir, track_id, path,
-                                prepared)
+                                prepared))
                                 and track_is_ready(
                                     self.track_analysis_dir, track_id, path)
                         ):
@@ -1185,15 +1190,15 @@ class WaveformFillWorker(QThread):
                             path,
                         )
                 elif kind == "cue-meta":
-                    if update_imported_cues(
+                    if self.cache_writes.publish(track_id, lambda: update_imported_cues(
                             self.track_analysis_dir, track_id, path,
-                            imported_cues or []):
+                            imported_cues or [])):
                         done += 1
                         self.detail_ready.emit(path)
                 elif kind == "grid-meta":
-                    if update_grid_source(
+                    if self.cache_writes.publish(track_id, lambda: update_grid_source(
                             self.track_analysis_dir, track_id, path,
-                            imported_beats or []):
+                            imported_beats or [])):
                         done += 1
                         self.detail_ready.emit(path)
             except Exception as exc:  # noqa: BLE001 — one bad track never stops prep

@@ -20,6 +20,9 @@ QStandardPaths.setTestModeEnabled(True)  # sandbox saves; never the real library
 
 from soundbox import engine, rekordbox_db
 rekordbox_db.db_available = lambda *_args: False  # never auto-read the live DB here
+def _deny_live_source(*_args, **_kwargs):
+    raise AssertionError("Render harness cannot read a real rekordbox source")
+rekordbox_db.load_live = _deny_live_source
 
 from desktop.app import MainWindow, make_app
 from soundbox.library import Library, Playlist, Track
@@ -41,6 +44,30 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    text_menu = '--theme-text-menu' in sys.argv
+    if text_menu:
+        sys.argv.remove('--theme-text-menu')
+    accent = None
+    text_color = None
+    for argument in list(sys.argv):
+        if argument.startswith('--accent='):
+            accent = argument.split('=', 1)[1]
+            sys.argv.remove(argument)
+        elif argument.startswith('--theme-text='):
+            text_color = argument.split('=', 1)[1]
+            sys.argv.remove(argument)
+    my_tags = "--my-tags" in sys.argv
+    if my_tags:
+        sys.argv.remove("--my-tags")
+    cue_edits = '--cue-edits' in sys.argv
+    if cue_edits:
+        sys.argv.remove('--cue-edits')
+    grid_edits = '--grid-edits' in sys.argv
+    if grid_edits:
+        sys.argv.remove('--grid-edits')
+    quantize = '--quantize' in sys.argv
+    if quantize:
+        sys.argv.remove('--quantize')
     art_review = "--art-review" in sys.argv
     if art_review:
         sys.argv.remove("--art-review")
@@ -70,6 +97,13 @@ def _render() -> None:
     # whole harness lifetime. Never probe real removable devices beside the app.
     MainWindow._refresh_devices = lambda self, **kwargs: None
     win = MainWindow()
+    from . import theme
+    win._apply_theme_color(accent or theme.DEFAULT_ACCENT, save=False)
+    if text_color is not None:
+        if text_color in ('white', 'black'):
+            win._apply_theme_text(text_color, save=False)
+        else:
+            win._apply_theme_text('custom', text_color, save=False)
     win.resize(1240, 800)
     win.lib = synthetic_library()
     win._build_artist_registry()
@@ -179,6 +213,69 @@ def _render() -> None:
         win._on_analysis_storage_paused(True, 19 * 1024 ** 3, 25 * 1024 ** 3)
         app.processEvents()
     out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/soundbox.png"
+    if text_menu:
+        from pathlib import Path
+        win._theme_text_mode.showPopup()
+        app.processEvents()
+        target = Path(out)
+        win._theme_text_mode.view().window().grab().save(
+            str(target.with_name(target.stem + '-text-menu.png')))
+        win._theme_text_mode.hidePopup()
+    if cue_edits:
+        track = win.lib.tracks_by_id['1']
+        track.source_uuid = 'synthetic-cue-track'
+        track.source_cue_revision = 'a' * 64
+        track.source_cues = cues
+        win.lib.source_kind = 'rekordbox-db'
+        win.lib.source_library_id = 'synthetic-cues'
+        win.tag_controller._requires_cue_authority = False
+        win.tag_controller._cue_store_factory = lambda *_: (_ for _ in ()).throw(
+            AssertionError('Render harness cannot write rekordbox cues'))
+        win.tag_controller.configure(win.lib, True)
+        win._sync_cue_editing()
+        pb.cue_panel.set_loaded(True)
+        assert all(button.isEnabled() for button in pb.cue_panel.hot_slots)
+    if grid_edits:
+        # Presentation-only enabled state; every source job still fails closed.
+        win.grid_controller.reason = lambda _tid, **_options: ''
+        win.grid_controller.bpm_reason = lambda _tid: ''
+        win.grid_controller.request = _deny_live_source
+        pb._native_error = ''
+        pb._pending_autoplay = False
+        pb.cue_panel.set_loaded(True)
+        win._sync_grid()
+        assert all(button.isEnabled() for button in win.grid_edit_buttons)
+    if quantize:
+        win._set_quantize(True, save=False)
+    if my_tags:
+        from pathlib import Path
+        from PySide6.QtCore import QItemSelectionModel, QPoint
+        from soundbox.library import LibraryTag
+        win.lib.source_kind = "rekordbox-db"
+        win.lib.source_library_id = "synthetic-tags"
+        win.lib.source_tags = [LibraryTag(str(i), name, "Genre", f"tag-{i}")
+                               for i, name in enumerate(("Dubstep", "Riddim", "Deep Dub", "DnB",
+                                   "Techno", "House", "Trap", "Brostep", "Tearout", "SONNY", "ZYKO"))]
+        for i, track in enumerate(win.lib.tracks_by_id.values()):
+            track.source_uuid = f"synthetic-{i}"
+            track.source_tag_ids = ["0"] if i % 2 else []
+        win.tag_controller._requires_authority = False
+        win.tag_controller._ready = True
+        win.tag_controller.probe = lambda: None
+        win.tag_controller.configure(win.lib, True)
+        # This render can show edit controls but can never acquire a real writer.
+        win.tag_controller._store_factory = lambda _lib: (_ for _ in ()).throw(
+            AssertionError("Render harness cannot write rekordbox"))
+        selection = win.table.selectionModel()
+        selection.clearSelection()
+        for row in (0, 1):
+            selection.select(win.model.index(row, 0),
+                             QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        win._sync_tags()
+        win.my_tags.popup.popup(win.my_tags.mapToGlobal(QPoint(0, win.my_tags.height())))
+        app.processEvents()
+        target = Path(out)
+        win.my_tags.popup.grab().save(str(target.with_name(target.stem + "-my-tags.png")))
     win.grab().save(out)
     if art_review:
         import io

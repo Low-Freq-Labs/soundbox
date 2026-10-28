@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from soundbox.rekordbox_db import (
-    _copy_stable_snapshot, _hot_cue_slot, _read_cues, _read_playlists, _read_tracks,
+    _copy_stable_snapshot, _hot_cue_slot, _read_cues, _read_playlists, _read_tags, _read_tracks,
     _smart_playlist_contents,
 )
 
@@ -34,12 +34,23 @@ class Named:
 
 
 class FakeDB:
-    def __init__(self, tracks=(), nodes=(), members=(), smart=None, cues=()):
+    def __init__(self, tracks=(), nodes=(), members=(), smart=None, cues=(), tags=(), tag_links=()):
         self._tracks = list(tracks)
         self._nodes = list(nodes)
         self._members = list(members)
         self._smart = smart or {}
         self._cues = list(cues)
+        self._tags = list(tags)
+        self._tag_links = list(tag_links)
+
+    def get_my_tag(self):
+        return self._tags
+
+    def get_my_tag_songs(self):
+        return self._tag_links
+
+    def get_property(self):
+        return [Row(DBID="synthetic-library")]
 
     def get_content(self):
         return self._tracks
@@ -305,6 +316,30 @@ class SelectedDatabase(unittest.TestCase):
             self.assertFalse(snapshots[0].parent.exists())
 
 
+class MyTags(unittest.TestCase):
+    def test_flat_order_uses_categories_and_leaf_sequence_without_merging_names(self):
+        categories = [Row(ID='c2',Name='Components',Attribute=1,ParentID='root',Seq=2),
+                      Row(ID='c1',Name='Genre',Attribute=1,ParentID='root',Seq=1)]
+        leaves = [Row(ID='b',UUID='ub',Name='Dubstep',Attribute=0,ParentID='c2',Seq=1),
+                  Row(ID='a2',UUID='ua2',Name='Riddim',Attribute=0,ParentID='c1',Seq=2),
+                  Row(ID='a1',UUID='ua1',Name='Dubstep',Attribute=0,ParentID='c1',Seq=1)]
+        tags, _ = _read_tags(FakeDB(tags=categories+leaves))
+        self.assertEqual([tag.tag_id for tag in tags], ['a1','a2','b'])
+        self.assertEqual([tag.name for tag in tags], ['Dubstep','Riddim','Dubstep'])
+        self.assertEqual(tags[0].source_uuid, 'ua1')
+
+    def test_deleted_tag_definitions_and_assignments_do_not_resurrect_memberships(self):
+        tags = [Row(ID='c',Name='Genre',Attribute=1,ParentID='root',Seq=1),
+                Row(ID='a',Name='Dubstep',Attribute=0,ParentID='c',Seq=1),
+                Row(ID='b',Name='Gone',Attribute=0,ParentID='c',Seq=2,rb_local_deleted=1)]
+        links = [Row(ContentID='1',MyTagID='a'),
+                 Row(ContentID='2',MyTagID='a',rb_local_deleted=1),
+                 Row(ContentID='1',MyTagID='b')]
+        definitions, memberships = _read_tags(FakeDB(tags=tags,tag_links=links))
+        self.assertEqual([tag.tag_id for tag in definitions], ['a'])
+        self.assertEqual(memberships, {'1':['a']})
+
+
 class CueMapping(unittest.TestCase):
     def test_rekordbox_reserved_kind_gap_maps_exact_a_through_p(self):
         expected = {
@@ -370,6 +405,32 @@ class CueMapping(unittest.TestCase):
 
 
 class StableSnapshot(unittest.TestCase):
+    def test_nonzero_rollback_journal_blocks_snapshot_without_touching_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / 'master.db'
+            destination = Path(td) / 'snapshot.db'
+            source.write_bytes(b'unchanged main database')
+            journal = source.with_name('master.db-journal')
+            payload = b'\xd9\xd5\x05\xf9\x20\xa1\x63\xd7' + b'pending recovery' * 100
+            journal.write_bytes(payload)
+            with self.assertRaisesRegex(RuntimeError, 'needs recovery'):
+                _copy_stable_snapshot(source, destination)
+            self.assertFalse(destination.exists())
+            self.assertEqual(journal.read_bytes(), payload)
+            self.assertEqual(source.read_bytes(), b'unchanged main database')
+
+    def test_zero_header_inactive_journal_remains_untouched(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / 'master.db'
+            destination = Path(td) / 'snapshot.db'
+            source.write_bytes(b'consistent database')
+            journal = source.with_name('master.db-journal')
+            payload = b'\0' * 8 + b'inactive payload'
+            journal.write_bytes(payload)
+            _copy_stable_snapshot(source, destination)
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+            self.assertEqual(journal.read_bytes(), payload)
+
     def test_copies_main_and_wal_but_never_live_shm(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

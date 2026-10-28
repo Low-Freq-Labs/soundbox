@@ -376,6 +376,7 @@ public:
         detailBuffer_ = nil;
         audioDetailBuffer_ = nil;
         gridBuffer_ = nil;
+        gridOverrideActive_ = false;
         cueBuffer_ = nil;
         sessionCueBuffer_ = nil;
         waveSampleCount_ = 0;
@@ -1246,6 +1247,71 @@ public:
         };
     }
 
+    static bool buildBeatGeometry(
+        const double *beatSeconds, const uint8_t *beatInBar, size_t beatCount,
+        std::vector<GridVertex> &grid, std::vector<BeatPosition> &positions) {
+        if (beatCount && !beatSeconds) return false;
+        grid.reserve(beatCount * 6);
+        positions.reserve(beatCount);
+        uint32_t bar = 0;
+        double previous = -1.0;
+        for (size_t i = 0; i < beatCount; ++i) {
+            const double t = beatSeconds[i];
+            if (!std::isfinite(t) || t < 0.0 || t <= previous) return false;
+            previous = t;
+            uint8_t beat = beatInBar ? beatInBar[i]
+                                     : static_cast<uint8_t>(i % 4 + 1);
+            if (beat < 1 || beat > 4) beat = static_cast<uint8_t>(i % 4 + 1);
+            const bool downbeat = beat == 1;
+            // Native rekordbox numbering: opening partial bar 0; first full
+            // downbeat starts bar 1. Preserve all preceding source beats.
+            if (downbeat) ++bar;
+            const uint32_t millis = static_cast<uint32_t>(std::clamp(
+                std::llround(t * 1000.0), 0LL,
+                static_cast<long long>(std::numeric_limits<uint32_t>::max())));
+            positions.push_back({t, bar, beat});
+            addBeatGrid(grid, millis, downbeat, beatSeconds, beatCount, i);
+        }
+        return true;
+    }
+
+    bool gridPosition(double seconds, uint32_t *bar, uint8_t *beat) {
+        if (!bar || !beat || !std::isfinite(seconds)) return false;
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        auto found = std::upper_bound(
+            beatPositions_.begin(), beatPositions_.end(), seconds,
+            [](double t, const BeatPosition &position) { return t < position.seconds; });
+        if (found == beatPositions_.begin()) return false;
+        --found;
+        *bar = found->bar;
+        *beat = found->beat;
+        return true;
+    }
+
+    bool setGrid(
+        uint64_t expectedGeneration, const double *beatSeconds,
+        const uint8_t *beatInBar, size_t beatCount, bool pinned) {
+        std::vector<GridVertex> grid;
+        std::vector<BeatPosition> positions;
+        if (!buildBeatGeometry(beatSeconds, beatInBar, beatCount, grid, positions)) {
+            return false;
+        }
+        id<MTLBuffer> buffer = grid.empty() ? nil
+            : [device_ newBufferWithBytes:grid.data()
+                length:grid.size() * sizeof(GridVertex)
+                options:MTLResourceStorageModeShared];
+        if (!grid.empty() && !buffer) return false;
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        if (expectedGeneration && renderGeneration_.load(std::memory_order_acquire)
+                != expectedGeneration) return false;
+        gridBuffer_ = buffer;
+        gridVertexCount_ = grid.size();
+        beatPositions_ = std::move(positions);
+        gridOverrideActive_ = pinned;
+        // Wave buffers, cached attributes, cues and the audio clock are intact.
+        return true;
+    }
+
     bool installAnalysis(
         std::vector<WaveSample> wave,
         double columnsPerSecond,
@@ -1254,35 +1320,8 @@ public:
         size_t beatCount,
         uint64_t expectedGeneration) {
         std::vector<GridVertex> grid;
-        grid.reserve(beatCount * 6);
         std::vector<BeatPosition> beatPositions;
-        beatPositions.reserve(beatCount);
-        uint32_t bar = 0;
-        for (size_t i = 0; i < beatCount; ++i) {
-            uint8_t beat = beatInBar ? beatInBar[i]
-                                     : static_cast<uint8_t>(i % 4 + 1);
-            if (beat < 1 || beat > 4) {
-                beat = static_cast<uint8_t>(i % 4 + 1);
-            }
-            const bool downbeat = beat == 1;
-            if (downbeat) {
-                ++bar;
-            } else if (bar == 0) {
-                // A truncated imported grid can begin mid-bar. Give that
-                // partial opening bar a useful number without rewriting the
-                // source grid.
-                bar = 1;
-            }
-            const double t = beatSeconds[i];
-            const uint32_t tMillis = static_cast<uint32_t>(std::clamp(
-                std::llround(t * 1000.0),
-                0LL,
-                static_cast<long long>(
-                    std::numeric_limits<uint32_t>::max())));
-            beatPositions.push_back({t, bar, beat});
-            addBeatGrid(grid, tMillis, downbeat,
-                        beatSeconds, beatCount, i);
-        }
+        if (!buildBeatGeometry(beatSeconds, beatInBar, beatCount, grid, beatPositions)) return false;
 
         std::array<uint32_t, kWaveMipLevels> waveMipOffsets{};
         std::array<uint32_t, kWaveMipLevels> waveMipCounts{};
@@ -1323,13 +1362,15 @@ public:
         audioDetailMipOffsets_.fill(0);
         audioDetailMipCounts_.fill(0);
         audioDetailMipDivisors_.fill(0);
-        gridBuffer_ = gridBuffer;
+        if (!gridOverrideActive_) {
+            gridBuffer_ = gridBuffer;
+            gridVertexCount_ = grid.size();
+            beatPositions_ = std::move(beatPositions);
+        }
         waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
-        gridVertexCount_ = grid.size();
         cueBuffer_ = nil;
         cueVertexCount_ = 0;
         cueMarkerCount_ = 0;
-        beatPositions_ = std::move(beatPositions);
         return true;
     }
 
@@ -1388,25 +1429,7 @@ public:
 
         std::vector<GridVertex> grid;
         std::vector<BeatPosition> beatPositions;
-        grid.reserve(beatCount * 6);
-        beatPositions.reserve(beatCount);
-        uint32_t bar = 0;
-        for (size_t i = 0; i < beatCount; ++i) {
-            uint8_t beat = beatInBar ? beatInBar[i]
-                                     : static_cast<uint8_t>(i % 4 + 1);
-            if (beat < 1 || beat > 4) beat = static_cast<uint8_t>(i % 4 + 1);
-            const bool downbeat = beat == 1;
-            if (downbeat) ++bar;
-            else if (bar == 0) bar = 1;
-            const double t = beatSeconds[i];
-            const uint32_t millis = static_cast<uint32_t>(std::clamp(
-                std::llround(t * 1000.0), 0LL,
-                static_cast<long long>(
-                    std::numeric_limits<uint32_t>::max())));
-            beatPositions.push_back({t, bar, beat});
-            addBeatGrid(grid, millis, downbeat,
-                        beatSeconds, beatCount, i);
-        }
+        if (!buildBeatGeometry(beatSeconds, beatInBar, beatCount, grid, beatPositions)) return false;
         id<MTLBuffer> waveBuffer =
             [device_ newBufferWithBytes:wavePyramid.data()
                 length:wavePyramid.size() * sizeof(WaveSample)
@@ -1434,10 +1457,12 @@ public:
         waveMipOffsets_ = waveMipOffsets;
         waveMipCounts_ = waveMipCounts;
         waveMipCount_ = waveMipCount;
-        gridBuffer_ = gridBuffer;
-        gridVertexCount_ = grid.size();
+        if (!gridOverrideActive_) {
+            gridBuffer_ = gridBuffer;
+            gridVertexCount_ = grid.size();
+            beatPositions_ = std::move(beatPositions);
+        }
         waveformRevision_.fetch_add(1, std::memory_order_acq_rel);
-        beatPositions_ = std::move(beatPositions);
         return true;
     }
 
@@ -5422,6 +5447,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     id<MTLBuffer> detailBuffer_ = nil;
     id<MTLBuffer> audioDetailBuffer_ = nil;
     id<MTLBuffer> gridBuffer_ = nil;
+    bool gridOverrideActive_ = false;
     id<MTLBuffer> cueBuffer_ = nil;
     id<MTLBuffer> sessionCueBuffer_ = nil;
     NSUInteger waveSampleCount_ = 0;
@@ -5912,6 +5938,21 @@ int sb_deck_set_audio_detail_range_mips_i16_for_generation(
     const int result = instance->setAudioDetailRangeMips16(
         minimum_values, maximum_values, level_counts, level_divisors,
         level_count, base_sample_count, base_samples_per_second, generation);
+    if (result) instance->requestDisplay();
+    return result;
+}
+
+int sb_deck_grid_position(
+    SBDeckRef deck, double seconds, uint32_t *bar, uint8_t *beat) {
+    return deck ? static_cast<SBDeck *>(deck)->gridPosition(seconds, bar, beat) : 0;
+}
+
+int sb_deck_set_grid_for_generation(
+    SBDeckRef deck, uint64_t generation, const double *beat_seconds,
+    const uint8_t *beat_in_bar, size_t beat_count, int pinned) {
+    if (!deck) return 0;
+    auto *instance = static_cast<SBDeck *>(deck);
+    const int result = instance->setGrid(generation, beat_seconds, beat_in_bar, beat_count, pinned != 0);
     if (result) instance->requestDisplay();
     return result;
 }

@@ -53,6 +53,7 @@ they are not a completed legal or dependency clearance.
 |---|---|---|---|
 | App layout, theme, search, tables, sidebar, saved columns/window | Keep | Same | Shared shell |
 | Read-only live rekordbox and XML refresh | Keep | Same | Core Connections card; validated database-location selection; shared snapshot/XML adapters; validate supported versions |
+| My Tag / Hot–Memory cue / beat-grid source edits | Explicit authority gate; no general-library compatibility claim | Accepted exact-library pilot | Shared core APIs; native acceptance binds library/schema/version, closed rekordbox/agent and recovery; manual BPM has a separate gate; smart-list creation remains disabled |
 | Collection, artists, custom playlists, ordering, drag/drop | Keep | Same | Shared library/curation controller |
 | Local audio import, bookmarks, bounded missing-link repair | Keep | Same | Shared imports; no source moves/retags |
 | Title/artist overrides, cleanup rules, aliases | Keep | Same | Shared curation; personal values are data |

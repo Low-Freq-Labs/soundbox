@@ -53,7 +53,10 @@ derivation, title-cleanup rules) · `artwork` (canonical local images, results, 
 `track_analysis` (canonical V5 storage plus read-only V4 compatibility,
 streaming RGB/grid
 analysis, and export eligibility) · `rekordbox_analysis` (read-only
-PQTZ/PCOB/PCO2/PWV3/PWV5/PWV7 parser) · `device_profile` (read-only device
+PQTZ/PCOB/PCO2/PWV3/PWV5/PWV7 parser) · `rekordbox_grid` (shared pure
+raw-section/metadata transforms) · `rekordbox_grid_proof` (unintegrated temporary-copy-only
+multi-file/SQL recovery proof; no publish-to-source API) · `rekordbox_grid_store`
+(accepted track-bound source transactions and explicit library authority) · `device_profile` (read-only device
 classification and stock-iPod readiness planning) · `stock_ipod` (MA446-only
 two-phase iTunesDB/artwork render/validate/commit adapter) · `stock_artwork`
 (content-addressed MA446 RGB565 preparation and ArtworkDB/ithmb layout) ·
@@ -192,7 +195,10 @@ smoother was rejected in installed-app testing because it turned one rare
 omitted ProMotion callback into several visibly speed-modulated frames.
 Maximum zoom therefore magnifies track detail, not clock or grid quantization.
 
-Rekordbox ANLZ files stay read-only and are an analysis seed/fallback source.
+Analysis preparation reads ANLZ only as a seed/fallback source. The separately
+accepted grid API writes only DAT/PQTZ and native EXT/PQT2 invalidation, with
+exact library/schema/version and per-track UUID authority; see
+[the prep plan](rekordbox-prep.md).
 Active `djmdCue` rows come from the same read-only live database snapshot as
 the library. Their normalized fingerprint and the exact normalized PQTZ beat
 rows update only the V5 manifest until SoundBox user data claims ownership;
@@ -535,12 +541,62 @@ refresh, preserving compressed waveform payloads.
 
 ## Data model
 
+- **Copy-only prep proof stays isolated.** The
+  `rekordbox_write.OfflineWorkspace` accepts an explicit source for stable
+  read/copy, then permits SQL only beneath a marked private temporary workspace.
+  Its typed tag plans bind a workspace identity and complete logical baseline;
+  encrypted staging, exact-delta checks, SQLite transactions, durable journal and
+  restart reconciliation are exercised without opening the real source with
+  SQLCipher. It cannot publish back. This offline full-database verification is
+  not the production save path. Its flag conventions are provisional, superseded
+  for live tags by native reference evidence. Companion-file transactions for
+  grids are now handled by the separate accepted source protocol in
+  [rekordbox prep editing](rekordbox-prep.md).
+- **My Tags use a separate live transaction API.** `rekordbox_tags.LiveTagStore`
+  requires an explicit per-library/schema/version authority and closed native
+  app/agent. It checks expected source UUIDs, tag names and memberships, maintains
+  an encrypted recovery baseline, journals exact row deltas, limits writes with
+  a SQL authorizer, commits atomically and independently verifies affected rows.
+  Native acceptance covers rekordbox 6.8.7.0303 with no Cloud/Mobile Library Sync.
+  `desktop.tag_controller` owns saves/readiness probes through TaskOwner retirement
+  and join; refresh, source selection, backup/restore and shutdown serialize with
+  that owner. A successful save reloads the source snapshot and smart memberships.
+  `LibraryTag`, source UUIDs/memberships and library identity travel through
+  instant-paint cache schema 7 (older 4–6 remain readable). A cached source cannot grant write authority.
+- **Cue planning is pure; the accepted writer binds one track.** `rekordbox_cues` produces exact
+  four-table deltas from raw snapshots, separate from normalized display cues.
+  Full revisions and explicit cue IDs/UUIDs guard stale chronological deletion;
+  aggregate insertion order, legacy fields and overflow remain intact. Native
+  WAV/MP3/AIFF and historical-aggregate references inform its rules. It has no
+  SQL/file API. `rekordbox_cue_store.CueLibraryAuthority` is provisioned only after
+  native add/delete acceptance and binds `PilotCueStore` to an explicit track.
+  It shares
+  the tag store's exact root/lock/journal, with operation-specific row/column
+  restrictions. One desktop TaskOwner owns tag/cue operations; pending operations
+  reconcile before another domain/track is admitted. Native DB-only add/delete
+  acceptance passed on No Trust, with audio/ANLZ/XML untouched. Cue saves publish
+  a new target Track and Library view without audio reload, browser rebuild or
+  full source read. Raw revisions/native IDs stay outside display cue hashes.
+  `desktop.cue_session` overlays queued edits in RAM without mutating that
+  verified Library. The deck sees pending cues immediately; the shared controller
+  executes their FIFO in background, rebasing revisions and resolving temporary
+  identities to native IDs after each read-back. Failure drops the unconfirmed
+  tail and refreshes source state. Normal window shutdown drains the queue before
+  generic TaskOwner.stop; abrupt exit can lose not-yet-started RAM intents.
+  Recovery receipts bind the physical source-file identity and may recognize an
+  exact inactive zero-header SQLite journal without changing/deleting that file.
+  Replaced DB files fail before SQLite recovery opens them.
 - **Reads the LIVE rekordbox DB** (default `~/Library/Pioneer/rekordbox/master.db`)
   via a read-only temp copy through `pyrekordbox`; XML export is a fallback.
   Connections can validate/select another DB; `settings.rekordbox_db_path`
   persists only after read and save succeed. The explicit path travels through
   RefreshWorker, snapshot acquisition and relative analysis-path resolution;
   the module's default path is never mutated.
+  Refresh first reconciles any prior authorized transaction using its provisioned
+  authority, even before a cached library has been verified. Source selection
+  never creates permission. Unknown recovery stops the read; the snapshot reader
+  rejects nonzero rollback journals so spilled uncommitted pages cannot masquerade
+  as a valid DB/WAL snapshot. Zero-header inactive files are left untouched.
 - **The temp snapshot is a verified DB/WAL pair.** SoundBox copies only
   `master.db` and its WAL, compares both source identities before and after,
   and retries a concurrent checkpoint/update. SQLite's process-local SHM is
@@ -565,8 +621,8 @@ refresh, preserving compressed waveform payloads.
 - **Two planes.** rekordbox is king (the mirror); SoundBox keeps its own plane
   on top: imported audio (referenced in place, never copied), per-track
   title/artist overrides, custom playlists, and deletes/removals that act as
-  *vetoes* over the mirror. Both planes drift synced devices; rekordbox is never
-  changed.
+  *vetoes* over the mirror. Both planes drift synced devices. Only explicit My Tag
+  assignment actions cross into the accepted rekordbox writer.
 - **Imported duration is source-header metadata.** `soundbox.imports` uses
   libsndfile first and Mutagen's container metadata fallback for ALAC/AAC;
   legacy zero-time records are backfilled and persisted on load. Canonical
@@ -604,9 +660,18 @@ refresh, preserving compressed waveform payloads.
 - **Drag-to-add works on the sidebar AND the main browser.** Dropping tracks or
   Finder audio onto the open view adds to the playlist it shows; Collection
   imports files only; Artists (tag-derived) and read-only rekordbox views reject
-  every drop (`TrackTable.resolve_drop` gates it — rekordbox is never written).
+  every drop (`TrackTable.resolve_drop` gates it; drops never write rekordbox).
 
 ## Settings, keyboard and optional account state
+
+`desktop.theme` resolves the saved `theme_accent` into base/light/dark/subtle
+roles. `theme_text_mode` (White/Black/Custom) and `theme_text_custom` independently
+control text on accent-colored selections/buttons; White is the default and
+custom colors survive mode/accent changes. General Settings applies changes across
+QSS, vector wordmark and custom-painted chrome immediately, without reloading a
+track. State load/restore reapplies both preferences. `desktop.wordmark.Wordmark`
+resolves the supplied SVG color layers in memory and occupies the original
+270×55 slot. The SVG is packaged data and part of the source fingerprint.
 
 Settings orders its tabs General, Keyboard, Graveyard, Connections; Graveyard
 uses the full width. A QTabBar is centered across the 40-pixel header, with Back on the left
@@ -893,3 +958,61 @@ buffers remain intact. PlayerBar cancels pending transport/cue/gain intentions o
 error; the bottom status exposes the cause. Visual prediction is bounded below
 by the current Play/seek frame until its CoreAudio presentation time arrives,
 preventing the initial backward jump without changing steady-state rendering.
+
+
+Grid editing uses `desktop.grid_controller` for immediate RAM rows, ordered
+250-ms/one-second grouped nudges and discrete FIFO saves. It shares the tag/cue
+TaskOwner and recovery lane. A generation-bound native grid setter updates only
+geometry/bar counters; late analysis retains the newer grid/cue overlays. Saved
+rows update V5 metadata and one browser BPM row, preserving waveform/audio state.
+Old preparation publications are fenced before source saving, off the GUI thread.
+Known grid recovery runs before source snapshots. Unknown payloads fail closed.
+Normal shutdown flushes accepted grid intents before draining the shared owner.
+
+
+The prep Q button stores `settings.quantize` (default false) in SoundBox state.
+PlayerBar finds the nearest current grid row by binary search over its existing
+beat list; the GUI captures the resulting cue timestamp before enqueueing.
+No native timing, database protocol or source Quantize preference changes.
+Existing cue playback remains immediate and unsnapped. State load/restore updates
+both the button and player without re-saving or moving transport.
+Six unassigned actions in the shared keyboard catalog dispatch the five grid
+operations and Q through their existing admission paths. BPM Value has no action.
+Paused bar-start capture reads the visible waveform cursor after loaded-source
+guards; playing capture uses fresh native time. Neither path quantizes grid edits.
+Grid intents may enter the same FIFO before the initial source probe completes.
+They retain track/UUID/path and captured milliseconds. A RAM-only base previews
+the shared row arithmetic immediately; it cannot reach Library/cache/source.
+The head requests its probe before saving, requires that loaded base to match
+the source grid exactly, and validates native metadata. Failed checks cancel the
+tail and restore its base; shutdown drains admitted probe-bound work. Provisional
+doubling omits final half-beat extrapolation until native end bounds arrive.
+
+MainWindow places the cue panel beside both header and deck rows; standalone
+PlayerBar instances keep their embedded cue panel. The title frame shares the
+waveform's right edge, and the first grid button shares its left edge. My Tags,
+Settings and Search occupy the prep strip's right end, with Search beneath the
+cue panel. The wordmark retains its original 270×55 slot.
+The logo/title gap equals the left inset. MainWindow mounts the transport deck
+beside both waveform and prep rows; standalone PlayerBar keeps its embedded
+transport. The default 1 Player dropdown exposes disabled 2 Player/Simple/Browser
+placeholders and stores no setting or mode transition.
+
+Live Tag/Cue/Grid backups use `rekordbox_write.encrypted_backup`: a stable raw
+DB/WAL copy, one encrypted checkpointed copy with SQLite integrity/identity
+checks, and existing exact-hash/fsync/recovery publication. SQL still opens only
+private copies for this capture. `OfflineWorkspace.capture` retains its separate
+full semantic inventory and editable working copy for research proofs; live
+backup creation does not need those Python allocations. Source SQL/publication
+and recovery formats remain unchanged. Fresh closed-app checks query exact
+rekordbox/agent process names through the OS, without a Python process walk or
+liveness cache. Library-cache serialization stays atomic but encodes/writes
+bounded records so the C JSON encoder cannot monopolize the GIL for a full library.
+
+Manual BPM uses the same immediate grid/FIFO path with a separate acceptance flag
+on library and track-bound authorities. Its native protocol additionally owns the
+primary contentFile hash/size/revision and AnalysisUpdated. Whole-row recovery
+binds those changes with DAT/EXT and SQL. Enter captures exact hundredths plus
+track identity; browser row confirmation follows the saved signal, never RAM
+preview. The player layout field uses a rounded custom painter with an inset
+chevron while retaining the native popup; transport row/column gaps both use 5 px.

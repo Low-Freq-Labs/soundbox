@@ -1,27 +1,76 @@
 # SoundBox player
 
-Current as of 2026-10-26. This is the player reference: shipped behavior,
+Current as of 2026-10-27. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
-the next grid work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
+remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
 ## Shipped behavior
 
-The player occupies two compact lanes:
+The player has a header, a deck, and a prep strip beneath it:
 
-- Header: compact SoundBox wordmark, centered artist/title with three stacked
-  autoplay controls, search, Settings.
+- Header: supplied SVG wordmark in the original 270×55 slot (white SOUND,
+  theme-colored BOX), centered artist/title with three stacked
+  autoplay controls. Its title frame ends flush with the waveform's right edge.
+  The logo-to-title gap matches the logo's left window inset.
 - Deck: centered transport stack on the left, waveform in the middle, and the
-  two-page cue panel on the right.
+  two-page cue panel on the right, spanning the header and deck height.
+- Prep strip: five grid buttons (enabled for a ready accepted track) and a BPM entry field on the left;
+  a Q Quantize toggle after the grid buttons. The first grid button aligns with
+  the waveform's left edge. My Tags, Settings and Search occupy the right end;
+  Search aligns beneath the cue panel, and My Tags sits to Settings' left.
+  Settings ends at the waveform's right edge. There is no separator before
+  My Tags; space outside cue buttons matches the surrounding header panel.
+
+The transport layout field has matching rounded corners and an inset chevron;
+its menu retains native behavior. The field text has an 11-pixel left inset.
+Track/jump rows and columns use equal 5-pixel gaps. The Q uses semibold lettering.
+
+Quantize uses a checkable **Q** after the five grid controls: red when on, grey
+when off, independent of theme accent. It is a global SoundBox setting, initially
+off and saved across restarts/restores. On snaps newly created Hot/Memory Cues
+and a newly relocated session CUE point to the nearest current beat row. Equal
+distances choose the earlier beat; unavailable/out-of-audio rows are never
+invented. Without a valid grid the exact position is retained. Live edited grids
+supply snapping targets immediately. Toggling alone never moves playback or cues.
+Existing cue previews retain their saved positions and immediate press/release
+behavior. Hot/Memory creation never seeks playback; paused session-CUE relocation
+moves to its snapped point once, without starting preview. The timestamp is
+captured before queueing, so later toggles/grid edits cannot change an accepted
+cue intent. No database/analysis reads occur in the snapping operation.
+This setting never reads or changes rekordbox's global Quantize preference.
+Loop authoring remains outside the current prep UI. Settings → Keyboard →
+Beatgrid exposes unassigned bindings for all five operations and Toggle Quantize;
+BPM Value is excluded. Paused bar-start edits use the visible cursor; playing
+edits capture the native playhead. Q never snaps a grid-edit target.
+Once the deck is loaded, a grid click can be captured while its initial saved-grid
+check is running. Its loaded RAM rows update both waveform scales, native grid,
+BPM, beat jumps and Q targets immediately. The FIFO retains track/UUID/path and
+position. Loaded rows are presentation only: the checked snapshot must match
+that base and pass identity, format and Analysis Lock validation before saving.
+Failure cancels the unconfirmed tail and restores the prior rows. A later seek or track change
+cannot retarget the captured edit, and normal shutdown drains it.
+Before native end metadata arrives, a provisional doubled grid uses the shared
+row arithmetic without extrapolating one final half-beat. The verified source
+preview reconciles that trailing boundary; it never changes the audio clock.
 
 Transport controls:
 
+- The layout dropdown above transport defaults to **1 Player**. **2 Player**,
+  **Simple** and **Browser** are visible, disabled placeholders in that order;
+  no layout-switching behavior or saved layout setting is implemented. The
+  transport column/divider spans the waveform and prep rows.
+  Its field uses matching rounded corners and an inset chevron; the popup remains native.
 - Previous/next track follows the active table/view order.
 - Back/forward jump uses a persistent selector: 4 beats, 8 beats, 16 beats,
   4 bars, 8 bars, or 16 bars.
 - Grid-aware jumps preserve the current offset inside the beat and follow
   Rekordbox's exact timestamps, including variable-tempo grids. Edge buttons
   disable when the requested jump is unavailable.
+  Audio before the first saved grid row uses that grid's first interval for
+  jump counting, so a forward jump from audio zero or a cue just before the
+  grid start can return backward. This extrapolates transport arithmetic only;
+  it never changes stored grid rows or enables a seek outside the audio.
 - CUE, populated hot cues, and populated memory cues share one gated-preview
   contract: press starts from that cue, holding keeps it playing, and release
   pauses and returns to that exact cue.
@@ -31,9 +80,9 @@ Transport controls:
   Session CUE state is never written to Rekordbox or the audio file.
 - The transport state is visually unambiguous: every cue-family press lights
   the white CUE label on an orange fill while PLAY remains an outline. Space
-  promotes a held preview into transport playback, filling PLAY purple; release
-  then clears only CUE. Paused transport is always a purple outline. The PLAY
-  glyph becomes PAUSE only with that purple transport state; decoder playback
+  promotes a held preview into transport playback, filling PLAY with the accent; release
+  then clears only CUE. Paused transport uses the accent outline (purple by default). The PLAY
+  glyph becomes PAUSE only with that filled transport state; decoder playback
   during an unlatched cue preview continues to show the PLAY glyph.
 - By default, `C` is the keyboard equivalent of pressing/releasing CUE while a
   browser surface has focus. The packaged entrypoint disables Cocoa
@@ -58,6 +107,11 @@ Transport controls:
   press sets without preview and its release is inert.
 - Play/pause and all transport/source changes use short gain ramps so starts,
   stops, seeks, and track replacement do not click.
+  Cue retriggers/releases use 3-ms envelopes and seek only once to their target;
+  ordinary pause/source fades retain their existing timing and exact visual hold.
+  A release before the native PLAYING poll cancels the decoder's pending start.
+  Transport edges never refresh library-wide artwork or request device discovery;
+  artwork callbacks and independent mount/device timers own that work.
 - CUE and play/pause are equal-size circular controls.
 - Header autoplay is mutually exclusive: blue up follows the frozen source
   playlist upward, green down follows it downward, and red `R` uses a shuffle
@@ -77,20 +131,26 @@ Transport controls:
 
 Keyboard settings expose the transport and cue actions with remappable modifier
 combinations and multiple bindings per action. Space, C and Command-R retain
-their defaults. Numbers 1–8 preview slots on the selected Hot/Memory page;
+their defaults. Numbers 1–8 preview populated slots on the selected Hot/Memory
+page, or create empty slots at the captured native playhead (nearest beat when Q
+is on); Command-1–8 deletes.
 9 selects Hot Cue and 0 selects Memory Cue. `=` zooms in and `-` zooms out by
 default. Cue keys use the same gated-preview
 contract as mouse presses. A held slot retains its original page/control through
 page switches, modifier release and focus changes. Keyboard cue bindings use the
-active page; the separate direct Hot/Memory actions are retired. Empty slots remain inert.
+active page; the separate direct Hot/Memory actions are retired. Creation does
+not start preview, and its release stays inert even when saving finishes while
+the key is held. Text fields retain normal input. Cue editing needs accepted
+library/version authority, fresh identity metadata and closed rekordbox/agent.
 See [keyboard settings](KEYBOARD.md) for editing and context boundaries.
 
 Cue panel:
 
 - `HOT CUE` and `MEM CUE` are separate pages with eight slots each, arranged
   as two columns by four rows.
-- The cue grid starts level with the whole-track overview and fills the player
-  height down to its page tabs; the separate elapsed/duration label was removed.
+- The cue grid spans the header and waveform rows, with taller, equally spaced
+  slots down to its page tabs. The tabs align with the waveform's bottom edge;
+  the separate elapsed/duration label was removed.
 - Existing cues are imported from `djmdCue` in the read-only live database
   snapshot. Hot cues retain every canonical slot (including I–P) and memory
   cues retain chronological order; the calm panel displays A–H / the first
@@ -110,7 +170,32 @@ Cue panel:
   for background waveform preparation; V5 still receives the same rows atomically
   for long-term SoundBox ownership.
 - Populated slots emit separate press/release edges for gated playback. Empty
-  slots are inert. No cue is written back.
+  slots can be clicked or keyed to create; Command-number deletes the active
+  page's exact native ID/UUID. Hot letters stay fixed; Memory cues reorder by time.
+  WAV/MP3/AIFF authoring follows native references, with unknown sync metadata
+  blocked. Existing loops, colors, comments, seek fields and hidden overflow remain.
+- Cue edits capture a fresh native position and source generation, optionally
+  snapping that captured timestamp when Q is on, without changing the session CUE marker. A single source-save lane
+  serializes tag/cue writes, probes, refresh, source selection and maintenance.
+  A small per-track session overlay publishes edits immediately to the loaded
+  panel and both waveform scales; a subsequent press can preview them while the
+  background save is running. A FIFO retains captured positions and stable cue
+  identities. Each write rebases onto the preceding verified revision; pending
+  Memory deletions follow cue identity through chronological renumbering.
+  Successful saves publish only the target's verified Track/Library metadata;
+  they neither reload audio nor reparse/prepare the whole library. Immutable
+  publication keeps background/cache readers on their original snapshot. Only
+  verified data reaches the library cache, once the queue drains. Failure cancels
+  the unconfirmed tail, restores verified cues and requests source reconciliation;
+  the backend still resolves uncertain transactions before another write.
+  Normal quit closes edit admission and drains every accepted queued edit before
+  stopping worker owners. The RAM overlay is pending presentation, not durable
+  success; abrupt termination can lose not-yet-started edits. Native transaction
+  recovery remains responsible for any write that had started.
+- `source_cue_revision` and `source_cue_refs` retain raw edit identities outside
+  display cues/waveform fingerprints. Snapshot cache schema 7 reads older 4–6
+  caches; cached data cannot grant write permission. No whole-library recook is
+  required for these fields. Source audio and ANLZ/XML remain untouched.
 - Whole-track and scrolling memory arrows are slightly wider than hot-cue
   stems and terminate flush on the waveform edge, fully covering a coincident
   red grid line.
@@ -378,7 +463,8 @@ no FFT, filter bank or beat detector runs. The source is decoded once in bounded
 chunks for exact song-anchored 1-ms stereo-midpoint signed extrema. The overview
 comes from PWV5. Incomplete imports or unsupported supplemental decoders retain
 the existing full analyzer and its generated display modes/spectral master. No player code opens Rekordbox files for writing. No SoundBox
-operation updates `master.db`, ANLZ data, or source audio.
+player operation updates `master.db`, ANLZ data, or source audio. Existing My Tag
+assignments have a separate guarded database API, outside the player.
 
 ## SoundBox-owned caches
 
@@ -395,7 +481,7 @@ Each V5 record is atomically replaced, keyed by track ID plus audio identity.
 Interactive loads validate only the requested section SHA-256; cache audits
 also verify the complete compressed payload. A
 changed/new track prepares only its own record. Storage-only cue/grid mutation
-support is a dormant boundary for later work; no manual grid editor exists.
+support is used by the accepted prep-grid editor; source authority remains separate.
 File-provider storage migrations are not audio changes. If size/mtime identity
 drifts, SoundBox recomputes the record's existing inexpensive fingerprint using
 its recorded size/mtime and the current first/last 128 KiB. An exact match
@@ -865,8 +951,36 @@ Historical experiments and installation measurements are preserved in the
 [player history](archive/player-history-2026-07-to-09.md). They are evidence,
 not current implementation instructions or pending work.
 
-## Deferred player work
+## Grid editing and deferred prep work
 
-Manual grid/cue editing needs a UX workshop before implementation. Storage and
-export-field mapping exist; a manual editor does not ship. Rekordbox remains
-read-only. See [ROADMAP](ROADMAP.md) for scope and sequencing.
+The October 26 [prep plan](rekordbox-prep.md) now includes accepted My Tag,
+Hot/Memory cue and grid source protocols. Installed provenance and user review
+status are in HANDOFF. Grid controls set a bar start, nudge the entire grid by
+1 ms (Shift: 3 ms), double or halve constant BPM. Buttons require the loaded
+accepted track, exact source identity, a valid grid and Analysis Lock off.
+The BPM field shows `000.00` while empty and loaded/session BPM with two decimals.
+Manual entry requires separate native acceptance for the library and a constant
+grid. Enter submits the captured track/value; Escape or focus loss cancels typing.
+Track changes abandon unfinished input. The grid previews immediately, while the
+browser BPM updates only after each successful background save verifies, without
+loading another song. Failed saves restore the confirmed deck grid and leave the
+browser value unchanged. Browser selection alone does not change the deck field.
+
+Grid edits immediately update bar/beat labels, jump geometry and native guides,
+without seeking or changing audio/waveforms/cues. Opening partial bars count as
+bar 0; earlier bars remain when setting a later downbeat. RAM previews and live
+cues override late manifest/overview uploads. The native generation-bound setter
+swaps only grid buffers, leaving cached wave attributes and audio clock intact.
+A fresh library application releases the completed overlay/pin so later external
+rekordbox corrections can replace it; accepted queued edits remain protected.
+Background nudges coalesce after 250 ms inactivity with a one-second group limit;
+ordered offsets preserve zero-crossing clipping. Other operations retain FIFO
+order. Cue creation stays immediate during grid saving and shares its source lane.
+
+Verified source saves update only target BPM/revision and V5 grid metadata.
+Preparation cache writes already in flight are fenced in the source worker,
+without deleting records or blocking GUI/transport. Failure cancels unconfirmed
+edits and reconciles source state. Normal quit drains accepted grid work before
+cue/TaskOwner shutdown. Variable-tempo scaling, source intelligent
+playlist creation and the opt-in full-Collection setting remain later work.
+See [ROADMAP](ROADMAP.md) and the prep protocol for exact limits.

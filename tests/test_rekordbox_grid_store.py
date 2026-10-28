@@ -1,0 +1,325 @@
+"""Track-bound source protocol on synthetic temp libraries, never live AppData."""
+from dataclasses import asdict, replace
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+from sqlcipher3 import dbapi2 as sqlcipher
+
+from soundbox import rekordbox_cue_store as cues
+from soundbox import rekordbox_grid_store as grids
+from soundbox import rekordbox_tags as tags
+from soundbox import rekordbox_write as offline
+from soundbox.rekordbox_grid import Beat, GridEdit, read_grid
+from tests.test_rekordbox_grid import primary, container, section, content_file
+from tests.test_rekordbox_grid_proof import fixture
+
+UID = '11111111-2222-4333-8444-555555555555'
+ANALYSIS = f'/PIONEER/USBANLZ/{UID[:3]}/{UID[3:]}/ANLZ0000.DAT'
+
+
+class GridSourceTransactions(unittest.TestCase):
+    def test_library_authority_requires_explicit_acceptance_and_exact_source(self):
+        with tempfile.TemporaryDirectory() as area:
+            path = Path(area) / 'authority.json'
+            values = dict(database=str(Path(area) / 'master.db'), library_id='synthetic',
+                          schema_sha256='a' * 64, accepted=True)
+            source = Path(values['database'])
+            self.assertIsNone(grids.load_grid_authority(path, source, 'synthetic'))
+            path.write_text(json.dumps({**values, 'accepted': False}))
+            self.assertIsNone(grids.load_grid_authority(path, source, 'synthetic'))
+            path.write_text(json.dumps(values))
+            authority = grids.load_grid_authority(path, source, 'synthetic')
+            self.assertIsNotNone(authority)
+            self.assertEqual(authority.bind('2', UID).track_uuid, UID)
+            self.assertFalse(authority.bind('2', UID).manual_bpm_accepted)
+            path.write_text(json.dumps({**values, 'manual_bpm_accepted': True}))
+            authority = grids.load_grid_authority(path, source, 'synthetic')
+            self.assertTrue(authority.bind('2', UID).manual_bpm_accepted)
+            self.assertIsNone(grids.load_grid_authority(path, source, 'other'))
+            self.assertIsNone(grids.load_grid_authority(path, source.with_name('other.db'), 'synthetic'))
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.base = Path(temp.name).resolve()
+        self.source = self.base / 'source/master.db'
+        self.source.parent.mkdir()
+        fixture(self.source)
+        conn = offline._connect(self.source)
+        conn.execute('ALTER TABLE djmdContent ADD COLUMN AnalysisDataPath TEXT')
+        conn.execute('UPDATE djmdContent SET UUID=?,AnalysisDataPath=? WHERE ID=?', (UID, ANALYSIS, '2'))
+        self.authority = grids.GridWriteAuthority(str(self.source), 'synthetic-library',
+                                                  tags._schema(conn), '2', track_uuid=UID)
+        conn.close()
+        self.dat = primary(tuple(Beat((i + 3) % 4 + 1, 9000, 39 + i * 2000 // 3)
+                                 for i in range(252)))
+        self.ext = container(section(b'PQT2', bytes.fromhex('000000000100000200000000')
+                                    + bytes(16) + struct.pack('>IIII', 3, 123, 0, 0)
+                                    + bytes(6), 56),
+                             section(b'PCOB', b'unchanged cue section'),
+                             section(b'PWV3', struct.pack('>III', 1, 25143, 0x960000)
+                                     + bytes(25143), 24))
+        self.dat_path = self.source.parent / 'share' / ANALYSIS.lstrip('/')
+        self.dat_path.parent.mkdir(parents=True)
+        self.dat_path.write_bytes(self.dat)
+        self.ext_path = self.dat_path.with_suffix('.EXT')
+        self.ext_path.write_bytes(self.ext)
+        self.extra_path = self.dat_path.with_suffix('.2EX')
+        self.extra_path.write_bytes(b'never touch this companion')
+        self.root = self.base / 'recovery'
+        self.enterContext(mock.patch.object(cues, '_closed'))
+        self.enterContext(mock.patch.object(cues, '_installed_version', return_value=tags.NATIVE_VERSION))
+        self.enterContext(mock.patch.object(tags, '_assert_closed'))
+        self.enterContext(mock.patch.object(tags, '_installed_version', return_value=tags.NATIVE_VERSION))
+        self.store = grids.PilotGridStore(self.authority, self.root)
+
+    def request(self, operation='shift', value=1):
+        snapshot = self.store.snapshot()
+        return GridEdit('2', UID, snapshot.revision, operation, value)
+
+    def state(self):
+        conn = offline._connect(self.source, readonly=True)
+        try:
+            return offline._state(conn)
+        finally:
+            conn.close()
+
+    def test_roundtrip_changes_only_proven_rows_and_sections(self):
+        before = self.state()
+        self.assertTrue(self.store.apply(self.request()))
+        self.assertEqual(self.state(), before)
+        self.store.apply(self.request(value=-1))
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        self.store.apply(self.request('double', 0))
+        snap = self.store.snapshot()
+        self.assertEqual((snap.track['BPM'], snap.track['TrackInfoUpdated'], snap.track['rb_local_usn']),
+                         (18000, '7', 43))
+        self.store.apply(self.request('halve', 0))
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        after = self.state()
+        self.assertEqual({t for t in before['tables'] if before['tables'][t] != after['tables'][t]},
+                         {'djmdContent', 'agentRegistry'})
+        self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
+        self.assertFalse(self.store.journal.exists())
+        self.assertFalse(self.store.payloads.exists())
+
+    def test_manual_bpm_requires_separate_acceptance_and_recovers_new_metadata(self):
+        before = self.store.snapshot()
+        with self.assertRaisesRegex(offline.WriteProofError, 'separate native acceptance'):
+            self.store.apply(self.request('bpm', 9100))
+        self.assertEqual(self.store.snapshot(), before)
+        conn = offline._connect(self.source)
+        file = content_file(before.track, before.dat, str(self.dat_path))
+        columns = ','.join('"' + k + '"' for k in file)
+        conn.execute('CREATE TABLE contentFile (' + columns + ')')
+        conn.execute('INSERT INTO contentFile VALUES (' + ','.join('?' for _ in file) + ')',
+                     tuple(file.values()))
+        schema = tags._schema(conn)
+        conn.close()
+        self.authority = replace(self.authority, schema_sha256=schema, manual_bpm_accepted=True)
+        self.store = grids.PilotGridStore(self.authority, self.root)
+        before = self.store.snapshot()
+        for phase in ('published-DAT', 'after-commit'):
+            self.crash('bpm', phase, wal=True)
+            self.store = grids.PilotGridStore(self.authority, self.root)
+            self.assertEqual(self.store.recover(),
+                             'committed' if phase == 'after-commit' else 'rolled-back')
+            current = self.store.snapshot()
+            if phase == 'published-DAT':
+                self.assertEqual(current, before)
+            else:
+                self.assertEqual((current.track['BPM'], current.track['AnalysisUpdated'],
+                                  current.track['TrackInfoUpdated'], current.track['rb_local_usn']),
+                                 (9100, '3', '7', 45))
+        self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
+
+    def test_stale_identity_and_analysis_lock_fail_without_writes(self):
+        edit = self.request()
+        for bad in (replace(edit, track_uuid='other'), replace(edit, track_id='1'),
+                    replace(edit, revision='stale')):
+            with self.subTest(edit=bad), self.assertRaises(offline.WriteProofError):
+                self.store.apply(bad)
+        conn = offline._connect(self.source)
+        conn.execute("UPDATE djmdContent SET Analysed=233 WHERE ID='2'")
+        conn.close()
+        edit = self.request()
+        with self.assertRaisesRegex(offline.WriteProofError, 'Lock'):
+            self.store.apply(edit)
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        self.assertEqual(self.ext_path.read_bytes(), self.ext)
+
+    def crash(self, operation, phase, wal=False):
+        if wal:
+            conn = offline._connect(self.source)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.close()
+        script = '''
+from pathlib import Path
+import json,os,sys
+from soundbox import rekordbox_cue_store as cues,rekordbox_grid_store as grids
+from soundbox.rekordbox_grid import GridEdit
+cues._closed=lambda:None
+cues._installed_version=lambda:'6.8.7.0303'
+authority=grids.GridWriteAuthority(**json.loads(sys.argv[1]))
+store=grids.PilotGridStore(authority,Path(sys.argv[2]))
+snapshot=store.snapshot()
+edit=GridEdit(authority.pilot_track_id,authority.track_uuid,snapshot.revision,sys.argv[3],
+              1 if sys.argv[3]=='shift' else 9100 if sys.argv[3]=='bpm' else 0)
+def fault(phase):
+    if phase==sys.argv[4]:os._exit(86)
+grids._fault=fault
+store.apply(edit)
+'''
+        result = subprocess.run([sys.executable, '-c', script, json.dumps(asdict(self.authority)),
+                                 str(self.root), operation, phase], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 86, result.stdout + result.stderr)
+
+    def test_real_exit_recovers_file_only_and_sql_operations(self):
+        for operation in ('shift', 'double'):
+            for phase in ('journal-ready', 'published-DAT', 'published-EXT', 'before-commit',
+                          'after-commit', 'decision-durable', 'journal-retired',
+                          'payload-retired', 'marker-retired'):
+                with self.subTest(operation=operation, phase=phase):
+                    # Reuse one library, recording a new exact baseline each time.
+                    original = self.store.snapshot()
+                    self.crash(operation, phase)
+                    self.store = grids.PilotGridStore(self.authority, self.root)
+                    retired = phase in ('journal-retired', 'payload-retired', 'marker-retired')
+                    committed = (phase == 'decision-durable' or retired
+                                 or operation == 'double' and phase == 'after-commit')
+                    result = self.store.recover()
+                    if retired:
+                        self.assertIsNone(result)
+                    else:
+                        self.assertEqual(result, 'committed' if committed else 'rolled-back')
+                    current = self.store.snapshot()
+                    if committed:
+                        self.assertNotEqual(current.dat, original.dat)
+                    else:
+                        self.assertEqual(current, original)
+                    # Keep repeated doubles bounded for this matrix.
+                    if committed and operation == 'double':
+                        self.store.apply(self.request('halve', 0))
+                    self.assertFalse(self.store.journal.exists())
+                    self.assertFalse(self.store.payloads.exists())
+
+    def test_wal_crashes_recover_both_sides_of_commit(self):
+        for phase in ('published-DAT', 'after-commit'):
+            with self.subTest(phase=phase):
+                original = self.store.snapshot()
+                self.crash('double', phase, wal=True)
+                self.store = grids.PilotGridStore(self.authority, self.root)
+                self.assertEqual(self.store.recover(), 'committed' if phase == 'after-commit' else 'rolled-back')
+                if phase == 'published-DAT':
+                    self.assertEqual(self.store.snapshot(), original)
+
+    def test_recovery_stops_on_foreign_analysis_before_restoring_any_file(self):
+        self.crash('double', 'published-DAT')
+        self.ext_path.write_bytes(b'foreign edit')
+        current_dat = self.dat_path.read_bytes()
+        with self.assertRaises(offline.RecoveryRequired):
+            self.store.recover()
+        self.assertEqual(self.dat_path.read_bytes(), current_dat)
+        self.assertEqual(self.ext_path.read_bytes(), b'foreign edit')
+        self.assertTrue(self.store.journal.exists())
+
+    def test_path_redirect_noop_and_process_guard(self):
+        self.assertFalse(self.store.apply(self.request(value=0)))
+        self.assertFalse(self.root.joinpath('baseline.db').exists())
+        with mock.patch.object(cues, '_closed', side_effect=offline.WriteProofError('running')):
+            with self.assertRaises(offline.WriteProofError):
+                self.store.snapshot()
+        self.dat_path.unlink()
+        self.dat_path.symlink_to(self.extra_path)
+        with self.assertRaises(offline.WriteProofError):
+            self.store.snapshot()
+        self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
+
+    def test_trigger_cannot_change_unrelated_data(self):
+        conn = offline._connect(self.source)
+        conn.execute("CREATE TRIGGER unsafe_grid AFTER UPDATE OF BPM ON djmdContent BEGIN "
+                     "UPDATE unknown_table SET opaque=X'02' WHERE id=1; END")
+        self.authority = replace(self.authority, schema_sha256=tags._schema(conn))
+        conn.close()
+        self.store = grids.PilotGridStore(self.authority, self.root)
+        before = self.state()
+        with self.assertRaises(sqlcipher.DatabaseError):
+            self.store.apply(self.request('double', 0))
+        self.assertEqual(self.state(), before)
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        self.assertEqual(self.store.recover(), 'rolled-back')
+
+    def test_cue_and_tag_domains_refuse_unresolved_grid_journal(self):
+        self.crash('shift', 'published-DAT')
+        for factory in (lambda: cues.PilotCueStore(cues.CueWriteAuthority(
+                            self.authority.database, self.authority.library_id,
+                            self.authority.schema_sha256, '2'), self.root).snapshot(),
+                        lambda: tags.LiveTagStore(tags.TagWriteAuthority(
+                            self.authority.database, self.authority.library_id,
+                            self.authority.schema_sha256), self.root).check_ready()):
+            with self.assertRaises(offline.WriteProofError):
+                factory()
+        self.store.recover()
+        self.assertEqual(read_grid(self.dat_path.read_bytes()), read_grid(self.dat))
+
+    def test_damaged_backup_and_changed_database_block_recovery(self):
+        self.crash('double', 'published-DAT')
+        before = self.dat_path.read_bytes(), self.ext_path.read_bytes()
+        saved = self.root / 'grid-transaction/before.DAT'
+        saved.write_bytes(b'broken backup')
+        with self.assertRaises(offline.RecoveryRequired):
+            self.store.recover()
+        self.assertEqual((self.dat_path.read_bytes(), self.ext_path.read_bytes()), before)
+        self.assertTrue(self.store.journal.exists())
+
+    def test_missing_journal_preserves_unfinished_evidence_and_blocks_all_domains(self):
+        with mock.patch.object(grids, 'atomic_bytes', wraps=grids.atomic_bytes) as publish:
+            original = publish._mock_wraps
+            def write(path, data):
+                if path == self.store.journal:
+                    raise OSError('journal unavailable')
+                original(path, data)
+            publish.side_effect = write
+            with self.assertRaises(OSError):
+                self.store.apply(self.request('double', 0))
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+        self.assertTrue(self.store.payloads.exists())
+        with self.assertRaises(offline.RecoveryRequired):
+            self.store.snapshot()
+        cue_store = cues.PilotCueStore(cues.CueWriteAuthority(
+            self.authority.database, self.authority.library_id, self.authority.schema_sha256, '2'), self.root)
+        with self.assertRaises(offline.RecoveryRequired):
+            cue_store.snapshot()
+
+    def test_native_version_and_sync_metadata_are_not_inferred_from_cache(self):
+        with mock.patch.object(cues, '_installed_version', return_value='new version'):
+            with self.assertRaises(offline.WriteProofError):
+                self.store.snapshot()
+        conn = offline._connect(self.source)
+        conn.execute('ALTER TABLE djmdContent ADD COLUMN rb_local_synced INTEGER DEFAULT 0')
+        conn.execute("UPDATE djmdContent SET rb_local_synced=2 WHERE ID='2'")
+        self.authority = replace(self.authority, schema_sha256=tags._schema(conn))
+        conn.close()
+        self.store = grids.PilotGridStore(self.authority, self.root)
+        with self.assertRaisesRegex(offline.WriteProofError, 'synchronization'):
+            self.store.snapshot()
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+
+    def test_native_historical_sync_flag_survives_bpm_edit(self):
+        conn = offline._connect(self.source)
+        conn.execute('ALTER TABLE djmdContent ADD COLUMN rb_local_synced INTEGER DEFAULT 0')
+        conn.execute("UPDATE djmdContent SET rb_local_synced=1 WHERE ID='2'")
+        self.authority = replace(self.authority, schema_sha256=tags._schema(conn))
+        conn.close()
+        self.store = grids.PilotGridStore(self.authority, self.root)
+        self.store.apply(self.request('double', 0))
+        self.assertEqual(self.store.snapshot().track['rb_local_synced'], 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

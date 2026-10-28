@@ -18,6 +18,9 @@ TEXT = "#c7ccd6"
 TEXT_DIM = "#7c828f"
 TEXT_HI = "#f2f4f8"
 
+DEFAULT_ACCENT = PURPLE
+DEFAULT_ACCENT_TEXT = '#ffffff'
+
 QSS = f"""
 QWidget {{
     font-size: 12px;
@@ -32,12 +35,6 @@ QLabel {{ background: transparent; }}
 #TopBar, #BottomBar {{ background: {PANEL2}; border: none; }}
 #TopBar {{ border-bottom: 1px solid {BORDER}; }}
 #BottomBar {{ border-top: 1px solid {BORDER}; }}
-#Wordmark {{ font-size: 15px; font-weight: 700; color: {TEXT_HI}; }}
-#WordmarkAccent {{ font-size: 15px; font-weight: 700; color: {PURPLE_LIGHT}; }}
-#AsciiSound {{ color: {TEXT_HI}; background: transparent;
-               font-family: Menlo, Monaco, monospace; font-size: 9px; }}
-#AsciiBox {{ color: {PURPLE_LIGHT}; background: transparent;
-             font-family: Menlo, Monaco, monospace; font-size: 9px; }}
 #NowPlayingFrame {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 5px;
 }}
@@ -95,6 +92,7 @@ QPushButton#DeviceTab:checked {{
 QLineEdit, QComboBox {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 4px;
     padding: 4px 6px; color: {TEXT};
+    selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@;
 }}
 QLineEdit:focus, QComboBox:focus {{ border: 1px solid {PURPLE_LIGHT}; }}
 
@@ -102,12 +100,13 @@ QLineEdit:focus, QComboBox:focus {{ border: 1px solid {PURPLE_LIGHT}; }}
 QPushButton#Stepper {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 5px;
     color: {TEXT}; font-size: 16px; font-weight: 600; padding: 0; }}
 QPushButton#Stepper:hover {{ border: 1px solid {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; }}
-QPushButton#Stepper:pressed {{ background: {PURPLE}; color: white; border: 1px solid {PURPLE}; }}
+QPushButton#Stepper:pressed {{ background: {PURPLE}; color: @ON_ACCENT@; border: 1px solid {PURPLE}; }}
 QPushButton#Stepper:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; background: {PANEL}; }}
 #StepperVal {{ color: {TEXT_HI}; background: transparent; }}
 #StepperVal:disabled {{ color: {TEXT_DIM}; }}
 QComboBox QAbstractItemView {{
     background: {PANEL}; border: 1px solid {BORDER}; selection-background-color: {PURPLE};
+    selection-color: @ON_ACCENT@;
 }}
 
 /* settings page: section header + per-row title/subtitle (scales cleanly) */
@@ -130,7 +129,7 @@ QTabBar#ReviewTabs::tab:first {{ border-top-left-radius: 5px; border-bottom-left
 QTabBar#ReviewTabs::tab:last {{
     border-right: 1px solid {BORDER}; border-top-right-radius: 5px; border-bottom-right-radius: 5px;
 }}
-QTabBar#ReviewTabs::tab:selected {{ background: {PURPLE}; border-color: {PURPLE}; color: {TEXT_HI}; }}
+QTabBar#ReviewTabs::tab:selected {{ background: {PURPLE}; border-color: {PURPLE}; color: @ON_ACCENT@; }}
 QTabBar#ReviewTabs::tab:hover:!selected {{ color: {TEXT_HI}; background: {PANEL2}; }}
 QPushButton#ReviewMoreButton::menu-indicator {{ image: none; width: 0; height: 0; }}
 QTreeWidget#Graveyard {{ background: {ROW}; alternate-background-color: {ROW_ALT};
@@ -161,7 +160,7 @@ QPushButton#WaveformModeButton:hover {{
 }}
 QPushButton#WaveformModeButton:checked {{
     background: {PURPLE_DARK}; border-color: {PURPLE_LIGHT};
-    color: white;
+    color: @ON_ACCENT@;
 }}
 
 QPushButton {{
@@ -169,11 +168,11 @@ QPushButton {{
     padding: 5px 12px; color: {TEXT};
 }}
 QPushButton:hover {{ border: 1px solid {PURPLE_LIGHT}; }}
-QPushButton#Primary {{ background: {PURPLE}; border: 1px solid {PURPLE}; color: white; font-weight: 600; }}
+QPushButton#Primary {{ background: {PURPLE}; border: 1px solid {PURPLE}; color: @ON_ACCENT@; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
 QPushButton#Ghost {{ background: transparent; }}
 #CuePanel {{ background: transparent; border-left: 1px solid {BORDER}; }}
-#CuePages {{ background: transparent; }}
+#CueColumn, #CuePages, #CuePage {{ background: transparent; }}
 QPushButton#CueSlot {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 3px;
     color: #515661; font-size: 9px; padding: 0 4px; text-align: left;
@@ -215,7 +214,7 @@ QPushButton#TransportBtn {{
 QPushButton#TransportBtn:hover {{
     border-color: {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; background: {PANEL};
 }}
-QPushButton#TransportBtn:pressed {{ background: {PURPLE_DARK}; color: white; }}
+QPushButton#TransportBtn:pressed {{ background: {PURPLE_DARK}; color: @ON_ACCENT@; }}
 QPushButton#TransportBtn:disabled {{
     background: {BG}; border-color: {BORDER}; color: #454955;
 }}
@@ -237,7 +236,7 @@ QPushButton#DeckPlayBtn:hover {{
     background: #28173a; border-color: {PURPLE_LIGHT};
 }}
 QPushButton#DeckPlayBtn:pressed, QPushButton#DeckPlayBtn[playing="true"] {{
-    background: {PURPLE}; border-color: {PURPLE}; color: white;
+    background: {PURPLE}; border-color: {PURPLE}; color: @ON_ACCENT@;
 }}
 QPushButton#DeckPlayBtn[playing="true"]:hover {{
     background: {PURPLE_LIGHT}; border-color: {PURPLE_LIGHT};
@@ -255,7 +254,7 @@ QCheckBox::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px sol
 /* sidebar tree */
 QTreeView {{ background: {PANEL}; border: none; }}
 QTreeView::item {{ padding: 0px 2px; height: 24px; color: {TEXT}; }}  /* 24px = table row height: sidebar + table share one grid */
-QTreeView::item:selected {{ background: {PURPLE}; color: white; }}
+QTreeView::item:selected {{ background: {PURPLE}; color: @ON_ACCENT@; }}
 QTreeView::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER};
                           border-radius: 3px; background: {BG}; }}
 QTreeView::indicator:checked {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
@@ -263,12 +262,12 @@ QTreeView::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px sol
 
 /* device file browser — styled like the track table */
 #DeviceBrowser {{ background: {ROW}; alternate-background-color: {ROW_ALT};
-                  border: none; selection-background-color: {PURPLE}; selection-color: white; }}
+                  border: none; selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@; }}
 #DeviceBrowser::item {{ padding: 3px 6px; color: {TEXT}; }}
-#DeviceBrowser::item:selected {{ background: {PURPLE}; color: white; }}
+#DeviceBrowser::item:selected {{ background: {PURPLE}; color: @ON_ACCENT@; }}
 #StockDeviceDetails, #StockDevicePlaylists, #StockDeviceMusic {{
     background: {ROW}; alternate-background-color: {ROW_ALT}; border: none;
-    selection-background-color: {PURPLE}; selection-color: white;
+    selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@;
 }}
 #StockDeviceDetails::item, #StockDevicePlaylists::item {{
     padding: 2px 6px; color: {TEXT};
@@ -278,7 +277,7 @@ QTreeView::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px sol
 QTableView {{
     background: {ROW}; alternate-background-color: {ROW_ALT};
     gridline-color: transparent; border: none;
-    selection-background-color: {PURPLE}; selection-color: white;
+    selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@;
 }}
 QTableView::item {{ padding: 0px 6px; border: none; }}
 QHeaderView::section {{
@@ -290,7 +289,27 @@ QHeaderView::section:hover {{ color: {TEXT_HI}; }}
 
 QMenu {{ background: {PANEL}; border: 1px solid {BORDER}; }}
 QMenu::item {{ padding: 5px 22px 5px 14px; }}
-QMenu::item:selected {{ background: {PURPLE}; color: white; }}
+QMenu::item:selected {{ background: {PURPLE}; color: @ON_ACCENT@; }}
+#PrepToolbar {{ background: {PANEL2}; border: none; }}
+QLineEdit#PrepBpmValue {{ background: {BG}; color: {TEXT_HI};
+    border: 1px solid {BORDER}; border-radius: 3px; padding: 2px 5px;
+    font-size: 13px; }}
+QToolButton#GridEditButton {{ background: {BG}; border: 1px solid {BORDER};
+    border-radius: 3px; padding: 0; }}
+QToolButton#QuantizeButton {{ background: {BG}; color: {TEXT_DIM};
+    border: 1px solid {BORDER}; border-radius: 3px; padding: 0;
+    font-size: 16px; font-weight: 600; }}
+QToolButton#QuantizeButton:checked {{ background: {BG}; color: #ff3748; }}
+QToolButton#QuantizeButton:hover {{ border-color: {TEXT_DIM}; }}
+QToolButton#MyTagsButton {{ background: {BG}; border: 1px solid {BORDER};
+    border-radius: 3px; padding: 2px 20px 2px 10px; color: {TEXT}; }}
+QToolButton#MyTagsButton::menu-indicator {{ image: none; width: 0; height: 0; }}
+QToolButton#MyTagsButton:hover {{ border-color: {PURPLE_LIGHT}; color: {TEXT_HI}; }}
+QToolButton#MyTagsButton:disabled {{ color: {TEXT_DIM}; }}
+#TagStatus {{ color: {TEXT_DIM}; font-size: 11px; }}
+#MyTagsMenu QWidget {{ background: {PANEL}; }}
+#MyTagsSummary {{ color: {TEXT_DIM}; font-size: 11px; }}
+QCheckBox#MyTagCheck {{ spacing: 8px; padding: 0; margin: 0; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 5px; min-height: 24px; }}
@@ -303,3 +322,42 @@ QProgressBar {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 
                 height: 16px; text-align: center; color: {TEXT_HI}; font-size: 11px; }}
 QProgressBar::chunk {{ background: {PURPLE_LIGHT}; border-radius: 3px; }}
 """
+
+
+_BASE_QSS = QSS
+
+
+def normalize_accent(value):
+    import re
+    return value.lower() if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) else DEFAULT_ACCENT.lower()
+
+
+def normalize_accent_text(value):
+    import re
+    return value.lower() if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) else DEFAULT_ACCENT_TEXT
+
+
+def set_accent(value, text_color=DEFAULT_ACCENT_TEXT):
+    """Resolve one saved accent into every UI role; default pixels stay familiar."""
+    from PySide6.QtGui import QColor
+    global PURPLE, PURPLE_LIGHT, PURPLE_DARK, QSS
+    PURPLE = normalize_accent(value)
+    base = QColor(PURPLE)
+    if PURPLE == DEFAULT_ACCENT.lower():
+        PURPLE_LIGHT, PURPLE_DARK, subtle = '#a855f7', '#5b21b6', '#28173a'
+    else:
+        PURPLE_LIGHT, PURPLE_DARK = base.lighter(135).name(), base.darker(145).name()
+        subtle = QColor.fromRgbF(
+            base.redF() * .23 + .77 * 13 / 255,
+            base.greenF() * .23 + .77 * 14 / 255,
+            base.blueF() * .23 + .77 * 18 / 255).name()
+    foreground = normalize_accent_text(text_color)
+    QSS = _BASE_QSS
+    for old, new in [('#7B2FBE', PURPLE), ('#A855F7', PURPLE_LIGHT),
+                     ('#5B21B6', PURPLE_DARK), ('#28173a', subtle),
+                     ('@ON_ACCENT@', foreground)]:
+        QSS = QSS.replace(old, new)
+    return PURPLE
+
+
+set_accent(DEFAULT_ACCENT)

@@ -3,10 +3,11 @@
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from soundbox import libcache
-from soundbox.library import Library, Playlist, Track
+from soundbox.library import Library, LibraryTag, Playlist, Track
 
 
 def _lib() -> Library:
@@ -28,6 +29,69 @@ def _lib() -> Library:
 
 
 class RoundTrip(unittest.TestCase):
+    def test_large_snapshot_encodes_records_without_one_uninterruptible_library_dump(self):
+        from dataclasses import replace
+        lib = _lib()
+        track = lib.tracks_by_id['1']
+        lib.tracks_by_id = {str(i): replace(track, track_id=str(i), name='曲' * 100)
+                            for i in range(1000)}
+        encode = json.dumps
+        def bounded(value, *args, **kwargs):
+            if isinstance(value, dict) and 'tracks' in value:
+                raise AssertionError('Whole-library C encoding blocks model callbacks')
+            return encode(value, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'cache.json'
+            with mock.patch.object(libcache.json, 'dumps', side_effect=bounded):
+                libcache.dump(lib, path)
+            got = libcache.load(path)
+            self.assertEqual(len(got.tracks_by_id), 1000)
+            self.assertEqual(got.tracks_by_id['999'].name, '曲' * 100)
+
+    def test_failed_chunk_encoding_keeps_the_previous_atomic_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'cache.json'
+            libcache.dump(_lib(), path)
+            before = path.read_bytes()
+            broken = _lib()
+            broken.tracks_by_id['1'].source_cues = [{'unsupported': object()}]
+            with self.assertRaises(TypeError):
+                libcache.dump(broken, path)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_cue_revision_and_native_ids_roundtrip_separate_from_display(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'cache.json'
+            lib = _lib()
+            track = lib.tracks_by_id['1']
+            track.source_cue_revision = 'a' * 64
+            track.source_cue_refs = [dict(kind='hot', slot=0, id='77', uuid='cue-uuid')]
+            libcache.dump(lib, path)
+            got = libcache.load(path).tracks_by_id['1']
+            self.assertEqual(got.source_cues, track.source_cues)
+            self.assertEqual(got.source_cue_revision, track.source_cue_revision)
+            self.assertEqual(got.source_cue_refs, track.source_cue_refs)
+            data = json.loads(path.read_bytes())
+            data['schema'] = 6
+            data['tracks'] = [r[:-2] for r in data['tracks']]
+            path.write_text(json.dumps(data))
+            old = libcache.load(path).tracks_by_id['1']
+            self.assertEqual(old.source_cues, track.source_cues)
+            self.assertEqual(old.source_cue_revision, '')
+            self.assertEqual(old.source_cue_refs, [])
+    def test_tag_catalog_membership_and_library_identity_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'cache.json';lib=_lib()
+            lib.source_library_id='library'
+            lib.source_tags=[LibraryTag('tag','Dubstep','Genre','tag-uuid')]
+            lib.tracks_by_id['1'].source_uuid='track-uuid'
+            lib.tracks_by_id['1'].source_tag_ids=['tag']
+            libcache.dump(lib,path);got=libcache.load(path)
+            self.assertEqual(got.source_tags,lib.source_tags)
+            self.assertEqual(got.source_library_id,'library')
+            self.assertEqual(got.tracks_by_id['1'].source_uuid,'track-uuid')
+            self.assertEqual(got.tracks_by_id['1'].source_tag_ids,['tag'])
+
     def test_dump_load_faithful(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "libcache.json"

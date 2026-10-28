@@ -2,7 +2,7 @@
 
 SoundBox is a native macOS music-library app that bridges **rekordbox → stock
 or Rockbox iPods / USB players** and includes a high-refresh DJ-style player.
-Browse the live rekordbox library, curate it without ever touching it, and drag
+Browse the live rekordbox library, curate it, edit existing My Tags and cues, and drag
 playlists onto a device with exact order, per-track cover art, and honest sync
 semantics. Built by Sonny (Low Freq Labs) with Claude and Codex.
 
@@ -27,10 +27,59 @@ repository can answer the question.
 
 ## Sacred safety contract (NON-NEGOTIABLE)
 
-- rekordbox is **never** written to. `master.db` is read via a read-only temp
-  snapshot (rekordbox can stay open); the XML export is a fallback.
-- Rekordbox analysis (`ANLZ*.DAT/EXT/2EX`) is read-only. SoundBox-derived
-  waveform/grid caches live only under SoundBox AppData.
+- Desktop rekordbox reads use a read-only DB/WAL snapshot; XML is a fallback.
+  The October 26 prep plan authorizes narrowly scoped My Tag and Hot/Memory Cue
+  writes through `soundbox.rekordbox_tags` and `soundbox.rekordbox_cue_store`,
+  bound to explicit library/schema/version authorities,
+  verified backup, exact expected track/tag identities and closed rekordbox/agent.
+  Native tag acceptance passed October 26 on Sonny’s actual library; its exact
+  authority enables selected-row assignments only on rekordbox 6.8.7.0303. A
+  different library/schema/version requires separate acceptance. The separate
+  `soundbox.rekordbox_write` proof remains temporary-copy-only, without a
+  publish-to-source API. Native DB-only cue creation/deletion passed on No Trust;
+  WAV/MP3/AIFF and older-aggregate references inform the accepted protocol.
+  `CueLibraryAuthority` is provisioned only after native acceptance and binds each
+  store to one explicit track. Both domains share the exact recovery root/lock/
+  journal and one desktop worker owner. Pending operations reconcile before a
+  different edit; unknown recovery or sync metadata fails closed. Cue identity
+  revisions and native IDs are separate from waveform/display cue dictionaries.
+  SoundBox’s Q setting optionally snaps newly captured cue points against the
+  current RAM grid; existing cue triggers stay exact. Never read or change
+  rekordbox’s global Quantize preference.
+  Cue session overlays are immediately usable while a FIFO saves in background;
+  only verified target metadata reaches Library/cache, without reloading audio or
+  the whole library. Normal shutdown drains accepted cue intents before stopping
+  TaskOwners; failure cancels the unconfirmed tail and reconciles source state.
+  Abrupt exit can lose not-yet-started RAM intents. Transport state edges must not
+  scan library artwork or trigger device discovery. Grid native references and
+  actual-source downbeat/BPM acceptance passed October 27. Intelligent-playlist creation remains disabled pending its own proof.
+  Sonny operates the rekordbox UI for reference/acceptance actions;
+  ask for specific actions rather than driving it remotely. See `docs/rekordbox-prep.md`.
+- Rekordbox analysis is read-only outside the accepted October 27 grid API.
+  `soundbox.rekordbox_grid_store.PilotGridStore` requires an explicitly accepted
+  exact library/schema/version authority, bound per operation to the track/UUID,
+  with rekordbox/agent closed. Only DAT/PQTZ and native EXT/PQT2 invalidation may
+  change; preserve all other sections, cues/audio/XML/2EX. BPM double/half alone
+  may change the four native djmdContent fields and local counter. Manual BPM
+  requires separate manual_bpm_accepted authority; it additionally updates
+  AnalysisUpdated and only the primary DAT contentFile hash/size/history, with
+  the native +4 counter sequence. Its recovery binds that exact metadata row. Respect
+  Analysis Lock, preserve unknown metadata, reject unverified tempo/sync states,
+  and retain encrypted DB plus exact analysis before/after backups. Shared
+  Tag/Cue/Grid lock/journal recovery validates the whole set before publication;
+  unknown state blocks all domains. Desktop previews and grouped saves share one
+  worker lane; loaded-deck clicks may queue during the initial source probe,
+  and preview from loaded RAM rows immediately. Saving requires a matching
+  verified source base; RAM previews grant no authority. Normal quit drains those
+  captured intents. Live backups retain verified encrypted DB/WAL/integrity/hash
+  capture; full semantic inventories remain offline proof work. Closed-app checks
+  stay fresh at every guard boundary. No audio reload, waveform recook or transport wait. Derived V5
+  grid updates stay in SoundBox AppData. Source intelligent playlists remain
+  a separate gate. See `docs/rekordbox-prep.md` for exact protocol and limits.
+  Historical No Trust primary-PQTZ restores were explicitly granted only for its
+  verified native-test baseline with closed rekordbox and native-saved 90 BPM;
+  preserve those receipts and native counters/history. That grant does not
+  authorize restoring another track or any secondary analysis cache.
 - Source audio files are **never** modified, renamed, moved, or deleted.
 - Every export write lands **under an explicit device target**, guarded so the
   target can never overlap the source library.
@@ -119,7 +168,7 @@ repository can answer the question.
   unambiguously to existing schema-3 managed media. A genuinely new membership
   is persisted only into a SoundBox-owned custom playlist, then reconciled
   into both firmware views. Rekordbox playlists do not adopt iPod additions;
-  rekordbox remains read-only. Exact hash-verified historical M3U8 prefixes
+  device reconciliation never writes rekordbox. Exact hash-verified historical M3U8 prefixes
   bind device paths to stable track IDs even after local source removal or
   relocation. The planning view may rebind those proven IDs to their current
   canonical Mac sources while retaining original device ownership/recovery
@@ -385,6 +434,11 @@ analysis, audible playback, duration and seeks; never shift only the waveform.
 Header probes belong to the native decode thread. See `docs/PLAYER.md`.
 
 ## Development
+
+Desktop accent roles come from `desktop.theme`, persisted as `settings.theme_accent`.
+Use those roles for UI chrome rather than fixed purple values. The supplied SVG
+wordmark stays in its 270×55 header slot; only BOX follows the accent. Waveform
+and cue data colors retain their musical/source meaning.
 
 Checkout hygiene and historical evidence locations: `docs/PROJECT_LAYOUT.md`.
 Current guidance stays in `docs/`; superseded experiments belong in

@@ -16,6 +16,14 @@ from .paths import decode_location
 _JUNK_MAX_SECONDS = 5
 
 
+@dataclass(frozen=True)
+class LibraryTag:
+    tag_id: str
+    name: str
+    category: str = ""
+    source_uuid: str = ""
+
+
 @dataclass
 class Track:
     track_id: str
@@ -45,6 +53,13 @@ class Track:
     # authoritative cue source was available; ``[]`` means the source
     # authoritatively contains no active cues for this track.
     source_cues: list[dict] | None = None
+    source_uuid: str = ""
+    # None is an unavailable authoritative tag source; [] is no assignments.
+    source_tag_ids: list[str] | None = None
+    # Edit identity is separate from display cues and waveform fingerprints.
+    # Missing revision (old cache/XML/import) never authorizes a cue write.
+    source_cue_revision: str = ""
+    source_cue_refs: list[dict] = field(default_factory=list)
 
     @property
     def path(self) -> Path:
@@ -166,6 +181,8 @@ class Library:
     hidden_ids: set = field(default_factory=set)
     removed_by_playlist: dict = field(default_factory=dict)
     title_junk: list | None = None
+    source_tags: list[LibraryTag] = field(default_factory=list)
+    source_library_id: str = ""
 
     @property
     def track_count(self) -> int:

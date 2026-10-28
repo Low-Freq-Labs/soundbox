@@ -551,7 +551,6 @@ class NativeWaveformShader(unittest.TestCase):
         native = (
             Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
         ).read_text()
-        self.assertEqual(native.count("addBeatGrid(grid,"), 2)
         self.assertIn("beats[index + 1] - beats[index]", native)
         self.assertIn("beats[index] - beats[index - 1]", native)
         self.assertIn("v[i].beatKind = downbeat ? 2u : 1u;", native)

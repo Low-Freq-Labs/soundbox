@@ -159,6 +159,93 @@ class NativeDeckContract(unittest.TestCase):
             elapsed += 10
         self.assertTrue(predicate(), f"condition missed after {timeout_ms} ms")
 
+    def test_full_library_cue_retriggers_do_not_scan_and_return_within_response_budget(self):
+        from desktop.app import MainWindow
+        from soundbox.library import Library, Track
+        with tempfile.TemporaryDirectory(prefix='sb-cue-window-') as area:
+            # isolated_dir suppresses constructor discovery and source loading.
+            # Keep suppression active throughout callbacks, not only startup.
+            win = MainWindow(isolated_dir=area)
+            win.lib = Library({str(i): Track(str(i), f'Track {i}', f'Artist {i % 100}',
+                              self.audio.as_uri(), total_time=120) for i in range(3740)}, [], 'synthetic')
+            pb = win.player_bar
+            pb.track_analysis_dir = Path(area) / 'analysis'
+            pb._deck_volume = 0
+            win.show()
+            try:
+                win._apply_loaded_library()
+                self.assertEqual(win.model.rowCount(), 3740)
+                pb.play_track('1', self.audio, autoplay=True)
+                self._wait_until(pb.is_playing)
+                # Finish first-expose/layout and the one-time row-cache warm;
+                # measure an interactive loaded deck, not window construction.
+                self._wait_until(lambda: win._warm_worker is None and not win._warm_timer.isActive())
+                QTest.qWait(100)
+                pb._set_session_cue(200)
+                latencies = []
+                with mock.patch.object(win.model, 'refresh_art') as art, \
+                        mock.patch.object(win, '_refresh_devices') as devices:
+                    for kind, target in [('session', 200), ('hot', 400), ('memory', 600)] * 4:
+                        start = time.perf_counter()
+                        pb._marker_cue_press(kind, 0, target)
+                        deadline = start + .2
+                        while time.perf_counter() < deadline:
+                            self.app.processEvents()
+                            if pb.is_playing() and target <= pb.player.position() < target + 100:
+                                break
+                            QTest.qWait(1)
+                        latencies.append((time.perf_counter() - start) * 1000)
+                        QTest.qWait(22)
+                        start = time.perf_counter()
+                        pb._marker_cue_release(kind, 0)
+                        deadline = start + .2
+                        while (pb.is_playing() or pb._pause_pending) and time.perf_counter() < deadline:
+                            QTest.qWait(1)
+                        latencies.append((time.perf_counter() - start) * 1000)
+                        self.assertFalse(pb.is_playing())
+                        self.assertEqual(pb.player.position(), target)
+                    art.assert_not_called()
+                    devices.assert_not_called()
+                # Reject the old 24-ms fade + per-release full-library scan.
+                # Allow ordinary CoreAudio/Qt scheduling variation on this Mac.
+                self.assertLess(sorted(latencies)[int(len(latencies) * .95)], 60, latencies)
+                self.assertLess(max(latencies), 100, latencies)
+                self.assertFalse(pb._cue_preview_active)
+            finally:
+                win.shutdown()
+                win.close()
+                self.app.processEvents()
+
+    def test_sub_poll_cue_taps_cancel_decoder_start_and_latest_gate_wins(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        pb._deck_volume = 0
+        pb.track_analysis_dir = Path(self.temp.name) / 'rapid-analysis'
+        try:
+            pb.play_track('rapid', self.audio, autoplay=False)
+            self._wait_until(lambda: pb._dur > 0 and not pb._pending_autoplay)
+            for target in (200, 400, 600, 800) * 3:
+                pb._marker_cue_press('hot', 0, target)
+                pb._marker_cue_release('hot', 0)  # no event turn/poll between edges
+            QTest.qWait(100)
+            self.assertFalse(pb.is_playing())
+            self.assertEqual(pb.player.position(), 800)
+            self.assertFalse(pb._pause_pending)
+            self.assertFalse(pb._cue_preview_active)
+            pb._marker_cue_press('hot', 0, 300)
+            QTest.qWait(2)
+            pb._marker_cue_release('hot', 0)
+            pb._marker_cue_press('memory', 0, 700)
+            self._wait_until(lambda: pb.is_playing() and pb.player.position() >= 700)
+            pb._marker_cue_release('hot', 0)  # stale control cannot stop latest
+            self.assertTrue(pb._cue_preview_active)
+            pb._marker_cue_release('memory', 0)
+            self._wait_until(lambda: not pb.is_playing() and not pb._pause_pending)
+            self.assertEqual(pb.player.position(), 700)
+        finally:
+            pb.shutdown()
+            pb.close()
+
     def test_review_pause_seek_resume_and_cancellation_of_pending_source_change(self):
         from desktop.player import PlayerBar
         pb=PlayerBar()
@@ -585,6 +672,59 @@ class NativeDeckContract(unittest.TestCase):
         self.assertFalse(self.deck.set_analysis(packed, 41))
         self.assertEqual(self.deck.diagnostic_analysis_shape(), (0, 0.0))
         self.assertTrue(self.deck.set_analysis(packed, 42))
+
+    def test_grid_only_update_preserves_audio_wave_cues_and_native_partial_bar_numbering(self):
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.begin_track(41)
+        self.assertTrue(self.deck.set_analysis({
+            '_overview_heights': b'\x40' * 300, '_overview_rgb': b'\x0e\0\0' * 300,
+            'sample_rate': 150.0, 'beats': [[1, 0, 90.0]]}, 41))
+        self.deck.set_cues([dict(kind='hot', slot=0, position_ms=500)])
+        self.deck.setPosition(500)
+        self._wait_until(lambda: self.deck.position() == 500)
+        shape = self.deck.diagnostic_analysis_shape(), self.deck.diagnostic_detail_shape()
+        duration = self.deck.duration()
+        beats = [[(i + 1) % 4 + 1, 9 + i * 2000 // 3, 90.0] for i in range(20)]
+        self.assertTrue(self.deck.set_grid(beats, 41))
+        self.assertEqual(self.deck.diagnostic_grid_position(9), (0, 2))
+        self.assertEqual(self.deck.diagnostic_grid_position(2009), (1, 1))
+        self.assertEqual(self.deck.diagnostic_grid_position(10009), (4, 1))
+        self.assertFalse(self.deck.set_grid([[1, 0, 120.0]], 40))
+        self.assertEqual(self.deck.diagnostic_grid_position(10009), (4, 1))
+        self.assertEqual((self.deck.diagnostic_analysis_shape(), self.deck.diagnostic_detail_shape()), shape)
+        self.assertEqual(self.deck.diagnostic_cue_marker_count(), 1)
+        self.assertEqual((self.deck.position(), self.deck.duration()), (500, duration))
+        self.assertNotEqual(self.deck.playbackState(), PlaybackState.PLAYING)
+        # A late compact overview/full upload belongs to the same source
+        # generation, but must not replace a newer user grid or cue identity.
+        self.assertTrue(self.deck.set_analysis({
+            '_overview_heights': b'\x40' * 300, '_overview_rgb': b'\x0e\0\0' * 300,
+            'sample_rate': 150.0, 'beats': [[1, 0, 120.0]],
+            'cues': [dict(kind='hot', slot=0, position_ms=500)]}, 41))
+        self.assertEqual(self.deck.diagnostic_grid_position(10009), (4, 1))
+        self.assertEqual(self.deck.diagnostic_cue_marker_count(), 1)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.playbackState() == PlaybackState.PLAYING)
+        start = self.deck.position()
+        for offset in range(12):
+            shifted = [[r[0], r[1] + offset, r[2]] for r in beats]
+            self.assertTrue(self.deck.set_grid(shifted, 41))
+            QTest.qWait(8)
+        self.assertEqual(self.deck.playbackState(), PlaybackState.PLAYING)
+        self.assertGreater(self.deck.position(), start + 40)
+        self.assertEqual(self.deck.duration(), duration)
+        self.assertEqual(self.deck.diagnostic_cue_marker_count(), 1)
+        self.assertTrue(self.deck.set_grid(beats, 41, pinned=False))
+        self.assertTrue(self.deck.set_analysis({
+            '_overview_heights': b'\x40', '_overview_rgb': b'\x0e\0\0',
+            'sample_rate': 150.0, 'beats': [[1, 0, 120.0]]}, 41))
+        self.assertEqual(self.deck.diagnostic_grid_position(10009), (1, 1))
+        self.deck.begin_track(42)
+        self.assertTrue(self.deck.set_analysis({
+            '_overview_heights': b'\x40', '_overview_rgb': b'\x0e\0\0',
+            'sample_rate': 150.0, 'beats': [[1, 0, 120.0]]}, 42))
+        self.assertEqual(self.deck.diagnostic_grid_position(10009), (1, 1))
 
     def test_late_color_stream_upload_cannot_replace_new_track(self):
         detail = {"_blue_detail": bytes([31]) * 150,

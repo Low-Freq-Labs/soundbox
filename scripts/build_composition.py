@@ -21,9 +21,9 @@ PERSONAL_PACKAGES = ("soundbox_personal", "yt_dlp")
 
 def source_fingerprint(root: Path = ROOT) -> str:
     files = []
-    for directory in ("soundbox", "desktop", "soundbox_personal", "native", "profiles"):
+    for directory in ("soundbox", "desktop", "soundbox_personal", "native", "profiles", "assets"):
         files.extend(p for p in (root / directory).rglob("*")
-                     if p.is_file() and p.suffix in (".py", ".cpp", ".mm", ".h", ".metal", ".json"))
+                     if p.is_file() and p.suffix in (".py", ".cpp", ".mm", ".h", ".metal", ".json", ".svg"))
     files.extend(root / name for name in (
         "soundbox_app.py", "Soundbox.spec", "build_app.sh", "build_native.sh",
         "requirements-core.txt", "requirements-personal.txt", "pyproject.toml",
@@ -62,6 +62,8 @@ def inspect_artifact(app: Path, profile: str) -> dict:
     resources = app / "Contents" / "Resources"
     manifest_path = resources / "soundbox-build.json"
     manifest = read_manifest(manifest_path)
+    if not (resources / 'assets/soundbox-wordmark.svg').is_file():
+        raise ValueError('Vector wordmark is missing from the bundle')
     expected = composition(profile)["manifest"]
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("Artifact build manifest differs from selected profile")

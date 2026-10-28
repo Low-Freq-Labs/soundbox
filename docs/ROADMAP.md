@@ -1,13 +1,67 @@
 # SoundBox roadmap
 
-Updated October 26, 2026. Current priorities and remaining acceptance are below;
+Updated October 27, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
 ## Next sequence — iPod acceptance, library management, CDJ USB export
 
-Sonny confirmed this order on October 26. Build 129 stays available for ordinary
-use while the next work is prepared; the completed artwork/Settings release below
+**Active library-management work:** Sonny approved the October 26
+[rekordbox prep-editing plan](rekordbox-prep.md): five grid buttons, exact-position
+Hot/Memory cue editing, flat existing My Tags, single-tag intelligent playlists,
+automatic saving, and an opt-in full-Collection setting. Each milestone stops
+for review. Milestone 1 proved copy-only recovery. Milestone 2 implements the flat
+selected-row tag dropdown and guarded live writer; Sonny confirmed native tag
+removal, restoration and DUBSTEP intelligent-list membership on the actual library.
+Milestone 3 implements cue editing. October 27 interaction review found cue
+latency/visual hitches and delayed cue availability: the installed correction removes
+library-wide work from transport edges, adds short cue envelopes and an immediate
+session overlay with serialized background saves. The native Text color menu
+correction is also installed. Grid native references and actual No Trust
+source downbeat/BPM acceptance passed October 27, including older synced records
+and fractional BPM rounding. Desktop integration now provides immediate grid
+previews, grouped background saves, shared cue ownership and grid-only native
+updates. Final installed build and user review status are in HANDOFF.
+The October 27 Q follow-up adds a persistent red/grey Quantize toggle for new
+cue placement against the current grid, with existing cue triggers unchanged.
+All five grid operations and Q have unassigned Keyboard → Beatgrid actions;
+BPM Value has manual Enter-to-save entry, without a keyboard action. Paused bar-start capture follows
+the visible cursor. Live review showed that change alone did not resolve the
+first-click problem. A timing trace then caught the loaded deck's grid button
+disabling during its initial source probe. The next correction captures clicks
+during that check, previews immediately from RAM, and validates the queued intent before saving; installed
+provenance and remaining live review are recorded in HANDOFF. The same pass
+extends the cue panel up beside the header, aligns the title and grid strip to
+the waveform edges, and moves My Tags/Settings/Search into the bottom strip.
+First-click behavior and smooth scrolling passed Sonny's live review. Manual
+BPM entry and final layout polish are installed and accepted by Sonny. The separate
+manual writer passed native No Trust acceptance; provenance is in HANDOFF. The 1 Player layout menu is a placeholder;
+2 Player/Simple/Browser are not implemented modes.
+Single-tag playlist creation and the default-off Collection setting follow grid
+review. Manual BPM entry now has a separately gated native protocol; its installed
+acceptance status is in HANDOFF. Variable-tempo scaling remains deferred. Existing
+iPod/CDJ acceptance boundaries remain unchanged.
+The associated UI pass replaces the ASCII wordmark with Sonny’s themeable SVG,
+adds the saved General accent picker, and changes My Tags to a button-width
+two-column menu. The October 27 follow-up orders tags down each column, adds
+independent White/Black/Custom accent text, and fixes backward beat jumps when
+audio starts before the first grid row. The Cocoa text-menu clipping correction
+is installed. The grid milestone now has accepted source recovery and native BPM
+checks; current desktop build/review status is in HANDOFF.
+
+Cue milestone progress: native WAV/MP3/AIFF and historical-aggregate references
+are captured and control cues restored. Sonny confirmed SoundBox-written A and
+Memory cues in rekordbox, then confirmed both gone after backend deletion and
+normal reopen/quit. Exact semantic audits preserved unrelated data/audio/ANLZ/XML.
+Active-page 1–8 create/preview, Command-1–8 deletes, and empty-slot clicks create.
+Verified target-only updates preserve playback and avoid a full-library reload.
+Raw edit revisions/native IDs travel separately in snapshot cache schema 7.
+Tag/cue saves and authorized startup recovery share ownership; unknown journals
+or replaced source files fail closed. Release/install status and remaining native
+UI review are in [HANDOFF](HANDOFF.md); scope is in [the plan](rekordbox-prep.md).
+
+Sonny confirmed this order on October 26. The tag milestone extends the prior
+build-129 artwork/Settings release; that completed work below
 is not a new implementation queue. These phases guide product work; the existing
 correctness, lifecycle and public-distribution gates later in this document still
 apply where relevant.
@@ -24,7 +78,8 @@ apply where relevant.
    friction around importing/refreshing tracks, title/artist identity, playlist
    order/membership, missing links, artwork decisions and backup/restore. Verify
    real rekordbox grid/cue edits on refresh/reopen. Preserve saved reviews/manual
-   art, source files and read-only rekordbox access. Prioritize observed problems
+   art and source files; only the accepted My Tag, cue and narrow grid APIs may
+   modify rekordbox under their exact authorities. Prioritize observed problems
    with Sonny rather than implementing every item in [IDEAS](IDEAS.md).
 3. **Develop native rekordbox-compatible CDJ USB export.** Start from the retained
    [prototype and reference exports](cdj-usb-export.md), then test on Sonny's home
@@ -100,10 +155,9 @@ refresh, validated source selection/default reset and the existing XML fallback.
 The preceding personal release passed the full offscreen/Cocoa release and render
 gates. Native synthetic acceptance covers numeric
 Hot/Memory cues, original-page release, Space latching and persisted remapping.
-See HANDOFF for the exact installed source revision, build and validation. The live personal connection successfully completed
-application-token exchange and a public-likes scan on October 25; current count
-and restart verification are in HANDOFF. Offline tests do not certify that
-external flow or private-account access.
+See HANDOFF for the exact installed source revision, build and validation. The live personal connection completed application-token exchange and a
+public-likes scan on October 25. That dated service check is historical; offline
+tests do not certify current external availability or private-account access.
 See [HANDOFF](HANDOFF.md), [KEYBOARD](KEYBOARD.md), and
 [SoundCloud setup](soundcloud-connection.md) for current provenance and setup.
 
@@ -356,9 +410,10 @@ manifest/cache schemas, native timing and visible behavior in each slice.
 
 ## Deferred, explicitly outside the current release sequence
 
-- SoundBox manual beat-grid editor: decide ownership, migration and export
-  precedence first. Storage groundwork and imported cues/grids already exist;
-  no editor currently ships. See [PLAYER.md](PLAYER.md).
+- Broader prep features beyond the [approved first version](rekordbox-prep.md):
+  compound/multi-field intelligent playlists, tag-definition management,
+  Undo/Redo, title/artist and ordinary-playlist write-back. The five-button
+  grid/cue editor is approved staged work above; it does not ship yet.
 - Schema-2 to schema-3 device migration: separate ownership/recovery design and
   acceptance. Existing refusal remains enabled.
 - Additional stock iPod models/formats: per-model fixtures, database/hash/art

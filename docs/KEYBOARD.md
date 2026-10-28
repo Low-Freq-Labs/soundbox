@@ -8,20 +8,31 @@ assignment names its current action and offers an explicit Move shortcut; it
 never silently steals another action's binding. Reset all asks before replacing
 the user's configured mappings with defaults.
 
+Newly created cues appear and can be previewed immediately while database saves
+run in background. The creation press/release itself stays inert for preview.
 The existing defaults remain Space for play/pause, C for held session CUE, and
 Command-R for Rename selected item (including the artist-pictures catalog).
 Additional cue defaults:
 
 | Key | Action |
 | --- | --- |
-| 1–8 | Preview A–H on Hot Cue, or Memory Cues 1–8 on Memory Cue |
+| 1–8 | Preview a populated active-page cue; set an empty cue at the playhead, or nearest beat with Q on |
+| Command-1–8 | Delete the corresponding active-page cue |
 | 9 | Select the Hot Cue page |
 | 0 | Select the Memory Cue page |
 | = | Zoom in |
 | - | Zoom out |
 
 Cue keys use press/release, including latching through the configured Play action.
-Empty slots do nothing. A held active-page cue remembers its original page and
+On an accepted library with rekordbox/agent closed, empty slots create without
+starting preview. Q off keeps the exact captured playhead; Q on snaps new cues to
+the nearest current beat. Existing cues always preview their saved positions.
+The Q button is global and persistent. **Beatgrid** provides bindable actions
+for Set bar start, Shift left/right, Double/Halve BPM and Toggle Quantize. These
+start unassigned; BPM Value has no shortcut action. They share mouse-button
+guards and settings, including Shift’s 3-ms nudge step. Memory numbers sort chronologically; Hot letters
+stay fixed. Creation remains inert on release even if its save finishes while
+the key is held. A held active-page cue remembers its original page and
 slot, so switching pages or releasing modifiers first cannot strand or release
 the wrong cue. Focus loss, shutdown and a successfully changed keymap release
 held keyboard controls. Repeated key events never retrigger commands. Multiple
@@ -49,6 +60,8 @@ portable library state. Unassigned overrides are explicit empty lists; missing
 actions inherit defaults. Unknown future action IDs/fields survive edits and
 reset. A future unsupported schema remains preserved and read-only. Corrupt
 ambiguous bindings do not execute. Failed saves retain the previous live map.
+New Command-number defaults yield to preexisting explicit custom bindings;
+the existing action remains active until the user explicitly moves its shortcut.
 Restore reloads both the editor and the router; no separate keyboard file can
 silently override restored user state.
 
@@ -56,4 +69,4 @@ Tests cover conflict moves, persistence/unbinding/reset, modifier/focus changes,
 autorepeat, multiple holds, page switching, failed-save rollback and text-focus
 boundaries. Source changes require the full release/render gate and installed
 native-player acceptance; see [HANDOFF](HANDOFF.md) for the current state and
-[PLAYER](PLAYER.md) for the read-only cue/transport contract.
+[PLAYER](PLAYER.md) for the cue editing/transport contract.

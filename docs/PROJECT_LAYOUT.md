@@ -1,6 +1,6 @@
 # Project layout and retention
 
-Reviewed October 26, 2026. This describes the checkout, not the installed app's
+Reviewed October 27, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 
 ## Active checkout
@@ -14,6 +14,9 @@ library or waveform caches.
 | `docs/archive/` | Clearly dated completed audits and superseded experiments; not current instructions |
 | `.venv/` | Active pinned development environment; installed SoundBox does not depend on it |
 | `build/native/`, `build/check/` | Current development native library and latest release reports |
+| `build/rekordbox-write-proof/` | Small private copy-only prep-write evidence; no live-write authority |
+| AppData `rekordbox_recovery/` | Private native-reference evidence, encrypted baselines and shared Tag/Cue/Grid receipts; preserve unresolved recovery |
+| AppData `rekordbox-{tag,cue,grid}-authority.json` | Separate accepted source/library/schema/version scopes; manual BPM has an additional gate; source selection never generates permission |
 | `soundbox-ipod-ref/`, `soundbox-waveform-ref/` | Private read-only regression fixtures and recovery/research captures |
 | `soundbox-cdj-ref/` | Private read-only CDJ research fixtures |
 
@@ -34,7 +37,16 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## Current retention — October 26
+## Current retention — October 27 accepted prep release
+
+Sonny accepted the My Tag/cue/grid/appearance build and is playing with it.
+The final wrap-up retires superseded rollback apps and duplicate dist/personal
+packaging, retaining the installed app, active checkout, build/native, build/check,
+and small QA/install/state records. Protected native-source references, encrypted
+recovery, frozen waveforms and iPod/CDJ fixtures stay intact. Exact current
+provenance, validation and cleanup receipts are in [HANDOFF](HANDOFF.md).
+
+## Completed retention — October 26 (historical)
 
 The full wrap-up installed personal build 129 from release commit 81c0d6c and
 verified its real curated state. Only `/Applications/Soundbox.app` and the active

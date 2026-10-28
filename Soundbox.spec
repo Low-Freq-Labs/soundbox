@@ -10,7 +10,7 @@ from scripts.build_composition import composition, write_manifest
 profile = os.environ.get("SOUNDBOX_BUILD_PROFILE", "personal")
 config = composition(profile)
 manifest = write_manifest(profile, Path(SPECPATH) / "build" / profile / "composition")
-datas = [(str(manifest), ".")]
+datas = [(str(manifest), "."), ("assets/soundbox-wordmark.svg", "assets")]
 binaries = [("build/native/libsoundbox_deck.dylib", "native")]
 hiddenimports = []
 for package in config["submodules"]:

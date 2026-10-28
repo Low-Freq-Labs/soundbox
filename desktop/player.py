@@ -14,7 +14,7 @@ from __future__ import annotations
 from array import array
 from bisect import bisect_right
 from enum import Enum
-from math import ceil, exp, floor
+from math import ceil, exp, floor, isfinite
 import sys
 import threading
 from time import perf_counter
@@ -26,16 +26,17 @@ from PySide6.QtGui import (
     QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
-    QButtonGroup, QGridLayout, QHBoxLayout, QMenu, QPushButton,
+    QButtonGroup, QComboBox, QGridLayout, QHBoxLayout, QMenu, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 from .task_owner import TaskOwner
+from .analysis_fence import AnalysisWriteFence
 from .native_deck import (
     NativeGainControl, NativeDeckBackend, PlaybackState,
     UnavailableDeckBackend,
 )
 
-_PLAYED = QColor("#A855F7")          # Freq purple — played portion
+from . import theme
 _REST = QColor(255, 255, 255, 55)    # dim — unplayed portion
 _HEAD = QColor(255, 255, 255, 200)   # playhead line
 _WAVE_BG = QColor("#0d0e12")
@@ -372,6 +373,7 @@ class WaveformWorker(QThread):
         self.generation = int(generation)
         self.native_backend = native_backend
         self._discard_requested = threading.Event()
+        self.cache_writes = AnalysisWriteFence()
 
     def discard_cached_record(self):
         """Prevent an in-flight interactive cook from surviving Graveyard."""
@@ -467,7 +469,8 @@ class WaveformWorker(QThread):
                 if (existing or {}).get("cue_import", {}).get("source") == "rekordbox-db":
                     from soundbox.track_analysis import with_imported_cues
                     prepared = with_imported_cues(prepared, existing.get("cues") or [])
-                track_store(self.track_analysis_dir, self.track_id, self.path, prepared)
+                self.cache_writes.publish(self.track_id, lambda: track_store(
+                    self.track_analysis_dir, self.track_id, self.path, prepared))
                 if checkpoint():
                     self._load_stages()
         except Exception:  # noqa: BLE001
@@ -688,6 +691,13 @@ class WaveformBar(QWidget):
             )
             data["_beat_times"] = prepared_times
         self._beat_times = prepared_times
+        self.set_grid(self._beats, prepared_times=prepared_times)
+
+    def set_grid(self, beats, *, prepared_times=None):
+        """Replace only timing metadata, retaining waveform and cue geometry."""
+        self._beats = list(beats or [])
+        self._beat_times = (prepared_times if prepared_times is not None else
+                            sorted(int(r[1]) for r in self._beats if len(r) >= 2))
         self._beat_positions = []
         bar = 0
         for index, row in enumerate(self._beats):
@@ -698,8 +708,6 @@ class WaveformBar(QWidget):
                 beat = index % 4 + 1
             if beat == 1:
                 bar += 1
-            elif bar == 0:
-                bar = 1
             self._beat_positions.append((int(row[1]), bar, beat))
         self._repaint()
 
@@ -1100,13 +1108,14 @@ class WaveformBar(QWidget):
         """Scrolling amplitude-only fallback for XML/imported tracks."""
         n = len(self._peaks)
         half = max(4.0, (self.height() - _ZOOM_TOP) / 2 - 7)
+        played = QColor(theme.PURPLE_LIGHT)
         for x in range(self.width()):
             sec = self._time_at_x(x, head_x)
             idx = int(sec / (self._duration_ms / 1000) * n)
             if not 0 <= idx < n:
                 continue
             amp = max(1.0, self._peaks[idx] * half)
-            p.setPen(_PLAYED if x <= head_x else _REST)
+            p.setPen(played if x <= head_x else _REST)
             p.drawLine(x, int(mid - amp), x, int(mid + amp))
 
     def _paint_overview(self, p: QPainter, width: int):
@@ -1308,12 +1317,13 @@ class WaveformBar(QWidget):
 
 
 class CuePanel(QWidget):
-    """Two compact 2×4 pages for read-only Rekordbox hot and memory cues."""
+    """Two compact 2×4 pages; empty-slot editing is explicitly admitted."""
 
     cue_pressed = Signal(str, int, int)  # kind, slot, absolute milliseconds
     cue_released = Signal(str, int)      # kind, slot
     # Compatibility observer for callers that only need the chosen position.
     cue_requested = Signal(int)
+    empty_pressed = Signal(str, int)
     _HOT_COLORS = _HOT_CUE_FALLBACKS
 
     def __init__(self):
@@ -1321,6 +1331,9 @@ class CuePanel(QWidget):
         self.setObjectName("CuePanel")
         self.setFixedWidth(198)
         self._loaded = False
+        self._editable = False
+        self._edit_reason = ''
+        self._pressed_controls = set()
         self._cues = {"hot": [None] * 8, "memory": [None] * 8}
 
         self.pages = QStackedWidget()
@@ -1350,6 +1363,7 @@ class CuePanel(QWidget):
 
     def _page(self, kind: str) -> list[QPushButton]:
         page = QWidget()
+        page.setObjectName('CuePage')
         grid = QGridLayout(page)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(3)
@@ -1391,6 +1405,12 @@ class CuePanel(QWidget):
         self._loaded = loaded
         self._refresh()
 
+    def set_editable(self, editable: bool, reason: str = ''):
+        if (self._editable, self._edit_reason) == (bool(editable), reason):
+            return
+        self._editable, self._edit_reason = bool(editable), reason
+        self._refresh()
+
     def set_cues(self, cues: list[dict]):
         prepared = {"hot": [None] * 8, "memory": [None] * 8}
         for cue in cues or []:
@@ -1419,8 +1439,9 @@ class CuePanel(QWidget):
                     button.setText(f"{label}   —")
                     button.setIcon(QIcon())
                     button.setToolTip(
-                        f"{'Hot' if kind == 'hot' else 'Memory'} cue {label}")
-                    button.setEnabled(False)
+                        'Set at the current position' if self._editable else
+                        self._edit_reason or f"{'Hot' if kind == 'hot' else 'Memory'} cue {label}")
+                    button.setEnabled(self._loaded and self._editable)
                 else:
                     position = max(0, int(cue.get("position_ms", 0)))
                     button.setText(f"{label}  {_fmt(position)}")
@@ -1446,14 +1467,38 @@ class CuePanel(QWidget):
     def _press(self, kind: str, slot: int):
         cue = self._cues[kind][slot]
         if self._loaded and cue is not None:
+            self._pressed_controls.add((kind, slot))
             position = max(0, int(cue.get("position_ms", 0)))
             self.cue_requested.emit(position)
             self.cue_pressed.emit(kind, slot, position)
+        elif self._loaded and self._editable:
+            self.empty_pressed.emit(kind, slot)
 
     def _release(self, kind: str, slot: int):
-        cue = self._cues[kind][slot]
-        if self._loaded and cue is not None:
+        if (kind, slot) in self._pressed_controls:
+            self._pressed_controls.discard((kind, slot))
             self.cue_released.emit(kind, slot)
+
+
+class PlayerLayoutSelector(QComboBox):
+    """Native popup with a symmetric field and consistently inset chevron."""
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor(theme.BORDER), 1))
+        painter.setBrush(QColor(theme.BG))
+        painter.drawRoundedRect(QRectF(.5, .5, self.width() - 1, self.height() - 1), 4, 4)
+        color = theme.TEXT if self.isEnabled() else theme.TEXT_DIM
+        painter.setPen(QColor(color))
+        painter.drawText(QRectF(11, 0, self.width() - 37, self.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter, self.currentText())
+        pen = QPen(QColor(color), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+        center, middle = self.width() - 14, self.height() / 2
+        painter.drawPolyline(QPolygonF([QPointF(center - 4, middle - 2),
+                                       QPointF(center, middle + 2),
+                                       QPointF(center + 4, middle - 2)]))
 
 
 class PlayerBar(QWidget):
@@ -1472,11 +1517,13 @@ class PlayerBar(QWidget):
     jump_mode_changed = Signal(str)
     waveform_zoom_changed = Signal(float)
     load_diagnostic = Signal(str, float)  # phase, milliseconds since load intent
+    track_ready = Signal()
 
     def __init__(
             self, jump_mode: str = "16 BEATS",
             waveform_zoom: float = _PIXELS_PER_SECOND,
-            waveform_mode: str = "3BAND"):
+            waveform_mode: str = "3BAND", *, embedded_cues: bool = True,
+            embedded_transport: bool = True):
         super().__init__()
         self.track_analysis_dir = None  # canonical SoundBox-owned V5 records
         self._deck_volume = 0.9
@@ -1493,6 +1540,8 @@ class PlayerBar(QWidget):
         self._src_path: str | None = None
         self._analysis_path = ""
         self._live_cues: list[dict] | None = None
+        self._live_grid = None
+        self.quantize_enabled = False
         self._dur = 0
         self._pos = 0
         self._bpm = 0.0
@@ -1577,14 +1626,30 @@ class PlayerBar(QWidget):
         self.set_jump_mode(jump_mode, emit=False)
 
         deck = QWidget()
+        self.transport_deck = deck
         deck.setObjectName("TransportDeck")
         # The top-bar's former 14px outer inset made this group look shifted
         # right inside its visual section. Keep the divider in the same place,
         # but let the deck own that width and center the controls within it.
         deck.setFixedWidth(116)
         dl = QVBoxLayout(deck)
-        dl.setContentsMargins(13, 0, 14, 0)
-        dl.setSpacing(2)
+        dl.setContentsMargins(13, 0 if embedded_transport else 4, 14,
+                              0 if embedded_transport else 3)
+        dl.setSpacing(5)
+        self.layout_selector = None
+        if not embedded_transport:
+            self.layout_selector = PlayerLayoutSelector()
+            self.layout_selector.setAccessibleName('Player layout')
+            self.layout_selector.setFocusPolicy(Qt.NoFocus)
+            self.layout_selector.setFixedHeight(28)
+            self.layout_selector.setMinimumContentsLength(8)
+            self.layout_selector.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            self.layout_selector.addItems(['1 Player', '2 Player', 'Simple', 'Browser'])
+            self.layout_selector.view().setMinimumWidth(120)
+            self.layout_selector.setToolTip('Player layout · additional layouts are not available yet')
+            for index in range(1, self.layout_selector.count()):
+                self.layout_selector.model().item(index).setEnabled(False)
+            dl.addWidget(self.layout_selector)
         dl.addStretch(1)
         nav = QHBoxLayout(); nav.setSpacing(5)
         nav.addWidget(self.previous_btn); nav.addWidget(self.next_btn)
@@ -1597,7 +1662,8 @@ class PlayerBar(QWidget):
         bottom = QHBoxLayout(); bottom.setSpacing(5)
         bottom.addWidget(self.cue_btn); bottom.addWidget(self.play_btn)
         dl.addLayout(bottom)
-        dl.addStretch(1)
+        if embedded_transport:
+            dl.addStretch(1)
 
         self.wave = WaveformBar()
         self.wave.setMinimumHeight(132)
@@ -1610,11 +1676,13 @@ class PlayerBar(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 4, 4, 4)
         lay.setSpacing(0)
-        lay.addWidget(deck, 0)
-        lay.addSpacing(12)
+        if embedded_transport:
+            lay.addWidget(deck, 0)
+            lay.addSpacing(12)
         lay.addWidget(self.wave, 1)
-        lay.addSpacing(10)
-        lay.addWidget(self.cue_panel, 0)
+        if embedded_cues:
+            lay.addSpacing(10)
+            lay.addWidget(self.cue_panel, 0)
 
         self._playback_available = True
         self._native_error = ""
@@ -1698,16 +1766,77 @@ class PlayerBar(QWidget):
     def current_track(self) -> str | None:
         return self._track_id
 
+    def capture_cue_position(self) -> int | None:
+        """Capture the authoritative native playhead, with source-generation guard."""
+        identity = (self._track_id, self._src_path, self._analysis_generation)
+        if (not self._track_id or not self._src_path or self._pending_autoplay
+                or self._native_error or not self.cue_panel._loaded):
+            return None
+        self.player.synchronize()
+        if (identity != (self._track_id, self._src_path, self._analysis_generation)
+                or self._pending_autoplay or self._native_error):
+            return None
+        position = self.player.position()
+        return position if type(position) is int and 0 <= position <= self._dur else None
+
+    def quantize_cue_position(self, position_ms):
+        """Nearest current grid row, with earlier-beat ties and no extrapolation."""
+        if not self.quantize_enabled or not self._beat_grid:
+            return position_ms
+        index = bisect_right(self._beat_grid, position_ms)
+        nearby = self._beat_grid[max(0, index - 1):index + 1]
+        valid = [beat for beat in nearby if 0 <= beat <= self._dur]
+        return min(valid, key=lambda beat: (abs(beat - position_ms), beat)) if valid else position_ms
+
+    def capture_grid_position(self) -> int | None:
+        """A paused grid edit belongs to the visible cursor, not a clock refresh."""
+        if (not self._track_id or not self._src_path or self._pending_autoplay
+                or self._native_error or not self.cue_panel._loaded):
+            return None
+        if self.is_playing() or self._pause_pending:
+            return self.capture_cue_position()
+        position = self.wave._position_ms
+        return round(position) if isfinite(position) and 0 <= position <= self._dur else None
+
     def refresh_live_cues(self, track_id: str, path, cues):
         """Publish a fresh DB snapshot without reloading or moving the deck."""
         if (track_id != self._track_id or str(path) != self._src_path
                 or cues is None):
             return
-        self._live_cues = list(cues)
+        prepared = list(cues)
+        if prepared == self._live_cues:
+            return
+        self._live_cues = prepared
         self._analysis_parts["cues"] = list(cues)
         self.wave.set_cues(self._live_cues)
         self.cue_panel.set_cues(self._live_cues)
         self.player.set_cues(self._live_cues)
+
+    def refresh_live_grid(self, track_id: str, path, beats, bpm):
+        """Apply verified/session grid metadata without touching transport/waves."""
+        if track_id != self._track_id or str(path) != self._src_path or beats is None:
+            return False
+        rows = [list(r) for r in beats]
+        self._live_grid = (rows, float(bpm or 0))
+        self._bpm = float(bpm or 0)
+        self._analysis_parts.update(self._with_live_grid({}))
+        self.wave.set_grid(rows)
+        self._beat_grid = self.wave._beat_times
+        result = self.player.set_grid(rows, self._analysis_generation)
+        self._update_transport()
+        return result
+
+    def _with_live_grid(self, data):
+        if self._live_grid is None:
+            return data
+        rows, _bpm = self._live_grid
+        return {**data, 'beats': list(rows), '_beat_times': sorted(int(r[1]) for r in rows)}
+
+    def clear_live_grid(self):
+        if self._live_grid is not None:
+            self.player.set_grid(self._live_grid[0], self._analysis_generation, pinned=False)
+            self._live_grid = None
+            self._analysis_parts.pop('_beat_times', None)
 
     def review_transport_state(self) -> dict:
         """Read-only compact transport view over the same native playback source."""
@@ -1827,11 +1956,13 @@ class PlayerBar(QWidget):
             self._cue_ms = 0
             self._session_cue_state = SessionCueState.UNSET
             self._analysis_parts = {}
+            self._live_grid = None
             if hasattr(self.player, "begin_track"):
                 self.player.begin_track(generation)
             self._set_session_cue(None)
             self._transport_play_active = False
             self._reset_cue_preview()
+            self.cue_panel._pressed_controls.clear()
             self._pending_autoplay = True
             self._pending_should_play = autoplay
             self._pending_start_ms = None
@@ -1914,7 +2045,7 @@ class PlayerBar(QWidget):
             self.load_diagnostic.emit(
                 phase, (perf_counter() - self._load_started) * 1000.0)
 
-    def _play_clean(self):
+    def _play_clean(self, *, fade_ms=None):
         """Start/resume with a short click-prevention gain envelope."""
         if not self._src_path or not self._playback_available:
             return
@@ -1929,15 +2060,19 @@ class PlayerBar(QWidget):
         if not self.is_playing():
             self.audio.setVolume(0.0)
             self.player.play()
-        self._animate_gain(self._deck_volume, self.FADE_IN_MS)
+        self._animate_gain(self._deck_volume, self.FADE_IN_MS if fade_ms is None else fade_ms)
 
-    def _pause_clean(self, after=None):
+    def _pause_clean(self, after=None, *, fade_ms=None, pin_position=True):
         """Fade out, pause, and pin backend + visual clocks to one position."""
         self._ordinary_playback_requested = False
         if self._pause_pending:
             if after is not None:
-                self._gain_epoch = self._transport_epoch
-                self._gain_completion = lambda: self._complete_pause(after)
+                finish = lambda: self._complete_pause(after, pin_position=pin_position)
+                if fade_ms is not None:
+                    self._animate_gain(0.0, fade_ms, finish)
+                else:
+                    self._gain_epoch = self._transport_epoch
+                    self._gain_completion = finish
             return
         if not self.is_playing():
             if after is not None:
@@ -1948,10 +2083,20 @@ class PlayerBar(QWidget):
             self._pos, self._transport_position(), self.player.position())
         self._pause_clock.restart()
         self._animate_gain(
-            0.0, self.FADE_OUT_MS,
-            lambda: self._complete_pause(after))
+            0.0, self.FADE_OUT_MS if fade_ms is None else fade_ms,
+            lambda: self._complete_pause(after, pin_position=pin_position))
 
-    def _complete_pause(self, after=None):
+    def _complete_pause(self, after=None, *, pin_position=True):
+        if not pin_position:
+            # A cue immediately seeks to its own exact target. Capturing and
+            # seeking the fade endpoint first only flushes the decoder twice.
+            self.player.pause()
+            self.audio.setVolume(self._deck_volume)
+            self._pause_pending = False
+            self._pause_clock.invalidate()
+            if after is not None:
+                after()
+            return
         # Capture Metal's exact newest committed/scheduled frame at the END of
         # the fade. The ordinary Python/backend positions are millisecond
         # snapshots and can trail the drawable by one refresh; seeking back to
@@ -2037,7 +2182,10 @@ class PlayerBar(QWidget):
         if (not self.is_playing() and not self._pause_pending
                 and self._session_cue_state
                 == SessionCueState.RELOCATION_PENDING):
-            self._set_session_cue(self._pos)
+            target = self.quantize_cue_position(self._pos)
+            if target != self._pos:
+                self._set_position(target)
+            self._set_session_cue(target)
             return
         self._start_cue_preview(self._cue_ms, ("session", -1))
 
@@ -2070,17 +2218,17 @@ class PlayerBar(QWidget):
 
         def begin():
             # A very quick release or another cue press can arrive during the
-            # 24 ms fade. Never let that stale completion start playback.
+            # cue fade. Never let that stale completion start playback.
             if (token != self._cue_preview_token
                     or not (self._cue_preview_active
                             or self._cue_preview_latched)
                     or self._cue_preview_control != control):
                 return
             self._set_position(target)
-            self._play_clean()
+            self._play_clean(fade_ms=3)
 
         if self.is_playing() or self._pause_pending:
-            self._pause_clean(begin)
+            self._pause_clean(begin, fade_ms=3, pin_position=False)
         else:
             begin()
         self._update_transport()
@@ -2107,8 +2255,13 @@ class PlayerBar(QWidget):
             self._set_position(target)
 
         if self.is_playing() or self._pause_pending:
-            self._pause_clean(finish)
+            self._pause_clean(finish, fade_ms=3, pin_position=False)
         else:
+            # A sub-poll tap can release before the native PLAYING edge reaches
+            # Python. Cancel its pending decoder start too, or the refill would
+            # resume after the physical control has already been released.
+            self.player.pause()
+            self.audio.setVolume(self._deck_volume)
             finish()
 
     def _reset_cue_preview(self):
@@ -2165,13 +2318,32 @@ class PlayerBar(QWidget):
             # Preserve the playhead's offset within its current beat while using
             # rekordbox's exact timestamps. This remains correct across a
             # variable-tempo grid instead of assuming one headline BPM.
-            anchor = max(0, bisect_right(self._beat_grid, self._pos) - 1)
+            anchor = bisect_right(self._beat_grid, self._pos) - 1
             target_idx = anchor + (
                 -self._jump_beats if direction < 0 else self._jump_beats)
-            if not 0 <= target_idx < len(self._beat_grid):
+            if target_idx >= len(self._beat_grid):
                 return None
-            offset = self._pos - self._beat_grid[anchor]
-            target = self._beat_grid[target_idx] + offset
+            # Audio can start before the first saved grid row (or a cue can be
+            # one millisecond before it). Count that lead-in on the first beat
+            # interval rather than clamping it to beat zero with a negative
+            # offset, which makes the inverse jump count one beat too few.
+            if anchor < 0 or target_idx < 0:
+                if len(self._beat_grid) < 2:
+                    return None
+                step = self._beat_grid[1] - self._beat_grid[0]
+                if step <= 0:
+                    return None
+                if anchor < 0:
+                    anchor = floor((self._pos - self._beat_grid[0]) / step)
+                    target_idx = anchor + (
+                        -self._jump_beats if direction < 0 else self._jump_beats)
+                    if target_idx >= len(self._beat_grid):
+                        return None
+                at = lambda index: (self._beat_grid[index] if index >= 0
+                                    else self._beat_grid[0] + index * step)
+                target = at(target_idx) + self._pos - at(anchor)
+            else:
+                target = self._beat_grid[target_idx] + self._pos - self._beat_grid[anchor]
             if target < 0 or not self._dur or target > self._dur:
                 return None
             return target
@@ -2425,6 +2597,7 @@ class PlayerBar(QWidget):
         else:
             self._transport_play_active = False
             self._sync_deck_button_states()
+        self.track_ready.emit()
 
     def _set_session_cue(self, position_ms: int | None):
         """Keep both renderers on one ephemeral deck-CUE timestamp."""
@@ -2453,6 +2626,9 @@ class PlayerBar(QWidget):
                 self.player if getattr(self.player, "is_native", False)
                 else None))
         self._wf = w
+        admission = getattr(self, 'analysis_cache_admitted', None)
+        if admission is not None and not admission(self._track_id):
+            w.cache_writes.protect(self._track_id)
         self._wf_pending.append(w)  # strong ref until finished (never GC mid-run)
         w.manifest_ready.connect(
             lambda src, gen, data, ap=analysis_path:
@@ -2504,7 +2680,7 @@ class PlayerBar(QWidget):
             generation: int, data: dict):
         if not self._analysis_is_current(path, analysis_path, generation):
             return
-        prepared = _apply_loaded_grid_contract(data, self._analysis_path)
+        prepared = self._with_live_grid(_apply_loaded_grid_contract(data, self._analysis_path))
         if self._live_cues is not None:
             prepared = {**prepared, "cues": list(self._live_cues)}
         self._analysis_parts = dict(prepared)
@@ -2529,10 +2705,15 @@ class PlayerBar(QWidget):
         if not self._analysis_is_current(path, analysis_path, generation):
             return
         self._analysis_parts.update(data)
+        self._analysis_parts = self._with_live_grid(self._analysis_parts)
+        if self._live_cues is not None:
+            self._analysis_parts['cues'] = list(self._live_cues)
         self.wave.set_analysis(self._analysis_parts)
         if (hasattr(self.player, "set_analysis")
                 and not data.get("_native_uploaded")):
             self.player.set_analysis(self._analysis_parts, generation)
+        if self._live_cues is not None:
+            self.player.set_cues(self._live_cues)
         self._mark_load_phase("first-colored-overview")
 
     def _on_analysis_detail(
@@ -2549,7 +2730,7 @@ class PlayerBar(QWidget):
         self._mark_load_phase("ultra-detail-promoted")
 
     def _apply_analysis(self, data: dict):
-        data = _apply_loaded_grid_contract(data, self._analysis_path)
+        data = self._with_live_grid(_apply_loaded_grid_contract(data, self._analysis_path))
         if self._live_cues is not None:
             data = dict(data)
             data["cues"] = list(self._live_cues)

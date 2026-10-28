@@ -79,7 +79,7 @@ class ProviderComposition(unittest.TestCase):
         # and PYTHONPATH; an import blocker also makes installed yt_dlp absent.
         with tempfile.TemporaryDirectory(prefix="sb-public-core-") as area:
             root = Path(area)
-            for name in ("soundbox", "desktop", "profiles"):
+            for name in ("soundbox", "desktop", "profiles", "assets"):
                 shutil.copytree(ROOT / name, root / name,
                                 ignore=shutil.ignore_patterns("__pycache__"))
             script = r'''

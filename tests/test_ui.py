@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 from PySide6.QtCore import QEvent, QPoint, QStandardPaths, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QColor, QKeyEvent
 
 QStandardPaths.setTestModeEnabled(True)
 
@@ -209,6 +209,189 @@ class SortAndSearch(unittest.TestCase):
 
 
 class SettingsPage(unittest.TestCase):
+    def test_grid_shortcuts_dispatch_all_five_operations_and_quantize(self):
+        from desktop.keyboard import Keymap, BY_ID
+        mapping = Keymap()
+        with mock.patch.object(_win, '_edit_grid') as edit, \
+                mock.patch.object(_win.quantize_btn, 'click') as toggle:
+            for action in ('downbeat', 'left', 'right', 'double', 'halve'):
+                command = 'grid.' + action
+                self.assertIn(command, BY_ID)
+                self.assertEqual(mapping.bindings(command), [])
+                _win._dispatch_keyboard_action(command)
+                edit.assert_called_with(action)
+            _win._dispatch_keyboard_action('grid.quantize')
+            toggle.assert_called_once()
+        self.assertNotIn('grid.bpm', BY_ID)
+
+    def test_quantize_button_saves_global_setting_and_tracks_both_states(self):
+        previous = _win.settings.get('quantize', False)
+        try:
+            _win._set_quantize(False, save=False)
+            with mock.patch.object(_win, '_schedule_settings_save') as save, \
+                    mock.patch.object(_win.player_bar.player, 'setPosition') as seek:
+                _win.quantize_btn.click()
+                self.assertTrue(_win.player_bar.quantize_enabled)
+                self.assertTrue(_win.settings['quantize'])
+                self.assertTrue(_win.quantize_btn.isChecked())
+                self.assertEqual(save.call_count, 1)
+                _win.quantize_btn.click()
+                self.assertFalse(_win.player_bar.quantize_enabled)
+                self.assertFalse(_win.settings['quantize'])
+                self.assertFalse(_win.quantize_btn.isChecked())
+                self.assertEqual(save.call_count, 2)
+                seek.assert_not_called()
+        finally:
+            _win._set_quantize(previous, save=False)
+
+    def test_quantize_persists_and_reloads_from_isolated_library_state(self):
+        from desktop.app import MainWindow
+        with tempfile.TemporaryDirectory(prefix='soundbox-quantize-') as area:
+            first = MainWindow(isolated_dir=area)
+            try:
+                self.assertFalse(first.quantize_btn.isChecked())
+                first.quantize_btn.click()
+                self.assertTrue(first._save_state())
+            finally:
+                first.close()
+                first.shutdown()
+            second = MainWindow(isolated_dir=area)
+            try:
+                self.assertTrue(second.quantize_btn.isChecked())
+                self.assertTrue(second.player_bar.quantize_enabled)
+            finally:
+                second.close()
+                second.shutdown()
+
+    def test_new_hot_and_memory_cues_capture_quantize_state_without_moving_playhead(self):
+        pb = _win.player_bar
+        track = _win.lib.tracks_by_id['1']
+        with mock.patch.object(pb, '_track_id', '1'), \
+                mock.patch.object(pb, '_src_path', str(track.path)), \
+                mock.patch.object(pb, '_dur', 5000), \
+                mock.patch.object(pb, '_beat_grid', [100, 767, 1433, 2100]), \
+                mock.patch.object(pb, 'quantize_enabled', True), \
+                mock.patch.object(pb, 'capture_cue_position', return_value=1101), \
+                mock.patch.object(pb.player, 'setPosition') as seek, \
+                mock.patch.object(_win, '_device_operation_owned', return_value=False), \
+                mock.patch.object(_win.tag_controller, 'cue_reason', return_value=''), \
+                mock.patch.object(_win.tag_controller, 'request_cue', return_value=True) as save:
+            for kind in ('hot', 'memory'):
+                self.assertTrue(_win._edit_cue(kind, 0, 'add'))
+                self.assertEqual(save.call_args.args, ('1', kind, 0, 'add', 1433))
+            captured = save.call_args.args
+            pb.quantize_enabled = False
+            self.assertTrue(_win._edit_cue('hot', 1, 'add'))
+            self.assertEqual(save.call_args.args, ('1', 'hot', 1, 'add', 1101))
+            self.assertEqual(captured[-1], 1433)
+            seek.assert_not_called()
+
+    def test_empty_number_sets_without_preview_and_command_number_deletes_active_page(self):
+        pb = _win.player_bar
+        panel = pb.cue_panel
+        previous_cues = {k: list(v) for k, v in panel._cues.items()}
+        previous_loaded = panel._loaded
+        panel.set_cues([])
+        panel.set_loaded(True)
+        panel.hot_tab.click()
+        try:
+            with mock.patch.object(_win, '_space_should_play', return_value=True), \
+                    mock.patch.object(_win, '_edit_cue', return_value=True) as edit, \
+                    mock.patch.object(pb, '_start_cue_preview') as preview, \
+                    mock.patch.object(pb, '_release_cue_preview') as release:
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_1, Qt.NoModifier))
+                edit.assert_called_once_with('hot', 0, 'add')
+                # Simulate the completed save while the creation key is held.
+                panel.set_cues([dict(kind='hot', slot=0, position_ms=10003)])
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, Qt.Key_1, Qt.NoModifier))
+                preview.assert_not_called()
+                release.assert_not_called()
+                panel.memory_tab.click()
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_2, Qt.ControlModifier))
+                self.assertEqual(edit.call_args.args, ('memory', 1, 'delete'))
+        finally:
+            _win._keyboard_router.release_all()
+            panel._cues = previous_cues
+            panel.set_loaded(previous_loaded)
+            panel.hot_tab.click()
+
+    def test_theme_color_updates_logo_styles_and_restores_saved_choice(self):
+        from desktop import theme
+        old = _win.settings.get('theme_accent', theme.DEFAULT_ACCENT)
+        before = dict(_win.settings)
+        try:
+            with mock.patch.object(_win, '_schedule_settings_save') as save:
+                _win._apply_theme_color('#168fc0', save=True)
+                save.assert_called_once()
+            self.assertEqual(_win.settings['theme_accent'], '#168fc0')
+            self.assertEqual(theme.PURPLE, '#168fc0')
+            self.assertIn('selection-background-color: #168fc0', _app.styleSheet())
+            self.assertEqual(_win.wordmark.size().toTuple(), (270, 55))
+            self.assertTrue(_win.wordmark.renderer.isValid())
+            _win._apply_theme_color(_win.settings['theme_accent'], save=False)
+            self.assertEqual(_win._theme_color.text(), '#168FC0')
+            with mock.patch('desktop.settings_page.QColorDialog.getColor', return_value=QColor()):
+                _win._choose_theme_color()
+            self.assertEqual(_win.settings['theme_accent'], '#168fc0')
+        finally:
+            _win._apply_theme_color(old, save=False)
+            _win.settings = before
+
+    def test_theme_text_choice_survives_accent_changes_and_preserves_custom_color(self):
+        from desktop import theme
+        before = dict(_win.settings)
+        try:
+            _win._apply_theme_color('#00ff00', save=False)
+            with mock.patch.object(_win, '_schedule_settings_save'):
+                _win._theme_text_mode.setCurrentIndex(_win._theme_text_mode.findData('black'))
+                self.assertIn('selection-color: #000000', _app.styleSheet())
+                self.assertEqual(_win.settings['theme_text_mode'], 'black')
+                with mock.patch('desktop.settings_page.QColorDialog.getColor', return_value=QColor('#123456')):
+                    _win._choose_theme_text_color()
+                self.assertEqual(_win.settings['theme_text_custom'], '#123456')
+                self.assertEqual(_win._theme_text_mode.currentData(), 'custom')
+                self.assertIn('selection-color: #123456', _app.styleSheet())
+                _win._theme_text_mode.setCurrentIndex(_win._theme_text_mode.findData('white'))
+                _win._apply_theme_color('#ffee00', save=False)
+                self.assertIn('selection-color: #ffffff', _app.styleSheet())
+                self.assertEqual(_win.settings['theme_text_custom'], '#123456')
+                with mock.patch('desktop.settings_page.QColorDialog.getColor', return_value=QColor()):
+                    _win._choose_theme_text_color()
+                self.assertEqual(_win.settings['theme_text_mode'], 'white')
+                _win._theme_text_mode.setCurrentIndex(_win._theme_text_mode.findData('custom'))
+                self.assertIn('selection-color: #123456', _app.styleSheet())
+                self.assertEqual(_win._theme_text_color.text(), '#123456')
+        finally:
+            _win.settings = before
+            _win._apply_theme_color(before.get('theme_accent', theme.DEFAULT_ACCENT), save=False)
+
+    def test_theme_text_custom_preference_reloads_from_saved_isolated_state(self):
+        from desktop.app import MainWindow
+        from desktop import theme
+        before = dict(_win.settings)
+        try:
+            with tempfile.TemporaryDirectory(prefix='sb-theme-text-') as area:
+                first = MainWindow(isolated_dir=area)
+                try:
+                    first._apply_theme_color('#00ff00', save=False)
+                    first._apply_theme_text('custom', '#112233', save=False)
+                    self.assertTrue(first._save_state())
+                finally:
+                    first.shutdown()
+                    first.close()
+                second = MainWindow(isolated_dir=area)
+                try:
+                    self.assertEqual(second.settings['theme_accent'], '#00ff00')
+                    self.assertEqual(second._theme_text_mode.currentData(), 'custom')
+                    self.assertEqual(second._theme_text_color.text(), '#112233')
+                    self.assertIn('selection-color: #112233', _app.styleSheet())
+                finally:
+                    second.shutdown()
+                    second.close()
+        finally:
+            _win.settings = before
+            _win._apply_theme_color(before.get('theme_accent', theme.DEFAULT_ACCENT), save=False)
+
     def test_keyboard_cue_numbers_follow_page_and_release_original_page(self):
         panel = _win.player_bar.cue_panel
         previous_cues = {kind: list(cues) for kind, cues in panel._cues.items()}
@@ -731,7 +914,7 @@ class StockIpodUI(unittest.TestCase):
     def test_older_flash_timer_cannot_clear_a_newer_identical_message(self):
         callbacks = []
         with mock.patch("desktop.app.QTimer.singleShot",
-                        side_effect=lambda _ms, callback: callbacks.append(callback)):
+                        side_effect=lambda _ms, _context, callback: callbacks.append(callback)):
             _win._flash_status("Updated ✓", 6)
             _win._flash_status("Updated ✓", 6)
         callbacks[0]()
@@ -1282,6 +1465,8 @@ class StockIpodUI(unittest.TestCase):
             _stock_view_pending={}, _dual_sync_queue={},
             _device_coordinator=DeviceOperationCoordinator(),
             _save_columns=lambda: None, _set_status_text=lambda text: None,
+            tag_controller=SimpleNamespace(shutdown=lambda: None),
+            grid_controller=SimpleNamespace(shutdown=lambda: None),
             worker=worker, findChildren=lambda kind: [],
         )
         QTimer.singleShot(0, lambda: events.append("Qt remained responsive"))
@@ -3505,6 +3690,8 @@ class TaskOwnership(unittest.TestCase):
             _stock_view_pending={}, _dual_sync_queue={},
             _device_coordinator=DeviceOperationCoordinator(),
             _save_columns=lambda: None, _set_status_text=lambda text: None,
+            tag_controller=SimpleNamespace(shutdown=lambda: events.append('cues drained')),
+            grid_controller=SimpleNamespace(shutdown=lambda: events.append('grids drained')),
             findChildren=parent.findChildren,
             player_bar=SimpleNamespace(stop=lambda: None,
                 shutdown=lambda: events.append("player closed")),
@@ -3514,7 +3701,7 @@ class TaskOwnership(unittest.TestCase):
             MainWindow.shutdown(stub)
             self.assertTrue(owner.stopping)
             self.assertEqual(owner.pending, 0)
-            self.assertEqual(events, ["child retired", "player closed"])
+            self.assertEqual(events, ['grids drained', 'cues drained', "child retired", "player closed"])
         finally:
             release.set()
             owner.drain()
@@ -3546,6 +3733,73 @@ class TaskOwnership(unittest.TestCase):
 
 
 class PlayerHardening(unittest.TestCase):
+    def test_grid_capture_uses_visible_paused_cursor_and_fresh_playing_position(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb._track_id, pb._src_path, pb._dur = 'synthetic', '/synthetic/audio', 5000
+            pb.cue_panel.set_loaded(True)
+            pb._native_error = ''
+            pb.wave.set_timing(0, 5000)
+            with mock.patch.object(pb, 'is_playing', return_value=False), \
+                    mock.patch.object(pb, 'capture_cue_position', return_value=33) as capture:
+                self.assertEqual(pb.capture_grid_position(), 0)
+                capture.assert_not_called()
+                pb.wave.set_timing(100.4, 5000)
+                self.assertEqual(pb.capture_grid_position(), 100)
+            with mock.patch.object(pb, 'is_playing', return_value=True), \
+                    mock.patch.object(pb, 'capture_cue_position', return_value=1234) as capture:
+                self.assertEqual(pb.capture_grid_position(), 1234)
+                capture.assert_called_once()
+            pb._pending_autoplay = True
+            self.assertIsNone(pb.capture_grid_position())
+        finally:
+            pb.shutdown()
+    def test_quantize_uses_nearest_actual_grid_rows_and_preserves_exact_off_mode(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb._dur = 5000
+            pb._beat_grid = [100, 767, 1433, 2100, 6000]
+            self.assertEqual(pb.quantize_cue_position(1101), 1101)
+            pb.quantize_enabled = True
+            for position, expected in ((0, 100), (760, 767), (1100, 767),
+                                       (1101, 1433), (1433, 1433), (4999, 2100)):
+                self.assertEqual(pb.quantize_cue_position(position), expected)
+            pb._beat_grid = []
+            self.assertEqual(pb.quantize_cue_position(1101), 1101)
+            # Edited/current deck rows replace the snapping targets immediately.
+            pb._track_id, pb._src_path = 'synthetic', '/synthetic/audio'
+            pb.refresh_live_grid('synthetic', '/synthetic/audio', [[1, 500, 120], [2, 1000, 120]], 120)
+            self.assertEqual(pb.quantize_cue_position(1101), 1000)
+        finally:
+            pb.shutdown()
+
+    def test_quantized_session_cue_relocates_once_and_existing_cues_preview_exactly(self):
+        from desktop.player import PlayerBar, SessionCueState
+        pb = PlayerBar()
+        try:
+            pb._src_path, pb._dur, pb._pos = '/synthetic/audio', 5000, 1101
+            pb._beat_grid = [100, 767, 1433, 2100]
+            pb.quantize_enabled = True
+            pb._session_cue_state = SessionCueState.RELOCATION_PENDING
+            with mock.patch.object(pb, 'is_playing', return_value=False), \
+                    mock.patch.object(pb, '_set_position') as seek, \
+                    mock.patch.object(pb, '_start_cue_preview') as preview:
+                pb._cue_press()
+                self.assertEqual(pb._cue_ms, 1433)
+                self.assertEqual(pb._session_cue_state, SessionCueState.SET)
+                seek.assert_called_once_with(1433)
+                preview.assert_not_called()
+                pb._cue_press()
+                preview.assert_called_once_with(1433, ('session', -1))
+                pb._marker_cue_press('hot', 0, 1101)
+                self.assertEqual(preview.call_args.args, (1101, ('hot', 0)))
+                pb._set_session_cue(1101)
+                pb._cue_press()
+                self.assertEqual(preview.call_args.args, (1101, ('session', -1)))
+        finally:
+            pb.shutdown()
     def test_steady_transport_updates_do_no_widget_work(self):
         """The 20 Hz position path must not rebuild unchanged button state.
 
@@ -3794,11 +4048,11 @@ class PlayerHardening(unittest.TestCase):
 
             pb._set_position = position
 
-            def play():
+            def play(**_options):
                 state["playing"] = True
                 events.append(("play",))
 
-            def pause(after=None):
+            def pause(after=None, **_options):
                 state["playing"] = False
                 events.append(("pause",))
                 if after is not None:
@@ -3883,11 +4137,11 @@ class PlayerHardening(unittest.TestCase):
             pb.is_playing = lambda: state["playing"]
             pb._set_position = lambda target: events.append(("seek", target))
 
-            def play():
+            def play(**_options):
                 state["playing"] = True
                 events.append(("play",))
 
-            def pause(after=None):
+            def pause(after=None, **_options):
                 state["playing"] = False
                 events.append(("pause",))
                 if after is not None:
@@ -3925,10 +4179,10 @@ class PlayerHardening(unittest.TestCase):
             pb._src_path = "/tmp/loaded.wav"
             pb._dur = 60_000
             pb.is_playing = lambda: state["playing"]
-            pb._pause_clean = lambda after=None: pending.append(after)
+            pb._pause_clean = lambda after=None, **_options: pending.append(after)
             pb._set_position = lambda target: events.append(("seek", target))
 
-            def play():
+            def play(**_options):
                 state["playing"] = True
                 events.append(("play",))
 
@@ -3971,6 +4225,50 @@ class PlayerHardening(unittest.TestCase):
         finally:
             pb.close()
             pb.shutdown_waveforms()
+
+    def test_live_grid_and_cues_survive_late_analysis_without_transport_changes(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb._track_id, pb._src_path, pb._analysis_path = 'synthetic', '/synthetic/audio', ''
+            pb._pending_autoplay = False
+            cues = [dict(kind='hot', slot=3, position_ms=44000)]
+            pb._live_cues = cues
+            rows = [[1, 100, 90.0], [2, 766, 90.0], [3, 1433, 90.0]]
+            with mock.patch.object(pb.player, 'set_grid', return_value=True), \
+                    mock.patch.object(pb.player, 'set_analysis') as upload, \
+                    mock.patch.object(pb.player, 'setPosition') as seek:
+                self.assertFalse(pb.refresh_live_grid('other', pb._src_path, rows, 90))
+                self.assertTrue(pb.refresh_live_grid('synthetic', pb._src_path, rows, 90))
+                stale = dict(beats=[[1, 0, 120.0]], cues=[], heights=[.5], colors=[[14, 0, 0]])
+                pb._on_analysis_manifest(pb._src_path, '', pb._analysis_generation, stale)
+                pb._on_analysis_overview(pb._src_path, '', pb._analysis_generation, stale)
+                self.assertEqual(pb.wave._beat_times, [100, 766, 1433])
+                self.assertEqual(pb.wave._cues, cues)
+                self.assertEqual(upload.call_args.args[0]['beats'], rows)
+                self.assertEqual(pb._bpm, 90)
+                seek.assert_not_called()
+                pb.clear_live_grid()
+                pb._on_analysis_overview(pb._src_path, '', pb._analysis_generation, stale)
+                self.assertEqual(pb.wave._beat_times, [0])
+                self.assertEqual(pb.wave._cues, cues)
+        finally:
+            pb.shutdown()
+
+    def test_bpm_row_update_preserves_order_and_reconciles_sort_and_filter(self):
+        from desktop.model import TrackModel, COLUMNS
+        model = TrackModel([dict(id='a', bpm='90.00'), dict(id='b', bpm='140.00')])
+        self.assertFalse(model.update_bpm('a', '180.00'))
+        self.assertEqual([r['id'] for r in model._rows], ['a', 'b'])
+        column = next(i for i, row in enumerate(COLUMNS) if row[0] == 'bpm')
+        model.sort(column)
+        self.assertEqual([r['id'] for r in model._rows], ['b', 'a'])
+        self.assertTrue(model.update_bpm('a', '90.00'))
+        self.assertEqual([r['id'] for r in model._rows], ['a', 'b'])
+        model.set_filter('90.00')
+        self.assertEqual(len(model._rows), 1)
+        self.assertTrue(model.update_bpm('a', '180.00'))
+        self.assertEqual(model._rows, [])
 
     def test_track_navigation_icons_are_exact_mirrors(self):
         from PySide6.QtCore import QSize
@@ -4088,6 +4386,36 @@ class PlayerHardening(unittest.TestCase):
         finally:
             pb.shutdown_waveforms()
 
+    def test_16_beat_jump_returns_to_audio_start_before_first_grid_row(self):
+        from desktop.player import PlayerBar
+        pb = PlayerBar()
+        try:
+            pb._src_path = '/synthetic/loaded.wav'
+            pb._playback_available = True
+            pb._dur = 60_000
+            # A valid imported grid can start later than audio/cue zero.
+            pb._beat_grid = [round(54 + i * 60_000 / 138) for i in range(100)]
+            original_grid = list(pb._beat_grid)
+            for start in (0, 53, 54):
+                pb._pos = start
+                target = pb._beat_jump_target(1)
+                self.assertIsNotNone(target)
+                pb._pos = target
+                pb._update_transport()
+                self.assertTrue(pb.beat_back_btn.isEnabled())
+                self.assertEqual(pb._beat_jump_target(-1), start)
+            self.assertEqual(pb._beat_grid, original_grid)
+            pb._pos = 0
+            self.assertIsNone(pb._beat_jump_target(-1))
+            # Lead-ins can cover multiple beats, including an entire jump.
+            pb._beat_grid = [10_000 + i * 500 for i in range(100)]
+            pb._pos = 0
+            self.assertEqual(pb._beat_jump_target(1), 8_000)
+            pb._pos = 8_000
+            self.assertEqual(pb._beat_jump_target(-1), 0)
+        finally:
+            pb.shutdown_waveforms()
+
     def test_jump_selector_supports_beats_and_bars(self):
         from desktop.player import PlayerBar
         pb = PlayerBar()
@@ -4156,7 +4484,7 @@ class PlayerHardening(unittest.TestCase):
         try:
             fake = FakePlayer()
             pb.player = fake
-            pb._pause_clean = lambda after=None: (
+            pb._pause_clean = lambda after=None, **_options: (
                 fake.pause(), after() if after is not None else None)
             pb._src_path = "/tmp/loaded.wav"
             pb._dur = 60_000
@@ -4191,11 +4519,11 @@ class PlayerHardening(unittest.TestCase):
                 pb._pos = target
                 events.append(("seek", target))
 
-            def play():
+            def play(**_options):
                 state["playing"] = True
                 events.append(("play",))
 
-            def pause(after=None):
+            def pause(after=None, **_options):
                 state["playing"] = False
                 events.append(("pause",))
                 if after is not None:
@@ -4754,6 +5082,20 @@ class PlayerHardening(unittest.TestCase):
             (500, 1, 1), (1000, 1, 2), (1500, 1, 3),
             (2000, 1, 4), (2500, 2, 1), (3000, 2, 2),
         ])
+
+    def test_grid_only_update_retains_wave_and_cues_and_counts_opening_partial_bar_zero(self):
+        from desktop.player import WaveformBar
+        w = WaveformBar()
+        cue = dict(kind='hot', slot=0, position_ms=3000)
+        w.set_analysis({'heights': [.5] * 300, 'colors': [[14, 0, 0]] * 300,
+                        'sample_rate': 150.0, 'cues': [cue]})
+        colors = w._rgb_colors
+        beats = [[(i + 1) % 4 + 1, 9 + i * 2000 // 3, 90.0] for i in range(20)]
+        w.set_grid(beats)
+        self.assertIs(w._rgb_colors, colors)
+        self.assertEqual(w._cues[0]['position_ms'], 3000)
+        self.assertEqual(w._beat_positions[0], (9, 0, 2))
+        self.assertIn((10009, 4, 1), w._beat_positions)
 
     def test_qt_fallback_draws_every_beat_as_opaque_timing_ink(self):
         source = (
@@ -7866,6 +8208,24 @@ class RefreshWhileViewingCollection(unittest.TestCase):
         _win._populate_tree(engine.summary(_win.lib))
         _win._reload_current_view()
 
+    def test_prep_bpm_tracks_the_loaded_song_and_saved_refresh_not_selection(self):
+        _win.lib = _make_lib()
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        with mock.patch.object(_win.player_bar, 'current_track', return_value='1'):
+            _win._sync_prep_bpm()
+            self.assertEqual(_win.bpm_value.text(), '140.00')
+            row = next(i for i, data in enumerate(_win.model._rows) if data['id'] == '2')
+            _win.table.selectRow(row)
+            self.assertEqual(_win._selected_ids(), ['2'])
+            self.assertEqual(_win.bpm_value.text(), '140.00')
+            fresh = _make_lib()
+            fresh.tracks_by_id['1'].bpm = '142.50'
+            self._refresh_lands(fresh)
+            self.assertEqual(_win.bpm_value.text(), '142.50')
+        with mock.patch.object(_win.player_bar, 'current_track', return_value=None):
+            _win._sync_prep_bpm()
+            self.assertEqual(_win.bpm_value.text(), '000.00')
+
     def _refresh_lands(self, fresh):
         """What _on_refresh_done does with a freshly read library (direct call —
         Qt slots swallow exceptions)."""
@@ -7933,6 +8293,32 @@ class RefreshWhileViewingCollection(unittest.TestCase):
         self.assertTrue(idx.isValid())
         self.assertEqual(_win.model._rows[idx.row()]["id"], "3")
 
+    def test_tag_refresh_keeps_all_surviving_selected_rows(self):
+        from PySide6.QtCore import QItemSelectionModel
+        _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+        selection=_win.table.selectionModel();selection.clearSelection()
+        for row,data in enumerate(_win.model._rows):
+            if data['id'] in ('1','3'):
+                selection.select(_win.model.index(row,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        self.assertEqual(set(_win._selected_ids()),{'1','3'})
+        with mock.patch.object(_win,'_on_refresh_done',side_effect=self._refresh_lands), \
+                mock.patch.object(_win,'_refresh_rekordbox'):
+            _win._tag_saved(_make_lib())
+            _app.processEvents()
+        self.assertEqual(set(_win._selected_ids()),{'1','3'})
+
+    def test_refresh_waits_for_an_accepted_tag_write(self):
+        pending=_win._refresh_pending
+        _win.tag_controller.busy=True
+        try:
+            with mock.patch.object(_win,'_start_rekordbox_refresh') as start:
+                _win._refresh_rekordbox()
+                self.assertTrue(_win._refresh_pending)
+                start.assert_not_called()
+        finally:
+            _win.tag_controller.busy=False
+            _win._refresh_pending=pending
+
 
 class StateMaintenance(unittest.TestCase):
     def _host(self):
@@ -7996,6 +8382,23 @@ class StateMaintenance(unittest.TestCase):
         self.assertFalse(host._state_maintenance)
         self.assertEqual(events[-1], ('enabled', True))
 
+    def test_maintenance_waits_for_an_accepted_tag_save_before_final_state_save(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QTimer
+        from desktop.settings_page import SettingsPageMixin
+        host, events=self._host()
+        host.tag_controller=SimpleNamespace(busy=True)
+        def finish():
+            events.append(('tags-finished',None))
+            host.tag_controller.busy=False
+        QTimer.singleShot(20,finish)
+        try:
+            self.assertTrue(SettingsPageMixin._begin_state_maintenance(host))
+            self.assertLess([e[0] for e in events].index('tags-finished'),
+                            [e[0] for e in events].index('save'))
+        finally:
+            host._end_state_maintenance()
+
     def test_explicit_restore_can_recover_a_write_disabled_library(self):
         from desktop.settings_page import SettingsPageMixin
         host, _events = self._host()
@@ -8052,6 +8455,25 @@ class DualFailureEvidence(unittest.TestCase):
 
 
 class RepeatedBackgroundWork(unittest.TestCase):
+    def test_artwork_completion_waits_for_idle_without_scanning_on_cue_edges(self):
+        try:
+            with mock.patch.object(_win.model, 'refresh_art') as refresh, \
+                    mock.patch.object(_win, '_refresh_devices') as devices, \
+                    mock.patch.object(_win.player_bar, 'is_playing', return_value=True):
+                _win._on_art_progress(1, 1)
+                self.assertTrue(_win._art_status_timer.isActive())
+                _win._flush_art_status()
+                for active in (True, False) * 10:
+                    _win._on_playback_active(active)
+                refresh.assert_not_called()
+                devices.assert_not_called()
+            with mock.patch.object(_win.model, 'refresh_art') as refresh, \
+                    mock.patch.object(_win.player_bar, 'is_playing', return_value=False):
+                _win._flush_art_status()
+                refresh.assert_called_once()
+        finally:
+            _win._art_status_timer.stop()
+
     def test_empty_idle_poll_never_starts_worker_but_retry_and_mount_do(self):
         from types import SimpleNamespace
         from desktop.app import MainWindow

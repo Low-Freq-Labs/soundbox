@@ -1,18 +1,32 @@
 # SoundBox
 
 A native macOS (PySide6) music-library bridge from **rekordbox** to **stock or
-Rockbox iPods / USB players** — browse the live rekordbox library, curate it without
-ever touching it, and drag playlists onto a device: exact order, per-track
+Rockbox iPods / USB players** — browse the live rekordbox library, curate it,
+edit existing My Tags, and drag playlists onto a device: exact order, per-track
 cover art, honest sync semantics.
 
 ## Start here
 
 SoundBox is a desktop app for keeping a curated music library and exporting it
-to portable players. It reads rekordbox without changing its database or source
-audio, keeps your title/artist edits and artwork in SoundBox's own state, and
+to portable players. It reads rekordbox through snapshots, saves accepted My Tag,
+cue and grid edits to the source, keeps source audio unchanged and title/artist edits
+and artwork in SoundBox's own state, and
 provides a CoreAudio/Metal player for previewing tracks before export.
 
 ### Requirements
+
+Rekordbox prep editing is being developed in reviewed stages. [My Tag, cue and grid editing](docs/rekordbox-prep.md)
+requires an explicitly accepted library on rekordbox 6.8.7.0303. Close rekordbox
+and its background agent before saving. Cue editing supports WAV/MP3/AIFF with
+verified metadata. Grid controls support setting a bar start, whole-grid nudges,
+and constant-tempo double/half under the same accepted source boundary. Manual
+BPM entry requires its separate native acceptance flag.
+Smart-list creation remains a subsequent milestone.
+New cues appear and become usable immediately in the playing session while
+guarded database saves run in the background. “Cues saved” confirms persistence;
+normal quit finishes the queue, and a failed save restores verified cue state.
+Grid edits also update the loaded session immediately, including during the
+initial source check; verified saving remains in the background.
 
 - **Apple Silicon Mac with macOS 14 or later** for the native player. The native
   build targets `arm64`; this is not an Intel or cross-platform player build.
@@ -40,6 +54,13 @@ The `.venv` location matters: the build and check scripts use it directly.
 The native build produces `build/native/libsoundbox_deck.dylib`. If the deck
 cannot load, SoundBox reports the problem and disables playback while leaving
 library management available.
+
+General Settings includes a **Theme color** picker and Reset button. The accent
+updates selections, controls and the SVG logo’s BOX layer immediately and persists
+with your settings. **Text color** independently selects White, Black or a custom
+color for lettering on theme-colored selections and buttons (White by default).
+Changing the accent never overrides that choice. The logo retains the previous
+header footprint.
 
 ### First workflow
 
@@ -135,7 +156,7 @@ in [the documentation archive](docs/archive/README.md).
   rollback facts, validation, and next-session sequence.
 - **[`docs/ROADMAP.md`](docs/ROADMAP.md)** — active sequence, release gates and deferred work.
 - **[`docs/PLAYER.md`](docs/PLAYER.md)** — native deck behavior, architecture,
-  caches, read-only cue panel, non-regression rules, QA, and deferred grid work.
+  caches, cue panel/editing, non-regression rules, QA, and staged grid work.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — engine/desktop layout, data model, build.
 - **[`docs/DEVICES.md`](docs/DEVICES.md)** — Rockbox, stock iPod, dual-boot,
   and generic-USB layouts, capabilities, and validation rules.
@@ -159,7 +180,20 @@ Refresh any time. After relocating a file in rekordbox, refresh SoundBox (or
 reopen it) to read the new path under the same track ID; SoundBox edits and
 playlist membership remain attached to that ID. SoundBox does not watch the
 rekordbox database continuously. Smart playlists follow active rekordbox My Tags; removed-tag
-history is ignored. On top of the rekordbox mirror, SoundBox keeps its own
+history is ignored. Select browser rows and open **My Tags** below the waveform
+to assign existing tags in one flat checklist. My Tags sits left of Settings and
+Search in the prep strip; Search aligns beneath the Hot Cue / Mem Cue tabs. Five grid buttons occupy the left, enabled for a ready accepted
+track with Analysis Lock off; the BPM field after the first-beat button shows
+`000.00` while empty. On an accepted constant grid, type a BPM and press Enter:
+the loaded grid changes immediately, saves in the background, and the browser BPM
+updates as soon as that save verifies. Escape or leaving the field cancels typing. The checklist menu matches the button width and uses two columns, with separated
+rows and wrapped availability text. Tags read down the left column, then down the
+right, preserving rekordbox order. Mixed assignments become checked
+for every selected track; unchecking removes the tag from every selected track.
+Saves are automatic, with a verified encrypted backup and conflict checks.
+SoundBox refreshes smart memberships after each successful save. Reopen rekordbox
+to see the changes; simultaneous writing is blocked. Other libraries remain
+read-only until explicitly accepted. On top of the rekordbox mirror, SoundBox keeps its own
 plane: **import audio files directly** (drag from Finder onto a SoundBox
 playlist or Collection, or right-click → Import Audio Files…). Imported files
 are referenced in place — never copied or re-tagged — and become first-class
@@ -279,8 +313,13 @@ with tabs centered across one header and Back on the left; Graveyard retains its
 full-width page.
 [Keyboard settings](docs/KEYBOARD.md) provide searchable,
 remappable actions with multiple bindings and explicit conflict moves. By default,
-1–8 preview the active Hot/Memory cue page, 9 selects Hot Cue, and 0 selects
-Memory Cue; `=` / `-` zoom in/out. General balances Player/Library/Backup on the
+1–8 preview a filled slot on the active Hot/Memory page or set an empty slot at
+the exact playhead. The grid strip’s **Q** toggle snaps new cue points to the nearest
+beat when red (on); grey is off. Its state is saved in SoundBox, independently of
+rekordbox’s preference. Existing cue playback stays exact. Command-1–8 deletes; 9 selects Hot Cue and 0 selects Memory
+Cue. Memory numbers reorder chronologically; Hot letters stay fixed. Empty slots
+can also be clicked to set. Saves update markers without moving playback or
+reloading the library. `=` / `-` zoom in/out. General balances Player/Library/Backup on the
 left with Title Cleanup/Cover Art on the right. **Connections** shows rekordbox
 on the left: loaded source/status, database location, Refresh, Choose database,
 Default location, and Open XML fallback. Database choices persist only after a
@@ -339,7 +378,8 @@ If a track was first cached before Rekordbox finished its display analysis,
 the recurring scan notices when a valid PWV3/PWV5/PWV7 stream appears for a
 mode still using SoundBox's fallback and atomically recooks only that track.
 Right-click **Reanalyze Track** remains the explicit recovery path. Both routes
-import only read-only ANLZ data; source audio and Rekordbox are never modified.
+import only read-only ANLZ data; analysis preparation never modifies source audio
+or rekordbox data.
 Stored hot-cue colors appear as black-outlined A–H boxes on both the
 whole-track overview and scrolling waveform; memory cues use one consistent
 red upward arrow in both scales.
@@ -349,7 +389,7 @@ zoom levels in memory, omitting duplicate spectral analysis. Existing caches
 remain playable while eligible local tracks upgrade individually in the background;
 there is no need to load each song. Offloaded audio waits until it is local.
 Incomplete imports retain SoundBox's generated fallback colors.
-Rekordbox and source audio remain read-only. Native-deck failure disables
+Player preparation leaves rekordbox and source audio unchanged. Native-deck failure disables
 playback with a diagnostic while library management remains available.
 
 **Devices & sync.** New connections appear as **Checking…**, then become usable
@@ -507,10 +547,17 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
 
 ## The safety contract (non-negotiable)
 
-- rekordbox is **never** written to. The live `master.db` is read via a
-  read-only temp snapshot; the XML export is a fallback.
+- Library reads use a verified read-only `master.db`/WAL snapshot; XML is a
+  fallback. Narrow live-write APIs change existing My Tag assignments and
+  Hot/Memory cues for an
+  explicitly accepted library/schema/version, with rekordbox/agent closed, a
+  verified encrypted backup, guarded transactions and independent read-back.
+  The accepted grid API changes only DAT/PQTZ, native EXT/PQT2 invalidation and
+  the narrow BPM metadata/counter delta. Other analysis sections and metadata
+  remain protected. Grid previews update immediately while the same shared
+  worker saves and verifies in background. See [the prep plan](docs/rekordbox-prep.md).
 - Source audio files are **never** modified, renamed, moved, or deleted.
-- Every write lands **under an explicit export target** (the device), guarded
+- Every export write lands **under an explicit export target** (the device), guarded
   so a target can never overlap the source library.
 - Writes below `iPod_Control` go only through the guarded MA446 stock adapter.
   On a dual layout, only the composite planner may coordinate that adapter with

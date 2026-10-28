@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
-from .library import Library, Playlist, Track
+from .library import Library, LibraryTag, Playlist, Track
 from .rekordbox_analysis import resolve_dat_path
 
 REKORDBOX_DB = Path.home() / "Library" / "Pioneer" / "rekordbox" / "master.db"
@@ -64,8 +66,22 @@ def load_live(path: str | Path | None = None) -> Library:
 
         db = Rekordbox6Database(path=str(copy))
         try:
-            tracks_by_id = _read_tracks(db, source)
+            tags, memberships = _read_tags(db)
+            identities = list(db.get_property())
+            library_id = str(identities[0].DBID) if len(identities) == 1 else ""
+            tracks_by_id = _read_tracks(db, source, memberships)
             playlists = _read_playlists(db, set(tracks_by_id))
+            # Preserve playlist scope before collecting edit identities. This
+            # metadata never adds tracks or schedules preparation.
+            referenced = {k for pl in playlists for k in pl.keys}
+            tracks_by_id = {tid: t for tid, t in tracks_by_id.items() if tid in referenced}
+            try:
+                _populate_cue_edit_state(db, tracks_by_id)
+            except Exception as exc:  # optional write identity must not disable browsing
+                logging.getLogger(__name__).warning('Cue edit identity unavailable: %s', exc)
+                for track in tracks_by_id.values():
+                    track.source_cue_revision = ''
+                    track.source_cue_refs = []
         finally:
             try:
                 db.close()
@@ -74,13 +90,13 @@ def load_live(path: str | Path | None = None) -> Library:
         # Soundbox is a PLAYLIST exporter — keep only tracks that are actually in a
         # playlist. Drops orphan collection entries (added to rekordbox but in no
         # playlist, files usually long gone) so the count matches the real library.
-        referenced = {k for pl in playlists for k in pl.keys}
-        tracks_by_id = {tid: t for tid, t in tracks_by_id.items() if tid in referenced}
         return Library(
             tracks_by_id=tracks_by_id,
             playlists=playlists,
             source=source,
             source_kind="rekordbox-db",
+            source_tags=tags,
+            source_library_id=library_id,
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -95,6 +111,62 @@ def _snapshot_identity(path: Path) -> tuple[int, int, int, int, int] | None:
             stat.st_mtime_ns, stat.st_ctime_ns)
 
 
+def _populate_cue_edit_state(db, tracks: dict[str, Track]) -> None:
+    """Batch raw identity reads on the disposable snapshot, never live SQL.
+
+    Raw driver rows keep SQL timestamps/opaque fields identical to the writer's
+    revision representation. Display dictionaries and waveform hashes stay intact.
+    """
+    from .rekordbox_cues import CueSnapshot
+    if not tracks:
+        return
+    conn = db.session.connection()
+    def rows(table):
+        return conn.exec_driver_sql('SELECT * FROM "' + table + '"').mappings()
+    grouped: dict[str, list[dict]] = {}
+    aggregates = {}
+    for row in rows('djmdCue'):
+        if row['ContentID'] in tracks:
+            grouped.setdefault(row['ContentID'], []).append(dict(row))
+    for row in rows('contentCue'):
+        if row['ContentID'] in tracks:
+            # An ambiguous source never receives a usable revision.
+            key = row['ContentID']
+            aggregates[key] = dict(row) if key not in aggregates else None
+    for row in rows('djmdContent'):
+        track = tracks.get(row['ID'])
+        if track is None or row['FileType'] not in (1, 11, 12):
+            continue
+        if row['ID'] in aggregates and aggregates[row['ID']] is None:
+            continue
+        cues = grouped.get(row['ID'], [])
+        snapshot = CueSnapshot(dict(row), tuple(cues), aggregates.get(row['ID']))
+        track.source_cue_revision = snapshot.revision
+        track.source_cue_refs = _cue_edit_refs(cues)
+
+
+def _cue_edit_refs(cues):
+    from .rekordbox_cues import _memory_order
+    refs = []
+    active = [r for r in cues if not r['rb_local_deleted']]
+    for native in active:
+        slot = _hot_cue_slot(native['Kind'])
+        if slot is not None:
+            refs.append(dict(kind='hot', slot=slot, id=native['ID'], uuid=native['UUID']))
+    for slot, native in enumerate(sorted((r for r in active if r['Kind'] == 0),
+                                          key=lambda r: (*_memory_order(r), r['ID']))):
+        refs.append(dict(kind='memory', slot=slot, id=native['ID'], uuid=native['UUID']))
+    return refs
+
+
+def cue_snapshot_fields(snapshot) -> dict:
+    """Small verified post-save update; no whole-library refresh or audio I/O."""
+    grouped = _normalize_cue_rows(SimpleNamespace(**row) for row in snapshot.cues)
+    return dict(source_cues=grouped.get(snapshot.track['ID'], []),
+                source_cue_revision=snapshot.revision,
+                source_cue_refs=_cue_edit_refs(snapshot.cues))
+
+
 def _copy_stable_snapshot(source: Path, destination: Path, retries: int = 5) -> None:
     """Copy a consistent main DB + WAL pair without opening the live database.
 
@@ -107,6 +179,7 @@ def _copy_stable_snapshot(source: Path, destination: Path, retries: int = 5) -> 
     wal = source.with_name(source.name + "-wal")
     destination_wal = destination.with_name(destination.name + "-wal")
     for _attempt in range(max(1, retries)):
+        _assert_snapshot_journal_inactive(source)
         before = (_snapshot_identity(source), _snapshot_identity(wal))
         if before[0] is None:
             raise FileNotFoundError(f"rekordbox database not found: {source}")
@@ -123,6 +196,7 @@ def _copy_stable_snapshot(source: Path, destination: Path, retries: int = 5) -> 
             if destination_wal.exists():
                 destination_wal.unlink()
             continue
+        _assert_snapshot_journal_inactive(source)
         after = (_snapshot_identity(source), _snapshot_identity(wal))
         if before == after:
             return
@@ -131,13 +205,52 @@ def _copy_stable_snapshot(source: Path, destination: Path, retries: int = 5) -> 
         "snapshot; wait a moment and refresh again")
 
 
+def _assert_snapshot_journal_inactive(source: Path) -> None:
+    """Never copy potentially spilled, uncommitted pages without their journal.
+
+    Owned transactions recover before refresh. Unknown recovery stays with
+    rekordbox. Zero-header inactive journals require no rollback and are safe
+    to leave in place; this reader never changes or deletes a journal.
+    """
+    journal = source.with_name(source.name + '-journal')
+    try:
+        with journal.open('rb') as handle:
+            header = handle.read(8)
+    except FileNotFoundError:
+        return
+    if any(header):
+        raise RuntimeError('The rekordbox database needs recovery before it can be refreshed')
+
+
 def _deleted(row) -> bool:
     # rekordbox soft-deletes (keeps the row for cloud/device sync) — hide those,
     # exactly as rekordbox itself does.
     return bool(getattr(row, "rb_local_deleted", 0))
 
 
-def _read_tracks(db, source: Path | None = None) -> dict[str, Track]:
+def _read_tags(db) -> tuple[list[LibraryTag], dict[str, list[str]]]:
+    """Flatten existing active My Tags; retain stable IDs and source order."""
+    definitions = [row for row in db.get_my_tag() if not _deleted(row)]
+    categories = {str(row.ID): row for row in definitions if row.Attribute == 1}
+    leaves = [row for row in definitions if row.Attribute == 0]
+    leaves.sort(key=lambda row: (
+        _integer(getattr(categories.get(str(row.ParentID)), "Seq", 0)),
+        _integer(row.Seq), str(row.ID)))
+    tags = [LibraryTag(str(row.ID), row.Name or "",
+                       getattr(categories.get(str(row.ParentID)), "Name", "") or "",
+                       str(getattr(row, "UUID", "") or ""))
+            for row in leaves]
+    active = {tag.tag_id for tag in tags}
+    memberships: dict[str, set[str]] = {}
+    for link in db.get_my_tag_songs():
+        if not _deleted(link) and str(link.MyTagID) in active:
+            memberships.setdefault(str(link.ContentID), set()).add(str(link.MyTagID))
+    return tags, {tid: [tag.tag_id for tag in tags if tag.tag_id in assigned]
+                  for tid, assigned in memberships.items()}
+
+
+def _read_tracks(db, source: Path | None = None,
+                 tag_memberships: dict[str, list[str]] | None = None) -> dict[str, Track]:
     cues_by_track = _read_cues(db)
     out: dict[str, Track] = {}
     for c in db.get_content():
@@ -175,6 +288,9 @@ def _read_tracks(db, source: Path | None = None) -> dict[str, Track]:
             source_analysis_path=str(resolve_dat_path(
                 source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "") or ""),
             source_cues=cues_by_track.get(str(c.ID), []),
+            source_uuid=str(getattr(c, "UUID", "") or ""),
+            source_tag_ids=(list(tag_memberships.get(str(c.ID), []))
+                            if tag_memberships is not None else None),
         )
     return out
 
@@ -224,11 +340,15 @@ def _hot_cue_slot(kind_number: int) -> int | None:
 
 def _read_cues(db) -> dict[str, list[dict]]:
     """Read every active cue once and group it by rekordbox ContentID."""
-    grouped: dict[str, list[dict]] = {}
     try:
         rows = db.get_cue()
     except (AttributeError, TypeError):
-        return grouped
+        return {}
+    return _normalize_cue_rows(rows)
+
+
+def _normalize_cue_rows(rows) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
     memory: dict[str, list[dict]] = {}
     for row in rows:
         if _deleted(row):

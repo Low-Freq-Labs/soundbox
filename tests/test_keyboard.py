@@ -19,6 +19,7 @@ class Keymaps(unittest.TestCase):
         self.assertEqual(mapping.bindings("transport.cue"), ["C"])
         for i in range(8):
             self.assertEqual(mapping.action(str(i + 1)), f"cues.slot.{i}")
+            self.assertEqual(mapping.action(f'Ctrl+{i + 1}'), f'cues.delete.{i}')
         self.assertEqual(mapping.action("9"), "cues.hot_page")
         self.assertEqual(mapping.action("0"), "cues.memory_page")
         self.assertEqual(mapping.action("="), "wave.zoom_in")
@@ -69,6 +70,13 @@ class Keymaps(unittest.TestCase):
         mapping.assign("cues.slot.0", "F1")
         self.assertEqual(mapping.action("F1"), "cues.slot.0")
         self.assertEqual(mapping.dump()["bindings"]["hot.0"], ["F1"])
+
+    def test_new_delete_defaults_preserve_existing_explicit_shortcuts(self):
+        mapping = Keymap({'schema': 1, 'bindings': {'browser.search': ['Ctrl+1']}})
+        self.assertEqual(mapping.action('Ctrl+1'), 'browser.search')
+        self.assertEqual(mapping.bindings('cues.delete.0'), [])
+        mapping.assign('cues.delete.0', 'Ctrl+1', move=True)
+        self.assertEqual(mapping.action('Ctrl+1'), 'cues.delete.0')
 
 
 class KeyboardRouting(unittest.TestCase):
