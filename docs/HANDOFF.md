@@ -4,11 +4,15 @@ Updated October 28, 2026, America/Chicago.
 
 ## Release and runtime
 
-Sonny requested wrap-up. Efficiency/player/browser work and the manual-BPM EOF
+Sonny accepted this build for continued use and requested final wrap-up.
+Efficiency/player/browser work and the manual-BPM EOF
 fix are complete, tested, installed and relaunched. Repository branch `main`;
 application-source release commit: `9035f70a8572fa9b3783051a06bf1e7c1b7a9ef5`. The current documentation-only
 follow-up records its provenance and does not restamp the installed binary.
-Both changes are published on `origin/main`; no in-scope release work remains.
+The release and documentation follow-ups are published on `origin/main`;
+no in-scope release work remains. Final acceptance recheck confirmed the running
+installed build's signature and source fingerprint; no rebuild or restart was
+needed for this documentation-only closeout.
 
 Installed `/Applications/Soundbox.app`, personal **1.0.0 build 133**.
 True signed base revision `a25de73b341eedacbdc72c7bedf4d66ea66e0f39`, dirty=true,
