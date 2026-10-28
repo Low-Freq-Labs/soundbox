@@ -25,16 +25,20 @@ and faint-only RGB visibility outside October27 coverage C (distinct from the re
 at every zoom. The final 1,452-test gate passed and the signed follow-up is
 installed; warm snapshot-browser p95 remains below 1.5 s (1,464 ms). Provenance
 and installed verification are in HANDOFF. A populated-window
-trace still shows occasional missed presentations; the residual scrolling hitch
-remains open and must not be marked solved by the pixel-step correction.
+trace still showed occasional missed presentations; that release did not prove
+the residual scrolling hitch solved. Further comparison work is now closed as
+noted below.
 
 October28: original RGB-edge B is implemented, tested and installed.
 Only main-lane edge color/coverage blending changes to encoded-channel space;
 both visibility lifts are explicitly retained. Later C/D/E trials are set aside.
 The prep strip also has an elapsed/total clock with hour formatting and evenly
 spaced controls, reusing existing transport updates.
-Center glistening/native appearance equivalence remain open; current release and
-installed provenance are recorded in HANDOFF.
+Sonny accepted this build and closed further waveform comparison/tuning for now.
+The old private comparison archive and obsolete builds were deleted with approval;
+collect fresh references only if he reopens it. Full native appearance equivalence
+was not established. Current release/provenance and historical cadence limits
+are recorded in HANDOFF.
 
 The browser follow-up adds a scrollbar beside the track area, a footer-colored
 right utility rail and a borderless inactive circle-i placeholder. The scrollbar

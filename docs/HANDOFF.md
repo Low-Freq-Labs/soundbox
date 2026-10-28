@@ -16,8 +16,11 @@ needed for this documentation-only closeout.
 
 Sonny then requested a full checkout hygiene audit. Git integrity and inventory,
 dependency health, fixtures, existing gate reports and installed signature/source
-parity passed. All private build investigations were archived with exact hashes;
-active build output is now about 3 MiB. No runtime change, repeat release suite,
+parity passed. Private build investigations were first archived with exact hashes;
+Sonny then closed comparison work and authorized deleting that archive and the
+confirmed build/test leftovers. Net logical bytes removed: 862,425,069. The 27
+small release/state records retained separately are described in PROJECT_LAYOUT;
+active build output remains about 3 MiB. No runtime change, repeat release suite,
 rebuild or restart was needed. See [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact
 retained paths and the archive mapping. Audit receipts:
 `~/Library/Logs/Soundbox/checkout-hygiene-2026-10-28/`.
@@ -41,11 +44,11 @@ Stock artwork reused all 3,106; zero new covers fetched. Ready footer and actual
 The canceled thin black text-outline experiment never changed production source,
 launched a live viewer or reached an installed build. Scratch moved reversibly to
 Trash; receipt: `~/Library/Logs/Soundbox/text-outline-discarded-2026-10-28/`.
-The prior app and duplicate dist/build packaging moved reversibly to
-`~/.Trash/Soundbox-wrap-20261028-045509/`; exact moves are in `cleanup.json`.
-The 2fed… prior app is `previous-Soundbox.app` there; its former temporary rollback
-path is empty. Only the current installed app and active checkout remain active. Preserve all source/native
-recovery and offline fixtures; cleanup never targets AppData or media.
+Prior app/duplicate packaging copies and generated caches are now absent; Trash
+was already empty when the final deletion pass began. Historical moves remain in
+`cleanup.json`. The empty temporary rollback directory was also removed. Only the
+current installed app and active checkout remain active. Preserve native recovery
+and offline fixtures; cleanup never targets live AppData or canonical media.
 
 ## Current behavior
 
@@ -122,10 +125,12 @@ log/inventories, app-build.log, installed receipt/provenance/native preservation
 startup log/window, state verification and scoped cleanup receipt.
 Earlier resize/footer/RGB evidence remains in rail-seams-2026-10-28,
 browser-columns-2026-10-28, browser-footer-2026-10-28 and waveform-rgb-edge-2026-10-28
-under the same private Logs root. Their former build working directories and
-small private harnesses are preserved under
-`~/Library/Logs/Soundbox/development-archive-2026-10-28/build/`;
-consult `moves.json` and review historical harness paths before reuse.
+under the same private Logs root. Their former build working directories,
+comparison captures and scratch harnesses are deleted. Selected small release/
+state records survive under
+`~/Library/Logs/Soundbox/retained-release-records-2026-10-28/` with original subpaths;
+`retained-files.json` lists the exact set. Native acceptance/recovery and required
+fixtures stay at their existing protected locations.
 
 Fresh state backups:
 `~/Library/Logs/Soundbox/efficiency-implementation-2026-10-27/install/manual-bpm-`
@@ -145,13 +150,18 @@ These are dated baselines; preserve subsequent user edits.
 
 ## Remaining work and safety
 
-Center glistening/native appearance equivalence and occasional scrolling hitch
-remain open. Original B's 39-frame/13-zoom preview parity is implementation parity,
-not native appearance acceptance. Earlier populated traces retained occasional
-16.667-ms presented gaps, roughly 117 fps and zero audio underruns. Keep zero-time
-rows in cadence evidence. No fill, temporal blur, source smoothing or lift removal.
-MOONLIGHT 576 reference work is retained at
-`~/Library/Logs/Soundbox/development-archive-2026-10-28/build/efficiency-implementation-2026-10-27/moonlight-576/`; Sonny's recordings/max-zoom stills are retained. No preview is running.
+**Waveform comparison/tuning is closed for now at Sonny's request.** Keep accepted
+original B and both lifts unchanged. Reopen only on a new request and collect fresh
+references then; the private comparison archive and experimental binaries are gone.
+Original recordings outside that archive were not cleanup targets. This is an
+accepted stopping point, not proof that every residual glisten or cadence issue
+was mathematically eliminated or that native appearance is identical.
+
+Historical original-B 39-frame/13-zoom preview parity describes implementation
+parity. Earlier populated traces had occasional 16.667-ms gaps, roughly 117 fps,
+and zero audio underruns; this pass neither fixes nor reopens that performance
+investigation. Future captures should retain zero-time dropped rows. No fill,
+blur, source smoothing or lift removal is newly authorized. No preview is running.
 
 Synthetic 3000-row/240-step resize wall times improved median 46.931→36.265 ms,
 p95 60.522→45.186 ms; horizontal-bar Show/Hide 119/118→0/0. This is not live-drag or

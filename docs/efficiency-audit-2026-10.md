@@ -1,10 +1,13 @@
 # Efficiency audit — October 27, 2026
 
-Private evidence relocation, October 28: investigation working directories listed
-in `~/Library/Logs/Soundbox/development-archive-2026-10-28/moves.json` now live
-under that archive with their original `build/` subpaths. Dated `build/...` paths
-below identify those preserved captures, not current runtime dependencies.
-See [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for the exact mapping and retention rules.
+Evidence disposition, October28: Sonny accepted the build and closed further
+waveform comparison/tuning for now. After the directory audit, he authorized
+removing the private comparison archive and obsolete experiment/test output.
+`~/Library/Logs/Soundbox/development-archive-2026-10-28/` and the historical
+`build/<investigation>` capture/harness paths below are deleted. Small release/
+state records, canonical native acceptance/recovery and required fixtures remain;
+see [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact retention. Measurements below
+are historical evidence, not a promise that raw comparisons can still be replayed.
 
 Initial source baseline: `a25de73`, clean `main`; then-installed personal build 131.
 Final implementation and build 133 installation are recorded at the end.
@@ -263,8 +266,8 @@ justify a promise of instant launch or a combined speed multiplier.
 Private scripts, JSON counters, cProfile output, process sample and vmmap summary:
 `~/Library/Logs/Soundbox/efficiency-audit-2026-10-27/`.
 The development working copies were originally ignored under
-`build/efficiency-audit-2026-10-27/` and are now in the October28 evidence archive
-described above.
+`build/efficiency-audit-2026-10-27/`; those scratch copies were subsequently
+deleted under the October28 disposition above.
 DB probes first copy a stable encrypted DB/WAL pair and only open disposable
 copies. Candidate changes exist only as process-local monkeypatches; complete
 serialized models matched. The UI probe copies metadata, substitutes disposable
@@ -483,8 +486,9 @@ row-cache miss was 3,336 ms. All readiness/deferred-import checks passed. Actual
 source load returned 3,740 tracks / 75 playlists, reused 3,237 preparation receipts and
 scheduled zero tasks. Curation, 4,041 art/review hashes and all authorities stayed
 exact; postquit/postlaunch library bytes match. See HANDOFF for exact receipts.
-The residual occasional presentation gaps remain open, separately from the
-verified continuous RGB source translation. Installed visual review is Sonny's.
+That release did not resolve occasional presentation gaps; verified continuous
+RGB source translation is a separate result. Sonny subsequently closed further
+comparison work as recorded in the current handoff.
 
 
 ### October28 selected RGB edge B and playback clock
@@ -495,7 +499,8 @@ integrates display channels jointly with signed coverage, blends the encoded
 background and decodes that final opaque pixel for Metal's sRGB attachment.
 BLUE,3BAND,overview, source extrema, height transfer, LOD and clocks stay intact.
 Later C/D/E lift-removal/direct-cell trials were set aside despite provisional
-improvement reports. Center glistening/native appearance equivalence remain open.
+improvement reports. Full native appearance equivalence was not established;
+Sonny later accepted the stopping point and closed comparison/tuning for now.
 
 The production shader matched original private B byte-for-byte over39 diagnostic
 frames (13zooms ×3positions, one display mip supplied to both at wide stops).

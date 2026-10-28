@@ -285,8 +285,11 @@ opaque background in that same space, then decodes the final pixel for Metal's
 sRGB attachment. This reduces edge glare while retaining both existing visibility
 lifts, source colors, signed extrema, LOD, song lattice and timing. BLUE,3BAND and
 the overview retain their existing compositors. Later lift-removal/direct-pixel
-C/D/E trials are set aside at Sonny's request. Center glistening and full native
-appearance equivalence remain unresolved. Release/installation status is in
+C/D/E trials are set aside at Sonny's request. On October28 he accepted this build
+and closed further waveform comparison/tuning for now; reopen only when asked.
+Full native appearance equivalence was not established. Private comparison captures
+and experimental builds were deleted with approval; required regression fixtures
+remain. Release/installation status is in
 [HANDOFF](HANDOFF.md).
 
 October 1 test audit: production Metal helpers now run against independent
@@ -377,7 +380,8 @@ Settings exposes three persistent waveform displays:
   thin intervals no longer receive an unconditional white center. The October 1
   correction reduces wide-view white washout without changing geometry or
   smoothing detail. Sonny accepted the narrowed BLUE candidate in a live muted comparison. Exact
-  recording parity and broader track acceptance remain open.
+  recording parity and broader track acceptance were not established by that
+  comparison. Further visual comparison work is closed for now as noted above.
   Its scrolling geometry is a high-rate signed
   min/max trace: low-frequency bins remain thin oscillating lines and dense
   bins widen naturally.

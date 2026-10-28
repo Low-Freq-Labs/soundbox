@@ -56,34 +56,45 @@ the protected dependency/reference roots; no tracked file exceeds 2 MiB. The
 `.venv` and three reference roots are intentional local dependencies/fixtures,
 remain excluded from Git, and are not duplicate installed applications.
 
-Private generated investigations moved out of the checkout into:
+The initial audit moved 2,315 generated investigation files outside the checkout
+and verified them against exact hashes. Sonny subsequently closed waveform
+comparison work for now and authorized deletion of the comparison archive and
+confirmed disposable build/test leftovers. The former
+`~/Library/Logs/Soundbox/development-archive-2026-10-28/` is **deleted**; its old
+`build/<investigation>` paths and scratch harnesses no longer resolve. They are
+historical references, not recoverable inputs or current build commands.
 
-`~/Library/Logs/Soundbox/development-archive-2026-10-28/build/`
+Before deletion, 27 small release/installation records and copied library-state
+snapshots were retained and verified at:
 
-This preserves all 2,315 files byte-for-byte: 860,256,008 logical bytes
-(866,140,160 allocated bytes before relocation). The parent `moves.json` lists
-all 20 exact moves; per-file hashes/modes/times and verification records are in
-`~/Library/Logs/Soundbox/checkout-hygiene-2026-10-28/`. Historical
-`build/<investigation>/...` references resolve beneath this archive only when
-that directory is listed in `moves.json`. This includes the current MOONLIGHT,
-waveform parity, efficiency, UI and install investigations. Earlier evidence not
-listed there is not claimed to have been recovered or relocated.
+`~/Library/Logs/Soundbox/retained-release-records-2026-10-28/`
 
-Archived scratch scripts retain their original bytes and may embed historical
-paths, rollback identities or install assumptions. Review and rebind them before
-reuse; they are evidence, not current build/install commands. Maintained harnesses
-remain in `scripts/`, `tests/` and `research/`.
+They retain their original subpaths, listed in `retained-files.json`. These are
+text/state records, not the removed raw frames, movies, images, scratch programs
+or experimental binaries. All current release/native-acceptance receipts remain
+in their separate original Logs/AppData locations. Exact deletion inventory,
+authorization and preserved-record hashes are in
+`~/Library/Logs/Soundbox/checkout-hygiene-2026-10-28/approved-deletion.json` and the
+earlier audit inventories beside it.
+
+Deletion removed 863,591,084 logical bytes; 1,166,015 bytes of records were kept,
+for a net 862,425,069 logical bytes removed. This includes 18 abandoned synthetic
+DB/UI test workspaces and an empty retired install directory. Experimental build
+folders were part of the archive and counted once. Filesystem available-space
+changes may differ because of APFS sharing/snapshots. The temporary
+`soundbox-source-staging` receipts were left alone.
 
 Only `build/native/`, `build/check/` and `build/rekordbox-write-proof/` remain in
-active build output (about 3 MiB allocated). Generated Python/type/Hypothesis
-caches and the empty `dist/` folder moved reversibly to
-`~/.Trash/Soundbox-generated-caches-20261028-050451/`; no files were deleted.
-These caches regenerate on later development runs. Archival/Trash relocation
-cleans the checkout without claiming free-space recovery. The installed app,
-canonical source audio, live AppData, rekordbox data, all native recovery and the
-three regression-reference roots were untouched. The signed installed source
-fingerprint remains the accepted release fingerprint in [HANDOFF](HANDOFF.md).
-No runtime/UI changes require another build or restart.
+active build output (about 3 MiB allocated). Generated caches and duplicate app/
+packaging copies previously moved to Trash are now absent; Trash was already
+empty when this deletion pass began. Maintained developer harnesses remain in
+`scripts/`, `tests/` and `research/`. No whole-Trash cleanup was performed.
+
+The installed app, canonical music, live AppData, rekordbox data, native recovery,
+`.venv` and all three regression-reference roots were untouched. The installed
+signature/source fingerprint was reverified. No runtime/UI changes require
+another build or restart. Further visual comparison work reopens only on a new
+user request; closure does not assert perfect native appearance or cadence.
 
 ## Completed retention — October 26 (historical)
 

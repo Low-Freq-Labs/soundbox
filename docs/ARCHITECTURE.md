@@ -419,7 +419,9 @@ polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
 The October 1 complete-corner correction at RGB/BLUE 256/384/576/864
 resolved the remaining reported pulses in Sonny's live B comparison. The separate
 BLUE palette/white-core correction was also accepted and installed. Broader track
-and exact-reference acceptance remain open; see the current handoff.
+and exact-reference parity were not established by those checks. Sonny closed
+further visual comparison work on October28; see the current handoff. This user
+acceptance does not claim exact native equivalence.
 Rejected
 carrier-neutral, background-bed, coverage-sharpening, and RGB-transition
 experiments are absent from the production ABI and shader. They either removed
