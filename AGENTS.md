@@ -453,6 +453,13 @@ wordmark stays in its 270×55 header slot; only BOX follows the accent. Waveform
 and cue data colors retain their musical/source meaning.
 
 Checkout hygiene and historical evidence locations: `docs/PROJECT_LAYOUT.md`.
+Private investigations listed in the October28 archive's `moves.json` now live
+under `~/Library/Logs/Soundbox/development-archive-2026-10-28/build/`, preserving
+their original build subpaths. Archived scratch harnesses may embed historical
+paths/rollback identities; review and rebind them before reuse. Active
+`build/native`, `build/check`, required reference roots and native recovery stay
+in place. See PROJECT_LAYOUT for the exact mapping; do not infer that all older
+build evidence was moved or remains available.
 Current guidance stays in `docs/`; superseded experiments belong in
 `docs/archive/` and never override the current handoff or roadmap.
 

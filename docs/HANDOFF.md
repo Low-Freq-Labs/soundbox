@@ -14,6 +14,14 @@ no in-scope release work remains. Final acceptance recheck confirmed the running
 installed build's signature and source fingerprint; no rebuild or restart was
 needed for this documentation-only closeout.
 
+Sonny then requested a full checkout hygiene audit. Git integrity and inventory,
+dependency health, fixtures, existing gate reports and installed signature/source
+parity passed. All private build investigations were archived with exact hashes;
+active build output is now about 3 MiB. No runtime change, repeat release suite,
+rebuild or restart was needed. See [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact
+retained paths and the archive mapping. Audit receipts:
+`~/Library/Logs/Soundbox/checkout-hygiene-2026-10-28/`.
+
 Installed `/Applications/Soundbox.app`, personal **1.0.0 build 133**.
 True signed base revision `a25de73b341eedacbdc72c7bedf4d66ea66e0f39`, dirty=true,
 application source fingerprint:
@@ -114,7 +122,10 @@ log/inventories, app-build.log, installed receipt/provenance/native preservation
 startup log/window, state verification and scoped cleanup receipt.
 Earlier resize/footer/RGB evidence remains in rail-seams-2026-10-28,
 browser-columns-2026-10-28, browser-footer-2026-10-28 and waveform-rgb-edge-2026-10-28
-under the same private Logs root; small private harnesses remain under build/.
+under the same private Logs root. Their former build working directories and
+small private harnesses are preserved under
+`~/Library/Logs/Soundbox/development-archive-2026-10-28/build/`;
+consult `moves.json` and review historical harness paths before reuse.
 
 Fresh state backups:
 `~/Library/Logs/Soundbox/efficiency-implementation-2026-10-27/install/manual-bpm-`
@@ -139,8 +150,8 @@ remain open. Original B's 39-frame/13-zoom preview parity is implementation pari
 not native appearance acceptance. Earlier populated traces retained occasional
 16.667-ms presented gaps, roughly 117 fps and zero audio underruns. Keep zero-time
 rows in cadence evidence. No fill, temporal blur, source smoothing or lift removal.
-MOONLIGHT 576 reference work remains in build/efficiency-implementation-2026-10-27/
-moonlight-576; Sonny's recordings/max-zoom stills are retained. No preview is running.
+MOONLIGHT 576 reference work is retained at
+`~/Library/Logs/Soundbox/development-archive-2026-10-28/build/efficiency-implementation-2026-10-27/moonlight-576/`; Sonny's recordings/max-zoom stills are retained. No preview is running.
 
 Synthetic 3000-row/240-step resize wall times improved median 46.931→36.265 ms,
 p95 60.522→45.186 ms; horizontal-bar Show/Hide 119/118→0/0. This is not live-drag or

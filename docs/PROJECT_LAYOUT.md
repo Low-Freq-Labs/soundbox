@@ -46,6 +46,45 @@ and small QA/install/state records. Protected native-source references, encrypte
 recovery, frozen waveforms and iPod/CDJ fixtures stay intact. Exact current
 provenance, validation and cleanup receipts are in [HANDOFF](HANDOFF.md).
 
+## Final directory audit — October 28
+
+The accepted application source is unchanged. Git integrity, tracked/untracked
+inventory, branch synchronization, dependency health, required fixture manifests,
+and the existing release-test report inventories were rechecked. No stray app
+bundles, nested repositories, broken links or conflict markers were found outside
+the protected dependency/reference roots; no tracked file exceeds 2 MiB. The
+`.venv` and three reference roots are intentional local dependencies/fixtures,
+remain excluded from Git, and are not duplicate installed applications.
+
+Private generated investigations moved out of the checkout into:
+
+`~/Library/Logs/Soundbox/development-archive-2026-10-28/build/`
+
+This preserves all 2,315 files byte-for-byte: 860,256,008 logical bytes
+(866,140,160 allocated bytes before relocation). The parent `moves.json` lists
+all 20 exact moves; per-file hashes/modes/times and verification records are in
+`~/Library/Logs/Soundbox/checkout-hygiene-2026-10-28/`. Historical
+`build/<investigation>/...` references resolve beneath this archive only when
+that directory is listed in `moves.json`. This includes the current MOONLIGHT,
+waveform parity, efficiency, UI and install investigations. Earlier evidence not
+listed there is not claimed to have been recovered or relocated.
+
+Archived scratch scripts retain their original bytes and may embed historical
+paths, rollback identities or install assumptions. Review and rebind them before
+reuse; they are evidence, not current build/install commands. Maintained harnesses
+remain in `scripts/`, `tests/` and `research/`.
+
+Only `build/native/`, `build/check/` and `build/rekordbox-write-proof/` remain in
+active build output (about 3 MiB allocated). Generated Python/type/Hypothesis
+caches and the empty `dist/` folder moved reversibly to
+`~/.Trash/Soundbox-generated-caches-20261028-050451/`; no files were deleted.
+These caches regenerate on later development runs. Archival/Trash relocation
+cleans the checkout without claiming free-space recovery. The installed app,
+canonical source audio, live AppData, rekordbox data, all native recovery and the
+three regression-reference roots were untouched. The signed installed source
+fingerprint remains the accepted release fingerprint in [HANDOFF](HANDOFF.md).
+No runtime/UI changes require another build or restart.
+
 ## Completed retention — October 26 (historical)
 
 The full wrap-up installed personal build 129 from release commit 81c0d6c and

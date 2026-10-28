@@ -1,5 +1,11 @@
 # Efficiency audit — October 27, 2026
 
+Private evidence relocation, October 28: investigation working directories listed
+in `~/Library/Logs/Soundbox/development-archive-2026-10-28/moves.json` now live
+under that archive with their original `build/` subpaths. Dated `build/...` paths
+below identify those preserved captures, not current runtime dependencies.
+See [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for the exact mapping and retention rules.
+
 Initial source baseline: `a25de73`, clean `main`; then-installed personal build 131.
 Final implementation and build 133 installation are recorded at the end.
 The initial audit below records measurements and disposable candidate experiments.
@@ -256,7 +262,9 @@ justify a promise of instant launch or a combined speed multiplier.
 
 Private scripts, JSON counters, cProfile output, process sample and vmmap summary:
 `~/Library/Logs/Soundbox/efficiency-audit-2026-10-27/`.
-The development working copies are ignored under `build/efficiency-audit-2026-10-27/`.
+The development working copies were originally ignored under
+`build/efficiency-audit-2026-10-27/` and are now in the October28 evidence archive
+described above.
 DB probes first copy a stable encrypted DB/WAL pair and only open disposable
 copies. Candidate changes exist only as process-local monkeypatches; complete
 serialized models matched. The UI probe copies metadata, substitutes disposable
