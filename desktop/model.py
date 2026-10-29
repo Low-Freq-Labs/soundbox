@@ -26,6 +26,8 @@ COLUMNS: list[tuple[str, str, bool]] = [
     ("genre", "Genre", True),
     ("dateAdded", "Date Added", True),
 ]
+from soundbox.track_info import FIELDS as INFO_FIELDS
+COLUMNS.extend((key,label,True) for key,label in INFO_FIELDS)
 
 _RIGHT = {"bpm", "time", "bitrate"}
 
@@ -100,6 +102,14 @@ def row_display_value(row: dict, key: str):
         return _ART_GLYPH.get(val, "")
     if key == "artist" and not val:
         return "—"
+    if key == 'size' and str(val).isdigit():
+        from .devices import human
+        return human(int(val))
+    if key == 'rating' and str(val).isdigit():return '★'*min(5,int(val))
+    if key == 'sampleRate' and val:return str(val)+' Hz'
+    if key == 'color' and str(val).isdigit():
+        colors=('None','Pink','Red','Orange','Yellow','Green','Aqua','Blue','Purple')
+        return colors[int(val)] if int(val)<len(colors) else str(val)
     return val
 
 

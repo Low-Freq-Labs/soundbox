@@ -30,7 +30,8 @@ CDJ work is already here: tracked codecs/field mapping live in
 `soundbox-cdj-ref/` root retains `ref-usb-empty`, `ref-usb-full`, `stage-A-clone`
 and the rejected `stage-B-scratch` candidate. The [CDJ plan](cdj-usb-export.md)
 separates retained experiments from hardware acceptance still needed. These are
-not an installed USB-export feature or disposable packaging output.
+historical candidates, separate from the installed pilot under `native/cdj` and
+`soundbox/cdj_*`; neither they nor frozen fixtures are disposable packaging output.
 
 `./build_app.sh` recreates packaging work under `build/` and output under `dist/`.
 Python, mypy and Hypothesis also recreate their ignored caches during development.
@@ -48,8 +49,9 @@ provenance, validation and cleanup receipts are in [HANDOFF](HANDOFF.md).
 
 ## Final directory audit — October 28
 
-The accepted application source is unchanged. Git integrity, tracked/untracked
-inventory, branch synchronization, dependency health, required fixture manifests,
+At the earlier October28 directory audit, application source was unchanged.
+The later CDJ/browser pilot is current work described in HANDOFF. Git integrity,
+tracked/untracked inventory, branch synchronization, dependency health, required fixture manifests,
 and the existing release-test report inventories were rechecked. No stray app
 bundles, nested repositories, broken links or conflict markers were found outside
 the protected dependency/reference roots; no tracked file exceeds 2 MiB. The
@@ -177,3 +179,22 @@ The October 9 cleanup left the then-installed app, live SoundBox AppData, source
 music, rekordbox data, required fixtures and generation-58 recovery untouched.
 The installed app was later updated to build 126 on October 24 as recorded above.
 Current installed provenance and recovery location remain in [HANDOFF](HANDOFF.md).
+
+
+October28 native CDJ pilot: `native/cdj/` contains the runtime adapter, pinned
+vendored Rust source/provenance and notices. `build/cdj/` is disposable compilation
+output; the documented isolated toolchain remains in `soundbox-cdj-ref/`.
+`offline-integration-20261028/` below that private root is a required immutable
+release fixture, pinned by `tests/fixtures/cdj-reference.json`. Never replace it
+with live device/source reads. The standalone fixture exporter and native control
+captures remain preserved; generated integration candidates are derived evidence.
+Current release/install receipts live under `~/Library/Logs/Soundbox/`; see HANDOFF.
+USB `.soundbox-cdj/transactions/` and matching Mac-side `cdj-recovery/` receipts
+are recovery material, not disposable build/app rollbacks.
+
+October29 UI/analysis/playlist checkpoint: private native source reference captures,
+22 supplied UI screenshots, release/state receipts and unshipped prototypes are
+retained in `~/Library/Logs/Soundbox/playlist-analysis-ui-2026-10-29/`. Its
+`unfinished-prototypes/resume.patch` passed a read-only apply check against the
+checkpoint; review it before reuse. No private DB/audio/authority is committed.
+See [next-session scope](analysis-playlists-next.md) and HANDOFF.

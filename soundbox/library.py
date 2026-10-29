@@ -43,6 +43,7 @@ class Track:
     bitrate: str = ""
     rating: str = ""
     year: str = ""
+    info: dict = field(default_factory=dict)
     # True for files imported directly into SoundBox. They have no DJ-library
     # analysis, so the flag exempts them from source cue-marker filtering.
     imported: bool = False
@@ -110,7 +111,7 @@ class Track:
 
     def to_row(self) -> dict:
         """Serializable row for the UI table."""
-        return {
+        row = {
             "id": self.track_id,
             "title": self.name,
             "artist": self.artist,
@@ -122,6 +123,10 @@ class Track:
             "format": self.file_type,
             "bitrate": self.bitrate,
         }
+        from .track_info import FIELDS
+        row.update({key:str(self.info.get(key,'')) for key,_label in FIELDS})
+        row.update(year=self.year,rating=self.rating,size=str(self.size or ''),location=str(self.path))
+        return row
 
     # Compatibility aliases for XML-era callers while the source-neutral names
     # become the public boundary.

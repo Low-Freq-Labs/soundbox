@@ -410,6 +410,33 @@ class SettingsPage(unittest.TestCase):
             _win.settings = before
             _win._apply_theme_color(before.get('theme_accent', theme.DEFAULT_ACCENT), save=False)
 
+    def test_configured_toggle_cue_page_switches_both_directions_without_repeat_or_typing(self):
+        from desktop.keyboard import Keymap
+        panel = _win.player_bar.cue_panel
+        old_map, old_page = _win._keyboard_router.keymap, panel.pages.currentIndex()
+        mapping = Keymap()
+        mapping.assign('cues.toggle_page', 'F2')
+        _win._keyboard_router.keymap = Keymap(mapping.dump())
+        try:
+            panel.hot_tab.click()
+            with mock.patch.object(_win, '_space_should_play', return_value=True):
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_F2, Qt.NoModifier))
+                self.assertEqual(panel.pages.currentIndex(), 1)
+                self.assertTrue(panel.memory_tab.isChecked())
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_F2, Qt.NoModifier, '', True))
+                self.assertEqual(panel.pages.currentIndex(), 1)
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, Qt.Key_F2, Qt.NoModifier))
+                _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_F2, Qt.NoModifier))
+                self.assertEqual(panel.pages.currentIndex(), 0)
+                self.assertTrue(panel.hot_tab.isChecked())
+            with mock.patch.object(_win, '_space_should_play', return_value=False):
+                _win.eventFilter(_win.search, QKeyEvent(QEvent.KeyPress, Qt.Key_F2, Qt.NoModifier))
+                self.assertEqual(panel.pages.currentIndex(), 0)
+        finally:
+            _win._keyboard_router.release_all()
+            _win._keyboard_router.keymap = old_map
+            (panel.hot_tab if old_page == 0 else panel.memory_tab).click()
+
     def test_keyboard_cue_numbers_follow_page_and_release_original_page(self):
         panel = _win.player_bar.cue_panel
         previous_cues = {kind: list(cues) for kind, cues in panel._cues.items()}
@@ -432,7 +459,7 @@ class SettingsPage(unittest.TestCase):
                         self.assertEqual(released.call_args.args[0], (kind, slot))
                 panel.hot_tab.click()
                 _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyPress, Qt.Key_1, Qt.NoModifier))
-                panel.memory_tab.click()
+                _win._dispatch_keyboard_action('cues.toggle_page')
                 _win.eventFilter(_win.table, QKeyEvent(QEvent.KeyRelease, Qt.Key_1, Qt.NoModifier))
                 self.assertEqual(released.call_args.args[0], ("hot", 0))
                 from desktop.keyboard import Keymap
@@ -804,7 +831,7 @@ class StockIpodUI(unittest.TestCase):
 
     def test_stock_device_header_has_requested_tabs(self):
         self.assertEqual(
-            [button.text() for button in _win.device_tab_buttons],
+            [button.text() for button in _win.device_tab_buttons[:3]],
             ["Device", "Songs", "Playlists"],
         )
         for button in _win.device_tab_buttons:
@@ -816,6 +843,222 @@ class StockIpodUI(unittest.TestCase):
         finally:
             for button in _win.device_tab_buttons:
                 button.setVisible(False)
+
+    def test_device_headers_and_detail_rows_match_the_regular_browser_grid(self):
+        from PySide6.QtWidgets import QWidget
+        from desktop.stock_device_view import StockIpodPages
+        from PySide6.QtWidgets import QTreeWidgetItem
+        header = _win.findChild(QWidget,'DeviceHeader')
+        self.assertEqual(header.height(),_win.table.horizontalHeader().height())
+        self.assertEqual(header.height(),26)
+        tree = StockIpodPages._detail_tree('Grid')
+        try:
+            item = QTreeWidgetItem(tree,['One','Two'])
+            QTreeWidgetItem(tree,['Three','Four'])
+            tree.resize(400,160);tree.show();_app.processEvents()
+            self.assertEqual(tree.visualItemRect(item).height(),24)
+            self.assertEqual(tree.header().height(),26)
+            pixels = tree.viewport().grab().toImage()
+            from desktop import theme
+            from PySide6.QtGui import QColor
+            self.assertEqual(pixels.pixelColor(200,60),QColor(theme.ROW))
+            self.assertEqual(pixels.pixelColor(200,84),QColor(theme.ROW_ALT))
+        finally:
+            tree.close()
+
+    def test_usb_columns_share_visibility_width_and_order_with_browser(self):
+        header = _win.table.horizontalHeader()
+        before = header.saveState()
+        try:
+            _win.table.setColumnHidden(8,False)
+            _win.table.setColumnWidth(3,92)
+            _win._sync_artist_columns()
+            tree = _win.usb_device_pages.playlist_tree
+            for column in range(header.count()):
+                self.assertEqual(tree.isColumnHidden(column),_win.table.isColumnHidden(column))
+                self.assertEqual(tree.columnWidth(column),_win.table.columnWidth(column))
+            self.assertEqual(tree.headerItem().text(0),'Track Title')
+        finally:
+            header.restoreState(before)
+            _win._sync_artist_columns()
+
+    def test_usb_playlist_refits_browser_columns_when_window_resizes(self):
+        previous = (_win.stack.currentIndex(),_win.device_content_stack.currentIndex(),
+                    _win.usb_device_pages.stack.currentIndex(),_win.size())
+        header = _win.table.horizontalHeader()
+        state = header.saveState()
+        try:
+            _win.device_content_stack.setCurrentIndex(2)
+            _win.usb_device_pages.set_page(1)
+            _win.stack.setCurrentIndex(1)
+            _win.show()
+            for width in (1100,1500):
+                _win.resize(width,_win.height());_app.processEvents()
+                view = _win.usb_device_pages.playlist_tree
+                self.assertEqual(view.header().length(),view.viewport().width())
+                self.assertFalse(view.horizontalScrollBar().isVisible())
+        finally:
+            page,device,usb,size = previous
+            _win.resize(size)
+            _win.stack.setCurrentIndex(page)
+            _win.device_content_stack.setCurrentIndex(device)
+            _win.usb_device_pages.set_page(usb)
+            header.restoreState(state)
+            _win._sync_artist_columns()
+
+    def test_usb_native_rows_load_metadata_and_restore_expansion_selection_and_tab(self):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from desktop.devices import DeviceFacts
+        from desktop.usb_device_view import UsbDevicePages,UsbSnapshot
+        from soundbox.cdj_usb import CdjLibrary,CdjPlaylist,CdjSong
+        from pathlib import Path
+        pages = UsbDevicePages()
+        song = CdjSong('7','/Contents/device.wav','Device title','Device artist',14000,'8A',137,320,artwork='/PIONEER/art.jpg')
+        native = CdjLibrary((CdjPlaylist('1','0','Fixture',False,((song.title,song.path),)),),
+            'USB',8,8,(),1,(),songs=(song,))
+        snapshot = UsbSnapshot(Path('/Volumes/NO-LIVE-READ'),1,DeviceFacts(volume_uuid='fake'),native=native)
+        args = dict(name='USB',profile=SimpleNamespace(kind='generic_usb',label='USB',rockbox_export=True),free=1,drift=0)
+        try:
+            pages.set_snapshot(snapshot,**args)
+            pages.resize(950,900);pages.show();_app.processEvents()
+            self.assertEqual(len(pages.controls),7)
+            self.assertTrue(all(control.height()==28 for control in pages.controls.values()))
+            self.assertTrue(pages.apply_settings.isVisible())
+            pages.set_page(1)
+            parent = pages.playlist_tree.topLevelItem(0)
+            parent.setExpanded(True)
+            row = parent.child(0)
+            self.assertEqual([row.text(i) for i in (0,1,3,4,5,6)],
+                ['Device title','Device artist','140.00','8A','2:17','WAV'])
+            pages.playlist_tree.setCurrentItem(row)
+            received = []
+            pages.song_requested.connect(received.append)
+            pages._activate_song(row)
+            self.assertEqual(received,[song])
+            pages.set_snapshot(replace(snapshot),**args)
+            _app.processEvents()
+            self.assertEqual(pages.stack.currentIndex(),1)
+            self.assertTrue(pages.playlist_tree.topLevelItem(0).isExpanded())
+            self.assertEqual(pages.playlist_tree.currentItem().text(0),'Device title')
+        finally:
+            pages.close()
+
+    def test_stock_view_memory_retains_nested_selection_and_distinct_detail_panels(self):
+        from types import SimpleNamespace
+        from PySide6.QtWidgets import QTreeWidgetItem
+        from desktop.cdj import CdjDeviceMixin
+        from desktop.stock_device_view import StockIpodPages
+        pages = StockIpodPages()
+        parent = QTreeWidgetItem(pages.playlist_tree,['Set'])
+        parent.setData(0,Qt.UserRole,'18446744073709551615')
+        child = QTreeWidgetItem(parent,['Song'])
+        parent.setExpanded(True)
+        pages.playlist_tree.setCurrentItem(child)
+        pages.set_page(2)
+        host = SimpleNamespace(_current_device_path='/not-live',
+            _device_profiles={'/not-live':SimpleNamespace(has_stock_ipod=True)},
+            _stock_snapshot=SimpleNamespace(target=Path('/not-live'),identity_key='fixture'),
+            stock_ipod_pages=pages,settings={},_shutting_down=False,
+            _schedule_settings_save=lambda:None,_set_stock_device_tab=pages.set_page)
+        try:
+            CdjDeviceMixin._remember_stock_device_view(host)
+            host.settings = json.loads(json.dumps(host.settings))
+            state = host.settings['device_views']['stock']['fixture']
+            self.assertEqual(state['views']['StockDevicePlaylists']['selected'],[0,0])
+            self.assertEqual(len([key for key in state['views'] if key.startswith('StockDeviceDetails:')]),4)
+            pages.set_page(0)
+            parent.setExpanded(False)
+            pages.playlist_tree.setCurrentItem(parent)
+            CdjDeviceMixin._restore_stock_device_view(host)
+            self.assertEqual(pages.stack.currentIndex(),2)
+            self.assertTrue(parent.isExpanded())
+            self.assertIs(pages.playlist_tree.currentItem(),child)
+        finally:
+            pages.close()
+
+    def test_usb_load_uses_device_audio_and_analysis_without_source_cue_overlay(self):
+        from desktop.usb_device_view import UsbSnapshot
+        from desktop.devices import DeviceFacts
+        from soundbox.cdj_usb import CdjSong
+        from pathlib import Path
+        previous = (_win.usb_device_pages._snapshot,_win._cdj_worker)
+        target = Path('/Volumes/NO-LIVE-USB-PLAYBACK')
+        snapshot = UsbSnapshot(target,9,DeviceFacts(volume_uuid='fixture'))
+        song = CdjSong('7','/Contents/actual.wav','Actual export','Device artist',14000,
+                       analysis='/PIONEER/USBANLZ/A/ANLZ0000.DAT')
+        started = []
+        try:
+            _win.usb_device_pages._snapshot = snapshot
+            with mock.patch.object(_win,'_defer_device_operation_until_scan_finishes',return_value=False), \
+                 mock.patch.object(_win,'_device_operation_owned',return_value=False), \
+                 mock.patch.object(_win,'_start_device_worker',side_effect=lambda w,*_:started.append(w)) as start, \
+                 mock.patch('soundbox.cdj_usb.prepare_playback',return_value=(target/'Contents/actual.wav',target/'PIONEER/USBANLZ/A/ANLZ0000.DAT')) as prepare, \
+                 mock.patch.object(_win.player_bar,'play_track') as play, \
+                 mock.patch.object(_win.tag_controller,'session_cues',side_effect=AssertionError('Source cue overlay')):
+                _win._load_usb_song(song)
+                worker = started[0]
+                start.assert_called_once_with(worker,str(target),'inspect')
+                worker.run()
+                worker.finished.emit()
+                _app.processEvents()
+                prepare.assert_called_once_with(target,9,song)
+                args,kwargs = play.call_args
+                self.assertTrue(args[0].startswith('usb:fixture:'))
+                self.assertEqual(args[1],target/'Contents/actual.wav')
+                self.assertEqual(kwargs['analysis_path'],str(target/'PIONEER/USBANLZ/A/ANLZ0000.DAT'))
+                self.assertIsNone(kwargs['cues'])
+                self.assertIsNone(kwargs['autoplay'])
+        finally:
+            _win.usb_device_pages._snapshot,_win._cdj_worker = previous
+
+    def test_usb_click_opens_overview_and_playlist_tabs_without_a_filesystem_read(self):
+        from pathlib import Path
+        from types import SimpleNamespace
+        from desktop.devices import DeviceFacts
+        from desktop.usb_device_view import UsbSnapshot, UsbPlaylist
+        dev = '/Volumes/SYNTHETIC-USB-VIEW'
+        previous = (_win._current_device_path, dict(_win._device_profiles),
+                    dict(_win._usb_view_cache), dict(_win._usb_device_rows),
+                    set(_win._usb_view_requests), _win.device_content_stack.currentIndex())
+        snapshot = UsbSnapshot(Path(dev), 77, DeviceFacts(capacity_bytes=1000),
+                               (UsbPlaylist('Set', 'Playlists/Set.m3u8', (('Track','/Music/a.wav'),)),))
+        profile = SimpleNamespace(has_stock_ipod=False, label='USB', rockbox_export=True)
+        class Item:
+            def data(self, _column, _role):
+                return dev
+        try:
+            _win._device_profiles[dev] = profile
+            _win._usb_view_cache[dev] = snapshot
+            _win._usb_device_rows[dev] = ('USB',400,0,profile)
+            with mock.patch.object(_win.fs_model, 'setRootPath', side_effect=AssertionError('Root enumeration')),                     mock.patch.object(_win, '_refresh_devices') as refresh:
+                _win._on_device_click(Item(), 0)
+                self.assertEqual(_win.device_content_stack.currentIndex(), 2)
+                self.assertEqual(_win.usb_device_pages.stack.currentIndex(), 0)
+                self.assertEqual([b.text() for b in _win.device_tab_buttons[:2]], ['Overview','Playlists'])
+                self.assertFalse(_win.device_tab_buttons[2].isHidden())
+                self.assertEqual([b.text() for b in _win.device_tab_buttons],
+                    ["Overview","Playlists","Category","Sort","Column","Color","My Settings"])
+                refresh.assert_not_called()
+                _win.device_tab_buttons[1].click()
+                self.assertEqual(_win.usb_device_pages.stack.currentIndex(), 1)
+                refresh.assert_called_once()
+                self.assertIn(dev, _win._usb_view_requests)
+                item = _win.usb_device_pages.playlist_tree.topLevelItem(0)
+                self.assertEqual(item.childCount(), 0)
+                item.setExpanded(True)
+                self.assertEqual(item.child(0).text(0), 'Track')
+        finally:
+            current, profiles, cache, rows, requests, page = previous
+            _win._current_device_path = current
+            _win._device_profiles = profiles
+            _win._usb_view_cache = cache
+            _win._usb_device_rows = rows
+            _win._usb_view_requests = requests
+            _win.device_content_stack.setCurrentIndex(page)
+            for button, label in zip(_win.device_tab_buttons, ('Device','Songs','Playlists')):
+                button.setText(label)
+                button.hide()
 
     def test_device_header_sync_is_always_available(self):
         old_sync = _win._sync_device
@@ -1363,6 +1606,7 @@ class StockIpodUI(unittest.TestCase):
             player_bar=SimpleNamespace(is_playing=lambda: True), settings={},
             device_tree=SimpleNamespace(topLevelItemCount=lambda: 0),
             _stock_view_cache={}, _device_mount_tokens={}, lib=None,
+            _current_device_path='', _usb_view_cache={}, _usb_view_requests=set(),
             _sync_playlists=lambda: [], overrides={}, titles={}, stock_ipod_shadow_store=None,
             _on_devices_discovered=lambda rows: None,
             _start_device_worker=lambda *args: started.append(args))
@@ -1619,7 +1863,7 @@ class StockIpodUI(unittest.TestCase):
             _win._on_device_click(_Item(), 0)
             self.assertEqual(_win.device_content_stack.currentIndex(), 1)
             self.assertTrue(all(
-                not button.isHidden() for button in _win.device_tab_buttons))
+                not button.isHidden() for button in _win.device_tab_buttons[:3]))
             self.assertEqual(calls[0][0], dev)
         finally:
             _win._read_stock_device_view = old_reader
@@ -1851,7 +2095,7 @@ class StockIpodUI(unittest.TestCase):
         old_tokens = dict(_win._device_mount_tokens)
         old_current = _win._current_device_path
         profile = SimpleNamespace(
-            has_stock_ipod=False, kind="generic", label="Generic USB")
+            has_stock_ipod=False, kind="generic", label="USB")
         _win.device_tree.clear()
         try:
             _win._dev_scan_worker = SimpleNamespace(mount_tokens={dev: 51})
@@ -3560,8 +3804,10 @@ class TitleJunkSetting(unittest.TestCase):
 class ColumnPersistence(unittest.TestCase):
     def test_widths_and_visibility_roundtrip(self):
         t = _win.table
-        t.setColumnWidth(3, 123)
+        # Free the Key width before enlarging BPM; independent drags may not
+        # borrow from Title when the row already fills the viewport.
         t.setColumnHidden(4, True)
+        t.setColumnWidth(3, 123)
         _win._save_columns()
         t.setColumnWidth(3, 60)
         t.setColumnHidden(4, False)
@@ -3598,13 +3844,12 @@ class BrowserColumnInteraction(unittest.TestCase):
         _win.setVisible(visible)
         _app.processEvents()
 
-    def test_dragging_title_and_bpm_only_resizes_the_dragged_column(self):
+    def test_column_drags_are_independent_and_stop_at_scrollbar(self):
         from PySide6.QtTest import QTest
-        from desktop.model import COLUMNS
-        for column, delta in ((0, 65), (3, 45)):
-            before = [self.header.sectionSize(i) for i in range(len(COLUMNS))]
-            following = self.header.sectionViewportPosition(column + 1)
-            edge = self.header.sectionViewportPosition(column) + before[column] - 1
+        def widths():
+            return [self.header.sectionSize(i) for i in range(self.header.count())]
+        def drag(column, delta):
+            edge = self.header.sectionViewportPosition(column) + self.header.sectionSize(column) - 1
             start = QPoint(edge, self.header.height() // 2)
             end = start + QPoint(delta, 0)
             QTest.mouseMove(self.header.viewport(), start)
@@ -3612,12 +3857,77 @@ class BrowserColumnInteraction(unittest.TestCase):
             QTest.mouseMove(self.header.viewport(), end)
             QTest.mouseRelease(self.header.viewport(), Qt.LeftButton, Qt.NoModifier, end)
             _app.processEvents()
-            self.assertEqual(self.header.sectionSize(column), before[column] + delta)
-            for other in range(len(COLUMNS)):
-                if other != column:
-                    self.assertEqual(self.header.sectionSize(other), before[other])
-            self.assertEqual(self.header.sectionViewportPosition(column + 1), following + delta)
-            self.assertEqual(self.header.sortIndicatorSection(), -1)
+        # Create room by narrowing Title, then use some of that room for BPM.
+        before = widths()
+        drag(0, -80)
+        self.assertEqual(widths(), [before[0] - 80, *before[1:]])
+        before = widths()
+        drag(3, 45)
+        expected = before[:]
+        expected[3] += 45
+        self.assertEqual(widths(), expected)
+        # Further growth stops at the edge without taking any other width.
+        for column, resize in ((3, self.header.resizeSection),
+                               (0, self.header.resizeSection),
+                               (6, _win.artists_view.setColumnWidth)):
+            before = widths()
+            slack = _win.table.viewport().width() - self.header.length()
+            resize(column, 5000)
+            expected = before[:]
+            expected[column] += slack
+            self.assertEqual(widths(), expected)
+            self.assertEqual(self.header.length(), _win.table.viewport().width())
+        self.assertEqual(_win.artists_view.header().length(), self.header.length())
+        self.assertEqual(self.header.sortIndicatorSection(), -1)
+        for column in (7, 8, 9):
+            _win._set_column_hidden(column, False)
+            self.assertLessEqual(self.header.length(), _win.table.viewport().width())
+        _win.resize(1000, _win.height())
+        _app.processEvents()
+        self.assertLessEqual(self.header.length(), _win.table.viewport().width())
+
+    def test_older_ten_column_header_keeps_new_metadata_unchecked(self):
+        from PySide6.QtWidgets import QTableWidget
+        from desktop.model import COLUMNS
+        old=QTableWidget(0,10)
+        self.addCleanup(old.close)
+        for i in (7,8,9):old.setColumnHidden(i,True)
+        _win.settings['columns_state']=bytes(old.horizontalHeader().saveState().toBase64()).decode('ascii')
+        _win.settings.pop('columns_keys',None)
+        _win._restore_columns();_app.processEvents()
+        self.assertEqual([i for i in range(len(COLUMNS)) if not _win.table.isColumnHidden(i)],list(range(7)))
+        _win._set_column_hidden(10,False);_win._set_column_hidden(10,True)
+        self.assertGreater(_win.table.viewport().width(),0)
+        self.assertGreater(_win.model.rowCount(),0)
+        self.assertEqual(_win.settings['columns_keys'],[key for key,_label,_hidden in COLUMNS])
+
+    def test_all_optional_columns_remain_reachable_and_can_be_hidden_without_restart(self):
+        from desktop.model import COLUMNS
+        for i in range(len(COLUMNS)):_win.table.setColumnHidden(i,False)
+        _win.resize(1000,_win.height());_win._fit_browser_columns(fill=True);_app.processEvents()
+        self.assertTrue(_win.table.horizontalScrollBar().isVisible())
+        self.assertGreater(_win.table.horizontalScrollBar().maximum(),0)
+        self.assertGreater(_win.table.viewport().width(),0)
+        _win.table.horizontalScrollBar().setValue(_win.table.horizontalScrollBar().maximum())
+        self.assertLess(self.header.sectionViewportPosition(len(COLUMNS)-1),_win.table.viewport().width())
+        _win._apply_default_columns();_app.processEvents()
+        self.assertFalse(_win.table.horizontalScrollBar().isVisible())
+        self.assertGreater(_win.model.rowCount(),0)
+
+    def test_footer_geometry_never_changes_when_progress_count_and_cancel_appear(self):
+        from desktop.app import FooterBar
+        bar=_win.findChild(FooterBar)
+        height=bar.height();viewport=_win.table.viewport().height()
+        try:
+            _win.progress.setVisible(True);_win.cancel_btn.setVisible(True)
+            _win.status_count_label.setText('9999/9999');_win.status_count_label.setVisible(True)
+            _app.processEvents()
+            self.assertEqual(bar.height(),height)
+            self.assertEqual(_win.table.viewport().height(),viewport)
+            self.assertGreaterEqual(_win.cancel_btn.y(),0)
+            self.assertLessEqual(_win.cancel_btn.y()+_win.cancel_btn.height(),height)
+        finally:
+            _win.progress.hide();_win.cancel_btn.hide();_win.status_count_label.hide()
 
     def test_legacy_restore_keeps_manual_widths_and_window_growth_expands_only_title(self):
         from PySide6.QtWidgets import QHeaderView
@@ -3633,31 +3943,42 @@ class BrowserColumnInteraction(unittest.TestCase):
         before = [self.header.sectionSize(i) for i in range(self.header.count())]
         _win.resize(_win.width() + 100, _win.height())
         _app.processEvents()
-        self.assertEqual(self.header.sectionSize(0), 350)
+        self.assertEqual(self.header.length(), _win.table.viewport().width())
         self.assertEqual(self.header.sectionSize(3), 120)
         self.assertEqual([self.header.sectionSize(i) for i in range(1, self.header.count())],
                          before[1:])
+        grown_title = self.header.sectionSize(0)
         _win.resize(_win.width() - 100, _win.height())
         _app.processEvents()
-        self.assertEqual(self.header.sectionSize(0), 250)
+        self.assertEqual(self.header.sectionSize(0), grown_title - 100)
         _win.artists_view.setColumnWidth(0, 275)
         self.assertEqual(self.header.sectionSize(0), 275)
         _win._show_artists()
+        _app.processEvents()
         _win.resize(_win.width() + 80, _win.height())
         _app.processEvents()
-        self.assertEqual(self.header.sectionSize(0), 355)
-        self.assertEqual(_win.artists_view.columnWidth(0), 355)
+        self.assertEqual(self.header.length(), _win.artists_view.viewport().width())
+        self.assertEqual(_win.artists_view.columnWidth(0), self.header.sectionSize(0))
 
-    def test_scrollbar_track_starts_below_header_with_overflow_and_at_both_ends(self):
+    def test_columns_fit_and_scrollbar_starts_below_header_at_both_ends(self):
         from PySide6.QtWidgets import QStyle, QStyleOptionSlider
         _win.model.set_rows([{'id': str(i), 'title': f'Track {i}'} for i in range(300)])
         self.header.resizeSection(0, _win.table.width() + 100)
         _app.processEvents()
-        self.assertTrue(_win.table.horizontalScrollBar().isVisible())
+        self.assertFalse(_win.table.horizontalScrollBar().isVisible())
+        self.assertLessEqual(self.header.length(), _win.table.viewport().width())
         self.assertGreater(_win.table.verticalScrollBar().maximum(), 0)
         for view, header in ((_win.table, self.header),
                              (_win.artists_view, _win.artists_view.header())):
+            if view is _win.artists_view:
+                _win._show_artists()
+            else:
+                _win._show_collection()
+            _app.processEvents()
             bar = view.verticalScrollBar()
+            self.assertLessEqual(header.length(), view.viewport().width())
+            self.assertLessEqual(header.mapTo(view, QPoint(header.length(), 0)).x(),
+                                 bar.mapTo(view, QPoint(0, 0)).x())
             header_bottom = header.mapTo(view, QPoint(0, header.height())).y()
             self.assertEqual(bar.mapTo(view, QPoint(0, 0)).y(), header_bottom)
             for position in (bar.minimum(), bar.maximum(), bar.minimum()):
@@ -3672,6 +3993,20 @@ class BrowserColumnInteraction(unittest.TestCase):
                     QStyle.CC_ScrollBar, option, QStyle.SC_ScrollBarSlider, bar)
                 self.assertGreaterEqual(bar.mapTo(view, handle.topLeft()).y(), header_bottom)
         self.assertEqual(_win.table.rowAt(0), 0)
+
+    def test_hidden_browser_refits_when_returning_from_settings(self):
+        original = _win.body_stack.currentIndex()
+        try:
+            for width in (1100, 1600, 1000):
+                _win.body_stack.setCurrentIndex(1)
+                _win.resize(width, _win.height())
+                _app.processEvents()
+                _win.body_stack.setCurrentIndex(0)
+                _app.processEvents()
+                self.assertEqual(self.header.length(), _win.table.viewport().width())
+                self.assertFalse(_win.table.horizontalScrollBar().isVisible())
+        finally:
+            _win.body_stack.setCurrentIndex(original)
 
     def test_fitted_columns_do_not_flash_horizontal_scrollbar_during_window_resize(self):
         from PySide6.QtCore import QObject
@@ -3949,7 +4284,8 @@ class PlaybackTime(unittest.TestCase):
             self.assertEqual(label.text(), '1:00:01/1:02:03')
             self.assertGreaterEqual(label.width(), label.fontMetrics().horizontalAdvance(label.text()))
             widgets = [*_win.grid_edit_buttons, _win.bpm_value,
-                       _win.quantize_btn, label, _win.my_tags]
+                       _win.quantize_btn, label, _win.info_placeholder,
+                       _win.my_tags, _win.settings_btn]
             ordered = sorted(widgets, key=lambda widget: widget.geometry().left())
             for left, right in zip(ordered, ordered[1:]):
                 self.assertLess(left.geometry().right(), right.geometry().left())

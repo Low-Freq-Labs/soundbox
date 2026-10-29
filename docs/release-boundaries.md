@@ -24,7 +24,7 @@ Build/install validation is recorded in the current handoff.
 “Public” means intended shared product scope, subject to the release gates in
 [ROADMAP.md](ROADMAP.md), not a declaration that today's build is ready to ship.
 Device management is shared, including guarded file maintenance and confirmed
-generic-volume Erase. Future validated rekordbox-compatible/CDJ USB export is
+generic-volume Erase. Validated rekordbox-compatible/CDJ USB export is
 also shared product scope. Neither profile may bypass source/device safety
 contracts. September 28 clarification: Sonny wants features in public when their
 specific implementation can be properly distributed and operated. Online features,
@@ -76,7 +76,7 @@ they are not a completed legal or dependency clearance.
 | Suggest artists for Unknowns (online consensus) | Omit | Retain via provider | Separate from local merge suggestions |
 | `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Personal bundles it; public physically excludes it |
 | Device discovery, loading status, dashboard, normal eject | Keep | Same | Core serialized device controller |
-| Generic FAT32 / Rockbox filesystem playlist export | Keep, guarded | Same | Do not revive blanket generic-USB prohibition |
+| Rockbox filesystem export / generic FAT32–exFAT native CDJ export | Shared scope, guarded | Same; CDJ remains a testing pilot | Separate firmware/layout contracts and publication boundaries |
 | Stock MA446 export | Keep after acceptance | Same allowlist | Validated MP3/supported WAV only |
 | Dual MA446 stock/Rockbox single-copy sync | Keep after acceptance | Same allowlist | Schema 3; one transaction authority |
 | Managed playlist deletion, reference-counted cleanup | Keep, confirmed | Same | Core sync semantics, not an unlock bypass |
@@ -88,8 +88,8 @@ they are not a completed legal or dependency clearance.
 | Backup/restore | Keep | Same | Staged restore/recovery and serialized core state ownership |
 | Diagnostic logging / actionable errors | Keep | Same | No user paths/library data bundled as examples |
 | Exact native traces, developer scripts and legacy XML CLI | Not product UI | Developer tools | Separate tools; do not treat as personal feature unlock |
-| Future validated rekordbox-compatible/CDJ USB export | Planned shared capability | Same | Requires separate implementation, validation and distribution review; not currently shipped |
-| CDJ writer research and hardware recovery fixtures | Exclude | Developer workspace only | Not an installed module or released capability |
+| Native CDJ USB pilot | Intended shared capability, release withheld | Personal testing build | Integrated dedicated backend; physical and dependency/distribution review remain open |
+| CDJ research harnesses and hardware fixtures | Exclude | Developer workspace only | Only the compiled dedicated renderer enters the personal pilot; no private fixture is bundled |
 | Other stock models, schema-2→3 migration, Windows | Not yet supported | Same | Personal profile does not expand firmware authority |
 
 No personal library, photos, absolute source paths, device captures, credentials
@@ -159,3 +159,12 @@ sandbox or a claim that an untrusted plugin cannot access the filesystem.
 - The public artifact contains no private provider, optional network dependency,
   developer capture, personal configuration or fixture. Review licenses/notices
   and signing/notarization separately before distribution.
+
+
+October28 CDJ integration vendors rbxport revision
+`b739d369665b492534dc2eae0733322c040a26d5` (GPL-2.0-or-later) and its dependency
+closure. Upstream notices/full GPL text are retained and packaged with the
+separate renderer. The local personal pilot is not redistribution clearance or
+hardware certification; review corresponding-source/dependency obligations before
+any public release. The source kit/provenance are under `native/cdj/vendor/`;
+private reference media, DB captures and settings never enter the app bundle.

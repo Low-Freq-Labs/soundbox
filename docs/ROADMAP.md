@@ -1,8 +1,26 @@
 # SoundBox roadmap
 
-Updated October 28, 2026. Current priorities and remaining acceptance are below;
+Updated October 29, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
+
+October29 session checkpoint: the dedicated USB exporter, USB/global preferences,
+column migration/footer corrections and responsive Info/layout refinements are
+implemented. Info resolves artwork after opening in a TaskOwner worker, builds
+its edit page lazily, omits Lyricist, gives Comments the full row, centers the
+artwork group and anchors technical details. Category/Sort have visible panels;
+Color uses dots beside inputs; Global My Settings and Keyboard scroll at the
+right window edge. Installed provenance is recorded in HANDOFF.
+
+Sonny requested continuing the larger additions in a fresh session. The remaining
+committed scope is [Analysis, track menu and native playlists](analysis-playlists-next.md).
+It includes a menu right of My Tags, standalone collection-song USB export,
+three beat-count modes, opt-in BPM/grid and Key analysis with its own settings
+page, and ordinary native rekordbox playlist CRUD. These are **not shipped** by
+this checkpoint. Use the pinned [rbxport](https://github.com/chrisle/rbxport)
+implementation as the reference/engine, retaining SoundBox source/recovery and
+worker boundaries. Native reference capture has begun; no playlist source-write
+authority has been provisioned.
 
 Historical October27 checkpoints: Sonny requested a fresh efficiency review. The
 [measured audit](efficiency-audit-2026-10.md) led to an approved implementation:
@@ -26,32 +44,63 @@ at every zoom. The final 1,452-test gate passed and the signed follow-up is
 installed; warm snapshot-browser p95 remains below 1.5 s (1,464 ms). Provenance
 and installed verification are in HANDOFF. A populated-window
 trace still showed occasional missed presentations; that release did not prove
-the residual scrolling hitch solved. Further comparison work is now closed as
-noted below.
+the residual scrolling hitch solved. The subsequent RGB report below reopens
+targeted visual investigation, without establishing a cadence correction.
 
 October28: original RGB-edge B is implemented, tested and installed.
 Only main-lane edge color/coverage blending changes to encoded-channel space;
 both visibility lifts are explicitly retained. Later C/D/E trials are set aside.
 The prep strip also has an elapsed/total clock with hour formatting and evenly
 spaced controls, reusing existing transport updates.
-Sonny accepted this build and closed further waveform comparison/tuning for now.
+Sonny accepted this build and initially closed further waveform comparison/tuning.
 The old private comparison archive and obsolete builds were deleted with approval;
 collect fresh references only if he reopens it. Full native appearance equivalence
 was not established. Current release/provenance and historical cadence limits
 are recorded in HANDOFF.
 
-The browser follow-up adds a scrollbar beside the track area, a footer-colored
-right utility rail and a borderless inactive circle-i placeholder. The scrollbar
-starts below the headers. Header drags resize columns independently, while window
-width changes grow/shrink Title and retain other column widths. Prep-edit progress now
-uses the existing bottom-left footer style with specific beatgrid/BPM/Hot Cue/
-Memory Cue/My Tag labels, verified `Done` and a timed return to `Ready`.
+**October28 native-reference follow-up:** Gunslinger (Bemah Flip), bars
+24.1–30.1, exposed playback red glisten at RGB 576/864. Fresh native recording
+registration supports logical-point movement. The accepted combined comparison
+uses that motion unit, a logical-pixel detail footprint, and fine-interval
+occupancy weighting to preserve color contrast instead of the brighter bare
+2-ms envelope. Other modes/stops, source audio and canonical caches are unchanged.
+Full release/install evidence is in HANDOFF. Earlier blend, physical-pixel-only,
+and direct-384-coverage trials were ineffective or partial and were not promoted.
+The separate wider-zoom color-brightness complaint remains open; fuller wide
+geometry is intended.
+
+**RGB overview follow-up:** the mini waveform now shares main RGB's bounded
+faint-only coverage lift and display-space blend, replacing its full-range cubic
+and linear-light resolve. Shape, source/cache data and all main-lane output are
+unchanged; BLUE/3BAND are controls. Keyboard Cue pages also exposes an unassigned
+**Toggle cue page** action, retaining 9/0 and held-cue page ownership.
+Release/visual review state is in HANDOFF.
+
+**USB dashboard follow-up:** non-stock USB/Rockbox devices use the iPod-style
+four-panel Overview and expandable Playlists tab. M3U/M3U8 snapshots below
+`/Playlists` are bounded, read-only and cached in the existing device worker;
+ordinary polls do not reread them. The subsequent native CDJ pilot below adds
+bounded native library/profile reads for generic USBs. Device rows and empty
+stripes now match the regular 24-point browser grid, with a shared 26-point
+header line. USB song columns mirror the browser layout and load actual device
+audio/cues. Per-device views remember tab, hierarchy, selection and scroll.
+The shortcut capture dialog also has Unbind immediately before Save, removing
+only the edited binding through the existing save/rollback path. Current installed
+state and visual acceptance are in HANDOFF.
+
+The earlier browser follow-up placed the bordered circle-i immediately before
+My Tags in the evenly spaced prep strip; Info and Settings share the dark control
+fill, 44×28 size, three-point corners and centered vector icons. The layout popup
+matches its selector width. The former right rail is removed. Manual column drags
+are independent, clamped to existing free width at the scrollbar boundary. Window
+shrink and newly shown columns also remain bounded; Artists shares the layout.
+The scrollbar begins below the headers and the footer has one full-width divider.
+Prep-edit progress uses the existing bottom-left style with specific beatgrid/BPM/
+Hot Cue/Memory Cue/My Tag labels, verified `Done` and a timed return to `Ready`.
 Focus-return saved-grid checks remain silent. Release/install state is in HANDOFF.
-The rail/header/footer junctions are seamless. Resize follow-up coordinates Title
-before shrinking child layout, removes redundant Artists section updates and
-declines unsupported table paint roles early. This removes transient horizontal-
-scrollbar flashing; compositor cadence and live-drag smoothness remain separate
-from the synthetic resize/geometry measurements recorded in HANDOFF.
+Ordinary layouts remain within the viewport; deliberately selecting more fields
+than their minimum widths permits horizontal scrolling. Compositor cadence and
+live-drag smoothness remain separate from synthetic geometry checks.
 
 October28 manual-BPM correction resolves disputed terminal beats using a bounded,
 read-only PCM header proof in the accepted source worker. Native STOP CAPPIN at
@@ -60,7 +109,7 @@ isolated bytes. Integer/one-decimal/two-decimal entry normalize alike. Unsupport
 ambiguous endpoints remain blocked; no new format or write domain is authorized.
 The thin black text-outline preview was rejected and never shipped.
 
-## Next sequence — iPod acceptance, library management, CDJ USB export
+## Historical October26 sequence — updated by October28 CDJ integration
 
 **Active library-management work:** Sonny approved the October 26
 [rekordbox prep-editing plan](rekordbox-prep.md): five grid buttons, exact-position
@@ -116,7 +165,9 @@ Tag/cue saves and authorized startup recovery share ownership; unknown journals
 or replaced source files fail closed. Release/install status and remaining native
 UI review are in [HANDOFF](HANDOFF.md); scope is in [the plan](rekordbox-prep.md).
 
-Sonny confirmed this order on October 26. The tag milestone extends the prior
+Sonny confirmed this order on October26; on October28 he advanced CDJ integration
+to the active milestone documented at the end of this roadmap. The following
+sequence is the historical planning baseline, not a restriction on that request. The tag milestone extends the prior
 build-129 artwork/Settings release; that completed work below
 is not a new implementation queue. These phases guide product work; the existing
 correctness, lifecycle and public-distribution gates later in this document still
@@ -144,12 +195,12 @@ apply where relevant.
    waveform modes and artwork. Audio playing in folder mode fails acceptance.
    Record model/firmware and required library format; test initial export,
    incremental updates, unchanged re-export, removals, interruption/recovery and
-   linked-player use before production integration. Current generic USB export
-   does not provide this. `/PIONEER` remains protected in the installed app;
-   a dedicated writer/ownership/recovery contract must precede any product writes.
+   linked-player use before production acceptance. The October28 pilot now
+   integrates its dedicated writer/ownership/recovery contract; ordinary exporters
+   retain their `/PIONEER` exclusion.
 
-The CDJ phase is a requested product milestone after iPod/library work, not an
-uncommitted UX idea or a shipped capability. It does not require completing every
+The original CDJ phase was sequenced after iPod/library work. October28 moved
+its pilot implementation forward; physical/production acceptance stays separate. It does not require completing every
 optional refactor or public-distribution task before research can resume.
 
 ## Completed artwork, Settings and player release — October 26
@@ -162,7 +213,7 @@ memory and a separate 8-MiB / 128-entry preview LRU. Reopening restores saved co
 and progress counts only pending checks. Keep and accepted replacements retain exact context decisions. Failed
 lookups are retriable, never cached misses; repeated failures pause the pass.
 Main controls remain Keep/Replace/Next, All remains optional browsing, and no
-scan changes images. Settings order is General, Keyboard, Graveyard, Connections.
+scan changes images. Settings order is General, My Settings, Keyboard, Graveyard, Connections.
 A successful source refresh now updates authoritative cues for the loaded track
 without audio reload/seek; queued stale manifests cannot put old cues back.
 Grid corrections retain the existing metadata-only background refresh path.
@@ -188,7 +239,7 @@ not a certificate that every cover is correct.
 
 Sonny's October 24 report led to source changes for bracket-aware song matching,
 accountable label credits, and an optional personal SoundCloud connection that
-prioritizes liked tracks. Settings now separates General, Keyboard, Graveyard
+prioritizes liked tracks. Settings now separates General, My Settings, Keyboard, Graveyard
 and Connections. Keyboard mappings support multiple bindings,
 conflict moves and safe held-cue routing; 1–8 use the active cue page, 9 selects
 Hot Cue and 0 selects Memory Cue. The five title-cleanup defaults use the requested
@@ -283,8 +334,8 @@ See the [feature allocation and module contract](release-boundaries.md).
 Reliable supported-device management remains the release prerequisite. The
 original MA446 workflow has physical acceptance; newer lifecycle/performance
 corrections still have the gates below. The requested rekordbox-style CDJ export
-phase follows iPod/library work; research must pass its own hardware and safe-write
-gates before becoming a shared product feature.
+pilot was advanced by Sonny on October28. Its dedicated safe-write contract is
+implemented; hardware and distribution gates still precede public acceptance.
 
 ## Device follow-up — physical acceptance when the iPod returns
 
@@ -508,3 +559,38 @@ runtime instruction files.
 - [ ] Complete the targeted legacy pre-provenance automatic-cover review, retaining
   manual selections, sticky removals and current conservative matching. This is
   curated-data QA, not permission for a bulk artwork reset or automatic refetch.
+
+
+## October28–29 native CDJ integration
+
+The compiled native exporter prepares both library formats from fresh source
+metadata/cues, exact new audio and curated artwork. Drops publish directly.
+Update Playlists reconciles managed selections while retaining the collection and
+other native playlists. rekordbox/SoundBox may alternate freely; small native
+catalog adoption replaces exclusive-manifest checks. Retained media is not walked
+or hashed. The release helper, one captured audio placement and incremental
+catalog merge remove repeated preparation. Interrupted work resumes internally;
+a newer coherent native export supersedes old pending catalogs.
+
+Implemented USB tabs: Overview, Playlists, Category, Sort, Column, Color,
+My Settings. Overview has a compact form. Browse lists, right column and eight
+color titles are editable.44 player/mixer controls share explicit Global import/
+apply in SoundBox Settings; no automatic propagation/presets. Native file samples
+prove the added Mic Echo, Headphones B, Hot Cue and −∞ mappings and reverse
+restoration. The information dialog has Summary/Info, artwork inside Info and
+optional metadata columns; edits remain SoundBox-local and feed export.
+
+The USB menu is Update Playlists, Import My Settings, Reformat USB, Eject.
+FAT32/exFAT formatting reviews the real volume name and physical target; no HFS+
+or agent hardware-format acceptance. Ordinary iPod/Rockbox behavior stays separate.
+Sonny reports successful player playback, artwork and waveforms. Remaining gates:
+exact firmware/full control matrix, newer OneLibrary hardware, broader media/loop/
+credit coverage, large-library staging efficiency, recovery retention and
+redistribution review. Physical iPod acceptance remains pending. Validation and
+true installed provenance belong in HANDOFF; see [CDJ contract](cdj-usb-export.md).
+
+October29 runtime follow-up: migrate older header states without unhiding newly
+added metadata columns; retain user choices with columns_keys. Many explicitly
+selected fields can scroll, and hiding them works without restarting. Footer
+height stays fixed while count/progress/Cancel appear. Native display snapshots
+read stable WAL pages from local copies while keeping write admission separate.

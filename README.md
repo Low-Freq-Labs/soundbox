@@ -81,19 +81,20 @@ header footprint.
 
 | Destination | Supported path and limits |
 | --- | --- |
-| Rockbox or generic FAT32 USB player | Filesystem export with ordered M3U8 playlists and per-track artwork |
+| Rockbox | Filesystem export with ordered M3U8 playlists and per-track artwork |
+| Generic FAT32/exFAT USB | Native CDJ pilot: classic Device Library + Device Library Plus, prepared together; playlist drops start directly |
 | Stock MA446 iPod | Guarded stock database export; validated MP3 and supported WAV only |
 | FAT32 MA446 with stock firmware and Rockbox | One composite transaction and a single shared copy where both firmwares support the audio |
 | Other stock iPod models | Read-only; stock writes are not enabled |
-| rekordbox/CDJ `/PIONEER` tree | Reserved and excluded from ordinary SoundBox writes; CDJ export remains separate R&D |
+| rekordbox/CDJ `/PIONEER` tree | Dedicated CDJ boundary only; excluded from ordinary stock/dual/Rockbox/filesystem writes |
 
-The next product sequence is physical iPod acceptance when Sonny's device returns,
-music-library management refinement, then native rekordbox-compatible CDJ USB
-export. That final milestone requires full library/performance behavior on the
-tested CDJs; folder-mode audio playback is insufficient. The existing prototype
-is in [`research/cdj_export/`](research/cdj_export/README.md), with its hardware
-findings and acceptance plan in [CDJ USB research](docs/cdj-usb-export.md).
-See the [roadmap](docs/ROADMAP.md) for sequencing and remaining gates.
+October28: Sonny advanced the native CDJ pilot to the active milestone. Both
+library formats share one selection, playlist order, audio/artwork/analysis set and
+recoverable transaction. USB settings are editable directly, with explicit global
+My Settings import/apply. Sonny reports playback, artwork and waveforms working.
+The full CDJ-3000 control matrix, newer OneLibrary hardware and redistribution
+review remain open. Physical iPod acceptance is still pending. See the
+[CDJ contract](docs/cdj-usb-export.md) and [roadmap](docs/ROADMAP.md).
 
 Background upkeep reuses unchanged analysis and prepared artwork, title edits
 refresh only their display row, and idle device watching waits for mount changes.
@@ -167,7 +168,7 @@ in [the documentation archive](docs/archive/README.md).
   traps (read before touching workers, player, or sync).
 - **[`docs/IDEAS.md`](docs/IDEAS.md)** — exploratory QOL backlog; UX
   workshop before roadmap commitment.
-- **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ USB export R&D (prototype in `research/cdj_export/`).
+- **[`docs/cdj-usb-export.md`](docs/cdj-usb-export.md)** — CDJ pilot write contract, reference evidence and remaining hardware/distribution gates.
 
 The [October efficiency audit](docs/efficiency-audit-2026-10.md) measures startup,
 browser and recurring work and separates candidate improvements from shipped behavior.
@@ -229,6 +230,31 @@ hydrated by startup checks.
   Add Anyway/Skip (Skip default). Names `Collection`/`Artists` are reserved.
 - **⛃ Devices** — external drives only, auto-detected; drag any playlist
   (rekordbox, SoundBox, or a pinned view) onto one to start its guarded export flow.
+
+**USB dashboard.** Tabs are Overview, Playlists, Category, Sort, Column, Color and
+My Settings. Edit native browse/sort order, default right column, color titles and
+player/mixer settings directly. Global My Settings lives in SoundBox Settings,
+with explicit Save to Global / Load Global controls. Existing settings survive
+ordinary playlist exports. Overview uses a compact two-column General layout.
+
+rekordbox and SoundBox can export over each other at any time. Existing native
+collections and other playlists are preserved. Drops export directly; Update
+Playlists updates SoundBox's managed selections without auditing retained songs
+or deleting collection media. The USB menu is Update Playlists, Import “My
+Settings”, Reformat USB…, Eject. Reformat offers the actual volume name and
+FAT32/exFAT, with a destructive confirmation. HFS+ is not currently offered.
+Source metadata/cues are captured fresh; unsupported imported/XML analysis fails
+explicitly. Song columns match your regular browser; double-click loads actual
+USB audio/cues. Device views remember your tab, hierarchy, selection and scroll.
+The information button opens Summary and Info, with editable artwork inside Info
+and optional metadata columns, hidden until selected. The dialog opens before
+artwork resolution; Comments spans the Info row and the edit note sits bottom
+left. USB Category/Sort panels have visible borders, Color uses dots beside
+inputs, and Global My Settings/Keyboard scroll at the right window edge.
+Older saved layouts keep
+new fields unchecked; many selected fields can scroll without stranding data.
+The footer keeps its height when Cancel appears. Supported metadata edits stay in SoundBox and
+feed export without changing source audio. See [CDJ limits](docs/cdj-usb-export.md).
 
 **Curation.** Inline Title/Artist edits (double-click or right-click) become
 per-track overrides that rename files on the device — sources untouched.
@@ -313,16 +339,18 @@ if the profile is unavailable the excluded image stays hidden. Other manual and
 unrecorded artwork stays protected. Additional source controls are under More.
 The bulk re-scan retries misses and explicitly automatic avatars; it preserves
 manual and unrecorded images. In-flight background results cannot overwrite an edit.
-Settings orders its tabs **General**, **Keyboard**, **Graveyard**, **Connections**,
+Settings orders its tabs **General**, **My Settings**, **Keyboard**, **Graveyard**, **Connections**,
 with tabs centered across one header and Back on the left; Graveyard retains its
 full-width page.
 [Keyboard settings](docs/KEYBOARD.md) provide searchable,
-remappable actions with multiple bindings and explicit conflict moves. By default,
+remappable actions with multiple bindings and explicit conflict moves. Edit a
+keycap and choose **Unbind** to remove that shortcut. By default,
 1–8 preview a filled slot on the active Hot/Memory page or set an empty slot at
 the exact playhead. The grid strip’s **Q** toggle snaps new cue points to the nearest
 beat when red (on); grey is off. Its state is saved in SoundBox, independently of
 rekordbox’s preference. Existing cue playback stays exact. Command-1–8 deletes; 9 selects Hot Cue and 0 selects Memory
-Cue. Memory numbers reorder chronologically; Hot letters stay fixed. Empty slots
+Cue. A remappable **Toggle cue page** action under Cue pages switches between
+them; it starts unassigned. Memory numbers reorder chronologically; Hot letters stay fixed. Empty slots
 can also be clicked to set. Saves update markers without moving playback or
 reloading the library. `=` / `-` zoom in/out. General balances Player/Library/Backup on the
 left with Title Cleanup/Cover Art on the right. **Connections** shows rekordbox
@@ -455,9 +483,10 @@ The device browser can copy selected audio/M3U8 entries in order into
 for rename, new folder, delete, and assign-artist. Playlist entries that escape
 the selected volume through `..` or a symlink are refused. Browser mutations
 are pinned to the exact confirmed mount and cannot span devices. A root `/PIONEER` rekordbox/CDJ
-export remains visible and counts toward used space, but is excluded from Sync,
-ownership, verification, import, cleanup, and all ordinary SoundBox writes.
-Non-FAT32 filesystems get flagged immediately (Rockbox requirement).
+export counts toward used space and stays excluded from ordinary stock/dual/
+Rockbox/filesystem Sync, ownership, verification, import and cleanup. Generic
+USBs use the separate native CDJ contract described above.
+Non-FAT32 filesystems are flagged for Rockbox; native generic USB export also supports exFAT.
 
 Dual-boot sync is deliberately single-copy. A complete no-write
 plan classifies each selected source: validated MA446-safe MP3 or stereo

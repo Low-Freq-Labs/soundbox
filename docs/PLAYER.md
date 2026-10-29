@@ -18,8 +18,12 @@ The player has a header, a deck, and a prep strip beneath it:
 - Prep strip: five grid buttons (enabled for a ready accepted track) and a BPM entry field on the left;
   a Q Quantize toggle after the grid buttons, then an elapsed/total playback clock.
   Controls use evenly distributed flexible gaps across the waveform width. The first grid button aligns with
-  the waveform's left edge. My Tags, Settings and Search occupy the right end;
-  Search aligns beneath the cue panel, and My Tags sits to Settings' left.
+  the waveform's left edge. The track information button sits
+  immediately before My Tags, followed by Settings and Search. Info and Settings
+  use the same dark inner background, 44×28 button size and corner radius as the
+  grid controls. Both icons use centered vector geometry. The player layout popup
+  matches its selector field's width. Search aligns beneath
+  the cue panel, and My Tags sits to Settings' left.
   Settings ends at the waveform's right edge. There is no separator before
   My Tags; space outside cue buttons matches the surrounding header panel.
 
@@ -30,22 +34,29 @@ drag previews use the existing transport updates. Only a changed displayed secon
 publishes new label text; no extra polling timer, audio load or library read is
 introduced. A source change resets it to `0:00/0:00` while duration loads.
 
-Below the player, the browser's scrollbar sits at the right edge of the track
-area, before a narrow footer-colored utility rail. Its track and thumb start
-below the column-header row. The rail's borderless circle-i is an inactive
-track-information placeholder.
-The rail, scrollbar cap and rail/footer corner have no separator seams; the normal
-footer divider remains below the main content.
+Below the player, the browser reaches the window's right edge without a utility
+rail. Its persistent vertical scrollbar and thumb start below the 26-point
+column-header row. The footer retains one full-width top divider.
 
-All columns, including Track Title, resize independently when their header edges
-are dragged: following columns move, and overflow uses the horizontal scrollbar.
-Resizing the window gives the width difference to Title, shrinking it first when
-narrowing the window and keeping other widths intact. The saved widths and
-visibility survive restart; Artists shares all column widths, including Title.
-Window shrink is coordinated before child layout and growth after layout, avoiding
-temporary horizontal-scrollbar flashes. Header synchronization updates only the
-changed section; unsupported table paint roles return immediately. Text, colors,
-sorting, editing and the per-item scrolling contract remain unchanged.
+Columns stay within the scrollbar boundary. Manual header drags resize only the
+dragged column, using any free width and stopping at the right edge without taking
+space from Title or another column. Narrow a column first to make room when the
+row is full. Window resizing gives spare space to Title; narrowing the window or
+showing more columns can reduce other widths only when necessary to keep every
+column reachable. Saved layouts are constrained on restore; Artists shares the
+same widths and visibility. Ordinary layouts keep horizontal scrolling off. Deliberately selecting fields
+whose combined minimum widths exceed the viewport enables horizontal scrolling
+so the rows remain reachable. Sorting, editing and 24-point
+per-item vertical scrolling are unchanged. USB playlist columns mirror this
+layout. Device headers use the same 26-point line; Overview/Playlists use the
+same 24-point rows and empty alternating backgrounds.
+
+Loading a USB playlist song uses its actual device audio and ANLZ companions,
+after mount/path validation in the shared device lane. The player reads that
+exported cue/grid analysis without substituting Mac source audio or source cue
+session overlays. Device track IDs cannot use desktop source cue/grid editing.
+The dashboard remembers its per-device tab, expanded playlists, selected row and
+scroll position across visits and launches.
 
 Accepted edits use the existing bottom-left footer label, with its normal font,
 color and spacing: `Updating beatgrid…`, `Updating BPM…`, `Updating hot cue…`,
@@ -283,14 +294,32 @@ October 28 RGB edge update implements Sonny's selected original B: main-lane
 RGB integrates display-encoded channels with joint pixel coverage, blends the
 opaque background in that same space, then decodes the final pixel for Metal's
 sRGB attachment. This reduces edge glare while retaining both existing visibility
-lifts, source colors, signed extrema, LOD, song lattice and timing. BLUE,3BAND and
-the overview retain their existing compositors. Later lift-removal/direct-pixel
+lifts, source colors, signed extrema, LOD, song lattice and timing. At that stage,
+BLUE, 3BAND and the overview retained their existing compositors. Later lift-removal/direct-pixel
 C/D/E trials are set aside at Sonny's request. On October28 he accepted this build
-and closed further waveform comparison/tuning for now; reopen only when asked.
-Full native appearance equivalence was not established. Private comparison captures
-and experimental builds were deleted with approval; required regression fixtures
-remain. Release/installation status is in
-[HANDOFF](HANDOFF.md).
+and initially closed further waveform comparison/tuning. The later native-reference
+follow-up addresses Gunslinger (Bemah Flip), bars 24.1–30.1, at RGB 576/864:
+one logical-point motion, a logical-pixel detail footprint (2-ms compact detail
+on Retina), and fine-interval occupancy weighting of encoded color contrast.
+This preserves the original painted amount when a wider peak interval contains
+fine gaps, avoiding the brighter unweighted 2-ms trial. Sonny accepted the
+combined comparison for both motion and color. Source/cache samples, palette,
+height curve, overview, BLUE/3BAND and other RGB stops remain unchanged.
+The original wide-zoom color-brightness report is separate and remains open;
+increased wider-view fill is intended. Release/install status is in HANDOFF.
+The later RGB overview follow-up matches the main lane's display-space blend and
+bounded faint-only coverage shoulder: below 18%, c′=c×(1+1.5×(1−c/0.18)²);
+stronger coverage receives no lift. The final opaque RGB pixel is decoded once
+for the sRGB attachment. The former overview-wide cubic/linear-light resolve
+brightened ordinary partial coverage. Geometry, authored colors, height transfer,
+sampling, caches and transport are unchanged. BLUE/3BAND overviews retain their
+cubic/linear-light resolve. Native before/after captures retain identical main
+lanes in all modes and identical BLUE/3BAND complete frames.
+
+Full native appearance equivalence was not established. Earlier private comparison
+captures and experimental builds were deleted with approval; the fresh Gunslinger
+reference and acceptance receipts remain, along with required regression fixtures.
+See [HANDOFF](HANDOFF.md).
 
 October 1 test audit: production Metal helpers now run against independent
 GPU numerical oracles, with a separate required Cocoa drawable gate. Tiny
@@ -349,8 +378,9 @@ detail. Close views gain a little height too, with more breathing room than
 wide views. It applies only to the large scrolling waveform.
 
 At 24/32/48 points/s, BLUE/RGB select a half-pixel extrema footprint;
-64–1500 select the physical-pixel footprint. The October 2 follow-up selects
-2-ms compact detail at Retina 384 and 1-ms at 576–1500. One song-anchored mip and the final
+64–1500 select the physical-pixel footprint except RGB 576/864, which select
+one logical pixel. Compact detail is 2 ms at Retina 384 and RGB 576/864; the
+other close cases retain 1 ms. One song-anchored mip and the final
 one-pixel profile integral preserve detail without mixing adjacent mip levels.
 The former four-pixel close footprint and divisor-dependent height gain were
 removed after comparison with the new reference.
@@ -360,9 +390,11 @@ comparison: exact joint pixel-area coverage plus continuous fractional translati
 removed the distracting red/dark-red oscillation while preserving detail. The
 October27 C coverage combination (distinct from rejected October28 C lift trial)
 initially changed only RGB 384. The later player follow-up
-extends continuous RGB translation to every zoom and removes broad RGB column
-brightening elsewhere. Samples, source extrema, LOD, colors, caches, clocks and
-export data remain unchanged. BLUE/3BAND retain their policies. The full release gate and installed
+initially extended continuous RGB translation to every zoom and removed broad
+RGB column brightening elsewhere. The later native-reference follow-up below
+uses logical-point motion and an occupancy-weighted logical source footprint at
+RGB 576/864. Source extrema, authored palette, caches, clocks and export data
+remain unchanged. BLUE/3BAND retain their policies. The full release gate and installed
 curated-runtime checks passed; see HANDOFF. A final minimum-stroke refinement was
 not retained: across 96 actual track phase captures it changed at most two display codes in 0.0051% of pixels,
 with no meaningful improvement over C.
@@ -381,7 +413,7 @@ Settings exposes three persistent waveform displays:
   correction reduces wide-view white washout without changing geometry or
   smoothing detail. Sonny accepted the narrowed BLUE candidate in a live muted comparison. Exact
   recording parity and broader track acceptance were not established by that
-  comparison. Further visual comparison work is closed for now as noted above.
+  comparison. The reopened report above concerns RGB; it grants no new BLUE acceptance.
   Its scrolling geometry is a high-rate signed
   min/max trace: low-frequency bins remain thin oscillating lines and dense
   bins widen naturally.
@@ -414,8 +446,9 @@ keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
 Both use output-footprint-selected extrema. Compact supplements hold signed
 1-ms cells at close zoom; spatial antialiasing resolves their coverage.
-RGB at every zoom and 3BAND use continuous fractional display translation. BLUE
-rounds to physical pixels through 384 points/s, then logical points at 576–1500. Audio, seek and grid clocks remain continuous in every mode.
+RGB 576/864 use logical-point translation; other RGB stops and 3BAND remain
+continuous. BLUE rounds to physical pixels through 384 points/s, then logical
+points at 576–1500. Audio, seek and grid clocks remain continuous in every mode.
 The minimum signed stroke is one physical pixel before antialiasing, replacing
 the fixed 3.6-point width that made thin carriers visibly thick on Retina.
 3BAND uses the original 150-Hz PWV7 rows and linear per-band interpolation,
@@ -837,14 +870,16 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - `color_model` versions the persisted RGB analysis independently of the V5
   container schema. Old records remain playable during background or selected-track upgrades; each temporary record lives beside
   its target, and SoundBox-owned grid/cue rows survive the upgrade.
-- Derive one footprint-matched LOD from source samples per physical pixel and
-  select one peak level. The overview and main lane call the same sampler;
-  high-rate detail refines geometry only, never timing or color.
+- Derive one footprint-matched LOD and select one peak level. The scrolling
+  RGB 576/864 source footprint is one logical pixel; other detail policies are
+  described above. High-rate detail never changes authored palette or timing;
+  those two RGB stops additionally use its interval occupancy for encoded contrast.
 - Print height and amplitude-weighted RGB onto a fixed, global song-coordinate
   attribute lattice, then translate those attributes. The lattice stores no
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
   the final drawable never refilters an already-antialiased edge. Every zoom
-  uses four attributes per physical pixel. RGB at every zoom and 3BAND use
+  uses four attributes per physical pixel. RGB 576/864 use logical-point motion;
+  other RGB stops and 3BAND use
   continuous fractional translation. BLUE rounds only its display offset:
   physical-pixel increments through 384 points/s, logical points at 576–1500.
   Its position error is at most half the chosen increment.
@@ -896,8 +931,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   BLUE and RGB 384 composite their exact area directly. Other RGB stops retain
   exact area except for the bounded faint-detail shoulder described below. Historically, boosting 20% coverage to nearly 49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
-  overview alone retains the continuous cubic vividness curve for true
-  subpixel peaks. This distinction affects only compositing, never height,
+  BLUE/3BAND overview retains the continuous cubic vividness curve for true
+  subpixel peaks; RGB overview uses the main lane's bounded faint-only shoulder. This distinction affects only compositing, never height,
   hue, LOD, or detail.
 - Integrate the fixed height/hue profile over exactly one physical pixel before
   final vertical coverage. BLUE/RGB retain five quarter-pixel boundary samples
@@ -921,6 +956,12 @@ measurements. The compact-cache and source-clock contracts above take precedence
   a horizontally hidden color sample cannot tint a visible RGB edge. RGB blends
   that encoded result with the encoded background and decodes the final opaque
   pixel once for the sRGB attachment. BLUE retains linear-light integration.
+  RGB 576/864 first weight encoded contrast against the background by the
+  represented fine-interval area divided by coarse-interval area. This is
+  attached to the song lattice before premultiplication; no final-pixel blur,
+  per-frame palette gain, new cache format or source read is added. The original
+  physical-footprint level supplies the reference; 1x output is unchanged when
+  both level selections agree.
   RGB 384 keeps that exact area. Other RGB stops apply a hue-independent
   visibility shoulder only when exact coverage c is below 0.18:
   c′ = c × (1 + 1.5 × (1−c/0.18)²). It is smooth and monotonic, adds at most
@@ -955,11 +996,11 @@ measurements. The compact-cache and source-clock contracts above take precedence
   one-physical-pixel vertical coverage band at final compositing. In neither
   path may per-tap alpha be averaged or an already-rasterized edge be sampled
   again.
-- The small overview alone composites coverage through a continuous cubic
-  ease-out so one-physical-pixel quiet passages remain visible. The scrolling
-  lane uses joint geometric coverage with the explicit RGB column policy above;
-  applying overview vividness
-  there made entering/leaving saturated edge pixels pulse.
+- The small RGB overview uses the main RGB faint-only shoulder and encoded-space
+  compositing. BLUE/3BAND overviews retain continuous cubic ease-out for thin peaks.
+  The scrolling lane uses joint geometric coverage with the explicit RGB column
+  policy above; applying overview-wide cubic vividness there made saturated edge
+  pixels pulse.
 - Address audio detail and compact color with integer sample anchors plus local
   float phase. Never multiply a large absolute float time back into a sample
   index.

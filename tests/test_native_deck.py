@@ -1266,6 +1266,51 @@ class NativeDeckContract(unittest.TestCase):
         self.assertTrue(np.all(counts >= 1), counts)
         self.assertTrue(np.all(counts <= 3), counts)
 
+    def test_rgb_coarse_footprint_does_not_paint_fine_gaps_at_full_strength(self):
+        import numpy as np
+
+        self.host.resize(800, 166)
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.set_analysis({"heights": [.5] * 300,
+                                "colors": [[255, 0, 0]] * 300, "sample_rate": 150.0})
+        self.assertTrue(self.deck._set_waveform_streams({
+            "_blue_detail": bytes([31]) * 300,
+            "_rgb_detail": bytes.fromhex("e07c") * 300,
+            "_detail_bands": bytes([30, 40, 50]) * 300,
+        }, 150.0))
+        # Positive/negative halves each occupy half the pooled interval.
+        # Symmetry makes the 1/2 occupancy independent of the height transfer.
+        self.deck.set_audio_detail({
+            "rate": 1000.0, "base_count": 2000,
+            "mip_divisors": [1, 2], "mip_counts": [2000, 1000],
+            "range_min_mips": [struct.pack('<2000h', *([0, -16384] * 1000)),
+                               struct.pack('<1000h', *([-16384] * 1000))],
+            "range_max_mips": [struct.pack('<2000h', *([16384, 0] * 1000)),
+                               struct.pack('<1000h', *([16384] * 1000))],
+            "encoding": "song-anchored-extrema-i16le-v1",
+        })
+        self.deck.set_waveform_mode('RGB')
+        for zoom in (576, 864):
+            self.deck.set_zoom(zoom)
+            self.deck.set_visual_position(500, True)
+            QTest.qWait(50)
+            self.deck.diagnostic_begin_frame_trace(1, 64)
+            self.deck.request_display()
+            self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                'presentation_completed_frames'] == 1)
+            self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                'gpu_completed_frames'] == 1)
+            output = Path(self.temp.name) / f'occupancy-{zoom}-{time.time_ns()}'
+            self.deck.diagnostic_finish_frame_trace(output)
+            manifest = json.loads((output / 'manifest.json').read_text())
+            frame = np.frombuffer((output / 'frames.bgra').read_bytes(), dtype='u1').reshape(
+                manifest['crop_height_pixels'], 64, 4)
+            scale = self.deck.diagnostic_view_geometry()[2] / self.host.width()
+            expected = [9, 7, 134] if scale > 1.5 else [0, 0, 255]
+            pixel = frame[manifest['crop_height_pixels'] // 2, 20, :3].astype(int)
+            self.assertLessEqual(int(np.abs(pixel - expected).max()), 2)
+
     def test_rgb_palette_is_not_dimmed_by_zero_compact_height(self):
         import numpy as np
 
@@ -1379,7 +1424,7 @@ class NativeDeckContract(unittest.TestCase):
                     for base in ((50000, 42704) if zoom == 864 else (50000,)):
                         first = capture(base)
                         first_record = dict(last_record)
-                        continuous_rgb = mode == "RGB"
+                        continuous_rgb = mode == "RGB" and zoom not in (576, 864)
                         point_rate = round(zoom)
                         common = math.gcd(44100, point_rate)
                         shift = round(point_rate / common * scale)
@@ -1425,6 +1470,23 @@ class NativeDeckContract(unittest.TestCase):
                                 first[30:-30, 6:106, :3].astype(int)
                                 - one_pixel[30:-30, 5:105, :3].astype(int))
                             self.assertLessEqual(int(delta.max()), 2)
+                        if mode == "RGB" and zoom in (576, 864) and base == 50000:
+                            # The native reference moves in LOGICAL pixels.
+                            # A physical-pixel-only fix still shimmered on Retina;
+                            # protect both the hold and one-point boundary.
+                            held = capture(base + 400.0 / zoom)
+                            np.testing.assert_array_equal(
+                                first[30:-30, 5:105, :3], held[30:-30, 5:105, :3])
+                            advanced = capture(base + 600.0 / zoom)
+                            quantum = round(scale)
+                            delta = np.abs(
+                                first[30:-30, 5+quantum:105+quantum, :3].astype(int)
+                                - advanced[30:-30, 5:105, :3].astype(int))
+                            self.assertLessEqual(int(delta.max()), 2)
+                            self.assertAlmostEqual(
+                                float(last_record['attribute_offset'])
+                                - float(first_record['attribute_offset']),
+                                scale * 4, delta=.001)
                         capture(0)  # forces a different attribute buffer center
                         returned = capture(base)
                         np.testing.assert_array_equal(first, returned)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -11,10 +11,11 @@ from .keyboard import BY_ID, COMMANDS, Keymap, display, event_binding
 
 
 class BindingDialog(QDialog):
-    def __init__(self, keymap, action, parent=None):
+    def __init__(self, keymap, action, parent=None, *, old=""):
         super().__init__(parent)
         self.keymap, self.action = keymap, action
         self.binding = ""
+        self.unbind_requested = False
         self.move = False
         self.setWindowTitle("Shortcut · " + BY_ID[action].label)
         self.setMinimumWidth(420)
@@ -27,17 +28,29 @@ class BindingDialog(QDialog):
         self.feedback = QLabel("Esc cancels. Modifier-only keys are ignored.")
         self.feedback.setWordWrap(True)
         layout.addWidget(self.feedback)
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        self.save = buttons.button(QDialogButtonBox.Save)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        self.unbind_button = QPushButton("Unbind")
+        self.unbind_button.setEnabled(bool(old and old in keymap.bindings(action)))
+        self.unbind_button.clicked.connect(self._unbind)
+        buttons.addWidget(self.unbind_button)
+        self.save = QPushButton("Save")
         self.save.setEnabled(False)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.save.clicked.connect(self.accept)
+        buttons.addWidget(self.save)
+        layout.addLayout(buttons)
         self.setFocusPolicy(Qt.StrongFocus)
         # Capture before buttons/text fields or a native shortcut can consume it.
         from PySide6.QtWidgets import QApplication
         QApplication.instance().installEventFilter(self)
         self.finished.connect(lambda _result: QApplication.instance().removeEventFilter(self))
+
+    def _unbind(self):
+        self.unbind_requested = True
+        self.accept()
 
     def eventFilter(self, obj, event):
         if event.type() not in (QEvent.ShortcutOverride, QEvent.KeyPress, QEvent.KeyRelease):
@@ -72,8 +85,9 @@ class KeyboardPage(QWidget):
         super().__init__(parent)
         self.keymap, self.save = keymap, save
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 16, 24, 20)
+        layout.setContentsMargins(0, 16, 0, 0)
         head = QHBoxLayout()
+        head.setContentsMargins(24,0,24,0)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find an action or shortcut…")
         self.search.setClearButtonEnabled(True)
@@ -87,15 +101,18 @@ class KeyboardPage(QWidget):
         layout.addLayout(head)
         note = QLabel("Click a shortcut to change it. Add more than one per action. Hold actions release with the key.")
         note.setObjectName("SettingsSub")
+        note.setContentsMargins(24,0,24,0)
         note.setWordWrap(True)
         layout.addWidget(note)
         self.message = QLabel()
         self.message.setObjectName("SettingsSub")
+        self.message.setContentsMargins(24,0,24,0)
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.NoFrame)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         layout.addWidget(self.scroll, 1)
         self._render()
 
@@ -107,7 +124,7 @@ class KeyboardPage(QWidget):
         position = self.scroll.verticalScrollBar().value()
         host = QWidget()
         columns = QHBoxLayout(host)
-        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setContentsMargins(24, 0, 24, 20)
         columns.setSpacing(18)
         sides = []
         for _ in range(2):
@@ -216,9 +233,12 @@ class KeyboardPage(QWidget):
         self._render()
 
     def _capture(self, action, old=""):
-        dialog = BindingDialog(self.keymap, action, self)
-        if dialog.exec() == QDialog.Accepted and dialog.binding:
-            self._change(lambda: self.keymap.assign(action, dialog.binding, replace=old, move=dialog.move))
+        dialog = BindingDialog(self.keymap, action, self, old=old)
+        if dialog.exec() == QDialog.Accepted:
+            if dialog.unbind_requested and old:
+                self._change(lambda: self.keymap.remove(action, old))
+            elif dialog.binding:
+                self._change(lambda: self.keymap.assign(action, dialog.binding, replace=old, move=dialog.move))
         dialog.deleteLater()
 
     def _reset_all(self):

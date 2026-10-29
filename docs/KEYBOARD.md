@@ -3,7 +3,11 @@
 **Settings → Keyboard** is a searchable two-column list of action groups. Each
 action's keycaps, removal controls, Add shortcut, and per-action Reset stay together
 on the same row. Multiple bindings wrap within the row. Click a keycap to replace
-it, or Add shortcut to record another key/modifier combination. A conflicting
+it, or Add shortcut to record another key/modifier combination. When editing an
+existing keycap, **Unbind** sits immediately left of Save and removes that shortcut
+through the normal save path. Other shortcuts for the action remain. Removing its
+last binding persists an explicit unassigned override; a failed save restores the
+previous mapping. Unbind is inactive when adding a new shortcut. A conflicting
 assignment names its current action and offers an explicit Move shortcut; it
 never silently steals another action's binding. Reset all asks before replacing
 the user's configured mappings with defaults.
@@ -22,6 +26,11 @@ Additional cue defaults:
 | 0 | Select the Memory Cue page |
 | = | Zoom in |
 | - | Zoom out |
+
+**Toggle cue page** switches between Hot Cues and Memory Cues from the same
+Cue pages group. It starts unassigned; use Add shortcut to choose its key. The
+separate 9/0 page-selection defaults remain available. Switching pages preserves
+any held cue's original page/slot until release.
 
 Cue keys use press/release, including latching through the configured Play action.
 On an accepted library with rekordbox/agent closed, empty slots create without

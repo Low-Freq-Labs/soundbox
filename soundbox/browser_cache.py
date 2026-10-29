@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 import tempfile
 
-SCHEMA = 1
+SCHEMA = 2
 _FIELDS = {'id', 'title', 'artist', 'bpm', 'key', 'time', 'dateAdded', 'genre', 'format', 'bitrate'}
+from .track_info import FIELDS as INFO_FIELDS
+_FIELDS.update(key for key,_label in INFO_FIELDS)
 
 
 def fingerprint(inputs: tuple) -> str:

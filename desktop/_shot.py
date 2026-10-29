@@ -14,7 +14,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest import mock
 
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import QStandardPaths,Qt
 
 QStandardPaths.setTestModeEnabled(True)  # sandbox saves; never the real library.json
 
@@ -44,6 +44,21 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    all_columns = '--all-columns' in sys.argv
+    if all_columns:sys.argv.remove('--all-columns')
+    track_info = "--track-info" in sys.argv
+    if track_info:sys.argv.remove("--track-info")
+    format_usb = "--format-usb" in sys.argv
+    if format_usb:sys.argv.remove("--format-usb")
+    usb_page = None
+    for flag, page in (('--usb-overview',0),('--usb-playlists',1),('--usb-category',2),('--usb-sort',3),
+                       ('--usb-column',4),('--usb-color',5),('--usb-my-settings',6)):
+        if flag in sys.argv:
+            usb_page = page
+            sys.argv.remove(flag)
+    shortcut_unbind = '--shortcut-unbind' in sys.argv
+    if shortcut_unbind:
+        sys.argv.remove('--shortcut-unbind')
     edit_status = '--edit-status' in sys.argv
     if edit_status:
         sys.argv.remove('--edit-status')
@@ -78,8 +93,8 @@ def _render() -> None:
     if art_review:
         sys.argv.remove("--art-review")
     settings_tab = None
-    for name in ("General", "Keyboard", "Connections", "Graveyard"):
-        flag = "--settings-" + name.lower()
+    for name in ("General", "My Settings", "Keyboard", "Connections", "Graveyard"):
+        flag = "--settings-" + name.lower().replace(' ','-')
         if flag in sys.argv:
             settings_tab = name
             sys.argv.remove(flag)
@@ -192,6 +207,9 @@ def _render() -> None:
     for _ in range(3):
         app.processEvents()
     if settings_tab:
+        if settings_tab=='My Settings':
+            from soundbox import my_settings
+            win._global_my_settings.set_profile(my_settings.values(my_settings.new_files({}).items()))
         win.hidden = {"2", "4", "7"}
         win.hidden_dates = {"2": "2026-10-24 06:30", "4": "2026-10-23 15:22", "7": "2026-10-22 09:04"}
         win._refresh_graveyard()
@@ -217,6 +235,10 @@ def _render() -> None:
                 app.processEvents()
                 assert positions == tuple(widget.geometry() for widget in (
                     win.status_label, win.status_count_label, win.progress, win.cancel_btn))
+    if all_columns:
+        from .model import COLUMNS
+        for column in range(len(COLUMNS)):win.table.setColumnHidden(column,False)
+        win._fit_browser_columns(fill=True);app.processEvents()
     if analysis_paused:
         win._on_analysis_tasks_ready(3)
         win._on_analysis_storage_paused(True, 19 * 1024 ** 3, 25 * 1024 ** 3)
@@ -435,6 +457,94 @@ def _render() -> None:
         target = Path(out)
         dialog.grab().save(str(target.with_name(target.stem + "-credentials.png")))
         dialog.close()
+    if usb_page is not None:
+        from pathlib import Path
+        from desktop.devices import DeviceFacts
+        from desktop.usb_device_view import UsbSnapshot
+        from soundbox.cdj_usb import CdjLibrary, CdjPlaylist, CdjSong
+        from soundbox import my_settings
+        from .usb_preferences import USB_TABS
+        preferences=dict(categories=[(i,i,name,i,visible) for i,name,visible in (
+            (1,'GENRE',False),(2,'ARTIST',True),(3,'ALBUM',True),(4,'TRACK',True),(11,'KEY',True),
+            (17,'PLAYLIST',True),(19,'HISTORY',True),(20,'SEARCH',True),(24,'FOLDER',True),(27,'MATCHING',True))],
+            sorts=[(i,i,name,i,True) for i,name in ((25,'DEFAULT'),(26,'ALPHABET / TRACK NAME'),(5,'BPM'),(11,'KEY'),(22,'DATE ADDED'),(2,'ARTIST'))],
+            sub_column=None,colors=list(enumerate(('Pink','Red','Orange','Yellow','Green','Aqua','Blue','Purple'),1)))
+        profiles=tuple(('PIONEER/'+name,raw) for name,raw in my_settings.new_files({}).items())
+        win.usb_device_pages.global_profile=my_settings.values(profiles)
+        snapshot = UsbSnapshot(Path('/Volumes/SOUNDBOX USB'), 1,
+            DeviceFacts(volume_uuid='SYNTHETIC-USB', protocol='USB', device_identifier='disk9s1',
+                        filesystem_name='MS-DOS (FAT32)', capacity_bytes=256_000_000_000,
+                        free_bytes=192_000_000_000, writable=True),
+            native=CdjLibrary((
+                CdjPlaylist('1', '0', 'CRATES', True, ()),
+                CdjPlaylist('2', '1', 'SET ONE', False,
+                    (('WODD — GHOST PROTOCOL', '/Contents/GHOST PROTOCOL.wav'),
+                     ('Zero — Enter The Dragon', '/Contents/Enter The Dragon.wav'))),
+                CdjPlaylist('3', '0', 'WARMUPS', False,
+                    (('Aweminus — Sea Shanty', '/Contents/Sea Shanty.wav'),))),
+                'SOUNDBOX USB', 8, 8, (('waveform_color', 'RGB'), ('waveform_position', 'LEFT'),
+                ('overview_waveform', 'Half Waveform'), ('key_format', 'Alphanumeric')), 1, profiles, preferences=preferences,songs=(
+                    CdjSong('1','/Contents/GHOST PROTOCOL.wav','GHOST PROTOCOL','WODD',14000,'8A',180,1411,artwork='/PIONEER/Artwork/1.jpg'),
+                    CdjSong('2','/Contents/Enter The Dragon.wav','Enter The Dragon','Zero',14000,'2A',195,1411),
+                    CdjSong('3','/Contents/Sea Shanty.wav','Sea Shanty','Aweminus',14000,'3A',160,1411))))
+        win.usb_device_pages.set_snapshot(snapshot, name='SOUNDBOX USB',
+            profile=SimpleNamespace(label='USB', kind='generic_usb', rockbox_export=True),
+            free=192_000_000_000, drift=0)
+        win.device_content_stack.setCurrentIndex(2)
+        for i, button in enumerate(win.device_tab_buttons):
+            button.setVisible(True);button.setText(USB_TABS[i])
+        win._current_device_path = str(snapshot.target)
+        win.dev_header.setText('SOUNDBOX USB')
+        win.device_sync_btn.setText('Update Playlists')
+        win._set_device_tab(usb_page)
+        win.stack.setCurrentIndex(1)
+        if usb_page==1:
+            win.usb_device_pages.playlist_tree.topLevelItem(0).setExpanded(True)
+            win.usb_device_pages.playlist_tree.topLevelItem(0).child(0).setExpanded(True)
+        app.processEvents()
+        win.grab().save(out)
+    if shortcut_unbind:
+        from pathlib import Path
+        from desktop.keyboard import Keymap
+        from desktop.keyboard_page import BindingDialog
+        dialog = BindingDialog(Keymap(), 'cues.hot_page', win, old='9')
+        dialog.show()
+        app.processEvents()
+        target = Path(out)
+        dialog.grab().save(str(target.with_name(target.stem + '-unbind.png')))
+        dialog.reject()
+    if track_info:
+        from pathlib import Path
+        from .track_info import TrackInfoDialog
+        from PySide6.QtWidgets import QTabWidget
+        row=win._row_for(next(iter(win.lib.tracks_by_id.values())))
+        row.update(album='GHOST PROTOCOL',label='SoundBox',comments='A synthetic track for UI review',year='2026',
+            releaseDate='2026-10-29',sampleRate='44100',size='13900000',rating='4',playCount='20',hotCueAutoLoad='On')
+        from PySide6.QtGui import QImage,QColor,QPainter
+        from PySide6.QtTest import QTest
+        art=QImage(320,320,QImage.Format_RGB32);art.fill(QColor('#202634'))
+        painter=QPainter(art);painter.setPen(QColor(theme.PURPLE))
+        painter.drawText(art.rect(),Qt.AlignCenter,'SOUNDBOX\nGHOST PROTOCOL');painter.end()
+        art_path=Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))/'info-fixture.png'
+        art.save(str(art_path))
+        row['location']='/Music/Example artist/Album name/Long title for the selected track.wav'
+        dialog=TrackInfoDialog(row,artwork=lambda:art_path,save=lambda _changes:True,pick_art=lambda:None,parent=win)
+        dialog.show();app.processEvents()
+        QTest.qWait(100)
+        target=Path(out)
+        dialog.grab().save(str(target.with_name(target.stem+'-summary.png')))
+        dialog.findChild(QTabWidget).setCurrentIndex(1);app.processEvents()
+        dialog.grab().save(str(target.with_name(target.stem+'-info.png')))
+        dialog.reject()
+    if format_usb:
+        from .usb_preferences import FormatUsbDialog
+        from soundbox.usb_format import FormatTarget
+        from pathlib import Path
+        dialog=FormatUsbDialog(FormatTarget('/Volumes/SOUNDBOX USB',(1,2),'synthetic','disk99',(),256_000_000_000,('/Volumes/SOUNDBOX USB',)),win)
+        dialog.show();app.processEvents()
+        target=Path(out)
+        dialog.grab().save(str(target.with_name(target.stem+'-format.png')))
+        dialog.reject()
     win.shutdown()
     print("saved", out, "| devices:", win.device_tree.topLevelItemCount())
 

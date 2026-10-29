@@ -33,6 +33,7 @@ COMMANDS = (
     Command("grid.quantize", "Beatgrid", "Toggle Quantize"),
     Command("cues.hot_page", "Cue pages", "Show Hot Cues", ("9",)),
     Command("cues.memory_page", "Cue pages", "Show Memory Cues", ("0",)),
+    Command("cues.toggle_page", "Cue pages", "Toggle cue page"),
     *(Command(f"cues.slot.{i}", "Cue pages", f"Cue {i + 1} · active page", (str(i + 1),), True)
       for i in range(8)),
     *(Command(f"cues.delete.{i}", "Cue pages", f"Delete cue {i + 1} · active page", (f"Ctrl+{i + 1}",))

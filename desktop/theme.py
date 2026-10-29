@@ -14,6 +14,7 @@ PANEL2 = "#1b1d24"
 ROW = "#111319"
 ROW_ALT = "#14161d"
 BORDER = "#2a2d37"
+CONTROL_BORDER = "#454a59"
 TEXT = "#c7ccd6"
 TEXT_DIM = "#7c828f"
 TEXT_HI = "#f2f4f8"
@@ -30,12 +31,18 @@ QWidget {{
 QMainWindow, QWidget {{ background: {BG}; }}
 /* Labels must be transparent or the BG above paints an ugly box behind text. */
 QLabel {{ background: transparent; }}
+QListWidget#UsbChoices {{ background: {PANEL}; border: 1px solid {CONTROL_BORDER}; }}
+QWidget#TrackDetails {{ border: 1px solid {BORDER}; border-radius: 4px; }}
+QListWidget#UsbChoices::item {{ padding: 4px 8px; }}
+QListWidget#UsbChoices::item:selected {{ background: {PURPLE}; color: @ON_ACCENT@; }}
+QPlainTextEdit#TrackComments {{ background: {BG}; border: 1px solid {CONTROL_BORDER};
+    border-radius: 3px; padding: 5px; }}
 
 /* top + bottom bars */
 #TopBar, #BottomBar {{ background: {PANEL2}; border: none; }}
 #TopBar {{ border-bottom: 1px solid {BORDER}; }}
-#InfoRail {{ background: {PANEL2}; border: none; }}
-#InfoPlaceholder {{ background: transparent; border: none; padding: 0; }}
+#InfoPlaceholder, #InfoPlaceholder:disabled {{ background: {BG};
+    border: 1px solid {BORDER}; border-radius: 3px; padding: 0; }}
 #BrowserScrollCap {{ background: {PANEL2}; border: none; }}
 #NowPlayingFrame {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 5px;
@@ -84,8 +91,9 @@ QPushButton#AutoplayDown[active="true"] {{
 QPushButton#DeviceTab {{
     background: transparent; border: none; border-radius: 0;
     border-bottom: 2px solid transparent; color: {TEXT_DIM};
-    padding: 3px 12px; font-size: 11px; font-weight: 700;
+    padding: 1px 12px; font-size: 11px; font-weight: 700;
 }}
+QPushButton#DeviceAction {{ padding: 1px 8px; font-size: 11px; }}
 QPushButton#DeviceTab:hover {{ color: {TEXT_HI}; border-bottom-color: {BORDER}; }}
 QPushButton#DeviceTab:checked {{
     color: {TEXT_HI}; border-bottom-color: {PURPLE_LIGHT};
@@ -170,6 +178,7 @@ QPushButton {{
     padding: 5px 12px; color: {TEXT};
 }}
 QPushButton:hover {{ border: 1px solid {PURPLE_LIGHT}; }}
+QPushButton#FooterCancel {{ padding: 0 10px; }}
 QPushButton#Primary {{ background: {PURPLE}; border: 1px solid {PURPLE}; color: @ON_ACCENT@; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
 QPushButton#Ghost {{ background: transparent; }}
@@ -194,8 +203,8 @@ QPushButton#CueTab:checked {{
     color: #18c8ff; border-color: #168fc0; background: #111b23;
 }}
 QPushButton#CueTab:hover {{ color: {TEXT_HI}; border-color: #168fc0; }}
-QPushButton#GearBtn {{ background: transparent; border: 1px solid {BORDER};
-    border-radius: 6px; color: {TEXT_DIM}; font-size: 20px; padding: 0; }}
+QPushButton#GearBtn {{ background: {BG}; border: 1px solid {BORDER};
+    border-radius: 3px; color: {TEXT_DIM}; padding: 0; }}
 QPushButton#GearBtn:hover {{ border: 1px solid {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; }}
 QPushButton#BackBtn {{ background: transparent; border: 1px solid {BORDER};
     border-radius: 5px; color: {TEXT}; padding: 4px 12px; }}
@@ -273,7 +282,7 @@ QTreeView::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px sol
     selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@;
 }}
 #StockDeviceDetails::item, #StockDevicePlaylists::item {{
-    padding: 2px 6px; color: {TEXT};
+    height: 24px; padding: 0px 6px; color: {TEXT};
 }}
 
 /* track table */

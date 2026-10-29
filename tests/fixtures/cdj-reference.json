@@ -1,0 +1,117 @@
+{
+  "description": "Offline CDJ metadata, one captured WAV, and explicit synthetic source DTO; no live source authority.",
+  "files": {
+    "analysis/ANLZ0000.2EX": {
+      "size": 61803,
+      "sha256": "c7f5e88eac664c1a839176c28bfbacab3c2eeb9da9b34fc4ccd55ebe6817607d"
+    },
+    "analysis/ANLZ0000.DAT": {
+      "size": 4976,
+      "sha256": "fe536dcc7cb89c692dff39637064cb863aaf5a24d586098b3718da02b3c2a75f"
+    },
+    "analysis/ANLZ0000.EXT": {
+      "size": 66483,
+      "sha256": "846774f6f5bbd3029984eb1dc0401828ec67e68993a603f5351c7b65943588b8"
+    },
+    "native/PIONEER/DEVSETTING.DAT": {
+      "size": 140,
+      "sha256": "1f449bff2801d6a44fc8b23dbcbb4a67225da05d1090cdcdfa0611e3a78669c3"
+    },
+    "native/PIONEER/DJMMYSETTING.DAT": {
+      "size": 160,
+      "sha256": "cbfdabafdc38fa56154f3f2b02707f7552394346e0d2ce82efbe8a463429483b"
+    },
+    "native/PIONEER/MYSETTING.DAT": {
+      "size": 148,
+      "sha256": "b2f847a830c5d7a67646e543c002a8726f27ff942c39c87cbffc8af92401b433"
+    },
+    "native/PIONEER/MYSETTING2.DAT": {
+      "size": 148,
+      "sha256": "ed25d7919c87fc716a42033956557e5b3d6266975b5debe65e7ece98931778d0"
+    },
+    "native/PIONEER/USBANLZ/P009/00024499/ANLZ0000.2EX": {
+      "size": 105052,
+      "sha256": "778bb93bbffa8f63ab38419edff169fab8f9a22042bc36605cd79c03f5e227a2"
+    },
+    "native/PIONEER/USBANLZ/P009/00024499/ANLZ0000.DAT": {
+      "size": 7830,
+      "sha256": "69e0ca303de23e7c1192b5b03ce91b6f1bb714554419aa3edcca40b29793f6ee"
+    },
+    "native/PIONEER/USBANLZ/P009/00024499/ANLZ0000.EXT": {
+      "size": 109444,
+      "sha256": "9590d905dbfbe2f1fe8aeed4232f779aaa530523eb8ffa5635c03db6a150aeba"
+    },
+    "native/PIONEER/USBANLZ/P013/0000DE3F/ANLZ0000.2EX": {
+      "size": 86100,
+      "sha256": "d1c23cb648b556d7c7bd225e45499a77330462504e305fb6185166cb58863dc7"
+    },
+    "native/PIONEER/USBANLZ/P013/0000DE3F/ANLZ0000.DAT": {
+      "size": 5764,
+      "sha256": "8927f08e625d1fb7d071ceea41424d6956275a4c8633d01a38a181eac020223f"
+    },
+    "native/PIONEER/USBANLZ/P013/0000DE3F/ANLZ0000.EXT": {
+      "size": 90348,
+      "sha256": "db8079746d2170b8bf6b385414488786d9ec867a4bf1599b3034cf7e2aa3b540"
+    },
+    "native/PIONEER/USBANLZ/P033/0002A237/ANLZ0000.2EX": {
+      "size": 61803,
+      "sha256": "c7f5e88eac664c1a839176c28bfbacab3c2eeb9da9b34fc4ccd55ebe6817607d"
+    },
+    "native/PIONEER/USBANLZ/P033/0002A237/ANLZ0000.DAT": {
+      "size": 4976,
+      "sha256": "fe536dcc7cb89c692dff39637064cb863aaf5a24d586098b3718da02b3c2a75f"
+    },
+    "native/PIONEER/USBANLZ/P033/0002A237/ANLZ0000.EXT": {
+      "size": 66483,
+      "sha256": "846774f6f5bbd3029984eb1dc0401828ec67e68993a603f5351c7b65943588b8"
+    },
+    "native/PIONEER/USBANLZ/P05C/00011BE0/ANLZ0000.2EX": {
+      "size": 71173,
+      "sha256": "0824b3156ab7fbdd53b03853bb906648be2710ca02c767171ecd8002902af524"
+    },
+    "native/PIONEER/USBANLZ/P05C/00011BE0/ANLZ0000.DAT": {
+      "size": 5040,
+      "sha256": "aaffab477093c3fa516fbd7bdc3948ff7264153682c3a9c599067c34df023ad7"
+    },
+    "native/PIONEER/USBANLZ/P05C/00011BE0/ANLZ0000.EXT": {
+      "size": 75573,
+      "sha256": "07f90e377a2b8baa0c568018ac9e0706c996b5685816b9f8ff4f1f662a2bc52e"
+    },
+    "native/PIONEER/USBANLZ/P072/00016236/ANLZ0000.2EX": {
+      "size": 104502,
+      "sha256": "953facf71ce0d16247591d8878efcab4150d07c9c2c314cbfa4829e780f8752a"
+    },
+    "native/PIONEER/USBANLZ/P072/00016236/ANLZ0000.DAT": {
+      "size": 5112,
+      "sha256": "e38be8ff9fe0ee386dfc06b574a9b446e3ed05ff8394c6774a394c9f0e9186eb"
+    },
+    "native/PIONEER/USBANLZ/P072/00016236/ANLZ0000.EXT": {
+      "size": 108198,
+      "sha256": "1e4f647819b3a89f868d4672d9f584343af00edf4acdc37bb289d63fd1577855"
+    },
+    "native/PIONEER/djprofile.nxs": {
+      "size": 160,
+      "sha256": "6a139417d93daeda11517d3178c835a5bddb54b287a77ec14c18c39629ed4575"
+    },
+    "native/PIONEER/rekordbox/export.pdb": {
+      "size": 167936,
+      "sha256": "1ad66d9c58415e949d5b656400147c601d78a205f0137cbd855f5c292760c5bb"
+    },
+    "native/PIONEER/rekordbox/exportExt.pdb": {
+      "size": 73728,
+      "sha256": "45112602c367da6dfa15c96224bdf497775f4e72a6e9e1b058b99797f80fe2d2"
+    },
+    "native/PIONEER/rekordbox/exportLibrary.db": {
+      "size": 118784,
+      "sha256": "afad674057d44cb9d8d21f069da111618468a9e306947424a673c5ba7ca916c6"
+    },
+    "request.json": {
+      "size": 1881,
+      "sha256": "be857b76ea4f47b6d1438f673104f6200418077c47c823bbbf00da77ce97c2af"
+    },
+    "source.wav": {
+      "size": 34067330,
+      "sha256": "d2de39fc7895972722e63aa45e4930f7d0f9d92a7b42ea21832d1ecc8d5220f2"
+    }
+  }
+}

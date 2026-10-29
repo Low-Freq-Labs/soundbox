@@ -29,6 +29,7 @@ class DeviceProfiles(unittest.TestCase):
         before = self._snapshot(root)
         profile = inspect_device(root, "msdos")
         self.assertEqual(profile.kind, "generic_usb")
+        self.assertEqual(profile.label, "USB")
         self.assertTrue(profile.rockbox_export)
         self.assertEqual(self._snapshot(root), before)
 

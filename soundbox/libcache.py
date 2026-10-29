@@ -18,8 +18,8 @@ from pathlib import Path
 
 from .library import Library, LibraryTag, Playlist, Track
 
-SCHEMA = 7
-_READABLE_SCHEMAS = {4, 5, 6, SCHEMA}
+SCHEMA = 8
+_READABLE_SCHEMAS = {4, 5, 6, 7, SCHEMA}
 
 # The Track fields worth persisting (everything the browser/export needs).
 # `path`/`duration_str`/`file_type` are computed properties, not stored.
@@ -30,6 +30,7 @@ _TRACK_FIELDS = (
     "date_added", "added_ts", "genre", "kind", "size", "bitrate", "rating", "year",
     "imported", "source_analysis_path", "source_cues", "source_uuid", "source_tag_ids",
     "source_cue_revision", "source_cue_refs",
+    "info",
 )
 _PLAYLIST_FIELDS = ("name", "folder_path", "keys", "pid")
 
@@ -86,8 +87,9 @@ def load(path: str | Path) -> Library | None:
         if schema not in _READABLE_SCHEMAS:
             return None
         tracks = {}
+        fields = _TRACK_FIELDS[:20] if schema < 7 else _TRACK_FIELDS[:22] if schema == 7 else _TRACK_FIELDS
         for row in data["tracks"]:
-            t = Track(**dict(zip(_TRACK_FIELDS, row)))
+            t = Track(**dict(zip(fields, row)))
             tracks[t.track_id] = t
         if schema == 4:
             # V4 included the rekordbox-XML-only key_type before pid. Normalize

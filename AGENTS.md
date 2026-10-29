@@ -6,12 +6,13 @@ Browse the live rekordbox library, curate it, edit existing My Tags and cues, an
 playlists onto a device with exact order, per-track cover art, and honest sync
 semantics. Built by Sonny (Low Freq Labs) with Claude and Codex.
 
-Product sequence confirmed October 26: physical iPod acceptance when Sonny's
-device returns, music-library management refinement, then native CDJ USB export
-with full library/performance acceptance against a rekordbox control. See
-`docs/ROADMAP.md` and `docs/cdj-usb-export.md`. Existing `research/cdj_export/`
-is standalone and its generated database has not passed CDJ acceptance. The
-installed app's `/PIONEER` exclusion remains in force.
+October28: Sonny advanced native CDJ USB integration to the active milestone.
+The dedicated `soundbox.cdj_*` pilot prepares classic Device Library and Device
+Library Plus together from a fresh source snapshot. October29: a USB playlist
+drop authorizes its recoverable generation without a second confirmation. Physical iPod acceptance remains pending. Sonny reports native USB playback, artwork
+and waveforms working; wider hardware acceptance and distribution review remain open. See `docs/ROADMAP.md` and
+`docs/cdj-usb-export.md`. Ordinary stock, dual and Rockbox/filesystem exporters
+retain their `/PIONEER` exclusion.
 
 ## Runtime instruction parity
 
@@ -26,6 +27,15 @@ relevant documents below. Do not rely on a prior agent's memory when the
 repository can answer the question.
 
 ## Sacred safety contract (NON-NEGOTIABLE)
+
+- Rekordbox and SoundBox are equal USB exporters. Users may switch between them
+  at any time. Another rekordbox export is normal, never an ownership conflict,
+  a reason to clear a library, or a reason to demand a verification workflow.
+  Start from the current small native catalogs, preserve other playlists and
+  media, and apply the requested changes. SoundBox's manifest records only its
+  own file ownership and playlist bindings; it is not exclusive library authority.
+  Normal export never scans/hashes retained media just because rekordbox wrote
+  the catalogs. Mount/source separation and supported-format guards still apply.
 
 - Desktop rekordbox reads use a read-only DB/WAL snapshot; XML is a fallback.
   The October 26 prep plan authorizes narrowly scoped My Tag and Hot/Memory Cue
@@ -217,12 +227,38 @@ repository can answer the question.
   and discarded only after success. Cleanup never depends on regenerating an
   older media or artwork profile from its source. Shared stock
   records additionally survive any remaining ordinary stock playlist reference.
-  The top-level `/PIONEER` tree is reserved for rekordbox/CDJ. SoundBox may
-  include its bytes only in whole-volume capacity, but must never use it for
-  drift, claim it in ownership, verify it, clean it, repair it, import from it,
-  edit it, delete it, or write below it. Case-insensitive spellings and symlink
-  redirects fail closed. The separately confirmed generic-volume whole-device
-  Erase is the sole exception; stock and dual iPods never expose that command.
+  The top-level `/PIONEER` tree is reserved for rekordbox/CDJ. Ordinary stock,
+  dual and Rockbox/filesystem code may include its bytes only in whole-volume
+  capacity; it must not claim, scan, verify, clean, repair, import, edit, delete
+  or write below it. Case aliases and symlink redirects fail closed. The dedicated
+  `soundbox.cdj_usb`, `cdj_source`, `cdj_export` and `cdj_transaction` boundary
+  is the scoped exception authorized October28/29: generic writable FAT32/exFAT
+  USBs, explicit mount/volume identity and source separation, bounded metadata
+  reads, off-device catalog preparation and manifest-last publication. Display
+  reads may include stable WAL pages in a local copy, never SHM/live USB SQL;
+  this grants no publication authority over active SQLite companions. Playlist
+  drops, Update Playlists and explicit Save to USB authorize publication without
+  another prepared-plan question. Preserve current native collections/playlists
+  across either exporter's writes. Never treat a changed native catalog alone as
+  an ownership conflict or erase it. Retain collection songs when managed
+  playlists are removed; no ordinary orphan-media sweep. Bind drag intent through
+  deferrals to mount/UUID. New/changed audio retains exact-byte verification;
+  retained native inventory needs no media audit. Internal recovery resumes
+  incomplete work; a later coherent native export supersedes older pending
+  catalogs without rollback over the new export. Local receipts remain required.
+  No stock/Rockbox markers or hidden `.PIONEER` layouts are admitted. Unknown
+  source/schema/cue states and redirects fail closed. Browser cache and player
+  overlays confer no authority. Source tag/cue/grid intents drain before capture.
+  USB-song playback validates actual device audio/analysis in the read lane and
+  uses a separate track ID without desktop source-edit authority.
+  Overview/Playlists/Category/Sort/Column/Color/My Settings share the USB header.
+  My Settings has44 recognized player/mixer controls, a SoundBox-global logical
+  profile seeded from the active USB, and explicit Save to Global / Load Global.
+  Existing opaque bytes survive edits; global changes do not auto-propagate.
+  The USB menu is Update Playlists, Import My Settings, Reformat USB, Eject.
+  Reformat requires concrete destructive confirmation, real physical USB identity,
+  source separation and FAT32/exFAT MBR; stock/dual never expose it. HFS+ remains
+  excluded. Ordinary iPod menu/erase rules are unchanged. See the CDJ guide.
   Finder-created `._*` AppleDouble files and abandoned `*.sbpart` temporaries
   below `/Music` or `/Playlists` are exact-baseline cleanup rows during explicit
   Repair or journal-backed interrupted recovery; successful cleanup removes only
@@ -458,7 +494,14 @@ removing its private diagnostic archive and obsolete experiment/test output.
 `~/Library/Logs/Soundbox/development-archive-2026-10-28/` is deleted; old paths
 there and historical build investigation paths no longer resolve. Small retained
 release/state records are listed in PROJECT_LAYOUT. Do not resume visual tuning
-unless Sonny asks; collect fresh references if it is reopened. Active
+unless Sonny asks; collect fresh references if it is reopened. Sonny has now
+reopened targeted Gunslinger red-glisten work at RGB 576/864 and supplied a new
+native recording. He accepted the combined RGB 576/864 motion/footprint/occupancy
+comparison. Current release/install state is in HANDOFF; the wider-zoom color
+complaint is separate. He then requested mini RGB brightness matching: its
+compositor now uses the main RGB faint-only shoulder and encoded-space blend;
+BLUE/3BAND overviews keep their existing resolve. Preserve the new references,
+acceptance receipts and main-lane parity evidence. Active
 `build/native`, `build/check`, required reference roots and native recovery stay
 in place. Closure does not claim perfect native appearance or presentation cadence.
 Current guidance stays in `docs/`; superseded experiments belong in
@@ -468,13 +511,14 @@ Current guidance stays in `docs/`; superseded experiments belong in
     ./check.sh --render   # + hermetic offscreen UI render
     ./check.sh --native   # compatibility alias; Cocoa is always required
     ./build_native.sh     # arm64 CoreAudio/Metal dylib only
+    ./build_cdj.sh        # pinned local Rust CDJ renderer; --test adds Rust checks
     ./build_app.sh        # personal → dist/personal/Soundbox.app, then stable signing
 
 - The release gate routes every discovered test exactly once into offscreen or
   Cocoa processes and reconciles their inventories. Skips, expected failures,
   missing fixtures and unrun tests fail the gate. Headless Metal oracles and
   native drawable/playback tests always run on the supported arm64 Mac.
-  Required offline iPod and frozen waveform snapshots are private, read-only
+  Required offline iPod, frozen waveform and CDJ snapshots are private, read-only
   inputs; see `docs/test-release-gate.md` for provisioning. Never read live
   devices/AppData or silently replace reference fixtures to make a gate pass.
 - Run `./check.sh` **bare**—never pipe it through `tail`/`grep` in an `&&`

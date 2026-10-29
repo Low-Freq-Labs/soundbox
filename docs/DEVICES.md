@@ -16,7 +16,7 @@ does not make a device writable by itself.
 | Rockbox | `/.rockbox/` | Export `/Music`, `/Playlists`, and `/.soundbox` only when the filesystem is FAT32 |
 | Stock iPod | `/iPod_Control/` with an iTunes database area | Read-only readiness by default; guarded playlist sync only for the explicit MA446/MP3/WAV allowlist |
 | Dual boot | Both layouts | Repeatable reference-counted, single-copy playlist sync on FAT32 MA446 |
-| Generic USB | Neither layout | Use the same Rockbox-style folder/playlist export on FAT32 |
+| USB | Neither firmware layout | Native CDJ pilot: one recoverable classic + Plus generation on FAT32/exFAT |
 
 The mounted on-disk layout selects the export contract automatically; SoundBox
 does not guess which firmware the user most recently booted. A `/.rockbox/`
@@ -29,17 +29,38 @@ shared subset enters Apple's database.
 Non-FAT volumes remain browseable but do not accept the Rockbox-style drop.
 Unknown or failed probes never grant extra capability.
 
-### Future CDJ USB destination
+### Native CDJ USB pilot
 
-The Generic USB row describes filesystem/M3U8 export. Native rekordbox-compatible
-CDJ export requires a separately validated on-device library and analysis; it is
-not implemented by that profile. The retained prototype currently has a rejected
-generated database and historical folder-mode playback, not full CDJ acceptance.
-The [CDJ plan](cdj-usb-export.md) defines the model/firmware-specific control
-comparison, required performance features and safe incremental-export gates.
-This is the requested milestone after iPod acceptance and library refinement in
-the [roadmap](ROADMAP.md). It adds no write authority today: current exporters
-continue excluding `/PIONEER`, including on USBs that also hold rekordbox content.
+October29: the dedicated generic-USB exporter maintains classic Device Library
+and Plus together on writable FAT32/exFAT. It preserves existing native collection
+records and other playlists across rekordbox/SoundBox switching. Drops export
+selected new/changed inputs directly; Update Playlists reconciles SoundBox's
+managed selection. Retained songs are inventory, not an audit; playlist removal
+retains the collection. Interruption resumes internally, and newer coherent native
+exports supersede old pending catalogs. Fresh source metadata/cues and exact new
+audio copies remain required. Ordinary stock/dual/Rockbox PIONEER guards remain.
+
+USB tabs are Overview, Playlists, Category, Sort, Column, Color, My Settings.
+General is a compact two-column form. Category/Sort edit active lists/order;
+Column controls the default right column; Color edits eight titles. My Settings
+has44 player/mixer fields and explicit Save to Global / Load Global, with the
+global profile in SoundBox Settings seeded from the actual USB. Unrelated exports
+preserve profiles/unknown bytes. Native name differs from the real volume name.
+The context menu is Update Playlists, Import My Settings, Reformat USB, Eject.
+Reformat confirms the physical external USB, real name and FAT32/exFAT MBR choice;
+HFS+ remains excluded. No actual format acceptance is claimed by mock tests.
+
+Headers use26 points; detail/song rows and empty stripes match the regular24-point
+browser. USB columns share browser state. Activation validates the selected actual
+USB audio/analysis in the device lane and uses a separate device track ID without
+Mac audio/source cue overlays or desktop write authority. Views remember per-volume
+tab, hierarchy, selection and scroll. Metadata stamps and app activation refresh
+native snapshots when switching exporters. Display-only snapshots include stable
+WAL pages copied locally, without live USB SQL or SHM locks. Publication still
+rejects active/unreconciled companions. Worker ownership lasts through finished.
+Sonny reports successful playback, artwork and waveforms; exact firmware/full
+control matrix/newer OneLibrary hardware and distribution gates remain. See the
+[CDJ contract](cdj-usb-export.md) for source guards, staging and recovery limits.
 
 Connection presentation separates visibility from readiness. Debounced `/Volumes`
 notifications and a 250-ms cached kernel mount-table check request discovery even
@@ -221,18 +242,18 @@ payload. Recovery verification contributes to visible sync progress. The
 device ownership manifest still changes only at the final successful
 publication.
 
-The device-root `/PIONEER` tree is a stronger external-ownership boundary, not
-merely an unowned SoundBox folder. rekordbox/CDJ exports may coexist there and
-their bytes still contribute to the volume's used/free capacity, but SoundBox
-does not descend into that tree for drift, accept it into schema-2 or schema-3
+For ordinary stock, dual and Rockbox/filesystem operations, device-root
+`/PIONEER` is an external-ownership boundary. Native CDJ libraries may coexist
+there and their bytes contribute to volume capacity, but these exporters do not
+descend into that tree for drift, accept it into schema-2 or schema-3
 ownership, verify or clean it, import from it, or mutate it through the device
 browser or a transaction. A stale or tampered manifest row beneath `/PIONEER`
 is discarded in memory without inspecting the payload. FAT-style case variants,
 lexical aliases, and symlink redirects into the tree fail closed. Consequently,
 rekordbox changes below `/PIONEER` cannot independently surface **Sync needed**.
-The only exception is the separately confirmed **Erase all files from device**
-command on a generic volume, whose confirmation explicitly covers all unknown
-content; stock and dual iPods do not expose whole-volume erase.
+The dedicated CDJ pilot above has its own scoped contract. The legacy filesystem
+erase backend still requires explicit whole-volume confirmation; the native USB
+menu exposes Reformat USB instead. Stock and dual iPods expose neither operation.
 
 Every dual-iPod Sync, playlist drop, and managed-playlist deletion receives an
 immediate concise Yes/No confirmation before expensive planning begins. An
@@ -577,7 +598,7 @@ intact and validates all retained Apple smart rules before it can commit.
 Clicking a stock-only iPod opens a read-only managed-device surface instead of
 the raw FAT folders. Header-level **Device**, **Songs**, and **Playlists** tabs
 show identity/model/generation, storage and database health, merged playback
-totals, recovery count, the exact indexed music records, and ordered regular or
+totals, the exact indexed music records, and ordered regular or
 smart playlists. The Playlists tab renders user-created regular playlists plus
 Apple's narrowly allowlisted **Videos** smart index. The library root and every
 other built-in smart list remain in the snapshot for database health and
@@ -591,15 +612,32 @@ playlist/track title column receives all spare width. Identity values preserve
 their provenance: mounted metadata,
 Apple's local device record, serial-derived model, or model-derived hardware
 catalog. Parsing runs off the UI thread and eject refuses to race it.
-Rockbox and generic USB devices retain the existing filesystem browser. It may
-show `/PIONEER` so volume contents remain honest, but exposes no SoundBox import,
-rename, folder, artist, or delete action inside that reserved tree. Every
-browser mutation is refused while another device operation owns the UI and is
-performed only through a mount identity pinned before user confirmation/input.
-One Delete cannot span volumes; parent/child selections collapse to the parent,
-and completion reports the exact deleted/total result. M3U8 import resolves
-entries only within the selected device, rejecting `..` and symlink escapes
-before creating the SoundBox Media destination.
+Non-stock USB/Rockbox devices now use **Overview** and **Playlists** tabs in the
+same device header and dashboard styling. Overview reuses the iPod's alternating
+2×2 detail panels: Identity, Storage, Playlists and SoundBox. Identity/storage
+facts come from the verified mount-probe cache; free space and sync status use the
+existing completed device scan. Unknown/error states remain explicit.
+
+Generic USBs prefer the bounded native CDJ snapshot described above. Otherwise,
+Playlists displays M3U/M3U8 files below `/Playlists`, including nested folders.
+Those rows expand on demand into ordered title/path-derived labels, with unknown
+metadata left blank. Snapshot discovery does not open referenced audio. Explicit
+song activation validates the chosen device path before handing it to the player.
+The M3U reader never traverses `/PIONEER` and omits references into it or outside
+the volume. Empty copy explicitly names `/Playlists`. Symlinked playlist files or
+folders and remount/changed-file reads produce an unavailable state.
+
+Reads run only in the existing serialized DeviceScanWorker: initial connection,
+remount, explicit Playlists selection and forced post-operation refresh. Ordinary
+polls reuse the immutable playlist snapshot, updating the existing free/drift
+presentation without rereading M3U8 payloads. Cache publication waits for
+QThread.finished and stale mount tokens retire snapshots. Overview selection and
+expanding rows perform no removable-file I/O. Explicit song loading uses the same
+serialized device lane and read-only path validation; it grants no write authority.
+Native Update Playlists/internal recovery follow the dedicated CDJ contract.
+Reformat has its own destructive confirmation; stock/dual/Rockbox guards remain separate.
+The former raw filesystem browser is no longer a USB tab. Its guarded backend
+mutation/import paths remain, but the new playlist tree exposes no such actions.
 
 On a schema-3 dual device, Songs and Playlists are composite rather than
 stock-prefixed views. The worker verifies the small manifest-owned M3U8 payloads

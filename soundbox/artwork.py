@@ -499,6 +499,11 @@ class ArtCache:
             raise ValueError("This track no longer has a cover to review")
         return CoverSnapshot(copy.deepcopy(self.index[track_id]), path.read_bytes())
 
+    @_art_read
+    def export_image_snapshot(self, track_id: str) -> bytes | None:
+        path = self.image_path(track_id)
+        return path.read_bytes() if path is not None else None
+
     def _review_paths(self, track_id: str) -> tuple[Path, Path]:
         if not track_id or Path(track_id).name != track_id or track_id in (".", ".."):
             raise ValueError("Invalid artwork track ID")

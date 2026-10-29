@@ -21,7 +21,11 @@ audio files are NEVER modified (see soundbox.sync safety contract).
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import logging
+import json
+from math import cos, pi, sin
 import os
 import random
 import sys
@@ -144,6 +148,7 @@ from .prep_grid import BpmValue, grid_edit_buttons, quantize_button
 from .grid_controller import GridEditController
 from .wordmark import Wordmark
 from .keyboard import KeyboardRouter, Keymap, event_binding
+from .usb_device_view import UsbDevicePages
 from .model import (
     COLUMNS, TrackModel, row_display_value, row_matches as _row_matches,
 )
@@ -152,6 +157,7 @@ from .player import PlayerBar
 from .device_browser import DeviceBrowserMixin
 from .devices import device_facts, device_fs, human
 from .settings_page import SettingsPageMixin
+from .track_info import TrackInfoMixin
 from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
@@ -231,7 +237,7 @@ class InfoPlaceholderButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("InfoPlaceholder")
-        self.setFixedSize(29, 34)
+        self.setFixedSize(44, 28)
         self.setFocusPolicy(Qt.NoFocus)
         self.setAccessibleName("Track information")
         self.setToolTip("Track information · Coming soon")
@@ -241,16 +247,45 @@ class InfoPlaceholderButton(QPushButton):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        center = self.rect().center()
+        center = QRectF(self.rect()).center()
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(theme.TEXT_DIM))
-        painter.drawEllipse(QRectF(center.x() - 8, center.y() - 8, 16, 16))
-        font = painter.font()
-        font.setPixelSize(13)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(theme.PANEL2))
-        painter.drawText(self.rect(), Qt.AlignCenter, "i")
+        painter.drawEllipse(center, 8, 8)
+        painter.setBrush(QColor(theme.BG))
+        # Draw the ink itself around the same center, without font bearings or
+        # a baseline shifting the letter relative to its enclosing circle.
+        painter.drawEllipse(QRectF(center.x() - 1, center.y() - 5, 2, 2))
+        painter.drawRoundedRect(QRectF(center.x() - 1, center.y() - 1.2, 2, 6), .5, .5)
+
+
+class SettingsButton(QPushButton):
+    """A centered 16-point vector gear matching the prep controls."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("GearBtn")
+        self.setFixedSize(44, 28)
+        self.setAccessibleName("Settings")
+        self.setToolTip("Settings")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        center = QRectF(self.rect()).center()
+        color = theme.PURPLE_LIGHT if self.underMouse() and self.isEnabled() else theme.TEXT_DIM
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(color))
+        points = []
+        for tooth in range(8):
+            for phase, radius in ((-.5, 6), (-.28, 8), (.28, 8), (.5, 6)):
+                angle = (tooth + phase) * pi / 4
+                points.append(QPointF(center.x() + radius * cos(angle),
+                                     center.y() + radius * sin(angle)))
+        painter.drawPolygon(QPolygonF(points))
+        painter.setBrush(QColor(theme.BG))
+        painter.drawEllipse(center, 2.8, 2.8)
 
 
 def _cap_browser_scrollbar(view, header):
@@ -263,18 +298,13 @@ def _cap_browser_scrollbar(view, header):
 
 
 class FooterBar(QWidget):
-    """Keep the footer divider under content, with a seamless utility corner."""
-
-    def __init__(self, rail, parent=None):
-        super().__init__(parent)
-        self._rail = rail
+    """Draw the single full-width divider above the footer."""
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        inset = self._rail.width() if self._rail.isVisible() else 0
         painter = QPainter(self)
         painter.setPen(QColor(theme.BORDER))
-        painter.drawLine(0, 0, self.width() - inset - 1, 0)
+        painter.drawLine(0, 0, self.width() - 1, 0)
 
 
 def _art_ui_action(method):
@@ -304,7 +334,10 @@ def _provider_action(action):
     return decorate
 
 
-class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+from .cdj import CdjDeviceMixin
+
+
+class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -411,8 +444,14 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._device_finalization_error: Exception | None = None
         self._drift_cache: dict[str, int | None] = {}  # None means not yet checked
         self._device_profiles: dict[str, object] = {}
+        self._usb_view_cache = {}
+        self._usb_view_requests = set()
+        self._usb_device_rows = {}
         self._device_mount_tokens: dict[str, int] = {}
         self._current_device_path = ""
+        self._cdj_worker = None
+        self._cdj_plan = None
+        self._cdj_waiting = None
         self._stock_snapshot: StockIpodSnapshot | None = None
         self._sync_playlists_cache: list[Playlist] | None = None
         # Autoplay owns a frozen snapshot of the view that supplied the
@@ -696,7 +735,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                                  registry=self.lib.artist_registry if self.lib else None,
                                  junk=self._title_junk())
             self._row_cache[t.track_id] = r
-        return dict(r)
+        result = dict(r)
+        result.update(self.settings.get('track_info',{}).get(t.track_id,{}))
+        if self.lib and t.source_tag_ids:
+            result['myTags'] = ', '.join(tag.name for tag in self.lib.source_tags if tag.tag_id in t.source_tag_ids)
+        return result
 
     def _rows_for(self, tracks) -> list[dict]:
         return [self._row_for(t) for t in tracks]
@@ -792,39 +835,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not getattr(self, '_browser_columns_shown', False):
-            self._browser_columns_shown = True
-            if not self.settings.get('columns_state'):
-                header = self.table.horizontalHeader()
-                fixed = sum(header.sectionSize(i) for i in range(1, len(COLUMNS)))
-                header.resizeSection(0, max(header.minimumSectionSize(),
-                                            self.table.viewport().width() - fixed))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if (getattr(self, '_browser_columns_shown', False)
-                and event.oldSize().isValid() and not self.table.isColumnHidden(0)):
-            delta = event.size().width() - event.oldSize().width()
-            if delta > 0:
-                self._resize_title(delta)
-
-    def _resize_title(self, delta):
-        header = self.table.horizontalHeader()
-        header.resizeSection(0, max(header.minimumSectionSize(),
-                                    header.sectionSize(0) + delta))
+        self._browser_columns_shown = True
+        self._fit_browser_columns(fill=not self.settings.get('columns_state'))
 
     # ---------- player ----------
     def eventFilter(self, obj, ev):
-        if (obj is self and ev.type() == QEvent.Resize
+        if (ev.type() in (QEvent.Resize, QEvent.Show)
                 and getattr(self, '_browser_columns_shown', False)
-                and ev.oldSize().isValid() and not self.table.isColumnHidden(0)):
-            delta = ev.size().width() - ev.oldSize().width()
-            if delta < 0:
-                # QMainWindow lays out its children before resizeEvent runs.
-                # Shrink Title here, before that narrower viewport can briefly
-                # overflow and flash a horizontal scrollbar. Growth follows
-                # layout in resizeEvent, after the extra room exists.
-                self._resize_title(delta)
+                and (obj is self.table.viewport()
+                     or obj is self.artists_view.viewport()
+                     or obj is self.usb_device_pages.playlist_tree.viewport())
+                and (obj.isVisible() or ev.type() == QEvent.Show)):
+            # Hidden pages can retain their old geometry until Show. Refit
+            # before the browser is painted after returning from Settings.
+            width = ev.size().width() if ev.type() == QEvent.Resize else obj.width()
+            self._fit_browser_columns(fill=True, available=width)
         if (getattr(self, "now_playing", None) is obj
                 and ev.type() == QEvent.MouseButtonRelease
                 and ev.button() == Qt.LeftButton):
@@ -849,6 +874,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if ev.type() == QEvent.ApplicationActivate:
             self.player_bar.resynchronize_transport()
             self.grid_controller.set_current(self.player_bar.current_track(), force=True)
+            paths=[path for path,profile in getattr(self,'_device_profiles',{}).items()
+                   if getattr(profile,'kind','')=='generic_usb']
+            if paths:
+                self._usb_view_requests.update(paths)
+                QTimer.singleShot(0,self._refresh_devices)
             return super().eventFilter(obj, ev)
         if ev.type() == QEvent.ApplicationDeactivate:
             self._keyboard_router.release_all()
@@ -858,6 +888,10 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return super().eventFilter(obj, ev)
         focus = QApplication.focusWidget()
         browsing = self._space_should_play(focus)
+        if focus is self.usb_device_pages.playlist_tree:
+            action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
+            browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
+                        or action in ('browser.load', 'browser.search', 'app.settings'))
         if (self._keyboard_router.keymap.action(event_binding(ev)) == "app.settings"
                 and not isinstance(focus, QLineEdit)):
             browsing = True
@@ -932,8 +966,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             "grid.quantize": lambda: self.quantize_btn.click(),
             "cues.hot_page": lambda: pb.cue_panel.hot_tab.click(),
             "cues.memory_page": lambda: pb.cue_panel.memory_tab.click(),
+            "cues.toggle_page": pb.cue_panel.toggle_page,
             "browser.rename": self._rename_current,
-            "browser.load": lambda: self._play_row(self.table.currentIndex()),
+            "browser.load": self._load_browser_selection,
             "browser.search": lambda: self.search.setFocus(),
             "browser.playing": self._focus_now_playing,
             "library.refresh": self._refresh_rekordbox,
@@ -1351,18 +1386,6 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         divider.setAttribute(Qt.WA_StyledBackground, True)
         bl.addWidget(divider)
         bl.addWidget(self._main_stack(), 1)
-        self.info_rail = QWidget()
-        self.info_rail.setObjectName("InfoRail")
-        self.info_rail.setAttribute(Qt.WA_StyledBackground, True)
-        self.info_rail.setFixedWidth(30)
-        rail = QVBoxLayout(self.info_rail)
-        rail.setContentsMargins(1, 0, 0, 0)
-        rail.setSpacing(0)
-        rail.addStretch(1)
-        self.info_placeholder = InfoPlaceholderButton(self.info_rail)
-        rail.addWidget(self.info_placeholder)
-        rail.addStretch(1)
-        bl.addWidget(self.info_rail)
         self.body_stack.addWidget(body)
 
         # page 1: full-page Settings
@@ -1463,11 +1486,8 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # ready to browse (transport keys, arrows). Startup focus goes to the table.
         self.search.setFocusPolicy(Qt.ClickFocus)
         self.search.textChanged.connect(self._on_search)
-        gear = QPushButton("⚙")
-        gear.setObjectName("GearBtn")
-        gear.setFixedSize(42, 28)
-        gear.setToolTip("Settings")
-        gear.setCursor(Qt.PointingHandCursor)
+        gear = SettingsButton()
+        self.settings_btn = gear
         gear.clicked.connect(self._open_settings)
         upper.addLayout(h, 0, 0, 1, 3)
 
@@ -1548,6 +1568,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self.playback_time.fontMetrics().horizontalAdvance("00:00:00/00:00:00") + 12)
         self.player_bar.playback_time_changed.connect(self.playback_time.setText)
         row.addWidget(self.playback_time)
+        row.addStretch(1)
+        self.info_placeholder = InfoPlaceholderButton(prep)
+        self.info_placeholder.setEnabled(True)
+        self.info_placeholder.setToolTip('Track information')
+        self.info_placeholder.clicked.connect(self._open_track_info)
+        row.addWidget(self.info_placeholder)
         row.addStretch(1)
         self.my_tags = MyTagsButton()
         self.my_tags.setFixedHeight(28)
@@ -1984,8 +2010,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         # grid at every scroll position (top, bottom, anywhere) — pixel scrolling
         # let the two panes drift out of alignment.
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
-        # The scrollbar stays beside the rows, before the separate utility rail.
+        # Keep the scrollbar beside the rows, below the capped header gutter.
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(24)
@@ -2028,30 +2055,36 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         dpage = QWidget(); dl = QVBoxLayout(dpage)
         dl.setContentsMargins(0, 0, 0, 0); dl.setSpacing(0)
         dhead = QWidget(); dhead.setObjectName("DeviceHeader")
-        dhead.setAttribute(Qt.WA_StyledBackground, True); dhead.setFixedHeight(34)
+        dhead.setAttribute(Qt.WA_StyledBackground, True); dhead.setFixedHeight(26)
         dhh = QHBoxLayout(dhead); dhh.setContentsMargins(10, 0, 8, 0)
         self.dev_header = QLabel("Device"); self.dev_header.setObjectName("DeviceTitle")
+        self.dev_header.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Preferred)
         dhh.addWidget(self.dev_header, 1)
         self.device_tab_group = QButtonGroup(self)
         self.device_tab_group.setExclusive(True)
         self.device_tab_buttons = []
-        for index, label in enumerate(("Device", "Songs", "Playlists")):
+        from .usb_preferences import USB_TABS
+        for index, label in enumerate(USB_TABS):
             button = QPushButton(label)
             button.setObjectName("DeviceTab")
             button.setCheckable(True)
-            button.setFixedHeight(26)
+            button.setFixedHeight(22)
             button.setVisible(False)
             button.toggled.connect(
                 lambda checked, i=index: (
-                    self._set_stock_device_tab(i) if checked else None))
+                    self._set_device_tab(i) if checked else None))
             self.device_tab_group.addButton(button, index)
             self.device_tab_buttons.append(button)
             dhh.addWidget(button)
         self.device_sync_btn = QPushButton("Sync")
+        self.device_sync_btn.setObjectName("DeviceAction")
+        self.device_sync_btn.setFixedHeight(22)
         self.device_sync_btn.clicked.connect(
             lambda: self._sync_device(self._current_device_path))
         dhh.addWidget(self.device_sync_btn)
         self.eject_btn = QPushButton("⏏ Eject")
+        self.eject_btn.setObjectName("DeviceAction")
+        self.eject_btn.setFixedHeight(22)
         self.eject_btn.clicked.connect(self._eject_current)
         self.eject_btn.setEnabled(False)
         dhh.addWidget(self.eject_btn)
@@ -2084,11 +2117,24 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.stock_ipod_pages = StockIpodPages()
         self.stock_ipod_pages.confirm_model_requested.connect(
             self._confirm_current_stock_model)
+        self.stock_ipod_pages.stack.currentChanged.connect(self._remember_stock_device_view)
         self.stock_ipod_pages.delete_playlists_requested.connect(
             self._begin_stock_playlist_delete)
         self.stock_ipod_pages.playlist_order_requested.connect(
             self._apply_composite_playlist_order)
         self.device_content_stack.addWidget(self.stock_ipod_pages)
+        self.usb_device_pages = UsbDevicePages()
+        self.usb_device_pages.settings_requested.connect(self._apply_usb_settings)
+        self.usb_device_pages.global_requested.connect(self._promote_usb_settings)
+        self.usb_device_pages.global_load_requested.connect(self._load_global_usb_settings)
+        self.usb_device_pages.song_requested.connect(self._load_usb_song)
+        saved_views = self.settings.get('device_views',{})
+        self.usb_device_pages._states = deepcopy(saved_views.get('usb',{})) if isinstance(saved_views,dict) else {}
+        self.usb_device_pages.view_changed.connect(self._save_device_views)
+        self.usb_device_pages.row_enricher = self._enrich_usb_row
+        self.usb_device_pages.playlist_tree.header().sectionResized.connect(self._on_usb_column_resized)
+        _cap_browser_scrollbar(self.usb_device_pages.playlist_tree,self.usb_device_pages.playlist_tree.header())
+        self.device_content_stack.addWidget(self.usb_device_pages)
         dl.addWidget(self.device_content_stack)
         self.stack.addWidget(dpage)
 
@@ -2102,6 +2148,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.artists_view.setAlternatingRowColors(True)
         self.artists_view.setUniformRowHeights(True)
         self.artists_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.artists_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         ah = self.artists_view.header()
         ah.setSectionResizeMode(QHeaderView.Interactive)
         ah.setStretchLastSection(False)
@@ -2129,17 +2176,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._apply_default_columns()
         self._sync_artist_columns()
         self.table.horizontalHeader().sectionResized.connect(
-            self._sync_artist_columns)
+            self._on_browser_column_resized)
         ah.sectionResized.connect(self._on_artist_column_resized)
         return self.stack
 
     def _bottom_bar(self) -> QWidget:
-        bar = FooterBar(self.info_rail); bar.setObjectName("BottomBar")
+        bar = FooterBar(); bar.setObjectName("BottomBar")
+        bar.setFixedHeight(28)
         bar.setAttribute(Qt.WA_StyledBackground, True)
-        self.body_stack.currentChanged.connect(lambda _index: bar.update())
         # A touch more left padding so status text (EXPORTING/DELETING/…) isn't jammed
         # against the window edge.
-        h = QHBoxLayout(bar); h.setContentsMargins(20, 6, 12, 6); h.setSpacing(8)
+        h = QHBoxLayout(bar); h.setContentsMargins(20, 4, 12, 4); h.setSpacing(8)
         self.status_label = QLabel("Ready")
         # Reserve only the current operation's animated dots.  A single global
         # width for every possible flash message left a huge dead gap before
@@ -2155,18 +2202,22 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.status_count_label.setMinimumWidth(
             fm.horizontalAdvance("9999/9999") + 16)
         self.status_count_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
-        self.status_count_label.setMargin(4)
+        self.status_count_label.setMargin(0)
+        self.status_count_label.setFixedHeight(20)
         self.status_count_label.setVisible(False)
         h.addWidget(self.status_count_label)
         self.progress = QProgressBar()
         self.progress.setMinimum(0)
         self.progress.setValue(0)
         self.progress.setFixedWidth(208)
+        self.progress.setFixedHeight(18)
         self.progress.setTextVisible(True)
         self.progress.setFormat("%p%")
         self.progress.setVisible(False)
         h.addWidget(self.progress)
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setObjectName('FooterCancel')
+        self.cancel_btn.setFixedHeight(20)
         self.cancel_btn.clicked.connect(self._cancel_export)
         self.cancel_btn.setVisible(False)
         h.addWidget(self.cancel_btn)
@@ -2239,7 +2290,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             frozenset(tuple(getattr(t, f) for f in (
                 'track_id', 'name', 'artist', 'location_uri', 'bpm', 'key',
                 'total_time', 'date_added', 'added_ts', 'genre', 'kind',
-                'size', 'bitrate', 'rating', 'year', 'imported'))
+                'size', 'bitrate', 'rating', 'year', 'imported')) + (json.dumps(t.info,sort_keys=True),)
                 for t in self.lib.tracks_by_id.values()),
             tuple(sorted(self.overrides.items())), tuple(sorted(self.titles.items())),
             tuple(sorted(self.aliases.items())), tuple(self._title_junk()),
@@ -3313,7 +3364,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return f"⛃  {name}    Sync status pending"
         if drift:
             return f"⛃  {name}    ⚠ Sync needed"
-        if fs and fs not in ("msdos", "fat32"):
+        if fs and fs not in ("msdos", "fat32") and not getattr(profile,'cdj_export',False):
             # Rockbox runs on FAT32 only — flag HFS+/exFAT devices immediately.
             return f"⛃  {name}    ⚠ {fs.upper()} (not FAT32)"
         kind = f" · {profile.label}" if profile is not None else ""
@@ -3372,6 +3423,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             str(self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE))
             for i in range(self.device_tree.topLevelItemCount())
         } | set(self._stock_view_cache)
+        if force and self._current_device_path:
+            profile = self._device_profiles.get(self._current_device_path)
+            if profile is not None and not getattr(profile, 'has_stock_ipod', False):
+                self._usb_view_requests.add(self._current_device_path)
+        usb_requests = frozenset(self._usb_view_requests)
         w = DeviceScanWorker(
             self.lib,
             self._sync_playlists(),
@@ -3381,7 +3437,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             stock_models=(raw_models if isinstance(raw_models, dict) else {}),
             known_paths=known_paths,
             known_mount_tokens=dict(self._device_mount_tokens),
+            usb_views=dict(self._usb_view_cache), usb_requests=usb_requests,
         )
+        self._usb_view_requests.difference_update(usb_requests)
         self._device_mount_refresh_pending = False
         self._dev_scan_worker = w
         w.discovered.connect(self._on_devices_discovered)
@@ -3532,6 +3590,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             self._device_retry_delay = 3.0
         new_paths = tuple(getattr(worker, "new_paths", ()))
         results = getattr(worker, "results", None)
+        usb_snapshots = dict(getattr(worker, 'usb_snapshots', {}))
         mount_tokens = dict(getattr(worker, "mount_tokens", {}))
         # Clear ownership before publishing any clickable row. A result emitted
         # from run() is not enough: QThread.finished is the actual boundary that
@@ -3540,7 +3599,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self._shutting_down or self._device_coordinator.eject_pending:
             return
         if results is not None:
+            self._usb_view_cache.update(usb_snapshots)
             self._on_devices_scanned(results, mount_tokens=mount_tokens)
+            if not self.settings.get('cdj_my_settings'):
+                native_profiles=[s for s in usb_snapshots.values() if getattr(s,'native',None) is not None]
+                if len(native_profiles)==1:self._sync_usb_my_settings(native_profiles[0])
         # The first usable row already has drift. Queue a full,
         # immutable read for each newly connected stock-capable device; the
         # stock-view queue remains single-flight across classic USB.
@@ -3603,6 +3666,11 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self._device_profiles = {
             path: profile for _n, path, _f, _d, profile in devs}
         all_paths = [p for _n, p, _f, _d, _profile in devs]
+        self._usb_device_rows = {path: (name, free, drift, profile)
+                                 for name, path, free, drift, profile in devs}
+        self._usb_view_cache = {path: snapshot for path, snapshot in self._usb_view_cache.items()
+                                if path in all_paths}
+        self._usb_view_requests.intersection_update(all_paths)
         if mount_tokens is None:
             mount_tokens = dict(getattr(
                 self._dev_scan_worker, "mount_tokens", {}))
@@ -3611,6 +3679,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if token:
                 self._device_mount_tokens[path] = token
                 self._device_coordinator.observe(DeviceSessionIdentity(path, token))
+        for path, snapshot in tuple(self._usb_view_cache.items()):
+            if snapshot.mount_token != self._device_mount_tokens.get(path, 0):
+                self._usb_view_cache.pop(path, None)
+        if (self._current_device_path in self._usb_device_rows
+                and not getattr(self._device_profiles.get(self._current_device_path), 'has_stock_ipod', False)):
+            self._present_usb_device(self._current_device_path)
         stale_stock_paths = (
             set(self._stock_view_cache)
             | set(self._stock_view_warming)
@@ -3725,28 +3799,30 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                     "confirmed MA446 model number.")
             elif profile.stock_write:
                 tip += "\nValidated MA446 stock-sync engine available (dry-run first)."
-        if fs not in ("msdos", "fat32", "unknown"):
+        if fs not in ("msdos", "fat32", "unknown") and not getattr(profile,'cdj_export',False):
             tip += "\n⚠ Rockbox requires FAT32 — this device would need reformatting."
         return tip
 
     def _on_device_click(self, item, _col):
+        self._remember_stock_device_view()
         dev = item.data(0, DEVPATH_ROLE)
         if dev:
             self._select_only(self.device_tree)
             self._current_device_path = dev
             self.dev_header.setText(f"Device:  {Path(dev).name}   ({dev})")
-            self.fs_view.setRootIndex(self.fs_model.setRootPath(dev))
             profile = self._device_profiles.get(dev)
+            self.dev_header.setText(Path(dev).name)
+            self.dev_header.setToolTip(dev)
+            self.device_sync_btn.setText('Update Playlists' if getattr(profile,'kind','')=='generic_usb' else 'Sync')
             stock = bool(
                 profile is not None
                 and getattr(profile, "has_stock_ipod", False))
-            for button in self.device_tab_buttons:
-                button.setVisible(stock)
-            for button, label in zip(
-                    self.device_tab_buttons,
-                    ("Device", "Songs", "Playlists"),
-                    strict=True):
-                button.setText(label)
+            from .usb_preferences import USB_TABS
+            labels = ('Device', 'Songs', 'Playlists') if stock else USB_TABS
+            for index, button in enumerate(self.device_tab_buttons):
+                button.setVisible(index < len(labels))
+                if index < len(labels):
+                    button.setText(labels[index])
             if stock:
                 self.device_content_stack.setCurrentIndex(1)
                 cached = self._stock_view_cache.get(dev)
@@ -3767,9 +3843,36 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                         self._set_stock_device_tab(0)
                     self._read_stock_device_view(dev, profile)
             else:
-                self.device_content_stack.setCurrentIndex(0)
+                self.device_content_stack.setCurrentIndex(2)
+                self._present_usb_device(dev)
+                self._set_device_tab(self.usb_device_pages.stack.currentIndex())
             self.stack.setCurrentIndex(1)
             self._update_device_action_state()
+
+    def _present_usb_device(self, dev):
+        row = self._usb_device_rows.get(dev)
+        if row is None:
+            row = (Path(dev).name, None, self._drift_cache.get(dev), self._device_profiles.get(dev))
+        name, free, drift, profile = row
+        self.usb_device_pages.set_snapshot(self._usb_view_cache.get(dev),
+                                          name=name, profile=profile, free=free, drift=drift)
+        self._sync_usb_my_settings(self._usb_view_cache.get(dev))
+
+    def _set_device_tab(self, index):
+        if self.device_content_stack.currentIndex() != 2:
+            self._set_stock_device_tab(index)
+            return
+        index = max(0, min(self.usb_device_pages.stack.count()-1, index))
+        button = self.device_tab_buttons[index]
+        blocked = button.blockSignals(True)
+        try:
+            button.setChecked(True)
+        finally:
+            button.blockSignals(blocked)
+        self.usb_device_pages.set_page(index)
+        if index == 1 and self._current_device_path:
+            self._usb_view_requests.add(self._current_device_path)
+            self._refresh_devices()
 
     def _set_stock_device_tab(self, index: int):
         if not self.device_tab_buttons:
@@ -4200,7 +4303,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             if profile is not None:
                 self._device_profiles[dev] = self._effective_device_profile(
                     dev, profile)
-        self.stock_ipod_pages.set_snapshot(result, composite_data)
+        self._restoring_stock_view = True
+        try:
+            self.stock_ipod_pages.set_snapshot(result, composite_data)
+            self._restore_stock_device_view()
+        finally:
+            self._restoring_stock_view = False
         profile = self._device_profiles.get(dev)
         pre_composite_dual = bool(
             getattr(profile, "kind", "") == "dual_boot"
@@ -4248,6 +4356,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         dev = item.data(0, DEVPATH_ROLE)
         menu = QMenu(self)
+        profile = self._device_profiles.get(dev)
+        if profile is not None and profile.kind=='generic_usb':
+            busy=self._device_operation_owned()
+            for title,callback in (
+                    ('Update Playlists',lambda:self._begin_cdj_export(dev)),
+                    ('Import “My Settings”',lambda:self._import_usb_my_settings(dev)),
+                    ('Reformat USB…',lambda:self._reformat_usb(dev)),
+                    ('Eject',lambda:self._eject(dev))):
+                action=menu.addAction(title,callback);action.setEnabled(not busy)
+            menu.exec(self.device_tree.mapToGlobal(pos))
+            return
         menu.addAction("Browse", lambda: self._on_device_click(item, 0))
         busy = self._device_operation_owned()
         profile = self._device_profiles.get(dev)
@@ -4256,6 +4375,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 "Preview stock iPod export…",
                 lambda: self._preview_stock_ipod(dev))
             action.setEnabled(not busy)
+        if profile is not None and profile.kind == 'generic_usb':
+            recovery = menu.addAction('Recover interrupted CDJ export…', lambda: self._recover_cdj(dev))
+            recovery.setEnabled(not busy)
         action = menu.addAction(
             "Verify export…", lambda: self._verify_device(dev))
         action.setEnabled(not busy)
@@ -5582,7 +5704,15 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 lambda: self._verify_device(dev, deep)):
             return
         self._release_eject_ready()
-        w = OneShotTask(lambda: engine.verify_export(dev, deep=deep))
+        profile = self._device_profiles.get(dev)
+        if profile is not None and profile.kind == 'generic_usb':
+            from soundbox.cdj_export import verify
+            facts = device_facts(dev,cached_only=True)
+            token = self._device_mount_tokens.get(dev,0)
+            from .cdj import CdjWorker
+            w = CdjWorker(lambda cancel,_progress: verify(dev,token=token,volume_uuid=facts.volume_uuid,deep=deep,should_cancel=cancel))
+        else:
+            w = OneShotTask(lambda: engine.verify_export(dev, deep=deep))
         self._device_verify_worker = w
         w.finished.connect(
             lambda ww=w, d=dev: self._finish_device_result_worker(
@@ -5654,6 +5784,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if self.lib is None or not dev:
             return
         profile = self._device_profiles.get(dev)
+        if profile is not None and profile.kind == "generic_usb":
+            self._begin_cdj_export(dev)
+            return
         if profile is not None and profile.kind == "stock_ipod":
             identity_key = self._stock_device_key(dev, profile)
             shadow = self.stock_ipod_shadow_store.load(identity_key)
@@ -5762,10 +5895,64 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     # ---------- columns ----------
     def _apply_default_columns(self):
-        for i, (_k, _l, hidden) in enumerate(COLUMNS):
-            self.table.setColumnHidden(i, hidden)
-        for i, w in enumerate([360, 170, 64, 70, 56, 64, 84, 80, 150, 110]):
-            self.table.setColumnWidth(i, w)
+        self._browser_column_fit = True
+        try:
+            for i, (_k, _l, hidden) in enumerate(COLUMNS):
+                self.table.setColumnHidden(i, hidden)
+            for i, w in enumerate([360, 170, 64, 70, 56, 64, 84, 80, 150, 110]):
+                self.table.setColumnWidth(i, w)
+        finally:
+            self._browser_column_fit = False
+        self._fit_browser_columns(fill=True)
+
+    def _fit_browser_columns(self, column=None, *, fill=False, available=None):
+        """Bound independent column drags; fit viewport changes separately."""
+        if getattr(self, '_browser_column_fit', False):
+            return
+        if not getattr(self, '_browser_columns_shown', False):
+            return
+        header = self.table.horizontalHeader()
+        visible = [i for i in range(header.count()) if not header.isSectionHidden(i)]
+        if not visible:
+            return
+        if available is None:
+            view = (self.usb_device_pages.playlist_tree if self.usb_device_pages.playlist_tree.isVisible()
+                    else self.artists_view if self.artists_view.isVisible() else self.table)
+            available = view.viewport().width()
+        minimum = header.minimumSectionSize()
+        self._browser_column_fit = True
+        try:
+            if 0 in visible and fill:
+                other = sum(header.sectionSize(i) for i in visible if i != 0)
+                header.resizeSection(0, max(minimum, available - other))
+            overflow = sum(header.sectionSize(i) for i in visible) - available
+            # Manual drags change only the dragged section. Window shrink or
+            # newly shown columns can require reducing existing widths too.
+            order = [column] if column is not None else [0, *reversed(visible)]
+            for i in order:
+                if overflow <= 0:
+                    break
+                if i not in visible:
+                    continue
+                width = header.sectionSize(i)
+                take = min(overflow, max(0, width - minimum))
+                if take:
+                    header.resizeSection(i, width - take)
+                    overflow -= take
+        finally:
+            self._browser_column_fit = False
+        # Optional columns can exceed even the minimum widths. Keep every
+        # selected field reachable instead of stranding it offscreen.
+        policy = Qt.ScrollBarAsNeeded if len(visible)*minimum>available else Qt.ScrollBarAlwaysOff
+        for view in (self.table,self.artists_view,self.usb_device_pages.playlist_tree):
+            view.setHorizontalScrollBarPolicy(policy)
+        self._sync_artist_columns()
+
+    def _on_browser_column_resized(self, column, _old_size, _new_size):
+        if getattr(self, '_browser_column_fit', False):
+            return
+        self._fit_browser_columns(column)
+        self._sync_artist_columns(column)
 
     def _sync_artist_columns(self, *resized):
         """Mirror every table section boundary into the Artists browser."""
@@ -5783,6 +5970,17 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
                 width = table_header.sectionSize(column)
                 if artist_header.sectionSize(column) != width:
                     artist_header.resizeSection(column, width)
+                usb = self.usb_device_pages.playlist_tree
+                usb.setColumnHidden(column,hidden)
+                if usb.columnWidth(column) != width:
+                    usb.setColumnWidth(column,width)
+            for view in (self.artists_view,self.usb_device_pages.playlist_tree):
+                header = view.header()
+                for visual in range(table_header.count()):
+                    logical = table_header.logicalIndex(visual)
+                    current = header.visualIndex(logical)
+                    if current != visual:
+                        header.moveSection(current,visual)
         finally:
             self._artist_column_sync = False
 
@@ -6753,6 +6951,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
 
     def _set_column_hidden(self, col: int, hidden: bool):
         self.table.setColumnHidden(col, hidden)
+        self._fit_browser_columns(fill=True)
         self._sync_artist_columns()
         self._save_columns()  # visibility toggles persist immediately
 
@@ -6764,6 +6963,7 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         """
         hh = self.table.horizontalHeader()
         self.settings["columns_state"] = bytes(hh.saveState().toBase64()).decode("ascii")
+        self.settings['columns_keys'] = [key for key,_label,_hidden in COLUMNS]
         self.settings["sidebar_split"] = list(self._sidebar_split.sizes())
         self.settings["window_geometry"] = bytes(
             self.saveGeometry().toBase64()).decode("ascii")
@@ -6826,10 +7026,21 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
             return
         from PySide6.QtCore import QByteArray
         hh = self.table.horizontalHeader()
-        if hh.restoreState(QByteArray.fromBase64(state.encode("ascii"))):
-            hh.setSortIndicator(-1, Qt.AscendingOrder)
-            hh.setSectionResizeMode(QHeaderView.Interactive)
-            hh.setStretchLastSection(False)
+        self._browser_column_fit = True
+        try:
+            if hh.restoreState(QByteArray.fromBase64(state.encode("ascii"))):
+                # Qt restores an older header successfully but unhides every
+                # section added since it was saved. New fields are opt-in.
+                keys=self.settings.get('columns_keys')
+                if not isinstance(keys,list):keys=[key for key,_label,_hidden in COLUMNS[:10]]
+                for i,(key,_label,hidden) in enumerate(COLUMNS):
+                    if key not in keys:self.table.setColumnHidden(i,hidden)
+                hh.setSortIndicator(-1, Qt.AscendingOrder)
+                hh.setSectionResizeMode(QHeaderView.Interactive)
+                hh.setStretchLastSection(False)
+        finally:
+            self._browser_column_fit = False
+        self._fit_browser_columns()
         self._sync_artist_columns()
 
     # ---------- export (auto on drop) ----------
@@ -6945,6 +7156,9 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if not pls:
             return
         profile = self._device_profiles.get(dev)
+        if profile is not None and profile.kind == "generic_usb":
+            self._begin_cdj_export(dev, pls, from_drop=True)
+            return
         if profile is not None and profile.kind == "stock_ipod":
             self._begin_stock_ipod_sync(dev, pls)
             return
@@ -7044,6 +7258,13 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         self.status_label.setToolTip(detail)
 
     def _cancel_export(self):
+        if self._cdj_waiting is not None:
+            self._cdj_waiting = None
+            self._stop_pulse()
+            self.cancel_btn.setVisible(False)
+            self._flash_status('CDJ request cancelled — nothing written')
+            return
+        self._cdj_waiting = None
         self._device_coordinator.cancel()
         self._pending_device_operation = None
         self._dual_sync_queue.clear()
@@ -7092,7 +7313,12 @@ class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
         if getattr(self, "_shutdown_waiting", False):
             return
         self._shutdown_waiting = True
+        if getattr(self,'usb_device_pages',None) is not None:
+            self.usb_device_pages._remember_view()
+        if hasattr(self,'_remember_stock_device_view'):
+            self._remember_stock_device_view()
         self._shutting_down = True
+        self._cdj_waiting = None
         keyboard = getattr(self, "_keyboard_router", None)
         if keyboard is not None:
             keyboard.release_all()

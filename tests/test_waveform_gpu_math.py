@@ -33,10 +33,11 @@ def audit_shader(source):
     overview = shader[overview_start:overview_end].rsplit('    }', 1)[0]
     overview = overview.replace('discard_fragment();', 'return float4(background, 1.0);')
     wrapper = r'''
-inline float4 audit_overview(float3 weighted, float weight, float coverage) {
-    Uniforms u{};
+inline float4 audit_overview(float3 weighted, float weight, float coverage, uint mode = 1u) {
+    Uniforms u{}; u.waveformMode = mode; u.threeBandActive = mode == 3u;
     WaveSurface surface{coverage, weighted, weight, 1.0};
-    float3 background = display_srgb_to_linear(float3(13.0, 14.0, 18.0) / 255.0);
+    float3 encodedBackground = float3(13.0, 14.0, 18.0) / 255.0;
+    float3 background = display_srgb_to_linear(encodedBackground);
     OVERVIEW
 }
 '''.replace('OVERVIEW', overview) + r'''
@@ -104,9 +105,16 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         out[4] = final.r; out[5] = final.g; out[6] = final.b;
     } else if (op == 5) {
         Uniforms u{}; u.audioDetailSamplesPerSecond = a[1];
-        u.pixelsPerSecond = a[2]; float scale = a[3];
+        u.pixelsPerSecond = a[2]; float scale = a[3]; u.waveformMode = uint(a[4]);
         DETAIL_SELECTION
         out[0] = float(auditDivisors[detailLevel]);
+        out[1] = float(auditDivisors[physicalDetailLevel]);
+    } else if (op == 9) {
+        device const AudioEnvelopeSample *fine = (device const AudioEnvelopeSample *)(a + 16);
+        float occupancy = signed_interval_occupancy(fine, 0, uint(a[1]), uint(a[2]),
+            uint(a[3]), uint(a[4]), a[5], a[6], a[7]);
+        float3 color = interval_occupancy_color(float3(a[8], a[9], a[10]), occupancy);
+        out[0] = occupancy; out[1] = color.r; out[2] = color.g; out[3] = color.b;
     } else if (op == 6) {
         float3 authored = float3(a[1], a[2], a[3]);
         float3 recovered = recover_rgb_color(authored * a[4], a[4], authored);
@@ -131,7 +139,7 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
         float4 pixel = audit_overview(v.weightedColor, v.colorWeight, v.coverage);
         out[0] = pixel.r; out[1] = pixel.g; out[2] = pixel.b;
     } else if (op == 7) {
-        float4 v = audit_overview(float3(a[1], a[2], a[3]), a[4], a[5]);
+        float4 v = audit_overview(float3(a[1], a[2], a[3]), a[4], a[5], uint(a[6]));
         out[0] = v.r; out[1] = v.g; out[2] = v.b;
     } else if (op == 3) {
         WaveAttribute attribute;
@@ -338,6 +346,36 @@ class WaveformGPUMath(unittest.TestCase):
         self.assertNotEqual(old, self.source)
         self.assertGreater(np.max(np.abs(self.execute(rows, old)[:, :3] - expected)), .1)
 
+    def test_rgb_overview_matches_main_faint_only_display_space_compositing(self):
+        background = np.array([13, 14, 18]) / 255
+        rows, expected, contrast_coverages = [], [], []
+        coverages = np.unique(np.r_[np.linspace(0, 1, 401), .17999, .18, .18001])
+        for weight in (0, 1e-8, .1, 1):
+            for color in np.array([[1, 0, 0], [0, 1, 1], [.2, .7, 1], [.8, .1, .5]]):
+                for coverage in coverages:
+                    row = np.zeros(64)
+                    row[:7] = [7, *(color * weight), weight, coverage, 2]
+                    rows.append(row)
+                    lifted = coverage * (1 + 1.5 * (1-coverage/.18)**2) if coverage < .18 else coverage
+                    contrast_coverages.append(lifted)
+                    expected.append(linear_color(background if weight == 0 else
+                        background + (color-background)*lifted))
+        actual = self.execute(rows)[:, :3]
+        np.testing.assert_allclose(actual, expected, atol=3e-6, rtol=0)
+        # Visible coverage is not lifted; weak edges get a bounded, monotonic
+        # shoulder and true silence keeps exactly the existing background.
+        lifted = np.array(contrast_coverages[:len(coverages)])
+        np.testing.assert_array_equal(lifted[coverages >= .18], coverages[coverages >= .18])
+        self.assertTrue((np.diff(lifted) >= 0).all())
+        self.assertLess(float(np.max(lifted-coverages)), .041)
+        old = self.source.replace(
+            'return float4(display_srgb_to_linear(\n'
+            '                mix(encodedBackground, encodedColor, coverage)), 1.0);',
+            'return float4(mix(background, display_srgb_to_linear(encodedColor), '
+            'vivid_wave_coverage(surface.coverage)), 1.0);')
+        self.assertNotEqual(old, self.source)
+        self.assertGreater(float(np.max(np.abs(self.execute(rows, old)[:, :3]-actual))), .2)
+
     def test_overview_uses_signed_audio_when_compact_height_rounds_to_zero(self):
         colors = [[1, 0, 0], [0, 1, 1], [.2, .7, 1]]
         rows, expected = [], []
@@ -517,6 +555,57 @@ class WaveformGPUMath(unittest.TestCase):
             # allowing the established six-percent reconstruction tolerance.
             self.assertGreaterEqual(divisor, max(1, .94*row[1]/(row[2]*row[3])))
         np.testing.assert_array_equal(actual[5:], [2, 1, 1, 1, 1])
+
+    def test_logical_rgb_detail_only_changes_the_two_accepted_retina_stops(self):
+        rows = []
+        for mode in (1, 2, 3):
+            for scale in (1, 2):
+                for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384,
+                             576, 864, 1152, 1500):
+                    row = np.zeros(64); row[:5] = [5, 1000, zoom, scale, mode]
+                    rows.append(row)
+        actual = self.execute(rows)
+        for row, values in zip(rows, actual):
+            if row[4] == 2 and row[3] == 2 and row[2] in (576, 864):
+                np.testing.assert_array_equal(values[:2], [2, 1])
+            else:
+                self.assertEqual(values[0], values[1])
+
+    def test_coarse_interval_color_preserves_fine_area_against_dense_oracle(self):
+        rng = np.random.default_rng(851)
+        rows, expected = [], []
+        for fine_divisor, coarse_divisor in ((1, 2), (8, 13), (1, 3), (2, 5)):
+            for index in range(50):
+                row = np.zeros(64, dtype='<f4')
+                row[:8] = [9, 8, fine_divisor, index % 2, coarse_divisor, 0, 0, .009]
+                row[8:11] = rng.uniform(0, 1, 3)
+                bounds = np.sort(rng.integers(-30000, 30001, (8, 2)), axis=1)
+                if index % 10 == 0:
+                    bounds[:] = 0
+                if index % 10 == 1:
+                    bounds[:, 1] = bounds[:, 0]
+                packed = np.zeros((8, 4), dtype='<i2'); packed[:, 2:] = bounds
+                row.view('u1')[64:128] = packed.view('u1').ravel()
+                begin = int(row[3]) * coarse_divisor
+                points = begin + (np.arange(32768) + .5) / 32768 * coarse_divisor
+                cells = (points / fine_divisor).astype(int)
+                cells = cells[cells < 8]
+                row[5] = bounds[cells.min():cells.max()+1, 0].min() / 32767
+                row[6] = bounds[cells.min():cells.max()+1, 1].max() / 32767
+                widths = np.maximum((bounds[cells, 1] - bounds[cells, 0]) / 32767, row[7])
+                occupancy = min(1, widths.mean() / max(float(row[6]-row[5]), row[7]))
+                background = np.array([13, 14, 18]) / 255
+                expected.append([occupancy, *(background + (row[8:11]-background)*occupancy)])
+                rows.append(row)
+        actual = self.execute(rows)[:, :4]
+        np.testing.assert_allclose(actual, expected, atol=8e-5, rtol=0)
+        self.assertTrue(((actual[:, 0] >= 0) & (actual[:, 0] <= 1)).all())
+        # Treating each wider interval as fully occupied recreates brightening.
+        old = self.source.replace(
+            'return saturate(fineArea / max(coveredSpan * coarseWidth, 1e-8));',
+            'return 1.0;')
+        self.assertNotEqual(old, self.source)
+        self.assertGreater(float(np.max(np.abs(self.execute(rows, old)[:, :4]-actual))), .25)
 
     def test_signed_crossing_retains_area_without_broad_rgb_brightness_boost(self):
         row = np.zeros(64, dtype=np.float32); row[:5] = [2, 2, 0, 60, .5]

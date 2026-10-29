@@ -194,15 +194,15 @@ def device_profile(path) -> DeviceProfile:
     return profile
 
 
-def device_facts(path) -> DeviceFacts:
+def device_facts(path, *, cached_only: bool = False) -> DeviceFacts:
     """Stable display/identity facts from the successful diskutil probe."""
     key = str(path)
-    if key not in _INFO_CACHE:
+    if key not in _INFO_CACHE and not cached_only:
         _is_external(Path(key))
     info = _INFO_CACHE.get(key) or {}
     ipod = (
         _classic_ipod_facts(key)
-        if str(info.get("MediaType") or "").casefold() == "ipod"
+        if not cached_only and str(info.get("MediaType") or "").casefold() == "ipod"
         else {}
     )
     return DeviceFacts(

@@ -47,7 +47,7 @@ class DeviceBrowserMixin:
     # the full guard fail-closed in case the user explicitly starts a new read
     # or operation before ejecting.
     _EJECT_BLOCKING_WORKERS = (
-        "export_worker", "_resync_worker", "_delete_worker",
+        "export_worker", "_resync_worker", "_delete_worker", "_cdj_worker",
         "_stock_plan_worker", "_stock_commit_worker",
         "_dual_plan_worker", "_dual_commit_worker",
         "_stock_delete_plan_worker", "_stock_delete_commit_worker",

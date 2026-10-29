@@ -29,7 +29,7 @@ from soundbox.stock_ipod import (
 from soundbox.stock_ipod_info import stock_ipod_device_key
 
 from .devices import (
-    device_facts, device_profile, list_devices, refresh_device_mount,
+    DeviceFacts, device_facts, device_profile, list_devices, refresh_device_mount,
 )
 from .analysis_fence import AnalysisWriteFence
 
@@ -261,7 +261,7 @@ class DeviceScanWorker(QThread):
     def __init__(self, lib, extra=None, *, artist_overrides=None,
                  title_overrides=None, stock_shadow_store=None,
                  stock_models=None, known_paths=None,
-                 known_mount_tokens=None):
+                 known_mount_tokens=None, usb_views=None, usb_requests=None):
         super().__init__()
         self.lib = lib
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
@@ -274,6 +274,9 @@ class DeviceScanWorker(QThread):
             str(path): int(token)
             for path, token in (known_mount_tokens or {}).items()
         }
+        self.usb_views = dict(usb_views or {})
+        self.usb_requests = frozenset(usb_requests or ())
+        self.usb_snapshots = {}
         self.mount_tokens: dict[str, int] = {}
         self.new_paths: tuple[str, ...] = ()
         self.results: list = []
@@ -343,14 +346,21 @@ class DeviceScanWorker(QThread):
             # not delay the first status check by another full read/pass.
             if self.lib is not None:
                 try:
-                    dr = engine.device_drift(
-                        self.lib,
-                        path,
-                        self.extra,
-                        artist_overrides=self.artist_overrides,
-                        title_overrides=self.title_overrides,
-                    )
-                    drift = dr.count() if dr else 0
+                    if profile.kind == 'generic_usb':
+                        from soundbox.cdj_export import status_hint
+                        facts = device_facts(path,cached_only=True)
+                        drift = status_hint(self.lib,path,token=self.mount_tokens.get(path,0),
+                            volume_uuid=facts.volume_uuid,all_playlists=self.extra,
+                            titles=self.title_overrides,artists=self.artist_overrides)
+                    else:
+                        dr = engine.device_drift(
+                            self.lib,
+                            path,
+                            self.extra,
+                            artist_overrides=self.artist_overrides,
+                            title_overrides=self.title_overrides,
+                        )
+                        drift = dr.count() if dr else 0
                 except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
                     drift = None
                 if (
@@ -381,6 +391,23 @@ class DeviceScanWorker(QThread):
                                 drift = max(1, status.local_changes)
                     except Exception:  # noqa: BLE001 - keep polling read-only
                         drift = None
+            if not getattr(profile, 'has_stock_ipod', False):
+                from .usb_device_view import UsbSnapshot, read_usb_snapshot, read_native_usb_snapshot
+                cached = self.usb_views.get(path)
+                token = self.mount_tokens.get(path, 0)
+                changed=False
+                if profile.kind=='generic_usb' and cached is not None:
+                    from soundbox.cdj_usb import metadata_stamp
+                    try:changed=cached.error or cached.native_stamp!=metadata_stamp(path,token)
+                    except (OSError,ValueError):changed=True
+                if (cached is None or cached.mount_token != token
+                        or path in self.new_paths or path in self.usb_requests or changed):
+                    try:
+                        reader = read_native_usb_snapshot if profile.kind == 'generic_usb' else read_usb_snapshot
+                        cached = reader(path, token, device_facts(path, cached_only=True))
+                    except Exception as exc:
+                        cached = UsbSnapshot(Path(path), token, DeviceFacts(), error=str(exc))
+                self.usb_snapshots[path] = cached
             out.append((name, path, free, drift, profile))
         log = LOG.info if out else LOG.debug
         log(

@@ -61,7 +61,8 @@ def _signed_carrier_lattice_summary(
         pixels_per_second: float,
         drawable_scale: float,
         panel_hz: float = 120.0,
-        camera_fps: float = 60.0) -> dict[str, float | int]:
+        camera_fps: float = 60.0,
+        waveform_mode: int = 1) -> dict[str, float | int]:
     """Mirror the BLUE/RGB mip choice and expose temporal aliases."""
     footprint = (
         samples_per_second
@@ -69,6 +70,8 @@ def _signed_carrier_lattice_summary(
         * (0.5 if pixels_per_second < 64.0
            else 1.0)
     )
+    if waveform_mode == 2 and pixels_per_second in (576.0, 864.0):
+        footprint *= drawable_scale
     required = max(1.0, footprint * 0.94)
     from soundbox.waveform_detail import DETAIL_DIVISORS
     divisors = DETAIL_DIVISORS if samples_per_second == 1000.0 else AUDIO_DETAIL_MIP_DIVISORS
@@ -276,6 +279,7 @@ def _write_timing_summary(
             float(rows[0]["pixels_per_second"]),
             float(rows[0]["drawable_scale"]),
             camera_fps=camera_fps,
+            waveform_mode=int(rows[0]["waveform_mode"]),
         )
     (segment / "timing-summary.json").write_text(
         json.dumps(summary, indent=2) + "\n")

@@ -18,6 +18,8 @@ echo "OK"
 echo "== native deck =="
 ./build_native.sh
 echo "OK"
+echo "== native CDJ renderer =="
+./build_cdj.sh --test
 echo "== mypy (engine) =="
 ./.venv/bin/python -m mypy soundbox/ soundbox_personal/
 echo "== required offline fixtures =="

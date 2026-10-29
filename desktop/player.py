@@ -1398,6 +1398,10 @@ class CuePanel(QWidget):
             lambda _checked=False, index=page: self.pages.setCurrentIndex(index))
         return button
 
+    def toggle_page(self):
+        target = self.memory_tab if self.pages.currentIndex() == 0 else self.hot_tab
+        target.click()
+
     def set_loaded(self, loaded: bool):
         loaded = bool(loaded)
         if loaded == self._loaded:
@@ -1487,7 +1491,14 @@ class CuePanel(QWidget):
 
 
 class PlayerLayoutSelector(QComboBox):
-    """Native popup with a symmetric field and consistently inset chevron."""
+    """A symmetric field with a popup bounded to the same width."""
+
+    def showPopup(self):
+        self.view().setMinimumWidth(0)
+        super().showPopup()
+        popup = self.view().window()
+        popup.setFixedWidth(self.width())
+        popup.move(self.mapToGlobal(QPointF(0, 0).toPoint()).x(), popup.y())
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -1654,7 +1665,6 @@ class PlayerBar(QWidget):
             self.layout_selector.setMinimumContentsLength(8)
             self.layout_selector.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             self.layout_selector.addItems(['1 Player', '2 Player', 'Simple', 'Browser'])
-            self.layout_selector.view().setMinimumWidth(120)
             self.layout_selector.setToolTip('Player layout · additional layouts are not available yet')
             for index in range(1, self.layout_selector.count()):
                 self.layout_selector.model().item(index).setEnabled(False)

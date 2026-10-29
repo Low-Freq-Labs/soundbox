@@ -1,6 +1,6 @@
 # Release test gate
 
-October 2, 2026. `./check.sh` builds native code, runs lint/types, validates the
+Updated October28, 2026. `./check.sh` builds native deck/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU tests use an offscreen Qt process; all `test_native_deck` cases
 use a fresh Cocoa process. Both are mandatory. `--native` remains a compatible
@@ -119,3 +119,13 @@ Generated AAC/ALAC supplements preserve imported bytes and native sample rate;
 ALAC extrema match the generated WAV reference exactly. Muted native browser-load
 tests cover playing/paused replacement, rapid latest-request selection, pending
 grid/media, transient PAUSED reports, explicit pause fades and CUE latch policy.
+
+
+October28 adds the isolated Rust1.99 CDJ renderer build, pinned-vendor verification,
+Rust pagination/confinement checks and Python integration/recovery checks. The
+required offline fixture is `soundbox-cdj-ref/offline-integration-20261028/`, or
+`SOUNDBOX_CDJ_REFERENCE`; `tests/fixtures/cdj-reference.json` pins all28 files.
+It contains copied native metadata/profiles/analysis plus one captured WAV and an
+explicit synthetic DTO. No harness opens live devices, source DBs or AppData.
+Restore exact fixture bytes; missing or changed inputs fail instead of skipping.
+Only the renderer binary and license notices are packaged, not these inputs.

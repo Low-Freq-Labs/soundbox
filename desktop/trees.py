@@ -126,6 +126,33 @@ class NoTypeAhead:
         self.setAttribute(Qt.WA_InputMethodEnabled, False)
 
 
+class BrowserDetailTree(NoTypeAhead, QTreeWidget):
+    """Device trees share the browser's 24-point grid through empty space."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        # QTreeView alternates populated rows only. Continue from its last
+        # visible row without adding fake model entries or selectable blanks.
+        viewport = self.viewport()
+        index = self.indexAt(QPoint(1, 1))
+        y = 0
+        row = self.verticalScrollBar().value()
+        while index.isValid():
+            rect = self.visualRect(index)
+            y = rect.bottom() + 1
+            if y >= viewport.height():
+                return
+            row += 1
+            index = self.indexBelow(index)
+        painter = QPainter(viewport)
+        painter.setClipRegion(event.region())
+        while y < viewport.height():
+            painter.fillRect(0, y, viewport.width(), 24,
+                             QColor(theme.ROW_ALT if row % 2 else theme.ROW))
+            y += 24
+            row += 1
+
+
 class ArtistsTree(NoTypeAhead, QTreeWidget):
     """The Artists browser page (artist folders → song rows). Drag source: a
     track row carries its own id; an artist row carries ALL its tracks — drop

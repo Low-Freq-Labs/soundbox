@@ -31,6 +31,10 @@ class DeviceProfile:
     model: str = ""
     library_persistent_id: int = 0
 
+    @property
+    def cdj_export(self) -> bool:
+        return self.kind=='generic_usb' and self.filesystem in FAT_FILESYSTEMS | {'exfat'}
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -120,7 +124,7 @@ def inspect_device(root: str | Path, filesystem: str = "") -> DeviceProfile:
     elif has_stock:
         kind, label = "stock_ipod", "Stock iPod"
     else:
-        kind, label = "generic_usb", "Generic USB"
+        kind, label = "generic_usb", "USB"
     fat = fs in FAT_FILESYSTEMS
     model = _read_model(base) if has_stock else ""
     stock_write = False

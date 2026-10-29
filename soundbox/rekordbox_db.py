@@ -267,7 +267,8 @@ def _content_rows(db, track_ids):
         yield from query
         return
     query = query.options(joinedload(DjmdContent.Artist),
-                          joinedload(DjmdContent.Key), joinedload(DjmdContent.Genre))
+                          joinedload(DjmdContent.Key), joinedload(DjmdContent.Genre),
+                          joinedload(DjmdContent.Album),joinedload(DjmdContent.Label))
     if track_ids is None:
         yield from query
     else:
@@ -315,6 +316,19 @@ def _read_tracks(db, source: Path | None = None,
             bitrate=str(c.BitRate or ""),
             rating=str(c.Rating or ""),
             year=str(c.ReleaseYear or ""),
+            info=dict(album=c.Album.Name if getattr(c,'Album',None) else '',
+                label=c.Label.Name if getattr(c,'Label',None) else '',
+                comments=str(getattr(c,'Commnt','') or ''),
+                releaseDate=str(getattr(c,'ReleaseDate','') or ''),
+                playCount=str(getattr(c,'DJPlayCount',0) or 0),
+                sampleRate=str(getattr(c,'SampleRate','') or ''),
+                bitDepth=str(getattr(c,'BitDepth','') or ''),
+                color=str(getattr(c,'ColorID',0) or 0),
+                dateCreated=str(getattr(c,'DateCreated','') or '')[:10],
+                hotCueAutoLoad='On' if str(getattr(c,'HotCueAutoLoad','')).lower()=='on' else 'Off',
+                publishInfo='On' if str(getattr(c,'DeliveryControl','')).lower()=='on' else 'Off',
+                message=str(getattr(c,'DeliveryComment','') or ''),
+                lyricist=str(getattr(c,'Lyricist','') or '')),
             source_analysis_path=str(resolve_dat_path(
                 source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "",
                 resolved_share=share) or ""),

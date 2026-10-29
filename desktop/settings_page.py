@@ -92,6 +92,7 @@ class SettingsPageMixin:
         filter — never modifies rekordbox)."""
         if self.lib is not None:
             self.lib.hide_untracked = bool(self.settings.get("hide_untracked"))
+            self.lib.info_overrides = self.settings.get('track_info',{})
             self.lib.hide_nokey = bool(self.settings.get("hide_nokey", True))
             self.lib.hide_short = bool(self.settings.get("hide_short", True))
             self.lib.hide_short_secs = int(self.settings.get("hide_short_secs", 5))
@@ -393,6 +394,11 @@ class SettingsPageMixin:
         self._refresh_graveyard()
         scroll.setWidget(host)
         add_tab(scroll, "General")
+        from .usb_preferences import MySettingsEditor
+        self._global_my_settings = MySettingsEditor(global_page=True)
+        self._global_my_settings.set_profile(self.settings.get('cdj_my_settings',{}))
+        self._global_my_settings.save_requested.connect(self._save_global_my_settings)
+        add_tab(self._global_my_settings,'My Settings')
         from .keyboard import Keymap
         from .keyboard_page import KeyboardPage
         self._keyboard_page = KeyboardPage(

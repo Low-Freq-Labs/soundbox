@@ -59,13 +59,26 @@ or reset curation, provider namespaces, images, sticky removals or analysis.
                 See research/cdj_export/.
     docs/       this documentation.
 
-The CDJ prototype is not an exporter backend in either installed profile.
-Its DeviceSQL codecs and synthetic ANLZ field bridge are research foundations;
-neither proves a hardware-valid generated library. A future CDJ backend needs
-its own explicit target, ownership and recovery design before integration. The
-existing `/PIONEER` guard stays in place. Product sequencing and the hardware
-acceptance contract live in [ROADMAP](ROADMAP.md) and
-[CDJ USB research](cdj-usb-export.md).
+The October28 CDJ pilot integrates the pinned Rust renderer under `native/cdj`.
+`soundbox.cdj_source` captures fresh native metadata/cues and verifies source
+playlist order; `cdj_usb` copies bounded native metadata/profile files for local
+parsing; `cdj_pdb` independently checks DeviceSQL pages/indexes; `cdj_export`
+prepares an immutable selection/candidate; `cdj_transaction` owns authorized
+publication and locally bound recovery. Both formats share one generation.
+`desktop.cdj` uses the existing device coordinator/worker lane. Ordinary exporters
+retain their PIONEER exclusion. Full contract and acceptance limits:
+[CDJ guide](cdj-usb-export.md).
+
+Current native catalogs are shared authority across exporters; cdj_catalog adopts
+fresh metadata and maps source-local tag IDs without auditing retained media.
+cdj_incremental changes selected records/memberships and preserves collection
+songs. cdj_transaction checksums while copying, resumes completed payloads, and
+lets a later coherent native export supersede an older interrupted catalog intent.
+USB/global My Settings use44 logical fields and byte-preserving selected patches;
+no automatic global propagation. usb_format revalidates the reviewed physical USB
+before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_info
+overrides feed display/export; browsercache schema2 and libcache schema8 preserve
+these fields without analysis/art rebuilds. No additional source DB write API exists.
 
 ## Engine modules (`soundbox/`)
 
@@ -180,10 +193,41 @@ provider imports, and the existing rekordbox modules remain concrete adapters.
 `device_browser` (`DeviceBrowserMixin`), `artpicker`, `suggest`,
 `artistcatalog`, `connections` (owned account jobs), `keyboard` (action catalog,
 versioned map and physical-key router), `keyboard_page` (capture/conflict editor),
-`model` (`TrackModel`), `player`, `theme`.
-`class MainWindow(SettingsPageMixin, DeviceBrowserMixin, QMainWindow)`.
+`model` (`TrackModel`), `player`, `theme`, `stock_device_view` (iPod dashboard),
+`usb_device_view` (seven USB pages and immutable native snapshots),
+`usb_preferences` (USB/global controls), `track_info` (Summary/Info).
+MainWindow composes these mixins with TrackInfoMixin and QMainWindow.
 `native_deck.py` adapts the native C ABI to PlayerBar's small transport
 protocol.
+
+USB presentation reuses the iPod detail-tree factory and playlist styling.
+Rockbox's bounded reader opens only `/Playlists` through no-follow descriptors,
+never referenced media or PIONEER. Generic USBs use the dedicated bounded native
+reader when either native library exists; no live SQL is opened on the USB.
+Native preference controls queue an explicit Save generation through the same
+worker lane. The UI does no removable-device I/O in widget callbacks.
+A USB playlist drop carries target-bound authorization through preparation into
+commit without another dialog. cdj_incremental freezes only selected changed/new
+inputs and merges copied native catalogs through native/cdj/src/merge.rs. Prior
+payload contracts remain inventory, not a fresh audit. Input signatures/per-playlist
+hints are separate from ownership. Newly captured audio is placed directly in the
+local partial output; the helper accepts only that exact Contents file set before
+building catalogs/analysis, and parent SHA-256 inventory proves unchanged audio.
+The packaged helper comes from build/cdj/release, never the debug profile. Source/candidate preparation and publication remain
+in the serialized device lane through QThread.finished. Connection/remount or an
+explicit request refreshes cached snapshots; ordinary polling uses a small
+manifest/RAM-input drift hint. Backend UUID/mount authority is absent from the
+Identity rows. No USB tab roots QFileSystemModel at the mount. See the CDJ guide
+for staging space, current-native catalog adoption, profile preservation and recovery limits.
+The shared device header is 26 points; BrowserDetailTree continues the regular
+24-point alternating grid below real rows. USB song rows use COLUMNS and shared
+browser header state. Immutable CdjSong records retain actual USB audio/analysis
+references; explicit activation validates them in the device lane and uses a
+separate device track ID, without source cue overlays/edit authority. USB view
+mementos are keyed by volume UUID, with tab, hierarchy/selection and scroll saved
+under settings.device_views; stock dashboards retain their per-device page state.
+The keyboard capture dialog uses the same transactional map save for Unbind as
+for keycap removal; failed saves restore the prior editor/runtime map.
 
 `desktop/app.py` remains the largest general orchestration hotspot. Its
 sections are explicit and cohesive mixins already own Settings and the device
@@ -200,31 +244,37 @@ boundaries.
 The complete player reference, including interaction semantics and committed
 next work, is in `PLAYER.md`.
 
-The browser body ends with a 30-point utility rail using the footer's PANEL2
-background without a left divider. Its centered circle-i button is an inactive track-
-information placeholder: it opens no pane and performs no metadata/source reads.
-The track table owns a persistent 10-point vertical-scrollbar gutter at its right
-edge, before that rail. An inert header-height scroll-bar widget reserves the
-top of the gutter, so the actual scrollbar and hit area begin below the headers.
-Artists reserves the same gutter/cap and shares every column width. All headers
-are Interactive, including Title: manual dragging changes only that column.
-MainWindow resize events give their width difference to Title, clamped to its
-minimum, while other widths remain intact. First-show default widths fill the
-viewport; saved widths retain their manual layout. Legacy header states restore
-into Interactive mode. ScrollPerItem keeps 24-point rows aligned with the sidebar.
-The circle-i and scrollbar cap have no enclosing/divider borders. FooterBar paints
-the normal top separator only below content, ending before the visible rail so
-its bottom corner joins seamlessly. Footer/status geometry is unchanged; Settings
-uses the full-width separator while the rail is hidden.
+The browser extends to the window's right edge; the former 30-point utility rail
+is removed. Its circle-i is a 44×28 bordered prep button
+immediately before My Tags, using the same BG inner fill as Settings and the other
+controls, with a matching three-point corner radius. Info and Settings use
+centered vector icons, avoiding font bearings. The player-layout popup is sized
+to the selector field after Qt lays it out. Info opens Summary/Info for the selected row, with artwork inside Info. Supported
+metadata edits are SoundBox-local and feed USB export. TrackInfoDialog constructs
+its Summary without artwork locks/decoding and lazily builds Info on selection.
+After the dialog opens, ArtworkWorker resolves the canonical art path and decodes
+a bounded QImage outside the GUI; TaskOwner retains it through finished/join and
+drains before dialog close or application shutdown. No extra work is added to
+track loading. Comments spans the Info row; Lyricist is omitted from that form.
+Global My Settings and Keyboard put their scrollbars at the window's right edge.
+Flexible prep
+gaps redistribute around it. FooterBar draws a single full-width top separator at a fixed28-point height.
+Its progress/count/Cancel controls fit inside without changing browser geometry.
 
-Width shrinking adjusts Title in the main window's own Resize filter before
-QMainWindow lays out its children. Growth follows layout in resizeEvent, once
-the extra viewport width exists. This prevents transient horizontal-scrollbar
-show/hide cycles while a fitted table resizes. Section-resized signals mirror
-only the changed column into Artists; full visibility/restoration calls still
-reconcile all columns. TrackModel resolves its fixed Qt role/alignment values
-once and immediately declines unsupported paint roles, retaining the same display,
-edit, tooltip and alignment results without adding a row cache or source reads.
+TrackTable and Artists own persistent vertical-scrollbar gutters. An inert
+26-point header-height widget reserves the top, keeping the real scrollbar and
+hit area below the headers. Headers stay Interactive with a shared bounded width
+policy: manual drags change only the dragged section, clamped to the remaining
+free width without borrowing from Title. Window resizing gives spare width to
+Title; narrowing or showing extra columns can reduce other widths only as needed. Saved/default layouts fit under
+a guarded section-resize loop. The visible viewport's Resize/Show events supply the
+available width, excluding the gutter. Ordinary layouts fit without horizontal
+scrolling; if selected fields exceed even their minimum widths, all three browser
+views allow horizontal scrolling so every field remains reachable. Saved layouts
+record columns_keys: restoring an older ten-column Qt header must explicitly keep
+new metadata fields hidden. Artists mirrors shared widths and visibility.
+ScrollPerItem keeps 24-point rows aligned with the sidebar. TrackModel declines
+unsupported paint roles early without adding a row cache or source reads.
 
 Prep edit feedback uses the existing lower-left status label and status helpers.
 `TagEditController.update_status_text` distinguishes accepted tag/cue/grid intents
@@ -322,9 +372,11 @@ and divisor-dependent height compensation were removed after the September 29
 reference comparison. The 13 UI/native zoom stops end at 1500 points/s.
 
 One footprint-selected song-anchored mip feeds the fixed four-attributes-per-pixel
-lattice. The three widest stops use a half-pixel source footprint; all stops from
-64 through 1500 use one physical pixel. The October 2 close-zoom follow-up
-selects 2-ms compact detail at Retina 384, then 1-ms at 576–1500. Thin signed carriers use a
+lattice. The three widest stops use a half-pixel source footprint; 64–1500 use
+one physical pixel except the logical-pixel footprint at RGB 576/864. The October 2 close-zoom follow-up
+selects 2-ms compact detail at Retina 384; the native-reference follow-up also
+selects a logical-pixel footprint (2 ms) at RGB 576/864. Other close cases retain
+1-ms detail. Thin signed carriers use a
 one-physical-pixel minimum before coverage, replacing the former fixed
 3.6-point stroke. Color is
 premultiplied before the final one-pixel integral, with no adjacent-LOD blend or
@@ -350,13 +402,14 @@ quarter-pixel profile remains in use at 64–184 px/s for RGB/BLUE and below
 lattice to form the complete piecewise-linear profile; integrating those true
 segment spans avoids a hidden corner moving through a fixed probe interval.
 There is no translated RGBA texture or second coverage/color filter; every
-zoom retains the oversampled attribute lattice. RGB at every zoom and 3BAND
-retain fractional travel. BLUE rounds only its display offset to physical pixels
+zoom retains the oversampled attribute lattice. RGB 576/864 use one logical-point display step, matching the native reference;
+other RGB stops and 3BAND retain fractional travel. BLUE rounds only its display offset to physical pixels
 through 384 points/s and logical points at 576–1500, bounding its waveform-only
 error by half that increment. Audio, grid and seek clocks remain
-continuous in every mode. The antialias window is exactly one physical pixel. The small overview applies
-continuous cubic vividness to true subpixel coverage; the scrolling lane uses
-mode-specific geometric coverage rather than the overview's vividness transfer.
+continuous in every mode. The antialias window is exactly one physical pixel.
+The RGB overview uses the same bounded faint-only shoulder as the main RGB lane;
+BLUE/3BAND overviews retain continuous cubic vividness. The scrolling lane uses
+mode-specific joint geometric coverage.
 For BLUE/RGB signed intervals, the fragment integrates clipped linear coverage
 moments and visible color over the same pointwise intersection. It does not
 reapply the smaller of separately integrated upper/lower boundaries: that older
@@ -369,9 +422,16 @@ BLUE retains linear-light joint-area compositing. RGB384 keeps the geometric
 coverage of Sonny's October27 C, with the selected October28 encoded-color blend. Other RGB stops apply only a smooth monotonic faint-detail shoulder
 below 18% coverage: c′=c×(1+1.5×(1−c/0.18)²), with premultiplied color scaled by
 c′/c. It adds at most 0.04 coverage, leaves zero empty and joins exact area at 18%.
-All RGB stops use fractional translation. The broad occupied-column boost is
+At RGB 576/864, attribute preparation also measures occupancy: the overlapping
+original physical-footprint intervals' minimum-stroke widths divided by the
+coarse interval's width, weighted by source span and bounded to 0–1. Encoded
+contrast against the background is weighted before existing height
+premultiplication, preserving fine painted area rather than treating all peak
+bounds as occupied. No additional buffer, cache schema or per-frame source
+read is needed. If the physical/logical selections agree, color is unchanged.
+RGB 576/864 use logical-point motion; other RGB stops remain fractional. The broad occupied-column boost is
 removed; normal coverage and hue are not brightened. Persisted
-extrema, mip data and the one-pixel source footprint remain unchanged.
+extrema, mip data and the final physical-pixel integration window remain unchanged.
 The canonical 64–256 px/s midrange family applies one same-LOD
 half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
 integration. The 24–48 distant stops and 384–1500 close family bypass it; it
@@ -380,8 +440,10 @@ Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
 hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:
 main-lane RGB blends its encoded color/coverage with the encoded background,
-then decodes that final opaque pixel. BLUE,3BAND,overview and fixed-function grid
-blending retain linear light. Metal encodes exactly once on store. Full colors and the `#0d0e12` clear remain
+then decodes that final opaque pixel. The RGB overview now does the same, with
+only the bounded faint-coverage shoulder below 18%; its old full-range cubic boost
+is removed for RGB. BLUE, 3BAND, their overviews and fixed-function grid blending
+retain linear light. Metal encodes exactly once on store. Full colors and the `#0d0e12` clear remain
 unchanged. The October28 RGB edge update retains both visibility lifts and the
 existing source/height/LOD/clock contracts; it does not promise equal linear-light
 energy for different RGB edge-coverage distributions.
@@ -411,8 +473,9 @@ pixel/refresh, and Nyquist-folded panel/camera rates. This keeps a real source
 carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
-uses joint coverage/color integration and continuous RGB translation. RGB 384
-keeps exact area; other RGB stops use only the faint shoulder described above. The installed September 30 correction additionally
+uses joint coverage/color integration. RGB 576/864 now use logical-point motion
+and the occupancy-weighted logical footprint above; other RGB stops remain
+continuous. RGB 384 keeps exact area; other RGB stops use only the faint shoulder described above. The installed September 30 correction additionally
 retains the original color-premultiplication weight through attribute interpolation;
 reconstructing that weight from interpolated signed bounds spuriously brightens
 polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
@@ -420,8 +483,9 @@ The October 1 complete-corner correction at RGB/BLUE 256/384/576/864
 resolved the remaining reported pulses in Sonny's live B comparison. The separate
 BLUE palette/white-core correction was also accepted and installed. Broader track
 and exact-reference parity were not established by those checks. Sonny closed
-further visual comparison work on October28; see the current handoff. This user
-acceptance does not claim exact native equivalence.
+further visual comparison work initially on October28, then reopened the
+Gunslinger case and accepted the targeted follow-up above. See the current
+handoff; that acceptance does not claim exact native equivalence.
 Rejected
 carrier-neutral, background-bed, coverage-sharpening, and RGB-transition
 experiments are absent from the production ABI and shader. They either removed
@@ -549,8 +613,9 @@ creates immutable identity/track/playlist snapshots, merges pending playback
 records only in memory, and exposes no mutation API. The desktop device page
 renders them as Device, Songs, and Playlists tabs. On a schema-3 dual device,
 Songs and Playlists merge manifest ownership with the parsed iTunesDB and label
-each row Both, Stock, or Rockbox; the filesystem browser remains for Rockbox-only
-and generic USB targets. Connection presentation separates visibility from readiness. Debounced `/Volumes`
+each row Both, Stock, or Rockbox. Rockbox-only and USB targets use the shared-style
+Overview/Playlists surface and cached native or M3U/M3U8 snapshots instead of the
+former raw filesystem browser. Connection presentation separates visibility from readiness. Debounced `/Volumes`
 notifications and a 250-ms cached kernel mount-table check request discovery even
 during playback or an eject-ready hold. The latter uses Darwin
 `getfsstat64(MNT_NOWAIT)` without opening mounted paths, so mounting over an
@@ -743,7 +808,7 @@ track. State load/restore reapplies both preferences. `desktop.wordmark.Wordmark
 resolves the supplied SVG color layers in memory and occupies the original
 270×55 slot. The SVG is packaged data and part of the source fingerprint.
 
-Settings orders its tabs General, Keyboard, Graveyard, Connections; Graveyard
+Settings orders its tabs General, My Settings, Keyboard, Graveyard, Connections; Graveyard
 uses the full width. A QTabBar is centered across the 40-pixel header, with Back on the left
 and no redundant Settings label. Equal outer grid columns keep its center
 independent of the Back button's width. It selects a

@@ -28,6 +28,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   replace or clear SoundBox AppData as part of an app install.
 
 ## Qt / PySide6 (these bite HARD)
+- **Tree stripes and embedded controls need explicit geometry.** QTreeView paints
+  alternate backgrounds only for real items. Device BrowserDetailTree extends
+  the same 24-point grid through empty space without fake rows. Legacy embedded device
+  controls need fixed24-point height to avoid enlarging uniform rows. Native USB
+  General now uses a separate28-point two-column form. Shared device headers
+  match the 26-point sidebar line.
 - **Cocoa combo popups need space for their checkmark gutter.** The Text color
   combo's content-only width clipped White/Custom in its native checked menu.
   Keep an explicit minimum contents length and the icon-aware size policy;
@@ -136,29 +142,27 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   `drawableSize` before requesting a frame. Returning to generic resize wakes
   causes both a request storm and a one-frame small/stretched waveform.
 - **The track scrollbar begins below the headers.** Keep its persistent gutter
-  on TrackTable with ScrollBarAlwaysOn, before the utility rail. Reserve a header-
-  height widget above the actual bar using addScrollBarWidget(AlignTop), rather
-  than just hiding a thumb that can still enter the header's hit area. Artists
-  uses the same gutter/cap. The separate 30-point footer-colored rail does not
-  own scrolling or wrap the player; its circle-i is borderless disabled chrome.
-  Keep the rail's left edge and scrollbar cap borderless. FooterBar's separator
-  ends before the visible rail, joining its lower corner without a seam; retain
-  the existing footer margins/height rather than adding a second border pixel.
-- **Header drags and window resizing have different width ownership.** Keep
-  every browser column Interactive, including Title, even after restoring an old
-  Stretch state. A manual drag changes only that section and moves following
-  columns. MainWindow width changes go to Title, clamped to its minimum; other
-  widths stay intact. Never use Stretch for that behavior: it takes width back
-  from Title during unrelated column drags. Mirror Title into Artists as well.
-- **QMainWindow can lay out children before resizeEvent.** Shrink Title in the
-  main window's own Resize event filter, then let the narrower viewport land.
-  Grow Title after layout, when that extra room exists. Doing both afterward
-  makes a fitted table briefly overflow, toggling its horizontal scrollbar and
-  changing viewport height during successive shrink frames. Never apply the
-  width delta for unrelated child Resize events or bypass the native host filter.
-  Mirror only the changed header section; don't reset every section's mode on
-  each frame. TrackModel's fixed role constants belong outside its hot data()
-  callback; unsupported paint roles need no row/key work or Qt enum lookup.
+  on TrackTable with ScrollBarAlwaysOn at the window's right edge. Reserve a
+  header-height widget above the actual bar using addScrollBarWidget(AlignTop),
+  rather than merely hiding a thumb whose hit area can enter the header. Artists
+  uses the same gutter/cap. There is no utility rail. The circle-i opens Summary/Info from a
+  bordered prep control before My Tags; Info and Settings share the 44×28 size,
+  three-point corners and BG fill of the grid controls. Draw both icons centered
+  on QRectF geometry; integer QRect centers and font bearings shift the ink.
+  The layout-selector popup is constrained to the field width after showPopup.
+  FooterBar draws one full-width separator without changing footer height/margins.
+- **Browser widths must fit the viewport without coupling manual drags.** Keep
+  Interactive headers. A manual drag changes only that section and is capped by
+  existing free width; do not take width from Title or another column. A full row
+  must first be narrowed to free space. Window resizing/column visibility can
+  refit Title and reduce other widths when necessary. Guard the section-resize feedback loop, including bulk default
+  and saved-state restoration, then reconcile Artists. Ordinary layouts keep horizontal
+  scrolling disabled; when selected fields exceed the minimum-width budget,
+  enable scrolling in the regular/Artists/USB views rather than strand columns.
+  Fit against the browser viewport on Resize/Show so the scrollbar gutter
+  is excluded, including after resizing in Settings. Do not fit against a hidden Artists viewport's stale geometry.
+  TrackModel's fixed role constants belong outside its hot data() callback;
+  unsupported paint roles need no row/key work or Qt enum lookup.
 - **Worker ownership does not mean an edit is saving.** Focus return rechecks
   the saved grid through the shared lane. Show footer progress only for accepted
   edit intents, using the existing status label/style; never show `Saving grid…`
@@ -241,7 +245,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Waveform primaries are authored for the built-in Display-P3 surface.**
   Keep `CAMetalLayer.colorspace` explicitly set to Display P3 while retaining
   the sRGB-transfer Metal attachment. Main-lane RGB decodes its final encoded-
-  space blend; BLUE,3BAND,overview and the grid retain linear-light compositing.
+  space blend, as does the RGB overview; BLUE/3BAND, their overviews and the grid
+  retain linear-light compositing.
   Leaving the layer color space implicit converts Rekordbox red `255/0/0` into
   `234/51/35` and high blue `127/162/255` into `134/162/248` on capture. In
   3BAND, preserve the measured flat membership palette rather than
@@ -249,10 +254,10 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **The scrolling surface must be fixed in song space, not reconstructed at a
   new playback phase each frame.** Print height and amplitude-weighted RGB onto
   a private song-coordinate attribute lattice with four attributes per
-  physical pixel at every zoom. RGB now uses continuous fractional translation
-  at every stop; RGB 384 retains October27 coverage C's exact area, and other RGB stops
+  physical pixel at every zoom. RGB 576/864 use logical-point motion after the
+  native Gunslinger reference; other RGB stops remain fractional. RGB 384 retains October27 coverage C's exact area, and other RGB stops
   use only the bounded faint-detail shoulder below 18% coverage. 3BAND also
-  stays continuous. BLUE alone rounds its display offset to physical pixels
+  stays continuous. BLUE rounds its display offset to physical pixels
   through 384 points/s and logical points at 576–1500. Historically, logical points at
   256/384 made visible steps, and fractional motion paired with conservative
   RGB coverage brought fuzz back. C removes that partial-pixel brightness boost
@@ -262,6 +267,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   generous guarded margin scaled by the attribute density and absolute
   integer-song-coordinate recentering so regeneration cannot create a viewport
   seam.
+- **Coarser extrema need an occupancy-aware color resolve.** The accepted RGB
+  576/864 follow-up selects one logical-pixel source footprint and one logical-
+  point motion unit (two physical pixels on Retina). A plain 2-ms peak envelope
+  improved glisten but increased painted area/brightness. Keep the original
+  physical-footprint level as the area reference and weight encoded contrast by
+  its overlapping signed widths divided by the coarse width. Apply this on the
+  fixed attribute lattice before existing premultiplication; retain the final
+  one-physical-pixel integral and both visibility policies. Do not substitute a
+  blanket palette gain. When both levels agree (including 1x), do not compensate.
+  The real source/caches remain unchanged; BLUE/3BAND and other RGB stops are controls.
 - **Recenter tests must compare different overlapping origins.** Returning to
   the identical origin misses floating-point source-cell boundary drift. Generate
   attributes from canonical 128-attribute clock blocks, preserving the same
@@ -300,8 +315,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Keep coverage policy explicit and test the final compositor.** A
   hard minimum vividness for every nonzero fragment turns a contour crossing a
   pixel into an on/off color flash, even when the song coordinate itself is
-  perfectly smooth. Use the cubic ease-out only for the small overview, where
-  true subpixel peaks need visibility. Do not apply that curve to the scrolling
+  perfectly smooth. The RGB overview now uses the same bounded faint-only
+  shoulder and encoded-space resolve as main RGB. Keep cubic ease-out only for
+  BLUE/3BAND overviews, where true subpixel peaks need visibility. Do not apply that curve to the scrolling
   lane; at 24 px/s the ease-out exaggerated
   20% physical coverage to nearly 49%, making saturated red/orange edges pulse.
   Coverage policy may change compositing only—never height, hue, LOD, detail
@@ -363,7 +379,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   RGB integrates encoded channels jointly with coverage, blends the encoded
   background, then decodes that opaque result for BGRA8Unorm_sRGB. Do not decode
   RGB channel endpoints first or let the sRGB attachment encode an already-encoded
-  result. BLUE,3BAND,overview and grid retain their linear-light behavior. Keep
+  result. The RGB overview now shares this encoded-space resolve with a faint-only
+  shoulder. BLUE/3BAND, their overviews and grid retain linear light. Keep
   Display-P3 primaries and the linear clear for `#0d0e12`. The earlier universal
   linear-light guidance described the preceding renderer and no longer applies
   to main-lane RGB. Source samples, height transfer, footprint, LOD and timing
@@ -637,6 +654,22 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   BLOCKS these for SECONDS when the stick is busy → whole-app beachball + frozen
   animations. Thread it (`DeviceScanWorker`/`DeleteWorker`), show the lower-left
   progress bar, cache drift in `_drift_cache`. Any new device op must be threaded.
+- **USB tabs are cached presentation, not a volume browser or write authority.**
+  For Rockbox/file playlists, read M3U/M3U8 text only below `/Playlists` using pinned no-follow descriptors in
+  DeviceScanWorker. That reader never resolves/opens referenced media or `/PIONEER`.
+  Generic USB native metadata/settings use the separate `cdj_*` contract; ordinary
+  exporters keep their exclusion. Reuse the
+  snapshot on normal polls; explicit tab refreshes stay queued behind the same
+  device owner. Publish only at QThread.finished, invalidate remount tokens and
+  show failed/oversized/redirected reads as unavailable. A missing folder alone
+  is a valid empty list. Use cached-only mount facts on this path; isolated
+  AppData alone never authorizes device probes in a harness. Lazy row expansion
+  must stay in RAM. Explicit song activation is a separate read-only lane task:
+  validate the selected USB audio/ANLZ paths, then load a device-specific ID with
+  no desktop cue overlay or source edit authority. Include the USB song viewport
+  in shared column Resize/Show fitting. Its keyboard scope admits deck/load
+  actions, not edits of a stale Mac browser selection. Stock/dual iPod routing
+  and guards remain separate.
 - **Confirmation belongs before exact iPod planning.** Sync, composite export,
   and composite playlist deletion must read as one action: immediate Yes/No,
   visible background planning, guarded commit, one completion. Never compute a
@@ -1770,3 +1803,73 @@ worker. Existing final rows inside the interval need the same proof for subseque
 edits. Never round an unsupported endpoint or weaken the pure planner's guard.
 No payload read/decode or source audio changes; journal and revalidate the proof
 through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
+
+
+## Native CDJ pilot — October28
+
+- Keep ordinary stock/dual/Rockbox PIONEER guards intact. Only the dedicated
+  generic-FAT32/exFAT CDJ session admits its authorized native paths; reject iPod,
+  Rockbox, hidden-library, source-overlap, linked and FAT-alias targets.
+- Capture current raw DB cues and source playlist order from the read-only
+  snapshot, after accepted source-edit intents drain. ANLZ can have stale cues.
+  Never export player overlays/display mips as native authority or waveform bytes.
+- A grown DeviceSQL row can move to another page. Renumber typed track rows by
+  their new page-local slot before table replacement; a one-page fixture is not
+  a scalable proof. Independent page/index checks complement the Rust reader.
+- Preserve raw classic browse/color rows and Plus menu/category/sort/color rows.
+  General updates patch only requested property fields; a full StickSettings
+  rewrite can normalize unknown flags. DEVSETTING unknowns are read-only and
+  existing player/mixer profile files survive unrelated sync byte for byte.
+- A USB playlist drop is the authorization. Preserve mount/UUID through deferrals
+  and hand off plan→commit at worker.finished without a second modal question.
+  Update Playlists and Save to USB also publish directly. Reformat alone has a
+  destructive target confirmation. Drop scopes selected
+  playlists; it must not reconcile unrelated source edits or audit retained media.
+- Package build/cdj/release/soundbox-cdj. A debug renderer adds substantial CPU
+  cost to multi-GB input. Captured new audio may pre-exist only as the exact
+  Contents set in a fresh local partial output; no metadata/extra files/links.
+  Retained catalogs merge off-device; raw media is never a synthetic placeholder.
+- Both databases and changed assets share one recoverable journal. Original bytes
+  remain live or in same-volume recovery until each replacement. The manifest
+  publishes last. Recovery requires the exact Mac-side intent receipt, validates
+  the affected set. A newer coherent native export supersedes the old pending
+  catalogs without rolling back over rekordbox; only small catalog copies are
+  checked. Never recover from an untrusted
+  USB journal alone. Worker ownership and shutdown rules apply through finished.
+- The native executable accepts only explicit local workspaces; it never
+  discovers devices or source libraries. The installed parent captures files and
+  owns publication. Pin source/lock files and package the executable plus notices.
+- Offline fixtures cannot establish CDJ hardware support. Record model/firmware
+  and retain the native control comparison; newer OneLibrary hardware is separate.
+
+- Native USB catalogs are shared with rekordbox, never exclusive manifest authority.
+  Use source-library ID plus track ID and map source-local tag IDs. Drop obsolete
+  asset ownership when another exporter changes/removes a record, without deleting
+  its files. Retained inventory is not a fresh integrity certificate.
+- My Settings Talkover −∞ uses separated bytes123/131, not one enum byte. Finite
+  levels clear131; preserve124–130. Mic Echo uses a two-byte rational. Legacy
+  unset Mic Echo/Headphones B display1/None without rewriting them on no-op.
+- Nested Qt layouts inherit spacing. Set USB settings column/row spacing explicitly;
+  the32-point column gap otherwise becomes32 points between every settings row.
+
+- Qt QHeaderView.restoreState succeeds for older section counts but unhides new
+  sections. Store columns_keys alongside the header state and explicitly hide
+  fields absent from that saved schema; legacy states know only the original10.
+  Test the actual ten-to28 transition, not only same-count round trips.
+- FooterBar has a fixed28-point height. Cancel is20, progress18 and the count20
+  with zero label margin; showing them cannot resize the footer or viewport.
+- Display-only native USB reads may copy a stable exportLibrary.db/WAL pair into
+  a local workspace and parse it there. Never copy SHM locks or open live USB SQL.
+  Include WAL/journal in freshness stamps. This is presentation, not publication
+  authority; a write still rejects active/unreconciled SQLite companions.
+
+- Track information must open before canonical artwork resolution. The art-state
+  lock and image decode can delay construction even when the track is loaded.
+  Resolve/decode in its TaskOwner worker after show; build Info fields on demand.
+  Do not prefetch more art during track load to hide dialog latency. Closing the
+  dialog retains/drains the worker through finished/join, like other art dialogs.
+
+- Pinned rbxport source retains upstream whitespace exactly. The narrow vendor
+  `.gitattributes` exemption keeps `git diff --check` useful for SoundBox files
+  without normalizing hash-verified dependency bytes. Vendor verification remains
+  mandatory; do not extend that exemption to application code.

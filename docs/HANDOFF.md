@@ -1,190 +1,164 @@
 # SoundBox current handoff
 
-Updated October 28, 2026, America/Chicago.
+October29, 2026. Branch main. This checkpoint includes the preceding uncommitted
+USB/export/settings/player work plus the completed UI/Info refinements. Sonny
+requested wrapping this session and continuing the larger additions in a fresh
+session. The release commit containing this handoff is the repository checkpoint;
+the installed binary's actual build base is recorded separately below.
 
-## Release and runtime
+## Installed release and validation
 
-Sonny accepted this build for continued use and requested final wrap-up.
-Efficiency/player/browser work and the manual-BPM EOF
-fix are complete, tested, installed and relaunched. Repository branch `main`;
-application-source release commit: `9035f70a8572fa9b3783051a06bf1e7c1b7a9ef5`. The current documentation-only
-follow-up records its provenance and does not restamp the installed binary.
-The release and documentation follow-ups are published on `origin/main`;
-no in-scope release work remains. Final acceptance recheck confirmed the running
-installed build's signature and source fingerprint; no rebuild or restart was
-needed for this documentation-only closeout.
+Personal1.0.0 build138, built from base HEAD
+`2c761726b6c10e703a9466c444fbb3a3a96c8d2e`, dirty=true. Installed source fingerprint:
+`349e6cc41055966070c8e2391593eb4a553fe5d28551981e9c2aba4c3613b0e7`.
+Installed `2026-10-29T04:25:17.766440-05:00`;
+launch requested `2026-10-29T04:25:17.767002-05:00`.
+Runtime source matches this fingerprint. Subsequent documentation/checkpoint
+commits do not relabel the binary as a newer Git build.
 
-Sonny then requested a full checkout hygiene audit. Git integrity and inventory,
-dependency health, fixtures, existing gate reports and installed signature/source
-parity passed. Private build investigations were first archived with exact hashes;
-Sonny then closed comparison work and authorized deleting that archive and the
-confirmed build/test leftovers. Net logical bytes removed: 862,425,069. The 27
-small release/state records retained separately are described in PROJECT_LAYOUT;
-active build output remains about 3 MiB. No runtime change, repeat release suite,
-rebuild or restart was needed. See [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact
-retained paths and the archive mapping. Audit receipts:
-`~/Library/Logs/Soundbox/checkout-hygiene-2026-10-28/`.
+Bare `./check.sh --render` passed:1586 Python tests (1528 offscreen+58 Cocoa),
+zero skips/xfails, Rust3, pinned243-file vendor verification, pyflakes, mypy68
+files and hermetic render. Final targeted Info tests also passed after centering
+its summary group. Signed personal composition and isolated packaged launch
+passed. Installed native __text/full embedded Metal and release CDJ __text/schema
+match source/build artifacts; both code signatures verify.
+Native __text `7c5f2eff8b491ab1fa96490b704a7069a1ad8cf64a9adda8b0d3916c576e4f0b`;
+CDJ __text `b8b89c99b00e655ca7cd258a1fd96cd279c866e515dabf404a556b90bfca1855`.
+The new checkpoint does not alter the accepted native waveform binary.
 
-Installed `/Applications/Soundbox.app`, personal **1.0.0 build 133**.
-True signed base revision `a25de73b341eedacbdc72c7bedf4d66ea66e0f39`, dirty=true,
-application source fingerprint:
-`cbd50fccf4fa9c99669b09db49037be62196f57ea3e3fdfe13ca51a1d246f2be`.
-Installed **2026-10-28T04:53:57.510539-05:00**; launch requested **2026-10-28T04:53:57.510679-05:00**.
-Signature, personal composition and source fingerprint verified against the tested
-checkout. Native source SHA remains
-`e475b3c7525ad967f74e22f2b967063824fa330e807b46fc91403a6cc5bfc345`;
-native binary outside renewed signing bytes is identical to the preceding build.
-Actual Cocoa window and offscreen release render inspected. Startup log confirms
-CoreAudio/Metal, snapshot and fresh source load: 3,740 tracks / 75 playlists;
-Collection 3,228 rows. Preparation reused 3,236 tracks and performed only one grid-
-metadata update for the native edit, with zero analysis or compact upgrades.
-Stock artwork reused all 3,106; zero new covers fetched. Ready footer and actual
-138.00 browser row observed. Resolve process/window IDs fresh.
+Evidence: `~/Library/Logs/Soundbox/playlist-analysis-ui-2026-10-29/release/`.
+It contains gate/build/install logs, test inventories, checked source, isolated
+runtime report, six inspected UI renders, actual installed desktop screenshot,
+installation/launch records and exact prequit/postquit/postlaunch/postvisual state
+backups. The actual installed browser is populated with the saved seven columns.
+Startup:3740 tracks/77 playlists, Collection3228;3237 analysis reused,0 preparation,
+3106 stock artwork reused,0 fetched. The extra source playlist is the native test
+playlist below, not an automatic SoundBox playlist.
 
-The canceled thin black text-outline experiment never changed production source,
-launched a live viewer or reached an installed build. Scratch moved reversibly to
-Trash; receipt: `~/Library/Logs/Soundbox/text-outline-discarded-2026-10-28/`.
-Prior app/duplicate packaging copies and generated caches are now absent; Trash
-was already empty when the final deletion pass began. Historical moves remain in
-`cleanup.json`. The empty temporary rollback directory was also removed. Only the
-current installed app and active checkout remain active. Preserve native recovery
-and offline fixtures; cleanup never targets live AppData or canonical media.
+## Curated state and rollback
 
-## Current behavior
+Prequit `2026-10-29T04:25:15.479169-05:00` SHA `b250596aabdd231d355f97dca87f7cc52389f8a09d42e90a12b1092dda301bbd`;
+postquit `2026-10-29T04:25:16.575790-05:00` SHA `d23114b0ce96eec114b12bc625e0dd28c983e42a8ad33f96d135d222300769e2`;
+postlaunch `2026-10-29T04:25:59.094013-05:00` SHA `d23114b0ce96eec114b12bc625e0dd28c983e42a8ad33f96d135d222300769e2`.
+Curation SHA `efb9c44c927b20bf044d70c40e7a8f817b4273861b73efc7de62c8a4340efe64`.
+All4041 art/review files,3 authority files and0 symlinks preserved. Analysis records
+remain3280. Counts: custom10/import84/artists489/titles1102/hidden517/removal groups1/
+additions0/aliases24/settings25. Quit changed only columns_keys, columns_state and
+sidebar_split; the installation launch changed no canonical state.
+columns_keys is the new explicit saved column schema, not curation loss.
 
-- **Original October 28 RGB B; keep BOTH visibility lifts unchanged.** Main-lane
-  RGB integrates encoded channels jointly with signed coverage, blends the encoded
-  background and decodes the final opaque pixel for Metal. BLUE/3BAND/overview/grid
-  keep their compositors. Source detail/extrema, height transfer, LOD, mips,
-  footprint and clocks are unchanged. October 27 coverage C at 384 is retained
-  underneath B; it is distinct from rejected October 28 C/D/E lift-removal/direct-
-  cell trials. Do not revive those trials or change lift/detail without instruction.
-- Elapsed/total clock uses `M:SS/M:SS`, with `H:MM:SS/H:MM:SS` on BOTH sides for
-  hour-plus tracks. Existing transport updates publish only changed seconds;
-  drag-owned preview survives late backend polls. No added polling or source reads.
-- Centered larger cue pads/color rims, intent-preserving next/previous and playing
-  hot cues, precise paused hold-preview and zoom-scaled grid nudges remain.
-- Specific prep-edit progress uses the existing bottom-left status label/style:
-  beatgrid/BPM/hot cue/memory cue/My Tags `Updating…`, then verified `Done` for 2 seconds,
-  then `Ready`. Focus-only saved-grid checks stay silent. Errors name the operation;
-  older timeouts cannot clear newer edits. Shared worker/recovery ownership stays.
-- A 30-point footer-colored right rail has a borderless inactive circle-i placeholder.
-  The actual scrollbar begins below the 26-point header. Rail/cap/footer junctions
-  have no extra separators; Settings retains a full-width footer divider.
-- Every column drags independently, including Title. Window width goes to Title
-  first when growing/shrinking, retaining other widths. Shrink precedes child layout
-  to prevent temporary horizontal-scrollbar flashes; growth follows layout. Artists
-  mirrors only changed sections; TrackModel declines unused paint roles early.
-- Startup batches art-policy reads, scopes Track construction to playlist members,
-  reuses unchanged display rows/registry, defers heavy imports and only retries
-  incomplete preparation at the bounded epoch. `browsercache.json` is disposable
-  display state; version its policy and never treat it as edit/export authority.
-- CDJ research now separates display fields from byte-preserving native streams and
-  rejects invalid musical values. It remains standalone, not an installed writer.
+A later live interaction added exactly title override117829415 =
+Zeds Dead - Rudeboy (Ruudy Flip), plus columns_state. It is preserved, not rolled
+back. Final observed baseline `2026-10-29T04:27:33.264924-05:00` has title overrides1103,
+library SHA `92b2034be6fa7f903f6c7d5704d1ca4b3b4c48036f95439c5ced02fbf7c4c744` and curation SHA
+`de29a5330cb48ecfeed5e8e3aefd4b7fbd68509966d7e8faf1c60dab525d4d68`. All other library data and all artwork/authorities/
+analysis counts match the pristine postlaunch baseline. Exact comparison is
+state-comparison-postvisual.json. Keep both baselines; never describe this later
+curation edit as installation drift or restore an older title dictionary.
 
-## Manual BPM fix and native reference
+Immediate prior installed build0c7b519 remains at:
+`/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-info-layout-rollback-f6ow8jiw/pre-info-layout-Soundbox.app`.
+The older c7d454 rollback was signature/provenance checked and retired; see
+retired-obsolete-bundles.json. Dist/personal retains the matching artifact pending
+Sonny's visual acceptance. Retire that duplicate and immediate rollback after
+acceptance. Never remove source references, recovery receipts or AppData as cleanup.
 
-`138`, `138.0` and `138.00` submit the same 13800 hundredths and display 138.00.
-The apparent 138.01 lock was a terminal-row proof failure, not a decimal parser bug.
-STOP CAPPIN (track 228450310, UUID a191ffb9-1cf5-4166-b61b-97cb453a311b) has
-5,677,875 PCM frames at 44,100 Hz: exactly 128,750 ms. PWV3 bounds EOF to
-128746–128754 ms. Sonny set 138.00 in rekordbox and closed it. Native retains its
-297th beat exactly at 128750 ms. Complete native DAT SHA:
-`715850b961c1ae5caebc941bd390a9c87699ec51401d3521f168e7832312a872`.
-An isolated reconstruction reproduced the earlier 138.01 receipt hash, then the
-fixed transform matched the complete native 138.00 DAT/EXT bytes exactly.
+## Completed runtime behavior
 
-`AmbiguousGridEnd` admits only a provisional RAM preview; the accepted source
-worker resolves disputed existing/proposed terminal rows using a bounded read-only
-PCM WAVE framing proof. It skips payloads/decoding, requires exact integral
-milliseconds agreeing with native bounds, and binds canonical path, stable file
-epoch, header digest, frames and rate. Journaled proof is revalidated before
-publication/commit and during recovery. Unsupported/fractional/redirected/changed
-sources fail closed. Ordinary edits never open audio. Existing backup, +4 counter,
-manual authority, metadata, shared lock/journal and closed-app guards remain.
+USB tabs: Overview, Playlists, Category, Sort, Column, Color, My Settings.44
+player/mixer fields, explicit global Save to Global / Load Global, unknown-byte
+preservation. Category/Sort have contrasting panels/visible borders; Color uses
+dots directly beside inputs. Global My Settings and Keyboard scrollbars reach
+the right window edge.
 
-**Live source remains at Sonny's native 138.00 edit.** No old DAT, native counters,
-metadata or source audio were restored. This fix was exercised on isolated source
-transactions plus the native read-only reference; no new actual-source writer
-acceptance is implied. Fresh installed snapshot confirms 138.00.
+Info opens before artwork lookup/decode; TaskOwner resolves/decodes a bounded
+QImage in a worker after show. Info fields build lazily on selection. No extra
+work is added to track loading. Lyricist is omitted from Info; Comments spans the
+row with a visible border. Artwork/button and Summary art/title group are centered;
+selectable technical details are anchored in a bordered panel; the local-edit
+note sits bottom left opposite Close. Supported metadata edits remain local and
+feed export. No new source write domain has been enabled.
 
-## Validation and state
+Old Qt header states explicitly hide fields absent from their saved schema;
+optional metadata stays unchecked until selected. Deliberately selecting more
+fields than fit permits horizontal scrolling without a blank browser. FooterBar
+stays28 points with progress/count/Cancel visible. Backtick cue-page mapping and
+all other saved keybindings remain intact.
 
-Final bare `./check.sh --render`: 1,477 tests, 1,420 offscreen + 57 Cocoa; zero skips/expected failures, inventories
-reconciled. Lint, native build, types and required frozen fixtures passed. The 59
-focused checks cover shorthand/retry, endpoint bounds, framing-only reads,
-malformed/redirected/changed sources, source WAL exits before/after commit, ordinary
-edits avoiding audio, subsequent BPM edits and verified preview reconciliation.
-Release render and installed window inspected; native player/GPU gates pass.
-AGENTS/CLAUDE parity, relative Markdown links and `git diff --check` pass.
+The dedicated generic FAT32/exFAT CDJ exporter prepares both library formats from
+fresh source snapshots. Drops publish directly through one serialized device lane.
+rekordbox and SoundBox are equal USB exporters: use current small native catalogs,
+preserve other playlists and collection songs; no normal orphan sweep or retained
+media audit. New audio checksums stream during copy. Coherent later native exports
+supersede older interrupted catalog work without rolling back over rekordbox.
+Display reads stable local DB/WAL snapshots, never live USB SQL/SHM. Publication
+still rejects active/unreconciled SQLite companions. Reformat alone requires
+concrete destructive confirmation; no agent hardware-format test occurred.
 
-Release evidence:
-`~/Library/Logs/Soundbox/manual-bpm-recovery-2026-10-28/` contains native 138.00
-captures, verified-native-parity.json, source.json, targeted-final.log, full release
-log/inventories, app-build.log, installed receipt/provenance/native preservation,
-startup log/window, state verification and scoped cleanup receipt.
-Earlier resize/footer/RGB evidence remains in rail-seams-2026-10-28,
-browser-columns-2026-10-28, browser-footer-2026-10-28 and waveform-rgb-edge-2026-10-28
-under the same private Logs root. Their former build working directories,
-comparison captures and scratch harnesses are deleted. Selected small release/
-state records survive under
-`~/Library/Logs/Soundbox/retained-release-records-2026-10-28/` with original subpaths;
-`retained-files.json` lists the exact set. Native acceptance/recovery and required
-fixtures stay at their existing protected locations.
+## Next session — explicitly unfinished
 
-Fresh state backups:
-`~/Library/Logs/Soundbox/efficiency-implementation-2026-10-27/install/manual-bpm-`
-prequit/postquit/postlaunch/settled library/state records. Sonny had already closed
-the app for the native reference before both quit baselines. Prequit time
-**2026-10-28T04:46:50.597653-05:00**, SHA `1bddad40428bc18220ca9b0a71d4f39e376c15b646f48644333e17a7c9fcfb1c`.
-Postquit **2026-10-28T04:52:32.307464-05:00**, SHA `1bddad40428bc18220ca9b0a71d4f39e376c15b646f48644333e17a7c9fcfb1c`.
-Settled **2026-10-28T04:54:24.559899-05:00**, SHA `1bddad40428bc18220ca9b0a71d4f39e376c15b646f48644333e17a7c9fcfb1c`.
-Curation excluding settings remained
-`a32587405b5432d55c16c7a3b5c8dc4113c2217f7785533af90deaf051cc5cc6`.
-All 4,041 art/review hashes, 3
-authorities and symlink inventory preserved. Library/settings bytes are identical
-across all four stages; installed-state-verification.json records empty differences. Counts: 10 custom, 84 imports,
-489 artist overrides, 1101 title edits, 517 hidden, 1 removal group, 0 additions,
-24 aliases, 22 settings; analysis count 3276.
-These are dated baselines; preserve subsequent user edits.
+Read [the full accepted scope](analysis-playlists-next.md). Remaining: sandwich
+menu immediately right of My Tags (waveform color, three beat counts, standalone
+song USB export, Analyze Track); Analysis settings tab and functional BPM/Grid+
+Key analysis; ordinary native rekordbox playlist create/add/remove/delete. Auto
+analysis off; Phrase disabled placeholder; no cloud/mode-selector clutter.
+Use the pinned [rbxport](https://github.com/chrisle/rbxport) engine/reference.
 
-## Remaining work and safety
+Private root: `~/Library/Logs/Soundbox/playlist-analysis-ui-2026-10-29/`.
+ui-references/ retains all22 supplied screenshots. unfinished-prototypes/ retains
+an apply-checked resume.patch and exact source copies for the Rust analysis helper,
+standalone planner input and native/Python beat-count prototype. These were removed
+from the release surface at Sonny's session-checkpoint request; they are untested,
+unwired and not shipped. Review/apply selectively, never overwrite newer files
+wholesale. Known tuple-order/decoded-budget/countdown/test work is documented there.
+No source analysis or playlist authority was provisioned.
 
-**Waveform comparison/tuning is closed for now at Sonny's request.** Keep accepted
-original B and both lifts unchanged. Reopen only on a new request and collect fresh
-references then; the private comparison archive and experimental binaries are gone.
-Original recordings outside that archive were not cleanup targets. This is an
-accepted stopping point, not proof that every residual glisten or cadence issue
-was mathematically eliminated or that native appearance is identical.
+Native playlist reference snapshots (encrypted DB, full semantic hash inventory,
+selected rows and XML): native-before, native-created, native-added, native-removed.
+Native changes were only djmdPlaylist/agentRegistry for create and
+ djmdSongPlaylist/agentRegistry for add/remove; schema/metadata stayed identical.
+The native surviving membership renumbered2→1; the removed membership disappeared
+physically. rbxport's tombstone removal is not yet proven equivalent.
 
-Historical original-B 39-frame/13-zoom preview parity describes implementation
-parity. Earlier populated traces had occasional 16.667-ms gaps, roughly 117 fps,
-and zero audio underruns; this pass neither fixes nor reopens that performance
-investigation. Future captures should retain zero-time dropped rows. No fill,
-blur, source smoothing or lift removal is newly authorized. No preview is running.
+Temporary source playlist still exists: SoundBox Playlist Test,
+ID4086406462, UUID4739cf09-58a3-4081-8280-a1695ded60c3. Sonny created it, added
+STOP CAPPIN228450310 then Gangster Tune18213989, then removed STOP CAPPIN. Only
+Gangster Tune remains. Last pending request: Sonny deletes ONLY this temporary
+playlist in rekordbox, keeps both songs in Collection, quits normally and replies
+done. That deletion sample has not been captured. If a delayed done arrives,
+use the preserved capture_soundbox_playlist_ref.py as native-deleted before doing
+anything else; first check fresh source state. Never drive rekordbox UI remotely.
+Then compare native create/add/remove/delete protocols/XML/counters against copied
+rbxport output before designing an exact accepted source publisher in the shared
+Tag/Cue/Grid lane. Intelligent playlists remain a separate gate.
 
-Synthetic 3000-row/240-step resize wall times improved median 46.931→36.265 ms,
-p95 60.522→45.186 ms; horizontal-bar Show/Hide 119/118→0/0. This is not live-drag or
-compositor 120 fps proof. Earlier 764d… build measured 20 warm packaged sanitized
-snapshot launches at median 1402 ms / p95 1424 ms; not repeated on this BPM build.
-This is a Qt-paint proxy, not OS-cold or fresh-source readiness.
+## Retained authority, device and performance boundaries
 
-Next approved milestones: single-tag intelligent playlists, then default-off
-full-Collection setting. Variable-tempo scaling deferred. MiniMeters canceled.
-Physical iPod acceptance awaits its return; CDJ USB is later and `/PIONEER` stays
-excluded. No new intelligent-playlist, physical-device or CDJ acceptance.
+Source authority: rekordbox6.8.7.0303, DBVersion6000, library629922790,
+schema c3255e959e179e46cd15e6ae2da50543427c03c8399b11b7a6809515f06e8c08.
+STOP CAPPIN228450310/a191ffb9-1cf5-4166-b61b-97cb453a311b remains Sonny's native
+138.00 edit and exact128750ms endpoint; DAT SHA
+715850b961c1ae5caebc941bd390a9c87699ec51401d3521f168e7832312a872.
+No agent source/audio/analysis/USB write or restore occurred in this follow-up.
+Closed-app, exact identity/authority, Analysis Lock and shared recovery guards stay
+mandatory. Never read/change rekordbox global Quantize. Existing source Key/detected
+analysis writes are not authorized by the accepted manual-grid API.
 
-Source authority remains rekordbox 6.8.7.0303, DBVersion 6000, library 629922790,
-schema `c3255e959e179e46cd15e6ae2da50543427c03c8399b11b7a6809515f06e8c08`.
-Sonny alone operates rekordbox reference UI. Source audio is immutable. Closed
-rekordbox/agent, Analysis Lock, exact track/UUID/path, backups and Tag/Cue/Grid
-recovery remain mandatory. Native Quantize is global/user-owned; never read/write
-it. SoundBox Q is separate and affects only newly captured cue placement.
-Preserve AppData rekordbox_recovery/native-grid-pilot-20261027,
-native-grid-initial-state-pilot-20261027, native-grid-historical-pilot-20261027,
-cue/tag baselines and generation 58 recovery 20260926-152340-47477cfa4a49.
-Historical No Trust primary-only restore permission does not authorize another
-track or secondary cache; original DAT SHA
-`f82e11d7a7f0d4a8a1150ae28bfcc4168602f187064ddebd2b7822fb32b9db71`.
-Preserve offline iPod 20260926-163945 and waveform/CDJ fixtures. Never restore old
-reference state over Sonny's later prep.
+Preserve native-grid-pilot-20261027, native-grid-initial-state-pilot-20261027,
+native-grid-historical-pilot-20261027 and cue/tag baselines in AppData recovery;
+generation58 recovery20260926-152340-47477cfa4a49; offline iPod20260926-163945;
+frozen waveform/CDJ fixtures. Historical No Trust primary-only restore grant does
+not authorize another track or secondary cache (original DAT f82e11d7a7f0d4a8a1150ae28bfcc4168602f187064ddebd2b7822fb32b9db71).
+
+Accepted Gunslinger RGB576/864 logical-point motion/footprint/occupancy and both
+faint visibility lifts remain. Mini RGB uses its faint-only encoded-space blend;
+BLUE/3BAND controls and source/cache data are unchanged. Do not claim perfect
+cadence or wider-zoom color equivalence. Physical iPod acceptance, exact CDJ
+firmware/full matrix, newer OneLibrary hardware, wider media/loop/credit coverage,
+large-library efficiency/recovery retention and redistribution remain open.
+
+RB USB TEST UUID5B29E617-ACFB-32C2-B580-077A6BF02C64, native name yerbski,
+current tempo±10. Do not restore historical±16. Earlier44-field restored-profile
+and whole-file parity receipts remain under usb-settings-2026-10-29/ and
+usb-preferences-2026-10-29/release-final/. All five native sample files were
+restored byte for byte by Sonny; no more My Settings samples are currently needed.

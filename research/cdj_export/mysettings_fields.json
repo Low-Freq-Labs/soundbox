@@ -1,0 +1,415 @@
+{
+  "schema": 1,
+  "status": "candidate mappings; no native edited-file or hardware acceptance",
+  "provenance": {
+    "dependency": "pyrekordbox",
+    "version": "0.4.4",
+    "structs_sha256": "e58d45dea4e6b0fd5f441dfdfc1107a505712b1d833bd072b44b89506fd135c6",
+    "documentation": "https://pyrekordbox.readthedocs.io/en/stable/tutorial/mysetting.html"
+  },
+  "formats": {
+    "MYSETTING.DAT": {
+      "brand": "PIONEER",
+      "software": "rekordbox",
+      "version": "0.001",
+      "body_size": 40,
+      "checksum_start": 104,
+      "fields": {
+        "on_air_display": {
+          "offset": 112,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "lcd_brightness": {
+          "offset": 113,
+          "values": {
+            "one": 129,
+            "two": 130,
+            "three": 131,
+            "four": 132,
+            "five": 133
+          }
+        },
+        "quantize": {
+          "offset": 114,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "auto_cue_level": {
+          "offset": 115,
+          "values": {
+            "minus_36db": 128,
+            "minus_42db": 129,
+            "minus_48db": 130,
+            "minus_54db": 131,
+            "minus_60db": 132,
+            "minus_66db": 133,
+            "minus_72db": 134,
+            "minus_78db": 135,
+            "memory": 136
+          }
+        },
+        "language": {
+          "offset": 116,
+          "values": {
+            "english": 129,
+            "french": 130,
+            "german": 131,
+            "italian": 132,
+            "dutch": 133,
+            "spanish": 134,
+            "russian": 135,
+            "korean": 136,
+            "chinese_simplified": 137,
+            "chinese_traditional": 138,
+            "japanese": 139,
+            "portuguese": 140,
+            "swedish": 141,
+            "czech": 142,
+            "hungarian": 143,
+            "danish": 144,
+            "greek": 145,
+            "turkish": 146
+          }
+        },
+        "jog_ring_brightness": {
+          "offset": 118,
+          "values": {
+            "off": 128,
+            "dark": 129,
+            "bright": 130
+          }
+        },
+        "jog_ring_indicator": {
+          "offset": 119,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "slip_flashing": {
+          "offset": 120,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "disc_slot_illumination": {
+          "offset": 124,
+          "values": {
+            "off": 128,
+            "dark": 129,
+            "bright": 130
+          }
+        },
+        "eject_lock": {
+          "offset": 125,
+          "values": {
+            "unlock": 128,
+            "lock": 129
+          }
+        },
+        "sync": {
+          "offset": 126,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "play_mode": {
+          "offset": 127,
+          "values": {
+            "continue_": 128,
+            "single": 129
+          }
+        },
+        "quantize_beat_value": {
+          "offset": 128,
+          "values": {
+            "one": 128,
+            "half": 129,
+            "quarter": 130,
+            "eighth": 131
+          }
+        },
+        "hotcue_autoload": {
+          "offset": 129,
+          "values": {
+            "off": 128,
+            "on": 129,
+            "rekordbox": 130
+          }
+        },
+        "hotcue_color": {
+          "offset": 130,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "needle_lock": {
+          "offset": 133,
+          "values": {
+            "unlock": 128,
+            "lock": 129
+          }
+        },
+        "time_mode": {
+          "offset": 136,
+          "values": {
+            "elapsed": 128,
+            "remain": 129
+          }
+        },
+        "jog_mode": {
+          "offset": 137,
+          "values": {
+            "cdj": 128,
+            "vinyl": 129
+          }
+        },
+        "auto_cue": {
+          "offset": 138,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "master_tempo": {
+          "offset": 139,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "tempo_range": {
+          "offset": 140,
+          "values": {
+            "six": 128,
+            "ten": 129,
+            "sixteen": 130,
+            "wide": 131
+          },
+          "native_reference_checks": [
+            {
+              "from": "ten",
+              "to": "sixteen",
+              "application_version": "6.8.7.0303",
+              "complete_native_file_match": true,
+              "native_sha256": "b2f847a830c5d7a67646e543c002a8726f27ff942c39c87cbffc8af92401b433",
+              "device_write_acceptance": false,
+              "hardware_acceptance": false
+            }
+          ]
+        },
+        "phase_meter": {
+          "offset": 141,
+          "values": {
+            "type1": 128,
+            "type2": 129
+          }
+        }
+      }
+    },
+    "MYSETTING2.DAT": {
+      "brand": "PIONEER",
+      "software": "rekordbox",
+      "version": "0.001",
+      "body_size": 40,
+      "checksum_start": 104,
+      "fields": {
+        "vinyl_speed_adjust": {
+          "offset": 104,
+          "values": {
+            "touch_release": 128,
+            "touch": 129,
+            "release": 130
+          }
+        },
+        "jog_display_mode": {
+          "offset": 105,
+          "values": {
+            "auto": 128,
+            "info": 129,
+            "simple": 130,
+            "artwork": 131
+          }
+        },
+        "pad_button_brightness": {
+          "offset": 106,
+          "values": {
+            "one": 129,
+            "two": 130,
+            "three": 131,
+            "four": 132
+          }
+        },
+        "jog_lcd_brightness": {
+          "offset": 107,
+          "values": {
+            "one": 129,
+            "two": 130,
+            "three": 131,
+            "four": 132,
+            "five": 133
+          }
+        },
+        "waveform_divisions": {
+          "offset": 108,
+          "values": {
+            "time_scale": 128,
+            "phrase": 129
+          }
+        },
+        "waveform": {
+          "offset": 114,
+          "values": {
+            "waveform": 128,
+            "phase_meter": 129
+          }
+        },
+        "beat_jump_beat_value": {
+          "offset": 116,
+          "values": {
+            "half": 128,
+            "one": 129,
+            "two": 130,
+            "four": 131,
+            "eight": 132,
+            "sixteen": 133,
+            "thirtytwo": 134,
+            "sixtyfour": 135
+          }
+        }
+      }
+    },
+    "DJMMYSETTING.DAT": {
+      "brand": "PioneerDJ",
+      "software": "rekordbox",
+      "version": "1.000",
+      "body_size": 52,
+      "checksum_start": 0,
+      "fields": {
+        "channel_fader_curve": {
+          "offset": 116,
+          "values": {
+            "steep_top": 128,
+            "linear": 129,
+            "steep_bottom": 130
+          }
+        },
+        "cross_fader_curve": {
+          "offset": 117,
+          "values": {
+            "constant": 128,
+            "slow_cut": 129,
+            "fast_cut": 130
+          }
+        },
+        "headphones_pre_eq": {
+          "offset": 118,
+          "values": {
+            "post_eq": 128,
+            "pre_eq": 129
+          }
+        },
+        "headphones_mono_split": {
+          "offset": 119,
+          "values": {
+            "stereo": 128,
+            "mono_split": 129
+          }
+        },
+        "beat_fx_quantize": {
+          "offset": 120,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "mic_low_cut": {
+          "offset": 121,
+          "values": {
+            "off": 128,
+            "on": 129
+          }
+        },
+        "talk_over_mode": {
+          "offset": 122,
+          "values": {
+            "advanced": 128,
+            "normal": 129
+          }
+        },
+        "talk_over_level": {
+          "offset": 123,
+          "values": {
+            "minus_24db": 128,
+            "minus_18db": 129,
+            "minus_12db": 130,
+            "minus_6db": 131
+          }
+        },
+        "midi_channel": {
+          "offset": 124,
+          "values": {
+            "one": 128,
+            "two": 129,
+            "three": 130,
+            "four": 131,
+            "five": 132,
+            "six": 133,
+            "seven": 134,
+            "eight": 135,
+            "nine": 136,
+            "ten": 137,
+            "eleven": 138,
+            "twelve": 139,
+            "thirteen": 140,
+            "fourteen": 141,
+            "fifteen": 142,
+            "sixteen": 143
+          }
+        },
+        "midi_button_type": {
+          "offset": 125,
+          "values": {
+            "toggle": 128,
+            "trigger": 129
+          }
+        },
+        "display_brightness": {
+          "offset": 126,
+          "values": {
+            "white": 128,
+            "one": 129,
+            "two": 130,
+            "three": 131,
+            "four": 132,
+            "five": 133
+          }
+        },
+        "indicator_brightness": {
+          "offset": 127,
+          "values": {
+            "one": 128,
+            "two": 129,
+            "three": 130
+          }
+        },
+        "channel_fader_curve_long": {
+          "offset": 128,
+          "values": {
+            "exponential": 128,
+            "smooth": 129,
+            "linear": 130
+          }
+        }
+      }
+    }
+  }
+}

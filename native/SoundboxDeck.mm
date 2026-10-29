@@ -2607,13 +2607,18 @@ public:
             static_cast<uint32_t>(std::min<NSUInteger>(
                 waveAttributeCount_,
                 std::numeric_limits<uint32_t>::max()));
-        // RGB uses continuous translation with area-based compositing at every
-        // zoom. BLUE retains physical-pixel steps wide, logical-point steps close.
+        // The native Gunslinger reference retains one logical-pixel raster
+        // phase (two physical pixels on Retina). Use that motion unit at
+        // RGB 576/864; other RGB stops and 3BAND remain continuous. BLUE keeps
+        // physical-pixel steps wide and logical-point steps close.
+        const bool continuousWaveform = uniforms.waveformMode == 3
+            || (uniforms.waveformMode == 2
+                && uniforms.pixelsPerSecond != 576.0f
+                && uniforms.pixelsPerSecond != 864.0f);
         const double displayPixelStep = uniforms.pixelsPerSecond <= 384.0f
             ? 1.0 : drawableScale;
         uniforms.waveAttributeCurrentOffset = static_cast<float>(
-            ((uniforms.waveformMode == 3
-                    || uniforms.waveformMode == 2)
+            (continuousWaveform
                 ? exactAttributeCenter
                 : std::round(exactAttributeCenter
                     / (attributeSamplesPerPixel * displayPixelStep))
@@ -3734,6 +3739,40 @@ inline WaveAttribute linear_attribute(
     return result;
 }
 
+inline float signed_interval_occupancy(
+        const device AudioEnvelopeSample *samples,
+        uint fineOffset, uint fineCount, uint fineDivisor,
+        uint coarseCell, uint coarseDivisor,
+        float coarseMinimum, float coarseMaximum, float minimumWidth) {
+    if (fineCount == 0 || fineDivisor == 0 || coarseDivisor <= fineDivisor) return 1.0;
+    const uint begin = coarseCell * coarseDivisor;
+    const uint end = begin + coarseDivisor;
+    const uint first = begin / fineDivisor;
+    const uint last = min(fineCount, (end + fineDivisor - 1u) / fineDivisor);
+    // The accepted close ladders need at most three overlapping fine cells.
+    if (first >= last || last - first > 4u) return 1.0;
+    float fineArea = 0.0;
+    float coveredSpan = 0.0;
+    for (uint cell = first; cell < last; ++cell) {
+        const uint left = max(begin, cell * fineDivisor);
+        const uint right = min(end, (cell + 1u) * fineDivisor);
+        const float overlap = float(right - left);
+        const AudioEnvelopeSample fine = samples[fineOffset + cell];
+        const float width = max(abs(float(fine.maximum) - float(fine.minimum)) / 32767.0, minimumWidth);
+        fineArea += width * overlap;
+        coveredSpan += overlap;
+    }
+    const float coarseWidth = max(abs(coarseMaximum - coarseMinimum), minimumWidth);
+    return saturate(fineArea / max(coveredSpan * coarseWidth, 1e-8));
+}
+
+inline float3 interval_occupancy_color(float3 color, float occupancy) {
+    // Encode the represented area as contrast against the unchanged background.
+    // Premultiplication below keeps this attached to the fixed song lattice.
+    const float3 background = float3(13.0, 14.0, 18.0) / 255.0;
+    return mix(background, color, occupancy);
+}
+
 kernel void wave_attribute_kernel(
         const device WaveSample *samples [[buffer(0)]],
         constant Uniforms &u [[buffer(1)]],
@@ -3879,23 +3918,25 @@ kernel void wave_attribute_kernel(
         const float detailFootprint =
             u.audioDetailSamplesPerSecond
             / max(1.0, u.pixelsPerSecond * scale);
-        const uint detailLevel = audio_detail_lod(
-            // The three widest stops integrate two extrema cells per pixel
-            // on the existing four-sample song lattice. One max-pooled cell
-            // inflated dense passages into flat slabs and hid narrow valleys.
-            // Close reconstruction and its accepted motion cadence stay intact.
+        const bool logicalRGBDetail = u.waveformMode == 2
+            && (u.pixelsPerSecond == 576.0 || u.pixelsPerSecond == 864.0);
+        const uint physicalDetailLevel = audio_detail_lod(
             detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0),
-            u.audioDetailMipDivisors,
-            u.audioDetailMipCount);
+            u.audioDetailMipDivisors, u.audioDetailMipCount);
+        // Match the native logical-pixel footprint at the two accepted stops.
+        // Keep the original level as the color-area reference, including 1x.
+        const uint detailLevel = logicalRGBDetail
+            ? audio_detail_lod(detailFootprint * scale,
+                u.audioDetailMipDivisors, u.audioDetailMipCount)
+            : physicalDetailLevel;
         const uint detailDivisor =
             u.audioDetailMipDivisors[detailLevel];
         const float detailLocal =
             clock.detailPhase
                 + secondOffset * u.audioDetailSamplesPerSecond;
-        // Reconstruct from the extrema level selected for the physical pixel.
-        // The close-view half-pixel override selected unresolvable cells at
-        // 384 points/s; the recorded RGB sweep instead supports a 2-ms level
-        // there, returning to full 1-ms detail as the screen can resolve it.
+        // Held extrema retain their selected song cells. Compact RGB uses
+        // 2-ms detail at 384/576/864 on Retina; BLUE and all other stops retain
+        // their existing choices. Final coverage still spans one physical pixel.
         EnvelopeTap sharpDetail = u.pixelsPerSecond >= 384.0
             ? held_envelope_tap(
                 audioDetailSamples,
@@ -3989,6 +4030,23 @@ kernel void wave_attribute_kernel(
             upperHeight = sharpDetail.maximum;
             lowerHeight = sharpDetail.minimum;
             height = max(abs(upperHeight), abs(lowerHeight));
+            if (logicalRGBDetail && detailLevel != physicalDetailLevel) {
+                const int coarseCell = int(clock.detailIndex / detailDivisor)
+                    + int(floor((float(clock.detailIndex % detailDivisor) + detailLocal)
+                        / float(detailDivisor)));
+                if (coarseCell >= 0) {
+                    const float heightScale = max(4.0, (u.heightPoints - 49.0) * 0.5 - 4.0);
+                    const float minimumWidth = 1.0 / (scale * heightScale);
+                    const float occupancy = signed_interval_occupancy(
+                        audioDetailSamples,
+                        u.audioDetailMipOffsets[physicalDetailLevel],
+                        u.audioDetailMipCounts[physicalDetailLevel],
+                        u.audioDetailMipDivisors[physicalDetailLevel],
+                        uint(coarseCell), detailDivisor,
+                        lowerHeight, upperHeight, minimumWidth);
+                    color = interval_occupancy_color(color, occupancy);
+                }
+            }
         }
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
@@ -4590,6 +4648,18 @@ fragment float4 wave_surface_fragment(
         const float3 encodedColor =
             surface.weightedColor
             / surface.colorWeight;
+        if (u.waveformMode == 2) {
+            // Match the main RGB lane: help only faint coverage and blend in
+            // display space. The old full-range cubic + linear-light blend
+            // brightened already-visible overview columns as well as tails.
+            float coverage = saturate(surface.coverage);
+            if (coverage < 0.18) {
+                const float fade = 1.0 - coverage / 0.18;
+                coverage *= 1.0 + 1.5 * fade * fade;
+            }
+            return float4(display_srgb_to_linear(
+                mix(encodedBackground, encodedColor, coverage)), 1.0);
+        }
         const float3 color = display_srgb_to_linear(
             u.threeBandActive != 0
             ? three_band_color(encodedColor)

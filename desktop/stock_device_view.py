@@ -27,6 +27,7 @@ from soundbox.stock_ipod_info import StockIpodSnapshot
 from soundbox.manifest import composite_library_counts
 
 from .devices import human
+from .trees import BrowserDetailTree
 
 
 def _duration(milliseconds: int) -> str:
@@ -355,7 +356,7 @@ class StockIpodPages(QWidget):
         playlist_layout = QVBoxLayout(playlist_page)
         playlist_layout.setContentsMargins(0, 0, 0, 0)
         playlist_layout.setSpacing(8)
-        self.playlist_tree = QTreeWidget()
+        self.playlist_tree = BrowserDetailTree()
         self.playlist_tree.setObjectName("StockDevicePlaylists")
         self.playlist_tree.setHeaderLabels(["Playlist / Track", "Tracks", "Type"])
         self.playlist_tree.setAlternatingRowColors(True)
@@ -426,12 +427,13 @@ class StockIpodPages(QWidget):
 
     @staticmethod
     def _detail_tree(title: str) -> QTreeWidget:
-        tree = QTreeWidget()
+        tree = BrowserDetailTree()
         tree.setObjectName("StockDeviceDetails")
         tree.setHeaderLabels([title, "Details"])
         tree.setAlternatingRowColors(True)
         tree.setUniformRowHeights(True)
         tree.setSelectionMode(QAbstractItemView.NoSelection)
+        tree.header().setFixedHeight(26)
         tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
         return tree

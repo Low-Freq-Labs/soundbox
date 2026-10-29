@@ -13,6 +13,7 @@ SIGN_IDENTITY="Soundbox Self-Signed"
 
 # Compile the arm64 CoreAudio + Metal deck before PyInstaller collects it.
 ./build_native.sh
+./build_cdj.sh
 
 # No argument preserves the full personal build. Public is always explicit.
 PROFILE="${1:-personal}"

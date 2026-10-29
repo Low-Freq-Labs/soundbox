@@ -39,6 +39,22 @@ def waveform_reference() -> tuple[Path, dict]:
     return path, manifest
 
 
+def cdj_reference() -> Path:
+    path = Path(os.environ.get('SOUNDBOX_CDJ_REFERENCE',
+        ROOT/'soundbox-cdj-ref/offline-integration-20261028')).resolve()
+    if path.is_relative_to('/Volumes') or path.is_relative_to('/dev'):
+        raise RuntimeError('CDJ release fixtures must be offline')
+    manifest = json.loads((ROOT/'tests/fixtures/cdj-reference.json').read_text())
+    for name, row in manifest['files'].items():
+        target = path/name
+        if not target.resolve().is_relative_to(path) or not target.is_file():
+            raise RuntimeError('Required offline CDJ fixture is missing or redirected; restore SOUNDBOX_CDJ_REFERENCE')
+        if target.stat().st_size != row['size'] or hashlib.sha256(target.read_bytes()).hexdigest() != row['sha256']:
+            raise RuntimeError('Frozen CDJ fixture changed: '+name)
+    return path
+
+
 if __name__ == '__main__':
     print('Offline iPod fixture:', ipod_capture())
     print('Frozen waveform fixture:', waveform_reference()[0])
+    print('Frozen CDJ fixture:', cdj_reference())
