@@ -4,7 +4,7 @@ import threading
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QHBoxLayout, QLabel, QProgressBar, QScrollArea, QVBoxLayout, QWidget)
+    QGridLayout, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QVBoxLayout, QWidget)
 
 from soundbox import analysis
 from .task_owner import TaskOwner
@@ -17,31 +17,46 @@ class AnalysisControls(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(30 if automatic else 0, 16, 30 if automatic else 0, 16)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
         title = QLabel('TRACK ANALYSIS'); title.setObjectName('SettingsSection'); layout.addWidget(title)
+        form = QWidget(); form.setMaximumWidth(700)
+        grid = QGridLayout(form); grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(24); grid.setVerticalSpacing(12)
+        grid.setColumnMinimumWidth(0, 132); grid.setColumnStretch(1, 1)
         self.bpm = QCheckBox('BPM / Grid')
         self.key = QCheckBox('Key')
         self.phrase = QCheckBox('Phrase'); self.phrase.setEnabled(False)
         self.phrase.setToolTip('Phrase analysis is not available yet')
+        choices = QHBoxLayout(); choices.setContentsMargins(0, 0, 0, 0); choices.setSpacing(20)
         for control in (self.bpm, self.key, self.phrase):
-            layout.addWidget(control)
+            choices.addWidget(control)
             control.toggled.connect(self.changed)
-        row = QHBoxLayout(); row.addWidget(QLabel('BPM range')); row.addStretch()
+        choices.addStretch()
+        grid.addWidget(QLabel('Analyze'), 0, 0); grid.addLayout(choices, 0, 1)
         self.bpm_range = QComboBox()
         for low, high in analysis.BPM_RANGES:
             self.bpm_range.addItem(f'{low}–{high}')
-        row.addWidget(self.bpm_range); layout.addLayout(row)
+        grid.addWidget(QLabel('BPM range'), 1, 0); grid.addWidget(self.bpm_range, 1, 1, Qt.AlignLeft)
         self.bpm_range.currentIndexChanged.connect(self.changed)
-        self.first_cue = QCheckBox('Set a Memory Cue on the first analyzed beat')
-        layout.addWidget(self.first_cue); self.first_cue.toggled.connect(self.changed)
-        self.auto = QCheckBox('Analyze new imports automatically')
+        self.first_cue = QCheckBox('Set at the first analyzed beat')
+        grid.addWidget(QLabel('Memory Cue'), 2, 0); grid.addWidget(self.first_cue, 2, 1)
+        self.first_cue.toggled.connect(self.changed)
+        self.auto = QCheckBox('Analyze automatically')
         self.auto.setVisible(automatic)
-        layout.addWidget(self.auto); self.auto.toggled.connect(self.changed)
-        row = QHBoxLayout(); row.addWidget(QLabel('Analysis process')); row.addStretch()
+        if automatic:
+            grid.addWidget(QLabel('New imports'), 3, 0); grid.addWidget(self.auto, 3, 1)
+        self.auto.toggled.connect(self.changed)
         self.process = QComboBox(); self.process.addItems(['Performance','Normal','Power saving'])
+        # Cocoa's popup also needs its native checked-item gutter. A size based
+        # only on the closed value clips even the BPM ranges and Power saving.
+        for combo, length in ((self.bpm_range, 12), (self.process, 18)):
+            combo.setMinimumContentsLength(length)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        grid.addWidget(QLabel('Analysis process'), 4 if automatic else 3, 0)
+        grid.addWidget(self.process, 4 if automatic else 3, 1, Qt.AlignLeft)
         self.process.currentIndexChanged.connect(self.changed)
-        row.addWidget(self.process); layout.addLayout(row)
-        note = QLabel('Existing saved grids and cues are preserved. Detection does not rebuild waveforms.')
+        layout.addWidget(form)
+        note = QLabel('Existing saved grids and cues are preserved.')
         note.setObjectName('SettingsSub'); note.setWordWrap(True); layout.addWidget(note)
         layout.addStretch(1)
         self.set_preferences(preferences)

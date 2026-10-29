@@ -376,7 +376,7 @@ Rockbox 4.0 does not support `sort playlists`; never add or require that key.
 Its absence after firmware saves preferences is not Sync drift. Preserve existing
 unknown config lines; retain the established numbered playlist filenames.
 
-October29 installed detection stage (personal build140; see HANDOFF): the track-menu
+October29 installed detection stage (personal build141; see HANDOFF): the track-menu
 button is immediately right of Q, with the
 existing equal flexible toolbar gaps. It offers waveform color, three resident
 beat-count modes, standalone collection-song CDJ export and Analyze Track.
@@ -388,6 +388,15 @@ publication is still gated by its own native reference and authority, not the
 accepted manual-grid API. Ordinary native playlist CRUD also remains gated;
 copy-only unsynced membership replay does not authorize source publication.
 Read docs/analysis-playlists-next.md for implemented scope and exact next actions.
+
+SoundBox playlist folders are local organization in the bounded, validated
+`settings.custom_playlist_tree`; membership remains in `custom`. Folder moves
+preserve song order and existing `cust:<name>` device identities, while export
+receives the actual folder_path. Folder drags expand to descendant playlist
+intents. Collection/Artists stay pinned; folder deletion reviews its contained
+playlists and preserves Collection/source audio. The context menu is New Playlist,
+New Folder, Rename, Delete. Composite Rockbox catalogue files remain numbered and
+top-level. None of this enables source rekordbox playlist or registration writes.
 
 ## Documentation map
 

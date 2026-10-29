@@ -209,7 +209,7 @@ SoundBox refreshes smart memberships after each successful save. Reopen rekordbo
 to see the changes; simultaneous writing is blocked. Other libraries remain
 read-only until explicitly accepted. On top of the rekordbox mirror, SoundBox keeps its own
 plane: **import audio files directly** (drag from Finder onto a SoundBox
-playlist or Collection, or right-click → Import Audio Files…). Imported files
+playlist or Collection, or use the Import audio files keyboard action). Imported files
 are referenced in place — never copied or re-tagged — and become first-class
 tracks: container-derived duration (including ALAC/AAC, displayed as H:MM:SS
 for hour-plus sets), edits, art, waveforms, export. Direct imports are always
@@ -228,14 +228,22 @@ cache instead of recooking unchanged audio, and on-demand placeholders are not
 hydrated by startup checks.
 
 **Sidebar.**
-- **⌂ Collection** — every track (rekordbox + imported), newest first.
+- **⌂ Collection** — every loaded track (rekordbox playlist songs + direct
+  imports), newest first. Put new rekordbox songs in a playlist such as ALL LOCAL
+  and refresh SoundBox. Direct SoundBox imports do not yet register in rekordbox.
 - **♪ Artists** — the same pool grouped A→Z by effective artist, expandable
   per artist.
 - Both are pinned views *and* draggable playlists: drop one on a device to
   export the whole pool in that view's order.
-- **★ SoundBox playlists** — your own: drag tracks in, drag the list to
-  reorder, rename/delete via right-click. Duplicate adds prompt
+- **★ SoundBox playlists** — your own: drag tracks in and organize playlists in
+  nested folders. Right-click offers **New Playlist, New Folder, Rename, Delete**;
+  the header + also creates playlists/folders. Drag rows between folders or back
+  to the root; dragging a folder to a device exports its descendant playlists
+  in order. Folder moves preserve playlist identities and song order. Deleting
+  a folder reviews its contained playlists; songs remain in Collection and on disk.
+  Duplicate adds prompt
   Add Anyway/Skip (Skip default). Names `Collection`/`Artists` are reserved.
+  Playlist names remain unique across the SoundBox folders.
 - **⛃ Devices** — external drives only, auto-detected; drag any playlist
   (rekordbox, SoundBox, or a pinned view) onto one to start its guarded export flow.
 
@@ -256,7 +264,8 @@ explicitly. Song columns match your regular browser; double-click loads actual
 USB audio/cues. Device views remember your tab, hierarchy, selection and scroll.
 The information button opens Summary and Info, with editable artwork inside Info
 and optional metadata columns, hidden until selected. The dialog opens before
-artwork resolution; Comments spans the Info row and the edit note sits bottom
+artwork resolution; Info uses a compact three-column form that fits at its default
+size, with smaller centered artwork and a full-width Comments row. The edit note sits bottom
 left. USB Category/Sort panels have visible borders, Color uses dots beside
 inputs, and Global My Settings/Keyboard scroll at the right window edge.
 Older saved layouts keep

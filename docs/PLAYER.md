@@ -6,7 +6,7 @@ remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
 October29 menu, beat-count modes and local detection stage are installed in
-personal build140 after the complete offscreen/Cocoa gate. Reverse analysis
+personal build141 after the complete offscreen/Cocoa gate. Reverse analysis
 publication remains unfinished; see [HANDOFF](HANDOFF.md).
 
 ## Implemented player behavior

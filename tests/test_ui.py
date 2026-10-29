@@ -91,6 +91,62 @@ class _FakeArt:
         return {tid: self.status_kind(tid) for tid in tids}
 
 
+class LocalPlaylistFolders(unittest.TestCase):
+    def setUp(self):
+        from copy import deepcopy
+        self.old_custom=_win.custom
+        self.old_settings=deepcopy(_win.settings)
+        self.addCleanup(self.restore)
+        self.enterContext(mock.patch.object(_win,'_save_state',return_value=True))
+        self.key='81cf1d6c-45ac-4773-adfa-fd582b246137'
+        _win.custom={'A':['1','2'],'B':['2','3'],'C':['3']}
+        _win.settings['custom_playlist_tree']=[dict(folder=self.key,name='Sets',children=[{'playlist':'A'},{'playlist':'B'}]),{'playlist':'C'}]
+        _win.settings['custom_playlist_expanded']=[self.key]
+        _win._refresh_custom()
+
+    def restore(self):
+        _win.custom=self.old_custom;_win.settings=self.old_settings
+        _win._refresh_custom();_win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
+
+    def test_folder_selection_is_read_only_and_drag_exports_children_in_order(self):
+        folder=_win.sb_tree.topLevelItem(2)
+        self.assertEqual(folder.childCount(),2)
+        _win.sb_tree.setCurrentItem(folder)
+        self.assertEqual([r['id'] for r in _win.model._rows],['1','2','3'])
+        self.assertIsNone(_win._resolve_table_drop())
+        lines=_win.sb_tree.mimeData([folder]).text().splitlines()
+        self.assertEqual([s for s in lines if s.startswith('cust\t')],['cust\tA','cust\tB'])
+        jobs=_win._resolve_jobs([('cust','A'),('cust','B')])
+        self.assertEqual([p.folder_path for p in jobs],[['Sets'],['Sets']])
+        self.assertEqual([device_manifest.playlist_key(p) for p in jobs],['cust:A','cust:B'])
+        self.assertEqual(jobs[0].keys,['1','2'])
+
+    def test_failed_save_does_not_move_a_playlist_or_change_memberships(self):
+        from copy import deepcopy
+        before=deepcopy(_win.settings['custom_playlist_tree']);members=deepcopy(_win.custom)
+        with mock.patch.object(_win,'_save_state',return_value=False):
+            _win._move_local_node('playlist:C',self.key,1)
+        self.assertEqual(_win.settings['custom_playlist_tree'],before)
+        self.assertEqual(_win.custom,members)
+        self.assertEqual(_win.sb_tree.topLevelItem(3).data(0, Qt.UserRole+3),'C')
+
+    def test_context_menu_order_and_builtin_protection(self):
+        for item in (None,_win.sb_tree.topLevelItem(0),_win.sb_tree.topLevelItem(2)):
+            menu=_win._local_context_menu(item)
+            self.assertEqual([a.text() for a in menu.actions()],['New Playlist','New Folder','Rename','Delete'])
+            self.assertEqual(menu.actions()[2].isEnabled(),item is _win.sb_tree.topLevelItem(2))
+            menu.deleteLater()
+
+    def test_confirmed_folder_deletion_preserves_collection_and_unrelated_playlist(self):
+        from PySide6.QtWidgets import QMessageBox
+        tracks=set(_win.lib.tracks_by_id)
+        with mock.patch.object(QMessageBox,'question',return_value=QMessageBox.Yes):
+            _win._delete_local_node('folder',self.key)
+        self.assertEqual(_win.custom,{'C':['3']})
+        self.assertEqual(set(_win.lib.tracks_by_id),tracks)
+        self.assertNotIn('Sets',str(_win.settings['custom_playlist_tree']))
+
+
 class CollectionView(unittest.TestCase):
     def test_sidebar_count_never_formats_titles_or_reads_art(self):
         _win._artist_count_cache = None

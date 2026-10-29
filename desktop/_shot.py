@@ -44,6 +44,10 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    analysis_menus = '--analysis-menus' in sys.argv
+    if analysis_menus:sys.argv.remove('--analysis-menus')
+    playlist_folders = '--playlist-folders' in sys.argv
+    if playlist_folders:sys.argv.remove('--playlist-folders')
     track_menu = '--track-menu' in sys.argv
     if track_menu: sys.argv.remove('--track-menu')
     analyze_dialog = '--analyze-dialog' in sys.argv
@@ -134,6 +138,15 @@ def _render() -> None:
     win._build_artist_registry()
     win._apply_settings_to_lib()
     win._populate_tree(engine.summary(win.lib))
+    if playlist_folders:
+        folder='c5b3690a-657b-4ad9-bdcf-baf008282fad'
+        nested='53e697c6-f1aa-4df1-934a-909c9c931a33'
+        win.custom={'Favorites':['1','2'],'Friday set':['2','3','4'],'Warmup':['5','6']}
+        win.settings['custom_playlist_tree']=[{'playlist':'Favorites'},
+            dict(folder=folder,name='DJ sets',children=[{'playlist':'Friday set'},
+                dict(folder=nested,name='Openers',children=[{'playlist':'Warmup'}])])]
+        win.settings['custom_playlist_expanded']=[folder,nested]
+        win._refresh_custom()
     win.tree.topLevelItem(0).setExpanded(True)
     win.tree.setCurrentItem(win.tree.topLevelItem(0).child(0))
     # Paint the transport in a representative loaded state without opening any
@@ -538,6 +551,8 @@ def _render() -> None:
         target=Path(out)
         dialog.grab().save(str(target.with_name(target.stem+'-summary.png')))
         dialog.findChild(QTabWidget).setCurrentIndex(1);app.processEvents()
+        from PySide6.QtWidgets import QScrollArea
+        assert dialog.findChild(QScrollArea).verticalScrollBar().maximum()==0, 'Info must fit at its default size'
         dialog.grab().save(str(target.with_name(target.stem+'-info.png')))
         dialog.reject()
     if format_usb:
@@ -565,9 +580,28 @@ def _render() -> None:
         dialog.show(); app.processEvents()
         target = Path(out)
         dialog.grab().save(str(target.with_name(target.stem+'-analysis.png')))
+        if analysis_menus:_capture_analysis_menus(dialog.controls,target,app)
         dialog.reject()
+    if analysis_menus and settings_tab=='Analysis':
+        from pathlib import Path
+        _capture_analysis_menus(win._analysis_controls,Path(out),app)
+    if playlist_folders:
+        from pathlib import Path
+        item=win.sb_tree.topLevelItem(3)
+        menu=win._local_context_menu(item)
+        menu.popup(win.sb_tree.viewport().mapToGlobal(win.sb_tree.visualItemRect(item).center()))
+        app.processEvents();target=Path(out)
+        menu.grab().save(str(target.with_name(target.stem+'-folder-menu.png')))
+        menu.close();menu.deleteLater()
     win.shutdown()
     print("saved", out, "| devices:", win.device_tree.topLevelItemCount())
+
+
+def _capture_analysis_menus(controls,target,app):
+    for name,combo in (('bpm',controls.bpm_range),('process',controls.process)):
+        combo.showPopup();app.processEvents()
+        combo.view().window().grab().save(str(target.with_name(target.stem+'-'+name+'-menu.png')))
+        combo.hidePopup();app.processEvents()
 
 
 def main() -> None:

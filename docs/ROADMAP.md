@@ -4,6 +4,14 @@ Updated October 29, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
+October29 layout/folder follow-up: compact aligned Analysis controls and complete
+Cocoa popup labels; Info's three-column form fits at its default size. SoundBox
+playlists gain nested folders, drag reorganization, persistent expansion and the
+exact New Playlist / New Folder / Rename / Delete context-menu order. Folder
+moves preserve membership and device playlist identities. Personal build141 is
+installed after its full1614-test gate and verified curated-state relaunch; native source
+registration/playlist writing and two-way analysis remain unfinished.
+
 October29 session checkpoint: the dedicated USB exporter, USB/global preferences,
 column migration/footer corrections and responsive Info/layout refinements are
 implemented. Info resolves artwork after opening in a TaskOwner worker, builds
@@ -12,7 +20,7 @@ artwork group and anchors technical details. Category/Sort have visible panels;
 Color uses dots beside inputs; Global My Settings and Keyboard scroll at the
 right window edge. Installed provenance is recorded in HANDOFF.
 
-October29 installed detection stage (personal build140; full release gate passed)
+October29 installed detection stage (personal build141; full release gate passed)
 implements the hamburger immediately right of Q,
 with equal toolbar spacing, waveform-color access, three native/Qt beat-count
 modes, and standalone USB collection-song export without a synthetic playlist.

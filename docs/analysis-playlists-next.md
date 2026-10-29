@@ -6,7 +6,7 @@ gaps. Analysis must ultimately work in either direction: importing/analyzing in
 SoundBox first or rekordbox first must preserve the same musical data, independent
 of author. The reverse source-publication acceptance below remains unfinished;
 the current detection stage must not be described as the completed round trip.
-The menu and local detection stage are installed in personal build140 after the
+The menu and local detection stage are installed in personal build141 after the
 complete offscreen/Cocoa gate. Shared source publication remains unfinished.
 Actual installed provenance and validation are in [HANDOFF](HANDOFF.md).
 

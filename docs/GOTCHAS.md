@@ -39,6 +39,14 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Keep an explicit minimum contents length and the icon-aware size policy;
   inspect the open Cocoa popup, not only the closed control or offscreen page.
   The hermetic render harness supports `--settings-general --theme-text-menu`.
+  Analysis uses the same icon-aware policy with explicit minimum contents lengths
+  for BPM ranges and process choices; inspect `--settings-analysis --analysis-menus`
+  on Cocoa. A roomy closed control alone does not prove its checked popup fits.
+- **Folder moves must preserve custom playlist identities.** Keep membership in
+  `custom` and organization in the bounded `custom_playlist_tree` settings tree.
+  Export the actual folder_path while retaining `cust:<name>` identity; do not
+  encode the folder path into a new playlist name/key. Folder deletion needs its
+  own explicit descendant-playlist review and never deletes Collection/source audio.
 - **Native checkbox layout margins can overlap custom menu rows.** My Tags
   gives its checkbox cells explicit rectangles inside the QWidgetAction, instead
   of allowing macOS layout-item margins to compress the grid. Its two-column

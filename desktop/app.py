@@ -161,7 +161,7 @@ from .track_info import TrackInfoMixin
 from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
-    CUSTOM_ROLE, DEVPATH_ROLE, PATH_ROLE,
+    CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, PATH_ROLE,
     ArtistsTree, CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
 
@@ -336,11 +336,12 @@ def _provider_action(action):
 
 
 from .analysis import AnalysisMixin
+from .playlist_folders import PlaylistFoldersMixin
 from .cdj import CdjDeviceMixin
 from .track_menu import TrackMenuButton, TrackMenuMixin
 
 
-class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -836,6 +837,9 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
             return
         if cur is not None and cur.data(0, ARTISTS_ROLE):
             self._show_artists()
+            return
+        if cur is not None and cur.data(0, CUSTOM_FOLDER_ROLE):
+            self._show_custom_folder(cur.data(0, CUSTOM_FOLDER_ROLE))
             return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
             tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
@@ -1969,6 +1973,9 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
         self.sb_tree.currentItemChanged.connect(self._on_custom_select)
         self.sb_tree.tracks_dropped.connect(self._on_tracks_dropped)
         self.sb_tree.playlist_moved.connect(self._move_custom)
+        self.sb_tree.node_moved.connect(self._move_local_node)
+        self.sb_tree.itemExpanded.connect(lambda item:self._local_folder_expanded(item, True))
+        self.sb_tree.itemCollapsed.connect(lambda item:self._local_folder_expanded(item, False))
         self.sb_tree.files_dropped.connect(
             lambda name, paths: self._import_files(paths, name or None))
         self.sb_tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1990,7 +1997,7 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
         split.addWidget(self.device_tree)
         split.setHandleWidth(26)  # exactly one section-header bar tall
         for i, header in ((1, self._section_header("SOUNDBOX PLAYLISTS", "+",
-                                                   self._new_custom, top=True)),
+                                                   self._new_soundbox_item_menu, top=True)),
                           (2, self._section_header("DEVICES", top=True))):
             h = split.handle(i)
             hl = QVBoxLayout(h); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(0)
@@ -2778,22 +2785,7 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
 
     # ---------- custom (SoundBox) playlists ----------
     def _new_custom(self):
-        if self.lib is None:
-            QMessageBox.information(self, "Open a library first",
-                                   "Load your rekordbox library first (↻ on the REKORDBOX header).")
-            return
-        name, ok = QInputDialog.getText(self, "New SoundBox Playlist", "Name:")
-        name = name.strip()
-        if not ok or not name:
-            return
-        if self._custom_name_taken(name):
-            QMessageBox.information(self, "Name taken",
-                                    f"“{name}” is already used (Collection and "
-                                    "Artists are reserved).")
-            return
-        self.custom[name] = []
-        self._refresh_custom()
-        self._save_state()
+        self._new_local_playlist()
 
     def _custom_name_taken(self, name: str) -> bool:
         """Custom names must not collide with each other OR the two exportable
@@ -2849,6 +2841,7 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
         keep_coll = bool(cur and cur.data(0, COLLECTION_ROLE))
         keep_artists = bool(cur and cur.data(0, ARTISTS_ROLE))
         keep_name = cur.data(0, CUSTOM_ROLE) if cur else None
+        keep_folder = cur.data(0, CUSTOM_FOLDER_ROLE) if cur else None
         self.sb_tree.blockSignals(True)
         try:
             self.sb_tree.clear()
@@ -2879,12 +2872,7 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
             self.sb_tree.addTopLevelItem(arts)
             if keep_artists:
                 self.sb_tree.setCurrentItem(arts)
-            for name, ids in self.custom.items():
-                it = QTreeWidgetItem([f"★  {name}  ({len(ids)})"])
-                it.setData(0, CUSTOM_ROLE, name)
-                self.sb_tree.addTopLevelItem(it)
-                if name == keep_name:
-                    self.sb_tree.setCurrentItem(it)
+            self._populate_custom_folders(keep_name, keep_folder)
         finally:
             self.sb_tree.blockSignals(False)
 
@@ -2954,19 +2942,7 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
         return box.clickedButton() is add
 
     def _sb_menu(self, pos):
-        item = self.sb_tree.itemAt(pos)
-        name = item.data(0, CUSTOM_ROLE) if item else None
-        menu = QMenu(self)
-        if name:
-            menu.addAction("Import Audio Files…", lambda: self._import_dialog(name))
-            menu.addSeparator()
-            menu.addAction("Rename…", lambda: self._rename_custom(name))
-            menu.addAction("Delete", lambda: self._delete_custom(name))
-        elif item is not None and item.data(0, COLLECTION_ROLE):
-            menu.addAction("Import Audio Files…", lambda: self._import_dialog(None))
-        else:
-            return
-        menu.exec(self.sb_tree.mapToGlobal(pos))
+        self._soundbox_context_menu(pos)
 
     # ---------- imported (non-rekordbox) audio ----------
     def _repair_import_locations(self):
@@ -3186,21 +3162,10 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
         self._save_state()
 
     def _rename_custom(self, name: str):
-        new, ok = QInputDialog.getText(self, "Rename playlist", "New name:", text=name)
-        new = new.strip()
-        if ok and new and new != name and not self._custom_name_taken(new):
-            self.custom = {new if k == name else k: v for k, v in self.custom.items()}
-            self._refresh_custom()
-            self._save_state()
+        self._rename_local_node('playlist', name)
 
     def _delete_custom(self, name: str):
-        if QMessageBox.question(self, "Delete playlist",
-                                f"Delete SoundBox playlist “{name}”?") != QMessageBox.Yes:
-            return
-        self.custom.pop(name, None)
-        self._refresh_custom()
-        self._save_state()
-        self.model.set_rows([])
+        self._delete_local_node('playlist', name)
 
     def _on_custom_select(self, cur, _prev):
         if cur is None:
@@ -3216,6 +3181,11 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
             # Table untouched behind the Artists page; park the key so later
             # stashes can't clobber the view we just left.
             self._view_key = "sb:Artists"
+            return
+        if cur.data(0, CUSTOM_FOLDER_ROLE):
+            key = cur.data(0, CUSTOM_FOLDER_ROLE)
+            self._show_custom_folder(key)
+            self._restore_view(f'sbfolder:{key}')
             return
         name = cur.data(0, CUSTOM_ROLE)
         if name:
@@ -3345,7 +3315,9 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
         drift/resync recognize them by identity (they aren't in lib.playlists).
         Mirrors the `cust` branch of _resolve_jobs."""
         custom = getattr(self, "custom", None) or {}
-        return [Playlist(name=n, folder_path=[], keys=list(ids))
+        from soundbox.playlist_folders import paths
+        locations = paths(self._local_playlist_tree())
+        return [Playlist(name=n, folder_path=locations.get(n, []), keys=list(ids))
                 for n, ids in custom.items() if ids]
 
     def _view_playlist(self, view: str):
@@ -7075,8 +7047,9 @@ class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, 
             elif kind == "cust":
                 ids = self.custom.get(val, [])
                 if ids:
-                    # Top level of /Playlists (no SoundBox subfolder).
-                    pls.append(Playlist(name=val, folder_path=[], keys=list(ids)))
+                    from soundbox.playlist_folders import paths
+                    locations = paths(self._local_playlist_tree())
+                    pls.append(Playlist(name=val, folder_path=locations.get(val, []), keys=list(ids)))
             elif kind == "sbview":
                 pl = self._view_playlist(val)
                 if pl is not None:

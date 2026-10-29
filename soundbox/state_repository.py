@@ -53,6 +53,13 @@ def validate_state(data: Any) -> dict:
             if field in row and not isinstance(row[field], str):
                 raise InvalidState(f'Imported {field} must be text')
     settings = data.get('settings', {})
+    if 'custom_playlist_tree' in settings:
+        from .playlist_folders import validate
+        try:validate(settings['custom_playlist_tree'])
+        except (ValueError, TypeError) as exc:raise InvalidState('Invalid SoundBox playlist folders') from exc
+    if 'custom_playlist_expanded' in settings and (not isinstance(settings['custom_playlist_expanded'], list)
+            or any(not isinstance(key, str) for key in settings['custom_playlist_expanded'])):
+        raise InvalidState('Invalid expanded playlist folders')
     for key in ('hide_untracked', 'hide_nokey', 'hide_short'):
         if key in settings and not isinstance(settings[key], bool):
             raise InvalidState(f'{key} must be a boolean')

@@ -814,6 +814,18 @@ refresh, preserving compressed waveform payloads.
   Finder audio onto the open view adds to the playlist it shows; Collection
   imports files only; Artists (tag-derived) and read-only rekordbox views reject
   every drop (`TrackTable.resolve_drop` gates it; drops never write rekordbox).
+- **SoundBox playlist folders are local organization.** `soundbox.playlist_folders`
+  validates a bounded nested `settings.custom_playlist_tree`: UUID/name/children
+  folder records and references to existing custom playlist names. Membership
+  remains in the original custom dictionary. Legacy playlists remain at root;
+  explicit empty folders and expanded IDs survive save/restore. UI mutations save
+  before rebuilding and restore prior RAM state on refusal. Cycles, duplicate
+  folder identities/sibling folder names and repeated playlist references fail.
+  Folder selection is a read-only deduplicated descendant view; imports still
+  target an individual playlist or Collection. Folder drags expand to ordinary
+  playlist intents. Export `folder_path` follows the hierarchy while existing
+  `cust:<name>` identities and per-playlist song order survive folder moves.
+  Composite Rockbox catalogue filenames remain numbered and top-level.
 
 ## Settings, keyboard and optional account state
 

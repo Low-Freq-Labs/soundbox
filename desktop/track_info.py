@@ -90,13 +90,15 @@ class TrackInfoDialog(QDialog):
         if index!=1 or self._info_built:return
         self._info_built=True
         info=self.tabs.widget(1);iv=QVBoxLayout(info)
-        art=QHBoxLayout();art.addStretch();art.addWidget(self._cover(150));art.addSpacing(20)
+        iv.setSpacing(10)
+        art=QHBoxLayout();art.addStretch();art.addWidget(self._cover(104));art.addSpacing(16)
         choose=QPushButton('Change artwork…');choose.setEnabled(self._pick_art is not None)
         def pick():
             if self._pick_art:self._pick_art();self._load_artwork()
         choose.clicked.connect(pick);art.addWidget(choose);art.addStretch();iv.addLayout(art)
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QScrollArea.NoFrame)
-        host=QWidget();grid=QGridLayout(host);grid.setContentsMargins(0,4,0,8);grid.setSpacing(12)
+        host=QWidget();grid=QGridLayout(host);grid.setContentsMargins(0,2,0,2)
+        grid.setHorizontalSpacing(12);grid.setVerticalSpacing(8)
         visible=[('title','Track title'),('artist','Artist'),('album','Album'),('year','Year'),
             ('releaseDate','Release date'),('bpm','BPM'),('key','Key'),('playCount','DJ play count'),
             ('rating','Rating'),('genre','Genre'),('label','Label'),('color','Color'),
@@ -117,7 +119,7 @@ class TrackInfoDialog(QDialog):
                 if index<0:control.addItem(value,value);index=control.count()-1
                 control.setCurrentIndex(index);control.setFixedHeight(28)
             elif isinstance(control,QPlainTextEdit):
-                control.setObjectName('TrackComments');control.setPlainText(value);control.setFixedHeight(90)
+                control.setObjectName('TrackComments');control.setPlainText(value);control.setFixedHeight(64)
             else:control.setText(value)
             control.setAccessibleName(label)
             editable=self.save_callback is not None and key in EDITABLE|{'title','artist'}
@@ -127,10 +129,15 @@ class TrackInfoDialog(QDialog):
             if key=='releaseDate':control.setPlaceholderText('YYYY-MM-DD')
             if editable:self.controls[key]=control
             fl.addWidget(control)
-            if key=='comments':grid.addWidget(field,7,0,1,2)
-            elif at>14:grid.addWidget(field,8,at-15,Qt.AlignTop)
-            else:grid.addWidget(field,at//2,at%2,Qt.AlignTop)
-        grid.setColumnStretch(0,1);grid.setColumnStretch(1,1)
+            field.setProperty('infoField',key)
+            if key=='title':grid.addWidget(field,0,0,1,2)
+            elif key=='artist':grid.addWidget(field,0,2)
+            elif key=='comments':grid.addWidget(field,5,0,1,3)
+            elif key=='message':grid.addWidget(field,6,0)
+            elif key=='myTags':grid.addWidget(field,6,1,1,2)
+            else:grid.addWidget(field,1+(at-2)//3,(at-2)%3,Qt.AlignTop)
+        for column in range(3):grid.setColumnStretch(column,1)
+        grid.setRowStretch(7,1)
         scroll.setWidget(host);iv.addWidget(scroll,1)
 
     def done(self,result):

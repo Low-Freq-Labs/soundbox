@@ -23,6 +23,7 @@ ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" folder (expandable)
 ARTIST_ROLE = Qt.UserRole + 8      # one artist entry under the Artists folder
 ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser (its id)
 ARTIST_IDS_ROLE = Qt.UserRole + 10   # an artist row's full track-id list (for drag)
+CUSTOM_FOLDER_ROLE = Qt.UserRole + 11  # local folder UUID, independent of playlist names
 
 
 class CellEditDelegate(QStyledItemDelegate):
@@ -220,6 +221,7 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
     dropped back on the list)."""
     tracks_dropped = Signal(str, list)  # custom name, [track_ids]
     playlist_moved = Signal(str, int)   # custom name, target index in the custom order
+    node_moved = Signal(str, str, int)  # playlist:name/folder:UUID, parent UUID, sibling index
     files_dropped = Signal(str, list)   # custom name ("" = Collection), [file paths]
 
     def __init__(self):
@@ -228,13 +230,11 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDropIndicatorShown(False)
-        # Flat list — no expand arrows. Removing the reserved indent makes the row
-        # (and its purple drop-hover) fill the FULL width from the left edge, instead
-        # of the highlight starting inset past a phantom branch column.
-        self.setRootIsDecorated(False)
-        self.setIndentation(0)
+        self.setRootIsDecorated(True)
+        self.setIndentation(16)
         self._hover = None
         self._insert_row: int | None = None  # reorder line position (top-level row)
+        self._insert_y = None
 
     @staticmethod
     def _drag_line(it) -> str:
@@ -243,6 +243,8 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         a device = export the whole pool in that view's order)."""
         if it.data(0, CUSTOM_ROLE):
             return f"cust\t{it.data(0, CUSTOM_ROLE)}"
+        if it.data(0, CUSTOM_FOLDER_ROLE):
+            return f"sbfolder\t{it.data(0, CUSTOM_FOLDER_ROLE)}"
         if it.data(0, COLLECTION_ROLE):
             return "sbview\tcollection"
         if it.data(0, ARTISTS_ROLE):
@@ -251,7 +253,14 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
 
     def mimeData(self, items):  # type: ignore[override]
         md = QMimeData()
-        md.setText("\n".join(line for it in items if (line := self._drag_line(it))))
+        lines = []
+        def collect(item):
+            line = self._drag_line(item)
+            if line:lines.append(line)
+            if item.data(0, CUSTOM_FOLDER_ROLE):
+                for index in range(item.childCount()):collect(item.child(index))
+        for item in items:collect(item)
+        md.setText("\n".join(dict.fromkeys(lines)))
         return md
 
     def startDrag(self, actions):  # type: ignore[override]
@@ -274,7 +283,7 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         """Row of the first custom playlist — the pinned Collection/Artists rows
         above it are not reorderable, so drops clamp below them."""
         for i in range(self.topLevelItemCount()):
-            if self.topLevelItem(i).data(0, CUSTOM_ROLE):
+            if self.topLevelItem(i).data(0, CUSTOM_ROLE) or self.topLevelItem(i).data(0, CUSTOM_FOLDER_ROLE):
                 return i
         return self.topLevelItemCount()
 
@@ -291,9 +300,29 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         return max(row, self._first_custom_row())
 
     def _set_insert(self, row: int | None):
-        if row != self._insert_row:
+        cleared = row is None and self._insert_y is not None
+        if row is None:self._insert_y = None
+        if row != self._insert_row or cleared:
             self._insert_row = row
             self.viewport().update()
+
+    def _drop_destination(self, pos):
+        item = self.itemAt(pos)
+        if item is None:
+            count = self.topLevelItemCount()
+            last = self.topLevelItem(count - 1) if count else None
+            while last is not None and last.isExpanded() and last.childCount():
+                last = last.child(last.childCount()-1)
+            y = self.visualItemRect(last).bottom() if last is not None else 1
+            return '', count - self._first_custom_row(), None, y
+        rect = self.visualItemRect(item)
+        if item.data(0, CUSTOM_FOLDER_ROLE) and rect.top() + 4 < pos.y() < rect.bottom() - 4:
+            return item.data(0, CUSTOM_FOLDER_ROLE), item.childCount(), item, None
+        parent = item.parent()
+        after = pos.y() > rect.center().y()
+        index = parent.indexOfChild(item) if parent else self.indexOfTopLevelItem(item) - self._first_custom_row()
+        if not parent and index < 0:return '', 0, None, self.visualItemRect(self.topLevelItem(self._first_custom_row())).top() if self._first_custom_row() < self.topLevelItemCount() else rect.bottom()
+        return parent.data(0, CUSTOM_FOLDER_ROLE) if parent else '', index + int(after), None, rect.bottom() if after else rect.top()
 
     def dragEnterEvent(self, e):
         md = e.mimeData()
@@ -317,12 +346,14 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         text = e.mimeData().text()
         if "trk\t" in text:
             item = self.itemAt(e.position().toPoint())
-            self._set_hover(item if item and item.data(0, CUSTOM_ROLE) else None)
+            target = item if item and item.data(0, CUSTOM_ROLE) else None
+            self._set_hover(target)
             self._set_insert(None)
-            e.acceptProposedAction()
-        elif "cust\t" in text and e.source() is self:
-            self._set_hover(None)
-            self._set_insert(self._drop_row(e.position().toPoint()))
+            e.acceptProposedAction() if target else e.ignore()
+        elif ("cust\t" in text or "sbfolder\t" in text) and e.source() is self:
+            _parent, _index, target, y = self._drop_destination(e.position().toPoint())
+            self._set_hover(target)
+            self._set_insert(None); self._insert_y = y; self.viewport().update()
             e.acceptProposedAction()
         else:
             self._set_hover(None)
@@ -352,26 +383,32 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
             return
         ids: list[str] = []
         custs: list[str] = []
+        folder_ids: list[str] = []
         for line in e.mimeData().text().split("\n"):
             kind, _, val = line.partition("\t")
             if kind == "trk":
                 ids += [i for i in val.split(",") if i]
             elif kind == "cust" and val:
                 custs.append(val)
+            elif kind == 'sbfolder' and val:
+                folder_ids.append(val)
         if name and ids:
             self.tracks_dropped.emit(name, ids)
             e.acceptProposedAction()
-        elif custs and e.source() is self:
-            # Reorder: index within the custom order = rows above the insert
-            # line that are custom playlists.
-            row = self._drop_row(e.position().toPoint())
-            self.playlist_moved.emit(custs[0], row - self._first_custom_row())
+        elif (custs or folder_ids) and e.source() is self:
+            parent, index, _target, _y = self._drop_destination(e.position().toPoint())
+            token = 'folder:'+folder_ids[0] if folder_ids else 'playlist:'+custs[0]
+            self.node_moved.emit(token, parent, index)
             e.acceptProposedAction()
         else:
             e.ignore()
 
     def paintEvent(self, e):
         super().paintEvent(e)
+        if self._insert_y is not None:
+            p = QPainter(self.viewport()); p.setPen(QPen(QColor(theme.PURPLE_LIGHT), 2))
+            y = max(1, min(self._insert_y, self.viewport().height() - 1))
+            p.drawLine(0, y, self.viewport().width(), y); p.end(); return
         if self._insert_row is None or not self.topLevelItemCount():
             return
         if self._insert_row < self.topLevelItemCount():
