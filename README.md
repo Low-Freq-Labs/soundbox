@@ -189,7 +189,7 @@ rekordbox database continuously. Smart playlists follow active rekordbox My Tags
 history is ignored. Select browser rows and open **My Tags** below the waveform
 to assign existing tags in one flat checklist. My Tags sits left of Settings and
 Search in the prep strip; Search aligns beneath the Hot Cue / Mem Cue tabs.
-The October29 source candidate (not installed yet; required Cocoa gate pending)
+The October29 installed detection stage
 adds a three-line menu immediately right of Q that controls waveform color and beat-count
 display, exports the loaded native song to a USB collection without a playlist,
 and opens Analyze Track. Settings → Analysis controls opt-in BPM/Grid and Key

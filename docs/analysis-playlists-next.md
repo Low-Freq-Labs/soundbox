@@ -6,9 +6,9 @@ gaps. Analysis must ultimately work in either direction: importing/analyzing in
 SoundBox first or rekordbox first must preserve the same musical data, independent
 of author. The reverse source-publication acceptance below remains unfinished;
 the current detection stage must not be described as the completed round trip.
-This is a source candidate, not the installed release. The locked macOS session
-blocks the required Cocoa presentation gate and installation. Actual installed
-provenance and validation are in [HANDOFF](HANDOFF.md).
+The menu and local detection stage are installed in personal build140 after the
+complete offscreen/Cocoa gate. Shared source publication remains unfinished.
+Actual installed provenance and validation are in [HANDOFF](HANDOFF.md).
 
 ## Implemented toolbar and USB behavior
 
@@ -87,6 +87,52 @@ SoundBox-first import → native registration → reload and rekordbox-first imp
 → SoundBox reuse, plus later manual edits from either app. Preserve existing manual
 grids, cues, Analysis Lock and opaque metadata. No perpetual author-ownership fork.
 
+The unanalysed import reference is captured and inventory-verified. Track102012532
+has BPM0, KeyID0, Analysed0, empty AnalysisDataPath and no contentFile/contentCue
+registrations or predicted UUID analysis directory. Only the new djmdContent row
+and agentRegistry changed; counter352236→352237, all existing content unchanged.
+The source WAV still matches its generated full SHA-256.
+
+The BPM/Grid+Key reference is also captured, including all three registered
+DAT/EXT/2EX files. Native analysis matches SoundBox's120 BPM,8B and249ms first
+beat, with64 beats ending31749ms and no cues. Only agentRegistry,djmdContent,
+contentFile and djmdMixerParam changed; all other tracks, XML and source audio
+are unchanged. The counter advanced352237→352257 over this session; do not
+generalize that to a writer formula. Native sets Analysed105,AnalysisUpdated1,
+TrackInfoUpdated2 and Length31 for the exact32-second fixture. Initial analysis
+also creates a gain/peak row and three contentFile rows. Those protocols and the
+duration discrepancy require proof before a reverse publisher can be accepted.
+
+Key-only recheck is now captured and confirms Sonny's explanation: it preserves
+the existing BPM/grid/waveform analysis. DAT/EXT/2EX remain byte-identical;
+contentFile rows, grid, cues, KeyID and AnalysisUpdated are unchanged. Only target
+TrackInfoUpdated2→3, rb_local_usn and updated_at change, plus agentRegistry.
+The session counter advances352257→352265; source audio, XML, other tracks and
+all other tables remain unchanged. This is recheck evidence, not a fresh
+Key-only registration protocol.
+
+First-beat option reanalysis is now captured: native creates one DB-only Memory
+Cue at249ms with its matching contentCue JSON aggregate. DAT/EXT/2EX and their
+contentFile rows remain unchanged. Only agentRegistry,contentCue,djmdContent and
+djmdCue change; other tracks, XML and audio stay unchanged. AnalysisUpdated1→2,
+CueUpdatedNULL→1,TrackInfoUpdated3→5; counter352265→352283 is the session delta,
+not an isolated cue-write formula. Existing accepted cue rules remain scoped;
+this reference does not authorize the detected-analysis publisher.
+
+Fresh Key-only import+analysis is captured together as native-key-only-new-track.
+Sonny explicitly confirms he selected only Key. New track109556371 nevertheless
+has120 BPM,8B,Analysed105,64 grid beats and all three DAT/EXT/2EX files. Every
+sidecar section matches the full-analysis reference except PPTH, which stores
+the new filename. Initial registration includes three contentFile rows and one
+gain/peak row, without cues. Only agentRegistry,contentFile,djmdContent and
+djmdMixerParam change; existing tracks, XML and audio remain unchanged. Session
+counter352283→352304 includes both import and analysis; no intermediate capture
+isolates those operations. Preserve the distinction between initial analysis
+and a Key-only recheck of existing analysis when implementing selection semantics.
+The third WAV is an exact verified copy of the generated reference; SoundBox-first
+remains unimported for the reverse-import proof. No further native action is
+currently requested; copy-only publication/recovery remains unfinished.
+
 ## Ordinary source playlists — still gated
 
 Accepted scope: create regular playlists, add/remove songs, delete regular
@@ -111,11 +157,13 @@ XML uses hexadecimal playlist IDs and also changes during membership edits;
 include its timestamp protocol in the future atomic transaction. Synced/cloud
 memberships, creation/deletion and interrupted recovery remain unproven.
 
-First pending user action: delete **only** SoundBox Playlist Test in rekordbox,
-keep both test songs in Collection, quit normally, and reply done. Capture that
-native-deleted snapshot before asking for another native edit. Test playlist:
-ID4086406462, UUID4739cf09-58a3-4081-8280-a1695ded60c3. It last contained only
-Gangster Tune18213989 after STOP CAPPIN228450310 was removed.
+The native deletion reference is now captured and inventory-verified. Playlist
+4086406462 and its last membership were physically removed. Both test songs
+remain active in Collection, with the entire djmdContent table unchanged. The
+session counter advanced352231→352236; this is an observed session delta, not
+yet a proven isolated deletion formula. The XML node F3919D3E survives with an
+advanced Timestamp. A future publisher must prove that protocol rather than
+assuming an XML-node deletion. No source-write authority follows from this capture.
 
 ## Private evidence
 

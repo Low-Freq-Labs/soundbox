@@ -45,7 +45,7 @@ records may be adopted by source identity, counters and metadata, without readin
 USB media. Existing audio placement survives display-only changes. Updating or
 removing a playlist retains collection songs and performs no orphan-media sweep.
 A repeated unchanged export writes nothing. The track menu immediately right of
-Q in the overnight source candidate (installation pending the unlocked Cocoa gate)
+Q in the installed October29 detection-stage release
 also exports the loaded native song directly to the collection, including on
 an empty USB, with no synthetic playlist. Its mount token/UUID survives discovery
 and source-save deferrals; locally bound recovery remembers interrupted standalone

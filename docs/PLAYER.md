@@ -5,9 +5,9 @@ architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
-October29 overnight additions below describe the source candidate. They are not
-installed yet: the locked macOS session blocks the required onscreen Cocoa gate.
-The prior release remains installed; see [HANDOFF](HANDOFF.md).
+October29 menu, beat-count modes and local detection stage are installed in
+personal build140 after the complete offscreen/Cocoa gate. Reverse analysis
+publication remains unfinished; see [HANDOFF](HANDOFF.md).
 
 ## Implemented player behavior
 

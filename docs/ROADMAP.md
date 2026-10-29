@@ -12,7 +12,7 @@ artwork group and anchors technical details. Category/Sort have visible panels;
 Color uses dots beside inputs; Global My Settings and Keyboard scroll at the
 right window edge. Installed provenance is recorded in HANDOFF.
 
-October29 overnight source candidate (not installed; unlocked Cocoa gate pending)
+October29 installed detection stage (personal build140; full release gate passed)
 implements the hamburger immediately right of Q,
 with equal toolbar spacing, waveform-color access, three native/Qt beat-count
 modes, and standalone USB collection-song export without a synthetic playlist.

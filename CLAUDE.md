@@ -376,7 +376,7 @@ Rockbox 4.0 does not support `sort playlists`; never add or require that key.
 Its absence after firmware saves preferences is not Sync drift. Preserve existing
 unknown config lines; retain the established numbered playlist filenames.
 
-October29 overnight source candidate (not installed; see HANDOFF): the track-menu
+October29 installed detection stage (personal build140; see HANDOFF): the track-menu
 button is immediately right of Q, with the
 existing equal flexible toolbar gaps. It offers waveform color, three resident
 beat-count modes, standalone collection-song CDJ export and Analyze Track.
