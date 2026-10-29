@@ -24,3 +24,10 @@ publication/recovery through the dedicated generic-FAT32/exFAT CDJ session.
 Source packaging includes the executable and upstream license/full GPL text, not
 private fixtures. Distribution review and CDJ hardware acceptance remain open.
 See [the complete contract](../../docs/cdj-usb-export.md).
+
+The `analyze` command reads one already captured local audio file through pinned
+rbl-audio/rbl-analysis. It checks rate/channel budgets before collecting and caps
+mono PCM at300seconds/32million samples. Constant-tempo rows use SoundBox's
+[beat, milliseconds, BPM] order. It has no desktop source-write API. Result
+persistence, cancellation and worker ownership live in the parent; shared source
+analysis acceptance is tracked in docs/analysis-playlists-next.md.

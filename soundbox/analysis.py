@@ -1,0 +1,179 @@
+"""Explicit captured-audio analysis. Results are durable SoundBox data.
+
+No desktop source-write authority is inferred from detection. The saved canonical
+path/audio digest lets direct imports and later rekordbox identities share results.
+Existing native/manual grids and source cues remain authoritative on playback.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+import hashlib
+import json
+import math
+from pathlib import Path
+import tempfile
+
+from .source_acquisition import SourceContract, acquire_source
+
+BPM_RANGES = ((70,180),(48,95),(58,115),(68,135),(78,155),(88,175),
+              (98,195),(108,215),(118,235),(128,255))
+DEFAULTS = dict(bpm=True, key=True, bpm_range=0, first_cue=False, process='Normal')
+ENGINE = 'rbxport-b739d369-constant-v1'
+
+
+def options(value=None):
+    raw = value if isinstance(value, dict) else {}
+    result = {**DEFAULTS, **{k:v for k,v in raw.items() if k in DEFAULTS}}
+    if any(type(result[k]) is not bool for k in ('bpm','key','first_cue')):
+        raise ValueError('Invalid analysis selection')
+    if type(result['bpm_range']) is not int or not 0 <= result['bpm_range'] < len(BPM_RANGES):
+        raise ValueError('Invalid BPM range')
+    if result['process'] not in ('Performance','Normal','Power saving'):
+        raise ValueError('Invalid analysis process preference')
+    return result
+
+
+def identity(info):
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def result_key(path):
+    return hashlib.sha256(str(path).encode()).hexdigest()
+
+
+def saved_result(results, track):
+    """Cheap presentation lookup; worker revalidation grants playback use."""
+    record = results.get(result_key(track.path))
+    if not isinstance(record, dict) or record.get('path') != str(track.path):
+        return None
+    if track.size and record.get('size') != track.size:
+        return None
+    return record
+
+
+def validate_result(record):
+    if (record.get('engine') != ENGINE or not isinstance(record.get('sha256'), str)
+            or len(record['sha256']) != 64 or any(c not in '0123456789abcdef' for c in record['sha256'])
+            or not isinstance(record.get('epoch'), list) or len(record['epoch']) != 5
+            or any(type(n) is not int or n < 0 for n in record['epoch'])
+            or not isinstance(record.get('path'), str) or not Path(record['path']).is_absolute()
+            or type(record.get('size')) is not int or record['size'] != record['epoch'][2]):
+        raise ValueError('Invalid captured analysis identity')
+    duration = record.get('duration')
+    if type(duration) not in (int, float) or not math.isfinite(duration) or not 4 <= duration <= 86400:
+        raise ValueError('Invalid analysis duration')
+    beats = record.get('beats') or []
+    if not isinstance(beats, list) or len(beats) > 400000:
+        raise ValueError('Invalid detected grid')
+    previous = -1
+    for row in beats:
+        if (not isinstance(row, list) or len(row) != 3 or type(row[0]) is not int or row[0] not in (1,2,3,4)
+                or type(row[1]) is not int or not previous < row[1] <= duration * 1000
+                or type(row[2]) not in (int,float) or not math.isfinite(row[2]) or not 1 <= row[2] <= 655.35):
+            raise ValueError('Invalid detected beat row')
+        previous = row[1]
+    bpm = record.get('bpm')
+    if bpm is not None and (type(bpm) not in (int,float) or not math.isfinite(bpm) or not 1 <= bpm <= 655.35):
+        raise ValueError('Invalid detected BPM')
+    key = record.get('key')
+    if key is not None and key not in {str(i)+letter for i in range(1,13) for letter in ('A','B')}:
+        raise ValueError('Invalid detected key')
+    if record.get('first_cue') is not None and (not beats or record['first_cue'] != beats[0][1]):
+        raise ValueError('Invalid first-beat Memory Cue')
+
+
+def _source_context(library, track):
+    if library.source_kind != 'rekordbox-db' or track.imported:
+        return {}
+    from pyrekordbox import Rekordbox6Database
+    from .rekordbox_db import _copy_stable_snapshot, _deleted
+    with tempfile.TemporaryDirectory(prefix='soundbox-analysis-db-') as folder:
+        target = Path(folder)/'master.db'
+        _copy_stable_snapshot(Path(library.source), target)
+        db = Rekordbox6Database(path=str(target))
+        try:
+            properties = list(db.get_property())
+            row = db.get_content(ID=track.track_id)
+            if (len(properties) != 1 or str(properties[0].DBID) != library.source_library_id
+                    or row is None or _deleted(row) or str(row.UUID) != track.source_uuid
+                    or Path(row.FolderPath).resolve(strict=True) != track.path.resolve(strict=True)):
+                raise ValueError('Source track changed; refresh before analyzing')
+            flags = row.Analysed
+            if type(flags) is not int or flags < 0:
+                raise ValueError('Unknown source analysis flags')
+            if flags & 0x80:
+                raise ValueError('Analysis Lock is on')
+            return dict(library_id=library.source_library_id, uuid=track.source_uuid,
+                        flags=flags, bpm=row.BPM, key=row.KeyID,
+                        analysis_updated=row.AnalysisUpdated, analysis_path=row.AnalysisDataPath)
+        finally:
+            db.close()
+
+
+def analyze(library, track, preferences=None, *, should_cancel=lambda:False):
+    from .cdj_usb import run_renderer
+    prefs = options(preferences)
+    if not (prefs['bpm'] or prefs['key']):
+        raise ValueError('Select BPM / Grid or Key')
+    source_context = _source_context(library, track)
+    source = track.path.expanduser().resolve(strict=True)
+    if source.suffix.lower() not in ('.wav','.aif','.aiff','.mp3','.flac','.m4a','.aac','.mp4'):
+        raise ValueError('Unsupported analysis audio format')
+    with tempfile.TemporaryDirectory(prefix='soundbox-analysis-') as folder:
+        root = Path(folder).resolve()
+        with acquire_source(SourceContract(source), root, should_cancel=should_cancel) as snapshot:
+            low, high = BPM_RANGES[prefs['bpm_range']]
+            request = root/'analysis.json'
+            request.write_text(json.dumps(dict(audio=str(snapshot.path), bpm=prefs['bpm'], key=prefs['key'],
+                                              min_bpm=low, max_bpm=high)))
+            result = run_renderer('analyze', root, request, should_cancel=should_cancel,
+                                  process_nice={'Performance':0,'Normal':10,'Power saving':18}[prefs['process']])
+            if should_cancel():
+                raise RuntimeError('Analysis cancelled')
+            if identity(source.stat()) != identity(snapshot.observation) or source_context != _source_context(library, track):
+                raise ValueError('Source changed during analysis; retry after refreshing')
+            result.update(engine=ENGINE, path=str(source), sha256=snapshot.sha256, size=snapshot.size,
+                          epoch=identity(snapshot.observation), source_context=source_context,
+                          first_cue=(result['beats'][0][1] if prefs['first_cue'] and result.get('beats') else None))
+            # Silence/too little rhythmic evidence must not become a fabricated grid.
+            if prefs['bpm'] and (not result.get('beats') or result.get('confidence', 0) < .5):
+                result.update(bpm=None, beats=[], first_cue=None)
+            validate_result(result)
+            return result
+
+
+def merge_result(previous, current, preferences):
+    """Key-only / grid-only analysis preserves an existing result for the same bytes."""
+    result = deepcopy(current)
+    if previous and previous.get('sha256') == current['sha256']:
+        if not preferences['bpm']:
+            for key in ('bpm','beats','confidence','first_cue'):
+                result[key] = deepcopy(previous.get(key))
+        if not preferences['key']:
+            for key in ('key','key_name'):
+                result[key] = previous.get(key)
+    validate_result(result)
+    return result
+
+
+def playback_data(data, record, path):
+    """Worker-only overlay. Preserve native/manual grids and every source cue."""
+    if not record:
+        return data
+    try:
+        validate_result(record)
+        if str(Path(path)) != record['path'] or identity(Path(path).stat()) != record['epoch']:
+            return data
+    except (OSError, ValueError, TypeError, KeyError):
+        return data
+    provenance = data.get('provenance') or {}
+    if provenance.get('grid') in {'rekordbox', 'soundbox-manual'} or provenance.get('user_data') == 'soundbox':
+        return data
+    if not record.get('beats'):
+        return data
+    cues = data.get('cues') or []
+    if not cues and record.get('first_cue') is not None and not record.get('source_context'):
+        cues = [dict(kind='memory', slot=0, position_ms=record['first_cue'], comment='First analyzed beat')]
+    return {**data, 'beats': deepcopy(record['beats']), 'cues': cues,
+            'provenance': {**provenance, 'grid':'soundbox-detected', 'analysis_engine':ENGINE},
+            '_detected_bpm':record['bpm']}

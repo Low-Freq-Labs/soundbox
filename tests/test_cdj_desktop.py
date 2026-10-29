@@ -49,7 +49,23 @@ class CdjDropIntent(unittest.TestCase):
         playlists=[object()]
         CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',playlists,from_drop=True,drop_target=(7,'fixture'))
         pending[0]()
-        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'))
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=())
+
+    def test_standalone_song_and_target_binding_survive_both_deferrals(self):
+        for source_busy in (False,True):
+            pending=[]
+            host=SimpleNamespace(_shutting_down=False,lib=object(),_begin_cdj_export=mock.Mock(),
+                _defer_device_operation_until_scan_finishes=lambda callback:False if source_busy else pending.append(callback) or True,
+                _device_operation_owned=lambda:False,tag_controller=SimpleNamespace(owned=source_busy),
+                _start_pulse=mock.Mock(),cancel_btn=mock.Mock())
+            track=object()
+            with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
+                CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',standalone=(track,),
+                    from_drop=True,drop_target=(8,'fixture'))
+            host.tag_controller.owned=False
+            pending[0]()
+            host._begin_cdj_export.assert_called_once_with('/not-a-device',(),settings=None,
+                standalone=(track,),from_drop=True,drop_target=(8,'fixture'))
 
     def test_generic_playlist_drop_carries_its_own_authorization(self):
         from desktop.app import MainWindow
@@ -70,7 +86,7 @@ class CdjDropIntent(unittest.TestCase):
             CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',playlists,from_drop=True,drop_target=(7,'fixture'))
         host.tag_controller.owned=False
         pending[0]()
-        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'))
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=())
 
     def test_settings_and_update_actions_publish_without_a_second_review(self):
         host,started=self.host()

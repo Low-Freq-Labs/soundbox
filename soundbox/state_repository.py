@@ -13,6 +13,9 @@ from typing import Any
 from .state_io import StateChangedError, atomic_bytes, state_area
 
 
+_MAX_STATE_BYTES = 64 * 1024**2
+
+
 class InvalidState(ValueError):
     pass
 
@@ -69,12 +72,26 @@ def validate_state(data: Any) -> dict:
             if key in row and (type(row[key]) not in (int, float)
                                or not math.isfinite(row[key]) or row[key] < 0):
                 raise InvalidState(f'Imported {key} must be a finite nonnegative number')
+    if 'analysis_results' in settings:
+        from .analysis import validate_result, result_key
+        results = settings['analysis_results']
+        if not isinstance(results, dict):
+            raise InvalidState('analysis_results must be an object')
+        for key, record in results.items():
+            if not isinstance(record, dict):
+                raise InvalidState('Analysis results must be objects')
+            try:
+                validate_result(record)
+                if key != result_key(record['path']):
+                    raise ValueError('Analysis result path binding changed')
+            except (ValueError, TypeError, KeyError) as exc:
+                raise InvalidState('Invalid saved analysis result') from exc
     # Unknown namespaces and settings remain byte-value-equivalent on roundtrip.
     return copy.deepcopy(data)
 
 
 def read_state(path: Path) -> dict:
-    if path.stat().st_size > 64 * 1024**2:
+    if path.stat().st_size > _MAX_STATE_BYTES:
         raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
     return validate_state(json.loads(path.read_text(encoding='utf-8')))
 
@@ -165,6 +182,8 @@ class StateRepository:
                 raise OSError('Library recovery required; restore a valid backup before saving')
             document = validate_state({**self._document, **changes})
             payload = json.dumps(document, indent=2, allow_nan=False).encode('utf-8')
+            if len(payload) > _MAX_STATE_BYTES:
+                raise InvalidState('Library JSON exceeds the 64 MiB safety limit; previous state was preserved')
             if self._saved_payload is None:
                 identity = self._identity()
                 try:

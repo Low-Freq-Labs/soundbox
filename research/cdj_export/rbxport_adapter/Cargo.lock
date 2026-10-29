@@ -548,6 +548,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "rbl-analysis"
+version = "1.9.0"
+dependencies = [
+ "realfft",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "rbl-anlz"
 version = "1.9.0"
 dependencies = [
@@ -808,6 +817,8 @@ checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 name = "soundbox-cdj"
 version = "0.1.0"
 dependencies = [
+ "rbl-analysis",
+ "rbl-audio",
  "rbl-export",
  "rbl-onelibrary",
  "rbl-pdb",

@@ -80,6 +80,24 @@ before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_
 overrides feed display/export; browsercache schema2 and libcache schema8 preserve
 these fields without analysis/art rebuilds. No additional source DB write API exists.
 
+`desktop.track_menu` supplies the evenly spaced button immediately right of Q.
+Beat-count mode is persisted separately from waveform color and uses cached
+memory positions plus the resident grid in both Qt and native ABI6. The same
+native RAM resolver drives drawable text and diagnostics; changes request one
+dirty frame. Standalone CDJ inputs join the existing collection union without
+manufacturing a playlist; local recovery receipts retain their source IDs/UUIDs.
+
+`desktop.analysis` owns the Analysis tab/dialog and cancellable TaskOwner jobs.
+`soundbox.analysis` captures one hashed local audio snapshot, then the optimized
+Rust helper reuses pinned rbxport DSP. Decoding checks bounds before collection
+and caps the buffer at300seconds/32million mono samples. Results are durable
+`settings.analysis_results`, keyed by canonical path with SHA-256, exact source
+identity and engine provenance, allowing a direct import and later native ID to
+share data. Playback overlays detected fallback grids in its existing worker;
+native/manual grids and source cues win. No waveform-cache rewrite or source
+DB/ANLZ publication is enabled. Full two-way analysis remains the explicit next
+acceptance gate; see [the accepted stage](analysis-playlists-next.md).
+
 ## Engine modules (`soundbox/`)
 
 `library` (source-neutral `Track` / `Playlist` / `Library` model) ·
@@ -356,7 +374,7 @@ The native host never expands an unused Qt envelope during detail delivery.
 PWV5 carrier repair is vectorized without changing its output, and native
 display-stream publication checks the generation under its render lock. A complete
 native upload presents overview and all three display modes together. Source
-replacement rejects late generations. Native ABI 5 additionally accepts a tested
+replacement rejects late generations. Native ABI 6 retains the tested
 timeline load contract. Tagged MPEG-1/LAME header facts are read on the decode
 thread, matched to the decoder's rate/valid-frame count, and restore leading
 samples to both playback and supplemental analysis. Seek and duration use that

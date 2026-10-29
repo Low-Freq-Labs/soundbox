@@ -12,15 +12,20 @@ artwork group and anchors technical details. Category/Sort have visible panels;
 Color uses dots beside inputs; Global My Settings and Keyboard scroll at the
 right window edge. Installed provenance is recorded in HANDOFF.
 
-Sonny requested continuing the larger additions in a fresh session. The remaining
-committed scope is [Analysis, track menu and native playlists](analysis-playlists-next.md).
-It includes a menu right of My Tags, standalone collection-song USB export,
-three beat-count modes, opt-in BPM/grid and Key analysis with its own settings
-page, and ordinary native rekordbox playlist CRUD. These are **not shipped** by
-this checkpoint. Use the pinned [rbxport](https://github.com/chrisle/rbxport)
-implementation as the reference/engine, retaining SoundBox source/recovery and
-worker boundaries. Native reference capture has begun; no playlist source-write
-authority has been provisioned.
+October29 overnight source candidate (not installed; unlocked Cocoa gate pending)
+implements the hamburger immediately right of Q,
+with equal toolbar spacing, waveform-color access, three native/Qt beat-count
+modes, and standalone USB collection-song export without a synthetic playlist.
+Analysis now has its own Settings tab, bounded cancellable rbxport BPM/Grid+Key
+jobs and durable audio-bound results that survive a later native track ID.
+Native/manual grids and source cues remain authoritative. Automatic detection is
+off by default; Phrase is disabled. This is the detection stage: SoundBox→rekordbox
+analysis publication and ordinary native playlist CRUD remain **unfinished**.
+Sonny explicitly requires shared analysis in both directions regardless of which
+app imports first. The [accepted scope and exact remaining gates](analysis-playlists-next.md)
+cover that round trip, source acceptance and the next native-reference actions.
+Copy-only native membership replay now matches unsynced add/remove rows/counters;
+creation/deletion/synced cases and journal/XML publication remain gated.
 
 Historical October27 checkpoints: Sonny requested a fresh efficiency review. The
 [measured audit](efficiency-audit-2026-10.md) led to an approved implementation:
@@ -519,8 +524,9 @@ manifest/cache schemas, native timing and visible behavior in each slice.
 
 - Broader prep features beyond the [approved first version](rekordbox-prep.md):
   compound/multi-field intelligent playlists, tag-definition management,
-  Undo/Redo, title/artist and ordinary-playlist write-back. The five-button
-  grid/cue editor is approved staged work above; it does not ship yet.
+  Undo/Redo and title/artist write-back. Ordinary playlists are active accepted
+  work above, with source publication gated. The accepted five-button grid/cue
+  editor is shipped; additional source domains require their separate proofs.
 - Schema-2 to schema-3 device migration: separate ownership/recovery design and
   acceptance. Existing refusal remains enabled.
 - Additional stock iPod models/formats: per-model fixtures, database/hash/art

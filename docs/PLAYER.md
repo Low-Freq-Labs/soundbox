@@ -1,11 +1,15 @@
 # SoundBox player
 
-Current as of 2026-10-28. This is the player reference: shipped behavior,
+Current as of 2026-10-29. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
-## Shipped behavior
+October29 overnight additions below describe the source candidate. They are not
+installed yet: the locked macOS session blocks the required onscreen Cocoa gate.
+The prior release remains installed; see [HANDOFF](HANDOFF.md).
+
+## Implemented player behavior
 
 The player has a header, a deck, and a prep strip beneath it:
 
@@ -16,7 +20,8 @@ The player has a header, a deck, and a prep strip beneath it:
 - Deck: centered transport stack on the left, waveform in the middle, and the
   two-page cue panel on the right, spanning the header and deck height.
 - Prep strip: five grid buttons (enabled for a ready accepted track) and a BPM entry field on the left;
-  a Q Quantize toggle after the grid buttons, then an elapsed/total playback clock.
+  a Q Quantize toggle after the grid buttons, the three-line track menu immediately
+  to its right, then an elapsed/total playback clock.
   Controls use evenly distributed flexible gaps across the waveform width. The first grid button aligns with
   the waveform's left edge. The track information button sits
   immediately before My Tags, followed by Settings and Search. Info and Settings
@@ -26,6 +31,18 @@ The player has a header, a deck, and a prep strip beneath it:
   the cue panel, and My Tags sits to Settings' left.
   Settings ends at the waveform's right edge. There is no separator before
   My Tags; space outside cue buttons matches the surrounding header panel.
+
+The track menu exposes waveform color, Beat Count Display, standalone Export to
+USB for the loaded native song, and Analyze Track. Current Position retains the
+bar.beat ruler. The two Memory Cue modes count to the next strictly later memory
+cue using fractional positions on actual adjacent grid intervals, rounding a
+partial beat up. Bars show four-beat bars plus remainder; Beats shows one integer.
+No next cue or unsupported grid position leaves the countdown blank. This is
+resident render-state work; modes persist without a new timer, seek or recook.
+The selected USB mount/UUID remains bound through deferrals and a song export
+creates no visible playlist. See [the analysis/playlist stage](analysis-playlists-next.md)
+for the bounded detection engine, durable results and outstanding two-way source
+publication acceptance. Existing native/manual grids and source cues are retained.
 
 The playback clock shows `M:SS/M:SS` (for example `1:23/3:15`). Tracks at least
 one hour long show hours on both sides, such as `0:01:23/1:02:03`. Its monospaced

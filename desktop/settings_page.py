@@ -394,6 +394,7 @@ class SettingsPageMixin:
         self._refresh_graveyard()
         scroll.setWidget(host)
         add_tab(scroll, "General")
+        add_tab(self._analysis_settings_page(), "Analysis")
         from .usb_preferences import MySettingsEditor
         self._global_my_settings = MySettingsEditor(global_page=True)
         self._global_my_settings.set_profile(self.settings.get('cdj_my_settings',{}))
@@ -788,6 +789,8 @@ class SettingsPageMixin:
         if not hasattr(self, "_chk_hide"):
             return
         self._sync_theme_text_controls()
+        if hasattr(self, '_analysis_controls'):
+            self._analysis_controls.set_preferences(self.settings.get('analysis'))
         for w, val in ((self._chk_hide, self.settings.get("hide_untracked")),
                        (self._chk_nokey, self.settings.get("hide_nokey", True)),
                        (self._chk_short, self.settings.get("hide_short", True))):
@@ -809,6 +812,7 @@ class SettingsPageMixin:
         self.settings["waveform_mode"] = normalized
         if hasattr(self, "player_bar"):
             self.player_bar.set_waveform_mode(normalized)
+        self._sync_settings_controls()
         self._schedule_settings_save()
 
     def _apply_and_refresh(self):

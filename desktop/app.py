@@ -196,6 +196,7 @@ _DEFAULT_SETTINGS = {
     "waveform_mode": "3BAND",
     "autoplay_mode": "",
     "quantize": False,
+    "beat_count_mode": 0,
     "theme_accent": theme.DEFAULT_ACCENT,
     "theme_text_mode": "white",
     "theme_text_custom": theme.DEFAULT_ACCENT_TEXT,
@@ -334,10 +335,12 @@ def _provider_action(action):
     return decorate
 
 
+from .analysis import AnalysisMixin
 from .cdj import CdjDeviceMixin
+from .track_menu import TrackMenuButton, TrackMenuMixin
 
 
-class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+class MainWindow(AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -626,6 +629,7 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
         self.player_bar.set_waveform_mode(
             str(self.settings.get("waveform_mode", "3BAND")))
         self._set_quantize(self.settings.get('quantize') is True, save=False)
+        self._set_beat_count_mode(self.settings.get('beat_count_mode', 0), save=False)
         self._set_autoplay_mode(
             str(self.settings.get("autoplay_mode", "")), save=False)
         self._sync_settings_controls()  # reflect saved values in the Settings page
@@ -736,6 +740,12 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
                                  junk=self._title_junk())
             self._row_cache[t.track_id] = r
         result = dict(r)
+        detected = self._analysis_result(t)
+        if detected:
+            if not t.bpm and detected.get('bpm'):
+                result['bpm'] = f"{detected['bpm']:.2f}"
+            if not t.key and detected.get('key'):
+                result['key'] = detected['key']
         result.update(self.settings.get('track_info',{}).get(t.track_id,{}))
         if self.lib and t.source_tag_ids:
             result['myTags'] = ', '.join(tag.name for tag in self.lib.source_tags if tag.tag_id in t.source_tag_ids)
@@ -1178,6 +1188,7 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
             t.track_id, t.path, title=label, bpm=t.bpm,
             analysis_path=getattr(t, "source_analysis_path", ""),
             autoplay=autoplay,
+            detected_analysis=self._analysis_result(t),
             cues=(self.tag_controller.session_cues(t.track_id)
                   if self.tag_controller.lib is self.lib else getattr(t, "source_cues", None)))
         self._highlight_now_playing(t.track_id)
@@ -1556,6 +1567,10 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
         self.quantize_btn.toggled.connect(self._set_quantize)
         row.addWidget(self.quantize_btn)
         row.addStretch(1)
+        self.track_menu_btn = TrackMenuButton(prep)
+        self.track_menu_btn.clicked.connect(self._show_track_menu)
+        row.addWidget(self.track_menu_btn)
+        row.addStretch(1)
         self.playback_time = QLabel(self.player_bar.playback_time_text)
         self.playback_time.setObjectName("PlaybackTime")
         self.playback_time.setAccessibleName("Playback time")
@@ -1593,6 +1608,8 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
         track_id = self.player_bar.current_track()
         track = self.lib.tracks_by_id.get(track_id) if self.lib else None
         value = track.bpm if track is not None else self.player_bar._bpm
+        if track is not None and not value:
+            value = (self._analysis_result(track) or {}).get('bpm') or 0
         view = self.grid_controller.view(track_id) if track_id else None
         if view is not None:
             value = view[1]
@@ -3047,6 +3064,7 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
         by_path = {rec.get("path"): tid for tid, rec in self.imported.items()}
         ids: list[str] = []
         skipped: list[str] = []
+        fresh_ids: list[str] = []
         for raw in paths:
             p = Path(raw).expanduser()
             if not imports.is_audio(p) or not p.is_file():
@@ -3056,6 +3074,7 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
             if tid is None:
                 tid = imports.new_id()
                 self.imported[tid] = imports.probe(p)
+                fresh_ids.append(tid)
                 by_path[str(p)] = tid
             ids.append(tid)
         if ids:
@@ -3069,6 +3088,8 @@ class MainWindow(TrackInfoMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowse
                 self._on_tracks_dropped(playlist, ids)  # dupe-guarded add
             else:
                 self._reload_current_view()  # Collection view picks them up live
+            if fresh_ids and self.settings.get('analysis', {}).get('automatic') is True:
+                QTimer.singleShot(0, lambda captured=tuple(fresh_ids): self._analyze_tracks(captured, automatic=True))
             self._arm_waveform_rechecks()
             if self.providers.allows("artwork.search"):
                 QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only

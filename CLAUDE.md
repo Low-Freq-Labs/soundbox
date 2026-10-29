@@ -376,6 +376,19 @@ Rockbox 4.0 does not support `sort playlists`; never add or require that key.
 Its absence after firmware saves preferences is not Sync drift. Preserve existing
 unknown config lines; retain the established numbered playlist filenames.
 
+October29 overnight source candidate (not installed; see HANDOFF): the track-menu
+button is immediately right of Q, with the
+existing equal flexible toolbar gaps. It offers waveform color, three resident
+beat-count modes, standalone collection-song CDJ export and Analyze Track.
+Explicit detected BPM/Grid+Key results persist in backed-up library.json with
+path/audio digest/exact identity and can follow a later native track ID. Native
+and manual grids/source cues remain authoritative. Sonny requires analysis shared
+both ways independent of which app imports first; reverse detected-analysis/Key
+publication is still gated by its own native reference and authority, not the
+accepted manual-grid API. Ordinary native playlist CRUD also remains gated;
+copy-only unsynced membership replay does not authorize source publication.
+Read docs/analysis-playlists-next.md for implemented scope and exact next actions.
+
 ## Documentation map
 
 | Doc | What's in it |

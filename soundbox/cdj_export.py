@@ -20,7 +20,7 @@ def _stable_id(key):
     return int.from_bytes(hashlib.sha256(key.encode()).digest()[:4], 'big') & 0x7fffffff or 1
 
 
-def _selected(library, additions, all_playlists, previous):
+def _selected(library, additions, all_playlists, previous, *, allow_empty=False):
     available = {manifest.playlist_key(p): p for p in all_playlists}
     jobs = {}
     for value in previous.get('selection', []) if previous else []:
@@ -31,7 +31,7 @@ def _selected(library, additions, all_playlists, previous):
         jobs[key] = available[key]
     for playlist in additions:
         jobs[manifest.playlist_key(playlist)] = playlist
-    if not jobs and not (previous and previous.get('library_managed', True)):
+    if not jobs and not allow_empty and not (previous and previous.get('library_managed', True)):
         raise ValueError('Drag a playlist onto this USB to establish its CDJ library')
     return jobs
 
@@ -71,20 +71,32 @@ def _playlist_dto(library, jobs, tracks, previous):
 
 def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists=(),
                 titles=None, artists=None, art_cache=None, should_cancel=lambda:False,
-                on_progress=lambda *_:None, recovery_root=None, additive=False, global_profile=None):
+                on_progress=lambda *_:None, recovery_root=None, additive=False, global_profile=None,
+                standalone=()):
     # Source containment is checked before any local preparation or device write.
     selected_sources = [Path(library.source), *[track.path for track in library.tracks_by_id.values()],
                         *[Path(t.source_analysis_path) for t in library.tracks_by_id.values() if t.source_analysis_path]]
+    selected_sources.extend(track.path for track in standalone)
+    selected_sources.extend(Path(track.source_analysis_path) for track in standalone if track.source_analysis_path)
     session = CdjSession(target, selected_sources, token=token, volume_uuid=volume_uuid)
     from .cdj_transaction import recover
     recover(session,recovery_root,retain_new=True)
     previous = load_manifest(session)
-    if not playlists:
+    if not playlists and not standalone:
         from .cdj_transaction import reusable_proof
         pending=reusable_proof(session,recovery_root)
         if pending.get('db_id')==int(library.source_library_id):
             available={manifest.playlist_key(p):p for p in [*library.playlists,*all_playlists]}
             playlists=tuple(available[p['key']] for p in pending.get('selection',[]) if p['key'] in available)
+            resumed = []
+            for entry in pending.get('standalone', []):
+                if entry.get('library_id') != library.source_library_id:
+                    continue
+                track = library.tracks_by_id.get(entry.get('track_id'))
+                if track is None or track.source_uuid != entry.get('uuid'):
+                    raise ValueError('Interrupted USB song changed or is unavailable; export its current selection again')
+                resumed.append(track)
+            standalone = tuple(resumed)
     native = read_library(target,token)
     if native is not None:
         from .cdj_catalog import current_baseline
@@ -93,9 +105,12 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
         from .cdj_incremental import plan_incremental
         return plan_incremental(library, playlists, session, previous, all_playlists=all_playlists,
             titles=titles, artists=artists, art_cache=art_cache, should_cancel=should_cancel,
-            on_progress=on_progress, recovery_root=recovery_root, additive=additive,native=native)
-    jobs = _selected(library, playlists, [*library.playlists, *all_playlists], previous)
+            on_progress=on_progress, recovery_root=recovery_root, additive=additive,native=native,
+            standalone=standalone)
+    jobs = _selected(library, playlists, [*library.playlists, *all_playlists], previous, allow_empty=bool(standalone))
     by_id: dict[str, Track] = {}
+    for track in standalone:
+        by_id.setdefault(track.track_id, track)
     for playlist in jobs.values():
         for track in library.resolve(playlist):
             by_id.setdefault(track.track_id, track)
@@ -249,10 +264,20 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
         plan.manifest['track_inputs'] = {str(dto['id']):dict(
             signature=input_signature(dto,extras[str(dto['id'])],assets[i].get('artwork','')),
             source=contracts[i]) for i,dto in enumerate(captured['tracks'])}
+        remember_standalone(plan.manifest, previous, library, standalone)
         return plan
     except Exception:
         workspace.cleanup()
         raise
+
+
+def remember_standalone(current, previous, library, tracks):
+    entries = {(r['library_id'],r['track_id']):dict(r) for r in (previous or {}).get('standalone',[])}
+    for track in tracks:
+        entries[(library.source_library_id, track.track_id)] = dict(
+            library_id=library.source_library_id, track_id=track.track_id, uuid=track.source_uuid)
+    if entries:
+        current['standalone'] = list(entries.values())
 
 
 def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_cancel=lambda:False, recovery_root=None):

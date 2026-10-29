@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define SB_DECK_ABI_VERSION 5u
+#define SB_DECK_ABI_VERSION 6u
 
 typedef void *SBDeckRef;
 
@@ -71,6 +71,7 @@ void sb_deck_end_waveform_update(SBDeckRef deck);
 float sb_deck_set_zoom(SBDeckRef deck, float pixels_per_second);
 void sb_deck_request_display(SBDeckRef deck);
 void sb_deck_sync_view_geometry(SBDeckRef deck);
+void sb_deck_set_beat_count_mode(SBDeckRef deck, uint32_t mode);
 int sb_deck_set_grid_for_generation(
     SBDeckRef deck, uint64_t generation,
     const double *beat_seconds, const uint8_t *beat_in_bar, size_t beat_count, int pinned);

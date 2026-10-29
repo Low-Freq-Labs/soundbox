@@ -813,7 +813,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   **OBJECTS**, not display-path strings. `SyncReport` has no `files_copied`
   (use `.playlists` / `.bytes_to_copy`).
 - `Playlist.display_path` joins with `" / "` (SPACES around slash), not `"/"`.
-- Settings page lives on `body_stack` (index 1); its tabs are General, Keyboard,
+- Settings page lives on `body_stack` (index 1); its tabs are General, Analysis, My Settings, Keyboard,
   Graveyard, Connections; Graveyard uses the full width. Connections keeps core rekordbox on the
   left and adds SoundCloud on the right only in personal builds. Database changes
   retain the current library until a successful worker retirement and settings
@@ -1873,3 +1873,27 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   `.gitattributes` exemption keeps `git diff --check` useful for SoundBox files
   without normalizing hash-verified dependency bytes. Vendor verification remains
   mandatory; do not extend that exemption to application code.
+
+## Analysis and track menu — October29
+
+- The hamburger belongs immediately right of Q. Use the same44×28 geometry and
+  flexible gaps as the grid strip, preserving clock width and Search alignment.
+  Menu and General waveform choices share one setting; no second color cache.
+- Beat countdowns must interpolate both current and off-grid cue positions on
+  the actual RAM intervals. Counting grid rows up to a rounded cue overcounts
+  partial beats. At a cue, target the next strictly later memory cue; outside
+  supported rows/no next cue means blank, not an invented zero. Cache cue times
+  when they change; never scan source data or add a transport timer per frame.
+- Captured rbxport detection is a separate durable result, not source authority.
+  Check decoded budgets before allocation. Cancellation must reap the process
+  before staging is removed. TaskOwner callbacks run before retirement finishes:
+  do not synchronously close/drain the same dialog from that callback. Automatic
+  completion defers close one event turn; manual completion shows detected values.
+- `settings.analysis_results` lives in backed-up library.json, outside disposable
+  waveform caches. Bind path/hash/exact filesystem identity, preserve native and
+  manual grids/cues, and never route arbitrary detection through the accepted
+  manual-grid writer. The two-way source publication gate remains explicit.
+- Standalone CDJ export supplies tracks directly, never a hidden fake playlist.
+  Include those identities in locally bound interrupted-work receipts. Preserve
+  native/managed playlists and prove the unchanged repeat performs no writes or
+  retained media reads. Harnesses still deny live source/device discovery.

@@ -765,6 +765,29 @@ class NativeDeckContract(unittest.TestCase):
             'sample_rate': 150.0, 'beats': [[1, 0, 120.0]]}, 42))
         self.assertEqual(self.deck.diagnostic_grid_position(10009), (1, 1))
 
+    def test_memory_countdown_uses_fractional_grid_positions_and_has_no_phantom_next_cue(self):
+        self.addCleanup(self.deck.set_beat_count_mode, 0)
+        from soundbox.beat_count import countdown
+        self.deck.begin_track(61)
+        times = [100,600,1000,1500,1900,2400,2800,3300,3700,4200]
+        self.assertTrue(self.deck.set_grid([[i%4+1,t,120] for i,t in enumerate(times)],61))
+        self.deck.set_cues([dict(kind='hot',slot=0,position_ms=650),
+                            dict(kind='memory',slot=0,position_ms=1150),
+                            dict(kind='memory',slot=1,position_ms=3700)])
+        for mode in (1,2):
+            self.deck.set_beat_count_mode(mode)
+            for position in (99,100,599,600,950,1000,1149,1150,1600,3699,3700,4201):
+                expected = countdown(times,[1150,3700],position)
+                observed = self.deck.diagnostic_grid_position(position)
+                self.assertEqual(observed, None if expected is None else
+                                 (expected,255) if mode==2 else (expected//4,expected%4))
+        self.deck.set_beat_count_mode(0)
+        self.assertEqual(self.deck.diagnostic_grid_position(600),(1,2))
+        self.deck.begin_track(62)
+        self.assertTrue(self.deck.set_grid([[i%4+1,t,120] for i,t in enumerate(times)],62))
+        self.deck.set_beat_count_mode(2)
+        self.assertIsNone(self.deck.diagnostic_grid_position(600))
+
     def test_late_color_stream_upload_cannot_replace_new_track(self):
         detail = {"_blue_detail": bytes([31]) * 150,
                   "_rgb_detail": bytes.fromhex("e47c") * 150,

@@ -84,7 +84,7 @@ def referenced_files(view):
     return result
 
 
-def _catalog(library, playlists, previous, all_playlists, additive):
+def _catalog(library, playlists, previous, all_playlists, additive, standalone=()):
     from .cdj_export import _selected, _stable_id
     old = previous['view']
     keep={int(p['id']) for p in old['playlists'] if additive or int(p['id']) in previous.get('foreign_playlists',[])}
@@ -151,6 +151,11 @@ def _catalog(library, playlists, previous, all_playlists, additive):
             members.append(by_source[tid])
         nodes[identity]['tracks'] = members
         selection[key] = dict(key=key,pid=playlist.pid,name=playlist.name,folder=playlist.folder_path)
+    for track in standalone:
+        tid=int(track.track_id)
+        tracks[tid]=track;used_sources.add(tid)
+        if tid not in by_source:
+            by_source[tid]=next_track;next_track+=1
     # Updating playlists does not empty the USB collection or garbage-collect
     # songs. Both exporters may keep records outside their current playlists.
     final_tracks = set(by_audio.values())
@@ -246,9 +251,10 @@ def _placements(changed, catalog, previous, reuse=None):
 
 def plan_incremental(library, playlists, session, previous, *, all_playlists=(), titles=None,
                      artists=None, art_cache=None, should_cancel=lambda:False,
-                     on_progress=lambda *_:None, recovery_root=None, additive=False,native=None):
+                     on_progress=lambda *_:None, recovery_root=None, additive=False,native=None,
+                     standalone=()):
     started = time.monotonic()
-    catalog = _catalog(library,playlists,previous,all_playlists,additive)
+    catalog = _catalog(library,playlists,previous,all_playlists,additive,standalone)
     tracks = catalog['tracks']
     if native is None:native = read_library(session.target,session.mount_identity[0])
     if native is None or any(digest(raw)!=previous['files'][path]['sha256']
@@ -425,6 +431,8 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
                 session.read_optional(MANIFEST,limit=8*1024*1024),False,len(view['track_rows']),len(catalog['selection']),None,recovery_root)
             if noop.requires_commit:noop.manifest=dict(previous,generation=uuid.uuid4().hex)
             return noop
+        from .cdj_export import remember_standalone
+        remember_standalone(plan.manifest, previous, library, standalone)
         records = deepcopy(cached)
         plan.manifest['foreign_playlists']=[i for i in previous.get('foreign_playlists',[]) if i not in catalog['reverse']]
         managed_ids={catalog['by_source'][int(t.track_id)] for t in tracks}

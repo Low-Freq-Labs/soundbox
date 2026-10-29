@@ -25,7 +25,7 @@ _HOT_CUE_FALLBACKS = (
 )
 _MEMORY_CUE_RGB = (255, 52, 52)
 _WAVEFORM_MODES = {"BLUE": 1, "RGB": 2, "3BAND": 3}
-_NATIVE_ABI_VERSION = 5
+_NATIVE_ABI_VERSION = 6
 _NATIVE_GEOMETRY_EVENTS = tuple(
     event_type
     for event_type in (
@@ -378,6 +378,8 @@ def _bind(path: Path):
         ctypes.c_size_t,
     ]
     lib.sb_deck_set_cues.restype = ctypes.c_int
+    lib.sb_deck_set_beat_count_mode.argtypes = [handle,ctypes.c_uint32]
+    lib.sb_deck_set_beat_count_mode.restype = None
     lib.sb_deck_set_grid_for_generation.argtypes = [
         handle, ctypes.c_uint64, ctypes.POINTER(ctypes.c_double),
         ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t, ctypes.c_int,
@@ -555,6 +557,9 @@ class UnavailableDeckBackend(QObject):
 
     def set_grid(self, _beats, _generation: int = 0, *, pinned=True):
         return False
+
+    def set_beat_count_mode(self, mode):
+        pass
 
     def set_session_cue(self, _position_ms):
         pass
@@ -1125,6 +1130,9 @@ class NativeDeckBackend(QObject):
         expected = int(generation or self._analysis_generation)
         return bool(self._lib.sb_deck_set_grid_for_generation(
             self._handle, expected, seconds, numbers, count, int(pinned)))
+
+    def set_beat_count_mode(self, mode):
+        self._lib.sb_deck_set_beat_count_mode(self._handle,int(mode))
 
     def set_cues(self, cues):
         """Upload colored hot-cue boxes and red memory-cue arrows to Metal."""

@@ -32,13 +32,14 @@ class CdjWorker(QThread):
 
 
 class CdjDeviceMixin:
-    def _begin_cdj_export(self, dev, playlists=(), *, settings=None, from_drop=False, drop_target=None):
+    def _begin_cdj_export(self, dev, playlists=(), *, settings=None, from_drop=False, drop_target=None,
+                          standalone=()):
         if self._shutting_down or self.lib is None:
             return
         if from_drop and drop_target is None:
             drop_target = (self._device_mount_tokens.get(dev,0),device_facts(dev,cached_only=True).volume_uuid)
         if self._defer_device_operation_until_scan_finishes(
-                lambda: self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target)):
+                lambda: self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)):
             return
         if self._device_operation_owned():
             QMessageBox.information(self, 'Device busy', 'Wait for the current device operation.')
@@ -57,14 +58,15 @@ class CdjDeviceMixin:
                     QTimer.singleShot(100, ready)
                     return
                 self._cdj_waiting = None
-                self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target)
+                self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)
             QTimer.singleShot(100, ready)
             return
         profile = self._device_profiles.get(dev)
         facts = device_facts(dev, cached_only=True)
         token = self._device_mount_tokens.get(dev, 0)
         if from_drop and drop_target != (token,facts.volume_uuid):
-            self._flash_status('USB changed after the drop; drop the playlist onto the connected device again',15)
+            self._flash_status('USB changed; choose the connected target again' if standalone else
+                               'USB changed after the drop; drop the playlist onto the connected device again',15)
             return
         if not profile or profile.kind != 'generic_usb' or not getattr(profile,'cdj_export',profile.rockbox_export) or not facts.writable or not facts.volume_uuid:
             QMessageBox.warning(self, 'CDJ export unavailable', 'Select a writable FAT32 or exFAT USB.')
@@ -76,6 +78,7 @@ class CdjDeviceMixin:
         # Freeze curation dictionaries and playlist selection on the GUI thread.
         library, titles, artists = deepcopy(self.lib), dict(self.titles), dict(self.overrides)
         playlists = deepcopy(tuple(playlists))
+        standalone = deepcopy(tuple(standalone))
         all_playlists = deepcopy(self._sync_playlists())
         global_profile = deepcopy(self.settings.get('cdj_my_settings',{}))
         if settings is None:
@@ -83,7 +86,7 @@ class CdjDeviceMixin:
                 library, playlists, dev, token=token, volume_uuid=facts.volume_uuid,
                 all_playlists=all_playlists, titles=titles, artists=artists, art_cache=self.art_cache,
                 should_cancel=cancel, on_progress=progress, recovery_root=recovery, additive=from_drop,
-                global_profile=global_profile)
+                global_profile=global_profile,standalone=standalone)
         else:
             changes = dict(settings)
             operation = lambda cancel, _progress: cdj_export.plan_settings(

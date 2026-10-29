@@ -491,7 +491,8 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
         current=session.read_optional(MANIFEST,limit=8*1024*1024)
         proof=dict(schema=1,volume_uuid=session.volume_uuid,generation=value['new_manifest']['generation'],
             old_manifest=current.decode() if current else None,files={},observations={},
-            selection=value['new_manifest']['selection'],db_id=value['new_manifest']['db_id'])
+            selection=value['new_manifest']['selection'],db_id=value['new_manifest']['db_id'],
+            standalone=value['new_manifest'].get('standalone',[]))
         from .state_io import atomic_bytes
         atomic_bytes(receipt.with_suffix('.reusable.json'),_json(proof))
         session.atomic_write(session.target/'.soundbox-cdj/reusable.json',_json(proof))
@@ -539,7 +540,8 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
         if retain_new:
             proof=dict(schema=1,volume_uuid=session.volume_uuid,generation=value['new_manifest']['generation'],
                 old_manifest=old,files=reusable,observations=observations,
-                selection=value['new_manifest']['selection'],db_id=value['new_manifest']['db_id'])
+                selection=value['new_manifest']['selection'],db_id=value['new_manifest']['db_id'],
+                standalone=value['new_manifest'].get('standalone',[]))
             # A USB file cannot grant ownership. The matching local record is
             # written only after the complete journal has been reconciled.
             local=receipt.with_suffix('.reusable.json')

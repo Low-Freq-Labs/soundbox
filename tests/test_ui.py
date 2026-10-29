@@ -884,7 +884,7 @@ class StockIpodUI(unittest.TestCase):
 
     def test_usb_playlist_refits_browser_columns_when_window_resizes(self):
         previous = (_win.stack.currentIndex(),_win.device_content_stack.currentIndex(),
-                    _win.usb_device_pages.stack.currentIndex(),_win.size())
+                    _win.usb_device_pages.stack.currentIndex(),_win.size(),_win.isVisible())
         header = _win.table.horizontalHeader()
         state = header.saveState()
         try:
@@ -898,13 +898,14 @@ class StockIpodUI(unittest.TestCase):
                 self.assertEqual(view.header().length(),view.viewport().width())
                 self.assertFalse(view.horizontalScrollBar().isVisible())
         finally:
-            page,device,usb,size = previous
+            page,device,usb,size,visible = previous
             _win.resize(size)
             _win.stack.setCurrentIndex(page)
             _win.device_content_stack.setCurrentIndex(device)
             _win.usb_device_pages.set_page(usb)
             header.restoreState(state)
             _win._sync_artist_columns()
+            _win.setVisible(visible)
 
     def test_usb_native_rows_load_metadata_and_restore_expansion_selection_and_tab(self):
         from dataclasses import replace
@@ -2155,6 +2156,9 @@ class StockIpodUI(unittest.TestCase):
         old_status = _win.status_label.text()
 
         class Worker:
+            def defer_for_interaction(self, _seconds):
+                pass
+
             @staticmethod
             def deleteLater():
                 pass
@@ -3502,6 +3506,36 @@ class TrackRemovalMenu(unittest.TestCase):
         _app.processEvents()
         self.assertEqual([a.text() for a in self._menu(["1"]).actions()], [
             "Remove from Collection"])
+
+
+class DeckTrackMenu(unittest.TestCase):
+    def test_menu_order_and_hamburger_geometry_share_toolbar_spacing(self):
+        self.addCleanup(_win.setVisible, _win.isVisible())
+        self.addCleanup(_win.body_stack.setCurrentIndex, _win.body_stack.currentIndex())
+        _win.show()
+        _win.body_stack.setCurrentIndex(0)
+        _app.processEvents()
+        controls = [*_win.grid_edit_buttons[:1], _win.bpm_value, *_win.grid_edit_buttons[1:],
+                    _win.quantize_btn, _win.track_menu_btn, _win.playback_time,
+                    _win.info_placeholder, _win.my_tags, _win.settings_btn]
+        gaps = [b.x()-(a.x()+a.width()) for a,b in zip(controls,controls[1:])]
+        self.assertLessEqual(max(gaps)-min(gaps),1)
+        self.assertEqual(_win.track_menu_btn.size(),_win.quantize_btn.size())
+        menu = _win._track_menu()
+        self.assertEqual([a.text() for a in menu.actions()],
+                         ['Change waveform color','Beat Count Display','Export to USB','Analyze Track'])
+        self.assertEqual([_win._settings_tabs.tabText(i) for i in range(2)],['General','Analysis'])
+        menu.deleteLater()
+
+    def test_beat_mode_is_persistent_and_does_not_seek_or_reload(self):
+        original = _win.settings.get('beat_count_mode',0)
+        with mock.patch.object(_win.player_bar.player,'setPosition') as seek, \
+             mock.patch.object(_win.player_bar,'play_track') as load:
+            _win._set_beat_count_mode(2)
+            self.assertEqual(_win.settings['beat_count_mode'],2)
+            self.assertEqual(_win.player_bar.wave.beat_count_mode,2)
+            seek.assert_not_called();load.assert_not_called()
+        _win._set_beat_count_mode(original,save=False)
 
 
 class TrackReanalysisMenu(unittest.TestCase):

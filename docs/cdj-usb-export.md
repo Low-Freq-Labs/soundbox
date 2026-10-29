@@ -44,7 +44,12 @@ confirmation. Drops prepare selected new/changed inputs only. Unchanged native
 records may be adopted by source identity, counters and metadata, without reading
 USB media. Existing audio placement survives display-only changes. Updating or
 removing a playlist retains collection songs and performs no orphan-media sweep.
-A repeated unchanged export writes nothing.
+A repeated unchanged export writes nothing. The track menu immediately right of
+Q in the overnight source candidate (installation pending the unlocked Cocoa gate)
+also exports the loaded native song directly to the collection, including on
+an empty USB, with no synthetic playlist. Its mount token/UUID survives discovery
+and source-save deferrals; locally bound recovery remembers interrupted standalone
+track IDs/UUIDs. Missing/changed source identities fail closed on resumption.
 
 Retained native/manifest inventory is not a fresh integrity certificate. Normal
 export does not walk/hash retained audio, analysis or artwork. New audio is

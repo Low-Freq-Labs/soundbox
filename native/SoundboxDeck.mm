@@ -386,6 +386,7 @@ public:
         cueVertexCount_ = 0;
         sessionCueVertexCount_ = 0;
         cueMarkerCount_ = 0;
+        memoryCueSeconds_.clear();
         waveSamplesPerSecond_ = 0;
         waveMipCount_ = 0;
         waveMipOffsets_.fill(0);
@@ -1098,6 +1099,7 @@ public:
             cueBuffer_ = nil;
             cueVertexCount_ = 0;
             cueMarkerCount_ = 0;
+            memoryCueSeconds_.clear();
             beatPositions_.clear();
             return false;
         }
@@ -1275,17 +1277,45 @@ public:
         return true;
     }
 
-    bool gridPosition(double seconds, uint32_t *bar, uint8_t *beat) {
-        if (!bar || !beat || !std::isfinite(seconds)) return false;
-        std::lock_guard<std::mutex> lock(renderMutex_);
-        auto found = std::upper_bound(
-            beatPositions_.begin(), beatPositions_.end(), seconds,
-            [](double t, const BeatPosition &position) { return t < position.seconds; });
+    // renderMutex_ must be held. Both the drawable and diagnostic ABI use
+    // this exact RAM-only resolver; fractional beats support off-grid cues.
+    bool rulerPosition(double seconds, BeatPosition &result) const {
+        if (!std::isfinite(seconds)) return false;
+        auto found = std::upper_bound(beatPositions_.begin(), beatPositions_.end(), seconds,
+            [](double t, const BeatPosition &p) { return t < p.seconds; });
         if (found == beatPositions_.begin()) return false;
-        --found;
-        *bar = found->bar;
-        *beat = found->beat;
+        result = *std::prev(found);
+        if (!beatCountMode_) return true;
+        if (beatPositions_.size() < 2 || seconds > beatPositions_.back().seconds) return false;
+        const auto cue = std::upper_bound(memoryCueSeconds_.begin(), memoryCueSeconds_.end(), seconds);
+        if (cue == memoryCueSeconds_.end() || *cue > beatPositions_.back().seconds) return false;
+        const auto phase = [this](double t) {
+            auto next = std::upper_bound(beatPositions_.begin(), beatPositions_.end(), t,
+                [](double value, const BeatPosition &p) { return value < p.seconds; });
+            auto current = std::prev(next);
+            const double index = std::distance(beatPositions_.begin(), current);
+            return next == beatPositions_.end() ? index
+                : index + (t-current->seconds)/(next->seconds-current->seconds);
+        };
+        const uint32_t remaining = static_cast<uint32_t>(std::max(0.0, std::ceil(phase(*cue)-phase(seconds)-1e-9)));
+        result.bar = beatCountMode_ == 2 ? remaining : remaining / 4;
+        result.beat = beatCountMode_ == 2 ? 255 : remaining % 4;
         return true;
+    }
+
+    bool gridPosition(double seconds, uint32_t *bar, uint8_t *beat) {
+        if (!bar || !beat) return false;
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        BeatPosition result{};
+        if (!rulerPosition(seconds, result)) return false;
+        *bar = result.bar;
+        *beat = result.beat;
+        return true;
+    }
+
+    void setBeatCountMode(uint32_t mode) {
+        std::lock_guard<std::mutex> lock(renderMutex_);
+        beatCountMode_ = std::min(mode, 2u);
     }
 
     bool setGrid(
@@ -1371,6 +1401,7 @@ public:
         cueBuffer_ = nil;
         cueVertexCount_ = 0;
         cueMarkerCount_ = 0;
+        memoryCueSeconds_.clear();
         return true;
     }
 
@@ -1541,14 +1572,17 @@ public:
             cueBuffer_ = nil;
             cueVertexCount_ = 0;
             cueMarkerCount_ = 0;
+            memoryCueSeconds_.clear();
             return true;
         }
         std::vector<GridVertex> markers;
         markers.reserve(count * 420);
         size_t markerCount = 0;
+        std::vector<double> memoryCues;
         for (size_t i = 0; i < count; ++i) {
             const uint32_t t = positions[i];
             const bool hot = kinds[i] == 1;
+            if (!hot) memoryCues.push_back(t / 1000.0);
             const uint8_t slot = slots[i];
             if (hot && slot > 7) {
                 continue;
@@ -1612,6 +1646,8 @@ public:
         cueBuffer_ = buffer;
         cueVertexCount_ = markers.size();
         cueMarkerCount_ = markerCount;
+        std::sort(memoryCues.begin(), memoryCues.end());
+        memoryCueSeconds_ = std::move(memoryCues);
         return true;
     }
 
@@ -2413,17 +2449,7 @@ public:
             gridVertexCount = gridVertexCount_;
             sessionCueVertexCount = sessionCueVertexCount_;
             cueVertexCount = cueVertexCount_;
-            auto beat = std::upper_bound(
-                beatPositions_.begin(), beatPositions_.end(),
-                currentSeconds,
-                [](double seconds, const BeatPosition &position) {
-                    return seconds < position.seconds;
-                });
-            if (beat != beatPositions_.begin()) {
-                --beat;
-                currentBeat = *beat;
-                hasCurrentBeat = true;
-            }
+            hasCurrentBeat = rulerPosition(currentSeconds, currentBeat);
         }
         setUniformPosition(uniforms, exactFrame, rate);
 
@@ -3009,7 +3035,7 @@ private:
         if (beat) {
             const std::string barText = std::to_string(beat->bar);
             const std::string label =
-                barText + "." + std::to_string(beat->beat);
+                beat->beat == 255 ? barText : barText + "." + std::to_string(beat->beat);
             const float labelX =
                 -(static_cast<float>(barText.size()) * 8.0f + 1.0f);
             addGridText(
@@ -5551,6 +5577,8 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     std::array<DisplayWaveform, 3> displayWaveforms_{};
     std::atomic<uint64_t> waveformRevision_{1};
     std::vector<BeatPosition> beatPositions_;
+    uint32_t beatCountMode_ = 0;
+    std::vector<double> memoryCueSeconds_;
     // Display-thread-only storage: rebuilding the small dynamic overlay never
     // allocates on the playback frame path after the first frame.
     std::vector<GridVertex> overlayScratch_;
@@ -6017,6 +6045,13 @@ int sb_deck_set_audio_detail_range_mips_i16_for_generation(
 int sb_deck_grid_position(
     SBDeckRef deck, double seconds, uint32_t *bar, uint8_t *beat) {
     return deck ? static_cast<SBDeck *>(deck)->gridPosition(seconds, bar, beat) : 0;
+}
+
+void sb_deck_set_beat_count_mode(SBDeckRef deck, uint32_t mode) {
+    if (!deck) return;
+    auto *instance = static_cast<SBDeck *>(deck);
+    instance->setBeatCountMode(mode);
+    instance->requestDisplay();
 }
 
 int sb_deck_set_grid_for_generation(

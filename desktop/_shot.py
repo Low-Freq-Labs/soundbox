@@ -44,6 +44,10 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    track_menu = '--track-menu' in sys.argv
+    if track_menu: sys.argv.remove('--track-menu')
+    analyze_dialog = '--analyze-dialog' in sys.argv
+    if analyze_dialog: sys.argv.remove('--analyze-dialog')
     all_columns = '--all-columns' in sys.argv
     if all_columns:sys.argv.remove('--all-columns')
     track_info = "--track-info" in sys.argv
@@ -93,7 +97,7 @@ def _render() -> None:
     if art_review:
         sys.argv.remove("--art-review")
     settings_tab = None
-    for name in ("General", "My Settings", "Keyboard", "Connections", "Graveyard"):
+    for name in ("General", "Analysis", "My Settings", "Keyboard", "Connections", "Graveyard"):
         flag = "--settings-" + name.lower().replace(' ','-')
         if flag in sys.argv:
             settings_tab = name
@@ -544,6 +548,23 @@ def _render() -> None:
         dialog.show();app.processEvents()
         target=Path(out)
         dialog.grab().save(str(target.with_name(target.stem+'-format.png')))
+        dialog.reject()
+    if track_menu:
+        from pathlib import Path
+        menu = win._track_menu()
+        menu.popup(win.track_menu_btn.mapToGlobal(win.track_menu_btn.rect().bottomLeft()))
+        app.processEvents()
+        target = Path(out)
+        menu.grab().save(str(target.with_name(target.stem+'-menu.png')))
+        menu.close(); menu.deleteLater()
+    if analyze_dialog:
+        from pathlib import Path
+        from .analysis import AnalysisDialog
+        dialog = AnalysisDialog(win.lib, [next(iter(win.lib.tracks_by_id.values()))], None, {},
+                                lambda _results: False, parent=win)
+        dialog.show(); app.processEvents()
+        target = Path(out)
+        dialog.grab().save(str(target.with_name(target.stem+'-analysis.png')))
         dialog.reject()
     win.shutdown()
     print("saved", out, "| devices:", win.device_tree.topLevelItemCount())

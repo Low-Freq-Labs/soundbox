@@ -154,7 +154,7 @@ def _apply_loaded_grid_contract(
         return data
     provenance = dict(data.get("provenance") or {})
     if provenance.get("grid") in {
-            "rekordbox", "soundbox-zero-anchor", "soundbox-manual"}:
+            "rekordbox", "soundbox-zero-anchor", "soundbox-manual", "soundbox-detected"}:
         return data
     current = list(data.get("beats") or [])
     if not current:
@@ -364,7 +364,7 @@ class WaveformWorker(QThread):
 
     def __init__(self, path: str, analysis_path: str = "",
                  track_id: str = "", track_analysis_dir=None,
-                 generation: int = 0, native_backend=None):
+                 generation: int = 0, native_backend=None, detected_analysis=None):
         super().__init__()
         self.path = path
         self.analysis_path = analysis_path
@@ -372,6 +372,7 @@ class WaveformWorker(QThread):
         self.track_analysis_dir = track_analysis_dir
         self.generation = int(generation)
         self.native_backend = native_backend
+        self.detected_analysis = detected_analysis
         self._discard_requested = threading.Event()
         self.cache_writes = AnalysisWriteFence()
 
@@ -391,6 +392,8 @@ class WaveformWorker(QThread):
             return False, False, False
         manifest = _apply_loaded_grid_contract(
             manifest, self.analysis_path)
+        from soundbox.analysis import playback_data
+        manifest = playback_data(manifest, self.detected_analysis, self.path)
         self.manifest_ready.emit(self.path, self.generation, manifest)
         if self.isInterruptionRequested():
             return True, False, False
@@ -521,6 +524,8 @@ class WaveformBar(QWidget):
         self._beat_times: list[int] = []
         self._beat_positions: list[tuple[int, int, int]] = []
         self._cues: list[dict] = []
+        self._memory_times: list[int] = []
+        self.beat_count_mode = 0
         self._session_cue_ms: int | None = None
         self._overview_cache_width = 0
         self._overview_columns: list[tuple[float, QColor]] = []
@@ -734,6 +739,7 @@ class WaveformBar(QWidget):
                 int(cue["slot"]),
             ),
         )
+        self._memory_times = sorted(c["position_ms"] for c in self._cues if c["kind"] == "memory")
         if repaint:
             self._repaint()
 
@@ -1283,11 +1289,21 @@ class WaveformBar(QWidget):
         _ms, bar, beat = self._beat_positions[
             min(index, len(self._beat_positions) - 1)]
         left, right = str(bar), str(beat)
+        mode = self.beat_count_mode
+        if mode:
+            from soundbox.beat_count import countdown
+            remaining = countdown(self._beat_times, self._memory_times, self._position_ms)
+            if remaining is None:
+                return
+            left, right = ((str(remaining), '') if mode == 2
+                           else (str(remaining // 4), str(remaining % 4)))
         color = QColor("#18c8ff")
         p.setPen(color)
         p.drawText(QPointF(
             head_x - 1 - p.fontMetrics().horizontalAdvance(left),
             _RULER_TOP + 14), left)
+        if not right:
+            return
         p.fillRect(QRectF(
             head_x - 1, _RULER_TOP + 11, 2, 2), color)
         p.drawText(QPointF(head_x + 2, _RULER_TOP + 14), right)
@@ -1560,6 +1576,7 @@ class PlayerBar(QWidget):
         self._live_cues: list[dict] | None = None
         self._live_grid = None
         self.quantize_enabled = False
+        self.detected_analysis = None
         self._dur = 0
         self._pos = 0
         self.playback_time_text = "0:00/0:00"
@@ -1747,6 +1764,12 @@ class PlayerBar(QWidget):
         b.setCursor(Qt.PointingHandCursor)
         b.setFocusPolicy(Qt.NoFocus)
         return b
+
+    def set_beat_count_mode(self, mode):
+        mode = mode if type(mode) is int and 0 <= mode <= 2 else 0
+        self.wave.beat_count_mode = mode
+        self.wave._repaint()
+        self.player.set_beat_count_mode(mode)
 
     def set_waveform_mode(self, mode: str):
         normalized = str(mode).upper()
@@ -1945,7 +1968,7 @@ class PlayerBar(QWidget):
 
     def play_track(self, track_id: str, path, title: str = "", bpm=None,
                    analysis_path: str = "", autoplay: bool | None = True,
-                   cues: list[dict] | None = None):
+                   cues: list[dict] | None = None, detected_analysis=None):
         """Load a track, optionally starting once its first grid beat is known.
 
         ``autoplay=False`` still waits for prepared analysis and positions the
@@ -1971,8 +1994,9 @@ class PlayerBar(QWidget):
             # perform the source change and its normal clickless fade-in.
             self._pause_clean(lambda: self.play_track(
                 track_id, path, title=title, bpm=bpm,
-                analysis_path=analysis_path, autoplay=autoplay, cues=cues))
+                analysis_path=analysis_path, autoplay=autoplay, cues=cues, detected_analysis=detected_analysis))
             return
+        self.detected_analysis = detected_analysis
         self._live_cues = list(cues) if cues is not None else None
         if changed:
             self._load_started = perf_counter()
@@ -2685,6 +2709,7 @@ class PlayerBar(QWidget):
             track_id=self._track_id or "",
             track_analysis_dir=self.track_analysis_dir,
             generation=self._analysis_generation,
+            detected_analysis=self.detected_analysis,
             native_backend=(
                 self.player if getattr(self.player, "is_native", False)
                 else None))
@@ -2744,6 +2769,8 @@ class PlayerBar(QWidget):
         if not self._analysis_is_current(path, analysis_path, generation):
             return
         prepared = self._with_live_grid(_apply_loaded_grid_contract(data, self._analysis_path))
+        if prepared.get('_detected_bpm'):
+            self._bpm = float(prepared['_detected_bpm'])
         if self._live_cues is not None:
             prepared = {**prepared, "cues": list(self._live_cues)}
         self._analysis_parts = dict(prepared)

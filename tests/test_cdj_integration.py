@@ -56,6 +56,56 @@ class CdjIntegrationTests(unittest.TestCase):
         self.plans.append(plan)
         return plan
 
+    def standalone(self):
+        with mock.patch('soundbox.cdj_source.capture_metadata', side_effect=lambda *_a,**_k:deepcopy(self.request)):
+            plan = cdj_export.plan_export(self.lib, [], self.target, token=self.token,
+                volume_uuid=self.volume, recovery_root=self.recovery, additive=True,
+                standalone=(self.lib.tracks_by_id['17'],))
+        self.plans.append(plan)
+        return plan
+
+    def test_standalone_initial_export_has_no_synthetic_playlist_and_is_a_true_noop(self):
+        unsafe = Track('outside-library','Unsafe','Fixture',(self.target/'source.wav').as_uri(),source_uuid='fixture')
+        with self.assertRaisesRegex(RuntimeError,'source'), mock.patch('soundbox.cdj_source.capture_metadata') as capture:
+            cdj_export.plan_export(self.lib,[],self.target,token=self.token,volume_uuid=self.volume,
+                                  recovery_root=self.recovery,standalone=(unsafe,))
+        capture.assert_not_called()
+        first = self.standalone(); cdj_transaction.commit(first)
+        view = read_library(self.target,self.token)
+        self.assertEqual(len(view.songs),1)
+        self.assertEqual(view.playlists,())
+        original = Path.open
+        def no_device_media(path,*args,**kwargs):
+            if path.is_relative_to(self.target/'Contents') or path.is_relative_to(self.target/'PIONEER/USBANLZ'):
+                raise AssertionError('Retained media was read')
+            return original(path,*args,**kwargs)
+        with mock.patch.object(Path,'open',no_device_media), mock.patch('soundbox.cdj_incremental.acquire_source',side_effect=AssertionError('Source acquired again')):
+            again = self.standalone()
+        self.assertFalse(again.requires_commit)
+        self.assertEqual(again.changes,())
+
+    def test_interrupted_standalone_intent_resumes_from_local_receipt_without_a_playlist(self):
+        first = self.standalone()
+        class Crash(BaseException): pass
+        with self.assertRaises(Crash):
+            cdj_transaction.commit(first,on_progress=lambda *_:(_ for _ in ()).throw(Crash()))
+        with mock.patch('soundbox.cdj_source.capture_metadata',side_effect=lambda *_a,**_k:deepcopy(self.request)):
+            retry = cdj_export.plan_export(self.lib,[],self.target,token=self.token,
+                volume_uuid=self.volume,recovery_root=self.recovery)
+        self.plans.append(retry);cdj_transaction.commit(retry)
+        view = read_library(self.target,self.token)
+        self.assertEqual((len(view.songs),len(view.playlists)),(1,0))
+        self.assertEqual(retry.manifest['standalone'][0]['track_id'],'17')
+
+    def test_standalone_incremental_preserves_native_and_managed_playlists(self):
+        first = self.plan(); cdj_transaction.commit(first)
+        before = read_library(self.target,self.token)
+        again = self.standalone(); cdj_transaction.commit(again)
+        after = read_library(self.target,self.token)
+        self.assertEqual(after.playlists,before.playlists)
+        self.assertEqual(after.songs,before.songs)
+        self.assertFalse(again.requires_commit)
+
     def test_read_only_native_snapshot_uses_captured_settings_and_playlist_order(self):
         snapshot = read_library(self.fixture/'native',(self.fixture/'native').stat().st_dev)
         self.assertEqual(len(snapshot.playlists),1)

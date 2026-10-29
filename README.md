@@ -188,7 +188,15 @@ playlist membership remain attached to that ID. SoundBox does not watch the
 rekordbox database continuously. Smart playlists follow active rekordbox My Tags; removed-tag
 history is ignored. Select browser rows and open **My Tags** below the waveform
 to assign existing tags in one flat checklist. My Tags sits left of Settings and
-Search in the prep strip; Search aligns beneath the Hot Cue / Mem Cue tabs. Five grid buttons occupy the left, enabled for a ready accepted
+Search in the prep strip; Search aligns beneath the Hot Cue / Mem Cue tabs.
+The October29 source candidate (not installed yet; required Cocoa gate pending)
+adds a three-line menu immediately right of Q that controls waveform color and beat-count
+display, exports the loaded native song to a USB collection without a playlist,
+and opens Analyze Track. Settings → Analysis controls opt-in BPM/Grid and Key
+detection; automatic analysis is off. Detected results are saved in SoundBox and
+can follow the same audio into a later native track ID. Existing saved grids/cues
+are preserved. Reverse analysis publication into rekordbox is still pending native
+acceptance; see [the exact stage](docs/analysis-playlists-next.md). Five grid buttons occupy the left, enabled for a ready accepted
 track with Analysis Lock off; the BPM field after the first-beat button shows
 `000.00` while empty. On an accepted constant grid, type a BPM and press Enter:
 the loaded grid changes immediately, saves in the background, and the browser BPM

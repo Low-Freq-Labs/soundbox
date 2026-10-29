@@ -35,7 +35,7 @@ def renderer_path():
     return Path(__file__).resolve().parents[1] / 'build/cdj/release/soundbox-cdj'
 
 
-def run_renderer(command, workspace, *args, should_cancel=None):
+def run_renderer(command, workspace, *args, should_cancel=None, process_nice=None):
     workspace = Path(workspace).resolve(strict=True)
     args = tuple(Path(arg).resolve(strict=False) for arg in args)
     binary = renderer_path()
@@ -45,6 +45,12 @@ def run_renderer(command, workspace, *args, should_cancel=None):
         process = subprocess.Popen([str(binary), command, str(workspace), *map(str, args)],
                                    stdout=output, stderr=errors)
         try:
+            if process_nice is not None:
+                try:
+                    inherited = os.getpriority(os.PRIO_PROCESS, process.pid)
+                    os.setpriority(os.PRIO_PROCESS, process.pid, max(inherited, int(process_nice)))
+                except ProcessLookupError:
+                    pass  # A short-lived helper may already have exited.
             while True:
                 try:
                     status = process.wait(timeout=.1)
