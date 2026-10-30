@@ -821,7 +821,10 @@ refresh, preserving compressed waveform payloads.
   explicit empty folders and expanded IDs survive save/restore. UI mutations save
   before rebuilding and restore prior RAM state on refusal. Cycles, duplicate
   folder identities/sibling folder names and repeated playlist references fail.
-  Folder selection is a read-only deduplicated descendant view; imports still
+  Folder clicks only navigate; they do not select another playlist or replace
+  the active browser view. `PlaylistFolderTree` retains the pressed folder's
+  persistent model index for dragging, independently of the active playlist.
+  Reload/drop/removal context stays bound to the active view; imports still
   target an individual playlist or Collection. Folder drags expand to ordinary
   playlist intents. Export `folder_path` follows the hierarchy while existing
   `cust:<name>` identities and per-playlist song order survive folder moves.

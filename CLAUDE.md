@@ -376,7 +376,7 @@ Rockbox 4.0 does not support `sort playlists`; never add or require that key.
 Its absence after firmware saves preferences is not Sync drift. Preserve existing
 unknown config lines; retain the established numbered playlist filenames.
 
-October29 installed detection stage (personal build141; see HANDOFF): the track-menu
+October29 installed detection stage (personal build142; see HANDOFF): the track-menu
 button is immediately right of Q, with the
 existing equal flexible toolbar gaps. It offers waveform color, three resident
 beat-count modes, standalone collection-song CDJ export and Analyze Track.
@@ -397,6 +397,8 @@ intents. Collection/Artists stay pinned; folder deletion reviews its contained
 playlists and preserves Collection/source audio. The context menu is New Playlist,
 New Folder, Rename, Delete. Composite Rockbox catalogue files remain numbered and
 top-level. None of this enables source rekordbox playlist or registration writes.
+Folder clicks only expand/collapse; only selecting a playlist activates its view.
+Navigation focus must not retarget browser refreshes, track drops or removal actions.
 
 ## Documentation map
 

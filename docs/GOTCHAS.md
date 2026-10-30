@@ -47,6 +47,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Export the actual folder_path while retaining `cust:<name>` identity; do not
   encode the folder path into a new playlist name/key. Folder deletion needs its
   own explicit descendant-playlist review and never deletes Collection/source audio.
+- **Folder navigation is not playlist activation.** Check PATH_ROLE before
+  clearing the other sidebar's selection. Local folder rows likewise leave the
+  active view alone. A folder can hold navigation focus while refresh/drop/track
+  actions still address the last chosen playlist. Retain a persistent pressed
+  index for folder drags; selectedItems alone can describe the active leaf instead.
 - **Native checkbox layout margins can overlap custom menu rows.** My Tags
   gives its checkbox cells explicit rectangles inside the QWidgetAction, instead
   of allowing macOS layout-item margins to compress the grid. Its two-column

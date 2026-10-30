@@ -6,7 +6,7 @@ gaps. Analysis must ultimately work in either direction: importing/analyzing in
 SoundBox first or rekordbox first must preserve the same musical data, independent
 of author. The reverse source-publication acceptance below remains unfinished;
 the current detection stage must not be described as the completed round trip.
-The menu and local detection stage are installed in personal build141 after the
+The menu and local detection stage are installed in personal build142 after the
 complete offscreen/Cocoa gate. Shared source publication remains unfinished.
 Actual installed provenance and validation are in [HANDOFF](HANDOFF.md).
 
@@ -33,7 +33,8 @@ The 44×28 hamburger button uses the existing toolbar layout. Menu order:
 
 ## Implemented detection stage
 
-Analysis is immediately right of General in Settings. BPM/Grid and Key run the
+Analysis is immediately right of General in Settings. Its controls span the
+page in three aligned groups; Memory Cue and automatic imports sit below. BPM/Grid and Key run the
 pinned rbxport constant-tempo/key engine in the optimized local helper. Phrase
 is a disabled placeholder; no Normal/Dynamic mode or cloud controls. Automatic
 analysis of newly imported SoundBox files is opt-in and initially off. The

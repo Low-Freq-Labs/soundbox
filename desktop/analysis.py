@@ -4,7 +4,7 @@ import threading
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QGridLayout, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QVBoxLayout, QWidget)
+    QGridLayout, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from soundbox import analysis
 from .task_owner import TaskOwner
@@ -19,32 +19,42 @@ class AnalysisControls(QWidget):
         layout.setContentsMargins(30 if automatic else 0, 16, 30 if automatic else 0, 16)
         layout.setSpacing(14)
         title = QLabel('TRACK ANALYSIS'); title.setObjectName('SettingsSection'); layout.addWidget(title)
-        form = QWidget(); form.setMaximumWidth(700)
+        form = QWidget()
         grid = QGridLayout(form); grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(24); grid.setVerticalSpacing(12)
-        grid.setColumnMinimumWidth(0, 132); grid.setColumnStretch(1, 1)
+        grid.setHorizontalSpacing(28); grid.setVerticalSpacing(20)
+        for column in range(3):grid.setColumnStretch(column, 1)
+        def field(label, control, row, column, span=1):
+            group = QWidget(); box = QVBoxLayout(group)
+            box.setContentsMargins(0, 0, 0, 0); box.setSpacing(8)
+            box.addWidget(QLabel(label))
+            if isinstance(control, QHBoxLayout):box.addLayout(control)
+            else:box.addWidget(control)
+            grid.addWidget(group, row, column, 1, span, Qt.AlignTop)
         self.bpm = QCheckBox('BPM / Grid')
         self.key = QCheckBox('Key')
         self.phrase = QCheckBox('Phrase'); self.phrase.setEnabled(False)
         self.phrase.setToolTip('Phrase analysis is not available yet')
         choices = QHBoxLayout(); choices.setContentsMargins(0, 0, 0, 0); choices.setSpacing(20)
         for control in (self.bpm, self.key, self.phrase):
+            control.setMinimumHeight(28)
             choices.addWidget(control)
             control.toggled.connect(self.changed)
         choices.addStretch()
-        grid.addWidget(QLabel('Analyze'), 0, 0); grid.addLayout(choices, 0, 1)
+        field('Analyze', choices, 0, 0)
         self.bpm_range = QComboBox()
         for low, high in analysis.BPM_RANGES:
             self.bpm_range.addItem(f'{low}–{high}')
-        grid.addWidget(QLabel('BPM range'), 1, 0); grid.addWidget(self.bpm_range, 1, 1, Qt.AlignLeft)
+        field('BPM range', self.bpm_range, 0, 1)
         self.bpm_range.currentIndexChanged.connect(self.changed)
         self.first_cue = QCheckBox('Set at the first analyzed beat')
-        grid.addWidget(QLabel('Memory Cue'), 2, 0); grid.addWidget(self.first_cue, 2, 1)
+        self.first_cue.setMinimumHeight(28)
+        field('Memory Cue', self.first_cue, 1, 0, 2)
         self.first_cue.toggled.connect(self.changed)
         self.auto = QCheckBox('Analyze automatically')
+        self.auto.setMinimumHeight(28)
         self.auto.setVisible(automatic)
         if automatic:
-            grid.addWidget(QLabel('New imports'), 3, 0); grid.addWidget(self.auto, 3, 1)
+            field('New imports', self.auto, 1, 2)
         self.auto.toggled.connect(self.changed)
         self.process = QComboBox(); self.process.addItems(['Performance','Normal','Power saving'])
         # Cocoa's popup also needs its native checked-item gutter. A size based
@@ -52,8 +62,8 @@ class AnalysisControls(QWidget):
         for combo, length in ((self.bpm_range, 12), (self.process, 18)):
             combo.setMinimumContentsLength(length)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        grid.addWidget(QLabel('Analysis process'), 4 if automatic else 3, 0)
-        grid.addWidget(self.process, 4 if automatic else 3, 1, Qt.AlignLeft)
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        field('Analysis process', self.process, 0, 2)
         self.process.currentIndexChanged.connect(self.changed)
         layout.addWidget(form)
         note = QLabel('Existing saved grids and cues are preserved.')
@@ -111,7 +121,7 @@ class AnalysisDialog(QDialog):
     def __init__(self, library, tracks, preferences, previous, save, *, autostart=False, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Analyze Track' if len(tracks) == 1 else f'Analyze {len(tracks)} Tracks')
-        self.resize(520, 410)
+        self.resize(780, 360)
         self.setWindowModality(Qt.WindowModal)
         self.owner = TaskOwner(self)
         self.worker = None

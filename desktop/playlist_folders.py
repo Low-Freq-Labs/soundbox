@@ -54,6 +54,7 @@ class PlaylistFoldersMixin:
                 if 'folder' in node:
                     item = QTreeWidgetItem([node['name']])
                     item.setData(0, CUSTOM_FOLDER_ROLE, node['folder'])
+                    item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
                     item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
                 else:
                     key = node['playlist']
@@ -163,11 +164,3 @@ class PlaylistFoldersMixin:
         rename = menu.addAction('Rename', lambda:self._rename_local_node(kind, key)); rename.setEnabled(bool(key))
         delete = menu.addAction('Delete', lambda:self._delete_local_node(kind, key)); delete.setEnabled(bool(key))
         return menu
-
-    def _show_custom_folder(self, key):
-        node = folders.locate(self._local_playlist_tree(), 'folder', key)[2]
-        ids = dict.fromkeys(tid for n, _ in folders.walk([node]) if 'playlist' in n
-                            for tid in self.custom[n['playlist']])
-        tracks = [self.lib.tracks_by_id[tid] for tid in ids if tid not in self.hidden and tid in self.lib.tracks_by_id]
-        self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
-        self.stack.setCurrentIndex(0)

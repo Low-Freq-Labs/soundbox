@@ -108,18 +108,69 @@ class LocalPlaylistFolders(unittest.TestCase):
         _win.custom=self.old_custom;_win.settings=self.old_settings
         _win._refresh_custom();_win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
 
-    def test_folder_selection_is_read_only_and_drag_exports_children_in_order(self):
+    def test_folder_navigation_keeps_active_playlist_and_drag_exports_children_in_order(self):
         folder=_win.sb_tree.topLevelItem(2)
         self.assertEqual(folder.childCount(),2)
+        _win.sb_tree.setCurrentItem(folder.child(0))
+        before=[r['id'] for r in _win.model._rows]
         _win.sb_tree.setCurrentItem(folder)
-        self.assertEqual([r['id'] for r in _win.model._rows],['1','2','3'])
-        self.assertIsNone(_win._resolve_table_drop())
+        self.assertEqual([r['id'] for r in _win.model._rows],before)
+        _win._reload_current_view()
+        self.assertEqual([r['id'] for r in _win.model._rows],before)
+        self.assertEqual(_win._resolve_table_drop(),('playlist','A'))
         lines=_win.sb_tree.mimeData([folder]).text().splitlines()
         self.assertEqual([s for s in lines if s.startswith('cust\t')],['cust\tA','cust\tB'])
         jobs=_win._resolve_jobs([('cust','A'),('cust','B')])
         self.assertEqual([p.folder_path for p in jobs],[['Sets'],['Sets']])
         self.assertEqual([device_manifest.playlist_key(p) for p in jobs],['cust:A','cust:B'])
         self.assertEqual(jobs[0].keys,['1','2'])
+
+    def test_mouse_folder_navigation_keeps_collection_until_a_leaf_is_clicked(self):
+        from PySide6.QtTest import QTest
+        collection=_win.sb_tree.topLevelItem(0)
+        _win.sb_tree.setCurrentItem(collection)
+        before=[r['id'] for r in _win.model._rows]
+        folder=_win.sb_tree.topLevelItem(2);folder.setExpanded(False)
+        _app.processEvents()
+        QTest.mouseClick(_win.sb_tree.viewport(),Qt.LeftButton,pos=_win.sb_tree.visualItemRect(folder).center())
+        self.assertTrue(folder.isExpanded())
+        self.assertEqual(_win._view_key,'sb:Collection')
+        self.assertEqual([r['id'] for r in _win.model._rows],before)
+        _win.sb_tree.setCurrentItem(folder.child(0))
+        self.assertEqual(_win._view_key,'sb:A')
+        self.assertEqual([r['id'] for r in _win.model._rows],['1','2'])
+
+    def test_rekordbox_folder_keeps_active_view_and_track_action_scope(self):
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtTest import QTest
+        collection=_win.sb_tree.topLevelItem(0);_win.sb_tree.setCurrentItem(collection)
+        before=[r['id'] for r in _win.model._rows]
+        folder=_win.tree.topLevelItem(0);folder.setExpanded(False);_app.processEvents()
+        QTest.mouseClick(_win.tree.viewport(),Qt.LeftButton,pos=_win.tree.visualItemRect(folder).center())
+        self.assertTrue(folder.isExpanded())
+        self.assertEqual(_win._view_key,'sb:Collection')
+        self.assertEqual([r['id'] for r in _win.model._rows],before)
+        _win.tree.setCurrentItem(folder.child(0))
+        self.assertEqual(_win._view_key,'rb:CRATES / SET ONE')
+        ids=[r['id'] for r in _win.model._rows]
+        _win.tree.setCurrentItem(folder);_win._reload_current_view()
+        self.assertEqual([r['id'] for r in _win.model._rows],ids)
+        menu=QMenu();_win._add_track_removal_actions(menu,['1'])
+        self.assertEqual(menu.actions()[0].text(),'Remove from Playlist');menu.deleteLater()
+
+    def test_pressed_folder_drag_uses_that_folder_instead_of_active_playlist(self):
+        from PySide6.QtTest import QTest
+        folder=_win.sb_tree.topLevelItem(2)
+        _win.sb_tree.setCurrentItem(folder.child(0));_app.processEvents()
+        position=_win.sb_tree.visualItemRect(folder).center()
+        QTest.mousePress(_win.sb_tree.viewport(),Qt.LeftButton,pos=position)
+        with mock.patch('desktop.trees._start_chip_drag') as drag:
+            _win.sb_tree.startDrag(Qt.CopyAction)
+        lines=drag.call_args.args[1].text().splitlines()
+        self.assertIn('sbfolder\t'+self.key,lines)
+        self.assertIn('cust\tB',lines)
+        self.assertEqual(_win._view_key,'sb:A')
+        QTest.mouseRelease(_win.sb_tree.viewport(),Qt.LeftButton,pos=position)
 
     def test_failed_save_does_not_move_a_playlist_or_change_memberships(self):
         from copy import deepcopy

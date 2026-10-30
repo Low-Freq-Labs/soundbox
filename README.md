@@ -244,6 +244,8 @@ hydrated by startup checks.
   Duplicate adds prompt
   Add Anyway/Skip (Skip default). Names `Collection`/`Artists` are reserved.
   Playlist names remain unique across the SoundBox folders.
+  Clicking a folder only expands/collapses it; the browser keeps its current
+  Collection/playlist until you choose a playlist inside, in either tree.
 - **⛃ Devices** — external drives only, auto-detected; drag any playlist
   (rekordbox, SoundBox, or a pinned view) onto one to start its guarded export flow.
 
@@ -265,7 +267,8 @@ USB audio/cues. Device views remember your tab, hierarchy, selection and scroll.
 The information button opens Summary and Info, with editable artwork inside Info
 and optional metadata columns, hidden until selected. The dialog opens before
 artwork resolution; Info uses a compact three-column form that fits at its default
-size, with smaller centered artwork and a full-width Comments row. The edit note sits bottom
+size, with larger centered artwork and a full-width Comments row. Summary uses
+a larger cover alongside the track text. The edit note sits bottom
 left. USB Category/Sort panels have visible borders, Color uses dots beside
 inputs, and Global My Settings/Keyboard scroll at the right window edge.
 Older saved layouts keep

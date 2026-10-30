@@ -838,14 +838,20 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         if cur is not None and cur.data(0, ARTISTS_ROLE):
             self._show_artists()
             return
-        if cur is not None and cur.data(0, CUSTOM_FOLDER_ROLE):
-            self._show_custom_folder(cur.data(0, CUSTOM_FOLDER_ROLE))
-            return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
             tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
                       if i not in self.hidden
                       and (t := self.lib.tracks_by_id.get(i))]
             self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
+            return
+        # A folder may own keyboard/mouse navigation while the browser keeps
+        # showing its previous playlist. Refresh that actual active view.
+        key = getattr(self, '_view_key', '') or ''
+        if key.startswith('rb:'):
+            self.model.set_rows(self._annotate_art(self._playlist_rows(key[3:])))
+        elif key == 'sb:Collection':self._show_collection()
+        elif key == 'sb:Artists':self._show_artists()
+        elif key.startswith('sb:') and key[3:] in self.custom:self._show_custom(key[3:])
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2428,6 +2434,9 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         cur = self.tree.currentItem()
         if cur is not None:
             prev = cur.data(0, PATH_ROLE)
+        active = getattr(self, '_view_key', '') or ''
+        if cur is not None and not prev and active.startswith('rb:'):
+            prev = active[3:]
         self.tree.blockSignals(True)
         try:
             self.tree.clear()
@@ -2457,6 +2466,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
             it.setData(0, PATH_ROLE, node["path"])
         else:
             it.setText(0, node["name"])
+            it.setFlags(it.flags() & ~Qt.ItemIsSelectable)
             for c in node.get("children", []):
                 it.addChild(self._make_item(c))
         return it
@@ -2772,11 +2782,11 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
     def _on_rb_select(self, cur, _prev):
         if cur is None:
             return
-        self._select_only(self.tree)
-        if self.lib is None:
-            return
         path = cur.data(0, PATH_ROLE)
         if not path:
+            return  # Folder navigation does not change the active playlist/view.
+        self._select_only(self.tree)
+        if self.lib is None:
             return
         self._stash_view()
         self.model.set_rows(self._annotate_art(self._playlist_rows(path)))
@@ -2906,8 +2916,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
             bag.append(i)
         self._refresh_custom()
         self._save_state()
-        cur = self.sb_tree.currentItem()
-        if cur and cur.data(0, CUSTOM_ROLE) == name:
+        if getattr(self, '_view_key', None) == f'sb:{name}':
             self._show_custom(name)
 
     def _track_label(self, tid: str) -> str:
@@ -3170,6 +3179,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
     def _on_custom_select(self, cur, _prev):
         if cur is None:
             return
+        if cur.data(0, CUSTOM_FOLDER_ROLE):
+            return
         self._select_only(self.sb_tree)
         self._stash_view()
         if cur.data(0, COLLECTION_ROLE):
@@ -3181,11 +3192,6 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
             # Table untouched behind the Artists page; park the key so later
             # stashes can't clobber the view we just left.
             self._view_key = "sb:Artists"
-            return
-        if cur.data(0, CUSTOM_FOLDER_ROLE):
-            key = cur.data(0, CUSTOM_FOLDER_ROLE)
-            self._show_custom_folder(key)
-            self._restore_view(f'sbfolder:{key}')
             return
         name = cur.data(0, CUSTOM_ROLE)
         if name:
@@ -6074,10 +6080,9 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         SoundBox view/export but never writes rekordbox or touches source audio.
         """
         n = len(ids)
-        rb_cur = self.tree.currentItem()
-        rb_path = rb_cur.data(0, PATH_ROLE) if rb_cur is not None else None
-        sb_cur = self.sb_tree.currentItem()
-        cust_name = sb_cur.data(0, CUSTOM_ROLE) if sb_cur is not None else None
+        key = getattr(self, '_view_key', '') or ''
+        rb_path = key[3:] if key.startswith('rb:') else None
+        cust_name = key[3:] if key.startswith('sb:') and key[3:] in self.custom else None
         if rb_path:
             menu.addAction("Remove from Playlist" if n == 1
                            else f"Remove {n} tracks from Playlist",

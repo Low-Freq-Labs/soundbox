@@ -1,64 +1,76 @@
 # SoundBox current handoff
 
-October29, 2026. Branch main; this document's commit contains the local folder
-and layout follow-up to bf6f412. The menu/local detection stage is installed and
-validated. **Two-way source analysis publication and ordinary native playlist
-CRUD remain unfinished.** This release does not complete that round trip.
+October29, 2026. Branch main; this document's commit contains the full-width
+Analysis/artwork/navigation follow-up to51ab8b9. Personal build142 is installed.
+**Two-way source analysis publication and ordinary native playlist CRUD remain
+unfinished.** This release does not complete that round trip.
 
 ## Installed app and validation
 
-Personal1.0.0 **build141** is running from `/Applications/Soundbox.app`.
-Actual build basebf6f4123a750b526e33f2f910e24cb395c51ed3b, dirty=true;
+Personal1.0.0 **build142** is installed at `/Applications/Soundbox.app`.
+Actual build base51ab8b96f31b0b68b885ed38c73c0c011995ecca, dirty=true;
 source fingerprint
-`d460893babc7fd14cdf9040d61c11a0d14cf00f99133b14c50365ded3b1eabc4`.
+`b84f2b9b4b07e7f7264affc3c25da77ca2606d133c99559e032a49d300773303`.
 Documentation changes after packaging do not change that binary provenance.
 
 Full bare `./check.sh --render` passed: native/Rust builds,243 pinned vendor
-files, Rust3, pyflakes, mypy71 files and **1614 tests** (1555 offscreen plus59
-Cocoa), zero skips/xfails; both inventories reconciled. Offscreen ran485.195s,
-Cocoa62.235s. The earlier locked-session failure is historical.
+files, Rust3, pyflakes, mypy71 files and **1617 tests** (1558 offscreen plus59
+Cocoa), zero skips/xfails; both inventories reconciled. Offscreen ran495.388s,
+Cocoa62.660s. After that gate, the sole extra EOF blank line in playlist_folders.py
+was removed: compiled Python bytecode is identical; pyflakes and focused36 checks
+passed again before the final package. Exact source fingerprints are recorded.
 
 Signature/personal composition and fresh packaged isolated launch passed:
-native=true,0 devices/no library/no art worker. Settings/menu/dialog renders were
-inspected on offscreen and Cocoa, including both open Analysis popups and the
-folder context menu. Info's default-size render asserts no vertical scrolling.
-A real installed-window capture verifies the curated library and sidebar.
-Native ABI6, complete embedded Metal and renderer
-schema match source; both Mach-O text hashes match the checked local build.
-Both the prior app and build141 quit normally;141 was relaunched and reverified.
-Final startup:3740 tracks/76 playlists, Collection3228;3237 analysis reused,
+native=true,0 devices/no library/no art worker. Full-width Analysis/settings,
+modal/popups, Summary and Info Cocoa renders were inspected. Info at default
+800×760 asserts no vertical scrolling. Native ABI6, complete embedded Metal and
+renderer schema match source; both Mach-O text hashes match the checked local
+build. Real installed screenshot verifies Collection3228 and Sonny's existing
+Genres folder. Native load:3740 tracks/75 playlists;3237 analysis reused,
 0 preparation tasks;3106 stock art reused/0 prepared,0 new art-fill tracks.
-Native test playlist deletion explains the playlist-count change. New reference
-tracks have no source playlist membership and do not enter this playlist-reached
-library view. No source/USB write was made by the agent.
+Source playlist count reflects the current native snapshot, not lost SoundBox
+curation. No source/USB write was made by the agent.
+
+Restart verification: build141 quit normally and142 launched successfully.
+A second normal quit of142 is currently waiting in a SoundCloud connection
+worker's SecKeychainFindGenericPassword call. Read-only process sampling confirms
+this; never kill the worker/app or weaken TaskOwner shutdown. Sonny has been asked
+to dismiss the macOS Keychain prompt (Allow or Deny). Finish its normal quit,
+relaunch and post-quit state capture before claiming wrap-up complete.
 
 Evidence:
-`~/Library/Logs/Soundbox/layout-folders-2026-10-29/`.
-Gate log: check.log. Release records include
-build/install/smoke logs, test reports, actual provenance, screenshots, library
-backups and exact state comparisons. Harnesses use frozen offline fixtures;
-render and isolated launch suppress real source/device discovery.
+`~/Library/Logs/Soundbox/wide-art-navigation-2026-10-29/`.
+Gate log: check.log. Release records include build/install/smoke logs, full test
+reports, actual provenance, native screenshots, curated library backups and exact
+state comparisons. Harnesses use frozen offline fixtures; render and isolated
+launch suppress real source/device discovery.
 
-## Final curated-state baseline
+## Curated-state baseline — final restart pending
 
-At `2026-10-29T18:46:06.260848-05:00`, after141's normal quit/relaunch:
-library SHA `cb99ec178b8fa36acf183ed805e3a9b46e93decceab29b1644c34a38d9aa6152`;
+Verified postlaunch at `2026-10-29T19:41:57.599872-05:00`:
+library SHA `fa0dcd9f7e95c5366e8a6453116c19fced6fe83e8e3828fd9678ca71120b6a58`;
 curation SHA `de29a5330cb48ecfeed5e8e3aefd4b7fbd68509966d7e8faf1c60dab525d4d68`.
 All4041 art/review files,3 authorities and3280 analysis records are preserved.
 Counts: custom10/import84/artists489/titles1103/hidden517/removal groups1/
-additions0/aliases24/settings26. Title117829415 remains
+additions0/aliases24/settings28. Title117829415 remains
 `Zeds Dead - Rudeboy (Ruudy Flip)`; never restore the older1102-title dictionary.
-Old app quit serialized columns_state; first141 launch changed no saved bytes;
-141 quit serialized columns_state; final relaunch
-changed no saved bytes. Curation is identical throughout. Exact stages are in
-state-timeline.json and state-verification-postvisual.json.
+Before this install, Sonny's saved state already had Genres with Rap/Pop/Classics/
+Indie/R&B/Reggae/Rock, custom expansion state, revised cue-page keybindings and
+waveform zoom. These explain the difference from141's earlier26-setting baseline;
+curation was unchanged. Preserve all of them. Build141 quit serialized only
+columns_state/sidebar_split;142's first launch changed no saved bytes.
+The pending142 quit serialized columns_state only. At19:45:15.999810-05:00,
+its saved library SHA is
+`01b26c1b21b34f9311d0a237036dec744e5b6e6e256a6a0865852b5c33b920df`;
+all curation/art/authorities/analysis remain exact. This is a pending-shutdown
+capture, not a completed final restart. See state-timeline.json.
 
 Retain current rollback pending Sonny's acceptance:
-`/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-analysis-rollback-flpz99ko/Soundbox-build140.app`.
-Build138 remains beside it in that same rollback directory. The preexisting
+`/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-analysis-rollback-flpz99ko/Soundbox-build141.app`.
+Build138 and140 remain beside it in that same rollback directory. The preexisting
 retained rollback also remains:
 `/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-info-layout-rollback-f6ow8jiw/pre-info-layout-Soundbox.app`.
-These are not source recovery backups; retain pending Sonny's acceptance of141.
+These are not source recovery backups; retain pending Sonny's acceptance of142.
 
 ## Implemented stage and unfinished work
 
@@ -69,9 +81,12 @@ These are not source recovery backups; retain pending Sonny's acceptance of141.
   identity and exact song order; folder drags export descendants. Confirmed folder
   deletion removes its playlists while preserving Collection/audio. Legacy playlist
   names remain globally unique. No live user playlists were reorganized for testing.
-- Analysis controls now align in one compact form and Cocoa popups fit all labels.
-  Info uses smaller centered artwork, a three-column form and full-width Comments;
-  all fields fit without scrolling at the default800×760 size.
+- Analysis controls span the width in three aligned groups; Cocoa popups fit all
+  labels. Summary cover is320 logical pixels and Info208, rendered at display DPR.
+  Info retains its three-column form and full-width Comments; all fields fit
+  without scrolling at the default800×760 size. Folder clicks in either sidebar
+  only expand/collapse; the active view, refresh/drop/removal scope and folder
+  dragging stay intact until a playlist is chosen.
 - Menu right of Q: waveform color, three RAM-only beat-count modes, standalone
   loaded native song → USB collection without a synthetic playlist, Analyze Track.
   Mount/UUID binds deferred intent; compiled disposable-target tests cover
@@ -112,8 +127,9 @@ path. Combined session counter deltas are not isolated write formulas. Native
 Length31 for exact32-second PCM remains a proof item. Audio hashes are unchanged.
 SoundBox-first reference.wav remains unimported for reverse-import acceptance.
 Sonny operates all rekordbox UI; never drive it remotely or read global Quantize.
-Sonny is busy and will restore native Auto Analysis=Enable and BPM/Grid+Key later
-after the temporary reference settings. No further reference action is requested.
+Sonny is available again and was reminded to restore native Auto Analysis=Enable
+and BPM/Grid+Key after the temporary reference settings. Restoration is not yet
+confirmed. No further native reference action is needed for this UI follow-up.
 For new songs now, native import into ALL LOCAL then SoundBox refresh is supported;
 SoundBox import/playlist editing still does not register tracks in rekordbox.
 

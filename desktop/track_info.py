@@ -15,7 +15,7 @@ class ArtworkWorker(QThread):
         try:
             path=self.resolve()
             if path and not self.isInterruptionRequested():
-                self.image=QImage(str(path)).scaled(400,400,Qt.KeepAspectRatio,Qt.SmoothTransformation)
+                self.image=QImage(str(path)).scaled(640,640,Qt.KeepAspectRatio,Qt.SmoothTransformation)
         except (OSError,ValueError):
             pass
 
@@ -32,9 +32,9 @@ class TrackInfoDialog(QDialog):
         self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
         summary=QWidget();sv=QVBoxLayout(summary);sv.setSpacing(16)
         centered=QHBoxLayout();centered.addStretch()
-        group=QWidget();group.setFixedWidth(640)
+        group=QWidget();group.setFixedWidth(700)
         top=QHBoxLayout(group);top.setContentsMargins(0,0,0,0);top.setSpacing(20)
-        cover=self._cover(190);top.addWidget(cover);top.addSpacing(20)
+        cover=self._cover(320);top.addWidget(cover);top.addSpacing(20)
         titles=QVBoxLayout();titles.setSpacing(6)
         for key,label in (('title','Track title'),('artist','Artist'),('album','Album')):
             caption=QLabel(label);caption.setObjectName('SettingsSub');titles.addWidget(caption)
@@ -76,7 +76,10 @@ class TrackInfoDialog(QDialog):
     def _paint_artwork(self):
         for cover in self._covers:
             if self._image.isNull():cover.setText('No artwork')
-            else:cover.setPixmap(QPixmap.fromImage(self._image).scaled(cover.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+            else:
+                ratio=cover.devicePixelRatioF()
+                image=QPixmap.fromImage(self._image).scaled(round(cover.width()*ratio),round(cover.height()*ratio),Qt.KeepAspectRatio,Qt.SmoothTransformation)
+                image.setDevicePixelRatio(ratio);cover.setPixmap(image)
 
     def _load_artwork(self):
         if self._owner.stopping or self._art_worker is not None or self._artwork is None:return
@@ -91,7 +94,7 @@ class TrackInfoDialog(QDialog):
         self._info_built=True
         info=self.tabs.widget(1);iv=QVBoxLayout(info)
         iv.setSpacing(10)
-        art=QHBoxLayout();art.addStretch();art.addWidget(self._cover(104));art.addSpacing(16)
+        art=QHBoxLayout();art.addStretch();art.addWidget(self._cover(208));art.addSpacing(16)
         choose=QPushButton('Change artwork…');choose.setEnabled(self._pick_art is not None)
         def pick():
             if self._pick_art:self._pick_art();self._load_artwork()

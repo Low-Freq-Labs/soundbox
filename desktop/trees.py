@@ -6,7 +6,7 @@ display_path), cust (custom playlist name), trk (comma-joined track ids).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QTableView,
@@ -187,7 +187,48 @@ class ArtistsTree(NoTypeAhead, QTreeWidget):
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
 
-class PlaylistTree(NoTypeAhead, QTreeWidget):
+class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
+    """Folders navigate without selecting a playlist; pressed folders still drag."""
+    def __init__(self):
+        super().__init__()
+        self.setExpandsOnDoubleClick(False)
+
+    @staticmethod
+    def is_folder(item):
+        return item is not None and not any(item.data(0, role) for role in
+            (PATH_ROLE, CUSTOM_ROLE, COLLECTION_ROLE, ARTISTS_ROLE))
+
+    def mousePressEvent(self, event):
+        item = self.itemAt(event.position().toPoint())
+        self._folder_press = (QPersistentModelIndex(self.indexFromItem(item))
+            if event.button() == Qt.LeftButton and self.is_folder(item) else None)
+        self._folder_position = event.position().toPoint()
+        self._folder_expanded = item.isExpanded() if self._folder_press else False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        press = getattr(self, '_folder_press', None)
+        if (press is not None and press.isValid() and event.buttons() & Qt.LeftButton
+                and (event.position().toPoint()-self._folder_position).manhattanLength() >= QApplication.startDragDistance()):
+            self.startDrag(Qt.CopyAction | Qt.MoveAction); return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        press = getattr(self, '_folder_press', None)
+        self._folder_press = None
+        super().mouseReleaseEvent(event)
+        if press is not None and press.isValid() and self.indexAt(event.position().toPoint()) == press:
+            item = self.itemFromIndex(QModelIndex(press))
+            if item.isExpanded() == self._folder_expanded:item.setExpanded(not self._folder_expanded)
+
+    def _playlist_drag_items(self):
+        press = getattr(self, '_folder_press', None)
+        self._folder_press = None
+        if press is not None and press.isValid():return [self.itemFromIndex(QModelIndex(press))]
+        return self.selectedItems()
+
+
+class PlaylistTree(PlaylistFolderTree):
     """Rekordbox playlist tree — drag source (rb)."""
     def mimeData(self, items):  # type: ignore[override]
         paths: list[str] = []
@@ -198,7 +239,7 @@ class PlaylistTree(NoTypeAhead, QTreeWidget):
         return md
 
     def startDrag(self, actions):  # type: ignore[override]
-        items = self.selectedItems()
+        items = self._playlist_drag_items()
         if not items:
             return
         label = items[0].text(0) + (f"   +{len(items) - 1}" if len(items) > 1 else "")
@@ -215,7 +256,7 @@ def _audio_paths(md) -> list[str]:
             if u.isLocalFile() and is_audio(Path(u.toLocalFile()))]
 
 
-class SoundBoxTree(NoTypeAhead, QTreeWidget):
+class SoundBoxTree(PlaylistFolderTree):
     """Custom playlists — drag source (cust), drop target for tracks (trk) and
     Finder audio files (import), and drag-to-reorder within itself (cust
     dropped back on the list)."""
@@ -264,7 +305,7 @@ class SoundBoxTree(NoTypeAhead, QTreeWidget):
         return md
 
     def startDrag(self, actions):  # type: ignore[override]
-        items = [it for it in self.selectedItems() if self._drag_line(it)]
+        items = [it for it in self._playlist_drag_items() if self._drag_line(it)]
         if not items:
             return
         label = items[0].text(0) + (f"   +{len(items) - 1}" if len(items) > 1 else "")
