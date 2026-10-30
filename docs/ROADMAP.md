@@ -4,7 +4,32 @@ Updated October 30, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
-Active October30: native ordinary playlist management passed11 exact native
+## Active priority: shared workflow and reported corrections
+
+Sonny's October30 follow-up requires SoundBox to use the native rekordbox DB
+as its shared primary library, with ordinary compatible saves and no separate
+Save to rekordbox workflow or routine app-branded footer. It also requires the
+reported latency/layout/RGB/manual-BPM corrections. The concrete sequence,
+current ABBA evidence and acceptance matrix are in the
+[implementation plan](shared-library-workflow-plan.md). This is planned work;
+build148 has not acquired these follow-up capabilities.
+
+Priorities: working local BPM/grid correction; a whole-BPM prior for steady
+near-integer detection; immediate durable playlist presentation; exact sidebar
+alignment; shared identities/component revisions and Collection-only discovery;
+accepted native registration/analysis publication; unified import/analysis/edit
+routing; then measured RGB temporal fixes and full round-trip/native acceptance.
+Automatic analysis remains a separate toggle, now enabled in Sonny's state.
+Reading existing native/manual data does not authorize rewriting it.
+
+The existing registered-track playlist writer and explicit adaptive detector are
+foundations. Passing their1700-test release does not certify direct SoundBox
+imports into native playlists, local manual BPM, reverse analysis or acceptable
+motion at the newly reported RGB stops. Preserve current85 imports/1104 titles.
+
+## Delivered October30 foundation
+
+Native ordinary playlist management passed11 exact native
 DB/XML/rollback references and12 actual-source CRUD operations, Sonny's native
 inspection and normal save. Its separate exact-library authority is provisioned;
 the durable FIFO, retry/discard, native folders and Collection retention are

@@ -1,10 +1,54 @@
 # SoundBox current handoff
 
-October30, 2026. Branch **main**, application release `5bf8141cfc0bd86bad8878dc41bf695cbf990ba5`;
-this documentation-only follow-up records its verified installation. Personal1.0.0
-**build148 is installed, restarted and running** with the native deck. No user
-step is pending for this release. No subagents are authorized. Sonny operates
+October30, 2026. Branch **main**; runtime release5bf8141 and provenance4eef8a9
+are published. **Build148 remains installed; this follow-up is a plan, not a
+runtime fix.** Sonny will restart context. Begin with the
+[shared-workflow implementation plan](shared-library-workflow-plan.md), then the
+code/evidence paths it lists. No subagents are authorized. Sonny operates
 rekordbox UI; never drive it remotely.
+
+## Next session: active scope and first actions
+
+Sonny reports slow visual playlist deletion, misaligned sidebar glyphs, RGB-only
+wiggle/pulse/glisten at five/six zoom-in steps, blocked direct imports into native
+playlists/Collection, and blocked manual BPM correction on SoundBox imports.
+The required outcome is **the same native rekordbox DB/sidecars as SoundBox's
+shared primary library**, independent of import/analysis author. Ordinary edits
+just save compatible native records; no separate Save to rekordbox step or
+routine app-branded save/footer messages. AppData holds UI/cache/identity/device
+state, pending drafts and recovery, not a competing musical-data authority. The plan covers per-component reconciliation, native
+registration/analysis publication, Collection-only discovery and real end-to-end
+acceptance; do not stop at UI polish or register-only imports.
+
+Sonny clarified the initial missing ABBA BPM/key was because automatic analysis
+was off. He has now enabled automatic BPM/Grid+Key. Keep that setting. The current
+ABBA result is119.85444071310947BPM /7A, full131.536-second analysis. Manual BPM is
+blocked because the existing controller accepts only analyzed native tracks.
+Sonny explicitly wants steady near-integer detections to prefer whole BPM
+(119.85->120,139.90/140.10->140), with the actual grid corrected, not display-only
+rounding. Implement local manual correction independently of registration, and
+validate a whole-tempo prior without overwriting deliberate fractional/variable
+or existing manual/native grids. RGB targets are128/184px/s if counting clicks;
+include92px/s to cover the alternate counting convention. BLUE is solid.
+
+First: read the plan/code map, preserve fresh current state, reproduce the local
+manual-edit and near-integer cases, design shared identity/component transitions,
+then implement/prove in the stated sequence. Profile deletion feedback and use a
+durable presentation overlay; it must not pretend an uncommitted source save.
+Reuse the captured native import/key/grid/cue examples before requesting any new
+Sonny UI steps. New registration/analysis/metadata authorities still need their
+own copy-only proof and native acceptance. Existing scopes are not broadened.
+
+Private current-case evidence/screenshots:
+~/Library/Logs/Soundbox/shared-workflow-plan-2026-10-30/.
+observed-case.json and library-at-plan.json at2026-10-30T16:52:41.455423-05:00 bind a newer state with
+**85 imports /1104 title overrides**, library SHA 44f1427958abe331358102916457a1b0769a0fc7d38ebf2cf0230c0ee55512bc.
+ABBA local ID sb-49963b9f4749; exact canonical-path query on a private source
+snapshot found no active native row. Fallback cache has260 zero-anchored rows at
+118.42; later RBXport result is separate. Do not mislabel the fallback as completed
+BPM/key analysis. Re-read current state at resume: Sonny is actively testing.
+**Never restore the older84/1103 release baseline below.** No app/source/audio
+mutations or analysis runs were performed by the agent in this planning pass.
 
 ## Installed provenance and validation
 
@@ -33,7 +77,7 @@ Key records: check-unlocked.log, passed-{offscreen,native}.json, installation.js
 state-verification-post-restart.json, final-state.json, final-analysis-verification.log,
 column-state-serialization-proof.json and final-environment.json.
 
-## Final saved state
+## Historical build148 verification state — not the current library
 
 Post-restart baseline at2026-10-30T14:32:01.087654-05:00:
 library SHA `88a9b5f349d0eff6cd6d2524279995c346ea9b8aa9cb56323a64529894428753`;
@@ -41,7 +85,7 @@ curation SHA `de29a5330cb48ecfeed5e8e3aefd4b7fbd68509966d7e8faf1c60dab525d4d68`.
 Custom10/import84/artists489/titles1103/hidden517/removal groups1/additions0/
 aliases24/settings29. All4041 artwork/review files,3282 waveform hashes and4 source
 authorities remain exact. Title117829415 is Zeds Dead - Rudeboy (Ruudy Flip).
-Normal quit changed only Qt columns_state serialization: independently restoring
+At that release checkpoint, normal quit changed only Qt columns_state serialization: independently restoring
 both headers proves identical order, widths, hidden sections and sort. Relaunch
 made no saved-state changes. Native playlist FIFO is empty; both reference UUID
 pins remain. Source DB/XML are unchanged by install/restart/cleanup; no journal.
@@ -56,8 +100,10 @@ apps must close for saves. Catalog/cache9 preserves empty folders and clocks;
 exact UUID pins retain affected Collection songs. CDJ capture waits for source
 intents and rebinds stable native IDs. Full scope: analysis-playlists-next.md.
 
-Bridge Pilot3604899226 now contains only102012532: the requested Key-only removal
-is native. Both reference tracks remain in Collection at120BPM/8B with cues intact.
+At release acceptance, Bridge Pilot3604899226 contained only102012532 after the
+requested native Key-only removal. Sonny has since deleted that playlist: a
+planning-time private snapshot found no row. Do not recreate it. Both reference
+tracks were retained in Collection at release; re-read current source at resume.
 Own acceptance folder2463365283/child2933229850 and synthetic NEW-row tests are
 gone; never recreate them or reuse their approvals. Only the corresponding
 October30 local veto was migrated; unrelated July vetoes remain.

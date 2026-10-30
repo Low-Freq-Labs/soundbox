@@ -14,6 +14,19 @@ and waveforms working; wider hardware acceptance and distribution review remain 
 `docs/cdj-usb-export.md`. Ordinary stock, dual and Rockbox/filesystem exporters
 retain their `/PIONEER` exclusion.
 
+October30 follow-up priority: Sonny requested a concrete plan before resetting
+context. Read docs/shared-library-workflow-plan.md and the current HANDOFF first.
+The target is the native rekordbox DB/sidecars as the shared primary library:
+ordinary compatible saves, no separate Save to rekordbox flow or app-branded
+footer, and no competing musical-data authority in AppData. It includes local manual BPM
+editing, whole-BPM preference for steady near-integer detection, immediate durable
+playlist feedback, exact sidebar alignment and the reported RGB92/128/184 motion.
+Automatic analysis is separate from engine choice; Sonny has now enabled it.
+This plan is not implemented source authority: registration, detected-analysis
+publication and broader native metadata still need their own proofs/acceptance.
+Preserve his newer85 imports/1104 title overrides; old release snapshots are not
+restore targets. This October30 planning pass changed documentation/evidence only.
+
 ## Runtime instruction parity
 
 `AGENTS.md` and `CLAUDE.md` are runtime equivalents and intentionally contain
