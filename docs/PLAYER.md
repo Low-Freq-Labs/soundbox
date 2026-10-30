@@ -461,6 +461,15 @@ Settings exposes three persistent waveform displays:
   interpolation parity remain unverified. See the October 1
   [recording verification](archive/waveform-reference-check-2026-10.md).
 
+October30 upstream-reference tuning preserves these main-lane policies. The
+3BAND mini overview now resolves its three resident layer profiles with all seven
+membership colors, replacing the former single dominant-band color. Source rows,
+main geometry/coverage, clocks and cache formats are unchanged. Before/after
+native drawables at all13 zooms in all three modes are byte-identical for the
+frozen Nuclear main lane. The [reference audit](rbxport-reference-audit-2026-10.md)
+records exact upstream values and why its approximate rendering paths were not
+blindly substituted for the accepted main compositor.
+
 All three streams are imported or derived in one cache preparation pass and
 remain resident as separate native GPU pyramids. Switching the selector is
 immediate and never recooks the track. BLUE and RGB combine their authored
@@ -1139,3 +1148,18 @@ edits and reconciles source state. Normal quit drains accepted grid work before
 cue/TaskOwner shutdown. Variable-tempo scaling, source intelligent
 playlist creation and the opt-in full-Collection setting remain later work.
 See [ROADMAP](ROADMAP.md) and the prep protocol for exact limits.
+
+## Explicit analysis default — October30
+
+Analyze Track uses the pinned RBXport adaptive/high-precision pipeline: tempo
+following, attack placement, arrangement downbeats and the existing default key
+rules. The selected BPM range still applies. Normal/Performance/Power saving are
+scheduling priorities, not genre presets. The head is bounded to30minutes/96M
+mono samples; the tail is streamed and checked before carrying the last measured
+tempo to its duration. `analysis_scope` and sample counts record the measured span.
+Native/manual grids and source cues remain authoritative. Detected analysis is
+SoundBox data, with no new native registration/publication authority. Legacy
+constant-v1 results remain usable; partial/inconclusive reanalysis preserves
+previous components for the same bytes and records their actual engine provenance.
+This separate explicit detector does not replace the waveform fallback analyzer
+or invalidate existing caches. See the [audit](rbxport-reference-audit-2026-10.md).

@@ -141,6 +141,11 @@ kernel void audit_math(device const float *inputs [[buffer(0)]],
     } else if (op == 7) {
         float4 v = audit_overview(float3(a[1], a[2], a[3]), a[4], a[5], uint(a[6]));
         out[0] = v.r; out[1] = v.g; out[2] = v.b;
+    } else if (op == 10) {
+        device const WaveSample *samples = (device const WaveSample *)(a + 8);
+        float4 pixel = three_band_overview_fragment(samples, overviewThreeBand,
+            1.5, 0.8, a[1], a[2], display_srgb_to_linear(float3(13.0,14.0,18.0)/255.0));
+        out[0]=pixel.r; out[1]=pixel.g; out[2]=pixel.b;
     } else if (op == 3) {
         WaveAttribute attribute;
         attribute.colorAndUpper = float4(a[1], a[2], a[3], a[4]);
@@ -396,6 +401,26 @@ class WaveformGPUMath(unittest.TestCase):
             gated[:, 4] = kind
             np.testing.assert_allclose(self.execute(gated)[:, :3],
                                        np.tile(background, (len(rows), 1)), atol=2e-6, rtol=0)
+
+    def test_three_band_overview_preserves_all_seven_native_overlap_colors(self):
+        # Independent pinned upstream palette facts. Each input is a full-coverage
+        # mask, so selecting a dominant band cannot satisfy the overlap cases.
+        palette={1:(0,85,225),2:(255,166,0),3:(180,105,10),4:(255,255,255),
+                 5:(210,220,250),6:(255,240,215),7:(245,235,215)}
+        rows=[];expected=[]
+        for mask in range(8):
+            row=np.zeros(64,dtype=np.float32);row[:3]=[10,0,.25]
+            row[8:24]=np.tile([.5 if mask else 0,*[int(bool(mask & (1<<i))) for i in range(3)]],4)
+            rows.append(row);expected.append(linear_color(np.array(palette.get(mask,(13,14,18)))/255))
+        np.testing.assert_allclose(self.execute(rows)[:,:3],expected,atol=3e-6,rtol=0)
+
+    def test_three_band_overview_keeps_inner_core_mid_overlap_and_outer_low_distinct(self):
+        rows=[]
+        for distance in (1,3.3,6):
+            row=np.zeros(64,dtype=np.float32);row[:3]=[10,distance,.25]
+            row[8:24]=np.tile([.7,1,.4/.7,.2/.7],4);rows.append(row)
+        expected=linear_color(np.array([(245,235,215),(180,105,10),(0,85,225)])/255)
+        np.testing.assert_allclose(self.execute(rows)[:,:3],expected,atol=3e-6,rtol=0)
 
     def test_three_band_close_tap_preserves_independent_150_hz_layer_detail(self):
         # Alternating narrow peaks in different bands expose pair pooling,

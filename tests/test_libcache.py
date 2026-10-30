@@ -48,6 +48,26 @@ class RoundTrip(unittest.TestCase):
             self.assertEqual(len(got.tracks_by_id), 1000)
             self.assertEqual(got.tracks_by_id['999'].name, '曲' * 100)
 
+    def test_native_catalog_roundtrip_is_bounded_and_corruption_rejects_edit_identity(self):
+        from soundbox.rekordbox_playlist_plan import revision
+        lib=_lib()
+        nodes=[dict(ID=str(i),Name='List',ParentID='root',Seq=i,Attribute=0,rb_local_deleted=0)
+               for i in range(1,101)]
+        members=[dict(ID=str(i),PlaylistID='1',ContentID='1',TrackNo=i,rb_local_deleted=0)
+                 for i in range(1,1001)]
+        lib.source_playlist_catalog=dict(nodes=nodes,members=members,revision=revision(nodes,members))
+        encode=json.dumps
+        def bounded(value,*args,**kwargs):
+            if isinstance(value,dict) and 'members' in value:
+                raise AssertionError('Native catalog must encode one row at a time')
+            return encode(value,*args,**kwargs)
+        with tempfile.TemporaryDirectory() as area:
+            path=Path(area)/'cache.json'
+            with mock.patch.object(libcache.json,'dumps',side_effect=bounded):libcache.dump(lib,path)
+            self.assertEqual(libcache.load(path).source_playlist_catalog,lib.source_playlist_catalog)
+            data=json.loads(path.read_bytes());data['source_playlist_catalog']['members'][0]['TrackNo']=99
+            path.write_text(json.dumps(data));self.assertIsNone(libcache.load(path))
+
     def test_failed_chunk_encoding_keeps_the_previous_atomic_snapshot(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'cache.json'

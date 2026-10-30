@@ -18,8 +18,8 @@ from pathlib import Path
 
 from .library import Library, LibraryTag, Playlist, Track
 
-SCHEMA = 8
-_READABLE_SCHEMAS = {4, 5, 6, 7, SCHEMA}
+SCHEMA = 9
+_READABLE_SCHEMAS = {4, 5, 6, 7, 8, SCHEMA}
 
 # The Track fields worth persisting (everything the browser/export needs).
 # `path`/`duration_str`/`file_type` are computed properties, not stored.
@@ -43,6 +43,7 @@ def dump(lib: Library, path: str | Path) -> None:
         "source": str(lib.source),
         "source_kind": lib.source_kind,
         "source_library_id": lib.source_library_id,
+        "source_playlist_catalog": lib.source_playlist_catalog,
         "source_tags": [[tag.tag_id, tag.name, tag.category, tag.source_uuid]
                         for tag in lib.source_tags],
         "tracks": ([getattr(t, f) for f in _TRACK_FIELDS]
@@ -59,23 +60,30 @@ def dump(lib: Library, path: str | Path) -> None:
         handle.write('{')
         for field_index, (key, value) in enumerate(data.items()):
             handle.write((', ' if field_index else '') + json.dumps(key) + ': ')
-            if not isinstance(value, (list, Iterator)):
+            if key=='source_playlist_catalog' and isinstance(value,dict) and value:
+                handle.write('{')
+                for i,(name,rows) in enumerate(value.items()):
+                    handle.write((', ' if i else '')+json.dumps(name)+': ')
+                    _write_rows(handle,rows) if isinstance(rows,list) else handle.write(json.dumps(rows))
+                handle.write('}')
+            elif isinstance(value,(list,Iterator)):
+                _write_rows(handle,value)
+            else:
                 handle.write(json.dumps(value))
-                continue
-            handle.write('[')
-            chunks, size = [], 0
-            for index, row in enumerate(value):
-                encoded = (', ' if index else '') + json.dumps(row)
-                chunks.append(encoded)
-                size += len(encoded)
-                if size >= 32 * 1024:
-                    handle.write(''.join(chunks))
-                    chunks, size = [], 0
-            if chunks:
-                handle.write(''.join(chunks))
-            handle.write(']')
         handle.write('}')
     os.replace(tmp, p)
+
+
+def _write_rows(handle,rows):
+    handle.write('[')
+    chunks,size=[],0
+    for index,row in enumerate(rows):
+        encoded=(', ' if index else '')+json.dumps(row)
+        chunks.append(encoded);size+=len(encoded)
+        if size>=32*1024:
+            handle.write(''.join(chunks));chunks,size=[],0
+    if chunks:handle.write(''.join(chunks))
+    handle.write(']')
 
 
 def load(path: str | Path) -> Library | None:
@@ -86,6 +94,15 @@ def load(path: str | Path) -> Library | None:
         schema = data.get("schema")
         if schema not in _READABLE_SCHEMAS:
             return None
+        catalog=data.get('source_playlist_catalog',{})
+        if not isinstance(catalog,dict):return None
+        if catalog:
+            from .rekordbox_playlist_plan import revision
+            if (set(catalog)!={'nodes','members','revision'}
+                    or not isinstance(catalog['nodes'],list) or not isinstance(catalog['members'],list)
+                    or any(not isinstance(row,dict) or not {'ID','Name','ParentID','Seq','Attribute','rb_local_deleted'}<=row.keys() for row in catalog['nodes'])
+                    or any(not isinstance(row,dict) or not {'ID','PlaylistID','ContentID','TrackNo','rb_local_deleted'}<=row.keys() for row in catalog['members'])
+                    or revision(catalog['nodes'],catalog['members'])!=catalog['revision']):return None
         tracks = {}
         fields = _TRACK_FIELDS[:20] if schema < 7 else _TRACK_FIELDS[:22] if schema == 7 else _TRACK_FIELDS
         for row in data["tracks"]:
@@ -109,6 +126,7 @@ def load(path: str | Path) -> Library | None:
             source=data.get("source", "cache"),
             source_kind=data.get("source_kind", "cache"),
             source_library_id=data.get("source_library_id", ""),
+            source_playlist_catalog=data.get("source_playlist_catalog", {}),
             source_tags=[LibraryTag(*row) for row in data.get("source_tags", [])],
         )
     except (OSError, ValueError, KeyError, TypeError):

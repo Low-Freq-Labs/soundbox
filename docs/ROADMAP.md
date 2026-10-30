@@ -4,6 +4,24 @@ Updated October 30, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
+Active October30: native ordinary playlist management passed11 exact native
+DB/XML/rollback references and12 actual-source CRUD operations, Sonny's native
+inspection and normal save. Its separate exact-library authority is provisioned;
+the durable FIFO, retry/discard, native folders and Collection retention are
+implemented. CDJ capture waits for source intents and rebinds stable selections.
+Personal build148 is installed after the complete1700-test gate. Final restart/
+state verification passed and is recorded in HANDOFF. New-file registration and reverse
+analysis publication remain unfinished.
+
+Sonny additionally requested comparison/tuning against Chris Le's work. The
+[reference audit](rbxport-reference-audit-2026-10.md) inventories117 repositories
+and pins five relevant source trees. The existing RBXport pin is current. Default
+analysis now follows tempo changes with high precision and a bounded30-minute/96M
+head plus streamed tail validation; legacy results and partial component data
+survive. The 3BAND overview now preserves seven overlap colors. All39 checked main
+waveform drawables remain byte-identical across three modes/13zooms. No network
+feature, new genre mode or hardware-support claim was added.
+
 October29/30 alignment/playback follow-up aligns playlist labels with folders,
 insets and aligns Analysis groups, and puts menu/dropdown checks on the right
 with inset arrows and complete labels. Summary uses inline caption/value rows
@@ -13,9 +31,9 @@ physical-pixel LOD/reconstruction; every mode/zoom integrates complete profile
 corners. Frozen all-zoom evidence preserves accepted close RGB pixels and lowers
 wide RGB redraw; live visual acceptance remains open. Final installed provenance
 and release validation belong in HANDOFF. The exact one-playlist/two-existing-track source pilot passed Sonny's native
-inspection and normal save October30. General native CRUD and two-way
-registration/analysis remain unfinished; the private pilot receipt grants no
-production API authority.
+inspection and normal save October30. The broader ordinary CRUD acceptance is
+recorded above; two-way registration/analysis remain unfinished. The historical
+private pilot receipt itself grants no general API authority.
 
 October30 appearance/audition follow-up adds coalesced live color preview, fast
 text-color switching and a further six-point playlist-content inset. Static QSS
@@ -33,7 +51,9 @@ clicks only expand/collapse, retaining the active browser view and its track
 actions; folder drags still export descendants. SoundBox folders retain nested
 drag reorganization, persistent expansion and New Playlist / New Folder / Rename /
 Delete context order. Membership and device playlist identities survive moves.
-Source registration/playlist writing and two-way analysis remain unfinished.
+At that checkpoint source playlist writing was still gated; ordinary CRUD later
+passed the October30 acceptance above. Source registration and two-way analysis
+remain unfinished.
 Normal quit/relaunch and exact curated-state verification passed; see HANDOFF.
 
 October29 session checkpoint: the dedicated USB exporter, USB/global preferences,
@@ -52,14 +72,17 @@ Analysis now has its own Settings tab, bounded cancellable rbxport BPM/Grid+Key
 jobs and durable audio-bound results that survive a later native track ID.
 Native/manual grids and source cues remain authoritative. Automatic detection is
 off by default; Phrase is disabled. This is the detection stage: SoundBox→rekordbox
-analysis publication and ordinary native playlist CRUD remain **unfinished**.
+analysis publication remains **unfinished**. Ordinary native CRUD subsequently
+passed the October30 acceptance above.
 Sonny explicitly requires shared analysis in both directions regardless of which
 app imports first. The [accepted scope and exact remaining gates](analysis-playlists-next.md)
 cover that round trip, source acceptance and the next native-reference actions.
 Copy-only replay now matches isolated root creation, rename and unsynced
 add/remove database states through rollback and commit/reopen. Last-root
 single-member deletion is captured and modeled; its audited replay reports one independent notification
-timestamp difference rather than a complete match. Other deletion shapes and synced cases remain gated. The paired journal/XML
+timestamp difference rather than a complete match. At that checkpoint other
+deletion shapes and synced cases were gated; the separate October30 ordinary
+acceptance above later covered them. The paired journal/XML
 publication follow-up below closes its isolated copy-proof gate. These offline research additions
 are not installed source publishers.
 
@@ -70,7 +93,8 @@ all1646 tests; a cadence threshold miss and unchanged Cocoa rerun remain evidenc
 The standalone pilot shares the existing native-edit root/lock/journal and remains
 unintegrated. Its exact one-playlist/two-existing-track plan was subsequently
 approved, published and natively inspected/saved October30. No production
-playlist/registration/analysis authority was provisioned. See HANDOFF and the
+authority was provisioned by that pilot. The separate ordinary API acceptance
+above later provisioned playlist authority; registration/analysis remain gated. See HANDOFF and the
 [exact accepted pilot scope](analysis-playlists-next.md).
 
 Historical October27 checkpoints: Sonny requested a fresh efficiency review. The

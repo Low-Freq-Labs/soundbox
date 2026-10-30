@@ -3559,18 +3559,15 @@ class DeletedTracks(unittest.TestCase):
         self.assertIn("1", [t.track_id for t in _win._collection_tracks()])
         _win.custom.pop("MIX", None)
 
-    def test_remove_from_rb_playlist_vetoes_only_that_playlist(self):
-        pl = _win.lib.playlists[0]           # SET ONE keys ["3","1"]
-        pl.pid = "42"
-        try:
-            _win._remove_from_rb_playlist(pl.display_path, ["1"])
-            self.assertEqual([t.track_id for t in _win.lib.resolve(pl)], ["3"])
-            self.assertIn("1", [t.track_id for t in _win._collection_tracks()])
-        finally:
-            pl.pid = ""
-            _win.removals.clear()
-            _win._apply_settings_to_lib()
-            _win._reload_current_view()  # don't leave the table stale for later tests
+    def test_native_removal_never_turns_a_local_filter_into_a_source_save(self):
+        pl = _win.lib.playlists[0]
+        before = {key:dict(values) for key,values in _win.removals.items()}
+        with mock.patch.object(_win, '_native_remove') as native:
+            _win._remove_from_rb_playlist(pl.display_path, ['1'])
+        native.assert_called_once_with(pl.display_path, ['1'])
+        self.assertEqual(_win.removals, before)
+        self.assertEqual([t.track_id for t in _win.lib.resolve(pl)], ['3','1'])
+        self.assertIn('1', [t.track_id for t in _win._collection_tracks()])
 
 
 class TrackRemovalMenu(unittest.TestCase):
@@ -9552,7 +9549,7 @@ class ProviderProfiles(unittest.TestCase):
                 rescan.assert_not_called()
             actions = []
             menu = mock.Mock()
-            menu.addAction.side_effect = lambda text, *args: actions.append(text)
+            menu.addAction.side_effect = lambda text, *args: (actions.append(text),mock.Mock())[1]
             with mock.patch('desktop.app.QMenu', return_value=menu):
                 _win._rb_header_menu(_win.tree, QPoint())
             self.assertIn('Suggest artist merges…', actions)

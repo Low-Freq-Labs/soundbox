@@ -44,6 +44,8 @@ def synthetic_library() -> Library:
 
 
 def _render() -> None:
+    native_playlists = '--native-playlists' in sys.argv
+    if native_playlists:sys.argv.remove('--native-playlists')
     analysis_menus = '--analysis-menus' in sys.argv
     if analysis_menus:sys.argv.remove('--analysis-menus')
     playlist_folders = '--playlist-folders' in sys.argv
@@ -149,6 +151,23 @@ def _render() -> None:
                 dict(folder=nested,name='Openers',children=[{'playlist':'Warmup'}])])]
         win.settings['custom_playlist_expanded']=[folder,nested]
         win._refresh_custom()
+    if native_playlists:
+        from soundbox.rekordbox_playlist_plan import revision
+        nodes=[]
+        for identity,name,parent,attribute,seq in (
+                ('10','CRATES','root',1,1),('1','SET ONE','10',0,1),
+                ('2','SET TWO','10',0,2),('3','WARMUPS','root',0,2),
+                ('11','Empty folder','root',1,3)):
+            nodes.append(dict(ID=identity,UUID=f'00000000-0000-4000-8000-{int(identity):012d}',
+                              Name=name,ParentID=parent,Attribute=attribute,Seq=seq,rb_local_deleted=0))
+        members=[dict(ID=f'{p.pid}-{i}',PlaylistID=p.pid,ContentID=tid,TrackNo=i,rb_local_deleted=0)
+                 for p in win.lib.playlists for i,tid in enumerate(p.keys,1)]
+        win.lib.source_kind='rekordbox-db';win.lib.source_library_id='synthetic-playlists'
+        win.lib.source_playlist_catalog=dict(nodes=nodes,members=members,revision=revision(nodes,members))
+        win.tag_controller.verified=True
+        win.playlist_controller.factory=_deny_live_source
+        win._native_request=_deny_live_source
+        win._populate_tree(engine.summary(win.lib))
     win.tree.topLevelItem(0).setExpanded(True)
     win.tree.setCurrentItem(win.tree.topLevelItem(0).child(0))
     # Paint the transport in a representative loaded state without opening any
@@ -331,6 +350,14 @@ def _render() -> None:
     # a playback reference.
     pb._emit_playback_time(83_000 if long_playback else 44_000)
     win.grab().save(out)
+    if native_playlists:
+        from pathlib import Path
+        from PySide6.QtCore import QPoint
+        menu=win._native_menu(win.tree.topLevelItem(2))
+        menu.popup(win.tree.viewport().mapToGlobal(QPoint(90,180)))
+        app.processEvents();target=Path(out)
+        menu.grab().save(str(target.with_name(target.stem+'-native-menu.png')))
+        win.grab().save(out);menu.close()
     if edit_status:
         from pathlib import Path
         target = Path(out)

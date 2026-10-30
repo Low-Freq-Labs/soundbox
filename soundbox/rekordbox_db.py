@@ -49,7 +49,7 @@ def _camelot(scale: str) -> str:
     return _CAMELOT.get((scale or "").strip(), scale or "")
 
 
-def load_live(path: str | Path | None = None) -> Library:
+def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = None) -> Library:
     """Snapshot the live rekordbox DB and parse it (read-only). Raises on failure."""
     source = Path(path or REKORDBOX_DB).expanduser()
     if not source.is_file():
@@ -71,10 +71,21 @@ def load_live(path: str | Path | None = None) -> Library:
             library_id = str(identities[0].DBID) if len(identities) == 1 else ""
             active_ids = _active_track_ids(db)
             playlists = _read_playlists(db, active_ids)
+            try:catalog = _playlist_catalog(db)
+            except (AttributeError,TypeError,ValueError) as exc:
+                logging.getLogger(__name__).warning('Playlist edit identity unavailable: %s',exc)
+                catalog = {}
             # Preserve playlist scope before collecting edit identities. This
             # metadata never adds tracks or schedules preparation.
             referenced = {k for pl in playlists for k in pl.keys}
-            tracks_by_id = _read_tracks(db, source, memberships, track_ids=referenced)
+            retained = (retain_tracks or {}).get(library_id, {})
+            if not isinstance(retained,dict):retained = {}
+            pinned = {k for k,v in retained.items() if isinstance(k,str) and isinstance(v,str)} & active_ids
+            tracks_by_id = _read_tracks(db, source, memberships, track_ids=referenced|pinned)
+            for tid in pinned:
+                track = tracks_by_id.get(tid)
+                if track is not None and track.source_uuid != retained[tid]:
+                    if tid not in referenced:tracks_by_id.pop(tid)
             try:
                 _populate_cue_edit_state(db, tracks_by_id)
             except Exception as exc:  # optional write identity must not disable browsing
@@ -87,9 +98,9 @@ def load_live(path: str | Path | None = None) -> Library:
                 db.close()
             except Exception:  # noqa: BLE001
                 pass
-        # Soundbox is a PLAYLIST exporter — keep only tracks that are actually in a
-        # playlist. Drops orphan collection entries (added to rekordbox but in no
-        # playlist, files usually long gone) so the count matches the real library.
+        # Keep the established playlist scope plus exact UUID pins retained by
+        # native edits. Removing a last playlist reference must not remove that
+        # song from SoundBox Collection on the next refresh.
         return Library(
             tracks_by_id=tracks_by_id,
             playlists=playlists,
@@ -97,6 +108,7 @@ def load_live(path: str | Path | None = None) -> Library:
             source_kind="rekordbox-db",
             source_tags=tags,
             source_library_id=library_id,
+            source_playlist_catalog=catalog,
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -619,3 +631,20 @@ def _read_playlists(
             "Active rekordbox playlists contain duplicate display paths; "
             "SoundBox cannot safely select them by name")
     return playlists
+
+
+def _playlist_catalog(db):
+    """Exact raw row clocks/identities from the reader's private DB copy.
+
+    ORM DateTime conversion loses native lexical precision. Keep the actual DBAPI
+    strings for optimistic edits; this is metadata, never write authority.
+    """
+    from .rekordbox_playlist_plan import revision
+    rows={}
+    connection=db.session.connection()
+    for table,key in (('djmdPlaylist','nodes'),('djmdSongPlaylist','members')):
+        result=connection.exec_driver_sql('SELECT * FROM "'+table+'"')
+        names=list(result.keys())
+        rows[key]=[dict(zip(names,row,strict=True)) for row in result]
+    rows['revision']=revision(rows['nodes'],rows['members'])
+    return rows

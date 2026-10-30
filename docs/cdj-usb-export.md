@@ -31,7 +31,12 @@ from their native records and cue metadata, without rebuilding their media.
 
 `cdj_source` captures the read-only desktop DB/WAL snapshot, selected IDs/UUIDs,
 metadata/counters, current DB cues and source playlist order. Accepted source
-edits drain before capture; a second capture detects concurrent changes. Browser
+Tag/Cue/Grid and durable native-playlist edits drain before capture; a second
+capture detects concurrent changes. Native playlist selections rebind by stable
+ID after that drain, so a rename/membership save is reflected and a deleted
+selection or switched source stops before USB writes. Pending playlist intents
+are not their own worker ownership; the waiting request leaves the source lane
+free to finish them. Browser
 cache and player overlays grant no export authority. SoundBox title/artist/info
 overrides and a locked artwork snapshot apply without editing source audio or
 adding a desktop database write domain. Imported/XML tracks or missing required

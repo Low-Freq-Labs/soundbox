@@ -18,7 +18,9 @@ from .source_acquisition import SourceContract, acquire_source
 BPM_RANGES = ((70,180),(48,95),(58,115),(68,135),(78,155),(88,175),
               (98,195),(108,215),(118,235),(128,255))
 DEFAULTS = dict(bpm=True, key=True, bpm_range=0, first_cue=False, process='Normal')
-ENGINE = 'rbxport-b739d369-constant-v1'
+LEGACY_ENGINE = 'rbxport-b739d369-constant-v1'
+ENGINE = 'rbxport-b739d369-adaptive-v2'
+_ENGINES = frozenset((LEGACY_ENGINE, ENGINE))
 
 
 def options(value=None):
@@ -52,13 +54,16 @@ def saved_result(results, track):
 
 
 def validate_result(record):
-    if (record.get('engine') != ENGINE or not isinstance(record.get('sha256'), str)
+    if (type(record.get('engine')) is not str or record.get('engine') not in _ENGINES or not isinstance(record.get('sha256'), str)
             or len(record['sha256']) != 64 or any(c not in '0123456789abcdef' for c in record['sha256'])
             or not isinstance(record.get('epoch'), list) or len(record['epoch']) != 5
             or any(type(n) is not int or n < 0 for n in record['epoch'])
             or not isinstance(record.get('path'), str) or not Path(record['path']).is_absolute()
             or type(record.get('size')) is not int or record['size'] != record['epoch'][2]):
         raise ValueError('Invalid captured analysis identity')
+    if any(type(record.get(field,record['engine'])) is not str or record.get(field,record['engine']) not in _ENGINES
+           for field in ('grid_engine','key_engine')):
+        raise ValueError('Invalid analysis component provenance')
     duration = record.get('duration')
     if type(duration) not in (int, float) or not math.isfinite(duration) or not 4 <= duration <= 86400:
         raise ValueError('Invalid analysis duration')
@@ -134,6 +139,7 @@ def analyze(library, track, preferences=None, *, should_cancel=lambda:False):
                 raise ValueError('Source changed during analysis; retry after refreshing')
             result.update(engine=ENGINE, path=str(source), sha256=snapshot.sha256, size=snapshot.size,
                           epoch=identity(snapshot.observation), source_context=source_context,
+                          grid_engine=ENGINE, key_engine=ENGINE,
                           first_cue=(result['beats'][0][1] if prefs['first_cue'] and result.get('beats') else None))
             # Silence/too little rhythmic evidence must not become a fabricated grid.
             if prefs['bpm'] and (not result.get('beats') or result.get('confidence', 0) < .5):
@@ -143,15 +149,17 @@ def analyze(library, track, preferences=None, *, should_cancel=lambda:False):
 
 
 def merge_result(previous, current, preferences):
-    """Key-only / grid-only analysis preserves an existing result for the same bytes."""
+    """Unchecked or inconclusive components preserve results for the same bytes."""
     result = deepcopy(current)
     if previous and previous.get('sha256') == current['sha256']:
-        if not preferences['bpm']:
+        if not preferences['bpm'] or not current.get('beats'):
             for key in ('bpm','beats','confidence','first_cue'):
                 result[key] = deepcopy(previous.get(key))
-        if not preferences['key']:
+            result['grid_engine'] = previous.get('grid_engine',previous['engine'])
+        if not preferences['key'] or current.get('key') is None:
             for key in ('key','key_name'):
                 result[key] = previous.get(key)
+            result['key_engine'] = previous.get('key_engine',previous['engine'])
     validate_result(result)
     return result
 
@@ -175,5 +183,5 @@ def playback_data(data, record, path):
     if not cues and record.get('first_cue') is not None and not record.get('source_context'):
         cues = [dict(kind='memory', slot=0, position_ms=record['first_cue'], comment='First analyzed beat')]
     return {**data, 'beats': deepcopy(record['beats']), 'cues': cues,
-            'provenance': {**provenance, 'grid':'soundbox-detected', 'analysis_engine':ENGINE},
+            'provenance': {**provenance, 'grid':'soundbox-detected', 'analysis_engine':record.get('grid_engine',record['engine'])},
             '_detected_bpm':record['bpm']}

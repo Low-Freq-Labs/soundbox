@@ -3,8 +3,12 @@ use std::{error::Error, path::Path};
 use serde::Deserialize;
 use serde_json::json;
 
-const MAX_SECONDS: usize = 300;
-const MAX_SAMPLES: usize = 32_000_000;
+// Match the upstream application's thirty-minute analysis horizon. A separate
+// sample budget bounds high-rate inputs; the remaining stream is still decoded
+// and checked through EOF before extending its last measured tempo.
+const MAX_SECONDS: usize = 1800;
+const MAX_SAMPLES: usize = 96_000_000;
+const MAX_DURATION: u64 = 86400;
 
 #[derive(Deserialize)]
 struct Request {
@@ -27,29 +31,45 @@ pub fn run(root: &Path, request: &Path) -> Result<serde_json::Value, Box<dyn Err
     if !(8_000..=192_000).contains(&rate) || !(1..=8).contains(&stream.source_channels()) {
         return Err("unsupported analysis sample rate or channel count".into());
     }
-    // Check the decoded budget BEFORE allocating/collecting. Bound every append
-    // even when a packet straddles the last sample. Long mixes keep one buffer.
+    // Reserve only the bounded head, then stream the complete tail without
+    // retaining it. A declared duration is checked even after the head fills.
     let cap = (MAX_SECONDS * rate as usize).min(MAX_SAMPLES);
     let expected = stream.expected_frames();
-    let mut samples = Vec::with_capacity(cap.min(expected.unwrap_or(cap as u64) as usize));
-    while samples.len() < cap {
-        let Some(chunk) = stream.next_chunk() else { break };
-        let count = chunk.len().min(cap - samples.len());
-        samples.extend_from_slice(&chunk[..count]);
-        if stream.sample_rate() != rate { return Err("sample rate changed during decode".into()); }
+    let channels = stream.source_channels();
+    if expected.is_some_and(|n| n > MAX_DURATION * u64::from(rate)) {
+        return Err("unsupported analysis duration".into());
     }
-    if samples.len() < rate as usize * 4 || samples.iter().any(|x| !x.is_finite()) {
+    let mut samples = Vec::with_capacity(cap.min(expected.unwrap_or(cap as u64) as usize));
+    let mut decoded: u64 = 0;
+    while let Some(chunk) = stream.next_chunk() {
+        if chunk.iter().any(|x| !x.is_finite()) {
+            return Err("finite audio is required".into());
+        }
+        let valid = expected.map_or(chunk.len(), |n| n.saturating_sub(decoded).min(chunk.len() as u64) as usize);
+        let count = valid.min(cap.saturating_sub(samples.len()));
+        samples.extend_from_slice(&chunk[..count]);
+        decoded = decoded.checked_add(chunk.len() as u64).ok_or("analysis duration overflow")?;
+        if decoded > MAX_DURATION * u64::from(rate) {
+            return Err("unsupported analysis duration".into());
+        }
+        if stream.sample_rate() != rate || stream.source_channels() != channels {
+            return Err("audio format changed during decode".into());
+        }
+    }
+    if samples.len() < rate as usize * 4 {
         return Err("at least four seconds of finite audio are required".into());
     }
-    if expected.is_some_and(|n| samples.len() < cap && (samples.len() as u64) + 1 < n) {
+    if expected.is_some_and(|n| decoded + 1 < n) {
         return Err("audio ended before its declared duration".into());
     }
-    let duration = expected.unwrap_or(samples.len() as u64) as f64 / f64::from(rate);
-    if !duration.is_finite() || !(4.0..=86400.0).contains(&duration) {
+    let frames = expected.unwrap_or(decoded);
+    let duration = frames as f64 / f64::from(rate);
+    if !duration.is_finite() || !(4.0..=MAX_DURATION as f64).contains(&duration) {
         return Err("unsupported analysis duration".into());
     }
     let (mut tempo, key) = if input.bpm {
-        let mut options = rbl_analysis::AnalysisPreset::Rekordbox.options();
+        let mut options = rbl_analysis::AnalysisPreset::Rbxport.options();
+        options.tempo.placement = rbl_analysis::tempo::Placement::Attack;
         options.tempo.min_bpm = f64::from(input.min_bpm);
         options.tempo.max_bpm = f64::from(input.max_bpm);
         let result = rbl_analysis::analyse_with(&samples, rate, options);
@@ -62,5 +82,7 @@ pub fn run(root: &Path, request: &Path) -> Result<serde_json::Value, Box<dyn Err
         json!([b.beat_number, b.time_ms, f64::from(b.tempo_x100)/100.0])).collect::<Vec<_>>());
     Ok(json!({"bpm":tempo.as_ref().map(|g|g.bpm), "confidence":tempo.as_ref().map(|g|g.confidence),
         "beats":beats, "key":key.as_ref().map(|k|k.camelot()), "key_name":key.as_ref().map(|k|&k.name),
-        "duration":duration, "analyzed_seconds":samples.len() as f64/f64::from(rate)}))
+        "duration":duration, "analyzed_seconds":samples.len() as f64/f64::from(rate),
+        "decoded_frames":decoded, "analyzed_frames":samples.len(),
+        "analysis_scope":if samples.len() as u64 >= frames { "full" } else { "head" }}))
 }

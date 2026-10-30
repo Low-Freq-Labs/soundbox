@@ -188,6 +188,8 @@ class Library:
     title_junk: list | None = None
     source_tags: list[LibraryTag] = field(default_factory=list)
     source_library_id: str = ""
+    # Read-only native playlist identities/history for exact edit baselines.
+    source_playlist_catalog: dict = field(default_factory=dict)
 
     @property
     def track_count(self) -> int:

@@ -23,6 +23,8 @@ ARTISTS_ROLE = Qt.UserRole + 7     # the built-in "Artists" folder (expandable)
 ARTIST_ROLE = Qt.UserRole + 8      # one artist entry under the Artists folder
 ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser (its id)
 ARTIST_IDS_ROLE = Qt.UserRole + 10   # an artist row's full track-id list (for drag)
+RB_NODE_ROLE = Qt.UserRole + 21  # stable native playlist/folder ID
+RB_NODE_KIND_ROLE = Qt.UserRole + 22
 CUSTOM_FOLDER_ROLE = Qt.UserRole + 11  # local folder UUID, independent of playlist names
 
 
@@ -271,6 +273,8 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
 
 class PlaylistTree(PlaylistFolderTree):
     """Rekordbox playlist tree — drag source (rb)."""
+    tracks_dropped = Signal(str, list)  # native playlist ID, track IDs
+
     def mimeData(self, items):  # type: ignore[override]
         paths: list[str] = []
         for it in items:
@@ -285,6 +289,28 @@ class PlaylistTree(PlaylistFolderTree):
             return
         label = items[0].text(0) + (f"   +{len(items) - 1}" if len(items) > 1 else "")
         _start_chip_drag(self, self.mimeData(items), label, actions)
+
+
+    def dragEnterEvent(self, event):
+        if 'trk\t' in event.mimeData().text():event.acceptProposedAction()
+        else:event.ignore()
+
+    def dragMoveEvent(self, event):
+        item=self.itemAt(event.position().toPoint())
+        if item and item.data(0,PATH_ROLE) and item.data(0,RB_NODE_KIND_ROLE)==0 and 'trk\t' in event.mimeData().text():
+            event.acceptProposedAction()
+        else:event.ignore()
+
+    def dropEvent(self, event):
+        item=self.itemAt(event.position().toPoint())
+        if item is None or not item.data(0,PATH_ROLE) or item.data(0,RB_NODE_KIND_ROLE)!=0:event.ignore();return
+        ids=[]
+        for line in event.mimeData().text().split('\n'):
+            kind,_,value=line.partition('\t')
+            if kind=='trk':ids.extend(v for v in value.split(',') if v)
+        if ids and item.data(0,RB_NODE_ROLE):
+            self.tracks_dropped.emit(item.data(0,RB_NODE_ROLE),ids);event.acceptProposedAction()
+        else:event.ignore()
 
 
 def _audio_paths(md) -> list[str]:
@@ -571,9 +597,11 @@ class TrackTable(NoTypeAhead, QTableView):
     Also a drop target when a WRITABLE SoundBox view is on screen, mirroring the
     sidebar: existing tracks (trk) add to the current custom playlist, Finder
     audio files import (+add). The app decides the target via `resolve_drop`,
-    which returns ("playlist", name) | ("collection", "") | None — Artists and
-    read-only rekordbox views resolve to None so nothing writes to them."""
+    which returns a custom playlist, Collection, a regular native playlist, or
+    None. Native destinations accept registered track IDs through their guarded
+    writer; source-only file imports remain a separate registration protocol."""
     tracks_dropped = Signal(str, list)  # custom playlist name, [track_ids]
+    rekordbox_tracks_dropped = Signal(str, list)
     files_dropped = Signal(str, list)   # name ("" = Collection, import only), [paths]
 
     #: set by the app to () -> ("playlist", name) | ("collection", "") | None
@@ -608,9 +636,9 @@ class TrackTable(NoTypeAhead, QTableView):
             return
         kind, _name = tgt
         md = e.mimeData()
-        if _audio_paths(md):
+        if _audio_paths(md) and kind!="rekordbox":
             e.acceptProposedAction()  # Finder files import into any writable view
-        elif "trk\t" in md.text() and kind == "playlist" and e.source() is not self:
+        elif "trk\t" in md.text() and kind in ("playlist","rekordbox") and e.source() is not self:
             e.acceptProposedAction()  # existing tracks add only to a real playlist
         else:
             e.ignore()               # (never re-drop the table's own rows onto itself)
@@ -622,18 +650,20 @@ class TrackTable(NoTypeAhead, QTableView):
             return
         kind, name = tgt
         files = _audio_paths(e.mimeData())
+        if files and kind=="rekordbox":e.ignore();return
         if files:
             self.files_dropped.emit(name if kind == "playlist" else "", files)
             e.acceptProposedAction()
             return
-        if kind == "playlist" and e.source() is not self:
+        if kind in ("playlist","rekordbox") and e.source() is not self:
             ids: list[str] = []
             for line in e.mimeData().text().split("\n"):
                 k, _, val = line.partition("\t")
                 if k == "trk":
                     ids += [i for i in val.split(",") if i]
             if ids:
-                self.tracks_dropped.emit(name, ids)
+                signal=self.rekordbox_tracks_dropped if kind=="rekordbox" else self.tracks_dropped
+                signal.emit(name,ids)
                 e.acceptProposedAction()
                 return
         e.ignore()

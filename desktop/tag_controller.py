@@ -74,6 +74,7 @@ class TagEditController(QObject):
         self._closing = False
         self.grid_waiting = False
         self.grid_update_status = ''
+        self.playlist_update_status = ''
 
     @property
     def status_text(self):
@@ -84,6 +85,8 @@ class TagEditController(QObject):
     @property
     def update_status_text(self):
         """Accepted edit intents only; a worker owning the lane is not a save."""
+        if self.busy and self._busy_kind == 'playlists':
+            return 'Updating rekordbox playlists…'
         if self.busy and self._busy_kind == 'tags':
             return 'Updating My Tags…'
         if self._cue_queue and self.busy and self._busy_kind == 'cues':
@@ -94,7 +97,7 @@ class TagEditController(QObject):
         if self._cue_queue:
             page = self._cue_queue[0].page
             return 'Updating hot cue…' if page == 'hot' else 'Updating memory cue…'
-        return ''
+        return self.playlist_update_status
 
     @property
     def owned(self):
@@ -167,6 +170,13 @@ class TagEditController(QObject):
             self._cue_store_factory(lib, record['track_id']).snapshot()
         elif record.get('format') == 'soundbox-native-mytag-v1':
             self._store_factory(lib).check_ready()
+        elif record.get('format') == 'soundbox-native-playlists-v1':
+            from soundbox.rekordbox_playlist_store import PlaylistStore, load_authority as load_playlist_authority
+            authority = load_playlist_authority(self.data_root/'rekordbox-playlist-authority.json',
+                                                Path(lib.source),lib.source_library_id)
+            if authority is None:
+                raise RuntimeError('Playlist recovery has no accepted library permission; evidence preserved')
+            PlaylistStore(authority,root).recover()
         elif record.get('format') == 'soundbox-native-grid-v1':
             authority = load_grid_authority(self.data_root / 'rekordbox-grid-authority.json',
                                             Path(lib.source), lib.source_library_id)
@@ -184,10 +194,12 @@ class TagEditController(QObject):
         transaction still needs exact recovery before copying dirty DB pages.
         This runs in the serialized source-refresh worker, not the GUI thread.
         """
+        from soundbox.rekordbox_playlist_store import load_authority as load_playlist_authority
         source = Path(source)
         for filename, loader in (('rekordbox-cue-authority.json', load_cue_authority),
                                  ('rekordbox-tag-authority.json', load_authority),
-                                 ('rekordbox-grid-authority.json', load_grid_authority)):
+                                 ('rekordbox-grid-authority.json', load_grid_authority),
+                                 ('rekordbox-playlist-authority.json', load_playlist_authority)):
             path = self.data_root / filename
             if not path.exists() and not path.is_symlink():
                 continue
@@ -342,11 +354,19 @@ class TagEditController(QObject):
         return display(overlay(track, self._cue_queue, self._cue_aliases))
 
     def run_grid_job(self, callback, finished) -> bool:
+        return self._run_source_job('grid',callback,finished)
+
+    def run_playlist_job(self, callback, finished) -> bool:
+        if self._cue_queue or self.grid_waiting:
+            return False
+        return self._run_source_job('playlists',callback,finished)
+
+    def _run_source_job(self, kind, callback, finished) -> bool:
         """Grid work uses this same worker lane and finished/join ownership."""
         if self.busy or self.checking or self.owner.stopping or self._closing:
             return False
         self.busy = True
-        self._busy_kind = 'grid'
+        self._busy_kind = kind
         self.changed.emit()
 
         def completed(worker):

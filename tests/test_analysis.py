@@ -87,6 +87,70 @@ class CapturedAnalysis(unittest.TestCase):
                 repo.save({'settings': {'large_result': 'x'*(len(previous)+128)}})
         self.assertEqual(repo.path.read_bytes(), previous)
 
+    def test_legacy_results_remain_playable_and_partial_reanalysis_keeps_component_provenance(self):
+        old={**self.record(),'engine':analysis.LEGACY_ENGINE}
+        analysis.validate_result(old)
+        repo=StateRepository(self.root/'library.json');repo.load()
+        repo.save({'settings':{'analysis_results':{analysis.result_key(self.audio):old}}})
+        restored=StateRepository(repo.path).load()['settings']['analysis_results'][analysis.result_key(self.audio)]
+        self.assertEqual(restored,old)
+        self.assertEqual(analysis.playback_data({},restored,self.audio)['provenance']['analysis_engine'],analysis.LEGACY_ENGINE)
+        current={**self.record(),'key':'9A','key_engine':analysis.ENGINE,'grid_engine':analysis.ENGINE}
+        merged=analysis.merge_result(old,current,dict(bpm=False,key=True))
+        self.assertEqual(merged['beats'],old['beats'])
+        self.assertEqual((merged['grid_engine'],merged['key_engine']),(analysis.LEGACY_ENGINE,analysis.ENGINE))
+        for invalid in ({'engine':[]},{'grid_engine':{}},{'key_engine':'unrecognized'}):
+            with self.assertRaises(ValueError):analysis.validate_result({**current,**invalid})
+
+    def test_inconclusive_reanalysis_preserves_existing_grid_key_and_first_cue_for_same_bytes(self):
+        old={**self.record(),'engine':analysis.LEGACY_ENGINE}
+        current={**self.record(),'bpm':None,'beats':[],'confidence':0,'key':None,'key_name':None,'first_cue':None}
+        merged=analysis.merge_result(old,current,dict(bpm=True,key=True))
+        self.assertEqual((merged['bpm'],merged['beats'],merged['key'],merged['first_cue']),
+                         (old['bpm'],old['beats'],old['key'],old['first_cue']))
+        self.assertEqual((merged['grid_engine'],merged['key_engine']),(analysis.LEGACY_ENGINE,analysis.LEGACY_ENGINE))
+        changed={**current,'sha256':'0'*64}
+        fresh=analysis.merge_result(old,changed,dict(bpm=True,key=True))
+        self.assertEqual(fresh['beats'],[]);self.assertIsNone(fresh['key'])
+
+    def test_analysis_detects_a_real_tempo_change_after_the_previous_five_minute_cutoff(self):
+        rate=8000;duration=420;change=310
+        samples=np.zeros(rate*duration,dtype=np.float32)
+        starts=list(np.arange(0,change,.5))+list(np.arange(change,duration,.4))
+        n=np.arange(160,dtype=np.float32)
+        kick=np.sin(n*1.1)*(1-n/160)*.8
+        for second in starts:
+            start=int(second*rate);samples[start:start+len(kick)]+=kick[:len(samples)-start]
+        with wave.open(str(self.audio),'wb') as out:
+            out.setnchannels(1);out.setsampwidth(2);out.setframerate(rate)
+            out.writeframes((samples*30000).astype('<i2').tobytes())
+        before=hashlib.sha256(self.audio.read_bytes()).hexdigest()
+        result=self.detect(key=False)
+        self.assertEqual(result['analysis_scope'],'full')
+        self.assertEqual(result['decoded_frames'],len(samples))
+        self.assertEqual(result['analyzed_frames'],len(samples))
+        early=[r[2] for r in result['beats'] if 60_000<r[1]<180_000]
+        late=[r[2] for r in result['beats'] if 360_000<r[1]<410_000]
+        self.assertTrue(early and late)
+        self.assertAlmostEqual(float(np.median(early)),120,delta=1)
+        self.assertAlmostEqual(float(np.median(late)),150,delta=1)
+        self.assertEqual(hashlib.sha256(self.audio.read_bytes()).hexdigest(),before)
+
+    def test_truncated_tail_after_the_previous_sample_cap_is_rejected(self):
+        from soundbox.cdj_usb import run_renderer
+        rate=8000;actual=301;declared=400
+        with wave.open(str(self.audio),'wb') as out:
+            out.setnchannels(1);out.setsampwidth(2);out.setframerate(rate)
+            out.writeframes(bytes(actual*rate*2))
+        raw=bytearray(self.audio.read_bytes());raw[4:8]=(36+declared*rate*2).to_bytes(4,'little')
+        raw[40:44]=(declared*rate*2).to_bytes(4,'little');self.audio.write_bytes(raw)
+        request=self.root/'request.json'
+        import json
+        request.write_text(json.dumps(dict(audio=str(self.audio),bpm=True,key=False,min_bpm=70,max_bpm=180)))
+        with self.assertRaisesRegex(RuntimeError,'declared duration'):
+            run_renderer('analyze',self.root,request)
+        self.assertEqual(self.audio.read_bytes(),raw)
+
     def test_cancel_does_not_publish_a_result_or_change_audio(self):
         before = self.audio.read_bytes()
         with self.assertRaisesRegex(RuntimeError,'cancelled'):

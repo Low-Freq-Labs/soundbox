@@ -1,6 +1,6 @@
 # Project layout and retention
 
-Reviewed October 28, 2026. This describes the checkout, not the installed app's
+Reviewed October30, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 
 ## Active checkout
@@ -16,7 +16,7 @@ library or waveform caches.
 | `build/native/`, `build/check/` | Current development native library and latest release reports |
 | `build/rekordbox-write-proof/` | Small private copy-only prep-write evidence; no live-write authority |
 | AppData `rekordbox_recovery/` | Private native-reference evidence, encrypted baselines and shared Tag/Cue/Grid receipts; preserve unresolved recovery |
-| AppData `rekordbox-{tag,cue,grid}-authority.json` | Separate accepted source/library/schema/version scopes; manual BPM has an additional gate; source selection never generates permission |
+| AppData `rekordbox-{tag,cue,grid,playlist}-authority.json` | Separate accepted source/library/schema/version scopes; manual BPM has an additional gate; source selection never generates permission |
 | `soundbox-ipod-ref/`, `soundbox-waveform-ref/` | Private read-only regression fixtures and recovery/research captures |
 | `soundbox-cdj-ref/` | Private read-only CDJ research fixtures |
 
@@ -38,6 +38,41 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
+## Garbage collection — October30
+
+Sonny explicitly requested reclaiming test/build space, thinning rekordbox backup
+storage and bloated logs. This pass reclaimed8,635,621,376 available bytes
+(~8.04GiB), with~29.97GiB free afterward. Exact inventories, hashes and completion
+receipt: `~/Library/Logs/Soundbox/garbage-collection-2026-10-30/`.
+
+95 immutable encrypted captures now use independent APFS clones with only changed
+pages separately allocated. All164 inventoried captures retain their exact
+bytes/paths (10.48GB logical); native acceptance archives and reference captures
+were not deleted. Runtime baseline.db and unresolved journals were excluded, with
+both apps closed and the shared writer lock held. All16 source archive receipts
+and available/explicitly-retired payload hashes were checked afterward. Apparent
+folder sizes still count shared extents repeatedly; they do not measure reclaimed
+space. The complete independent recovery set must not be mistaken for duplicates
+to delete just because its logical size still looks large.
+
+Removed five superseded app bundles: analysis-rollbacks138/140/141/142 and the
+older info-layout138 bundle. At that cleanup checkpoint, installed147 and
+fallback146 remained; the subsequent release retention is recorded in HANDOFF. Rust debug/
+dependency/build output and mypy cache were removed; build now retains16MiB of
+native dylib, checked CDJ release binary, current check reports and copy-only
+proof. Re-running the full gate regenerates its disposable compiler output.
+The runtime log retains its latest2MiB; the complete previous21MiB is verified
+in previous-runtime.log.gz at the cleanup root.47 large diagnostic JSON files
+are transparently compressed with unchanged logical contents and paths.
+
+Actual source DB/XML, library.json,4041 art/review files,3282 waveform records,
+4 authorities, installed app and all required fixture manifests remain unchanged.
+No runtime source changed during cleanup. The subsequent analysis/native-playlist
+release passed its unlocked gate, installed/restarted build148 and reverified
+curation. Post-install cleanup retains only fallback147 and the16MiB checked
+binaries/reports;146 and regenerated packaging/compiler output are retired.
+Final restart and retention facts are recorded in HANDOFF.
+
 ## Current UI/waveform evidence — October30
 
 The October29/30 alignment, choices and Graveyard release has fresh private QA
@@ -45,7 +80,7 @@ at `~/Library/Logs/Soundbox/choices-graveyard-waveform-2026-10-29/`: frozen
 before/after phase frames, metrics, Cocoa controls, test logs and safe installation
 records. It does not revive the deleted development archive. Protected source,
 iPod and CDJ references remain separate. Keep the existing single rollback root
-pending Sonny's acceptance; exact installed/build/retention facts are in HANDOFF.
+as reduced by the garbage collection above; exact installed/build/retention facts are in HANDOFF.
 This follow-up retired `build/personal`, duplicate `dist/personal`, Rust debug/
 dependency caches, mypy cache and the current arm64 PyInstaller binary cache after
 verified installation. These are reproducible output, separate from retained

@@ -226,6 +226,7 @@ class RefreshWorker(QThread):
         self.database_path = database_path
         self.preflight = None
         self.selection_path = None
+        self.retained_tracks = {}
         self.result = None
         self.error = ""
 
@@ -233,7 +234,8 @@ class RefreshWorker(QThread):
         try:
             if self.preflight is not None:
                 self.preflight(self.database_path or rekordbox_db.REKORDBOX_DB)
-            lib = rekordbox_db.load_live(self.database_path)
+            lib = (rekordbox_db.load_live(self.database_path,retain_tracks=self.retained_tracks)
+                   if self.retained_tracks else rekordbox_db.load_live(self.database_path))
         except Exception as exc:  # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
             self.failed.emit(self.error)

@@ -65,6 +65,27 @@ repository can answer the question.
   actual-source downbeat/BPM acceptance passed October 27. Intelligent-playlist creation remains disabled pending its own proof.
   Sonny operates the rekordbox UI for reference/acceptance actions;
   ask for specific actions rather than driving it remotely. See `docs/rekordbox-prep.md`.
+- Ordinary desktop playlist/folder create, rename and delete plus registered-track
+  append/remove passed native acceptance October30 through
+  `soundbox.rekordbox_playlist_store`. Its separate explicit authority binds the
+  exact source/library/schema/6.8.7.0303 version; selecting a source or replaying
+  an old pilot never provisions it. Allow regular local0/1 sync states with no
+  cloud USN and verified UUID/local counters. Source SQL is confined to playlist/
+  membership rows and localUpdateCount; Collection/content/cue/analysis/audio are
+  preserved. Deletions retain native history/XML and sibling ordering. It shares
+  Tag/Cue/Grid root/lock/journal and the one desktop source worker, requires
+  rekordbox/agent closed, stages encrypted DB/XML pairs, and validates exact
+  recovery prefixes before another edit. Native acceptance archives retain full
+  pairs; ordinary completed backups retain the latest full pair plus permanent
+  row/XML/operation receipts with verified, resumable older-payload retirement.
+  Pending UI intents persist before worker admission and survive restart; no
+  local veto substitutes for a source save. Retry renews stale/rolled-back intent
+  identity/revision/clock, while committed receipts replay idempotently. Normal
+  quit drains active source work; unstarted playlist intents remain durable.
+  CDJ capture waits for these edits and rebinds native selections by stable ID;
+  deleted selections or changed sources cancel before export. Exact UUID pins
+  retain affected tracks in SoundBox Collection without registering new files.
+  Intelligent/cloud mutations and new-track registration remain separate gates.
 - Rekordbox analysis is read-only outside the accepted October 27 grid API.
   `soundbox.rekordbox_grid_store.PilotGridStore` requires an explicitly accepted
   exact library/schema/version authority, bound per operation to the track/UUID,
@@ -385,19 +406,25 @@ path/audio digest/exact identity and can follow a later native track ID. Native
 and manual grids/source cues remain authoritative. Sonny requires analysis shared
 both ways independent of which app imports first; reverse detected-analysis/Key
 publication is still gated by its own native reference and authority, not the
-accepted manual-grid API. Ordinary native playlist CRUD also remains gated;
-copy-only unsynced playlist lifecycle/membership replay does not authorize source
-publication.
-The separate unintegrated playlist pilot was explicitly approved and natively
-accepted October30 for its exact prepared plan digest. It created/named one
-SoundBox Bridge Pilot playlist and appended its two bound existing unsynced
-reference tracks. Sonny verified order, BPM/Key and the existing Memory Cue;
-normal native quit preserved the exact playlist pair. Both apps were closed
-for publication; the shared Tag/Cue/Grid root/lock/journal, encrypted DB/XML
-backups, exact recovery pairs and fresh source/schema/version guards remain
-mandatory. This receipt authorizes no further source test or production CRUD,
-registration or analysis API. Preserve its private approval/acceptance and
-recovery receipts. Read docs/analysis-playlists-next.md for scope/next steps.
+accepted manual-grid API. Ordinary native playlist management now has its own
+October30 authority after11 exact native DB/XML/rollback replays and12 actual
+source CRUD operations followed by Sonny's native inspection/normal save. The
+current permission is separate from the earlier exact-plan Bridge Pilot approval
+and the two specifically approved synthetic NEW-row reference seeds. Those old
+receipts never authorize arbitrary future source tests or changing existing
+sync flags. Preserve every native reference, approval and recovery archive.
+Current implementation/installed status lives in HANDOFF; the broader scope and
+remaining registration/analysis gates are in docs/analysis-playlists-next.md.
+
+October30 upstream audit uses pinned rbxport b739d369 (also current upstream at
+audit time). Explicit detection defaults to its adaptive/high-precision pipeline,
+with a bounded thirty-minute/96M-sample head and a full streamed tail check.
+Legacy constant-v1 results remain valid; component provenance survives partial or
+inconclusive reanalysis. Native/manual grids and existing cues stay authoritative;
+this grants no new source analysis-write permission. The 3BAND overview now keeps
+all seven layer-overlap colors. Accepted main-lane RGB/BLUE/3BAND geometry and
+color remain protected by before/after native drawables. See the dated reference
+audit for exact upstream values, observed differences and validation limits.
 
 SoundBox playlist folders are local organization in the bounded, validated
 `settings.custom_playlist_tree`; membership remains in `custom`. Folder moves
@@ -406,7 +433,8 @@ receives the actual folder_path. Folder drags expand to descendant playlist
 intents. Collection/Artists stay pinned; folder deletion reviews its contained
 playlists and preserves Collection/source audio. The context menu is New Playlist,
 New Folder, Rename, Delete. Composite Rockbox catalogue files remain numbered and
-top-level. None of this enables source rekordbox playlist or registration writes.
+top-level. These local folders remain independent of the separately accepted
+native playlist writer and never register new source tracks.
 Folder clicks only expand/collapse; only selecting a playlist activates its view.
 Navigation focus must not retarget browser refreshes, track drops or removal actions.
 
@@ -541,7 +569,8 @@ reconstruction; every mode/zoom integrates every lattice corner. Accepted close
 RGB motion/footprint/occupancy remains intact. Current release/install state and
 fresh frozen phase comparisons are in HANDOFF; visual acceptance remains open.
 Mini RGB brightness matching retains the main RGB faint-only shoulder and
-encoded-space blend; BLUE/3BAND overviews keep their existing resolve. Preserve the new references,
+encoded-space blend; BLUE retains its existing resolve, and the October30 3BAND
+overview retains independent layers with the seven native palette colors. Preserve the new references,
 acceptance receipts and main-lane parity evidence. Active
 `build/native`, `build/check`, required reference roots and native recovery stay
 in place. Closure does not claim perfect native appearance or presentation cadence.

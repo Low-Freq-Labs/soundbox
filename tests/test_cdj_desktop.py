@@ -88,6 +88,41 @@ class CdjDropIntent(unittest.TestCase):
         pending[0]()
         host._begin_cdj_export.assert_called_once_with('/not-a-device',playlists,settings=None,from_drop=True,drop_target=(7,'fixture'),standalone=())
 
+    def test_pending_native_playlist_save_drains_before_export_and_rebinds_membership(self):
+        from soundbox.library import Playlist
+        old=Playlist('Before',[],['one','two'],'1000');new=Playlist('After',[],['one'],'1000')
+        pending=[];controller=SimpleNamespace(pending=[object()],queue_error=lambda:'')
+        lib=SimpleNamespace(source='/synthetic/master.db',source_library_id='synthetic',playlists=[old])
+        host=SimpleNamespace(_shutting_down=False,lib=lib,_begin_cdj_export=mock.Mock(),
+            _defer_device_operation_until_scan_finishes=lambda _:False,_device_operation_owned=lambda:False,
+            tag_controller=SimpleNamespace(owned=False),playlist_controller=controller,
+            _start_pulse=mock.Mock(),cancel_btn=mock.Mock())
+        with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
+            CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',[old],from_drop=True,drop_target=(7,'fixture'))
+        host._begin_cdj_export.assert_not_called()
+        controller.pending=[];lib.playlists=[new];pending[0]()
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',[new],settings=None,
+            from_drop=True,drop_target=(7,'fixture'),standalone=())
+
+    def test_playlist_deleted_or_source_switched_while_waiting_cannot_export_old_rows(self):
+        from soundbox.library import Playlist
+        for switch in (False,True):
+            with self.subTest(source_switched=switch):
+                old=Playlist('Before',[],['one'],'1000');pending=[]
+                controller=SimpleNamespace(pending=[object()],queue_error=lambda:'')
+                lib=SimpleNamespace(source='/synthetic/master.db',source_library_id='synthetic',playlists=[old])
+                host=SimpleNamespace(_shutting_down=False,lib=lib,_begin_cdj_export=mock.Mock(),
+                    _defer_device_operation_until_scan_finishes=lambda _:False,_device_operation_owned=lambda:False,
+                    tag_controller=SimpleNamespace(owned=False),playlist_controller=controller,
+                    _start_pulse=mock.Mock(),_stop_pulse=mock.Mock(),_flash_status=mock.Mock(),cancel_btn=mock.Mock())
+                with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
+                    CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',[old],from_drop=True,drop_target=(7,'fixture'))
+                controller.pending=[]
+                if switch:lib.source_library_id='different-native-library'
+                else:lib.playlists=[]
+                pending[0]();host._begin_cdj_export.assert_not_called()
+                self.assertIsNone(host._cdj_waiting);host._flash_status.assert_called_once()
+
     def test_settings_and_update_actions_publish_without_a_second_review(self):
         host,started=self.host()
         plan=SimpleNamespace(changes=[SimpleNamespace(new_sha256='hash',size=1,path='catalog')],close=mock.Mock())

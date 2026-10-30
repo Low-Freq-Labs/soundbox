@@ -12,6 +12,12 @@ from soundbox import cdj_export, cdj_transaction
 from .devices import device_facts
 
 
+def _source_edits_pending(host):
+    controller=getattr(host,'playlist_controller',None)
+    return bool(host.tag_controller.owned or controller and
+                (controller.pending or controller.queue_error()))
+
+
 class CdjWorker(QThread):
     progress = Signal(int, int, str)
 
@@ -46,19 +52,31 @@ class CdjDeviceMixin:
             return
         # Accepted source edits drain before freezing a generation; a timer keeps
         # Qt delivery and the native player alive while that FIFO finishes.
-        if self.tag_controller.owned:
+        if _source_edits_pending(self):
+            native_ids={p.pid for p in getattr(self.lib,'playlists',())}
+            selected_native={getattr(p,'pid',None) for p in playlists} & native_ids
+            source_binding=(str(self.lib.source),self.lib.source_library_id) if hasattr(self.lib,'source') else None
             request = (dev, tuple(playlists), settings, from_drop, drop_target)
             self._cdj_waiting = request
-            self._start_pulse('Waiting for cue/grid saves')
+            self._start_pulse('Waiting for source edits')
             self.cancel_btn.setVisible(True)
             def ready():
                 if self._shutting_down or self._cdj_waiting is not request:
                     return
-                if self.tag_controller.owned:
+                if _source_edits_pending(self):
                     QTimer.singleShot(100, ready)
                     return
                 self._cdj_waiting = None
-                self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)
+                selected=playlists
+                fresh={p.pid:p for p in getattr(self.lib,'playlists',())}
+                if (source_binding is not None and source_binding!=(str(self.lib.source),self.lib.source_library_id)
+                        or selected_native-fresh.keys()):
+                    self._stop_pulse();self.cancel_btn.setVisible(False)
+                    self._flash_status('Library or selected playlist changed; choose the playlist again',15)
+                    return
+                if selected_native:
+                    selected=[fresh[p.pid] if p.pid in selected_native else p for p in playlists]
+                self._begin_cdj_export(dev, selected, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)
             QTimer.singleShot(100, ready)
             return
         profile = self._device_profiles.get(dev)

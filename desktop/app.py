@@ -158,11 +158,12 @@ from .player import PlayerBar
 from .device_browser import DeviceBrowserMixin
 from .devices import device_facts, device_fs, human
 from .settings_page import SettingsPageMixin
+from .rekordbox_playlists import NativePlaylistsMixin, PlaylistEditController
 from .track_info import TrackInfoMixin
 from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
-    CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, PATH_ROLE,
+    CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, PATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE,
     ArtistsTree, CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
 )
 
@@ -342,7 +343,7 @@ from .cdj import CdjDeviceMixin
 from .track_menu import TrackMenuButton, TrackMenuMixin
 
 
-class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -480,7 +481,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         self._pending_device_operation = None
         self._accordion_guard = False
         self._prep_update_message = ''
-        self.tag_controller = TagEditController(data_dir, self)
+        self.tag_controller = TagEditController(data_dir,self,loader=lambda source:
+            rekordbox_db.load_live(source,retain_tracks=self.settings.get('rekordbox_collection_tracks',{})))
         self.grid_controller = GridEditController(self.tag_controller, self,
                                                   cache_dir=self._track_analysis_dir,
                                                   prepare_cache=self._prepare_grid_cache)
@@ -489,6 +491,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         self._initial_state = self._state_repository.load()
         self.settings.update(self._initial_state.get('settings') or {})
         self._apply_theme_color(self.settings.get('theme_accent'), save=False)
+        self.playlist_controller = PlaylistEditController(self)
         self._build_ui()
         self.player_bar.analysis_cache_admitted = lambda tid: not self.grid_controller.pending(tid)
         self.tag_controller.changed.connect(self._sync_tags)
@@ -758,8 +761,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
 
     def _playlist_rows(self, display_path: str) -> list[dict]:
         """Rows for a rekordbox playlist, in sacred order — via the row cache."""
-        pl = next((p for p in self.lib.playlists if p.display_path == display_path),
-                  None) if self.lib else None
+        pl = self._native_view_playlist(display_path)
         return self._rows_for(self.lib.resolve(pl)) if pl is not None else []
 
     def _invalidate_rows(self, track_ids=None) -> None:
@@ -1979,7 +1981,12 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         self.tree = PlaylistTree()
         self.tree.setHeaderHidden(True)
         self.tree.setDragEnabled(True)
-        self.tree.setDragDropMode(QAbstractItemView.DragOnly)
+        self.tree.setDragDropMode(QAbstractItemView.DragDrop)
+        self.tree.setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(False)
+        self.tree.tracks_dropped.connect(self._native_append)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._native_tree_menu)
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
         self.tree.setMinimumHeight(72)
@@ -2045,6 +2052,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         # No keypress/double-click editing — a stray Space would wipe a cell. The
         # ONLY way in is the right-click menu (which calls self.table.edit()).
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.rekordbox_tracks_dropped.connect(self._native_append)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context)  # edit or art
         self.table.doubleClicked.connect(self._play_row)  # double-click preserves playback
@@ -2427,14 +2435,14 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         if pending is not None and not self._shutting_down:
             self._start_library_cache(pending)
 
-    def _find_tree_item(self, path: str):
+    def _find_tree_item(self, path: str, identity=None):
         """Locate a playlist tree item by its display path (PATH_ROLE)."""
         stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
         while stack:
             it = stack.pop()
             if it is None:
                 continue
-            if it.data(0, PATH_ROLE) == path:
+            if (it.data(0,RB_NODE_ROLE)==identity if identity else it.data(0,PATH_ROLE)==path):
                 return it
             for i in range(it.childCount()):
                 stack.append(it.child(i))
@@ -2451,6 +2459,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         active = getattr(self, '_view_key', '') or ''
         if cur is not None and not prev and active.startswith('rb:'):
             prev = active[3:]
+        prev_pid=(getattr(self,'_active_native_playlist_id',None) if active.startswith('rb:') else None)
         self.tree.blockSignals(True)
         try:
             self.tree.clear()
@@ -2461,7 +2470,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         self._refresh_custom()  # Collection count tracks the freshly loaded library
         # Restore the prior selection if it still exists (expand to it + re-show rows).
         if prev:
-            it = self._find_tree_item(prev)
+            it = self._find_tree_item(prev,prev_pid)
             if it is not None:
                 self._accordion_guard = True
                 p = it.parent()
@@ -2475,11 +2484,14 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
 
     def _make_item(self, node: dict) -> QTreeWidgetItem:
         it = QTreeWidgetItem()
+        it.setData(0,RB_NODE_ROLE,node.get("pid"))
+        it.setData(0,RB_NODE_KIND_ROLE,node.get("attribute"))
         if node["type"] == "playlist":
             it.setText(0, f"♪  {node['name']}  ({node['count']})")
             it.setData(0, PATH_ROLE, node["path"])
         else:
             it.setText(0, node["name"])
+            it.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
             it.setFlags(it.flags() & ~Qt.ItemIsSelectable)
             for c in node.get("children", []):
                 it.addChild(self._make_item(c))
@@ -2557,6 +2569,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         if not self._device_operation_owned():
             self._start_pulse("Loading")
         w = RefreshWorker(path)
+        w.retained_tracks = {k:dict(v) for k,v in self.settings.get('rekordbox_collection_tracks',{}).items()
+                             if isinstance(v,dict)}
         w.preflight = self.tag_controller.recover_before_read
         if selection:
             w.selection_path = str(path)
@@ -2628,6 +2642,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
 
     def _rb_header_menu(self, widget, pos):
         menu = QMenu(self)
+        self._native_menu_actions(menu)
+        menu.addSeparator()
         menu.addAction("Refresh from rekordbox", self._refresh_rekordbox)
         menu.addAction("Open XML…", self._open_dialog)
         menu.addSeparator()
@@ -2800,6 +2816,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         if not path:
             return  # Folder navigation does not change the active playlist/view.
         self._select_only(self.tree)
+        self._active_native_playlist_id=cur.data(0,RB_NODE_ROLE)
         if self.lib is None:
             return
         self._stash_view()
@@ -2904,8 +2921,9 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         """What a drop on the main browser targets, or None to reject it.
         Mirrors the sidebar: a custom SoundBox playlist takes tracks + files;
         Collection imports files only (no "add", it's every track already);
-        Artists (derived from tags) and read-only rekordbox (rb:) views reject —
-        the sacred rule means rekordbox is never written to."""
+        Artists remains derived. Regular native rekordbox views accept existing
+        registered tracks through the guarded source lane; file drops wait for
+        the separate native-registration protocol."""
         key = getattr(self, "_view_key", None)
         if not key:
             return None
@@ -2915,7 +2933,11 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
             name = key[3:]
             if name in getattr(self, "custom", {}):
                 return ("playlist", name)
-        return None  # sb:Artists, rb:<path>, or anything unrecognized
+        if key.startswith('rb:') and self.lib and self.lib.source_playlist_catalog:
+            pl=self._native_view_playlist(key[3:])
+            node=self._native_node(pl.pid) if pl else None
+            if node and node['Attribute']==0:return ('rekordbox',pl.pid)
+        return None  # derived/unsupported views
 
     def _on_tracks_dropped(self, name: str, ids: list[str]):
         bag = self.custom.setdefault(name, [])
@@ -6110,24 +6132,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
                        lambda: self._delete_tracks(ids))
 
     def _remove_from_rb_playlist(self, display_path: str, ids: list[str]):
-        """Take tracks out of ONE rekordbox playlist, SoundBox-side only (a veto
-        list keyed by the stable pid) — Collection and other playlists keep them.
-        Changes the playlist's effective sig → synced devices show drift."""
-        pl = next((p for p in self.lib.playlists
-                   if p.display_path == display_path), None) if self.lib else None
-        if pl is None:
-            return
-        if not pl.pid:
-            QMessageBox.information(self, "Not available",
-                                    "Removing tracks needs the live rekordbox library "
-                                    "(XML playlists have no stable identity).")
-            return
-        bag = dict(self.removals.get(pl.pid, {}))
-        stamp = time.strftime("%Y-%m-%d %H:%M")  # minute precision — same-day deletes sort truthfully
-        for i in ids:
-            bag.setdefault(i, stamp)
-        self.removals[pl.pid] = bag
-        self._after_track_edit(f"Removed {len(ids)} ✓")
+        """A native playlist gesture must publish to rekordbox, never a local veto."""
+        self._native_remove(display_path,ids)
 
     def _remove_from_custom(self, name: str, ids: list[str]):
         """Custom SoundBox playlists are ours — remove for real."""
@@ -7331,6 +7337,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         if hasattr(self,'_remember_stock_device_view'):
             self._remember_stock_device_view()
         self._shutting_down = True
+        if getattr(self,'playlist_controller',None) is not None:
+            self.playlist_controller.stop()
         self._cdj_waiting = None
         keyboard = getattr(self, "_keyboard_router", None)
         if keyboard is not None:
@@ -7469,6 +7477,9 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         if not force and self._stock_view_warming:
             self._start_ipod_loading_status()
             return False
+        playlist_status=getattr(getattr(self,'tag_controller',None),'playlist_update_status','')
+        if text=='Ready' and playlist_status:
+            text=playlist_status
         if (text == "Ready" and self._preparing_library
                 and self._background_status_available()):
             self._show_preparation_status()

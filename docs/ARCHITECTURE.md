@@ -78,11 +78,11 @@ lets a later coherent native export supersede an older interrupted catalog inten
 USB/global My Settings use44 logical fields and byte-preserving selected patches;
 no automatic global propagation. usb_format revalidates the reviewed physical USB
 before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_info
-overrides feed display/export; browsercache schema2 and libcache schema8 preserve
-these fields without analysis/art rebuilds. No additional source DB write API exists
-in the shipped desktop app. A separate standalone playlist pilot under research
-has an exact-plan approval gate, the shared native-edit recovery root/lock/journal,
-and no production authority or app loader; see the current handoff.
+overrides feed display/export; browsercache schema2 and libcache schema9 preserve
+these fields without analysis/art rebuilds. The ordinary desktop playlist API
+shares the accepted Tag/Cue/Grid lane and has separate explicit authority. The
+historical standalone pilot under research has only its exact-plan approval,
+shared recovery root/lock/journal and no general authority or app loader; see HANDOFF.
 
 `desktop.track_menu` supplies the evenly spaced button immediately right of Q.
 Beat-count mode is persisted separately from waveform color and uses cached
@@ -111,7 +111,12 @@ Its three inset groups align labels and 30-point control rows; the section heade
 and preservation note retain the outer edge.
 `soundbox.analysis` captures one hashed local audio snapshot, then the optimized
 Rust helper reuses pinned rbxport DSP. Decoding checks bounds before collection
-and caps the buffer at300seconds/32million mono samples. Results are durable
+and bounds the analysis head to thirty minutes/96million mono samples. The
+remaining tail is streamed, with finite/frame/format checks, before extending the
+last measured tempo. The default adaptive/high-precision pipeline follows tempo
+changes and uses upstream downbeat/key rules without a genre selector. Legacy
+constant-v1 results remain valid; partial/inconclusive components preserve their
+prior data/provenance for the same bytes. Results are durable
 `settings.analysis_results`, keyed by canonical path with SHA-256, exact source
 identity and engine provenance, allowing a direct import and later native ID to
 share data. Playback overlays detected fallback grids in its existing worker;
@@ -127,8 +132,9 @@ transport with its own approved create/name/two-track intent, target-only live
 reads, snapshot inventories and restrictive SQL authorizer. Both apps must be
 closed. Its exact October30 publication subsequently passed Sonny's native
 inspection and normal-save comparison; SQL commit alone never establishes that
-acceptance. The private receipt grants no further operations. General ordinary
-playlist CRUD, registration and analysis publication remain unintegrated/gated.
+acceptance. That historical receipt grants no further operations. The broader
+ordinary-playlist API subsequently passed its separate October30 native/source
+acceptance below; registration and analysis publication remain gated.
 
 ## Engine modules (`soundbox/`)
 
@@ -844,8 +850,10 @@ refresh, preserving compressed waveform payloads.
   resolve media paths. Only unknown-date birthtime fallback uses `_landed_cache`.
 - **Drag-to-add works on the sidebar AND the main browser.** Dropping tracks or
   Finder audio onto the open view adds to the playlist it shows; Collection
-  imports files only; Artists (tag-derived) and read-only rekordbox views reject
-  every drop (`TrackTable.resolve_drop` gates it; drops never write rekordbox).
+  imports files only; Artists remains derived. Regular native rekordbox views
+  accept already registered track IDs through the accepted source worker; Finder
+  imports still require the separate registration protocol.
+  `TrackTable.resolve_drop` binds each drop to the active view.
 - **SoundBox playlist folders are local organization.** `soundbox.playlist_folders`
   validates a bounded nested `settings.custom_playlist_tree`: UUID/name/children
   folder records and references to existing custom playlist names. Membership
@@ -1208,6 +1216,26 @@ beside both waveform and prep rows; standalone PlayerBar keeps its embedded
 transport. The default 1 Player dropdown exposes disabled 2 Player/Simple/Browser
 placeholders and stores no setting or mode transition.
 
+October30 accepted ordinary playlists:
+`rekordbox_playlist_plan` is a pure row/counter planner, `_xml` preserves lexical
+native tokens, and `_store` stages encrypted DB/XML pairs under the shared native
+edit root/lock/journal. Source SQL is limited to playlist/membership targets and
+localUpdateCount; exact before/after affected states govern recovery. The separate
+explicit library/schema/version authority was provisioned after11 exact native
+replays,12 actual CRUD operations and Sonny's native inspection/normal quit.
+`desktop.rekordbox_playlists` persists immutable FIFO intents before admission to
+the Tag/Cue/Grid TaskOwner, waits for closed native apps, verifies source saves,
+and persists renewed retry identities/clocks before publication. A committed
+operation replays unchanged. Unstarted intents survive restart; active source
+work drains on normal quit. Collection UUID pins retain affected native songs
+without granting registration or analysis authority. Raw playlist catalogs/clocks
+and empty folders travel in cache9; older snapshots paint read-only until verified.
+Catalog arrays encode bounded rows. CDJ capture also waits for durable playlist
+intents, rebinds native selections by PID, and rejects deleted selections or source
+changes before export. The ordinary backup-retirement pointer binds exact
+committed receipts and resumes deletion of only older completed DB payloads;
+full acceptance archives remain protected. Scope: [prep guide](analysis-playlists-next.md).
+
 Live Tag/Cue/Grid backups use `rekordbox_write.encrypted_backup`: a stable raw
 DB/WAL copy, one encrypted checkpointed copy with SQLite integrity/identity
 checks, and existing exact-hash/fsync/recovery publication. SQL still opens only
@@ -1226,3 +1254,11 @@ binds those changes with DAT/EXT and SQL. Enter captures exact hundredths plus
 track identity; browser row confirmation follows the saved signal, never RAM
 preview. The player layout field uses a rounded custom painter with an inset
 chevron and the shared Qt choice popup; transport row/column gaps both use 5 px.
+
+October30 upstream tuning: [the audit](rbxport-reference-audit-2026-10.md) pins the
+current public source and compares analysis options and waveform semantics. The
+3BAND overview now integrates independent existing PWV7 layer profiles with the
+same seven membership colors as the main lane. Its former dominant-band function
+is removed. No cache/schema/clock/transport change is required. Native before/after
+captures preserve all39 checked main drawables across three modes/13zooms. BLUE
+and RGB palette/geometry and the accepted 3BAND main lane remain unchanged.

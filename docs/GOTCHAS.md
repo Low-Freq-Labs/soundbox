@@ -3,6 +3,41 @@
 Hard-won + researched. **Read before touching workers, playlists, sync, art, or
 the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 
+## Native playlist writer — accepted October30
+
+- A local membership veto is not a rekordbox save. The writer replaces the
+  removal gesture with a durable, identity-bound source intent and leaves the
+  native membership visible until verified publication. An error says the edit
+  needs attention; interrupted publication may already have committed. Explicit
+  retry replays a committed receipt without duplicate creation, or persists a new
+  operation/revision/clock before attempting a previously rolled-back/stale edit.
+- Use the same Tag/Cue/Grid owner, lock and journal. Source authority is an
+  explicitly provisioned exact library/schema/version file, never a cached tree.
+  Pending work waits while rekordbox/agent are open. Unknown recovery blocks all
+  domains; source audio, Collection rows, cues and analysis are outside SQL scope.
+- Native deletion differs by row history. Unsynced rows delete physically; the
+  approved older two-entry reference keeps playlist/member tombstones and uses
+  three counter groups. Single-entry removal updates every active survivor in
+  one group, even unchanged TrackNo values. Missing legacy XML is not universally
+  created: ordinary membership edits can add a zero-clock node, but deletion
+  retains its absence. The native empty/folder and mixed-member references also
+  pass; bulk UI gestures compose the proven single-entry edits.
+- A persisted playlist FIFO is not TagEditController.owned: its pump waits for
+  that owner. Including its own pending jobs in owned deadlocks admission. CDJ
+  export checks both independently, waits without reserving a device operation,
+  and rebinds native playlist IDs after saving. Deleted selections/source changes
+  cancel before capture; mount/UUID and standalone intents survive deferral.
+- Preserve removed songs in Collection using exact native UUID pins bound to the
+  source library. These pins are display retention, never registration or source
+  permission. Cache schema9 stores raw playlist rows/clocks and empty folders;
+  encode its catalog one row at a time, as with tracks. Intelligent memberships
+  retain their computed keys when their containing folder is renamed.
+- Acceptance captures keep full encrypted pairs. Normal retention keeps
+  the latest full pair and permanent row/XML/operation receipts. Older completed
+  DB payload retirement must verify receipts/hashes, journal its own progress and
+  resume safely; it must never touch unresolved or native-acceptance evidence.
+
+
 ## Repo hygiene
 - Current guidance and historical evidence are separated; see
   [project layout](PROJECT_LAYOUT.md) before cleaning ignored files. Required
@@ -27,7 +62,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   compare curated state. Never use `rm -rf /Applications/Soundbox.app`; never
   replace or clear SoundBox AppData as part of an app install.
 
-## Offline native playlist references
+## Historical offline native playlist references
 
 - Root playlist creation and renaming are separate native operations. The isolated
   6.8.7 reference increments the local counter once for each, retaining the new
@@ -36,9 +71,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - The observed last-root single-member deletion removes DB playlist/membership
   rows while preserving the entire content table and byte-identical playlist XML,
   even after normal quit. Its retained XML node is not an orphan to clean up.
-  Other deletion shapes remain unaccepted. Paired copy recovery is now proven;
-  the October30 exact create/name/two-add source pilot has now passed native
-  inspection/save. Other source operations retain separate acceptance gates.
+  At that checkpoint other deletion shapes were unaccepted. Paired copy recovery
+  and the narrow source pilot subsequently passed, followed by the broader
+  ordinary API acceptance described above. Registration/analysis remain separate.
 - Explicit frozen-copy replay is strict by default. A reference-only
   notificationNextFetch.updated_at difference can be audited explicitly, but
   must remain visible as complete_semantic_match=false. Never rewrite the
@@ -52,8 +87,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - Check XML again after recovery inventory reads and immediately before rollback.
   The standalone pilot holds SQLite's writer lock while validating the pair and
   restoring XML. Its transport lease reuses native guards, not Cue permission.
-  Separate exact-plan approval is mandatory; no app loader consumes that approval
-  or provisions general native playlist/analysis authority.
+  The historical standalone pilot's exact-plan approval is never consumed by an
+  app loader. Ordinary playlists later passed a separate October30 acceptance and
+  use their own explicit authority; analysis publication remains separate.
 
 ## Qt / PySide6 (these bite HARD)
 - **Tree stripes and embedded controls need explicit geometry.** QTreeView paints
@@ -1969,3 +2005,22 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   Include those identities in locally bound interrupted-work receipts. Preserve
   native/managed playlists and prove the unchanged repeat performs no writes or
   retained media reads. Harnesses still deny live source/device discovery.
+
+## Upstream analysis/waveform tuning — October30
+
+- `AnalysisPreset::Rekordbox` and `Rbxport` are not equivalent in the pinned code:
+  the former disables tempo following. Our default now uses the adaptive preset
+  and attack placement. Keep scheduling priority distinct from DSP choices.
+- A full head is not proof of a valid tail. Stream past the bounded30-minute/96M
+  head and compare declared frames even after it fills. Unknown codec endpoints
+  still confer no source-publication authority. Preserve legacy analysis and each
+  component's engine when a partial or inconclusive result retains previous data.
+- PWV5's even red0–14 extraction/division is equivalent to0–7; do not halve red
+  twice or copy upstream per-row peak normalization over accepted RGB display
+  policy. All seven 3BAND palette values already matched. The demonstrated issue
+  was overview layer loss, fixed by independent profiles rather than new colors.
+- Upstream's own waveform notes distinguish empirical calibration, detail/overview
+  data and conditional close-zoom heuristics. Reference code alone does not prove
+  universal pixel parity. Preserve frozen inputs and compare actual native draws;
+  the scoped39-frame main-lane before/after comparison is exact. See the
+  [audit](rbxport-reference-audit-2026-10.md) for constants and limitations.

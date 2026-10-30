@@ -320,6 +320,27 @@ class SelectedDatabase(unittest.TestCase):
             self.assertTrue(snapshots)
             self.assertFalse(snapshots[0].parent.exists())
 
+    def test_collection_pin_keeps_only_the_same_active_native_uuid_after_last_membership_removal(self):
+        from soundbox import rekordbox_db
+        track=TrackMapping()._track(UUID='expected-native-uuid')
+        db=FakeDB(tracks=[track]);db.close=lambda:None
+        with tempfile.TemporaryDirectory() as area:
+            source=Path(area)/'master.db';source.write_bytes(b'private synthetic source')
+            with mock.patch('pyrekordbox.Rekordbox6Database',return_value=db), \
+                    mock.patch.object(rekordbox_db,'_playlist_catalog',return_value={}), \
+                    mock.patch.object(rekordbox_db,'_populate_cue_edit_state'):
+                lib=rekordbox_db.load_live(source)
+                self.assertEqual(lib.tracks_by_id,{})
+                lib=rekordbox_db.load_live(source,retain_tracks={'synthetic-library':{'265095720':'expected-native-uuid'}})
+                self.assertEqual(set(lib.tracks_by_id),{'265095720'})
+                wrong=rekordbox_db.load_live(source,retain_tracks={'synthetic-library':{'265095720':'replaced-uuid'}})
+                self.assertEqual(wrong.tracks_by_id,{})
+                foreign=rekordbox_db.load_live(source,retain_tracks={'another-library':{'265095720':'expected-native-uuid'}})
+                self.assertEqual(foreign.tracks_by_id,{})
+                track.rb_local_deleted=1
+                deleted=rekordbox_db.load_live(source,retain_tracks={'synthetic-library':{'265095720':'expected-native-uuid'}})
+                self.assertEqual(deleted.tracks_by_id,{})
+
 
 class MyTags(unittest.TestCase):
     def test_flat_order_uses_categories_and_leaf_sequence_without_merging_names(self):

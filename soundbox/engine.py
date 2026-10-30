@@ -23,6 +23,26 @@ def load_library(xml_path: str | Path) -> Library:
 def playlist_tree(lib: Library) -> dict:
     """Nested folder/playlist tree for the sidebar (mirrors rekordbox)."""
     root: dict = {"name": "Playlists", "type": "folder", "children": []}
+    catalog=getattr(lib,'source_playlist_catalog',{})
+    if catalog:
+        active=[r for r in catalog['nodes'] if r.get('rb_local_deleted')==0 and r.get('Attribute') in (0,1,4)]
+        children: dict[str,list] = {}
+        for row in active:children.setdefault(row['ParentID'],[]).append(row)
+        visible={p.pid:p for p in lib.playlists}
+        def walk_native(parent,path,seen):
+            out=[]
+            for row in sorted(children.get(parent,[]),key=lambda r:r['Seq']):
+                if row['ID'] in seen:raise ValueError('Native playlist folder cycle')
+                if row['Attribute']==1:
+                    out.append(dict(name=row['Name'],type='folder',pid=row['ID'],
+                                    children=walk_native(row['ID'],path+[row['Name']],seen|{row['ID']})))
+                elif row['ID'] in visible:
+                    pl=visible[row['ID']]
+                    out.append(dict(name=pl.name,type='playlist',pid=pl.pid,attribute=row['Attribute'],
+                                    count=len(lib.resolve(pl)),path=pl.display_path))
+            return out
+        root['children']=walk_native('root',[],set())
+        return root
     index: dict[tuple[str, ...], dict] = {(): root}
 
     for pl in lib.playlists:

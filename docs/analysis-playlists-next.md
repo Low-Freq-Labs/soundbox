@@ -38,7 +38,7 @@ Analysis is immediately right of General in Settings. Its controls span the
 page in three aligned, inset groups; Memory Cue and automatic imports sit below.
 The section header and note retain the outer edge. Menus/dropdowns use right-hand
 checks and inset arrows, including the Analysis dialog and My Settings. BPM/Grid and Key run the
-pinned rbxport constant-tempo/key engine in the optimized local helper. Phrase
+pinned rbxport adaptive/high-precision tempo/key pipeline in the optimized local helper. Phrase
 is a disabled placeholder; no Normal/Dynamic mode or cloud controls. Automatic
 analysis of newly imported SoundBox files is opt-in and initially off. The
 first-analyzed-beat Memory Cue option is initially unchecked. Performance,
@@ -46,16 +46,21 @@ Normal and Power saving select child-process scheduling priority, preserving the
 same DSP and quality. BPM ranges are 70–180 default, 48–95, 58–115, 68–135,
 78–155, 88–175, 98–195, 108–215, 118–235 and 128–255.
 
-One source snapshot is captured while hashing. The helper decodes at most300
-seconds /32 million mono samples, checks rate/channel budgets before collecting,
-and bounds every append. A constant grid extends to the declared complete file
-end; without a declared end it remains bounded to the sampled span. A premature
-end encountered while decoding is rejected; a capped sample does not prove the
-unread tail. Source publication must separately establish complete endpoint and
-sidecar consistency. Silence/low-confidence tempo does not become an invented grid. Cancellation terminates/joins the child;
-TaskOwner retains the worker through finished delivery/join. Closing before
-result delivery cannot save; failure preserves previous results. There is no
-source audio retagging, waveform invalidation or audio reload.
+One source snapshot is captured while hashing. The helper retains up to thirty
+minutes /96million mono samples, checks rate/channel budgets before allocation,
+and bounds every append. It streams the remaining tail through EOF, checking
+finite samples, stable format and declared duration even after the head fills.
+Tracks within those bounds are analyzed completely; beyond the head the last measured
+tempo extends through the checked duration. The saved analysis records describe
+their measured span rather than claiming unmeasured transitions. Source publication
+must still separately prove endpoint and sidecar consistency. Silence/low-confidence
+tempo does not become an invented grid; unchecked or inconclusive components retain
+previous results for the same bytes. Legacy constant-v1 records remain valid, with
+component provenance retained on partial reanalysis. Cancellation terminates/joins
+the child; TaskOwner retains it through finished delivery/join. Failure preserves
+previous results. Source audio is never retagged, and detection does not invalidate
+waveforms or reload audio. The [upstream audit](rbxport-reference-audit-2026-10.md)
+records exact options, limits and comparison evidence.
 
 Results persist inside backed-up `library.json` as `settings.analysis_results`.
 Publication enforces the same64MiB ceiling as the reader before replacing any
@@ -137,13 +142,57 @@ The third WAV is an exact verified copy of the generated reference; SoundBox-fir
 remains unimported for the reverse-import proof. No further native action is
 currently requested; copy-only publication/recovery remains unfinished.
 
-## Ordinary source playlists — still gated
+## Ordinary source playlists — accepted October30
 
-Accepted scope: create regular playlists, add/remove songs, delete regular
-playlists. Collection tracks and source audio survive membership/playlist removal.
-Intelligent playlists remain separate. The standalone exact source pilot below
-has narrow native acceptance; no general ordinary-playlist publisher or
-production source authority is enabled yet.
+Regular local playlist/folder create, rename and delete plus registered-track
+append/remove passed actual-source acceptance on the exact current library,
+schema andrekordbox6.8.7.0303. Eleven frozen native DB/XML/rollback transitions
+match, followed by12 guarded source CRUD operations. Sonny verified native
+names/order,120BPM/8B and the existing Memory Cue, then quit normally. Native
+opening and final save retained the exact playlist/counter/XML result; content,
+cue and analysis tables were unchanged. A separate explicit production authority
+was provisioned afterward. The installed build/status remains in HANDOFF.
+
+`soundbox.rekordbox_playlist_plan`, `_xml` and `_store` now own ordinary scoped
+row/counter planning, lexical XML and encrypted paired recovery. Only playlist/
+membership rows and localUpdateCount may change. Native and agent must be closed;
+unknown cloud/sync states, stale identities and foreign recovery fail closed.
+Tag/Cue/Grid/Playlist share one worker, lock and journal. Acceptance archives
+retain full pairs; normal editing retains the latest full encrypted pair plus
+permanent row/XML/operation receipts, retiring only verified older completed DB
+payloads with resumable progress.
+
+`desktop.rekordbox_playlists` persists intents before admission, waits while
+rekordbox is open and updates membership after verified source save. Retry
+renews an explicitly retried stale/rolled-back operation's ID/revision/clock;
+committed receipts replay unchanged. Discard never reverses a saved source edit.
+Normal quit drains active work; unstarted intents survive restart. CDJ capture
+waits for pending playlist edits and rebinds selected native IDs afterward;
+deleted selections or changed libraries stop before export.
+
+Native unsynced rows delete physically. Older locally synced rows retain native
+tombstones: playlist/folder group first, members next when present, sibling-order
+group last even when there are no following siblings. Native empty deletion
+advances2 groups; nonempty advances3. Deletion retains all XML, including a missing
+legacy node. Single-song removal updates every active survivor in one additional
+group even when TrackNo is unchanged. Bulk selection composes proven single-entry
+operations rather than assuming an unobserved bulk counter formula. First legacy
+ordinary edits can add a missing XML node at zero; later edits touch its clock.
+
+Cache9 retains raw catalogs/clocks and empty folders. Exact UUID pins keep affected
+native songs in SoundBox Collection after their last playlist reference disappears;
+cache data and pins grant no registration/edit authority. Only the user-requested
+October30 local veto3604899226/109556371 was cleared after its verified native
+removal; unrelated older local vetoes remain. The acceptance's own temporary
+folder was removed through the accepted writer afterward, preserving Collection,
+cues/analysis and XML. Intelligent/cloud mutations, new-file registration and
+reverse detected-analysis publication remain separate unfinished milestones.
+
+## Historical prototype and first exact-plan pilot
+
+The following records describe the earlier isolated proof, before the broader
+October30 acceptance above. Their original exact approvals remain bounded to
+those operations; they are never a general permission loader.
 
 `research/cdj_export/playlist_reference.py` compares explicit frozen encrypted
 captures against their complete semantic inventories; it has no live defaults.
@@ -187,9 +236,10 @@ The XML is byte-identical before deletion, immediately after it and after normal
 quit: its63B7E4CA node survives with its previous Timestamp1793325835677. The old
 combined capture's timestamp advance must not be attributed to deletion itself.
 
-Deletion replay is deliberately narrower than general CRUD: only the last active
-root playlist with exactly one unsynced member. Empty/multiple-member deletion,
-folders and sibling renumbering remain unproven. Its reference also contains one
+This historical deletion replay was deliberately narrower than general CRUD:
+only the last active root playlist with exactly one unsynced member. Empty/
+multiple-member deletion, folders and sibling renumbering were unproven there;
+the separate ordinary API acceptance above subsequently covered them. Its reference also contains one
 independent `notificationNextFetch.updated_at` change. Default strict full-state
 replay rejects that difference. The explicit `--audit-notification-timestamp`
 mode verifies all other database state exactly, preserves the original registry
@@ -290,8 +340,9 @@ newly playlist-scoped references now enter its read-only browser (3742 tracks,
 76 playlists, Collection3230). This is scoped native acceptance, not production
 playlist, registration or analysis authority.
 
-General CRUD, other deletion shapes, sibling order, direct registration and
-analysis publication still need their remaining implementation/acceptance.
+The separate ordinary API acceptance above later completed general CRUD, other
+deletion shapes and sibling order. Direct registration and analysis publication
+still need their remaining implementation/acceptance.
 Never reuse this approval for a different operation or refresh a stale plan.
 
 ## Private evidence

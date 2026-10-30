@@ -182,6 +182,14 @@ Both use the same library format, local artwork controls, player and device guar
 
 ## What it does
 
+**Rekordbox playlists.** Right-click to create a playlist/folder, rename or
+delete it. Drag existing registered tracks onto a native playlist and use Remove
+from Playlist to save membership changes to rekordbox. Songs remain in Collection.
+Edits wait while rekordbox or its agent is open and report success after verified
+publication; pending errors offer Retry or Discard. This accepted writer is bound
+to the current library/version. Intelligent/cloud edits and registering newly
+imported SoundBox files in rekordbox remain separate work.
+
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
 temp snapshot — rekordbox can stay open) or an XML export as fallback; ↻
 Refresh any time. After relocating a file in rekordbox, refresh SoundBox (or
@@ -195,10 +203,16 @@ The October29 installed detection stage
 adds a three-line menu immediately right of Q that controls waveform color and beat-count
 display, exports the loaded native song to a USB collection without a playlist,
 and opens Analyze Track. Settings → Analysis controls opt-in BPM/Grid and Key
-detection; automatic analysis is off. Detected results are saved in SoundBox and
+detection; automatic analysis is off. Its default RBXport pipeline follows tempo
+changes with attack placement and downbeat selection, using the selected BPM
+range. Tracks within the thirty-minute/96M mono-sample bounds are analyzed
+completely, with longer tails streamed and the grid continued
+at the last measured tempo. Inconclusive results preserve prior musical data for
+the same audio. Detected results are saved in SoundBox and
 can follow the same audio into a later native track ID. Existing saved grids/cues
 are preserved. Reverse analysis publication into rekordbox is still pending native
-acceptance; see [the exact stage](docs/analysis-playlists-next.md). Five grid buttons occupy the left, enabled for a ready accepted
+acceptance; see [the exact stage](docs/analysis-playlists-next.md) and the
+[upstream comparison](docs/rbxport-reference-audit-2026-10.md). Five grid buttons occupy the left, enabled for a ready accepted
 track with Analysis Lock off; the BPM field after the first-beat button shows
 `000.00` while empty. On an accepted constant grid, type a BPM and press Enter:
 the loaded grid changes immediately, saves in the background, and the browser BPM

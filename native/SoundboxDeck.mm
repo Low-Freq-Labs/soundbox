@@ -3352,19 +3352,6 @@ inline float3 display_srgb_to_linear(float3 value) {
         (value + 0.055) / 1.055, float3(2.4));
     return select(upper, lower, value <= float3(0.04045));
 }
-inline float3 three_band_color(float3 bands) {
-    // PWV7 channels arrive as low/mid/high geometry. The compact overview
-    // cannot show independent vertical layers, so use the color belonging to
-    // the strongest native band. The scrolling lane performs the complete
-    // layered Pioneer compositor below.
-    const float3 lowColor = float3(0.0, 85.0 / 255.0, 225.0 / 255.0);
-    const float3 midColor = float3(1.0, 166.0 / 255.0, 0.0);
-    const float3 highColor = float3(1.0);
-    if (bands.b >= bands.r && bands.b >= bands.g) {
-        return highColor;
-    }
-    return bands.g >= bands.r ? midColor : lowColor;
-}
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     const float2 positions[3] = {
         float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
@@ -4600,6 +4587,52 @@ inline WaveSurface overview_wave_surface(
     return surface;
 }
 
+// The overview retains all three PWV7 layer heights. Its palette is the
+// same seven membership colors as the main lane and pinned rbxport's
+// src/canvas/waveform.ts; choosing only the dominant band loses the inner
+// brown/cream stretches even though their original data is resident.
+inline float4 three_band_overview_fragment(
+        const device WaveSample *samples, constant Uniforms &u,
+        float position, float footprint, float distance, float antialias,
+        float3 background) {
+    const uint anchor = min(uint(floor(position)), u.sampleCount - 1);
+    const float phase = position - floor(position);
+    const uint level = biased_lod(footprint, u.waveMipCount);
+    float lows[kIntegrationTaps], mids[kIntegrationTaps], highs[kIntegrationTaps];
+    uint count = 0;
+    float3 peaks = float3(0.0);
+    for (uint tap = 0; tap < kIntegrationTaps; ++tap) {
+        const WaveTap sample = wave_tap(
+            samples, u.waveMipOffsets[level], u.waveMipCounts[level],
+            anchor, phase + integration_offset(tap, kIntegrationTaps) * footprint,
+            level);
+        if (sample.valid == 0.0) continue;
+        // Three-band pyramid colors are premultiplied absolute layer heights.
+        const float3 bands = max(sample.weightedColor, float3(0.0));
+        lows[count] = bands.r; mids[count] = bands.g; highs[count] = bands.b;
+        peaks = max(peaks, bands); ++count;
+    }
+    if (count < 2 || max(peaks.r, max(peaks.g, peaks.b)) == 0.0) {
+        return float4(background, 1.0);
+    }
+    const float low = peaks.r > 0.0 ? profile_coverage(lows, count, distance, 11.0, antialias) : 0.0;
+    const float mid = peaks.g > 0.0 ? profile_coverage(mids, count, distance, 11.0, antialias) : 0.0;
+    const float high = peaks.b > 0.0 ? profile_coverage(highs, count, distance, 11.0, antialias) : 0.0;
+    const float none = (1.0-low) * (1.0-mid) * (1.0-high);
+    const float alpha = 1.0-none;
+    if (alpha <= 0.0) return float4(background, 1.0);
+    const float3 color = (
+        low*(1.0-mid)*(1.0-high)*float3(0.0,85.0,225.0)
+        + (1.0-low)*mid*(1.0-high)*float3(255.0,166.0,0.0)
+        + low*mid*(1.0-high)*float3(180.0,105.0,10.0)
+        + (1.0-low)*(1.0-mid)*high*float3(255.0)
+        + low*(1.0-mid)*high*float3(210.0,220.0,250.0)
+        + (1.0-low)*mid*high*float3(255.0,240.0,215.0)
+        + low*mid*high*float3(245.0,235.0,215.0)) / (255.0*alpha);
+    return float4(mix(background, display_srgb_to_linear(color),
+                      vivid_wave_coverage(alpha)), 1.0);
+}
+
 fragment float4 wave_surface_fragment(
         Out in [[stage_in]],
         const device WaveSample *samples [[buffer(0)]],
@@ -4662,6 +4695,10 @@ fragment float4 wave_surface_fragment(
             float(u.sampleCount)
             / max(1.0, float(u.drawableWidthPixels));
         const float distance = abs(yPoints - 14.0);
+        if (u.threeBandActive != 0) {
+            return three_band_overview_fragment(samples,u,position,footprint,
+                                                distance,antialias,background);
+        }
         const WaveSurface surface = overview_wave_surface(
             samples, audioDetailSamples, u, position, footprint,
             distance, antialias);
@@ -4687,10 +4724,7 @@ fragment float4 wave_surface_fragment(
             return float4(display_srgb_to_linear(
                 mix(encodedBackground, encodedColor, coverage)), 1.0);
         }
-        const float3 color = display_srgb_to_linear(
-            u.threeBandActive != 0
-            ? three_band_color(encodedColor)
-            : encodedColor);
+        const float3 color = display_srgb_to_linear(encodedColor);
         return float4(mix(
             background, color,
             vivid_wave_coverage(surface.coverage)), 1.0);
