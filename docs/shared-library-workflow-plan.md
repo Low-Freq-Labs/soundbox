@@ -419,4 +419,3 @@ native reopen acceptance, temporal
 visual acceptance and exact state preservation. Distinguish any outstanding
 capability/format/permission gate explicitly. Do not call the two-app workflow
 complete merely because registration, one detector test, or UI polish passed.
-
