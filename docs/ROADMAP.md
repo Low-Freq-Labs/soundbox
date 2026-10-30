@@ -13,7 +13,7 @@ actions; folder drags still export descendants. SoundBox folders retain nested
 drag reorganization, persistent expansion and New Playlist / New Folder / Rename /
 Delete context order. Membership and device playlist identities survive moves.
 Source registration/playlist writing and two-way analysis remain unfinished.
-Installed restart/state verification is recorded in HANDOFF.
+Normal quit/relaunch and exact curated-state verification passed; see HANDOFF.
 
 October29 session checkpoint: the dedicated USB exporter, USB/global preferences,
 column migration/footer corrections and responsive Info/layout refinements are

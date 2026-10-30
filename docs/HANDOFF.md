@@ -1,7 +1,8 @@
 # SoundBox current handoff
 
-October29, 2026. Branch main; this document's commit contains the full-width
-Analysis/artwork/navigation follow-up to51ab8b9. Personal build142 is installed.
+October29, 2026. Branch main; runtime changes are committed in7f278d5, with this
+documentation follow-up recording final installed verification. Personal build142
+is installed and running.
 **Two-way source analysis publication and ordinary native playlist CRUD remain
 unfinished.** This release does not complete that round trip.
 
@@ -32,11 +33,11 @@ Source playlist count reflects the current native snapshot, not lost SoundBox
 curation. No source/USB write was made by the agent.
 
 Restart verification: build141 quit normally and142 launched successfully.
-A second normal quit of142 is currently waiting in a SoundCloud connection
-worker's SecKeychainFindGenericPassword call. Read-only process sampling confirms
-this; never kill the worker/app or weaken TaskOwner shutdown. Sonny has been asked
-to dismiss the macOS Keychain prompt (Allow or Deny). Finish its normal quit,
-relaunch and post-quit state capture before claiming wrap-up complete.
+Build142's first quit waited in the SoundCloud connection worker's macOS Keychain
+read. Sonny dismissed the prompt; its normal shutdown completed without killing
+workers or changing TaskOwner guarantees. Build142 then relaunched and passed
+fresh native/startup/state verification. The final launch changed no saved bytes.
+Read-only process sampling and both attempts remain in the private evidence.
 
 Evidence:
 `~/Library/Logs/Soundbox/wide-art-navigation-2026-10-29/`.
@@ -45,10 +46,10 @@ reports, actual provenance, native screenshots, curated library backups and exac
 state comparisons. Harnesses use frozen offline fixtures; render and isolated
 launch suppress real source/device discovery.
 
-## Curated-state baseline — final restart pending
+## Final curated-state baseline
 
-Verified postlaunch at `2026-10-29T19:41:57.599872-05:00`:
-library SHA `fa0dcd9f7e95c5366e8a6453116c19fced6fe83e8e3828fd9678ca71120b6a58`;
+Verified after142's normal quit/relaunch at `2026-10-29T19:46:21.095156-05:00`:
+library SHA `01b26c1b21b34f9311d0a237036dec744e5b6e6e256a6a0865852b5c33b920df`;
 curation SHA `de29a5330cb48ecfeed5e8e3aefd4b7fbd68509966d7e8faf1c60dab525d4d68`.
 All4041 art/review files,3 authorities and3280 analysis records are preserved.
 Counts: custom10/import84/artists489/titles1103/hidden517/removal groups1/
@@ -59,11 +60,9 @@ Indie/R&B/Reggae/Rock, custom expansion state, revised cue-page keybindings and
 waveform zoom. These explain the difference from141's earlier26-setting baseline;
 curation was unchanged. Preserve all of them. Build141 quit serialized only
 columns_state/sidebar_split;142's first launch changed no saved bytes.
-The pending142 quit serialized columns_state only. At19:45:15.999810-05:00,
-its saved library SHA is
-`01b26c1b21b34f9311d0a237036dec744e5b6e6e256a6a0865852b5c33b920df`;
-all curation/art/authorities/analysis remain exact. This is a pending-shutdown
-capture, not a completed final restart. See state-timeline.json.
+Build142 quit serialized columns_state only; the final relaunch changed no saved
+bytes. All curation/art/authorities/analysis remain exact throughout. See
+state-timeline.json and state-verification-post-restart.json.
 
 Retain current rollback pending Sonny's acceptance:
 `/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-analysis-rollback-flpz99ko/Soundbox-build141.app`.
