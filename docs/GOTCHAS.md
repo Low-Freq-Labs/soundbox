@@ -27,6 +27,22 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   compare curated state. Never use `rm -rf /Applications/Soundbox.app`; never
   replace or clear SoundBox AppData as part of an app install.
 
+## Offline native playlist references
+
+- Root playlist creation and renaming are separate native operations. The isolated
+  6.8.7 reference increments the local counter once for each, retaining the new
+  playlist identity and creation time across rename. Do not infer a one-operation
+  counter formula from the earlier combined create/name sample.
+- The observed last-root single-member deletion removes DB playlist/membership
+  rows while preserving the entire content table and byte-identical playlist XML,
+  even after normal quit. Its retained XML node is not an orphan to clean up.
+  Other deletion shapes and DB/XML publication/recovery remain unaccepted.
+- Explicit frozen-copy replay is strict by default. A reference-only
+  notificationNextFetch.updated_at difference can be audited explicitly, but
+  must remain visible as complete_semantic_match=false. Never rewrite the
+  notification row to make a comparison pass or transfer that research exception
+  into a source writer. See [the current proof](analysis-playlists-next.md).
+
 ## Qt / PySide6 (these bite HARD)
 - **Tree stripes and embedded controls need explicit geometry.** QTreeView paints
   alternate backgrounds only for real items. Device BrowserDetailTree extends

@@ -151,20 +151,82 @@ only djmdSongPlaylist and the local counter, retaining schema/metadata and all
 other rows. Synthetic tests reject unknown sync and nonordinary playlists.
 This is useful proof, not native acceptance or complete playlist CRUD.
 
-The create sample advances the counter twice and has distinct creation/update
-timestamps; upstream's single create operation advances once. Separate the
-native UI's create/name sequence before assuming those are equivalent. Native
-XML uses hexadecimal playlist IDs and also changes during membership edits;
-include its timestamp protocol in the future atomic transaction. Synced/cloud
-memberships, creation/deletion and interrupted recovery remain unproven.
+The earlier combined create/name sample advanced the counter twice. The new
+isolated native captures prove those are two operations: root creation makes
+1672996042/62c5eea3-f32f-43ba-9cbc-ab818d7fd3b9 as Untitled Playlist with
+Seq8, equal creation/update timestamps and counter352307→352308. Renaming it to
+SoundBox Bridge Test preserves identity/creation/order and changes only Name,
+updated_at and rb_local_usn, with counter352308→352309. Native XML creates
+Id63B7E4CA at Timestamp0, then advances Timestamp on rename.
 
-The native deletion reference is now captured and inventory-verified. Playlist
-4086406462 and its last membership were physically removed. Both test songs
+Adding reference tracks102012532 and109556371 appends native memberships1/2,
+counter352309→352311. Removing the first physically deletes its membership,
+retains the survivor's UUID/created_at, renumbers2→1 and advances the counter twice
+to352313. Other database tables, schema and library identity remain unchanged.
+
+`playlist_lifecycle.py` models root creation, separate ordinary unsynced renaming
+and the observed last-root single-member deletion as pure plans.
+`playlist_replay.py` replays creation, rename, append and removal only on
+disposable encrypted copies. All four operations match complete
+native database semantics, restore the complete baseline on SQL rollback, and
+match again after commit/reopen. Frozen inputs and live sources are never modified.
+This is database-copy proof; atomic XML publication, process-interruption recovery,
+source authority and synced/cloud cases remain unproven. Native XML timestamps
+must be captured as independent values, not inferred from SQL updated_at.
+
+Sonny confirms normal Auto Analysis and BPM/Grid+Key settings restored. He deleted
+SoundBox Bridge Test and quit rekordbox normally. The isolated deletion removes
+playlist1672996042 and its remaining membership physically, counter352313→352315.
+Both reference tracks remain active; the entire djmdContent table is unchanged.
+The XML is byte-identical before deletion, immediately after it and after normal
+quit: its63B7E4CA node survives with its previous Timestamp1793325835677. The old
+combined capture's timestamp advance must not be attributed to deletion itself.
+
+Deletion replay is deliberately narrower than general CRUD: only the last active
+root playlist with exactly one unsynced member. Empty/multiple-member deletion,
+folders and sibling renumbering remain unproven. Its reference also contains one
+independent `notificationNextFetch.updated_at` change. Default strict full-state
+replay rejects that difference. The explicit `--audit-notification-timestamp`
+mode verifies all other database state exactly, preserves the original registry
+metadata in the candidate, reports that single residual difference and keeps
+`complete_semantic_match=false`. SQL rollback and commit/reopen pass. It never
+normalizes frozen inputs or writes unrelated registry rows. This is an audited
+partial match, not full native acceptance or source-publication authority.
+The closed after-capture adds no DB or XML changes. No further native UI action
+is pending for this reference pass. Future creation must also reject identity
+collisions with retained XML entries, even when their SQL row has been deleted.
+
+Earlier combined-session deletion evidence (superseded for isolated counter/XML
+behavior): playlist4086406462 and its last membership were physically removed. Both test songs
 remain active in Collection, with the entire djmdContent table unchanged. The
 session counter advanced352231→352236; this is an observed session delta, not
 yet a proven isolated deletion formula. The XML node F3919D3E survives with an
 advanced Timestamp. A future publisher must prove that protocol rather than
 assuming an XML-node deletion. No source-write authority follows from this capture.
+
+Frozen playlist sequence under the evidence root below:
+
+| Capture | Local counter |
+|---|---:|
+| native-playlist-create-before | 352307 |
+| native-playlist-created-default | 352308 |
+| native-playlist-renamed | 352309 |
+| native-playlist-two-added | 352311 |
+| native-playlist-one-removed | 352313 |
+| native-playlist-deleted-isolated | 352315 |
+| native-playlist-deleted-closed | 352315 |
+
+Explicit offline replay, with capture directories substituted for BEFORE/AFTER:
+
+```sh
+PYTHONPATH=. .venv/bin/python -m research.cdj_export.playlist_replay BEFORE AFTER create 1672996042
+```
+
+Operations are create, rename, append, remove and delete-last. Only the captured
+delete-last comparison needs the explicit notification-timestamp audit flag;
+its strict default rejection is retained as evidence. Full replay reports,
+frozen-input hashes and the1626-test gate are retained in
+`~/Library/Logs/Soundbox/playlist-lifecycle-proof-2026-10-29/`.
 
 ## Private evidence
 

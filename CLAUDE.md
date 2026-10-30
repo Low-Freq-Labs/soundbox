@@ -386,7 +386,8 @@ and manual grids/source cues remain authoritative. Sonny requires analysis share
 both ways independent of which app imports first; reverse detected-analysis/Key
 publication is still gated by its own native reference and authority, not the
 accepted manual-grid API. Ordinary native playlist CRUD also remains gated;
-copy-only unsynced membership replay does not authorize source publication.
+copy-only unsynced playlist lifecycle/membership replay does not authorize source
+publication.
 Read docs/analysis-playlists-next.md for implemented scope and exact next actions.
 
 SoundBox playlist folders are local organization in the bounded, validated

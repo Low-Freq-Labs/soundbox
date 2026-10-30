@@ -35,8 +35,12 @@ analysis publication and ordinary native playlist CRUD remain **unfinished**.
 Sonny explicitly requires shared analysis in both directions regardless of which
 app imports first. The [accepted scope and exact remaining gates](analysis-playlists-next.md)
 cover that round trip, source acceptance and the next native-reference actions.
-Copy-only native membership replay now matches unsynced add/remove rows/counters;
-creation/deletion/synced cases and journal/XML publication remain gated.
+Copy-only replay now matches isolated root creation, rename and unsynced
+add/remove database states through rollback and commit/reopen. Last-root
+single-member deletion is captured and modeled; its audited replay reports one independent notification
+timestamp difference rather than a complete match. Other deletion shapes, synced
+cases and journal/XML publication remain gated. These offline research additions
+are not installed source publishers.
 
 Historical October27 checkpoints: Sonny requested a fresh efficiency review. The
 [measured audit](efficiency-audit-2026-10.md) led to an approved implementation:

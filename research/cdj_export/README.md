@@ -60,6 +60,16 @@ coordinated recovery. Users never choose or separately enable the formats.
   publication and broader native mapping acceptance remain pending; the complete
   native ±10→±16 tempo file already matches the staged codec output exactly.
 
+- `playlist_reference.py`, `playlist_membership.py`, `playlist_lifecycle.py` and
+  `playlist_replay.py` — explicit frozen-capture comparison, pure unsynced
+  membership/root-create/rename and scoped deletion plans, and semantic replay on
+  disposable encrypted database copies. SQL rollback and commit/reopen are checked against
+  the native inventories. Strict replay rejects unrelated differences; explicit
+  notification-timestamp audit reports its residual and never claims a complete
+  match. Deletion is limited to the observed last-root single-member case.
+  This does not prove XML publication/interruption recovery or grant source-write authority; see
+  [the current playlist protocol work](../../docs/analysis-playlists-next.md).
+
 ## Checking it
 
 Use the project's existing venv. From the repository root, run the pure bridge

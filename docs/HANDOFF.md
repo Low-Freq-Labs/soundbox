@@ -1,10 +1,41 @@
 # SoundBox current handoff
 
-October29, 2026. Branch main; runtime changes are committed in7f278d5, with this
-documentation follow-up recording final installed verification. Personal build142
-is installed and running.
-**Two-way source analysis publication and ordinary native playlist CRUD remain
-unfinished.** This release does not complete that round trip.
+October29, 2026. Branch main; this commit adds offline playlist lifecycle proof
+after ebcb140. Installed personal build142 is unchanged; no runtime files changed
+and no reinstall is required. **Two-way source analysis publication and ordinary
+native playlist CRUD remain unfinished.** No source publisher/authority was added.
+
+## Current offline proof and next work
+
+Sonny completed isolated root-create, rename, two-song append, first-song removal
+and last-root single-member deletion, then quit rekordbox normally. Native
+Auto Analysis=Enable and BPM/Grid+Key settings are confirmed restored.
+
+New pure lifecycle plans and disposable encrypted-copy replay exactly match the
+first four complete DB states. Deletion counter352313→352315 and playlist/member
+removal match, with both reference songs and the complete content table preserved.
+Its XML entry and bytes remain unchanged even after normal quit. The capture also
+has one reference-only notificationNextFetch.updated_at change. Strict replay
+rejects it; explicit audit mode preserves baseline metadata and reports
+complete_semantic_match=false. SQL rollback and commit/reopen pass in all cases;
+all frozen input hashes are unchanged. Focused12 tests and the full bare
+`./check.sh` pass:1626 tests (1567 offscreen/59 Cocoa), zero skips/xfails, native
+and Rust builds, Rust3,243 pinned vendor files, pyflakes and mypy71 files. No new
+UI/runtime behavior requires packaging or a render/install cycle.
+
+Evidence: `~/Library/Logs/Soundbox/playlist-lifecycle-proof-2026-10-29/` contains
+check.log and replay-results.json. Frozen before/after captures, XML and full
+inventories remain in playlist-analysis-ui-2026-10-29. The after-close capture
+adds no DB/XML changes. Exact findings and replay scope:
+[analysis-playlists-next.md](analysis-playlists-next.md).
+
+Next: prove atomic DB/XML copy publication and process-interruption recovery,
+including ID allocation against retained XML entries; cover empty/multiple-member
+deletion and sibling renumbering before expanding its scope. Synced/cloud/intelligent playlists remain separate gates. Shared-analysis
+registration/publication needs its own copy proof, contentFile/gain/peak/endpoint
+protocol and narrowly accepted authority; the manual-grid API cannot authorize it.
+SoundBox-first reference.wav stays unimported for that future acceptance. No further
+native UI action is pending for this reference pass.
 
 ## Installed app and validation
 
@@ -102,12 +133,8 @@ These are not source recovery backups; retain pending Sonny's acceptance of142.
   accepted source authority and actual SoundBox-first/rekordbox-first round trips.
   Prove duration/endpoint, gain/peak, sidecar/contentFile/contentCue, counters/flags
   and existing-data preservation. Manual-grid authority cannot authorize these writes.
-- Ordinary source playlist append/remove has a pure unsynced planner and exact
-  encrypted-copy replay, without a live publisher. Native deletion is captured;
-  creation/name, deletion counters, XML and interrupted recovery still need proof.
-  Synced/cloud and intelligent playlists remain separate gates.
 
-## Native references saved — normal preferences deferred
+## Native references saved — normal preferences restored
 
 Sonny completed deletion, unanalysed import, BPM/Grid+Key, Key-only recheck,
 first-beat cue and fresh Key-only import+analysis. Captures and sidecars:
@@ -126,9 +153,8 @@ path. Combined session counter deltas are not isolated write formulas. Native
 Length31 for exact32-second PCM remains a proof item. Audio hashes are unchanged.
 SoundBox-first reference.wav remains unimported for reverse-import acceptance.
 Sonny operates all rekordbox UI; never drive it remotely or read global Quantize.
-Sonny is available again and was reminded to restore native Auto Analysis=Enable
-and BPM/Grid+Key after the temporary reference settings. Restoration is not yet
-confirmed. No further native reference action is needed for this UI follow-up.
+Sonny confirms native Auto Analysis=Enable and BPM/Grid+Key are restored. He is
+available to continue the native registration/playlist proof steps.
 For new songs now, native import into ALL LOCAL then SoundBox refresh is supported;
 SoundBox import/playlist editing still does not register tracks in rekordbox.
 
