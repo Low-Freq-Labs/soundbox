@@ -114,6 +114,7 @@ class ComboBox(BaseComboBox):
             app._choice_popup_style.setParent(app)
         self.setStyle(app._choice_popup_style)
         view = QListView(self)
+        view.setProperty('soundboxThemePainted', True)
         self.setView(view)
         self.setItemDelegate(_ChoiceDelegate(self))
 

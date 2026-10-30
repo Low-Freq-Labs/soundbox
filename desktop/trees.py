@@ -154,6 +154,10 @@ class BrowserDetailTree(NoTypeAhead, QTreeWidget):
             row += 1
 
 
+class GraveyardTree(NoTypeAhead, QTreeWidget):
+    """Read-only audition selection; native text entry must not claim held C."""
+
+
 class ArtistsTree(NoTypeAhead, QTreeWidget):
     """The Artists browser page (artist folders → song rows). Drag source: a
     track row carries its own id; an artist row carries ALL its tracks — drop
@@ -189,10 +193,16 @@ class ArtistsTree(NoTypeAhead, QTreeWidget):
 
 class _PlaylistDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
+        option = QStyleOptionViewItem(option)
+        self.initStyleOption(option, index)
+        # Fill the original row before insetting its contents, so selected
+        # nested leaves have no gap between the branch and label backgrounds.
+        option.widget.style().drawPrimitive(
+            QStyle.PE_PanelItemViewItem, option, painter, option.widget)
+        option.rect.adjust(6, 0, 0, 0)
         # A leaf's icon occupies the branch column, just as a folder's chevron
         # does. Keep the model text/roles and the tree's hit/drag geometry intact.
         if any(index.data(role) for role in (PATH_ROLE, CUSTOM_ROLE, COLLECTION_ROLE, ARTISTS_ROLE)):
-            option = QStyleOptionViewItem(option)
             self.initStyleOption(option, index)
             icon, separator, text = option.text.partition('  ')
             if separator:
@@ -217,6 +227,12 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
         self.setExpandsOnDoubleClick(False)
         self.setIndentation(16)
         self.setItemDelegate(_PlaylistDelegate(self))
+
+    def drawBranches(self, painter, rect, index):
+        painter.save()
+        painter.translate(6, 0)
+        super().drawBranches(painter, rect, index)
+        painter.restore()
 
     @staticmethod
     def is_folder(item):

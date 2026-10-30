@@ -141,8 +141,9 @@ currently requested; copy-only publication/recovery remains unfinished.
 
 Accepted scope: create regular playlists, add/remove songs, delete regular
 playlists. Collection tracks and source audio survive membership/playlist removal.
-Intelligent playlists remain separate. No live ordinary-playlist publisher or
-source authority is enabled yet.
+Intelligent playlists remain separate. The standalone exact source pilot below
+has narrow native acceptance; no general ordinary-playlist publisher or
+production source authority is enabled yet.
 
 `research/cdj_export/playlist_reference.py` compares explicit frozen encrypted
 captures against their complete semantic inventories; it has no live defaults.
@@ -174,7 +175,7 @@ disposable encrypted copies. All four operations match complete
 native database semantics, restore the complete baseline on SQL rollback, and
 match again after commit/reopen. Frozen inputs and live sources are never modified.
 This earlier DB-only replay does not establish paired publication or source
-authority. The paired copy proof and proposed source pilot are recorded below;
+authority. The paired copy proof and exact accepted source pilot are recorded below;
 synced/cloud cases remain unproven. Native XML timestamps
 must be captured as independent values, not inferred from SQL updated_at.
 
@@ -232,7 +233,7 @@ its strict default rejection is retained as evidence. Full replay reports,
 frozen-input hashes and the1626-test gate are retained in
 `~/Library/Logs/Soundbox/playlist-lifecycle-proof-2026-10-29/`.
 
-## Recoverable paired copy publication and proposed source pilot
+## Recoverable paired copy publication and exact source pilot
 
 `playlist_xml.py` patches only the planned local NODEs and preserves every other
 byte. It reproduces all five native XML captures exactly, including retained
@@ -268,23 +269,30 @@ full XML bytes remain bound; there is no source notification-timestamp exception
 Before/after encrypted DB/XML backups remain archived after completion. Unknown
 state, changed approval/payloads, competing domains and redirects fail closed.
 
-Proposed pilot is prepared, **not approved or published**:
-~/Library/Logs/Soundbox/playlist-source-pilot-2026-10-29/plan/.
-It creates SoundBox Bridge Pilot3604899226, then adds102012532 and109556371 in that
+The exact source pilot was explicitly approved, published and natively accepted
+October30. Private plan:
+`~/Library/Logs/Soundbox/playlist-source-pilot-2026-10-29/plan/`.
+It created SoundBox Bridge Pilot3604899226, then added102012532 and109556371 in that
 order; native counter352315→352319. Source629922790/schema/version bind exactly.
-Existing content, cues, analysis and source audio do not change. Plan digest:
-ab2331c468bfa152726df43e699f4fe72afb75b6f01014a3febe42dde90033c9.
-The preview, SQL-authorizer proof and validation logs remain beside that plan.
-No approval.json has been created; native UI acceptance and all production
-playlist/registration/analysis authorities remain disabled.
+Plan digest: ab2331c468bfa152726df43e699f4fe72afb75b6f01014a3febe42dde90033c9.
+The exact approval.json and operation5ec931cd8d814c8baaf636bf68cdbc07 receipt remain
+private. Both apps were closed for guarded publication; all four encrypted DB/XML
+backup hashes were verified, the committed receipt archived and journal retired.
+Sonny verified the playlist/order, both120BPM/8B and the first track's existing
+Memory Cue. Normal rekordbox quit preserved playlist/membership rows and exact
+published XML bytes. Content/cue/analysis inventories remained unchanged.
+Native startup changed agentRegistry authentication/notification bookkeeping;
+readable reports retain only credential-redacted deltas. Encrypted snapshots
+remain intact. Do not normalize native registry changes to manufacture equality.
+Native-open/native-closed comparisons and acceptance.json are under sibling
+`native-acceptance/`. SoundBox's curation/art/authorities stayed exact; the two
+newly playlist-scoped references now enter its read-only browser (3742 tracks,
+76 playlists, Collection3230). This is scoped native acceptance, not production
+playlist, registration or analysis authority.
 
-After explicit approval: back up/hash SoundBox curation; gracefully quit SoundBox
-to drain source intents; verify both apps closed; publish using that exact plan
-and approval. Then Sonny opens rekordbox to check playlist/name/order and existing
-analysis/cues, quits normally, and the agent captures the accepted native result.
-A source SQL commit alone never provisions production authority. General CRUD,
-empty/multiple-member deletion, sibling order, direct registration and analysis
-publication still need their own remaining implementation/acceptance.
+General CRUD, other deletion shapes, sibling order, direct registration and
+analysis publication still need their remaining implementation/acceptance.
+Never reuse this approval for a different operation or refresh a stale plan.
 
 ## Private evidence
 

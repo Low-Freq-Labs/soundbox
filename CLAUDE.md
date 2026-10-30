@@ -376,7 +376,7 @@ Rockbox 4.0 does not support `sort playlists`; never add or require that key.
 Its absence after firmware saves preferences is not Sync drift. Preserve existing
 unknown config lines; retain the established numbered playlist filenames.
 
-October29 installed detection stage (personal build142; see HANDOFF): the track-menu
+October29/30 installed detection stage (see HANDOFF for current provenance): the track-menu
 button is immediately right of Q, with the
 existing equal flexible toolbar gaps. It offers waveform color, three resident
 beat-count modes, standalone collection-song CDJ export and Analyze Track.
@@ -388,14 +388,16 @@ publication is still gated by its own native reference and authority, not the
 accepted manual-grid API. Ordinary native playlist CRUD also remains gated;
 copy-only unsynced playlist lifecycle/membership replay does not authorize source
 publication.
-A separate unintegrated playlist pilot requires Sonny's explicit approval of its
-exact prepared plan digest. It may only create/name one SoundBox Bridge Pilot
-playlist and append its two bound existing unsynced reference tracks. Both apps
-must be closed; the shared Tag/Cue/Grid root/lock/journal, encrypted DB/XML backups,
-exact recovery pairs and fresh source/schema/version guards remain mandatory.
-A successful pilot SQL commit confers no native UI acceptance or production
-playlist/analysis authority. Never create its approval receipt before Sonny grants
-that specific source test. Read docs/analysis-playlists-next.md for scope/next steps.
+The separate unintegrated playlist pilot was explicitly approved and natively
+accepted October30 for its exact prepared plan digest. It created/named one
+SoundBox Bridge Pilot playlist and appended its two bound existing unsynced
+reference tracks. Sonny verified order, BPM/Key and the existing Memory Cue;
+normal native quit preserved the exact playlist pair. Both apps were closed
+for publication; the shared Tag/Cue/Grid root/lock/journal, encrypted DB/XML
+backups, exact recovery pairs and fresh source/schema/version guards remain
+mandatory. This receipt authorizes no further source test or production CRUD,
+registration or analysis API. Preserve its private approval/acceptance and
+recovery receipts. Read docs/analysis-playlists-next.md for scope/next steps.
 
 SoundBox playlist folders are local organization in the bounded, validated
 `settings.custom_playlist_tree`; membership remains in `custom`. Folder moves
@@ -518,7 +520,11 @@ key; artwork policy/visibility and source authority remain independently fresh.
 Desktop accent roles come from `desktop.theme`, persisted as `settings.theme_accent`.
 Use those roles for UI chrome rather than fixed purple values. The supplied SVG
 wordmark stays in its 270×55 header slot; only BOX follows the accent. Waveform
-and cue data colors retain their musical/source meaning.
+and cue data colors retain their musical/source meaning. `desktop.theme_controller`
+installs static QSS once, then changes only visible controls' accent declarations;
+hidden controls catch up on Show. Color pickers preview coalesced live colors
+without saving preferences; OK commits once and Cancel restores the saved theme.
+Never reapply the global stylesheet for each color-wheel/text-color change.
 
 Checkout hygiene and historical evidence locations: `docs/PROJECT_LAYOUT.md`.
 Sonny closed waveform comparison work for now on October28 and authorized

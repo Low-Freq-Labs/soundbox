@@ -61,6 +61,8 @@ General Settings includes a **Theme color** picker and Reset button. The accent
 updates selections, controls and the SVG logo’s BOX layer immediately and persists
 with your settings. **Text color** independently selects White, Black or a custom
 color for lettering on theme-colored selections and buttons (White by default).
+Both pickers preview live as you move through colors; OK saves and Cancel
+restores your previous appearance. Text-color switching updates immediately.
 Changing the accent never overrides that choice. The logo retains the previous
 header footprint.
 
@@ -296,7 +298,8 @@ offers only the latter. Graveyard restore is selection-scoped: select one,
 Shift/Cmd-select several, or use Cmd-A, then right-click **Restore**. There is
 no unconditional Restore All shortcut. Double-click a Graveyard track (or choose
 Load Track) to audition it in the deck before restoring; it stays removed and
-does not join autoplay. A global Graveyard entry immediately
+does not join autoplay. Space, held C and existing cue keys work there. Cue
+creation/deletion waits until restoration. A global Graveyard entry immediately
 drops its disposable SoundBox waveform record and background preparation skips
 it; restoring the track prepares it again when its source remains available.
 Playlist-only removals retain analysis because the track can still be browsed

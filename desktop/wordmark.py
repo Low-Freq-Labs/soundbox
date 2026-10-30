@@ -23,6 +23,8 @@ class Wordmark(QWidget):
         self.set_accent(theme.PURPLE)
 
     def set_accent(self, color):
+        if getattr(self, '_accent', None) == color:
+            return
         # Qt SVG does not resolve the web CSS custom properties in the supplied
         # asset. Resolve only its two named color layers in memory instead.
         svg = ET.fromstring(self._source)
@@ -37,6 +39,7 @@ class Wordmark(QWidget):
             raise ValueError('SoundBox wordmark SVG could not be loaded')
         self.renderer.setViewBox(self.renderer.boundsOnElement('outline'))
         self.renderer.setAspectRatioMode(Qt.IgnoreAspectRatio)
+        self._accent = color
         self.update()
 
     def paintEvent(self, event):

@@ -61,7 +61,10 @@ action requires a real dispatcher and tests, not only an editor row.
 Bindings operate inside SoundBox from the normal browsing surfaces. Search,
 inline editors, ordinary dialogs, settings lists and device filesystem browsing
 retain normal typing/navigation. Open/close Settings also works from nontext
-settings controls. These are application mappings, not global OS hotkeys. Native
+settings controls. Graveyard additionally accepts playback, existing cues,
+wave/grid/autoplay controls and Load for its own selection; it keeps native
+multi-selection, captures no queue and does not enable new cue creation/deletion.
+These are application mappings, not global OS hotkeys. Native
 text editing and standard widget navigation remain platform behavior. This first
 version supports modifier combinations and multiple bindings per action, not
 multi-stroke sequences, macros, MIDI or additional decks.

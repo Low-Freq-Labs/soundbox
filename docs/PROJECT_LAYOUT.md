@@ -46,8 +46,23 @@ before/after phase frames, metrics, Cocoa controls, test logs and safe installat
 records. It does not revive the deleted development archive. Protected source,
 iPod and CDJ references remain separate. Keep the existing single rollback root
 pending Sonny's acceptance; exact installed/build/retention facts are in HANDOFF.
-`build/personal` and `dist/personal` are regenerated packaging output while this
-candidate is being validated, separate from the retained regression fixtures.
+This follow-up retired `build/personal`, duplicate `dist/personal`, Rust debug/
+dependency caches, mypy cache and the current arm64 PyInstaller binary cache after
+verified installation. These are reproducible output, separate from retained
+regression fixtures; the native library, checked CDJ binary and release reports
+remain. Exact paths/free-space proof are in generated-retirement.json under the
+October30 evidence root below.
+
+The October30 live-theme/Graveyard follow-up evidence is under
+`~/Library/Logs/Soundbox/live-theme-graveyard-2026-10-30/`: native live-picker
+captures/timings, sidebar renders, complete release reports and state/install
+receipts. The source playlist pilot's exact plan, approval and native-open/closed
+acceptance stay in `~/Library/Logs/Soundbox/playlist-source-pilot-2026-10-29/`;
+its encrypted paired recovery remains under AppData, separate from build output.
+Reproducible Rust debug/dependency caches and duplicate PyInstaller output may
+be retired after the installed binary and release proofs are verified. Retain
+`build/native`, `build/check`, the checked `build/cdj/release/soundbox-cdj` binary,
+all source/native/device fixtures, source recovery and the current rollback root.
 
 ## Historical retention — October28 efficiency/player release
 

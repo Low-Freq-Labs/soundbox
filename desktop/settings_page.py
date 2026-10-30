@@ -11,14 +11,15 @@ time the gear opens.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QColorDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QButtonGroup, QCheckBox, QColorDialog, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QStackedWidget, QTabBar, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 from .choices import ComboBox as QComboBox, Menu as QMenu
+from .trees import GraveyardTree
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
 
@@ -37,11 +38,17 @@ class SettingsPageMixin:
         custom = theme.normalize_accent_text(self.settings.get('theme_text_custom'))
         self.settings.update(theme_text_mode=mode, theme_text_custom=custom)
         text_color = {'white': '#ffffff', 'black': '#000000', 'custom': custom}[mode]
-        color = theme.set_accent(value, text_color)
+        color = self._render_theme(value, text_color)
         self.settings['theme_accent'] = color
-        app = QApplication.instance()
-        if app.styleSheet() != theme.QSS:
-            app.setStyleSheet(theme.QSS)
+        self._sync_theme_text_controls()
+        if save:
+            self._schedule_settings_save()
+
+    def _render_theme(self, value, text_color):
+        """Paint one theme without changing or saving any user preferences."""
+        color = theme.set_accent(value, text_color)
+        from .theme_controller import install
+        install(QApplication.instance()).update()
         if hasattr(self, 'wordmark'):
             self.wordmark.set_accent(color)
         if hasattr(self, '_theme_color'):
@@ -49,17 +56,47 @@ class SettingsPageMixin:
             swatch.fill(QColor(color))
             self._theme_color.setIcon(QIcon(swatch))
             self._theme_color.setText(color.upper())
-        self._sync_theme_text_controls()
         self.update()
         if hasattr(self, 'my_tags'):
             self.my_tags._size_popup()
-        if save:
-            self._schedule_settings_save()
+        return color
 
     def _choose_theme_color(self):
-        color = QColorDialog.getColor(QColor(theme.PURPLE), self, 'Theme color')
-        if color.isValid():
-            self._apply_theme_color(color.name(), save=True)
+        self._theme_picker(text=False)
+
+    def _theme_picker(self, *, text):
+        original = (theme.PURPLE, theme.ON_ACCENT)
+        initial = (self.settings.get('theme_text_custom', theme.DEFAULT_ACCENT_TEXT)
+                   if text else theme.PURPLE)
+        dialog = QColorDialog(QColor(initial), self)
+        dialog.setWindowTitle('Theme text color' if text else 'Theme color')
+        timer = QTimer(dialog); timer.setSingleShot(True); timer.setInterval(16)
+        latest = [None]
+        def preview():
+            if latest[0] is not None:
+                self._render_theme(original[0] if text else latest[0],
+                                   latest[0] if text else original[1])
+        def changed(color):
+            if color.isValid():
+                latest[0] = color.name()
+                if not timer.isActive():timer.start()
+        timer.timeout.connect(preview)
+        dialog.currentColorChanged.connect(changed)
+        committed = False
+        try:
+            accepted = dialog.exec() == QDialog.Accepted
+            timer.stop()
+            color = dialog.selectedColor()
+            if accepted and color.isValid():
+                if text:self._apply_theme_text('custom', color.name(), save=True)
+                else:self._apply_theme_color(color.name(), save=True)
+                committed = True
+        finally:
+            timer.stop()
+            if not committed:
+                self._render_theme(*original)
+                self._sync_theme_text_controls()
+            dialog.deleteLater()
 
     def _apply_theme_text(self, mode, custom=None, *, save=False):
         self.settings['theme_text_mode'] = mode
@@ -82,11 +119,7 @@ class SettingsPageMixin:
         self._theme_text_color.setVisible(mode == 'custom')
 
     def _choose_theme_text_color(self):
-        color = QColorDialog.getColor(
-            QColor(self.settings.get('theme_text_custom', theme.DEFAULT_ACCENT_TEXT)),
-            self, 'Theme text color')
-        if color.isValid():
-            self._apply_theme_text('custom', color.name(), save=True)
+        self._theme_picker(text=True)
 
     def _apply_settings_to_lib(self, *, invalidate_rows=True):
         """Push current settings onto the loaded library (a pure display/export
@@ -180,7 +213,7 @@ class SettingsPageMixin:
         gl = QVBoxLayout(graveyard_page)
         gl.setContentsMargins(30, 6, 30, 30); gl.setSpacing(8)
         gl.addWidget(self._settings_section("GRAVEYARD"))
-        self._grave = QTreeWidget()
+        self._grave = GraveyardTree()
         self._grave.setObjectName("Graveyard")
         self._grave.setHeaderLabels(["Track", "Removed"])
         self._grave.setRootIsDecorated(False)
@@ -472,7 +505,7 @@ class SettingsPageMixin:
         if track is None:
             self._flash_status('Track is no longer in the library', 5)
             return
-        if self._open_track(track, autoplay=None, capture_autoplay=False):
+        if self._open_track(track, autoplay=None, capture_autoplay=False, audition=True):
             self._autoplay_order = []
             self._autoplay_index = None
             self._autoplay_random_seen = set()
@@ -503,6 +536,9 @@ class SettingsPageMixin:
                 bag.pop(tid, None)
                 if not bag:
                     self.removals.pop(pid, None)
+        if getattr(self, '_cue_audition_track', None) in {pick[1] for pick in picks}:
+            self._cue_audition_track = None
+            self._sync_cue_editing()
         self._after_track_edit(f"Restored {len(picks)} ✓")
         self._refresh_graveyard()
         if restored_global:

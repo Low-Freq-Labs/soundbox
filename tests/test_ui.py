@@ -334,6 +334,16 @@ class SortAndSearch(unittest.TestCase):
 
 
 class SettingsPage(unittest.TestCase):
+    def picker(self, value):
+        from contextlib import ExitStack
+        from PySide6.QtWidgets import QColorDialog, QDialog
+        dialog = QColorDialog(_win)
+        stack = ExitStack()
+        stack.enter_context(mock.patch('desktop.settings_page.QColorDialog', return_value=dialog))
+        stack.enter_context(mock.patch.object(dialog, 'exec', return_value=(QDialog.Accepted if value.isValid() else QDialog.Rejected)))
+        stack.enter_context(mock.patch.object(dialog, 'selectedColor', return_value=value))
+        return stack
+
     def test_grid_shortcuts_dispatch_all_five_operations_and_quantize(self):
         from desktop.keyboard import Keymap, BY_ID
         mapping = Keymap()
@@ -450,12 +460,12 @@ class SettingsPage(unittest.TestCase):
                 save.assert_called_once()
             self.assertEqual(_win.settings['theme_accent'], '#168fc0')
             self.assertEqual(theme.PURPLE, '#168fc0')
-            self.assertIn('selection-background-color: #168fc0', _app.styleSheet())
+            self.assertIn('selection-background-color: #168fc0', theme.QSS)
             self.assertEqual(_win.wordmark.size().toTuple(), (270, 55))
             self.assertTrue(_win.wordmark.renderer.isValid())
             _win._apply_theme_color(_win.settings['theme_accent'], save=False)
             self.assertEqual(_win._theme_color.text(), '#168FC0')
-            with mock.patch('desktop.settings_page.QColorDialog.getColor', return_value=QColor()):
+            with self.picker(QColor()):
                 _win._choose_theme_color()
             self.assertEqual(_win.settings['theme_accent'], '#168fc0')
         finally:
@@ -469,22 +479,22 @@ class SettingsPage(unittest.TestCase):
             _win._apply_theme_color('#00ff00', save=False)
             with mock.patch.object(_win, '_schedule_settings_save'):
                 _win._theme_text_mode.setCurrentIndex(_win._theme_text_mode.findData('black'))
-                self.assertIn('selection-color: #000000', _app.styleSheet())
+                self.assertIn('selection-color: #000000', theme.QSS)
                 self.assertEqual(_win.settings['theme_text_mode'], 'black')
-                with mock.patch('desktop.settings_page.QColorDialog.getColor', return_value=QColor('#123456')):
+                with self.picker(QColor('#123456')):
                     _win._choose_theme_text_color()
                 self.assertEqual(_win.settings['theme_text_custom'], '#123456')
                 self.assertEqual(_win._theme_text_mode.currentData(), 'custom')
-                self.assertIn('selection-color: #123456', _app.styleSheet())
+                self.assertIn('selection-color: #123456', theme.QSS)
                 _win._theme_text_mode.setCurrentIndex(_win._theme_text_mode.findData('white'))
                 _win._apply_theme_color('#ffee00', save=False)
-                self.assertIn('selection-color: #ffffff', _app.styleSheet())
+                self.assertIn('selection-color: #ffffff', theme.QSS)
                 self.assertEqual(_win.settings['theme_text_custom'], '#123456')
-                with mock.patch('desktop.settings_page.QColorDialog.getColor', return_value=QColor()):
+                with self.picker(QColor()):
                     _win._choose_theme_text_color()
                 self.assertEqual(_win.settings['theme_text_mode'], 'white')
                 _win._theme_text_mode.setCurrentIndex(_win._theme_text_mode.findData('custom'))
-                self.assertIn('selection-color: #123456', _app.styleSheet())
+                self.assertIn('selection-color: #123456', theme.QSS)
                 self.assertEqual(_win._theme_text_color.text(), '#123456')
         finally:
             _win.settings = before
@@ -509,7 +519,7 @@ class SettingsPage(unittest.TestCase):
                     self.assertEqual(second.settings['theme_accent'], '#00ff00')
                     self.assertEqual(second._theme_text_mode.currentData(), 'custom')
                     self.assertEqual(second._theme_text_color.text(), '#112233')
-                    self.assertIn('selection-color: #112233', _app.styleSheet())
+                    self.assertIn('selection-color: #112233', theme.QSS)
                 finally:
                     second.shutdown()
                     second.close()
@@ -3750,6 +3760,84 @@ class BackupWorker(unittest.TestCase):
 
 
 class Graveyard(unittest.TestCase):
+    def test_playback_keys_and_existing_cues_work_without_capturing_a_queue(self):
+        from desktop.keyboard import Keymap
+        router = _win._keyboard_router
+        previous_map = router.keymap
+        previous_order, previous_index = _win._autoplay_order, _win._autoplay_index
+        panel = _win.player_bar.cue_panel
+        previous_cues, previous_loaded = panel._cues, panel._loaded
+        previous_page = panel.pages.currentIndex()
+        router.release_all(); router.keymap = Keymap()
+        _win._autoplay_order = ['already-existing']; _win._autoplay_index = 0
+        panel.set_loaded(True); panel.set_cues([dict(kind='memory',slot=0,position_ms=400)])
+        panel.memory_tab.click()
+        try:
+            with mock.patch('desktop.app.QApplication.focusWidget', return_value=_win._grave), \
+                 mock.patch.object(_win, '_toggle_player') as play, \
+                 mock.patch.object(_win.player_bar, '_cue_press') as cue, \
+                 mock.patch.object(_win.player_bar, '_cue_release') as release, \
+                 mock.patch.object(panel, '_press') as marker, \
+                 mock.patch.object(panel, '_release') as marker_release:
+                self.assertTrue(_win.eventFilter(_win._grave, QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier)))
+                play.assert_called_once()
+                self.assertTrue(_win.eventFilter(_win._grave, QKeyEvent(QEvent.KeyPress, Qt.Key_C, Qt.NoModifier)))
+                cue.assert_called_once()
+                self.assertTrue(_win.eventFilter(_win._grave, QKeyEvent(QEvent.KeyRelease, Qt.Key_C, Qt.NoModifier)))
+                release.assert_called_once()
+                self.assertTrue(_win.eventFilter(_win._grave, QKeyEvent(QEvent.KeyPress, Qt.Key_1, Qt.NoModifier)))
+                marker.assert_called_once_with('memory', 0)
+                self.assertTrue(_win.eventFilter(_win._grave, QKeyEvent(QEvent.KeyRelease, Qt.Key_1, Qt.NoModifier)))
+                marker_release.assert_called_once_with('memory', 0)
+            self.assertEqual(_win._autoplay_order, ['already-existing'])
+            self.assertEqual(_win._autoplay_index, 0)
+            self.assertFalse(_win._grave.testAttribute(Qt.WA_InputMethodEnabled))
+        finally:
+            router.release_all(); router.keymap = previous_map
+            panel._cues = previous_cues; panel.set_loaded(previous_loaded)
+            panel.pages.setCurrentIndex(previous_page)
+            _win._autoplay_order, _win._autoplay_index = previous_order, previous_index
+
+    def test_graveyard_audition_keeps_existing_cues_playable_and_rejects_edits(self):
+        pb = _win.player_bar
+        panel = pb.cue_panel
+        previous = (getattr(_win, '_cue_audition_track', None), panel._cues,
+                    panel._loaded, panel._editable, panel._edit_reason)
+        _win._cue_audition_track = 'audition'
+        try:
+            panel.set_loaded(True)
+            panel.set_cues([dict(kind='hot',slot=0,position_ms=400)])
+            with mock.patch.object(pb, 'current_track', return_value='audition'), \
+                 mock.patch.object(_win.tag_controller, 'cue_reason', return_value=''), \
+                 mock.patch.object(_win.tag_controller, 'request_cue') as write:
+                _win._sync_cue_editing()
+                self.assertTrue(panel.hot_slots[0].isEnabled())
+                self.assertFalse(panel.hot_slots[1].isEnabled())
+                self.assertFalse(_win._edit_cue('hot', 1, 'add'))
+                self.assertFalse(_win._edit_cue('hot', 0, 'delete'))
+                write.assert_not_called()
+        finally:
+            (_win._cue_audition_track, panel._cues, loaded, editable, reason) = previous
+            panel.set_loaded(loaded); panel.set_editable(editable, reason)
+
+    def test_graveyard_load_targets_its_selection_and_library_rename_stays_disabled(self):
+        from desktop.keyboard import Keymap
+        router = _win._keyboard_router; previous = router.keymap
+        router.keymap = Keymap({'schema':1,'bindings':{'browser.load':['Return']}})
+        _win.hidden.add('1'); _win._refresh_graveyard()
+        item = _win._grave.topLevelItem(0); _win._grave.setCurrentItem(item)
+        try:
+            with mock.patch('desktop.app.QApplication.focusWidget', return_value=_win._grave), \
+                 mock.patch.object(_win, '_grave_load') as load, \
+                 mock.patch.object(_win, '_load_browser_selection') as background_load, \
+                 mock.patch.object(_win, '_rename_current') as rename:
+                self.assertTrue(_win.eventFilter(_win._grave,QKeyEvent(QEvent.KeyPress,Qt.Key_Return,Qt.NoModifier)))
+                load.assert_called_once_with(item); background_load.assert_not_called()
+                _win.eventFilter(_win._grave,QKeyEvent(QEvent.KeyPress,Qt.Key_R,Qt.ControlModifier))
+                rename.assert_not_called()
+        finally:
+            router.release_all(); router.keymap = previous
+
     def tearDown(self):
         _win.hidden.clear()
         _win.hidden_dates.clear()
@@ -3828,7 +3916,7 @@ class Graveyard(unittest.TestCase):
         _win._autoplay_order = ['2', '3']; _win._autoplay_index = 0
         with mock.patch.object(_win, '_open_track', return_value=True) as load:
             _win._grave.itemDoubleClicked.emit(item, 0)
-        load.assert_called_once_with(_win.lib.tracks_by_id['1'], autoplay=None, capture_autoplay=False)
+        load.assert_called_once_with(_win.lib.tracks_by_id['1'], autoplay=None, capture_autoplay=False, audition=True)
         self.assertEqual(_win._autoplay_order, [])
         self.assertIsNone(_win._autoplay_index)
         _app.processEvents()
@@ -6255,7 +6343,7 @@ class QtTrapAudit(unittest.TestCase):
         self.assertTrue(_win._space_should_play(_win.tree))
         self.assertTrue(_win._space_should_play(_win.device_tree))
         self.assertFalse(_win._space_should_play(_win.search))   # types a space
-        self.assertFalse(_win._space_should_play(_win._grave))   # native toggle
+        self.assertFalse(_win._space_should_play(_win._grave))   # enabled per playback action only
         self.assertFalse(_win._space_should_play(_win._rules))
         self.assertFalse(_win._space_should_play(_win.fs_view))  # device browser
 

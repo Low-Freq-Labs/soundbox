@@ -37,7 +37,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   rows while preserving the entire content table and byte-identical playlist XML,
   even after normal quit. Its retained XML node is not an orphan to clean up.
   Other deletion shapes remain unaccepted. Paired copy recovery is now proven;
-  source publication/native UI acceptance remain separate approval gates.
+  the October30 exact create/name/two-add source pilot has now passed native
+  inspection/save. Other source operations retain separate acceptance gates.
 - Explicit frozen-copy replay is strict by default. A reference-only
   notificationNextFetch.updated_at difference can be audited explicitly, but
   must remain visible as complete_semantic_match=false. Never rewrite the
@@ -83,6 +84,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Export the actual folder_path while retaining `cust:<name>` identity; do not
   encode the folder path into a new playlist name/key. Folder deletion needs its
   own explicit descendant-playlist review and never deletes Collection/source audio.
+- **Playlist insets must preserve selected row backgrounds.** Inset content and
+  branch glyphs six points together; fill the original item panel before moving
+  contents so selected nested leaves have no branch-to-label seam. Preserve model,
+  drag and activation geometry.
+- **Graveyard is an audition input surface.** Admit playback/cue/grid/wave/autoplay
+  actions and selection-bound Load, while retaining native selection and blocking
+  unrelated browser edits. Disable native input-method/typeahead ownership so
+  held C reaches the keyboard router. Auditions capture no queue; existing cues
+  remain playable while new/deleted cues wait for restoration. General settings
+  editors and dialogs retain their ordinary input boundary.
 - **Folder navigation is not playlist activation.** Check PATH_ROLE before
   clearing the other sidebar's selection. Local folder rows likewise leave the
   active view alone. A folder can hold navigation focus while refresh/drop/track
@@ -101,8 +112,16 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   to the outline. Preserve the former 270×55 header footprint. Include the SVG
   in both PyInstaller data and the source fingerprint; source-only tests that
   copy desktop code must also provision that asset.
-- **Accent changes must update existing chrome.** Regenerate theme QSS, refresh
-  the wordmark and dynamic painters. Persist the accent in `settings.theme_accent`
+- **Accent changes must not repolish the whole app.** Install static QSS once;
+  `theme_controller` updates visible accent declarations and hidden widgets on
+  Show. Custom menu/combo painters read theme roles directly. Refresh the wordmark
+  only when its accent changes. QColorDialog previews coalesce at16ms without
+  saving settings; OK commits once and Cancel restores the prior visual roles.
+  Reapplying QApplication.setStyleSheet cost1.6–1.9seconds on the measured page;
+  native component updates measured13–14ms and text changes7–9ms. The scripted
+  Cocoa capture uses asynchronous native open because programmatic reject can
+  strand Cocoa's helper exec; production retains the ordinary user-driven dialog.
+  Preserve external inline styles such as musical cue rims. Persist the accent in `settings.theme_accent`
   and lettering independently in `theme_text_mode` / `theme_text_custom`; never
   replace the user's text choice with a luminance-based black/white decision.
   Saved-state reload/restore applies the same path. Fixed cue/analysis colors are

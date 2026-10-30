@@ -1,13 +1,19 @@
 # SoundBox player
 
-Current as of 2026-10-29. This is the player reference: shipped behavior,
+Current as of 2026-10-30. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
-October29 menu, beat-count modes and local detection stage are installed in
-personal build142 after the complete offscreen/Cocoa gate. Reverse analysis
+The initial October29 menu, beat-count modes and local detection stage shipped
+in personal build142 after the complete offscreen/Cocoa gate. Reverse analysis
 publication remains unfinished; see [HANDOFF](HANDOFF.md).
+
+Graveyard auditions use the same loaded deck and playback keys (Space, held C,
+existing cue triggers and zoom), with no supplying autoplay queue. Its selected
+track is the Load target. Existing cues stay playable; cue creation/deletion
+waits for restoration or an ordinary browser load. Auditioning does not restore
+membership or persist hidden waveform records.
 
 ## Implemented player behavior
 

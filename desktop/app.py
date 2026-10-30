@@ -909,6 +909,10 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
             return super().eventFilter(obj, ev)
         focus = QApplication.focusWidget()
         browsing = self._space_should_play(focus)
+        if focus is getattr(self, '_grave', None):
+            action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
+            browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
+                        or action in ('browser.load', 'app.settings'))
         if focus is self.usb_device_pages.playlist_tree:
             action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
             browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
@@ -938,6 +942,9 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
 
     def _dispatch_keyboard_action(self, action):
         pb = self.player_bar
+        if action == 'browser.load' and QApplication.focusWidget() is getattr(self, '_grave', None):
+            self._grave_load(self._grave.currentItem())
+            return None
         if action == "transport.cue":
             self._cue_key_down = True
             pb._cue_press()
@@ -1178,7 +1185,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
 
     def _open_track(
             self, t, autoplay: bool | None,
-            capture_autoplay: bool = True) -> bool:
+            capture_autoplay: bool = True, audition: bool = False) -> bool:
         try:
             ok = t.path.is_file()
         except OSError:
@@ -1195,6 +1202,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
         title = metadata.effective_title(t.track_id, t.name, artist, self.titles,
                                          self._title_junk())
         label = f"{artist} — {title}" if artist and artist != "Unknown Artist" else title
+        self._cue_audition_track = t.track_id if audition else None
         self.player_bar.play_track(
             t.track_id, t.path, title=label, bpm=t.bpm,
             analysis_path=getattr(t, "source_analysis_path", ""),
@@ -1202,6 +1210,7 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
             detected_analysis=self._analysis_result(t),
             cues=(self.tag_controller.session_cues(t.track_id)
                   if self.tag_controller.lib is self.lib else getattr(t, "source_cues", None)))
+        self._sync_cue_editing()
         self._highlight_now_playing(t.track_id)
         self._update_player_navigation()
         return True
@@ -1766,7 +1775,9 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
 
     def _sync_cue_editing(self):
         pb = self.player_bar
-        reason = self.tag_controller.cue_reason(pb.current_track())
+        reason = ('Restore this track before editing cues'
+                  if pb.current_track() and pb.current_track() == getattr(self, '_cue_audition_track', None)
+                  else self.tag_controller.cue_reason(pb.current_track()))
         if not reason and (self._refresh_worker is not None or self._state_maintenance
                            or self._device_operation_owned()):
             reason = 'Library operation in progress'
@@ -1778,6 +1789,8 @@ class MainWindow(PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuM
                 or self._device_operation_owned()):
             return False
         track_id = pb.current_track()
+        if track_id and track_id == getattr(self, '_cue_audition_track', None):
+            return False
         track = self.lib.tracks_by_id.get(track_id) if self.lib else None
         if not track or str(track.path) != pb._src_path:
             return False
@@ -7558,7 +7571,8 @@ def make_app() -> QApplication:
     app.setOrganizationName("LowFreqLabs")
     app.setApplicationName("Soundbox")
     app.setFont(QFontDatabase.systemFont(QFontDatabase.GeneralFont))  # real system font
-    app.setStyleSheet(theme.QSS)
+    from .theme_controller import install
+    install(app)
     return app
 
 

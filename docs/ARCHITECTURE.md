@@ -19,8 +19,9 @@ back to reconstruction. Row invalidation retires the checkpoint key, preventing
 new rows from being saved under an old input fingerprint. Cache publication is
 serialized with the existing background snapshot lane and uses bounded row
 encoding. Metadata derivation changes must bump `browser_cache.SCHEMA`.
-Saved theme application precedes child-widget construction, and unchanged QSS
-does not repolish every widget. The global input filter attaches after startup
+Saved theme application precedes child-widget construction. Static QSS is
+installed once; theme_controller applies small visible accent overrides and
+refreshes hidden controls on Show, without repolishing the whole widget tree. The global input filter attaches after startup
 restoration; the native waveform host keeps its geometry filter throughout.
 Artist title-rescue regexes compile on first actual rescue, and the optional
 extractor is presence-checked at composition but imports only on first search.
@@ -95,8 +96,12 @@ combo popups with matching right checks. Qt retains keyboard/action/accessibilit
 semantics; a shared application-owned proxy disables native Cocoa combo menus
 without owning QApplication's platform style. Closed combo arrows sit 14 points
 from the right edge. Sidebar leaf icons use the branch column, aligning labels
-with folders at every depth. Graveyard double-click/Load Track uses the existing
-deck with no autoplay capture. Hidden auditions prepare a private temporary
+with folders at every depth. Both trees inset content/branch glyphs six more
+points while preserving full selected-row backgrounds and hit/drag geometry.
+Graveyard double-click/Load Track uses the existing deck with no autoplay capture.
+Its NoTypeAhead tree routes standard playback and cue keys, with Load bound to its
+own selection. Existing cues play; empty-slot creation/deletion remains disabled
+until restoration or loading an ordinary browser track. Hidden auditions prepare a private temporary
 record through the normal codec, upload the data, and remove the temporary
 record before worker retirement; the canonical cache remains absent.
 Summary uses a large cover beside inline caption/value rows.
@@ -120,7 +125,9 @@ DB/XML prefixes determine rollback or completion. Evidence/unknown-state checks
 precede recovery writes. The separate source pilot uses the existing guarded SQL
 transport with its own approved create/name/two-track intent, target-only live
 reads, snapshot inventories and restrictive SQL authorizer. Both apps must be
-closed. A SQL commit does not establish native UI acceptance. General ordinary
+closed. Its exact October30 publication subsequently passed Sonny's native
+inspection and normal-save comparison; SQL commit alone never establishes that
+acceptance. The private receipt grants no further operations. General ordinary
 playlist CRUD, registration and analysis publication remain unintegrated/gated.
 
 ## Engine modules (`soundbox/`)
@@ -861,8 +868,10 @@ refresh, preserving compressed waveform payloads.
 roles. `theme_text_mode` (White/Black/Custom) and `theme_text_custom` independently
 control text on accent-colored selections/buttons; White is the default and
 custom colors survive mode/accent changes. General Settings applies changes across
-QSS, vector wordmark and custom-painted chrome immediately, without reloading a
-track. State load/restore reapplies both preferences. `desktop.wordmark.Wordmark`
+small widget-local accent declarations, vector wordmark and custom-painted
+chrome without reloading a track or resetting QApplication's stylesheet. Native
+color-dialog signals feed a16ms coalescing preview; previews never mutate saved
+preferences. OK commits once, Cancel restores the original accent/text roles. State load/restore reapplies both preferences. `desktop.wordmark.Wordmark`
 resolves the supplied SVG color layers in memory and occupies the original
 270×55 slot. The SVG is packaged data and part of the source fingerprint.
 

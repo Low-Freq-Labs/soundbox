@@ -12,8 +12,18 @@ autoplay capture or persistent hidden analysis. Wide BLUE/RGB share conservative
 physical-pixel LOD/reconstruction; every mode/zoom integrates complete profile
 corners. Frozen all-zoom evidence preserves accepted close RGB pixels and lowers
 wide RGB redraw; live visual acceptance remains open. Final installed provenance
-and release validation belong in HANDOFF. The source playlist pilot still awaits
-its separate exact-plan approval; two-way registration/analysis is unfinished.
+and release validation belong in HANDOFF. The exact one-playlist/two-existing-track source pilot passed Sonny's native
+inspection and normal save October30. General native CRUD and two-way
+registration/analysis remain unfinished; the private pilot receipt grants no
+production API authority.
+
+October30 appearance/audition follow-up adds coalesced live color preview, fast
+text-color switching and a further six-point playlist-content inset. Static QSS
+is installed once; visible accent overrides and custom painters update without
+repolishing all hidden settings widgets. Cancel restores the prior appearance;
+OK saves once. Graveyard accepts standard playback/cue keys and selection-bound
+Load, retaining existing cue triggers while cue edits wait for restoration.
+No Graveyard queue is captured.
 
 Earlier October29 navigation/artwork follow-up was installed in personal build142 after
 its full1617-test gate. Analysis controls span the width in three aligned groups,
@@ -49,19 +59,19 @@ cover that round trip, source acceptance and the next native-reference actions.
 Copy-only replay now matches isolated root creation, rename and unsynced
 add/remove database states through rollback and commit/reopen. Last-root
 single-member deletion is captured and modeled; its audited replay reports one independent notification
-timestamp difference rather than a complete match. Other deletion shapes, synced
-cases and journal/XML publication remain gated. These offline research additions
+timestamp difference rather than a complete match. Other deletion shapes and synced cases remain gated. The paired journal/XML
+publication follow-up below closes its isolated copy-proof gate. These offline research additions
 are not installed source publishers.
 
-October29 paired-publication follow-up: all five native XML transitions now match
-byte for byte, and encrypted TEMP DB/XML publication passes process-exit recovery,
-including WAL and spilled rollback journals. A standalone, exact-plan-approved
-source pilot shares the existing native-edit root/lock/journal and remains
-unintegrated. The one-playlist/two-existing-track preview is prepared but **not
-approved or published**. Final bare ./check.sh passes all1646 tests; an earlier cadence threshold miss
-and its unchanged Cocoa rerun are retained as historical evidence. Native UI acceptance and production
-playlist/registration/analysis authorities remain pending. See HANDOFF and the
-[exact proposed pilot](analysis-playlists-next.md).
+October29 paired-publication follow-up: all five native XML transitions matched
+byte for byte, and encrypted TEMP DB/XML publication passed process-exit recovery,
+including WAL and spilled rollback journals. Its historical bare ./check.sh passed
+all1646 tests; a cadence threshold miss and unchanged Cocoa rerun remain evidence.
+The standalone pilot shares the existing native-edit root/lock/journal and remains
+unintegrated. Its exact one-playlist/two-existing-track plan was subsequently
+approved, published and natively inspected/saved October30. No production
+playlist/registration/analysis authority was provisioned. See HANDOFF and the
+[exact accepted pilot scope](analysis-playlists-next.md).
 
 Historical October27 checkpoints: Sonny requested a fresh efficiency review. The
 [measured audit](efficiency-audit-2026-10.md) led to an approved implementation:

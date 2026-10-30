@@ -338,6 +338,7 @@ QProgressBar::chunk {{ background: {PURPLE_LIGHT}; border-radius: 3px; }}
 
 
 _BASE_QSS = QSS
+STATIC_QSS = _BASE_QSS.replace('@ON_ACCENT@', DEFAULT_ACCENT_TEXT)
 
 
 def normalize_accent(value):
@@ -353,7 +354,7 @@ def normalize_accent_text(value):
 def set_accent(value, text_color=DEFAULT_ACCENT_TEXT):
     """Resolve one saved accent into every UI role; default pixels stay familiar."""
     from PySide6.QtGui import QColor
-    global PURPLE, PURPLE_LIGHT, PURPLE_DARK, ON_ACCENT, QSS
+    global PURPLE, PURPLE_LIGHT, PURPLE_DARK, ON_ACCENT, SUBTLE, QSS
     PURPLE = normalize_accent(value)
     base = QColor(PURPLE)
     if PURPLE == DEFAULT_ACCENT.lower():
@@ -365,6 +366,7 @@ def set_accent(value, text_color=DEFAULT_ACCENT_TEXT):
             base.greenF() * .23 + .77 * 14 / 255,
             base.blueF() * .23 + .77 * 18 / 255).name()
     foreground = normalize_accent_text(text_color)
+    SUBTLE = subtle
     ON_ACCENT = foreground
     QSS = _BASE_QSS
     for old, new in [('#7B2FBE', PURPLE), ('#A855F7', PURPLE_LIGHT),

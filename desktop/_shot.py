@@ -76,6 +76,8 @@ def _render() -> None:
     text_menu = '--theme-text-menu' in sys.argv
     if text_menu:
         sys.argv.remove('--theme-text-menu')
+    theme_preview = '--theme-preview' in sys.argv
+    if theme_preview:sys.argv.remove('--theme-preview')
     accent = None
     text_color = None
     for argument in list(sys.argv):
@@ -603,6 +605,9 @@ def _render() -> None:
         app.processEvents();target=Path(out)
         menu.grab().save(str(target.with_name(target.stem+'-folder-menu.png')))
         menu.close();menu.deleteLater()
+    if theme_preview:
+        from pathlib import Path
+        _capture_theme_preview(win, Path(out), app)
     win.shutdown()
     print("saved", out, "| devices:", win.device_tree.topLevelItemCount())
 
@@ -612,6 +617,62 @@ def _capture_analysis_menus(controls,target,app):
         combo.showPopup();app.processEvents()
         combo.view().window().grab().save(str(target.with_name(target.stem+'-'+name+'-menu.png')))
         combo.hidePopup();app.processEvents()
+
+
+def _capture_theme_preview(win, target, app):
+    """Exercise the actual macOS dialog signal path against synthetic state."""
+    from copy import deepcopy
+    import json
+    from time import perf_counter
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QColorDialog
+    from . import theme
+    before = deepcopy(win.settings)
+    observations = []; timings = []
+    render = win._render_theme
+    def measured(*args):
+        start = perf_counter(); result = render(*args)
+        timings.append((perf_counter()-start)*1000)
+        return result
+    dialog = QColorDialog(QColor(theme.PURPLE), win)
+    # Cocoa's native helper can strand exec() after a programmatic reject.
+    # Open the actual native panel asynchronously for scripted signal capture;
+    # the production picker retains its ordinary user-driven modal lifecycle.
+    def native_capture_exec():
+        loop = QEventLoop()
+        dialog.finished.connect(loop.quit)
+        dialog.open()
+        loop.exec()
+        return dialog.result()
+    def capture(name):
+        observations.append(dict(name=name, accent=theme.PURPLE,
+                                 settings_unchanged=win.settings==before))
+        win.grab().save(str(target.with_name(target.stem+'-'+name+'.png')))
+    QTimer.singleShot(0, lambda: dialog.setCurrentColor(QColor('#168fc0')))
+    QTimer.singleShot(150, lambda: capture('live-blue'))
+    QTimer.singleShot(200, lambda: dialog.setCurrentColor(QColor('#e27239')))
+    QTimer.singleShot(350, lambda: capture('live-orange'))
+    QTimer.singleShot(400, dialog.reject)
+    with mock.patch('desktop.settings_page.QColorDialog', return_value=dialog), \
+         mock.patch.object(dialog, 'exec', side_effect=native_capture_exec), \
+         mock.patch.object(win, '_render_theme', side_effect=measured), \
+         mock.patch.object(app, 'setStyleSheet', wraps=app.setStyleSheet) as global_style:
+        win._choose_theme_color()
+        assert [row['accent'] for row in observations]==['#168fc0','#e27239']
+        assert all(row['settings_unchanged'] for row in observations)
+        assert win.settings==before
+        assert global_style.call_count==0
+        lettering=[]
+        for mode in ('black','white','black'):
+            start=perf_counter();win._apply_theme_text(mode)
+            lettering.append((perf_counter()-start)*1000)
+    win.settings=before;win._apply_theme_color(before.get('theme_accent'))
+    win.grab().save(str(target.with_name(target.stem+'-restored.png')))
+    report=dict(observations=observations,preview_update_ms=timings,
+                lettering_update_ms=lettering,global_stylesheet_rebuilds=0,
+                cancelled_preferences_restored=True)
+    target.with_name(target.stem+'-theme.json').write_text(json.dumps(report,indent=2)+'\n')
 
 
 def main() -> None:
