@@ -36,12 +36,23 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - The observed last-root single-member deletion removes DB playlist/membership
   rows while preserving the entire content table and byte-identical playlist XML,
   even after normal quit. Its retained XML node is not an orphan to clean up.
-  Other deletion shapes and DB/XML publication/recovery remain unaccepted.
+  Other deletion shapes remain unaccepted. Paired copy recovery is now proven;
+  source publication/native UI acceptance remain separate approval gates.
 - Explicit frozen-copy replay is strict by default. A reference-only
   notificationNextFetch.updated_at difference can be audited explicitly, but
   must remain visible as complete_semantic_match=false. Never rewrite the
   notification row to make a comparison pass or transfer that research exception
   into a source writer. See [the current proof](analysis-playlists-next.md).
+
+- A native snapshot can retain a WAL header even after folding committed pages.
+  Normalize only newly created private recovery copies to DELETE journal mode;
+  never normalize the source to simplify a proof. Stable hash identities exclude
+  atime (the first read can update it), while inode/size/mtime/ctime stay bound.
+- Check XML again after recovery inventory reads and immediately before rollback.
+  The standalone pilot holds SQLite's writer lock while validating the pair and
+  restoring XML. Its transport lease reuses native guards, not Cue permission.
+  Separate exact-plan approval is mandatory; no app loader consumes that approval
+  or provisions general native playlist/analysis authority.
 
 ## Qt / PySide6 (these bite HARD)
 - **Tree stripes and embedded controls need explicit geometry.** QTreeView paints

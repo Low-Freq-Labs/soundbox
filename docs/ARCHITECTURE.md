@@ -78,7 +78,10 @@ USB/global My Settings use44 logical fields and byte-preserving selected patches
 no automatic global propagation. usb_format revalidates the reviewed physical USB
 before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_info
 overrides feed display/export; browsercache schema2 and libcache schema8 preserve
-these fields without analysis/art rebuilds. No additional source DB write API exists.
+these fields without analysis/art rebuilds. No additional source DB write API exists
+in the shipped desktop app. A separate standalone playlist pilot under research
+has an exact-plan approval gate, the shared native-edit recovery root/lock/journal,
+and no production authority or app loader; see the current handoff.
 
 `desktop.track_menu` supplies the evenly spaced button immediately right of Q.
 Beat-count mode is persisted separately from waveform color and uses cached
@@ -97,6 +100,15 @@ share data. Playback overlays detected fallback grids in its existing worker;
 native/manual grids and source cues win. No waveform-cache rewrite or source
 DB/ANLZ publication is enabled. Full two-way analysis remains the explicit next
 acceptance gate; see [the accepted stage](analysis-playlists-next.md).
+
+The playlist research path now has a byte-preserving XML codec and a marked-TEMP
+paired transaction proof. XML is durable before SQL commit; complete recorded
+DB/XML prefixes determine rollback or completion. Evidence/unknown-state checks
+precede recovery writes. The separate source pilot uses the existing guarded SQL
+transport with its own approved create/name/two-track intent, target-only live
+reads, snapshot inventories and restrictive SQL authorizer. Both apps must be
+closed. A SQL commit does not establish native UI acceptance. General ordinary
+playlist CRUD, registration and analysis publication remain unintegrated/gated.
 
 ## Engine modules (`soundbox/`)
 

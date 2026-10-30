@@ -42,6 +42,16 @@ timestamp difference rather than a complete match. Other deletion shapes, synced
 cases and journal/XML publication remain gated. These offline research additions
 are not installed source publishers.
 
+October29 paired-publication follow-up: all five native XML transitions now match
+byte for byte, and encrypted TEMP DB/XML publication passes process-exit recovery,
+including WAL and spilled rollback journals. A standalone, exact-plan-approved
+source pilot shares the existing native-edit root/lock/journal and remains
+unintegrated. The one-playlist/two-existing-track preview is prepared but **not
+approved or published**. Final bare ./check.sh passes all1646 tests; an earlier cadence threshold miss
+and its unchanged Cocoa rerun are retained as historical evidence. Native UI acceptance and production
+playlist/registration/analysis authorities remain pending. See HANDOFF and the
+[exact proposed pilot](analysis-playlists-next.md).
+
 Historical October27 checkpoints: Sonny requested a fresh efficiency review. The
 [measured audit](efficiency-audit-2026-10.md) led to an approved implementation:
 browser counts/batched artwork policy, scoped source reads, unchanged display

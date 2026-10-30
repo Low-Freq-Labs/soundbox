@@ -1,41 +1,68 @@
 # SoundBox current handoff
 
-October29, 2026. Branch main; this commit adds offline playlist lifecycle proof
-after ebcb140. Installed personal build142 is unchanged; no runtime files changed
-and no reinstall is required. **Two-way source analysis publication and ordinary
-native playlist CRUD remain unfinished.** No source publisher/authority was added.
+October29, 2026. Branch main; active follow-up to e80daba implements paired
+DB/XML copy recovery and a separately approved standalone source pilot. Installed
+personal build142 is unchanged; runtime fingerprint still matches and no reinstall
+is required. **Two-way source analysis and general native playlist CRUD remain
+unfinished. No new production authority is enabled.**
 
-## Current offline proof and next work
+## Prepared source pilot — approval/native UI acceptance pending
 
-Sonny completed isolated root-create, rename, two-song append, first-song removal
-and last-root single-member deletion, then quit rekordbox normally. Native
-Auto Analysis=Enable and BPM/Grid+Key settings are confirmed restored.
+Paired TEMP publication and byte-preserving XML match all five frozen captures.
+The scoped deletion retains its explicit notification-clock audit residual;
+transaction/source recovery itself admits only exact before/after states. Real
+subprocess exits prove rollback/commit across XML, SQL, WAL, spilled rollback
+journals, receipts and retirement. Unknown complete DB/XML state blocks recovery
+without overwriting either file. Source SQL uses bounded identity/target reads;
+full semantic inventories remain on encrypted private snapshots.
 
-New pure lifecycle plans and disposable encrypted-copy replay exactly match the
-first four complete DB states. Deletion counter352313→352315 and playlist/member
-removal match, with both reference songs and the complete content table preserved.
-Its XML entry and bytes remain unchanged even after normal quit. The capture also
-has one reference-only notificationNextFetch.updated_at change. Strict replay
-rejects it; explicit audit mode preserves baseline metadata and reports
-complete_semantic_match=false. SQL rollback and commit/reopen pass in all cases;
-all frozen input hashes are unchanged. Focused12 tests and the full bare
-`./check.sh` pass:1626 tests (1567 offscreen/59 Cocoa), zero skips/xfails, native
-and Rust builds, Rust3,243 pinned vendor files, pyflakes and mypy71 files. No new
-UI/runtime behavior requires packaging or a render/install cycle.
+The standalone source pilot shares the existing Tag/Cue/Grid root/lock/journal,
+requires both apps closed and an approval bound to the exact prepared plan, and
+retains encrypted DB/XML before/after backups. SQL write authorization permits
+only playlist rows/memberships and counter int_1, denying triggers/DDL/other tables.
+Approval is not automatic. It provisions no native acceptance or app authority.
 
-Evidence: `~/Library/Logs/Soundbox/playlist-lifecycle-proof-2026-10-29/` contains
-check.log and replay-results.json. Frozen before/after captures, XML and full
-inventories remain in playlist-analysis-ui-2026-10-29. The after-close capture
-adds no DB/XML changes. Exact findings and replay scope:
-[analysis-playlists-next.md](analysis-playlists-next.md).
+Read-only plan is prepared, NOT approved/published:
+`~/Library/Logs/Soundbox/playlist-source-pilot-2026-10-29/plan/`.
+Plan SHA `ab2331c468bfa152726df43e699f4fe72afb75b6f01014a3febe42dde90033c9`;
+operation5ec931cd8d814c8baaf636bf68cdbc07; new root playlist3604899226,
+SoundBox Bridge Pilot, with102012532 then109556371. Counter352315→352319.
+No Collection/audio/analysis/cue changes. Approval.json deliberately does not exist.
+The actual-schema SQL authorizer proof passes on the plan copy. Focused playlist
+checks pass. Final bare ./check.sh passes all1646 tests (1587 offscreen/59 Cocoa),
+zero skips/xfails, native/Rust builds, Rust3,243 pinned vendor files, pyflakes and
+mypy71 files. check-final.log and *-final.json are authoritative. An earlier run
+missed display cadence112.94098fps against114; unchanged full Cocoa rerun passed,
+then final review added immutable in-memory plan binding and the full gate passed
+again. Preserve the earlier failure/rerun evidence rather than hiding it.
+Five paired replay reports are in playlist-paired-proof-2026-10-29.
 
-Next: prove atomic DB/XML copy publication and process-interruption recovery,
-including ID allocation against retained XML entries; cover empty/multiple-member
-deletion and sibling renumbering before expanding its scope. Synced/cloud/intelligent playlists remain separate gates. Shared-analysis
-registration/publication needs its own copy proof, contentFile/gain/peak/endpoint
-protocol and narrowly accepted authority; the manual-grid API cannot authorize it.
-SoundBox-first reference.wav stays unimported for that future acceptance. No further
-native UI action is pending for this reference pass.
+Next, after explicit approval of this source test:
+1. Record the approval as private plan/approval.json: format
+   soundbox-playlist-pilot-approval-v1, approved=true, exact plan_sha256 above,
+   source=/Users/sonnypiccolo/Library/Pioneer/rekordbox/master.db and operation_id above.
+   Never create that receipt before Sonny grants this test.
+2. Back up/hash library.json and curated state. Gracefully quit SoundBox to drain
+   accepted source intents; confirm SoundBox plus rekordbox/agent are closed.
+3. Run .venv/bin/python scripts/prove_rekordbox_playlist_pilot.py publish with
+   --plan pointing at the prepared directory and --approval its approval.json.
+   Verify the source result, preserve all backups and journal evidence.
+4. Ask Sonny to open rekordbox, check SoundBox Bridge Pilot's name/order/two songs
+   and retained BPM/Key/cues, then quit normally. Capture and compare native result.
+If interrupted, recover with the same CLI/plan/approval and both apps closed;
+unknown state preserves evidence. No whole-DB restore or global preference edit.
+
+Source shared recovery remains
+`~/Library/Application Support/LowFreqLabs/Soundbox/rekordbox_recovery/tag-writes/b496f6c142799c5315d33799`.
+Pending format is soundbox-native-playlist-pilot-v1; older domains must reject it.
+Backups remain in playlist-pilot-5ec931cd8d814c8baaf636bf68cdbc07 under that root.
+
+After native acceptance, implement the app's shared source-lane integration and
+remaining ordinary playlist shapes. Registration/detected-analysis/Key publication
+needs its own contentFile/gain/peak/endpoint copy proof and narrow source acceptance;
+manual-grid permission cannot authorize it. SoundBox-first reference.wav remains
+unimported for that future test. Normal native Auto Analysis and BPM/Grid+Key are
+confirmed restored. Full findings: [analysis-playlists-next.md](analysis-playlists-next.md).
 
 ## Installed app and validation
 
@@ -77,7 +104,7 @@ reports, actual provenance, native screenshots, curated library backups and exac
 state comparisons. Harnesses use frozen offline fixtures; render and isolated
 launch suppress real source/device discovery.
 
-## Final curated-state baseline
+## Installed142 validation baseline and current source-only check
 
 Verified after142's normal quit/relaunch at `2026-10-29T19:46:21.095156-05:00`:
 library SHA `01b26c1b21b34f9311d0a237036dec744e5b6e6e256a6a0865852b5c33b920df`;
@@ -94,6 +121,13 @@ columns_state/sidebar_split;142's first launch changed no saved bytes.
 Build142 quit serialized columns_state only; the final relaunch changed no saved
 bytes. All curation/art/authorities/analysis remain exact throughout. See
 state-timeline.json and state-verification-post-restart.json.
+
+Current source-only preapproval snapshot at 2026-10-29T23:29:16.273136-05:00:
+library SHA `4ec9f23f26e2f5ec6845177cb5bd8b7042ced41cf8521881eebe3a9960c3fb7c`; curation SHA remains the same above.
+Only columns_state/sidebar_split differ from the installed142 restart baseline;
+all curation is unchanged. Preserve those serialized UI settings. No reinstall
+or extra quit/relaunch was performed for these unintegrated research changes.
+Exact comparison: preapproval-settings-differences.json beside the pilot plan.
 
 Retain current rollback pending Sonny's acceptance:
 `/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-analysis-rollback-flpz99ko/Soundbox-build141.app`.

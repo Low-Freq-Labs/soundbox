@@ -31,14 +31,16 @@ def _apply(conn, changes):
         if table == 'agentRegistry' and change['id'] != 'localUpdateCount':
             raise ValueError('Replay cannot write unrelated registry metadata')
         key = 'registry_id' if table == 'agentRegistry' else 'ID'
-        actual = [r for r in _rows(conn, table) if r[key] == change['id']]
+        cursor = conn.execute(f'SELECT * FROM {_quote(table)} WHERE {_quote(key)}=?', (change['id'],))
+        names = [c[0] for c in cursor.description]
+        actual = [dict(zip(names,row,strict=True)) for row in cursor]
         before, after = change['before'], change['after']
         if actual != ([] if before is None else [before]):
             raise ValueError('Replay baseline conflict')
         if after is None:
             conn.execute(f'DELETE FROM {_quote(table)} WHERE {_quote(key)}=?', (change['id'],))
         else:
-            columns = [r[1] for r in conn.execute(f'PRAGMA table_info({_quote(table)})')]
+            columns = names
             if set(columns) != set(after) or after[key] != change['id']:
                 raise ValueError('Replay row/schema mismatch')
             values = [after[c] for c in columns]
@@ -46,6 +48,10 @@ def _apply(conn, changes):
                 conn.execute(f'INSERT INTO {_quote(table)} '
                     f'({",".join(_quote(c) for c in columns)}) VALUES ({",".join("?" for c in columns)})', values)
             else:
+                columns = [c for c in columns if after[c] != before[c]]
+                if not columns:
+                    raise ValueError('Unchanged replay row')
+                values = [after[c] for c in columns]
                 conn.execute(f'UPDATE {_quote(table)} SET '
                     f'{",".join(_quote(c)+"=?" for c in columns)} WHERE {_quote(key)}=?', values+[change['id']])
 
@@ -73,7 +79,7 @@ def _reference_differences(conn, expected, reference_rows, *, audit_notification
     return differences
 
 
-def replay(before, after, operation, playlist_id, *, audit_notification_timestamp=False):
+def replay(before, after, operation, playlist_id, *, audit_notification_timestamp=False, paired=False):
     first, left = load_capture(before)
     expected, right = load_capture(after)
     if first['schema'] != expected['schema'] or first['metadata'] != expected['metadata']:
@@ -152,9 +158,35 @@ def replay(before, after, operation, playlist_id, *, audit_notification_timestam
                 raise ValueError('Reopened committed copy differs from native reference')
         finally:
             conn.close()
+    publication = None
+    if paired:
+        from .playlist_transaction import OfflinePlaylistWorkspace, _sha
+        workspace = OfflinePlaylistWorkspace.capture(before)
+        try:
+            xml_path = Path(after).expanduser().resolve()/'masterPlaylists6.xml'
+            _sha(xml_path)  # reject redirects/hardlinks before reading
+            xml_after = xml_path.read_bytes()
+            workspace.apply(changes, xml_after, expected_before=first,
+                expected_xml_sha256=_sha(workspace.xml))
+            conn = _connect(workspace.database, readonly=True)
+            try:
+                if _reference_differences(conn, expected, right,
+                        audit_notification_timestamp=audit_notification_timestamp) != differences:
+                    raise ValueError('Paired publication differs from the native DB reference')
+            finally:conn.close()
+            if workspace.xml.read_bytes() != xml_after:
+                raise ValueError('Paired publication differs from native XML bytes')
+            publication = dict(verified_commit=True, xml_byte_match=True,
+                pending_recovery=workspace.transaction.exists(), source_write_authority=False)
+        except BaseException as exc:
+            exc.add_note('Preserved offline playlist workspace: '+str(workspace.root))
+            raise
+        else:
+            shutil.rmtree(workspace.root)
     return dict(operation=operation, playlist_id=playlist_id, planned_changes=len(changes),
         complete_semantic_match=not differences, reference_only_differences=differences,
         audited_semantic_match=True, rollback_match=True, reopened_commit_match=True,
+        paired_publication=publication,
         xml_publication_proven=False, source_write_authority=False)
 
 
@@ -164,9 +196,10 @@ def main():
     parser.add_argument('operation', choices=('create', 'rename', 'append', 'remove', 'delete-last'))
     parser.add_argument('playlist_id')
     parser.add_argument('--audit-notification-timestamp', action='store_true')
+    parser.add_argument('--paired', action='store_true')
     args = parser.parse_args()
     print(json.dumps(replay(args.before, args.after, args.operation, args.playlist_id,
-        audit_notification_timestamp=args.audit_notification_timestamp), indent=2))
+        audit_notification_timestamp=args.audit_notification_timestamp, paired=args.paired), indent=2))
 
 
 if __name__ == '__main__':

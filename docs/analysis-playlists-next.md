@@ -170,8 +170,9 @@ and the observed last-root single-member deletion as pure plans.
 disposable encrypted copies. All four operations match complete
 native database semantics, restore the complete baseline on SQL rollback, and
 match again after commit/reopen. Frozen inputs and live sources are never modified.
-This is database-copy proof; atomic XML publication, process-interruption recovery,
-source authority and synced/cloud cases remain unproven. Native XML timestamps
+This earlier DB-only replay does not establish paired publication or source
+authority. The paired copy proof and proposed source pilot are recorded below;
+synced/cloud cases remain unproven. Native XML timestamps
 must be captured as independent values, not inferred from SQL updated_at.
 
 Sonny confirms normal Auto Analysis and BPM/Grid+Key settings restored. He deleted
@@ -227,6 +228,60 @@ delete-last comparison needs the explicit notification-timestamp audit flag;
 its strict default rejection is retained as evidence. Full replay reports,
 frozen-input hashes and the1626-test gate are retained in
 `~/Library/Logs/Soundbox/playlist-lifecycle-proof-2026-10-29/`.
+
+## Recoverable paired copy publication and proposed source pilot
+
+`playlist_xml.py` patches only the planned local NODEs and preserves every other
+byte. It reproduces all five native XML captures exactly, including retained
+64-bit Lib_Type1 entries. New local IDs cannot collide with retained XML history.
+
+`playlist_transaction.py.OfflinePlaylistWorkspace` remains original-private-TEMP
+only, with no source publication route. It stages verified encrypted before/after
+DBs and exact XML, journals before canonical writes, publishes XML durably inside
+the SQL transaction and uses the SQL commit as the decision point. Exact before
+DB plus after XML rolls XML back; exact after DB plus after XML completes. Unknown
+DB/XML or an impossible after-DB/before-XML prefix preserves all evidence. The
+whole pair and payloads are verified before any recovery mutation. WAL headers
+are consolidated only on new disposable backup copies; source files are untouched.
+Real subprocess exits cover preparation, journal, SQL, XML, commit, receipt and
+retirement, including WAL and genuinely spilled rollback journals.
+
+The replay command now accepts --paired. All five frozen cases pass paired
+copy publication with byte-identical XML. The deletion reference retains its
+explicit notification-only audit residual; transaction recovery itself has
+no metadata exception. No record may normalize a source registry clock.
+
+scripts/prove_rekordbox_playlist_pilot.py has prepare/show/publish/recover commands,
+all with explicit paths. Preparation only snapshots a closed source and builds a
+private encrypted plan. Publication requires a separate approval file bound to
+its plan SHA, source and operation ID; nothing creates that approval automatically.
+The unintegrated playlist_pilot.py uses the existing shared source root/lock/
+journal and guarded SQL connection lease. It regenerates exactly create/name/two
+existing unsynced additions, authorizes only the two playlist tables and counter
+int_1, and denies trigger/DDL/other-table mutations. Reads against the live writer
+are identity/target reads; complete inventories run on verified private snapshots.
+Both SoundBox and rekordbox/agent must be closed. All unrelated source state and
+full XML bytes remain bound; there is no source notification-timestamp exception.
+Before/after encrypted DB/XML backups remain archived after completion. Unknown
+state, changed approval/payloads, competing domains and redirects fail closed.
+
+Proposed pilot is prepared, **not approved or published**:
+~/Library/Logs/Soundbox/playlist-source-pilot-2026-10-29/plan/.
+It creates SoundBox Bridge Pilot3604899226, then adds102012532 and109556371 in that
+order; native counter352315→352319. Source629922790/schema/version bind exactly.
+Existing content, cues, analysis and source audio do not change. Plan digest:
+ab2331c468bfa152726df43e699f4fe72afb75b6f01014a3febe42dde90033c9.
+The preview, SQL-authorizer proof and validation logs remain beside that plan.
+No approval.json has been created; native UI acceptance and all production
+playlist/registration/analysis authorities remain disabled.
+
+After explicit approval: back up/hash SoundBox curation; gracefully quit SoundBox
+to drain source intents; verify both apps closed; publish using that exact plan
+and approval. Then Sonny opens rekordbox to check playlist/name/order and existing
+analysis/cues, quits normally, and the agent captures the accepted native result.
+A source SQL commit alone never provisions production authority. General CRUD,
+empty/multiple-member deletion, sibling order, direct registration and analysis
+publication still need their own remaining implementation/acceptance.
 
 ## Private evidence
 

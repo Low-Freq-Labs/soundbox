@@ -7,6 +7,12 @@ cue add/delete acceptance passed October 26. Grid source acceptance passed Octob
 current build/install and user review status live in HANDOFF. Source intelligent-list
 creation remains a subsequent milestone.
 
+The later ordinary-playlist source work is separate from these accepted Tag/Cue/
+Grid permissions. Its paired TEMP proof and separately approved one-playlist/two-
+existing-track source pilot are documented in
+[analysis-playlists-next.md](analysis-playlists-next.md). The prepared pilot is
+not published or accepted; it has no production authority or app integration.
+
 ## Agreed first version
 
 - A strip beneath the waveform: set the playhead as a bar's first beat, shift

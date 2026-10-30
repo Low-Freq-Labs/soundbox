@@ -388,7 +388,14 @@ publication is still gated by its own native reference and authority, not the
 accepted manual-grid API. Ordinary native playlist CRUD also remains gated;
 copy-only unsynced playlist lifecycle/membership replay does not authorize source
 publication.
-Read docs/analysis-playlists-next.md for implemented scope and exact next actions.
+A separate unintegrated playlist pilot requires Sonny's explicit approval of its
+exact prepared plan digest. It may only create/name one SoundBox Bridge Pilot
+playlist and append its two bound existing unsynced reference tracks. Both apps
+must be closed; the shared Tag/Cue/Grid root/lock/journal, encrypted DB/XML backups,
+exact recovery pairs and fresh source/schema/version guards remain mandatory.
+A successful pilot SQL commit confers no native UI acceptance or production
+playlist/analysis authority. Never create its approval receipt before Sonny grants
+that specific source test. Read docs/analysis-playlists-next.md for scope/next steps.
 
 SoundBox playlist folders are local organization in the bounded, validated
 `settings.custom_playlist_tree`; membership remains in `custom`. Folder moves

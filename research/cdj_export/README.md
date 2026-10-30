@@ -2,8 +2,9 @@
 
 October28 integration update: the desktop pilot now uses the shared renderer in
 [`native/cdj`](../../native/cdj/README.md), fresh `soundbox.cdj_source` capture and
-reviewed `cdj_transaction` publication. The standalone tools below remain explicit
-offline fixtures, not device writers. Current contract/limits/install evidence:
+reviewed `cdj_transaction` publication. The standalone export tools below remain explicit
+offline fixtures, not device writers. A separate desktop playlist pilot has an
+explicit one-plan approval gate and no app integration; see the playlist scope. Current contract/limits/install evidence:
 [CDJ guide](../../docs/cdj-usb-export.md), [HANDOFF](../../docs/HANDOFF.md).
 
 
@@ -69,6 +70,17 @@ coordinated recovery. Users never choose or separately enable the formats.
   match. Deletion is limited to the observed last-root single-member case.
   This does not prove XML publication/interruption recovery or grant source-write authority; see
   [the current playlist protocol work](../../docs/analysis-playlists-next.md).
+
+- `playlist_xml.py` / `playlist_transaction.py` — byte-preserving XML codec and
+  original-TEMP-only paired publication with complete evidence validation and
+  real process-exit recovery checks. `playlist_replay.py --paired` exercises the
+  frozen native DB/XML pairs. No source permission is granted by that proof.
+- `playlist_pilot_plan.py` / `playlist_pilot.py` — a separately approved, unintegrated
+  desktop-source test for one new named playlist plus two existing unsynced tracks.
+  Preparation/show are read-only to the source. Publish/recover require the exact
+  separate approval; no automatic acceptance or production authority exists.
+  CLI: `scripts/prove_rekordbox_playlist_pilot.py`; read the
+  [scope and actual pending plan](../../docs/analysis-playlists-next.md) first.
 
 ## Checking it
 
