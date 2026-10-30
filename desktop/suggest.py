@@ -222,7 +222,7 @@ class MergeDialog(QDialog):
         v.addLayout(row)
 
     def _existing_menu(self, pos):
-        from PySide6.QtWidgets import QMenu
+        from .choices import Menu as QMenu
         it = self.done_list.itemAt(pos)
         data = it.data(0, _ROLE) if it else None
         if data and data[0] == "existing":

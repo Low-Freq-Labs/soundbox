@@ -26,9 +26,10 @@ from PySide6.QtGui import (
     QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QGridLayout, QHBoxLayout, QMenu, QPushButton,
+    QButtonGroup, QGridLayout, QHBoxLayout, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
+from .choices import ComboBox as QComboBox, Menu as QMenu
 from .task_owner import TaskOwner
 from .analysis_fence import AnalysisWriteFence
 from .native_deck import (
@@ -373,6 +374,7 @@ class WaveformWorker(QThread):
         self.generation = int(generation)
         self.native_backend = native_backend
         self.detected_analysis = detected_analysis
+        self.transient_analysis = False
         self._discard_requested = threading.Event()
         self.cache_writes = AnalysisWriteFence()
 
@@ -381,13 +383,13 @@ class WaveformWorker(QThread):
         self._discard_requested.set()
         self.requestInterruption()
 
-    def _load_stages(self) -> tuple[bool, bool, bool]:
+    def _load_stages(self, cache_dir=None) -> tuple[bool, bool, bool]:
         from soundbox.track_analysis import (
             load_detail, load_manifest, load_overview,
         )
 
-        manifest = load_manifest(
-            self.track_analysis_dir, self.track_id, self.path)
+        cache_dir = self.track_analysis_dir if cache_dir is None else cache_dir
+        manifest = load_manifest(cache_dir, self.track_id, self.path)
         if manifest is None:
             return False, False, False
         manifest = _apply_loaded_grid_contract(
@@ -398,11 +400,11 @@ class WaveformWorker(QThread):
         if self.isInterruptionRequested():
             return True, False, False
         overview = load_overview(
-            self.track_analysis_dir, self.track_id, self.path)
+            cache_dir, self.track_id, self.path)
         if self.isInterruptionRequested():
             return True, overview is not None, False
         detail = load_detail(
-            self.track_analysis_dir, self.track_id, self.path)
+            cache_dir, self.track_id, self.path)
         if self.isInterruptionRequested():
             return True, overview is not None, detail is not None
         if overview is not None and self.native_backend is not None:
@@ -433,8 +435,19 @@ class WaveformWorker(QThread):
         return True, overview is not None, detail is not None
 
     def run(self):
+        if self.transient_analysis:
+            # Audition hidden songs through the same checked analysis codec,
+            # without recreating their canonical record. Signals/GPU uploads
+            # retain the loaded bytes after this private directory is removed.
+            from tempfile import TemporaryDirectory
+            with TemporaryDirectory(prefix='soundbox-audition-') as area:
+                self._run(area)
+        else:
+            self._run(self.track_analysis_dir)
+
+    def _run(self, cache_dir):
         try:
-            if not self.track_analysis_dir or not self.track_id:
+            if not cache_dir or not self.track_id:
                 self.manifest_ready.emit(self.path, self.generation, {})
                 return
             from soundbox.track_analysis import (
@@ -442,11 +455,11 @@ class WaveformWorker(QThread):
             )
             from soundbox.waveform_detail import analyze_imported, complete_import, DETAIL_MODEL
             from soundbox.track_analysis import load_manifest, is_dataless_source
-            present = self._load_stages()
+            present = self._load_stages(cache_dir)
             checkpoint = lambda: not self.isInterruptionRequested()
             if not checkpoint():
                 return
-            existing = load_manifest(self.track_analysis_dir, self.track_id, self.path)
+            existing = load_manifest(cache_dir, self.track_id, self.path)
             # A valid old record plays immediately. Upgrade just the selected
             # local track; never turn launch into a full-library recook.
             if all(present) and (existing or {}).get("waveform_model") == DETAIL_MODEL:
@@ -473,18 +486,18 @@ class WaveformWorker(QThread):
                     from soundbox.track_analysis import with_imported_cues
                     prepared = with_imported_cues(prepared, existing.get("cues") or [])
                 self.cache_writes.publish(self.track_id, lambda: track_store(
-                    self.track_analysis_dir, self.track_id, self.path, prepared))
+                    cache_dir, self.track_id, self.path, prepared))
                 if checkpoint():
-                    self._load_stages()
+                    self._load_stages(cache_dir)
         except Exception:  # noqa: BLE001
             if not self.isInterruptionRequested():
                 self.manifest_ready.emit(self.path, self.generation, {})
         finally:
             if (self._discard_requested.is_set()
-                    and self.track_analysis_dir and self.track_id):
+                    and cache_dir and self.track_id):
                 from soundbox.track_analysis import discard_records
                 discard_records(
-                    self.track_analysis_dir, (self.track_id,))
+                    cache_dir, (self.track_id,))
 
 
 class SessionCueState(str, Enum):
@@ -1508,6 +1521,7 @@ class CuePanel(QWidget):
 
 class PlayerLayoutSelector(QComboBox):
     """A symmetric field with a popup bounded to the same width."""
+    popup_matches_field = True
 
     def showPopup(self):
         self.view().setMinimumWidth(0)
@@ -1515,23 +1529,6 @@ class PlayerLayoutSelector(QComboBox):
         popup = self.view().window()
         popup.setFixedWidth(self.width())
         popup.move(self.mapToGlobal(QPointF(0, 0).toPoint()).x(), popup.y())
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(QColor(theme.BORDER), 1))
-        painter.setBrush(QColor(theme.BG))
-        painter.drawRoundedRect(QRectF(.5, .5, self.width() - 1, self.height() - 1), 4, 4)
-        color = theme.TEXT if self.isEnabled() else theme.TEXT_DIM
-        painter.setPen(QColor(color))
-        painter.drawText(QRectF(11, 0, self.width() - 37, self.height()),
-                         Qt.AlignLeft | Qt.AlignVCenter, self.currentText())
-        pen = QPen(QColor(color), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        painter.setPen(pen)
-        center, middle = self.width() - 14, self.height() / 2
-        painter.drawPolyline(QPolygonF([QPointF(center - 4, middle - 2),
-                                       QPointF(center, middle + 2),
-                                       QPointF(center + 4, middle - 2)]))
 
 
 class PlayerBar(QWidget):
@@ -2716,7 +2713,7 @@ class PlayerBar(QWidget):
         self._wf = w
         admission = getattr(self, 'analysis_cache_admitted', None)
         if admission is not None and not admission(self._track_id):
-            w.cache_writes.protect(self._track_id)
+            w.transient_analysis = True
         self._wf_pending.append(w)  # strong ref until finished (never GC mid-run)
         w.manifest_ready.connect(
             lambda src, gen, data, ap=analysis_path:

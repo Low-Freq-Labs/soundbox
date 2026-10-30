@@ -10,7 +10,7 @@ from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint
 from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QTableView,
-    QTreeWidget, QTreeWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QStyle, QStyleOptionViewItem,
 )
 
 from . import theme
@@ -187,11 +187,36 @@ class ArtistsTree(NoTypeAhead, QTreeWidget):
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
 
+class _PlaylistDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        # A leaf's icon occupies the branch column, just as a folder's chevron
+        # does. Keep the model text/roles and the tree's hit/drag geometry intact.
+        if any(index.data(role) for role in (PATH_ROLE, CUSTOM_ROLE, COLLECTION_ROLE, ARTISTS_ROLE)):
+            option = QStyleOptionViewItem(option)
+            self.initStyleOption(option, index)
+            icon, separator, text = option.text.partition('  ')
+            if separator:
+                option.text = text
+                style = option.widget.style()
+                style.drawControl(QStyle.CE_ItemViewItem, option, painter, option.widget)
+                painter.save()
+                selected = bool(option.state & QStyle.State_Selected)
+                painter.setPen(QColor(theme.ON_ACCENT if selected else theme.TEXT))
+                branch = option.rect.adjusted(-self.parent().indentation(), 0,
+                    -option.rect.width(), 0)
+                painter.drawText(branch, Qt.AlignCenter, icon)
+                painter.restore()
+                return
+        super().paint(painter, option, index)
+
+
 class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
     """Folders navigate without selecting a playlist; pressed folders still drag."""
     def __init__(self):
         super().__init__()
         self.setExpandsOnDoubleClick(False)
+        self.setIndentation(16)
+        self.setItemDelegate(_PlaylistDelegate(self))
 
     @staticmethod
     def is_folder(item):

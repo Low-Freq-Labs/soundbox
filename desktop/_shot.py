@@ -571,7 +571,17 @@ def _render() -> None:
         app.processEvents()
         target = Path(out)
         menu.grab().save(str(target.with_name(target.stem+'-menu.png')))
+        colors = menu.actions()[0].menu()
+        colors.popup(menu.mapToGlobal(menu.actionGeometry(menu.actions()[0]).topRight()))
+        app.processEvents()
+        colors.grab().save(str(target.with_name(target.stem+'-color-menu.png')))
+        colors.close()
         menu.close(); menu.deleteLater()
+        selector = pb.layout_selector
+        if selector is not None:
+            selector.showPopup(); app.processEvents()
+            selector.view().window().grab().save(str(target.with_name(target.stem+'-layout-menu.png')))
+            selector.hidePopup()
     if analyze_dialog:
         from pathlib import Path
         from .analysis import AnalysisDialog

@@ -13,7 +13,8 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer
-from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
+from PySide6.QtWidgets import QInputDialog, QMessageBox
+from .choices import Menu as QMenu
 
 from soundbox import imports as import_mod, sync as sync_mod
 from soundbox.paths import sanitize_component

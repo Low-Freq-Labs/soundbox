@@ -90,7 +90,20 @@ native RAM resolver drives drawable text and diagnostics; changes request one
 dirty frame. Standalone CDJ inputs join the existing collection union without
 manufacturing a playlist; local recovery receipts retain their source IDs/UUIDs.
 
+`desktop.choices` paints menu checks in a right-hand gutter and uses QListView
+combo popups with matching right checks. Qt retains keyboard/action/accessibility
+semantics; a shared application-owned proxy disables native Cocoa combo menus
+without owning QApplication's platform style. Closed combo arrows sit 14 points
+from the right edge. Sidebar leaf icons use the branch column, aligning labels
+with folders at every depth. Graveyard double-click/Load Track uses the existing
+deck with no autoplay capture. Hidden auditions prepare a private temporary
+record through the normal codec, upload the data, and remove the temporary
+record before worker retirement; the canonical cache remains absent.
+Summary uses a large cover beside inline caption/value rows.
+
 `desktop.analysis` owns the Analysis tab/dialog and cancellable TaskOwner jobs.
+Its three inset groups align labels and 30-point control rows; the section header
+and preservation note retain the outer edge.
 `soundbox.analysis` captures one hashed local audio snapshot, then the optimized
 Rust helper reuses pinned rbxport DSP. Decoding checks bounds before collection
 and caps the buffer at300seconds/32million mono samples. Results are durable
@@ -402,8 +415,9 @@ and divisor-dependent height compensation were removed after the September 29
 reference comparison. The 13 UI/native zoom stops end at 1500 points/s.
 
 One footprint-selected song-anchored mip feeds the fixed four-attributes-per-pixel
-lattice. The three widest stops use a half-pixel source footprint; 64–1500 use
-one physical pixel except the logical-pixel footprint at RGB 576/864. The October 2 close-zoom follow-up
+lattice. Every stop uses one physical pixel of source support except the
+logical-pixel footprint at RGB 576/864. Wide BLUE/RGB use the same conservative
+LOD and same-LOD reconstruction as the middle stops. The October 2 close-zoom follow-up
 selects 2-ms compact detail at Retina 384; the native-reference follow-up also
 selects a logical-pixel footprint (2 ms) at RGB 576/864. Other close cases retain
 1-ms detail. Thin signed carriers use a
@@ -425,10 +439,8 @@ precision. Attribute generation uses absolute 128-attribute clock blocks, with
 CPU-double-derived anchors and phases, so overlapping tile rebuilds cannot
 round a held cell onto a different source sample. The scrolling lane translates fixed height/hue attributes into each
 final Retina drawable pixel. The fragment computes vertical silhouette
-coverage and composites the final color exactly once. The accepted
-quarter-pixel profile remains in use at 64–184 px/s for RGB/BLUE and below
-1152 px/s for 3BAND. RGB/BLUE at 24–48 and 256–1500, and 3BAND at
-1152–1500, use the pixel endpoints plus every integer knot of the four-attributes-per-pixel
+coverage and composites the final color exactly once. All modes and all 13 zooms
+use the pixel endpoints plus every integer knot of the four-attributes-per-pixel
 lattice to form the complete piecewise-linear profile; integrating those true
 segment spans avoids a hidden corner moving through a fixed probe interval.
 There is no translated RGBA texture or second coverage/color filter; every
@@ -462,10 +474,11 @@ read is needed. If the physical/logical selections agree, color is unchanged.
 RGB 576/864 use logical-point motion; other RGB stops remain fractional. The broad occupied-column boost is
 removed; normal coverage and hue are not brightened. Persisted
 extrema, mip data and the final physical-pixel integration window remain unchanged.
-The canonical 64–256 px/s midrange family applies one same-LOD
-half-physical-pixel `[1, 2, 1]` reconstruction pass before that final
-integration. The 24–48 distant stops and 384–1500 close family bypass it; it
-changes neither mip selection nor close source detail.
+BLUE/RGB at 24–256 px/s and 3BAND at 64–256 apply the same-LOD `[1, 2, 1]`
+reconstruction before final integration. Wave/color taps sit half a physical
+pixel either side; signed interval taps use 1.5 physical pixels in source space.
+The 384–1500 close family and wide 3BAND bypass that pass. Final coverage remains
+one physical pixel; close source detail and accepted RGB motion are unchanged.
 Scrolling grid rectangles carry signed local line distance into the fragment,
 which applies analytic physical-pixel box coverage instead of rasterizing a
 hard two-pixel-wide Retina rectangle. The drawable is BGRA8Unorm_sRGB:
@@ -853,7 +866,7 @@ track. State load/restore reapplies both preferences. `desktop.wordmark.Wordmark
 resolves the supplied SVG color layers in memory and occupies the original
 270×55 slot. The SVG is packaged data and part of the source fingerprint.
 
-Settings orders its tabs General, My Settings, Keyboard, Graveyard, Connections; Graveyard
+Settings orders its tabs General, Analysis, My Settings, Keyboard, Graveyard, Connections; Graveyard
 uses the full width. A QTabBar is centered across the 40-pixel header, with Back on the left
 and no redundant Settings label. Equal outer grid columns keep its center
 independent of the Back button's width. It selects a
@@ -1203,4 +1216,4 @@ primary contentFile hash/size/revision and AnalysisUpdated. Whole-row recovery
 binds those changes with DAT/EXT and SQL. Enter captures exact hundredths plus
 track identity; browser row confirmation follows the saved signal, never RAM
 preview. The player layout field uses a rounded custom painter with an inset
-chevron while retaining the native popup; transport row/column gaps both use 5 px.
+chevron and the shared Qt choice popup; transport row/column gaps both use 5 px.

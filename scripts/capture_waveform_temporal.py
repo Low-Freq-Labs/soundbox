@@ -67,8 +67,6 @@ def _signed_carrier_lattice_summary(
     footprint = (
         samples_per_second
         / max(1.0, pixels_per_second * drawable_scale)
-        * (0.5 if pixels_per_second < 64.0
-           else 1.0)
     )
     if waveform_mode == 2 and pixels_per_second in (576.0, 864.0):
         footprint *= drawable_scale

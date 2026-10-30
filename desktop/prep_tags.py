@@ -6,9 +6,10 @@ from collections import Counter
 from PySide6.QtCore import QPointF, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPolygonF
 from PySide6.QtWidgets import (
-    QCheckBox, QLabel, QMenu, QStyle, QStyleOption, QToolButton,
+    QCheckBox, QLabel, QStyle, QStyleOption, QToolButton,
     QWidget, QWidgetAction,
 )
+from .choices import Menu as QMenu
 from . import theme
 
 

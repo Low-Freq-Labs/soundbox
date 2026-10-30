@@ -268,7 +268,7 @@ The information button opens Summary and Info, with editable artwork inside Info
 and optional metadata columns, hidden until selected. The dialog opens before
 artwork resolution; Info uses a compact three-column form that fits at its default
 size, with larger centered artwork and a full-width Comments row. Summary uses
-a larger cover alongside the track text. The edit note sits bottom
+a larger cover alongside inline labels and track values. The edit note sits bottom
 left. USB Category/Sort panels have visible borders, Color uses dots beside
 inputs, and Global My Settings/Keyboard scroll at the right window edge.
 Older saved layouts keep
@@ -294,7 +294,9 @@ both **Remove from Playlist** (only that playlist) and **Remove from Collection*
 (global hide, restorable from the dated **Settings → Graveyard** tab); Collection
 offers only the latter. Graveyard restore is selection-scoped: select one,
 Shift/Cmd-select several, or use Cmd-A, then right-click **Restore**. There is
-no unconditional Restore All shortcut. A global Graveyard entry immediately
+no unconditional Restore All shortcut. Double-click a Graveyard track (or choose
+Load Track) to audition it in the deck before restoring; it stays removed and
+does not join autoplay. A global Graveyard entry immediately
 drops its disposable SoundBox waveform record and background preparation skips
 it; restoring the track prepares it again when its source remains available.
 Playlist-only removals retain analysis because the track can still be browsed
@@ -359,9 +361,10 @@ if the profile is unavailable the excluded image stays hidden. Other manual and
 unrecorded artwork stays protected. Additional source controls are under More.
 The bulk re-scan retries misses and explicitly automatic avatars; it preserves
 manual and unrecorded images. In-flight background results cannot overwrite an edit.
-Settings orders its tabs **General**, **My Settings**, **Keyboard**, **Graveyard**, **Connections**,
+Settings orders its tabs **General**, **Analysis**, **My Settings**, **Keyboard**, **Graveyard**, **Connections**,
 with tabs centered across one header and Back on the left; Graveyard retains its
-full-width page.
+full-width page. Menu and dropdown labels start on the left, checks sit on the
+right, and dropdown arrows share the player selector’s inset spacing.
 [Keyboard settings](docs/KEYBOARD.md) provide searchable,
 remappable actions with multiple bindings and explicit conflict moves. Edit a
 keycap and choose **Unbind** to remove that shortcut. By default,

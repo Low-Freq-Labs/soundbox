@@ -3,7 +3,8 @@ from uuid import uuid4
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox, QTreeWidgetItem
+from PySide6.QtWidgets import QInputDialog, QMessageBox, QTreeWidgetItem
+from .choices import Menu as QMenu
 
 from soundbox import playlist_folders as folders
 from .trees import CUSTOM_ROLE, CUSTOM_FOLDER_ROLE

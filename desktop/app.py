@@ -106,10 +106,11 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QLineEdit,
     QFileDialog, QFileSystemModel, QGridLayout, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
+    QHeaderView, QInputDialog, QLabel, QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget,
     QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
+from .choices import Menu as QMenu
 
 
 from soundbox import (

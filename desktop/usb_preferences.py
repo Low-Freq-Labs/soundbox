@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
     QVBoxLayout, QWidget, QDialog, QDialogButtonBox, QFormLayout)
+from .choices import ComboBox as QComboBox
 from soundbox import my_settings
 
 USB_TABS = ('Overview', 'Playlists', 'Category', 'Sort', 'Column', 'Color', 'My Settings')

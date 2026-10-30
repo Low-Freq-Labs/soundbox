@@ -11,9 +11,10 @@ from PySide6.QtCore import QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QSplitter, QTabBar, QVBoxLayout, QWidget, QComboBox, QMenu,
+    QMessageBox, QPushButton, QSplitter, QTabBar, QVBoxLayout, QWidget,
     QStackedWidget,
 )
+from .choices import ComboBox as QComboBox, Menu as QMenu
 
 from soundbox.art_sources import account_name, excluded_source, same_art_source, profile_source
 from soundbox.artwork import ArtResult

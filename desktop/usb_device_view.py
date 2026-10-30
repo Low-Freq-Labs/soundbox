@@ -13,9 +13,10 @@ import stat
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QGridLayout, QHeaderView, QLineEdit, QPushButton, QScrollArea, QStackedWidget,
+    QAbstractItemView, QGridLayout, QHeaderView, QLineEdit, QPushButton, QScrollArea, QStackedWidget,
     QTreeWidgetItem, QTreeWidgetItemIterator, QVBoxLayout, QWidget, QLabel, QHBoxLayout,
 )
+from .choices import ComboBox as QComboBox
 
 from soundbox.cdj_usb import CdjLibrary, CdjPlaylist, CdjSong, DISPLAY_FIELDS
 from .model import COLUMNS, row_display_value

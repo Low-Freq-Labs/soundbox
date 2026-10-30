@@ -38,7 +38,18 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## Current retention — October28 efficiency/player release
+## Current UI/waveform evidence — October30
+
+The October29/30 alignment, choices and Graveyard release has fresh private QA
+at `~/Library/Logs/Soundbox/choices-graveyard-waveform-2026-10-29/`: frozen
+before/after phase frames, metrics, Cocoa controls, test logs and safe installation
+records. It does not revive the deleted development archive. Protected source,
+iPod and CDJ references remain separate. Keep the existing single rollback root
+pending Sonny's acceptance; exact installed/build/retention facts are in HANDOFF.
+`build/personal` and `dist/personal` are regenerated packaging output while this
+candidate is being validated, separate from the retained regression fixtures.
+
+## Historical retention — October28 efficiency/player release
 
 Sonny requested wrap-up of the efficiency/player/browser changes and manual-BPM fix.
 The final wrap-up retires superseded rollback apps and duplicate dist/personal

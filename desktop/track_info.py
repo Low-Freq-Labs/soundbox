@@ -2,7 +2,8 @@
 from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QDialog,QDialogButtonBox,QGridLayout,QHBoxLayout,
-    QLabel,QLineEdit,QMessageBox,QPlainTextEdit,QPushButton,QScrollArea,QTabWidget,QVBoxLayout,QWidget,QComboBox)
+    QLabel,QLineEdit,QMessageBox,QPlainTextEdit,QPushButton,QScrollArea,QTabWidget,QVBoxLayout,QWidget)
+from .choices import ComboBox as QComboBox
 from soundbox.track_info import EDITABLE
 from .task_owner import TaskOwner
 
@@ -31,16 +32,19 @@ class TrackInfoDialog(QDialog):
         layout=QVBoxLayout(self);layout.setContentsMargins(16,12,16,12)
         self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
         summary=QWidget();sv=QVBoxLayout(summary);sv.setSpacing(16)
-        centered=QHBoxLayout();centered.addStretch()
-        group=QWidget();group.setFixedWidth(700)
+        centered=QHBoxLayout()
+        group=QWidget()
         top=QHBoxLayout(group);top.setContentsMargins(0,0,0,0);top.setSpacing(20)
-        cover=self._cover(320);top.addWidget(cover);top.addSpacing(20)
-        titles=QVBoxLayout();titles.setSpacing(6)
-        for key,label in (('title','Track title'),('artist','Artist'),('album','Album')):
-            caption=QLabel(label);caption.setObjectName('SettingsSub');titles.addWidget(caption)
+        cover=self._cover(320);top.addWidget(cover,0,Qt.AlignTop);top.addSpacing(20)
+        titles=QGridLayout();titles.setHorizontalSpacing(20);titles.setVerticalSpacing(16)
+        titles.setContentsMargins(0,48,0,0)
+        for at,(key,label) in enumerate((('title','Track title'),('artist','Artist'),('album','Album'))):
+            caption=QLabel(label);caption.setObjectName('SettingsSub');titles.addWidget(caption,at,0,Qt.AlignTop)
             value=QLabel(str(row.get(key) or '—'));value.setWordWrap(True)
-            value.setTextInteractionFlags(Qt.TextSelectableByMouse);titles.addWidget(value)
-        top.addLayout(titles,1);centered.addWidget(group);centered.addStretch();sv.addLayout(centered)
+            value.setMinimumWidth(0)
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse);titles.addWidget(value,at,1,Qt.AlignTop)
+        titles.setColumnStretch(1,1);titles.setRowStretch(3,1)
+        top.addLayout(titles,1);centered.addWidget(group);sv.addLayout(centered)
         details=QWidget();details.setObjectName('TrackDetails');form=QGridLayout(details)
         form.setContentsMargins(14,12,14,12);form.setHorizontalSpacing(18);form.setVerticalSpacing(10)
         for at,(key,label) in enumerate((('time','Time'),('format','File type'),('size','Size'),('dateCreated','Date created'),

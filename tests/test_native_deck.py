@@ -1081,6 +1081,34 @@ class NativeDeckContract(unittest.TestCase):
             self.assertGreaterEqual(fps, expected * 0.9)
             self.assertLessEqual(max_gap_ms, 2.2 * 1000 / expected)
 
+    def test_hidden_audition_plays_with_native_waveform_and_no_canonical_record(self):
+        from desktop.player import PlayerBar
+        from PySide6.QtCore import QEventLoop, QTimer
+        with tempfile.TemporaryDirectory(prefix='sb-hidden-native-') as area:
+            bar = PlayerBar()
+            bar.track_analysis_dir = Path(area) / 'canonical'
+            bar.analysis_cache_admitted = lambda _tid: False
+            bar._deck_volume = 0
+            bar.show()
+            try:
+                bar.play_track('hidden', self.audio, autoplay=True)
+                # Run a real Qt event loop while Python analysis prepares. A
+                # repeated QTest.qWait loop starves its first DSP imports.
+                loop = QEventLoop(); deadline = QTimer()
+                deadline.setSingleShot(True); deadline.timeout.connect(loop.quit)
+                bar._waveform_tasks.drained.connect(loop.quit)
+                deadline.start(5000)
+                if bar._waveform_tasks.pending: loop.exec()
+                deadline.stop(); bar._waveform_tasks.drained.disconnect(loop.quit)
+                self.assertEqual(bar._waveform_tasks.pending, 0)
+                self._wait_until(bar.is_playing)
+                self.assertGreater(bar.player.diagnostic_audio_detail_buffer_bytes(), 0)
+                self.assertFalse(bar.track_analysis_dir.exists())
+                self.assertEqual(bar.current_track(), 'hidden')
+            finally:
+                bar.shutdown()
+                bar.close()
+
     def test_presentation_error_is_measured_against_the_submitted_target(self):
         # Position is predicted for the target presentation timestamp. If the
         # drawable actually reaches the screen elsewhere, that difference is

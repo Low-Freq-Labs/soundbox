@@ -394,9 +394,10 @@ unused lane height without changing the amplitude curve, cached data, horizontal
 detail. Close views gain a little height too, with more breathing room than
 wide views. It applies only to the large scrolling waveform.
 
-At 24/32/48 points/s, BLUE/RGB select a half-pixel extrema footprint;
-64–1500 select the physical-pixel footprint except RGB 576/864, which select
-one logical pixel. Compact detail is 2 ms at Retina 384 and RGB 576/864; the
+All zooms select the conservative physical-pixel extrema footprint except
+RGB 576/864, which select one logical pixel. The October29 wide-view follow-up
+removes the former half-pixel footprint at 24/32/48 and extends the existing
+same-LOD reconstruction to wide BLUE/RGB. Compact detail is 2 ms at Retina 384 and RGB 576/864; the
 other close cases retain 1 ms. One song-anchored mip and the final
 one-pixel profile integral preserve detail without mixing adjacent mip levels.
 The former four-pixel close footprint and divisor-dependent height gain were
@@ -853,6 +854,14 @@ and source bytes unchanged, and never applies to Rekordbox-authored PWV5. New
 cooks pack the compact codes directly and therefore need no compatibility
 repair; existing long Sets need neither hydration nor audio recooking.
 
+October29 wide-view phase proof uses the hash-verified frozen Nuclear fixture,
+all 13 RGB zooms and wide BLUE/3BAND. RGB 24/32/48 registered redraw falls 36–63%
+with 31–42% less silhouette change; RGB 256–1500 captures remain pixel-identical.
+These are numerical/display comparisons, not Sonny's acceptance of every track.
+All modes/zooms now integrate complete lattice corners. The accepted close RGB
+motion/footprint/occupancy policies remain unchanged; no clocks, audio, cache or
+export data change. Evidence: `~/Library/Logs/Soundbox/choices-graveyard-waveform-2026-10-29/`.
+
 ## Why the waveform remains stable
 
 The following combines current rendering rules with explicitly labeled historical
@@ -919,7 +928,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   profile to integrate; they simply must not buy undisplayable detail.
 - **Select one conservative level for the physical source footprint.** Compact
   signed mips use integer millisecond divisors; legacy V5 uses its persisted
-  ladder. Only the three widest stops use the documented half-pixel footprint.
+  ladder. Wide stops use the same physical-pixel footprint as the middle stops;
+  the former half-pixel source footprint exposed undisplayable detail.
   Earlier power-of-two PWV alias measurements are historical, not a description
   of the compact signed ladder.
 - **Use one mip level, never a blend of two.** Levels remain song-anchored.
@@ -952,10 +962,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
   subpixel peaks; RGB overview uses the main lane's bounded faint-only shoulder. This distinction affects only compositing, never height,
   hue, LOD, or detail.
 - Integrate the fixed height/hue profile over exactly one physical pixel before
-  final vertical coverage. BLUE/RGB retain five quarter-pixel boundary samples
-  at 64–184 px/s. At 24–48 and 256–864 (BLUE/RGB only), and 1152–1500 px/s
-  (all modes),
-  use the pixel endpoints plus
+  final vertical coverage. Every mode and all thirteen zooms use the pixel endpoints plus
   every integer knot of the four-attributes-per-pixel lattice, weighted by
   their actual spans; this is the complete piecewise-linear profile and avoids
   a fractional-phase knot hiding between fixed probes. Premultiplied color uses

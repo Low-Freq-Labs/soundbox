@@ -84,9 +84,5 @@ class WaveformProfileMath(unittest.TestCase):
         source = (Path(__file__).parents[1] / "native/SoundboxDeck.mm").read_text()
         for (mode, zoom), (error, missing) in profile_errors(source).items():
             with self.subTest(mode=mode, zoom=zoom):
-                complete = zoom >= 1152 or (mode != 3 and (zoom < 64 or zoom >= 256))
-                if complete:
-                    self.assertLess(error, 1e-6)
-                    self.assertEqual(missing, 0)
-                # Retained five-point branches are a documented approximation,
-                # not a correctness assertion that missing peaks is desirable.
+                self.assertLess(error, 1e-6)
+                self.assertEqual(missing, 0)

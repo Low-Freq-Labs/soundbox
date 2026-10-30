@@ -3822,11 +3822,18 @@ class Graveyard(unittest.TestCase):
 
     def test_double_click_does_not_restore(self):
         _win.hidden.add("1")
+        _win._apply_settings_to_lib()
         _win._refresh_graveyard()
         item = _win._grave.topLevelItem(0)
-        _win._grave.itemDoubleClicked.emit(item, 0)
+        _win._autoplay_order = ['2', '3']; _win._autoplay_index = 0
+        with mock.patch.object(_win, '_open_track', return_value=True) as load:
+            _win._grave.itemDoubleClicked.emit(item, 0)
+        load.assert_called_once_with(_win.lib.tracks_by_id['1'], autoplay=None, capture_autoplay=False)
+        self.assertEqual(_win._autoplay_order, [])
+        self.assertIsNone(_win._autoplay_index)
         _app.processEvents()
         self.assertIn("1", _win.hidden)
+        self.assertIn('1', _win.lib.hidden_ids)
 
     def test_date_stamped_on_delete(self):
         import time as _t
@@ -8901,6 +8908,30 @@ class WaveformRapidLoad(unittest.TestCase):
             self.assertFalse(target.exists())
         finally:
             self.pb._wf_pending.remove(worker)
+
+    def test_hidden_audition_prepares_playable_deck_without_canonical_cache(self):
+        from soundbox.track_analysis import cache_path, store
+        canonical = Path(self.cache) / 'hidden-audition'
+        self.pb.track_analysis_dir = canonical
+        self.pb.analysis_cache_admitted = lambda _tid: False
+        self.pb._track_id = 'hidden'; self.pb._src_path = self.paths[0]
+        self.pb._pending_autoplay = True; self.pb._pending_should_play = False
+        destinations = []
+        def capture(destination, *args, **kwargs):
+            destinations.append(Path(destination))
+            return store(destination, *args, **kwargs)
+        with mock.patch('soundbox.track_analysis.store', side_effect=capture):
+            self.pb._start_waveform(self.paths[0])
+            worker = self.pb._wf
+            worker.wait(5000)
+            self.assertFalse(worker.isRunning())
+            _app.processEvents()
+        self.assertTrue(destinations)
+        self.assertTrue(all(p != canonical and not p.exists() for p in destinations))
+        self.assertFalse(cache_path(canonical, 'hidden').exists())
+        self.assertFalse(self.pb._pending_autoplay)
+        self.assertTrue(self.pb._analysis_parts.get('_overview_heights'))
+        self.assertTrue(self.pb._analysis_parts.get('_audio_detail'))
 
     def test_canonical_rekordbox_grid_keeps_exact_first_beat(self):
         from pathlib import Path

@@ -529,10 +529,13 @@ release/state records are listed in PROJECT_LAYOUT. Do not resume visual tuning
 unless Sonny asks; collect fresh references if it is reopened. Sonny has now
 reopened targeted Gunslinger red-glisten work at RGB 576/864 and supplied a new
 native recording. He accepted the combined RGB 576/864 motion/footprint/occupancy
-comparison. Current release/install state is in HANDOFF; the wider-zoom color
-complaint is separate. He then requested mini RGB brightness matching: its
-compositor now uses the main RGB faint-only shoulder and encoded-space blend;
-BLUE/3BAND overviews keep their existing resolve. Preserve the new references,
+comparison. Sonny has now reopened stability across all zoom levels. Wide
+BLUE/RGB use conservative physical-pixel LOD and the middle stops' song-space
+reconstruction; every mode/zoom integrates every lattice corner. Accepted close
+RGB motion/footprint/occupancy remains intact. Current release/install state and
+fresh frozen phase comparisons are in HANDOFF; visual acceptance remains open.
+Mini RGB brightness matching retains the main RGB faint-only shoulder and
+encoded-space blend; BLUE/3BAND overviews keep their existing resolve. Preserve the new references,
 acceptance receipts and main-lane parity evidence. Active
 `build/native`, `build/check`, required reference roots and native recovery stay
 in place. Closure does not claim perfect native appearance or presentation cadence.

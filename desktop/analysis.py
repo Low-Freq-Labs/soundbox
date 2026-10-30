@@ -3,8 +3,9 @@ from copy import deepcopy
 import threading
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
     QGridLayout, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+from .choices import ComboBox as QComboBox
 
 from soundbox import analysis
 from .task_owner import TaskOwner
@@ -20,15 +21,18 @@ class AnalysisControls(QWidget):
         layout.setSpacing(14)
         title = QLabel('TRACK ANALYSIS'); title.setObjectName('SettingsSection'); layout.addWidget(title)
         form = QWidget()
-        grid = QGridLayout(form); grid.setContentsMargins(0, 0, 0, 0)
+        grid = QGridLayout(form); grid.setContentsMargins(24, 0, 24, 0)
         grid.setHorizontalSpacing(28); grid.setVerticalSpacing(20)
         for column in range(3):grid.setColumnStretch(column, 1)
         def field(label, control, row, column, span=1):
             group = QWidget(); box = QVBoxLayout(group)
             box.setContentsMargins(0, 0, 0, 0); box.setSpacing(8)
             box.addWidget(QLabel(label))
-            if isinstance(control, QHBoxLayout):box.addLayout(control)
-            else:box.addWidget(control)
+            line = QWidget(); line.setFixedHeight(30)
+            line_box = QHBoxLayout(line); line_box.setContentsMargins(0, 0, 0, 0)
+            if isinstance(control, QHBoxLayout):line_box.addLayout(control)
+            else:line_box.addWidget(control)
+            box.addWidget(line)
             grid.addWidget(group, row, column, 1, span, Qt.AlignTop)
         self.bpm = QCheckBox('BPM / Grid')
         self.key = QCheckBox('Key')
@@ -44,7 +48,7 @@ class AnalysisControls(QWidget):
         self.bpm_range = QComboBox()
         for low, high in analysis.BPM_RANGES:
             self.bpm_range.addItem(f'{low}–{high}')
-        field('BPM range', self.bpm_range, 0, 1)
+        field('BPM Range', self.bpm_range, 0, 1)
         self.bpm_range.currentIndexChanged.connect(self.changed)
         self.first_cue = QCheckBox('Set at the first analyzed beat')
         self.first_cue.setMinimumHeight(28)
@@ -54,16 +58,16 @@ class AnalysisControls(QWidget):
         self.auto.setMinimumHeight(28)
         self.auto.setVisible(automatic)
         if automatic:
-            field('New imports', self.auto, 1, 2)
+            field('New Imports', self.auto, 1, 2)
         self.auto.toggled.connect(self.changed)
         self.process = QComboBox(); self.process.addItems(['Performance','Normal','Power saving'])
-        # Cocoa's popup also needs its native checked-item gutter. A size based
-        # only on the closed value clips even the BPM ranges and Power saving.
+        # Reserve the shared popup's right-hand check gutter as well as text.
+        # A content-only width clips BPM ranges and Power saving.
         for combo, length in ((self.bpm_range, 12), (self.process, 18)):
             combo.setMinimumContentsLength(length)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        field('Analysis process', self.process, 0, 2)
+        field('Analysis Process', self.process, 0, 2)
         self.process.currentIndexChanged.connect(self.changed)
         layout.addWidget(form)
         note = QLabel('Existing saved grids and cues are preserved.')

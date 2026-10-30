@@ -3860,10 +3860,11 @@ kernel void wave_attribute_kernel(
         clock.wavePhase + secondOffset * u.samplesPerSecond,
         waveLevel);
     // The renderer accepts only the thirteen canonical zoom levels. The
-    // midrange family uses one symmetric same-LOD [1, 2, 1] reconstruction;
-    // distant stops do not need it and close stops preserve linear facets.
+    // BLUE/RGB wide and midrange stops share the symmetric same-LOD
+    // [1, 2, 1] reconstruction. Preserve 3BAND's independent wide profile
+    // and the accepted close facets; never filter moving final pixels.
     const float midrangeFilter =
-        u.pixelsPerSecond >= 64.0 && u.pixelsPerSecond < 384.0
+        (u.waveformMode != 3 || u.pixelsPerSecond >= 64.0) && u.pixelsPerSecond < 384.0
         ? 1.0 : 0.0;
     const float filterSeconds =
         0.5 / max(1.0, u.pixelsPerSecond * scale);
@@ -3947,7 +3948,7 @@ kernel void wave_attribute_kernel(
         const bool logicalRGBDetail = u.waveformMode == 2
             && (u.pixelsPerSecond == 576.0 || u.pixelsPerSecond == 864.0);
         const uint physicalDetailLevel = audio_detail_lod(
-            detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0),
+            detailFootprint,
             u.audioDetailMipDivisors, u.audioDetailMipCount);
         // Match the native logical-pixel footprint at the two accepted stops.
         // Keep the original level as the color-area reference, including 1x.
@@ -4730,31 +4731,22 @@ fragment float4 wave_surface_fragment(
         // attribute-lattice knot inside it are the complete piecewise-linear
         // profile. Fixed quarter-pixel probes miss one moving knot whenever
         // the song phase is fractional, causing colors and tips to pulse.
-        // RGB/BLUE use complete corners at 24..48 and 256..1500 px/s;
-        // preserve the accepted five-point resolve at 64..184 and the
-        // existing 3BAND profile. This never widens the one-pixel footprint.
+        // Every mode and zoom uses these complete corners. The former fixed
+        // probes at mid/wide stops missed fractional-phase peaks. Source LOD
+        // is conservative even at 24..48; the final footprint stays one pixel.
         float tilePositions[kAttributeProfileCapacity];
         float profilePositions[kAttributeProfileCapacity];
         uint profileCount = 0;
-        if ((u.waveformMode != 3
-                && (u.pixelsPerSecond < 64.0 || u.pixelsPerSecond >= 256.0))
-                || u.pixelsPerSecond >= 1152.0) {
-            tilePositions[profileCount++] = leftTile;
-            const float firstKnot = floor(leftTile) + 1.0;
-            for (uint i = 0; i + 2 < kAttributeProfileCapacity; ++i) {
-                const float knot = firstKnot + float(i);
-                if (knot >= rightTile) {
-                    break;
-                }
-                tilePositions[profileCount++] = knot;
+        tilePositions[profileCount++] = leftTile;
+        const float firstKnot = floor(leftTile) + 1.0;
+        for (uint i = 0; i + 2 < kAttributeProfileCapacity; ++i) {
+            const float knot = firstKnot + float(i);
+            if (knot >= rightTile) {
+                break;
             }
-            tilePositions[profileCount++] = rightTile;
-        } else {
-            for (uint i = 0; i < 5u; ++i) {
-                tilePositions[profileCount++] =
-                    leftTile + samplesPerPixel * float(i) * 0.25;
-            }
+            tilePositions[profileCount++] = knot;
         }
+        tilePositions[profileCount++] = rightTile;
         float heights[kAttributeProfileCapacity];
         float outerHeights[kAttributeProfileCapacity];
         float midHeights[kAttributeProfileCapacity];

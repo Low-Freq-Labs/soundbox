@@ -61,14 +61,23 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   controls need fixed24-point height to avoid enlarging uniform rows. Native USB
   General now uses a separate28-point two-column form. Shared device headers
   match the 26-point sidebar line.
-- **Cocoa combo popups need space for their checkmark gutter.** The Text color
-  combo's content-only width clipped White/Custom in its native checked menu.
-  Keep an explicit minimum contents length and the icon-aware size policy;
-  inspect the open Cocoa popup, not only the closed control or offscreen page.
-  The hermetic render harness supports `--settings-general --theme-text-menu`.
-  Analysis uses the same icon-aware policy with explicit minimum contents lengths
-  for BPM ranges and process choices; inspect `--settings-analysis --analysis-menus`
-  on Cocoa. A roomy closed control alone does not prove its checked popup fits.
+- **Run Cocoa cadence checks without competing preview windows.** A capture
+  harness with an always-on-top window can fully cover the native test host;
+  macOS then stops its drawable cadence. Finish visual captures before the full
+  native gate and preserve failed exploratory evidence; do not lower thresholds.
+- **Python worker tests need an event loop that yields the GIL.** Repeated
+  QTest.qWait calls can starve first NumPy/SciPy imports in a QThread even
+  while native audio plays. Use QEventLoop with a bounded timer and the owner's
+  drained signal, or join the worker then dispatch its queued delivery. Do not
+  treat that test-only starvation as a playback timeout or suppress the check.
+- **Choice checks belong in the right gutter.** Use desktop.choices Menu and
+  ComboBox across app menus, settings and USB controls. Qt retains navigation,
+  activation and accessibility; QListView popups avoid Cocoa's left check gutter.
+  Keep text/icon-aware minimum sizes and inspect open Cocoa popups with
+  `--settings-analysis --analysis-menus` and `--theme-text-menu`. Menu QSS must
+  reserve enough right padding in the action geometry itself; enlarging only
+  QMenu.sizeHint leaves action rectangles narrow and clips custom text.
+  A proxy style must own a fresh base, never QApplication.style().
 - **Folder moves must preserve custom playlist identities.** Keep membership in
   `custom` and organization in the bounded `custom_playlist_tree` settings tree.
   Export the actual folder_path while retaining `cust:<name>` identity; do not
@@ -265,8 +274,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   one footprint-selected peak level, and one-pixel coverage. Signed intervals
   intersect before integration, as documented below. Compact
   mips are `1/2/3/4/6/8/12/16/24/32/48/64`; old V5 retains its persisted ladder.
-  The three widest zooms use half a pixel of source support; all stops from
-  64 through 1500 use one physical pixel. This supersedes the four-pixel rule and artificial
+  All stops use one physical pixel of source support except the accepted
+  logical-pixel RGB 576/864 policy. Wide BLUE/RGB also use the middle stops'
+  same-LOD reconstruction. This supersedes the four-pixel rule and artificial
   divisor-dependent height compensation. Never blend adjacent mips or blur
   final pixels to hide sampling errors.
 - **Compact RGB codes are already PWV5 channel values.** SoundBox's
@@ -436,10 +446,9 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Never cache or interpolate final alpha.
 - **A fixed attribute lattice still needs one-physical-pixel horizontal
   integration.** One center height sample leaves subpixel needles that crawl
-  through dense passages. RGB/BLUE retain five quarter-pixel boundaries at
-  64–184 px/s; 3BAND retains them below 1152. At all other stops, a
-  fractional song phase can place an integer attribute-lattice knot between
-  those probes; integrate the two pixel endpoints plus every interior knot
+  through dense passages. At every mode/zoom a fractional song phase can
+  place an integer attribute-lattice knot between fixed probes; integrate the
+  two pixel endpoints plus every interior knot
   with their actual spans. Feed the same positioned profile to silhouette,
   signed-interval, color, and 3BAND coverage. Do not widen the footprint: one
   pixel removes the alias while retaining the close detail that B-spline
@@ -788,7 +797,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Collection must discard the exact SoundBox V4/V5 record, and startup/bulk
   preparation must skip every globally hidden ID. Recheck membership before
   and after atomic publication because either the bulk worker or an interactive
-  deck worker can already be decoding when the UI removal lands. Restore uses
+  deck worker can already be decoding when the UI removal lands. Graveyard
+  double-click and Load Track audition through that same deck without restoring
+  membership or capturing autoplay. Its worker uses a private temporary record,
+  uploads the loaded bytes and removes that directory before retirement; it
+  never recreates the canonical hidden cache. Restore uses
   the normal bounded preparation path. Do not apply this rule to a
   playlist-only removal: that track remains browsable elsewhere and still owns
   its cache. These preparation/removal paths never write source audio or ANLZ.

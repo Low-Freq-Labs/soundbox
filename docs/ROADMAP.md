@@ -1,10 +1,21 @@
 # SoundBox roadmap
 
-Updated October 29, 2026. Current priorities and remaining acceptance are below;
+Updated October 30, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
 
-October29 navigation/artwork follow-up is installed in personal build142 after
+October29/30 alignment/playback follow-up aligns playlist labels with folders,
+insets and aligns Analysis groups, and puts menu/dropdown checks on the right
+with inset arrows and complete labels. Summary uses inline caption/value rows
+beside the large cover. Graveyard tracks load for audition without restoration,
+autoplay capture or persistent hidden analysis. Wide BLUE/RGB share conservative
+physical-pixel LOD/reconstruction; every mode/zoom integrates complete profile
+corners. Frozen all-zoom evidence preserves accepted close RGB pixels and lowers
+wide RGB redraw; live visual acceptance remains open. Final installed provenance
+and release validation belong in HANDOFF. The source playlist pilot still awaits
+its separate exact-plan approval; two-way registration/analysis is unfinished.
+
+Earlier October29 navigation/artwork follow-up was installed in personal build142 after
 its full1617-test gate. Analysis controls span the width in three aligned groups,
 with complete Cocoa popup labels. Summary/Info use larger covers; Info's
 three-column form and full-width Comments still fit at the default size. Folder
@@ -243,7 +254,7 @@ memory and a separate 8-MiB / 128-entry preview LRU. Reopening restores saved co
 and progress counts only pending checks. Keep and accepted replacements retain exact context decisions. Failed
 lookups are retriable, never cached misses; repeated failures pause the pass.
 Main controls remain Keep/Replace/Next, All remains optional browsing, and no
-scan changes images. Settings order is General, My Settings, Keyboard, Graveyard, Connections.
+scan changes images. Settings order is General, Analysis, My Settings, Keyboard, Graveyard, Connections.
 A successful source refresh now updates authoritative cues for the loaded track
 without audio reload/seek; queued stale manifests cannot put old cues back.
 Grid corrections retain the existing metadata-only background refresh path.
@@ -269,7 +280,7 @@ not a certificate that every cover is correct.
 
 Sonny's October 24 report led to source changes for bracket-aware song matching,
 accountable label credits, and an optional personal SoundCloud connection that
-prioritizes liked tracks. Settings now separates General, My Settings, Keyboard, Graveyard
+prioritizes liked tracks. Settings now separates General, Analysis, My Settings, Keyboard, Graveyard
 and Connections. Keyboard mappings support multiple bindings,
 conflict moves and safe held-cue routing; 1–8 use the active cue page, 9 selects
 Hot Cue and 0 selects Memory Cue. The five title-cleanup defaults use the requested

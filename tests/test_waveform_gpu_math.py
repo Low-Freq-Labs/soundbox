@@ -273,9 +273,7 @@ class WaveformGPUMath(unittest.TestCase):
     def test_complete_profiles_preserve_every_corner_and_pixel_footprint(self):
         rows = []
         for mode in (1, 2, 3):
-            for zoom in (24, 32, 48, 256, 384, 576, 864, 1152, 1500):
-                if mode == 3 and zoom < 1152:
-                    continue  # visually retained approximation, not asserted correct
+            for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500):
                 for base in (0, 100, 16000):
                     for phase in np.linspace(0, 1, 33):
                         row = np.zeros(64); row[:5] = [1, mode, zoom, base+phase, 4]
@@ -288,8 +286,8 @@ class WaveformGPUMath(unittest.TestCase):
 
     def test_original_missing_corner_mutation_is_detected_on_gpu(self):
         row = np.zeros((1, 64)); row[0, :5] = [1, 2, 256, 10.5, 4]
-        old = self.source.replace('(u.pixelsPerSecond < 64.0 || u.pixelsPerSecond >= 256.0)',
-                                  '(u.pixelsPerSecond < 64.0)')
+        old = self.source.replace('const float firstKnot = floor(leftTile) + 1.0;',
+                                  'const float firstKnot = floor(leftTile) + 2.0;')
         self.assertNotEqual(old, self.source)
         actual = self.execute(row, old)[0]
         self.assertNotIn(11, actual[1:1+int(actual[0])])
@@ -543,10 +541,10 @@ class WaveformGPUMath(unittest.TestCase):
         np.testing.assert_allclose(actual, np.repeat(actual[:, :1], 4, axis=1),
                                    atol=1e-4, rtol=0)
 
-    def test_close_detail_uses_resolvable_extrema_at_each_drawable_scale(self):
+    def test_every_zoom_uses_resolvable_extrema_at_each_drawable_scale(self):
         rows = []
         for scale in (1, 2):
-            for zoom in (384, 576, 864, 1152, 1500):
+            for zoom in (24, 32, 48, 64, 92, 128, 184, 256, 384, 576, 864, 1152, 1500):
                 row = np.zeros(64); row[:4] = [5, 1000, zoom, scale]
                 rows.append(row)
         actual = self.execute(rows)[:, 0]
@@ -554,7 +552,10 @@ class WaveformGPUMath(unittest.TestCase):
             # Each retained cell must cover the physical source footprint,
             # allowing the established six-percent reconstruction tolerance.
             self.assertGreaterEqual(divisor, max(1, .94*row[1]/(row[2]*row[3])))
-        np.testing.assert_array_equal(actual[5:], [2, 1, 1, 1, 1])
+        choices = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64)
+        expected = [next(d for d in choices if d >= max(1, .94*row[1]/(row[2]*row[3])))
+                    for row in rows]
+        np.testing.assert_array_equal(actual, expected)
 
     def test_logical_rgb_detail_only_changes_the_two_accepted_retina_stops(self):
         rows = []

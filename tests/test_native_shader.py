@@ -381,7 +381,7 @@ class NativeWaveformShader(unittest.TestCase):
             "constant uint kIntegrationTaps", 1
         )[0]
         self.assertIn(
-            "u.pixelsPerSecond >= 64.0 && u.pixelsPerSecond < 384.0",
+            "(u.waveformMode != 3 || u.pixelsPerSecond >= 64.0) && u.pixelsPerSecond < 384.0",
             kernel)
         self.assertNotIn("targeted_stop_filter", self.shader)
         self.assertIn(
@@ -479,13 +479,8 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn(
             "positioned_profile_coverage(\n"
             "            heights, profilePositions, profileCount", fragment)
-        self.assertIn(
-            "if ((u.waveformMode != 3\n"
-            "                && (u.pixelsPerSecond < 64.0 || u.pixelsPerSecond >= 256.0))\n"
-            "                || u.pixelsPerSecond >= 1152.0)",
-            fragment)
         self.assertIn("const float firstKnot = floor(leftTile) + 1.0", fragment)
-        self.assertIn("for (uint i = 0; i < 5u; ++i)", fragment)
+        self.assertNotIn("leftTile + samplesPerPixel * float(i) * 0.25", fragment)
         self.assertIn("saturate(coverage)", fragment)
 
     def test_edge_coverage_is_continuous_not_a_tap_average(self):
@@ -568,20 +563,20 @@ class NativeWaveformShader(unittest.TestCase):
             "2.0, 4.0, smoothstep(256.0, 384.0, u.pixelsPerSecond)", fragment)
         self.assertIn("(u.heightPoints - 49.0) * 0.5 - verticalPadding", fragment)
 
-    def test_wide_detail_uses_existing_finer_extrema_not_new_cache_data(self):
+    def test_wide_detail_uses_conservative_pixel_footprint_not_new_cache_data(self):
         kernel = self.shader.split("kernel void wave_attribute_kernel", 1)[1]
         self.assertIn(
-            "detailFootprint * (u.pixelsPerSecond < 64.0 ? 0.5 : 1.0)",
+            "const uint physicalDetailLevel = audio_detail_lod(\n            detailFootprint,",
             kernel)
         # The accepted close family and 4x song-anchored resolve remain.
         self.assertNotIn("detailFootprint * 4.0", kernel)
         divisors = (8, 13, 18, 25, 35, 50, 66, 99, 132, 192, 256)
         for scale in (1, 2):
             for zoom in (24, 32, 48):
-                footprint = 6300 / (zoom * scale) * 0.5
+                footprint = 6300 / (zoom * scale)
                 divisor = next(d for d in divisors if d >= footprint * 0.94)
                 density = 6300 / divisor / (zoom * scale)
-                self.assertLessEqual(density, 2 / 0.94)
+                self.assertLessEqual(density, 1 / 0.94)
                 self.assertLess(density, 4)  # available attribute samples/pixel
 
     def test_scrolling_grid_lines_use_analytic_subpixel_coverage(self):

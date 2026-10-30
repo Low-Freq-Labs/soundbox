@@ -1,7 +1,8 @@
 """Deck options and captured single-track actions in the prep toolbar."""
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QActionGroup, QColor, QPainter, QPen
-from PySide6.QtWidgets import QMenu, QToolButton
+from PySide6.QtWidgets import QToolButton
+from .choices import Menu as QMenu
 
 from soundbox.beat_count import MODES
 from . import theme

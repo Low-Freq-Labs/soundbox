@@ -14,10 +14,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QApplication, QButtonGroup, QCheckBox, QColorDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QStackedWidget, QTabBar, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
+from .choices import ComboBox as QComboBox, Menu as QMenu
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
 
@@ -194,9 +195,10 @@ class SettingsPageMixin:
         self._grave.header().setStretchLastSection(False)
         self._grave.setContextMenuPolicy(Qt.CustomContextMenu)
         self._grave.customContextMenuRequested.connect(self._grave_menu)
+        self._grave.itemDoubleClicked.connect(lambda item, _column: self._grave_load(item))
         gl.addWidget(self._grave, 1)
         gsub = QLabel("Tracks removed from Collection (and removed from playlists) "
-                      "rest here — rekordbox and disk untouched. Select one or "
+                      "rest here — rekordbox and disk untouched. Double-click to load and listen. Select one or "
                       "Shift/Cmd-select several, then right-click to restore; "
                       "Cmd-A selects all.")
         gsub.setObjectName("SettingsSub"); gsub.setWordWrap(True)
@@ -456,9 +458,26 @@ class SettingsPageMixin:
     def _grave_menu(self, pos):
         g = self._grave
         menu = QMenu(self)
+        item = g.itemAt(pos)
+        if item is not None:
+            menu.addAction('Load Track', lambda: self._grave_load(item))
+            menu.addSeparator()
         self._add_grave_restore_action(menu)
         if not menu.isEmpty():
             menu.exec(g.mapToGlobal(pos))
+
+    def _grave_load(self, item):
+        data = item.data(0, _GRAVE_ROLE) if item is not None else None
+        track = self.lib.tracks_by_id.get(data[1]) if self.lib and data else None
+        if track is None:
+            self._flash_status('Track is no longer in the library', 5)
+            return
+        if self._open_track(track, autoplay=None, capture_autoplay=False):
+            self._autoplay_order = []
+            self._autoplay_index = None
+            self._autoplay_random_seen = set()
+            self._autoplay_random_queue = []
+            self._update_player_navigation()
 
     def _add_grave_restore_action(self, menu):
         """Expose only selection-scoped restore; never a bulk shortcut."""

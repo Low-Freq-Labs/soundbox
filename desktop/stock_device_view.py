@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
-    QMenu,
     QPushButton,
     QStackedWidget,
     QTableView,
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .choices import Menu as QMenu
 
 from soundbox.stock_ipod import supports_stock_write
 from soundbox.stock_ipod_info import StockIpodSnapshot
