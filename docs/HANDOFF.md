@@ -1,7 +1,7 @@
 # SoundBox current handoff
 
-October30, 2026. Branch **main**; application release is the commit containing
-this handoff (resolved release ID is recorded after committing). Personal1.0.0
+October30, 2026. Branch **main**, application release `5bf8141cfc0bd86bad8878dc41bf695cbf990ba5`;
+this documentation-only follow-up records its verified installation. Personal1.0.0
 **build148 is installed, restarted and running** with the native deck. No user
 step is pending for this release. No subagents are authorized. Sonny operates
 rekordbox UI; never drive it remotely.
