@@ -553,7 +553,7 @@ def request_for(catalog, operation, *, identity=None, name='', parent='root', fo
         playlist_uuid=target['UUID'] if target else str(uuid4()),revision=catalog['revision'],
         name=name,parent=parent,folder=bool(folder),timestamp=stamp,survivor_timestamp=stamp,
         xml_timestamp=clock,allow_duplicate=bool(allow_duplicate),
-        tracks=[dict(track_id=t.track_id,uuid=t.source_uuid,id=str(uuid4()),membership_uuid=str(uuid4()))
+        tracks=[dict(track_id=getattr(t,'native_id',t.track_id),uuid=t.source_uuid,id=str(uuid4()),membership_uuid=str(uuid4()))
                 for t in tracks])
 
 

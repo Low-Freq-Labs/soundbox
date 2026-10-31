@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 
-SCHEMA = 2
+SCHEMA = 3
 _FIELDS = {'id', 'title', 'artist', 'bpm', 'key', 'time', 'dateAdded', 'genre', 'format', 'bitrate'}
 from .track_info import FIELDS as INFO_FIELDS
 _FIELDS.update(key for key,_label in INFO_FIELDS)

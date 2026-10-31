@@ -104,7 +104,7 @@ def _render() -> None:
     art_review = "--art-review" in sys.argv
     if art_review:
         sys.argv.remove("--art-review")
-    settings_tab = None
+    settings_tab = 'Analysis' if analyze_dialog else None
     for name in ("General", "Analysis", "My Settings", "Keyboard", "Connections", "Graveyard"):
         flag = "--settings-" + name.lower().replace(' ','-')
         if flag in sys.argv:
@@ -611,16 +611,6 @@ def _render() -> None:
             selector.showPopup(); app.processEvents()
             selector.view().window().grab().save(str(target.with_name(target.stem+'-layout-menu.png')))
             selector.hidePopup()
-    if analyze_dialog:
-        from pathlib import Path
-        from .analysis import AnalysisDialog
-        dialog = AnalysisDialog(win.lib, [next(iter(win.lib.tracks_by_id.values()))], None, {},
-                                lambda _results: False, parent=win)
-        dialog.show(); app.processEvents()
-        target = Path(out)
-        dialog.grab().save(str(target.with_name(target.stem+'-analysis.png')))
-        if analysis_menus:_capture_analysis_menus(dialog.controls,target,app)
-        dialog.reject()
     if analysis_menus and settings_tab=='Analysis':
         from pathlib import Path
         _capture_analysis_menus(win._analysis_controls,Path(out),app)

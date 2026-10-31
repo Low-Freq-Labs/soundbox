@@ -266,6 +266,7 @@ class GridInterface(unittest.TestCase):
             _cache_library=mock.Mock(), _flash_status=mock.Mock(), _finish_tag_refresh=mock.Mock(),
             _finish_edit_status=mock.Mock())
         host._invalidate_rows = lambda ids: MainWindow._invalidate_rows(host, ids)
+        host._update_browser_bpm = lambda tid, bpm: MainWindow._update_browser_bpm(host, tid, bpm)
         confirmed, painted = [], []
         column = next(i for i, row in enumerate(COLUMNS) if row[0] == 'bpm')
         model.dataChanged.connect(lambda a, b, roles: painted.append((a.column(), b.column())))

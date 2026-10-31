@@ -1,8 +1,22 @@
 # SoundBox roadmap
 
-Updated October 30, 2026. Current priorities and remaining acceptance are below;
+Updated October 31, 2026. Current priorities and remaining acceptance are below;
 completed behavior is summarized separately. Historical experiments belong in
 the linked audits. Installed provenance and final validation: [HANDOFF](HANDOFF.md).
+
+## Next session first: ordinary shared imports
+
+Sonny’s October31 wrap-up explicitly prioritizes the two installed failures:
+brand-new files cannot drop straight onto native rekordbox playlists, and
+SoundBox Collection imports do not register themselves in rekordbox Collection.
+Implement both before RGB or further UI polish. A direct native playlist drop
+must capture its destination, enter both Collections once, and append membership
+without a Collection-first workaround. SoundBox Collection/playlist imports must
+use the same native registration/reuse and durable identity/destination queue.
+Ship bare registration/membership with analysis off or still pending; do not wait
+for general native DSP/gain/metadata publication to complete these import paths.
+Preserve the existing WHOLE CLUB ROCKIN and Innerbloom records without reimport
+or reanalysis. Accepted generated pilots do not complete this ordinary workflow.
 
 ## Active priority: shared workflow and reported corrections
 
@@ -11,21 +25,34 @@ as its shared primary library, with ordinary compatible saves and no separate
 Save to rekordbox workflow or routine app-branded footer. It also requires the
 reported latency/layout/RGB/manual-BPM corrections. The concrete sequence,
 current ABBA evidence and acceptance matrix are in the
-[implementation plan](shared-library-workflow-plan.md). This is planned work;
-build148 has not acquired these follow-up capabilities.
+[implementation plan](shared-library-workflow-plan.md). Implementation has begun
+with manual import-grid drafts, the whole-tempo prior, immediate durable deletion
+presentation and vector sidebar alignment. These are installed in build152;
+exact release provenance and preservation are in HANDOFF.
 
-Priorities: working local BPM/grid correction; a whole-BPM prior for steady
-near-integer detection; immediate durable playlist presentation; exact sidebar
-alignment; shared identities/component revisions and Collection-only discovery;
+The initial local BPM/grid correction, whole-BPM prior, durable delete feedback
+and sidebar alignment are implemented. Broader durable playlist presentation is
+installed with the1836-test release verification. Remaining priorities are shared identities/component
+revisions and Collection-only discovery;
 accepted native registration/analysis publication; unified import/analysis/edit
 routing; then measured RGB temporal fixes and full round-trip/native acceptance.
 Automatic analysis remains a separate toggle, now enabled in Sonny's state.
 Reading existing native/manual data does not authorize rewriting it.
+October31 continuation adds durable detection restart intents and separates
+Analyze Track from Rebuild Waveform in the browser menu. A bundled media-header
+probe and crash-tested encrypted multi-format registration workspace support a
+ten-generated-file native test. Sonny approved it separately; publication and
+native reopen/normal-quit acceptance passed for all ten. A separate general bare
+registration store now passes recovery/crash tests and full TEMP replay, but no
+production authority or shared import routing is provisioned. Stable identity
+projection retains logical curation/device IDs. Immediate create/rename/membership
+presentation is installed after complete offscreen/native verification. HANDOFF
+distinguishes tested source from installed runtime.
 
 The existing registered-track playlist writer and explicit adaptive detector are
 foundations. Passing their1700-test release does not certify direct SoundBox
 imports into native playlists, local manual BPM, reverse analysis or acceptable
-motion at the newly reported RGB stops. Preserve current85 imports/1104 titles.
+motion at the newly reported RGB stops. Preserve current87 imports/1105 titles.
 
 ## Delivered October30 foundation
 
@@ -34,8 +61,8 @@ DB/XML/rollback references and12 actual-source CRUD operations, Sonny's native
 inspection and normal save. Its separate exact-library authority is provisioned;
 the durable FIFO, retry/discard, native folders and Collection retention are
 implemented. CDJ capture waits for source intents and rebinds stable selections.
-Personal build148 is installed after the complete1700-test gate. Final restart/
-state verification passed and is recorded in HANDOFF. New-file registration and reverse
+The earlier build148 passed the complete1700-test gate; build152 now supersedes
+it. Current restart/state verification is recorded in HANDOFF. New-file registration and reverse
 analysis publication remain unfinished.
 
 Sonny additionally requested comparison/tuning against Chris Le's work. The
@@ -60,8 +87,9 @@ inspection and normal save October30. The broader ordinary CRUD acceptance is
 recorded above; two-way registration/analysis remain unfinished. The historical
 private pilot receipt itself grants no general API authority.
 
-October30 appearance/audition follow-up adds coalesced live color preview, fast
-text-color switching and a further six-point playlist-content inset. Static QSS
+The earlier October30 appearance/audition follow-up added coalesced live color preview, fast
+text-color switching and a further six-point playlist-content inset. The current
+vector sidebar layout supersedes that inset geometry. Static QSS
 is installed once; visible accent overrides and custom painters update without
 repolishing all hidden settings widgets. Cancel restores the prior appearance;
 OK saves once. Graveyard accepts standard playback/cue keys and selection-bound

@@ -19,8 +19,9 @@ BPM_RANGES = ((70,180),(48,95),(58,115),(68,135),(78,155),(88,175),
               (98,195),(108,215),(118,235),(128,255))
 DEFAULTS = dict(bpm=True, key=True, bpm_range=0, first_cue=False, process='Normal')
 LEGACY_ENGINE = 'rbxport-b739d369-constant-v1'
-ENGINE = 'rbxport-b739d369-adaptive-v2'
-_ENGINES = frozenset((LEGACY_ENGINE, ENGINE))
+ADAPTIVE_ENGINE = 'rbxport-b739d369-adaptive-v2'
+ENGINE = 'rbxport-b739d369-whole-v3'
+_ENGINES = frozenset((LEGACY_ENGINE, ADAPTIVE_ENGINE, ENGINE))
 
 
 def options(value=None):
@@ -85,6 +86,10 @@ def validate_result(record):
         raise ValueError('Invalid detected key')
     if record.get('first_cue') is not None and (not beats or record['first_cue'] != beats[0][1]):
         raise ValueError('Invalid first-beat Memory Cue')
+    from .local_grid import validate_draft
+    validate_draft(record)
+    from .local_cues import validate
+    validate(record)
 
 
 def _source_context(library, track):
@@ -135,10 +140,23 @@ def analyze(library, track, preferences=None, *, should_cancel=lambda:False):
                                   process_nice={'Performance':0,'Normal':10,'Power saving':18}[prefs['process']])
             if should_cancel():
                 raise RuntimeError('Analysis cancelled')
-            if identity(source.stat()) != identity(snapshot.observation) or source_context != _source_context(library, track):
+            verified_epoch = identity(snapshot.observation)
+            if identity(source.stat()) != verified_epoch:
+                # Import-time bookmark creation and cloud hydration may finish
+                # while DSP runs on its immutable local snapshot. Revalidate
+                # those exact bytes, rather than discard completed detection or
+                # accept new timestamps without a content proof.
+                try:
+                    with acquire_source(SourceContract(source,snapshot.size,snapshot.sha256),root,
+                                        should_cancel=should_cancel) as checked:
+                        verified_epoch = identity(checked.observation)
+                except (OSError, RuntimeError) as exc:
+                    if should_cancel(): raise RuntimeError('Analysis cancelled') from exc
+                    raise ValueError('Source changed during analysis; retry after refreshing') from exc
+            if identity(source.stat()) != verified_epoch or source_context != _source_context(library, track):
                 raise ValueError('Source changed during analysis; retry after refreshing')
             result.update(engine=ENGINE, path=str(source), sha256=snapshot.sha256, size=snapshot.size,
-                          epoch=identity(snapshot.observation), source_context=source_context,
+                          epoch=verified_epoch, source_context=source_context,
                           grid_engine=ENGINE, key_engine=ENGINE,
                           first_cue=(result['beats'][0][1] if prefs['first_cue'] and result.get('beats') else None))
             # Silence/too little rhythmic evidence must not become a fabricated grid.
@@ -152,8 +170,12 @@ def merge_result(previous, current, preferences):
     """Unchecked or inconclusive components preserve results for the same bytes."""
     result = deepcopy(current)
     if previous and previous.get('sha256') == current['sha256']:
+        if previous.get('grid_draft'):
+            result['grid_draft'] = deepcopy(previous['grid_draft'])
+        if previous.get('cue_draft') is not None:
+            result['cue_draft'] = deepcopy(previous['cue_draft'])
         if not preferences['bpm'] or not current.get('beats'):
-            for key in ('bpm','beats','confidence','first_cue'):
+            for key in ('bpm','beats','confidence','first_cue','tempo_policy'):
                 result[key] = deepcopy(previous.get(key))
             result['grid_engine'] = previous.get('grid_engine',previous['engine'])
         if not preferences['key'] or current.get('key') is None:
@@ -164,24 +186,50 @@ def merge_result(previous, current, preferences):
     return result
 
 
-def playback_data(data, record, path):
+def playback_data(data, record, path, *, verification_cache=None, should_cancel=lambda: False):
     """Worker-only overlay. Preserve native/manual grids and every source cue."""
     if not record:
         return data
     try:
         validate_result(record)
-        if str(Path(path)) != record['path'] or identity(Path(path).stat()) != record['epoch']:
+        source = Path(path)
+        if str(source) != record['path']:
             return data
-    except (OSError, ValueError, TypeError, KeyError):
+        verified_epoch = identity(source.stat())
+        if verified_epoch != record['epoch']:
+            if verification_cache is None:
+                return data
+            # Cloud hydration/bookmarks can change ctime after detection. Prove
+            # the original bytes; never accept a changed timestamp on faith or
+            # replace the user's completed analysis with a fallback estimate.
+            def captured_hash(canonical):
+                with tempfile.TemporaryDirectory(prefix='soundbox-analysis-identity-') as area:
+                    with acquire_source(SourceContract(canonical), Path(area),
+                                        should_cancel=should_cancel) as snapshot:
+                        return snapshot.sha256
+            digest, _stat = verification_cache.verify(source, captured_hash)
+            if digest != record['sha256']:
+                return data
+            verified_epoch = identity(_stat)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
         return data
     provenance = data.get('provenance') or {}
     if provenance.get('grid') in {'rekordbox', 'soundbox-manual'} or provenance.get('user_data') == 'soundbox':
         return data
     if not record.get('beats'):
         return data
+    from .local_grid import effective_result
+    resolved = effective_result(record)
     cues = data.get('cues') or []
-    if not cues and record.get('first_cue') is not None and not record.get('source_context'):
+    if record.get('cue_draft') is not None and not record.get('source_context'):
+        from .local_cues import cues as draft_cues
+        cues = draft_cues(record)
+    if (not cues and record.get('cue_draft') is None and record.get('first_cue') is not None
+            and not record.get('source_context')):
         cues = [dict(kind='memory', slot=0, position_ms=record['first_cue'], comment='First analyzed beat')]
-    return {**data, 'beats': deepcopy(record['beats']), 'cues': cues,
-            'provenance': {**provenance, 'grid':'soundbox-detected', 'analysis_engine':record.get('grid_engine',record['engine'])},
-            '_detected_bpm':record['bpm']}
+    return {**data, 'beats': deepcopy(resolved['beats']), 'cues': cues,
+            'provenance': {**provenance,
+                           'grid':'soundbox-manual' if record.get('grid_draft') else 'soundbox-detected',
+                           'analysis_engine':record.get('grid_engine',record['engine'])},
+            '_detected_bpm':resolved['bpm'], '_detected_sha256':record['sha256'],
+            '_detected_epoch':verified_epoch}

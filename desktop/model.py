@@ -200,21 +200,26 @@ class TrackModel(QAbstractTableModel):
 
     def update_bpm(self, track_id: str, bpm: str) -> bool:
         """Update one track; reset only when filtering/BPM sorting can move it."""
+        return self.update_analysis(track_id, bpm=bpm)
+
+    def update_analysis(self, track_id: str, **values) -> bool:
+        if not values or set(values) - {'bpm', 'key'}:
+            raise ValueError('Invalid analysis columns')
         changed = False
         for row in self._all_rows:
-            if row.get('id') == track_id and row.get('bpm') != bpm:
-                row['bpm'] = bpm
+            if row.get('id') == track_id and any(row.get(k) != v for k, v in values.items()):
+                row.update(values)
                 row.pop('_hay', None)
                 changed = True
         if not changed:
             return False
-        if self._filter or self._sort and self._sort[0] == 'bpm':
+        if self._filter or self._sort and self._sort[0] in values:
             self._apply_filter()
             return True
-        column = next(i for i, (key, _label, _hidden) in enumerate(COLUMNS) if key == 'bpm')
+        columns = [i for i, (key, _label, _hidden) in enumerate(COLUMNS) if key in values]
         for index, row in enumerate(self._rows):
             if row.get('id') == track_id:
-                self.dataChanged.emit(self.index(index, column), self.index(index, column),
+                self.dataChanged.emit(self.index(index, min(columns)), self.index(index, max(columns)),
                                       [Qt.DisplayRole, Qt.ToolTipRole])
         return False
 

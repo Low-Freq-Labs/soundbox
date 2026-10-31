@@ -18,8 +18,8 @@ from pathlib import Path
 
 from .library import Library, LibraryTag, Playlist, Track
 
-SCHEMA = 9
-_READABLE_SCHEMAS = {4, 5, 6, 7, 8, SCHEMA}
+SCHEMA = 10
+_READABLE_SCHEMAS = {4, 5, 6, 7, 8, 9, SCHEMA}
 
 # The Track fields worth persisting (everything the browser/export needs).
 # `path`/`duration_str`/`file_type` are computed properties, not stored.
@@ -30,7 +30,7 @@ _TRACK_FIELDS = (
     "date_added", "added_ts", "genre", "kind", "size", "bitrate", "rating", "year",
     "imported", "source_analysis_path", "source_cues", "source_uuid", "source_tag_ids",
     "source_cue_revision", "source_cue_refs",
-    "info",
+    "info", "source_native_id",
 )
 _PLAYLIST_FIELDS = ("name", "folder_path", "keys", "pid")
 

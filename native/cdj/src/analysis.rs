@@ -77,12 +77,33 @@ pub fn run(root: &Path, request: &Path) -> Result<serde_json::Value, Box<dyn Err
     } else {
         (None, rbl_analysis::key::detect_key(&samples, rate))
     };
+    let tempo_policy = if let Some(ref mut grid) = tempo {
+        let measured = samples.len() as f64 / f64::from(rate);
+        if measured >= duration && grid.segments.len() == 1 && (grid.bpm.round()-grid.bpm).abs() <= 0.25 {
+            let env = rbl_analysis::onset::onset_envelope(&samples,rate);
+            let before=grid.clone();
+            let mut policy=soundbox_cdj::whole_tempo::prefer_integer(grid,&env,duration,
+                f64::from(input.min_bpm),f64::from(input.max_bpm));
+            if policy["selected"]==true {
+                let attacks=rbl_analysis::attack::AttackMap::new(&samples,rate,Default::default());
+                if let Some(offsets)=soundbox_cdj::whole_tempo::align_attacks(grid,&attacks,duration,&before) {
+                    policy["attack_offsets_ms"]=json!(offsets);
+                } else {
+                    *grid=before;
+                    policy["selected"]=json!(false);
+                    policy["attack_fit_rejected"]=json!(true);
+                }
+            }
+            Some(policy)
+        } else { None }
+    } else { None };
     if let Some(ref mut grid) = tempo { grid.extend_to(duration); }
     let beats = tempo.as_ref().map(|g| g.beats.iter().map(|b|
         json!([b.beat_number, b.time_ms, f64::from(b.tempo_x100)/100.0])).collect::<Vec<_>>());
     Ok(json!({"bpm":tempo.as_ref().map(|g|g.bpm), "confidence":tempo.as_ref().map(|g|g.confidence),
         "beats":beats, "key":key.as_ref().map(|k|k.camelot()), "key_name":key.as_ref().map(|k|&k.name),
-        "duration":duration, "analyzed_seconds":samples.len() as f64/f64::from(rate),
+        "duration":duration, "tempo_policy":tempo_policy,
+        "analyzed_seconds":samples.len() as f64/f64::from(rate),
         "decoded_frames":decoded, "analyzed_frames":samples.len(),
         "analysis_scope":if samples.len() as u64 >= frames { "full" } else { "head" }}))
 }

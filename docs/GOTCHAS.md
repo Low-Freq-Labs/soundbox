@@ -7,7 +7,15 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 
 - A local membership veto is not a rekordbox save. The writer replaces the
   removal gesture with a durable, identity-bound source intent and leaves the
-  native membership visible until verified publication. An error says the edit
+  verified native membership intact until publication. A durable matching-identity
+  deletion hides the sidebar row immediately through a presentation projection;
+  create/rename and membership edits now project the same durable queue into the
+  sidebar/browser, including nested pending creations. The verified revision stays
+  separate from these display rows; newer snapshots must reconcile receipts first.
+  Background creation completion must not steal the user’s later navigation. This view
+  never changes that source catalog or grants source authority. Failure/discard
+  rebuilds against the latest verified catalog and requests a fresh serialized
+  snapshot; a read completion must retain the pending/error status. An error says the edit
   needs attention; interrupted publication may already have committed. Explicit
   retry replays a committed receipt without duplicate creation, or persists a new
   operation/revision/clock before attempting a previously rolled-back/stale edit.
@@ -29,7 +37,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   cancel before capture; mount/UUID and standalone intents survive deferral.
 - Preserve removed songs in Collection using exact native UUID pins bound to the
   source library. These pins are display retention, never registration or source
-  permission. Cache schema9 stores raw playlist rows/clocks and empty folders;
+  permission. Cache schema10 retains raw playlist rows/clocks and empty folders;
   encode its catalog one row at a time, as with tracks. Intelligent memberships
   retain their computed keys when their containing folder is renamed.
 - Acceptance captures keep full encrypted pairs. Normal retention keeps
@@ -120,10 +128,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Export the actual folder_path while retaining `cust:<name>` identity; do not
   encode the folder path into a new playlist name/key. Folder deletion needs its
   own explicit descendant-playlist review and never deletes Collection/source audio.
-- **Playlist insets must preserve selected row backgrounds.** Inset content and
-  branch glyphs six points together; fill the original item panel before moving
-  contents so selected nested leaves have no branch-to-label seam. Preserve model,
-  drag and activation geometry.
+- **Sidebar layout uses common vector bounds.** One delegate paints folder
+  chevrons and note/star/home paths with the same icon center, label start and
+  24-point row geometry. Never mix font-glyph bearings with a native branch
+  painter again. Fill the complete selected panel; preserve Qt's model, branch
+  hit testing, drag and folder-only navigation.
 - **Graveyard is an audition input surface.** Admit playback/cue/grid/wave/autoplay
   actions and selection-bound Load, while retaining native selection and blocking
   unrelated browser edits. Disable native input-method/typeahead ownership so
@@ -871,7 +880,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Eligibility uses packed-only stream/grid reads; never expand every track into
   per-sample Python colors or generic ANLZ objects during discovery.
   A newly valid exact stream queues that one atomic V5 recook. The explicit
-  track-row Reanalyze action remains the escape hatch and bypasses `is_ready`
+  track-row Rebuild Waveform action remains the escape hatch and bypasses `is_ready`
   for only the requested track. Both routes retain the old playable cache until
   a complete replacement is atomically stored and hot-refresh the deck after
   success. Never delete the record first, and never write source audio or
@@ -1188,7 +1197,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   sync metadata fails closed. `rekordbox_tags` alone owns this API, restricted by
   source identity, exact schema/version authority, expected rows and closed native
   processes. Never generalize to cloud sync or a new version without evidence.
-  Sonny operates rekordbox UI for native references and acceptance.
+  Sonny normally operates the UI; his October31 grant allows careful agent
+  control for generated references with verified selection, preserving real music.
 - **Tag saves and readiness checks own a TaskOwner lane.** Retain through finished
   delivery and join; source selection/refresh/backup/restore must wait. A committed
   write followed by refresh failure is an error requiring reconciliation, never
@@ -2001,6 +2011,14 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   waveform caches. Bind path/hash/exact filesystem identity, preserve native and
   manual grids/cues, and never route arbitrary detection through the accepted
   manual-grid writer. The two-way source publication gate remains explicit.
+- Manual edits of captured imports live in a revisioned `grid_draft` beside the
+  raw detector result. Publish through StateRepository before changing RAM/browser
+  rows. Compare the loaded rows at admission, merge against the newest draft on
+  late analysis delivery, and pin BPM as well as rows through late manifests.
+  Key-only/inconclusive analysis also retains the grid component's tempo-policy
+  provenance, including the raw estimate used before a whole-BPM decision.
+  Native/manual source priority and exact capture binding remain independent;
+  neither a draft nor a waveform fallback grants registration/analysis authority.
 - Standalone CDJ export supplies tracks directly, never a hidden fake playlist.
   Include those identities in locally bound interrupted-work receipts. Preserve
   native/managed playlists and prove the unchanged repeat performs no writes or

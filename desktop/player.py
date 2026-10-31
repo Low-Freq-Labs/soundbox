@@ -17,6 +17,7 @@ from enum import Enum
 from math import ceil, exp, floor, isfinite
 import sys
 import threading
+from pathlib import Path
 from time import perf_counter
 
 from PySide6.QtCore import (
@@ -395,7 +396,11 @@ class WaveformWorker(QThread):
         manifest = _apply_loaded_grid_contract(
             manifest, self.analysis_path)
         from soundbox.analysis import playback_data
-        manifest = playback_data(manifest, self.detected_analysis, self.path)
+        from soundbox.source_verification import SourceVerificationCache
+        manifest = playback_data(manifest, self.detected_analysis, self.path,
+            verification_cache=(SourceVerificationCache(Path(cache_dir))
+                                if self.detected_analysis and cache_dir else None),
+            should_cancel=self.isInterruptionRequested)
         self.manifest_ready.emit(self.path, self.generation, manifest)
         if self.isInterruptionRequested():
             return True, False, False
@@ -1868,8 +1873,9 @@ class PlayerBar(QWidget):
     def _with_live_grid(self, data):
         if self._live_grid is None:
             return data
-        rows, _bpm = self._live_grid
-        return {**data, 'beats': list(rows), '_beat_times': sorted(int(r[1]) for r in rows)}
+        rows, bpm = self._live_grid
+        return {**data, 'beats': list(rows), '_beat_times': sorted(int(r[1]) for r in rows),
+                '_detected_bpm': bpm}
 
     def clear_live_grid(self):
         if self._live_grid is not None:

@@ -37,6 +37,25 @@ def is_audio(path: Path) -> bool:
     return path.suffix.lower() in AUDIO_EXTS
 
 
+def expand_paths(selected, *, should_cancel=lambda: False):
+    """Expand folder drops deterministically, without following directory links."""
+    result, seen = [], set()
+    def visit(path):
+        if should_cancel():
+            raise RuntimeError('Import cancelled')
+        if path.is_dir() and not path.is_symlink():
+            for child in sorted(path.iterdir(), key=lambda p: p.name.casefold()):
+                visit(child)
+        elif is_audio(path) and path.is_file():
+            canonical = path.resolve(strict=True)
+            if canonical not in seen:
+                seen.add(canonical)
+                result.append(str(canonical))
+    for raw in selected:
+        visit(Path(raw).expanduser())
+    return result
+
+
 def new_id() -> str:
     return ID_PREFIX + uuid.uuid4().hex[:12]
 
@@ -212,12 +231,17 @@ def refresh_metadata(imported: dict) -> int:
     return changed
 
 
-def inject(lib: Library, imported: dict) -> int:
+def inject(lib: Library, imported: dict, *, repair_missing=True) -> int:
     """Merge the imported tracks into a (re)loaded Library. Idempotent — safe
     to call after every rekordbox refresh. Missing legacy metadata is repaired
     from read-only source headers before Track rows are built."""
-    changed = refresh_metadata(imported)
+    changed = refresh_metadata(imported) if repair_missing else 0
     for tid, rec in imported.items():
+        existing = lib.tracks_by_id.get(tid)
+        # A verified native identity projection must retain source BPM/grid/cues.
+        # The import record remains migration/curation input, not a replacement.
+        if existing is not None and existing.source_native_id and not existing.imported:
+            continue
         lib.tracks_by_id[tid] = make_track(tid, rec)
     return changed
 

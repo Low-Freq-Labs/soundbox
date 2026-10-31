@@ -1,0 +1,20 @@
+[package]
+name = "soundbox-analysis-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+rbl-analysis = { path = "../../../native/cdj/vendor/rbxport/crates/rbl-analysis" }
+rbl-anlz = { path = "../../../native/cdj/vendor/rbxport/crates/rbl-anlz" }
+rbl-audio = { path = "../../../native/cdj/vendor/rbxport/crates/rbl-audio" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = "none"

@@ -37,10 +37,15 @@ The 44×28 hamburger button uses the existing toolbar layout. Menu order:
 Analysis is immediately right of General in Settings. Its controls span the
 page in three aligned, inset groups; Memory Cue and automatic imports sit below.
 The section header and note retain the outer edge. Menus/dropdowns use right-hand
-checks and inset arrows, including the Analysis dialog and My Settings. BPM/Grid and Key run the
+checks and inset arrows, including Analysis Settings and My Settings. BPM/Grid and Key run the
 pinned rbxport adaptive/high-precision tempo/key pipeline in the optimized local helper. Phrase
 is a disabled placeholder; no Normal/Dynamic mode or cloud controls. Automatic
 analysis of newly imported SoundBox files is opt-in and initially off. The
+current manual/automatic paths run silently in the background without an analysis
+window or progress bar, saving/publishing each completed song before the next.
+Folder imports enter Collection before header/bookmark probing. Captured imports
+admit BPM/grid and Hot/Memory Cue drafts after detection, including already-added
+songs whose unchanged audio acquired a newer cloud metadata timestamp. The
 first-analyzed-beat Memory Cue option is initially unchecked. Performance,
 Normal and Power saving select child-process scheduling priority, preserving the
 same DSP and quality. BPM ranges are 70–180 default, 48–95, 58–115, 68–135,
@@ -101,6 +106,15 @@ has BPM0, KeyID0, Analysed0, empty AnalysisDataPath and no contentFile/contentCu
 registrations or predicted UUID analysis directory. Only the new djmdContent row
 and agentRegistry changed; counter352236→352237, all existing content unchanged.
 The source WAV still matches its generated full SHA-256.
+
+October30 bounded follow-up closes the earlier unrelated-registry comparison gap:
+Sonny opened rekordbox, then imported a separate copy of the generated32-second
+WAV with analysis off. The startup-complete snapshot and immediate after-import
+snapshot differ by exactly the independently constructed content row plus the +1
+counter (352390→352391). `research/native_library` reproduces the complete native
+semantic inventory and byte-identical XML without ignoring globals. This remains
+a copy-only/native-reference proof, not source-writer acceptance or app integration.
+HANDOFF records the exact track/evidence and subsequent initial-analysis check.
 
 The BPM/Grid+Key reference is also captured, including all three registered
 DAT/EXT/2EX files. Native analysis matches SoundBox's120 BPM,8B and249ms first

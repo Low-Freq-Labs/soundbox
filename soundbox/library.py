@@ -62,6 +62,14 @@ class Track:
     source_cue_revision: str = ""
     source_cue_refs: list[dict] = field(default_factory=list)
 
+    # Logical IDs survive first registration; only native adapters use this ID.
+    # Empty retains the original native/XML identity convention.
+    source_native_id: str = ""
+
+    @property
+    def native_id(self) -> str:
+        return self.source_native_id or self.track_id
+
     @property
     def path(self) -> Path:
         """Decoded local filesystem path (not verified to exist)."""

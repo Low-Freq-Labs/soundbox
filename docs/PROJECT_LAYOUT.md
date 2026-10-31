@@ -8,7 +8,7 @@ library or waveform caches.
 | Location | Purpose |
 | --- | --- |
 | `soundbox/`, `desktop/`, `native/`, `soundbox_personal/` | Application source |
-| `tests/`, `scripts/`, `research/` | Regression tests, maintained developer tools and scoped CDJ research |
+| `tests/`, `scripts/`, `research/` | Regression tests, maintained developer tools and scoped CDJ/native-library proofs |
 | `assets/`, `profiles/` and root build/config files | Product assets and reproducible build inputs |
 | `docs/` | Current behavior, handoff, roadmap, exploratory ideas and open audits |
 | `docs/archive/` | Clearly dated completed audits and superseded experiments; not current instructions |
@@ -37,6 +37,36 @@ historical candidates, separate from the installed pilot under `native/cdj` and
 Python, mypy and Hypothesis also recreate their ignored caches during development.
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
+
+## Cleanup — October31
+
+Sonny explicitly requested reducing accumulated diagnostics, backup copies and
+extra app/packaging storage. Removed22,117 generated files, all five obsolete app
+bundles, duplicate dist/packaging, compiler/Python caches and loose scratch files.
+The installed verified app remains; no rollback bundle remains. Build retains
+about18MiB of checked native/CDJ/analysis binaries, release reports and small proof
+records. Source, unfinished research and regression tests are retained.
+
+Seven additional encrypted captures now share APFS blocks independently;203 were
+byte-verified before the separate retirement below.25 diagnostic files received
+transparent filesystem compression, preserving readable bytes and paths. Current
+recovery/acceptance archives remain complete; pending journals/runtime baselines
+were excluded and the shared source lock held with native apps closed.
+
+41 redundant full master.db checkpoints from the completed playlist-management
+and playlist-analysis-ui diagnostic runs were retired explicitly. Their comparison
+records, metadata and exact hash/retirement receipts remain; old raw replays at
+those paths are unavailable. Prepared-plan payloads, native sidecars, active shared-
+library references and required fixture roots remain intact. Logs are about3.6GiB,
+reduced from6.7GiB; about6.8GiB of actual filesystem free space was reclaimed overall.
+APFS shared-block directory sizes must not be summed as unique physical storage.
+Receipts: `~/Library/Logs/Soundbox/cleanup-2026-10-31/`.
+
+The latest user state is87 imports/1105 titles/490 artist overrides/520 hidden/
+4043 canonical art files, preserved through cleanup/restart. Keep future diagnostics
+bounded: reuse snapshots for inspection, retain full DB pairs only for required
+acceptance/recovery, and retire generated packaging/scratch output after verified
+installation. Current exact state/build/retention is in HANDOFF.
 
 ## Garbage collection — October30
 

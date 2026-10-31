@@ -8,7 +8,7 @@ from time import monotonic
 
 from PySide6.QtCore import QEventLoop, QObject, QTimer, Signal
 
-from soundbox import rekordbox_db, track_analysis
+from soundbox import local_grid, rekordbox_db, track_analysis
 from soundbox.rekordbox_grid import (
     AmbiguousGridEnd, Beat, GridEdit, clear_secondary_grid, read_grid, replace_grid,
     transform_beats, transform_grid,
@@ -37,13 +37,16 @@ class GridEditController(QObject):
     saved = Signal(object, str)
     failed = Signal(str)
     rejected = Signal(str)
+    local_saved = Signal(str)
 
     def __init__(self, shared, parent=None, *, store_factory=None, cache_dir=None,
-                 prepare_cache=None):
+                 prepare_cache=None, local_result=None, save_local=None):
         super().__init__(parent)
         self.shared = shared
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.prepare_cache = prepare_cache
+        self.local_result = local_result
+        self.save_local = save_local
         self._factory = store_factory or self._make_store
         self._requires_authority = store_factory is None
         self._authority = None
@@ -99,10 +102,21 @@ class GridEditController(QObject):
     def _track(self, tid):
         return self.shared.lib.tracks_by_id.get(tid) if self.shared.lib else None
 
+    def is_local(self, tid):
+        track = self._track(tid)
+        return bool(track and track.imported and not track.source_uuid
+                    and not track.source_analysis_path and self.local_result and self.save_local)
+
+    def _local_record(self, tid):
+        return self.local_result(self._track(tid)) if self.is_local(tid) else None
+
     def _source_reason(self, tid):
         if self._closing or self.shared.owner.stopping:
             return 'Finishing grid edits…'
         lib, track = self.shared.lib, self._track(tid)
+        if self.is_local(tid):
+            record = self._local_record(tid)
+            return '' if record and record.get('beats') else 'Analyze BPM / Grid before editing this track'
         if not lib or not self.shared.verified or lib.source_kind != 'rekordbox-db':
             return 'Refresh a rekordbox library to edit its grid'
         if self._requires_authority and self._authority is None:
@@ -116,6 +130,8 @@ class GridEditController(QObject):
         reason = self._source_reason(tid)
         if reason:
             return reason
+        if self.is_local(tid):
+            return ''
         if tid in self._errors:
             return self._errors[tid]
         snapshot = self._snapshots.get(tid)
@@ -129,6 +145,9 @@ class GridEditController(QObject):
         reason = self.reason(tid, allow_checking=True)
         if reason:
             return reason
+        if self.is_local(tid):
+            rows = local_grid.effective_result(self._local_record(tid))['beats']
+            return '' if len({r[2] for r in rows}) == 1 else 'Manual BPM requires a constant-tempo grid'
         if self._requires_authority and not getattr(self._authority, 'manual_bpm_accepted', False):
             return 'Manual BPM editing awaits native acceptance for this library'
         snapshot = self._snapshots.get(tid)
@@ -143,7 +162,8 @@ class GridEditController(QObject):
         tid = str(tid or '')
         changed = tid != self.current
         self.current = tid
-        if not self._source_reason(tid) and (changed or force or tid not in self._snapshots):
+        if (not self.is_local(tid) and not self._source_reason(tid)
+                and (changed or force or tid not in self._snapshots)):
             if not any(g.track_id == tid for g in self._queue):
                 self._errors.pop(tid, None)
                 self._probe_wanted = tid
@@ -176,6 +196,12 @@ class GridEditController(QObject):
             return replace_grid(dat, beats), clear_secondary_grid(ext)
 
     def view(self, tid):
+        if self.is_local(tid):
+            record = self._local_record(tid)
+            if not record or not record.get('beats'):
+                return None
+            resolved = local_grid.effective_result(record)
+            return resolved['beats'], resolved['bpm']
         result = self._view_bytes(tid)
         if result is None:
             preview = self._preview_bases.get(tid)
@@ -200,6 +226,23 @@ class GridEditController(QObject):
         if operation == 'bpm' and self.bpm_reason(tid):
             self.rejected.emit(self.bpm_reason(tid))
             return False
+        if self.is_local(tid):
+            try:
+                record = self._local_record(tid)
+                # The durable captured result is the local edit base. A late
+                # fallback waveform must never veto a completed analysis; the
+                # successful save refreshes the loaded grid in place.
+                after = local_grid.edit(record, operation, value)
+                if after == record:
+                    return True
+                if not self.save_local(self._track(tid), record, after):
+                    raise OSError('BPM / Grid edit was not saved')
+            except (OSError, ValueError, RuntimeError) as exc:
+                self.rejected.emit(str(exc))
+                return False
+            self.changed.emit(tid)
+            self.local_saved.emit(tid)
+            return True
         track = self._track(tid)
         current = self._view_bytes(tid)
         try:

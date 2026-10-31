@@ -20,8 +20,10 @@ requires an explicitly accepted library on rekordbox 6.8.7.0303. Close rekordbox
 and its background agent before saving. Cue editing supports WAV/MP3/AIFF with
 verified metadata. Grid controls support setting a bar start, whole-grid nudges,
 and constant-tempo double/half under the same accepted source boundary. Manual
-BPM entry requires its separate native acceptance flag; `138`, `138.0` and
+BPM entry on native tracks requires its separate acceptance flag; `138`, `138.0` and
 `138.00` all submit the same two-decimal value.
+Captured analysis on direct imports supports manual grid drafts independently;
+native registration and publication of those drafts remain pending.
 Smart-list creation remains a subsequent milestone.
 New cues appear and become usable immediately in the playing session while
 guarded database saves run in the background. The existing bottom-left footer
@@ -202,8 +204,15 @@ Search in the prep strip; Search aligns beneath the Hot Cue / Mem Cue tabs.
 The October29 installed detection stage
 adds a three-line menu immediately right of Q that controls waveform color and beat-count
 display, exports the loaded native song to a USB collection without a playlist,
-and opens Analyze Track. Settings → Analysis controls opt-in BPM/Grid and Key
-detection; automatic analysis is off. Its default RBXport pipeline follows tempo
+and starts Analyze Track in the background using Settings → Analysis preferences.
+There is no analysis popup or progress bar. Automatic detection is opt-in (off
+for new settings); when enabled, folder/file imports appear at the top of
+Collection before analysis, and BPM/Key populate one completed song at a time.
+Finished songs can be edited while later songs continue analyzing.
+Unfinished detection resumes after restart with the original job settings;
+failed songs wait for an explicit retry. The browser context menu also offers
+Analyze Track, with Rebuild Waveform kept as a separate display-recovery action.
+Its default RBXport pipeline follows tempo
 changes with attack placement and downbeat selection, using the selected BPM
 range. Tracks within the thirty-minute/96M mono-sample bounds are analyzed
 completely, with longer tails streamed and the grid continued
@@ -216,7 +225,18 @@ acceptance; see [the exact stage](docs/analysis-playlists-next.md) and the
 track with Analysis Lock off; the BPM field after the first-beat button shows
 `000.00` while empty. On an accepted constant grid, type a BPM and press Enter:
 the loaded grid changes immediately, saves in the background, and the browser BPM
-updates as soon as that save verifies. Escape or leaving the field cancels typing. The checklist menu matches the button width and uses two columns, with separated
+updates as soon as that save verifies. Captured BPM/Grid analysis on a direct
+import can also be corrected through these controls: its manual draft persists
+before the actual grid and browser update, preserving the detector's raw result
+and cues. Captured imports also retain durable Hot/Memory Cue drafts. Cloud
+metadata changes require a cached exact-byte proof before reusing analysis;
+they do not require reimporting or reanalyzing an unchanged song.
+Native registration/publication of those drafts remains unfinished.
+Native playlist create, rename, delete and song membership edits appear as soon
+as their intent is safely saved; the shared background writer completes the native
+save, while failures offer retry or discard against the current source view.
+Steady detections now test nearby whole BPM against onsets and attack timing;
+genuine fractional/variable grids remain valid. Escape or leaving the field cancels typing. The checklist menu matches the button width and uses two columns, with separated
 rows and wrapped availability text. Tags read down the left column, then down the
 right, preserving rekordbox order. Mixed assignments become checked
 for every selected track; unchecking removes the tag from every selected track.
@@ -450,7 +470,8 @@ a read-only live-DB snapshot until SoundBox user data claims ownership.
 If a track was first cached before Rekordbox finished its display analysis,
 the recurring scan notices when a valid PWV3/PWV5/PWV7 stream appears for a
 mode still using SoundBox's fallback and atomically recooks only that track.
-Right-click **Reanalyze Track** remains the explicit recovery path. Both routes
+Right-click **Rebuild Waveform** remains the explicit recovery path. **Analyze
+Track** runs BPM/Grid+Key detection in the background instead. Both waveform routes
 import only read-only ANLZ data; analysis preparation never modifies source audio
 or rekordbox data.
 Stored hot-cue colors appear as black-outlined A–H boxes on both the

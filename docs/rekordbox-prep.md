@@ -10,10 +10,18 @@ creation remains a subsequent milestone.
 The later ordinary-playlist source work is separate from these accepted Tag/Cue/
 Grid permissions. Its paired TEMP proof and separately approved one-playlist/two-
 existing-track source pilot are documented in
-[analysis-playlists-next.md](analysis-playlists-next.md). The prepared pilot is
-not published or accepted; it has no production authority or app integration.
+[analysis-playlists-next.md](analysis-playlists-next.md). Ordinary playlist/folder
+CRUD and registered-track membership passed separate October30 native acceptance
+and now have their own production authority and app integration. New-track
+registration, reverse detected-analysis publication and broader metadata writes
+remain separate gates. The current shared-library transition is in
+[shared-library-workflow-plan.md](shared-library-workflow-plan.md).
 
-## Agreed first version
+## Original October26 scope, with subsequently accepted grid behavior
+
+The title/artist and broad-playlist deferrals below describe that original prep
+scope. The later accepted ordinary-playlist authority and shared-library plan
+above govern current work; they do not broaden Tag/Cue/Grid permissions.
 
 - A strip beneath the waveform: set the playhead as a bar's first beat, shift
   the whole grid left/right, double/halve BPM, and **My Tags** left of

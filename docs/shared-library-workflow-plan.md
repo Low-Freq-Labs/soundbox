@@ -2,9 +2,24 @@
 
 October 30, 2026. This records Sonny's requested direction and the proposed next-
 session implementation sequence, incorporating screenshots and auto-analysis/BPM
-clarifications. **Planning only: none of these follow-up fixes is implemented
-by this document.** Installed build 148 and its passing release suite are the
-starting point, not proof that the shared workflow is complete.
+clarifications. The original planning pass changed no runtime code. Implementation
+has now started with local grid drafts, measured whole-tempo detection, durable
+delete presentation and shared sidebar geometry. See HANDOFF for their validation
+and installed status. Build148 is the starting point; the shared native workflow
+is still unfinished.
+
+## October31 next-session priority
+
+Sonny explicitly requested the next session start with direct native playlist
+file drops and SoundBox Collection → rekordbox Collection registration. Both are
+still broken in the installed build. Do not require Collection-first importing.
+Use the proven registration foundations to complete durable registration/reuse,
+canonical identities, captured playlist destination and membership publication
+even when analysis is off or unfinished,
+then verify both Collections through restart/native reopen. Preserve the already
+imported WHOLE CLUB ROCKIN (`sb-5adee0814145`,174BPM/9A) and Innerbloom
+(`sb-19a5565cfb6d`,140BPM/6A). RGB/polish follows this work. This wrap-up publishes
+the current foundation; it does not claim those import paths are implemented.
 
 ## Required outcome
 
@@ -29,6 +44,18 @@ the displayed number. Manual correction must remain available.
 Also required: immediate visual acknowledgement of playlist deletion; precisely
 aligned sidebar icons/chevrons and labels; stable RGB motion at the reported
 middle zoom stops, with the solid BLUE rendering preserved.
+
+Sonny's later October30 clarification is explicit: file/folder drops immediately
+put all songs at the top of Collection, then silently populate BPM and Key one
+song at a time. No analysis popup or progress bar; manual Analyze Track uses the
+same background path when automatic analysis is off. Each finished song must
+immediately admit manual BPM, grid and cue edits. A direct drop into either native
+or SoundBox playlists must also enter both apps' Collection. Existing imported
+Innerbloom (`sb-19a5565cfb6d`,140BPM/6A) must benefit without reimport/reanalysis.
+Current preservation baseline is87 imports/1105 title overrides; the86-import
+checkpoint and its evidence remain historical.
+The background/edit fixes are installed; native shared imports remain
+an independent unfinished acceptance/integration gate.
 
 ## Shared-database architecture and ordinary save behavior
 
@@ -71,7 +98,7 @@ This architecture is the completion criterion for the phases below. The local
 manual-edit route in phase1 unblocks correction and preserves drafts during the
 transition; it is not the final replacement for native persistence.
 
-## Confirmed build-148 gaps and exact reproducer
+## Historical build-148 gaps and exact reproducer
 
 | Area | Observed / verified | Consequence |
 | --- | --- | --- |
@@ -396,9 +423,9 @@ recapture old cases merely because apparent folder sizes look large.
 ## Execution and release discipline
 
 Read AGENTS/CLAUDE, HANDOFF, this plan, GOTCHAS and PLAYER first. Use the existing
-authority/evidence boundaries and shared worker ownership. The user's current
-request is to plan and preserve context; do not silently implement or alter the
-installed app during this planning pass.
+authority/evidence boundaries and shared worker ownership. The original planning
+pass did not authorize runtime work by itself. Sonny has resumed the overhaul
+in the implementation session; retain the separate native publication gates.
 
 Next session should start with the local BPM/whole-tempo reproducer and shared
 pipeline/authority design, while profiling immediate playlist feedback and layout.
@@ -419,3 +446,131 @@ native reopen acceptance, temporal
 visual acceptance and exact state preservation. Distinguish any outstanding
 capability/format/permission gate explicitly. Do not call the two-app workflow
 complete merely because registration, one detector test, or UI polish passed.
+
+## October30 implementation checkpoint
+
+The initial changes use `soundbox.local_grid` for revisioned manual drafts inside
+the captured analysis record. Raw detector BPM/rows/engine, first-cue identity,
+path/audio digest and unrelated state remain intact. Prep operations reuse the
+pure row arithmetic, commit through StateRepository before updating loaded grid
+buffers/browser BPM, and never call a native store for an unregistered import.
+Failure retains the previous grid. Late manifests retain the live BPM as well as
+its rows; late detector delivery merges the newest manual draft. Key-only and
+inconclusive results retain the grid's raw tempo-decision measurements too. Native data keeps
+its existing priority. This route currently requires a valid captured BPM/Grid
+result; it does not invent authority from the waveform fallback. It remains a
+working draft for future ordinary native persistence, not a completed shared save.
+
+The detector's caller adds `whole-onset-v1` outside the unchanged pinned vendor
+tree. Fully measured single-tempo results within0.25BPM of an in-range integer
+are compared at refitted phase across three song sections. The candidate requires
+onset evidence in every section, two competitive sections and a competitive total;
+the final attack check requires strong attacks in every third and phase agreement
+within15ms. These are explicit initial policy constants, not user-specified facts.
+The selected grid is regenerated at the integer tempo and aligned to captured
+attacks. Raw BPM and all three onset/attack measurements persist as provenance.
+Partial-head, variable, unsupported and contrary fractional results are retained.
+Legacy constant-v1/adaptive-v2 results remain valid; new results use whole-v3.
+
+ABBA's private copy-only candidate measured120BPM/7A, with first beat255ms and
+strong-attack offsets -0.44/-1.08/-2.08ms across early/middle/late sections. Its
+original estimate119.85444071310947 remains in the report; source SHA-256 remains
+f78b9cb8a649cae8adbfec53277804da2c7cda13db2f0b42659ea84469fff3af.
+No live result was replaced by this measurement. Manual120 entry independently
+retains the user's existing227ms anchor; a fresh detector refit is a different
+operation. The measured candidate is not yet native reopen or audible acceptance.
+
+Durable deletion projects matching-source/UUID requests over the sidebar without
+mutating Library/catalog, memberships, revision, Collection or local removal maps.
+Admission prunes only affected tree rows and moves a deleted active view to
+Collection once, preserving its remembered selection. Refresh cannot resurrect
+pending deletion; source failure/discard rebuilds from the latest verified catalog,
+requests a fresh owned source snapshot and preserves expansion. A source refresh
+does not replace a pending/error save status with an Updated success banner. Source writer,
+FIFO rebase, recovery, retry and export barriers remain authoritative. The October31 continuation extends that presentation to create, rename, append
+and remove, including edits to pending new folders/playlists. It preserves the
+verified source baseline, stops on newer revisions/errors, and selects new
+playlists on admission so background completion cannot steal later navigation.
+This presentation is installed with the October31 release; exact provenance,
+validation and preservation are recorded in HANDOFF. Routine playlist save
+success banners are removed; waiting/errors stay truthful and neutral.
+
+Folder chevrons and home/note/star icons now use one vector painter with common
+12-point icon boxes,16-point depth steps,24-point rows and explicit label bounds.
+Native/custom folders and leaves at the same depth share these exact rectangles.
+Qt retains expansion, selection, drag and keyboard behavior. Cocoa captures are
+under the private implementation evidence root; RGB renderer behavior is unchanged.
+
+### Shared-store component contract: next implementation boundary
+
+Current musical editor inventory (existing controls, not a claim of native support):
+
+| Component | Current ordinary write capability | Required shared-store work |
+| --- | --- | --- |
+| BPM/grid | Accepted native grid API; captured imports use manual drafts above | Initial analysis/registration, component rebase and draft-to-native commit |
+| Key | Captured detection only; native KeyID is read | Key interning, selected-component update and native acceptance |
+| Hot/Memory Cues | Accepted exact native DB API; first-beat import cue is local detection data | Registration binding and initial cue publication; keep native IDs distinct |
+| My Tags | Accepted exact native assignment API | Bind newly registered identity; preserve assignment bases |
+| Title/artist | SoundBox overrides/derivation | Explicit migration diff and compatible native metadata writer |
+| Album/genre/year/release date/comments/rating/color/label/play count/hot-cue auto load | Local `track_info` overrides | Per-field native references/counters and component reconciliation |
+| Artwork | Curated JPEG/provider/default state plus device derivatives | Native artwork counterpart/registration proof; preserve curated originals |
+
+Use one stable logical identity record per canonical file with SoundBox ID/aliases,
+native source/library/ID/UUID binding and captured digest when identity changes.
+An import intent must bind destination and source at admission and persist these
+states: admitted -> identity resolved -> registered -> requested analysis ready ->
+native components committed -> membership committed -> verified view delivered.
+Each transition retains its idempotency receipt and exact previous verified base;
+a crash may repeat readback, never duplicate registration or append. Component
+drafts retain base revision/value, intended value and protected/manual/locked
+status. Compare base/current/intention independently per component: unchanged
+native base permits the intention; identical intended/current value retires the
+draft; independent native changes merge; a same-component divergence preserves
+both for an explicit bounded conflict. App origin and wall clock never decide.
+
+At this historical October30 checkpoint, the future registration/analysis/metadata
+modules were required to be separate pure planners
+and disposable-copy transaction adapters before joining the existing shared owner
+and recovery protocol. Nothing in this checkpoint provisions their authority,
+registers the other84 imports, migrates old local overrides/playlists, expands
+Collection discovery or changes the installed/native library without verification.
+
+### Copy-only registration research checkpoint
+
+The October30 private constructor reproduces the exact captured native bare row
+for one untagged PCM16 stereo44.1kHz WAV, including original inode-based file ID,
+library DeviceID, size and +1 local counter. Encrypted TEMP commit/reopen and
+rollback preserve the complete content table. Full semantic comparison remains
+failing in agentRegistry: the native capture interval also changed five path/
+notification bookkeeping rows before the import timestamp. Reopen housekeeping
+is an inference, not permission to ignore or rewrite these fields. Keep the
+strict failure and diagnostic deltas; obtain a cleanly bounded baseline or prove
+the independent transitions before claiming an exact full replay. This private
+prototype has no reusable writer/publication API, source authority, codec/metadata
+generality or initial-analysis acceptance. Evidence lives beside the implementation
+reports referenced by HANDOFF, outside the repository.
+
+The resumed pass adds maintained `research/native_library` row construction,
+encrypted marked-TEMP transaction/recovery and strict frozen replay. Its17
+synthetic tests cover real process exits, spilled hot journals, stale/tampered
+plans, aliases, source drift, unknown schemas, opaque fields and preserved XML.
+The strict original reference mismatch remains; no source authority is granted.
+The9-test pure component contract implements the three-way decision rules above;
+the9-test identity planner proposes exact-path native reuse and preserves ambiguous
+or historical bindings. The combined35-test run passes; none supplies native
+serializers, alias/curation migration or app integration. A metadata-only audit
+found1 existing native match among85 local imports, with84 unmatched; no records
+were registered or migrated. The subsequent startup-complete native before/import
+pair now passes the entire semantic inventory and byte-identical XML without any
+registry exclusions. The old reference mismatch remains historical evidence.
+Sonny then performed one isolated initial BPM/Grid+Key analysis on the same
+generated test file; HANDOFF holds its current capture/proof status and next steps.
+
+The separately approved one-file bare source pilot subsequently passed full
+source readback and Sonny's native reopen/inspection/normal save and quit. This
+accepts only that known generated-WAV test, without provisioning general source
+authority. The initial-analysis metadata constructor and DB/directory transaction
+now pass frozen/synthetic/disposable-copy proofs, and a standalone renderer emits
+fresh waveform packets. Waveforms differ from native, PQT2 initial invalidation
+needs acceptance, and gain/endpoint observations remain fixture-bound. No analysis
+source publisher/permission or production import/Collection integration is enabled.

@@ -485,7 +485,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             rekordbox_db.load_live(source,retain_tracks=self.settings.get('rekordbox_collection_tracks',{})))
         self.grid_controller = GridEditController(self.tag_controller, self,
                                                   cache_dir=self._track_analysis_dir,
-                                                  prepare_cache=self._prepare_grid_cache)
+                                                  prepare_cache=self._prepare_grid_cache,
+                                                  local_result=self._analysis_result,
+                                                  save_local=self._save_local_grid)
         # Apply saved chrome before building thousands of child widgets. Loading
         # state again later would also lose the repository's recovery receipt.
         self._initial_state = self._state_repository.load()
@@ -505,6 +507,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.tag_controller.changed.connect(self._sync_grid)
         self.grid_controller.changed.connect(self._grid_changed)
         self.grid_controller.saved.connect(self._grid_saved)
+        self.grid_controller.local_saved.connect(self._local_grid_saved)
         self.grid_controller.failed.connect(self._tag_failed)
         self.grid_controller.rejected.connect(lambda text: self._flash_status(text, 10))
         # Animated dots for transient states (FINALIZING…, Cancelling…).
@@ -745,13 +748,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                                  junk=self._title_junk())
             self._row_cache[t.track_id] = r
         result = dict(r)
-        detected = self._analysis_result(t)
+        from soundbox.local_grid import effective_result
+        detected = effective_result(self._analysis_result(t))
         if detected:
-            if not t.bpm and detected.get('bpm'):
+            if (not t.bpm or (t.imported and detected.get('grid_draft'))) and detected.get('bpm'):
                 result['bpm'] = f"{detected['bpm']:.2f}"
             if not t.key and detected.get('key'):
                 result['key'] = detected['key']
         result.update(self.settings.get('track_info',{}).get(t.track_id,{}))
+        if t.imported and detected and detected.get('grid_draft'):
+            result['bpm'] = f"{detected['bpm']:.2f}"
         if self.lib and t.source_tag_ids:
             result['myTags'] = ', '.join(tag.name for tag in self.lib.source_tags if tag.tag_id in t.source_tag_ids)
         return result
@@ -1659,8 +1665,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             reason = 'Library operation in progress'
         if not reason and (pb._pending_autoplay or pb._native_error or not pb.cue_panel._loaded):
             reason = 'Wait for the track to finish loading'
-        if not reason and (pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
-                           or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox'):
+        if (not reason and not self.grid_controller.is_local(pb.current_track())
+                and (pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
+                     or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox')):
             reason = 'This track has a SoundBox manual grid'
         step = pb.grid_nudge_ms()
         for index, button in enumerate(self.grid_edit_buttons):
@@ -1677,7 +1684,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         view = self.grid_controller.view(track_id)
         provenance = pb._analysis_parts.get('provenance', {})
         manual = provenance.get('grid') == 'soundbox-manual' or provenance.get('user_data') == 'soundbox'
-        if track is not None and view is not None and not manual:
+        if (track is not None and view is not None and not manual
+                and not self.grid_controller.is_local(track_id)):
             pb.refresh_live_grid(track_id, track.path, view[0], view[1])
         self._sync_grid()
         self._sync_edit_status()
@@ -1687,11 +1695,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         pb = self.player_bar
         if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
                 or self._device_operation_owned() or pb._pending_autoplay or pb._native_error
-                or not pb.cue_panel._loaded
-                or pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
-                or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox'):
+                or not pb.cue_panel._loaded):
             return False
         tid = pb.current_track()
+        if (not self.grid_controller.is_local(tid)
+                and (pb._analysis_parts.get('provenance', {}).get('grid') == 'soundbox-manual'
+                     or pb._analysis_parts.get('provenance', {}).get('user_data') == 'soundbox')):
+            return False
         if track_id is not None and tid != track_id:
             return False
         track = self.tag_controller.lib.tracks_by_id.get(tid) if self.tag_controller.lib else None
@@ -1731,18 +1741,21 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         track = lib.tracks_by_id.get(track_id)
         if track is not None:
             self._invalidate_rows([track_id])
-            selected = set(self._selected_ids())
-            reset = self.model.update_bpm(track_id, track.bpm)
-            if reset and selected:
-                selection = self.table.selectionModel()
-                for row, data in enumerate(self.model._rows):
-                    if data.get('id') in selected:
-                        selection.select(self.model.index(row, 0),
-                                         QItemSelectionModel.Select | QItemSelectionModel.Rows)
+            self._update_browser_bpm(track_id, track.bpm)
         if not self.tag_controller.owned:
             self._cache_library()
             self._finish_tag_refresh()
         self._finish_edit_status()
+
+    def _update_browser_bpm(self, track_id, bpm):
+        selected = set(self._selected_ids())
+        reset = self.model.update_bpm(track_id, bpm)
+        if reset and selected:
+            selection = self.table.selectionModel()
+            for row, data in enumerate(self.model._rows):
+                if data.get('id') in selected:
+                    selection.select(self.model.index(row, 0),
+                                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
 
     def _sync_tags(self):
         if not hasattr(self, "my_tags"):
@@ -1777,8 +1790,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
 
     def _sync_cue_editing(self):
         pb = self.player_bar
+        local_reason = self._local_cue_reason(pb.current_track())
         reason = ('Restore this track before editing cues'
                   if pb.current_track() and pb.current_track() == getattr(self, '_cue_audition_track', None)
+                  else local_reason if local_reason is not None
                   else self.tag_controller.cue_reason(pb.current_track()))
         if not reason and (self._refresh_worker is not None or self._state_maintenance
                            or self._device_operation_owned()):
@@ -1798,7 +1813,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             return False
         if operation == 'delete' and pb.cue_panel._cues[kind][slot] is None:
             return False
-        reason = self.tag_controller.cue_reason(track_id)
+        local_reason = self._local_cue_reason(track_id)
+        reason = local_reason if local_reason is not None else self.tag_controller.cue_reason(track_id)
         if reason:
             self._flash_status(reason, 10)
             return False
@@ -1808,6 +1824,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             return False
         if operation == 'add':
             position = pb.quantize_cue_position(position)
+        if local_reason is not None:
+            return self._edit_local_cue(track, kind, slot, operation, position)
         return self.tag_controller.request_cue(track_id, kind, slot, operation, position)
 
     def _assign_tag(self, tag_id, present):
@@ -2300,6 +2318,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self._rekordbox_connection_error = ""
         self._save_state()
         self._apply_loaded_library()
+        QTimer.singleShot(0,self,self._resume_analysis_jobs)
         self._sync_rekordbox_connection()
         self._refresh_devices()
         self.stack.setCurrentIndex(0)
@@ -2449,6 +2468,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         return None
 
     def _populate_tree(self, summary: dict):
+        presentation=self._native_presentation()
+        if presentation is not None and presentation is not self.lib:
+            summary=engine.summary(presentation)
         # Remember what the user was viewing so a refresh doesn't dump them onto a
         # random playlist. Signals blocked during the rebuild so no stray
         # currentItemChanged fires _on_rb_select mid-repopulate.
@@ -2463,8 +2485,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.tree.blockSignals(True)
         try:
             self.tree.clear()
+            pending_deletions=self._native_pending_deletions()
             for child in summary["tree"].get("children", []):
-                self.tree.addTopLevelItem(self._make_item(child))
+                def visible(node):
+                    if node.get('pid') in pending_deletions:return None
+                    return {**node,'children':[v for c in node.get('children',[]) if (v:=visible(c)) is not None]}
+                projected=visible(child)
+                if projected is not None:self.tree.addTopLevelItem(self._make_item(projected))
         finally:
             self.tree.blockSignals(False)
         self._refresh_custom()  # Collection count tracks the freshly loaded library
@@ -2481,6 +2508,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 self.tree.setCurrentItem(it)  # fires _on_rb_select → re-shows its rows
                 self.tree.scrollToItem(it)
         # else: collapsed by default; accordion handles the rest
+        self._native_pending_changed()
 
     def _make_item(self, node: dict) -> QTreeWidgetItem:
         it = QTreeWidgetItem()
@@ -2616,11 +2644,15 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self._rekordbox_source_verified = True
         self._rekordbox_connection_error = ""
         self._apply_loaded_library()
+        QTimer.singleShot(0,self,self._resume_analysis_jobs)
         self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
         self._sync_rekordbox_connection()
-        if not self._device_operation_owned():
+        controller=getattr(self,'playlist_controller',None)
+        if controller and (controller.pending or controller.queue_error()):
+            self._sync_edit_status()
+        elif not self._device_operation_owned():
             self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
         self._arm_waveform_rechecks()
@@ -3074,7 +3106,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.settings["import_dir"] = str(Path(paths[0]).parent)
         self._import_files(paths, playlist)
 
-    def _import_files(self, paths: list[str], playlist: str | None = None):
+    def _import_files(self, paths: list[str], playlist: str | None = None, *, _expanded=False):
         """Add non-rekordbox audio files to SoundBox. Referenced in place —
         never copied, moved or re-tagged. They join the track pool, so they
         appear in Collection automatically; `playlist` also adds them to that
@@ -3082,6 +3114,24 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         overrides/art/playlist entries stick)."""
         if self.lib is None:
             return
+        if not _expanded and any(Path(p).expanduser().is_dir() for p in paths):
+            from .task_owner import TaskOwner
+            from .workers import OneShotTask
+            if not hasattr(self, '_import_tasks'):
+                self._import_tasks = TaskOwner(self)
+            worker = OneShotTask(lambda: imports.expand_paths(
+                paths, should_cancel=worker.cancellation.is_set), log_label='Folder import')
+            def retired(job):
+                if self._shutting_down or job.cancellation.is_set():
+                    return
+                if isinstance(job.result, Exception):
+                    self._flash_status(f'Couldn’t import folder: {job.result}', 15)
+                else:
+                    self._import_files(job.result, playlist, _expanded=True)
+            self._import_tasks.adopt(worker, retired)
+            worker.start()
+            return
+        before_imported = dict(self.imported)
         by_path = {rec.get("path"): tid for tid, rec in self.imported.items()}
         ids: list[str] = []
         skipped: list[str] = []
@@ -3094,23 +3144,40 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             tid = by_path.get(str(p))
             if tid is None:
                 tid = imports.new_id()
-                self.imported[tid] = imports.probe(p)
+                # Admit the whole drop before reading container headers or
+                # creating bookmarks. Those can hydrate cloud files.
+                self.imported[tid] = dict(path=str(p), added=time.strftime('%Y-%m-%d'),
+                    added_ts=time.time(), time=0, size=p.stat().st_size)
                 fresh_ids.append(tid)
                 by_path[str(p)] = tid
             ids.append(tid)
         if ids:
-            imports.inject(self.lib, self.imported)
+            if not self._save_state():
+                self.imported = before_imported
+                return
+            imports.inject(self.lib, self.imported, repair_missing=False)
             self._build_artist_registry()  # imported names join the deriver
             self._refresh_custom()         # Collection count includes them now
-            self._save_state()
             LOG.info("Imported %d audio files (%d skipped)", len(ids), len(skipped))
             self._flash_status(f"Imported {len(ids)} ✓", 15)
             if playlist:
                 self._on_tracks_dropped(playlist, ids)  # dupe-guarded add
             else:
-                self._reload_current_view()  # Collection view picks them up live
+                # A Collection import must be visible immediately, even when
+                # an old search/header sort would otherwise hide its new rows.
+                self.search.clear()
+                self.table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
+                self.model.sort(-1)
+                collection = self.sb_tree.topLevelItem(0)
+                if collection is not None and collection.data(0, COLLECTION_ROLE):
+                    self.sb_tree.setCurrentItem(collection)
+                self._show_collection()
+                self._view_key = 'sb:Collection'
+                self.table.scrollToTop()
             if fresh_ids and self.settings.get('analysis', {}).get('automatic') is True:
                 QTimer.singleShot(0, lambda captured=tuple(fresh_ids): self._analyze_tracks(captured, automatic=True))
+            if fresh_ids:
+                self._probe_import_metadata(fresh_ids)
             self._arm_waveform_rechecks()
             if self.providers.allows("artwork.search"):
                 QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
@@ -3123,6 +3190,42 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 "file, or the file doesn't exist):\n\n"
                 + "\n".join(f"  •  {n}" for n in skipped[:8])
                 + (f"\n  …and {len(skipped) - 8} more" if len(skipped) > 8 else ""))
+
+    def _probe_import_metadata(self, track_ids):
+        from .task_owner import TaskOwner
+        from .workers import OneShotTask
+        if not hasattr(self, '_import_tasks'):
+            self._import_tasks = TaskOwner(self)
+        expected = {tid:dict(self.imported[tid]) for tid in track_ids}
+        def probe():
+            result = {}
+            for tid, rec in expected.items():
+                if worker.cancellation.is_set():
+                    break
+                result[tid] = imports.probe(Path(rec['path']))
+            return result
+        worker = OneShotTask(probe, log_label='Imported audio metadata')
+        def retired(job):
+            if self._shutting_down or job.cancellation.is_set():
+                return
+            if isinstance(job.result, Exception):
+                self._flash_status(f'Couldn’t read imported audio: {job.result}', 15)
+                return
+            for tid, rec in job.result.items():
+                current = self.imported.get(tid)
+                if current is None or current.get('path') != expected[tid]['path']:
+                    continue
+                # Keep the original admission time/order and any newer edits.
+                for key in ('time', 'size', file_locations.BOOKMARK_KEY):
+                    if key in rec:
+                        current[key] = rec[key]
+                if self.lib is not None:
+                    self.lib.tracks_by_id[tid] = imports.make_track(tid, current)
+            self._save_state()
+            self._invalidate_rows(list(job.result))
+            self._reload_current_view()
+        self._import_tasks.adopt(worker, retired)
+        worker.start()
 
     def _fix_links(self, roots: list | None = None):
         """Find imported files the user moved on disk and re-point their
@@ -6089,7 +6192,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
     def _add_track_reanalysis_action(self, menu: QMenu, ids: list[str]):
         n = len(ids)
         menu.addAction(
-            "Reanalyze Track" if n == 1 else f"Reanalyze {n} Tracks",
+            "Analyze Track" if n == 1 else f"Analyze {n} Tracks",
+            lambda selected=tuple(ids): self._analyze_tracks(selected),
+        )
+        menu.addAction(
+            "Rebuild Waveform" if n == 1 else f"Rebuild {n} Waveforms",
             lambda selected=tuple(ids): self._reanalyze_tracks(selected),
         )
 
@@ -6873,14 +6980,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                     ", ".join(sorted(failed)),
                 )
                 self._flash_status(
-                    "Reanalysis failed ✕" if len(failed) == 1
-                    else f"{len(failed)} reanalyses failed ✕",
+                    "Waveform rebuild failed ✕" if len(failed) == 1
+                    else f"{len(failed)} waveform rebuilds failed ✕",
                     10,
                 )
             elif forced:
                 self._flash_status(
-                    "Reanalyzed ✓" if len(forced) == 1
-                    else f"Reanalyzed {len(forced)} ✓",
+                    "Waveform rebuilt ✓" if len(forced) == 1
+                    else f"{len(forced)} waveforms rebuilt ✓",
                     8,
                 )
             else:
@@ -6909,7 +7016,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         }
         if not available:
             QMessageBox.warning(
-                self, "Reanalysis unavailable",
+                self, "Waveform unavailable",
                 "The selected source audio is missing or unavailable.",
             )
             return

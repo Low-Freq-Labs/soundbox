@@ -71,9 +71,11 @@ class CapturedAnalysis(unittest.TestCase):
 
     def test_durable_result_and_key_only_merge_survive_state_round_trip(self):
         old = self.record()
-        current = {**old,'bpm':None,'beats':None,'key':'9A','first_cue':None}
+        old['tempo_policy'] = dict(raw_bpm=119.9,candidate_bpm=120,selected=True)
+        current = {**old,'bpm':None,'beats':None,'key':'9A','first_cue':None,'tempo_policy':None}
         merged = analysis.merge_result(old,current,dict(bpm=False,key=True))
         self.assertEqual(merged['beats'],old['beats']); self.assertEqual(merged['key'],'9A')
+        self.assertEqual(merged['tempo_policy'],old['tempo_policy'])
         repo = StateRepository(self.root/'library.json'); repo.load()
         repo.save({'settings':{'analysis_results':{analysis.result_key(self.audio):merged}}})
         self.assertEqual(StateRepository(repo.path).load()['settings']['analysis_results'][analysis.result_key(self.audio)],merged)
@@ -151,6 +153,27 @@ class CapturedAnalysis(unittest.TestCase):
             run_renderer('analyze',self.root,request)
         self.assertEqual(self.audio.read_bytes(),raw)
 
+    def test_real_detector_prefers_supported_integer_but_retains_measured_fractional_tempo(self):
+        rate=8000;duration=120
+        for bpm in (120.0,119.9,120.13,140.1):
+            samples=np.zeros(rate*duration,dtype=np.float32)
+            n=np.arange(160,dtype=np.float32)
+            click=np.sin(n*1.1)*(1-n/160)*.8
+            for second in np.arange(.2,duration,60/bpm):
+                start=round(second*rate)
+                samples[start:start+len(click)]+=click[:len(samples)-start]
+            with wave.open(str(self.audio),'wb') as out:
+                out.setnchannels(1);out.setsampwidth(2);out.setframerate(rate)
+                out.writeframes((samples*30000).astype('<i2').tobytes())
+            result=self.detect(key=False)
+            self.assertAlmostEqual(result['bpm'],bpm,delta=.02,msg=str(result.get('tempo_policy')))
+            if bpm==120:
+                self.assertEqual(result['bpm'],120)
+                self.assertTrue(result['tempo_policy']['selected'])
+                self.assertTrue(all(row[2]==120 for row in result['beats']))
+            elif result.get('tempo_policy'):
+                self.assertFalse(result['tempo_policy']['selected'])
+
     def test_cancel_does_not_publish_a_result_or_change_audio(self):
         before = self.audio.read_bytes()
         with self.assertRaisesRegex(RuntimeError,'cancelled'):
@@ -165,6 +188,21 @@ class CapturedAnalysis(unittest.TestCase):
         with mock.patch('soundbox.cdj_usb.run_renderer',side_effect=changed):
             with self.assertRaisesRegex(ValueError,'Source changed'):
                 self.detect()
+
+    def test_bookmark_metadata_change_during_detection_keeps_result_after_exact_byte_recapture(self):
+        record = {**self.record(),'confidence':1}
+        before = self.audio.read_bytes()
+        def bookmark(*_args,**_kwargs):
+            self.audio.chmod(0o600)
+            return record
+        with mock.patch('soundbox.cdj_usb.run_renderer',side_effect=bookmark), \
+                mock.patch('soundbox.analysis.acquire_source',wraps=analysis.acquire_source) as capture:
+            result = self.detect()
+        self.assertEqual(capture.call_count,2)
+        self.assertEqual(capture.call_args.args[0].sha256,hashlib.sha256(before).hexdigest())
+        self.assertEqual(result['bpm'],120)
+        self.assertEqual(result['epoch'],analysis.identity(self.audio.stat()))
+        self.assertEqual(self.audio.read_bytes(),before)
 
     def test_invalid_settings_and_unknown_result_rows_fail_closed(self):
         for prefs in ({'bpm_range':True},{'bpm_range':10},{'key':'yes'},{'process':'Turbo'}):

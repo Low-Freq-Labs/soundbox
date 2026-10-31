@@ -22,10 +22,82 @@ footer, and no competing musical-data authority in AppData. It includes local ma
 editing, whole-BPM preference for steady near-integer detection, immediate durable
 playlist feedback, exact sidebar alignment and the reported RGB92/128/184 motion.
 Automatic analysis is separate from engine choice; Sonny has now enabled it.
-This plan is not implemented source authority: registration, detected-analysis
-publication and broader native metadata still need their own proofs/acceptance.
-Preserve his newer85 imports/1104 title overrides; old release snapshots are not
-restore targets. This October30 planning pass changed documentation/evidence only.
+Implementation has begun with captured-import manual grid drafts, a measured
+whole-tempo prior, durable delete presentation and common vector sidebar geometry.
+Current validation/installed status lives in HANDOFF. These are not native source
+authority: registration, detected-analysis publication and broader metadata still
+need their own proofs/acceptance. Drafts retain raw detector data and do not
+become a competing final musical store.
+Preserve his newer87 imports/1105 title overrides; old release snapshots are not
+restore targets. The original planning pass changed documentation/evidence only;
+Sonny has now resumed implementation. Closing rekordbox does not broaden the
+existing accepted write scopes.
+
+October30 continued registration foundations are in
+`research/native_library`: independent bare-WAV row construction, marked-TEMP
+encrypted transactions/recovery and pure component/identity contracts. Core
+workspaces stay copy-only. A separate unintegrated one-plan source pilot accepts
+only the known generated SoundBox-first WAV, requires its own exact-plan approval,
+closed native apps/SoundBox and shared native-edit lock/journal. Cue transport
+reuse grants no Cue permission. Old synthetic-row/playlist approvals never
+authorize this pilot. No production app integration or registration/analysis
+authority exists; successful source SQL still needs native acceptance.
+The original frozen import interval retains explicit agentRegistry differences;
+strict replay of that old interval still reports a full mismatch. The newer
+startup-complete bare-import reference passes the entire semantic inventory/XML
+without exclusions; this is not source-writer acceptance. HANDOFF records current
+initial-analysis evidence and the next native gate. Existing accepted writer
+permissions remain unchanged.
+
+October30 import-flow correction: Sonny added Innerbloom (`sb-19a5565cfb6d`,
+140BPM/6A); that checkpoint had86 imports/1105 title overrides. Existing
+imports must benefit without reimport/reanalysis. Manual and automatic analysis
+now use a per-song background queue without popup/progress bar, updating each
+finished row independently. Captured imports admit local grid/cue drafts while
+native shared registration/publication remains unfinished. Cloud timestamp drift
+requires exact-byte verification before reusing completed analysis; it must not
+force a fallback grid/reload. See HANDOFF for validation/installed status.
+
+Initial-analysis continuation: `research/native_library/analysis_pilot.py` is a
+separate unintegrated source adapter for only the already accepted generated
+SoundBox-first track ID190717052/UUID2e47171e-a854-4b9c-be9b-128e28202cce
+and its exact known audio digest. It requires its own concrete plan and approval;
+the bare registration grant explicitly excluded analysis. It shares the native
+lock/journal, guards closed apps and native-share identity, stages encrypted
+DB/XML/packet evidence and recovers only exact DB/directory states. Preparation
+remains copy-only; no approval, native analysis acceptance or production authority
+is inferred. Sonny subsequently approved the exact prepared initial-analysis
+plan and it committed on the generated reference only. Native reopen/load/save/
+quit acceptance passed with exact target/packet preservation (see HANDOFF). This
+accepts only the known generated WAV; no general format/gain/endpoint policy or
+production authority was provisioned. Keep the
+core offline adapters TEMP-only and preserve all evidence.
+
+October31 continuation: the bundled read-only media header probe and separate
+`media_workspace`/`media_pilot` add recoverable multi-format registration proofs.
+The original WAV markers/scopes remain narrow. A ten-generated-file batch is
+prepared with encrypted paired evidence; it requires its own exact-plan source
+approval and native acceptance. Sonny approved that exact batch and publication
+committed; native reopen/normal-quit acceptance passed on all ten references.
+No general registration authority is provisioned. Durable detection restart
+intents are installed after the1811-test gate; the separate registration store and stable-ID bridge pass TEMP proofs but
+have no production authority or desktop import caller. Immediate native playlist
+create/rename/membership presentation is installed after the1836-test combined
+phase verification; HANDOFF retains the initial Cocoa cadence miss and clean
+full native recheck. The real library identity bridge remains unactivated. See HANDOFF for
+tested versus installed state and the fresh post-quit curated baseline.
+
+October31 wrap-up priority from Sonny: **start next session with direct shared
+imports**. Brand-new files must drop straight onto any native rekordbox playlist
+without a Collection-first step; SoundBox Collection imports must automatically
+register/reuse the song in rekordbox Collection. Both paths remain broken in the
+installed build. Preserve WHOLE CLUB ROCKIN (`sb-5adee0814145`,174BPM/9A) and
+Innerbloom (`sb-19a5565cfb6d`,140BPM/6A) without reimport/reanalysis. Complete
+identity-safe registration, durable destination/membership routing and both
+Collection views before RGB or more UI polish. Bare registration/membership
+must work with analysis off; broader native analysis publication must not block
+this first delivery. The accepted ten-file pilot is
+not ordinary import integration. HANDOFF gives the exact starting boundary.
 
 ## Runtime instruction parity
 
@@ -76,8 +148,12 @@ repository can answer the question.
   Abrupt exit can lose not-yet-started RAM intents. Transport state edges must not
   scan library artwork or trigger device discovery. Grid native references and
   actual-source downbeat/BPM acceptance passed October 27. Intelligent-playlist creation remains disabled pending its own proof.
-  Sonny operates the rekordbox UI for reference/acceptance actions;
-  ask for specific actions rather than driving it remotely. See `docs/rekordbox-prep.md`.
+  Sonny normally operates the rekordbox UI for reference/acceptance actions.
+  On October30 he explicitly authorized slow, careful computer control to finish
+  the generated native reference checks. Verify the screen and a single exact
+  fixture selection before each edit; capture and verify the resulting delta.
+  This does not authorize edits to real music, destructive operations or new
+  source SQL publishers. See `docs/rekordbox-prep.md`.
 - Ordinary desktop playlist/folder create, rename and delete plus registered-track
   append/remove passed native acceptance October30 through
   `soundbox.rekordbox_playlist_store`. Its separate explicit authority binds the
@@ -645,6 +721,19 @@ material are not application rollbacks and remain protected.
 
 Moving/replacing the `.app` bundle must never touch
 `~/Library/Application Support/LowFreqLabs/Soundbox/`.
+
+## Diagnostic retention — October31 cleanup request
+
+Sonny explicitly requested cleanup of excessive backup/diagnostic storage and
+extra apps/packaging. Completed redundant playlist diagnostic DB checkpoints and
+obsolete app/build/scratch copies were retired; exact receipts are in HANDOFF.
+Current recovery/acceptance archives, active shared-library references and required
+fixtures remain protected. Keep future diagnostics lean: reuse existing snapshots
+for inspections, retain full DB pairs only when acceptance/recovery requires them,
+and remove generated packaging/scratch output after verified installation. Do not
+create a new full-library capture for every status/UI check. Preserve small
+comparison/approval/install receipts. Current preservation baseline is87 imports,
+1105 titles,490 artist overrides and520 hidden tracks; never reset older state.
 
 ## Private / out of scope
 

@@ -659,7 +659,7 @@ A current compact record stays on the small-manifest path. A legacy detail model
 or mode whose provenance still says `soundbox-analysis` may probe its current
 read-only PWV3/PWV5/PWV7 payload; unchanged ineligible records reuse receipts. A newly valid stream
 queues only that track for a normal atomic recook. The browser's per-track
-**Reanalyze Track** action remains the explicit recovery path and deliberately
+**Rebuild Waveform** action remains the explicit recovery path and deliberately
 bypasses the ready-manifest shortcut for only the selected record. Both routes
 decode the unchanged source again and publish a verified V5 replacement. The
 old playable cache stays in place if decoding or storage fails, a loaded deck
@@ -720,7 +720,7 @@ rechecks completion and dataless status after waiting, never runs a full analyze
 when a compact upgrade fails, and retains the prior record on cancellation/failure.
 Manual grid/cue ownership and authoritative DB cues survive conversion. Preparation
 receipts include the compact model, so older ready receipts cannot suppress the
-new work. Reanalyze Track uses the same import-first path. Dataless old-cache
+new work. Rebuild Waveform uses the same import-first path. Dataless old-cache
 upgrades defer until the source becomes local; no background download is requested.
 
 The compact import path also supports local AAC/ALAC through QAudioDecoder when
@@ -1117,10 +1117,21 @@ Hot/Memory cue and grid source protocols. Installed provenance and user review
 status are in HANDOFF. Grid controls set a bar start, nudge the entire grid by
 the zoom-scaled 50/25/10/5/3/2/1-ms step (Shift triples it), double or halve
 constant BPM. The closest 1152–1500 views retain 1/3-ms precision. Buttons require the loaded
-accepted track, exact source identity, a valid grid and Analysis Lock off.
+accepted native track, exact source identity, a valid grid and Analysis Lock off.
+Unregistered imports with captured BPM/Grid analysis now have a separate manual
+draft route through the same controls. It preserves the detector's raw estimate,
+anchor/cues and exact capture binding, commits the draft before updating browser
+and RAM grid, and survives restart/reanalysis. It never calls the native writer.
+Waveform-only fallback grids remain ineligible for this route. See HANDOFF for
+installed status and the shared-workflow plan for remaining native persistence.
+Completed detection replaces the loaded fallback in place. A stale waveform does
+not require reloading before editing. Local translations discard rows past EOF,
+including a detected beat exactly at the audio endpoint. Unregistered captured
+imports admit Hot/Memory Cue drafts through the same controls, persisted before
+live cue publication and preserved through later grid edits/reanalysis.
 The BPM field shows `000.00` while empty and loaded/session BPM with two decimals.
 Inputs such as `138`, `138.0` and `138.00` submit the same exact hundredths and
-reconcile to `138.00`. Manual entry requires separate native acceptance for the library and a constant
+reconcile to `138.00`. Native manual entry requires separate acceptance for the library and a constant
 grid. Enter submits the captured track/value; Escape or focus loss cancels typing.
 Track changes abandon unfinished input. A disputed final beat can use the source
 worker's bounded PCM header endpoint proof, with native-tested exact-EOF inclusion;
@@ -1151,6 +1162,21 @@ See [ROADMAP](ROADMAP.md) and the prep protocol for exact limits.
 
 ## Explicit analysis default — October30
 
+Automatic and manual analysis run in the background, without a popup, progress
+bar or routine success footer. Settings supply manual Analyze Track options.
+Folder drops expand off the GUI thread; all admitted songs enter Collection
+before container metadata probing and detection. Each finished song saves and
+updates its BPM/Key row independently and is immediately editable; later songs
+continue in the queue. Existing completed imports use this same edit route.
+Pending detection persists before worker admission; each result and its job
+retirement save together. Interrupted jobs resume after the matching library
+loads, using their captured settings; failed jobs wait for explicit Analyze Track.
+Both the loaded-track and browser context menus offer Analyze Track. Rebuild
+Waveform separately refreshes the disposable display cache and preserves musical
+data. Neither detection admission nor restart displays an analysis popup/bar.
+Playback verifies unchanged captured bytes across cloud metadata drift instead
+of silently dropping completed analysis for a waveform fallback.
+
 Analyze Track uses the pinned RBXport adaptive/high-precision pipeline: tempo
 following, attack placement, arrangement downbeats and the existing default key
 rules. The selected BPM range still applies. Normal/Performance/Power saving are
@@ -1163,3 +1189,9 @@ constant-v1 results remain usable; partial/inconclusive reanalysis preserves
 previous components for the same bytes and records their actual engine provenance.
 This separate explicit detector does not replace the waveform fallback analyzer
 or invalidate existing caches. See the [audit](rbxport-reference-audit-2026-10.md).
+
+The follow-up whole-v3 caller evaluates a nearby integer only for fully measured
+steady results, using three-section onset fits and consistent captured attack
+phase before regenerating the grid. Raw estimates and the fit measurements remain
+available; fractional/variable and legacy results stay valid. This policy is
+independent of manual input, native grids and the automatic-analysis toggle.

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import logging
+from pathlib import Path
 import time
 
 from PySide6.QtCore import QObject, QTimer
@@ -12,9 +14,10 @@ from soundbox.library import Playlist
 from soundbox.rekordbox_playlist_store import PlaylistStore, load_authority, request_for, validate_request
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed
 from .choices import Menu
-from .trees import PATH_ROLE, RB_NODE_ROLE
+from .trees import COLLECTION_ROLE, PATH_ROLE, RB_NODE_ROLE
 
 QUEUE='rekordbox_playlist_edits'
+LOG=logging.getLogger('soundbox')
 
 
 
@@ -58,9 +61,14 @@ class PlaylistEditController(QObject):
 
     def status(self,message):
         if self.tags.playlist_update_status!=message:
+            previous=self.tags.playlist_update_status
             self.tags.playlist_update_status=message;self.tags.changed.emit()
+            w=self.window
+            if not message and previous and getattr(w,'_prep_update_message',None)==previous:
+                w._prep_update_message='';w._set_status_text('Ready')
 
     def enqueue(self, request):
+        started=time.monotonic()
         validate_request(request)
         reason=self.reason()
         if reason:self.window._flash_status(reason,10);return False
@@ -73,7 +81,11 @@ class PlaylistEditController(QObject):
             if old:w.settings[QUEUE]=old
             else:w.settings.pop(QUEUE,None)
             return False
-        self.status('Saving playlist edits to rekordbox…');self.schedule();return True
+        admitted=time.monotonic()
+        w._native_pending_changed(rebuild=True)
+        LOG.info('Playlist intent admitted: operation=%s persist_ms=%.2f feedback_ms=%.2f',
+                 request['operation'],(admitted-started)*1000,(time.monotonic()-started)*1000)
+        self.status('Saving playlist edits…');self.schedule();return True
 
     def schedule(self):
         if self.closing:return
@@ -142,8 +154,7 @@ class PlaylistEditController(QObject):
                 self.fail('Saved in rekordbox; SoundBox state could not be saved. Retry after fixing storage.');return
             self.not_before=0
             if not self.closing:w._native_refresh_view(job['request'])
-            self.status('Saving playlist edits to rekordbox…' if self.pending else '')
-            w._flash_status('Saved to rekordbox ✓',6)
+            self.status('Saving playlist edits…' if self.pending else '')
             self.schedule()
         self.tags.run_playlist_job(work,completed)
 
@@ -152,6 +163,8 @@ class PlaylistEditController(QObject):
         jobs=deepcopy(self.pending)
         if jobs:
             jobs[0]['error']=message;w.settings[QUEUE]=jobs;w._save_state()
+        w._native_pending_changed(rebuild=True)
+        w._native_reconcile_source()
         self.status('Rekordbox playlist edit needs attention — '+message)
 
     def retry(self):
@@ -160,6 +173,7 @@ class PlaylistEditController(QObject):
         w=self.window;previous=deepcopy(self.pending);jobs=deepcopy(previous)
         jobs[0].update(error='',retry=True);w.settings[QUEUE]=jobs
         if w._save_state():
+            w._native_pending_changed(rebuild=True)
             self.status('Retrying rekordbox playlist edit…');self.not_before=0;self.schedule()
         else:w.settings[QUEUE]=previous
 
@@ -171,28 +185,122 @@ class PlaylistEditController(QObject):
                 QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
         previous=deepcopy(self.pending);w.settings[QUEUE]=[]
         if not w._save_state():w.settings[QUEUE]=previous
-        else:self.timer.stop();self.status('')
+        else:
+            self.timer.stop();self.status('');w._native_pending_changed(rebuild=True)
+            w._native_reconcile_source()
 
     def stop(self):
         self.closing=True;self.timer.stop()
 
 
 class NativePlaylistsMixin:
+    def _native_reconcile_source(self):
+        """Request a fresh owned snapshot after a failed/discarded source intent."""
+        refresh=getattr(self,'_start_rekordbox_refresh',None)
+        if (not refresh or self._shutting_down or not self.lib
+                or self.lib.source_kind!='rekordbox-db'):return
+        if self.tag_controller.owned or getattr(self,'_refresh_worker',None) is not None:
+            self._refresh_pending=True
+        else:
+            refresh(Path(self.lib.source))
+
+    def _native_presentation(self):
+        controller=getattr(self,'playlist_controller',None)
+        if not self.lib or not controller or controller.queue_error():return self.lib
+        from soundbox.playlist_presentation import project
+        return project(self.lib,controller.pending)
+
+    def _native_pending_deletions(self):
+        """Rows absent from this source's durable presentation, including new IDs."""
+        controller=getattr(self,'playlist_controller',None);lib=self.lib
+        if not lib or not controller or controller.queue_error() or not controller.pending:return set()
+        known={r['ID'] for r in lib.source_playlist_catalog.get('nodes',[]) if r['rb_local_deleted']==0}
+        known|={job['request']['playlist_id'] for job in controller.pending
+                if job['source']==str(lib.source) and job['library_id']==lib.source_library_id
+                and job['request']['operation']=='create'}
+        visible={r['ID'] for r in self._native_presentation().source_playlist_catalog.get('nodes',[]) if r['rb_local_deleted']==0}
+        return known-visible
+
+    def _native_pending_changed(self, *, rebuild=False):
+        # The small test controller host has no sidebar; source behavior remains
+        # independently testable. The desktop applies this in the admission turn.
+        if not hasattr(self,'tree') or self.lib is None:return
+        removed=self._native_pending_deletions()
+        identity=(str(self.lib.source),self.lib.source_library_id) if self.lib else None
+        expanded=(set(getattr(self,'_pending_native_expansion',set()))
+                  if identity==getattr(self,'_pending_native_identity',None) else set())
+        self._pending_native_identity=identity
+        def remember(parent):
+            for i in range(parent.childCount()):
+                item=parent.child(i)
+                if item.isExpanded():expanded.add(item.data(0,RB_NODE_ROLE))
+                remember(item)
+        remember(self.tree.invisibleRootItem())
+        self._pending_native_expansion=expanded
+        current=getattr(self,'_view_key','') or ''
+        active=getattr(self,'_active_native_playlist_id',None)
+        if current.startswith('rb:') and not active:
+            active=next((p.pid for p in self.lib.playlists if p.display_path==current[3:]),None)
+        if current.startswith('rb:') and active in removed:
+            self._stash_view();self._active_native_playlist_id=None
+            self._select_only(self.sb_tree)
+            item=self.sb_tree.topLevelItem(0)
+            if item and item.data(0,COLLECTION_ROLE):
+                self.sb_tree.blockSignals(True)
+                try:self.sb_tree.setCurrentItem(item)
+                finally:self.sb_tree.blockSignals(False)
+            self._show_collection()
+            self._restore_view('sb:Collection')
+        if rebuild:
+            if current.startswith('rb:') and active:
+                updated=next((p for p in self._native_presentation().playlists if p.pid==active),None)
+                if updated:self._view_key='rb:'+updated.display_path
+            self._populate_tree(engine.summary(self.lib))
+            if current.startswith('rb:') and active not in removed:self._reload_current_view()
+            def restore(parent):
+                for i in range(parent.childCount()):
+                    item=parent.child(i)
+                    if item.data(0,RB_NODE_ROLE) in expanded:item.setExpanded(True)
+                    restore(item)
+            self._accordion_guard=True
+            try:restore(self.tree.invisibleRootItem())
+            finally:self._accordion_guard=False
+        else:
+            def prune(parent):
+                for i in range(parent.childCount()-1,-1,-1):
+                    item=parent.child(i)
+                    if item.data(0,RB_NODE_ROLE) in removed:parent.takeChild(i)
+                    else:prune(item)
+            self.tree.blockSignals(True)
+            try:prune(self.tree.invisibleRootItem())
+            finally:self.tree.blockSignals(False)
+
     def _native_view_playlist(self,path):
-        if not self.lib:return None
+        lib=self._native_presentation()
+        if not lib:return None
         identity=getattr(self,'_active_native_playlist_id',None)
-        return next((p for p in self.lib.playlists if p.pid==identity and p.display_path==path),None) or next(
-            (p for p in self.lib.playlists if p.display_path==path),None)
+        return next((p for p in lib.playlists if p.pid==identity and p.display_path==path),None) or next(
+            (p for p in lib.playlists if p.display_path==path),None)
 
     def _native_node(self, identity):
-        return next((r for r in self.lib.source_playlist_catalog.get('nodes',[]) if r['ID']==identity),None) if self.lib else None
+        lib=self._native_presentation()
+        return next((r for r in lib.source_playlist_catalog.get('nodes',[]) if r['ID']==identity),None) if lib else None
 
     def _native_request(self, operation, **kwargs):
         reason=self.playlist_controller.reason()
         if reason:self._flash_status(reason,10);return False
-        try:request=request_for(self.lib.source_playlist_catalog,operation,**kwargs)
+        # Only target identity/presentation comes from the projected view. The
+        # captured revision remains the verified source baseline; FIFO rebase
+        # renews it after preceding accepted operations commit.
+        try:request=request_for(self._native_presentation().source_playlist_catalog,operation,**kwargs)
         except (ValueError,KeyError) as exc:self._flash_status(str(exc),10);return False
-        return self.playlist_controller.enqueue(request)
+        accepted=self.playlist_controller.enqueue(request)
+        if accepted and operation=='create' and hasattr(self,'tree'):
+            item=self._find_tree_item('',request['playlist_id'])
+            if item:
+                if item.data(0,PATH_ROLE):self.tree.setCurrentItem(item)
+                else:item.setExpanded(True)
+        return accepted
 
     def _native_new(self, parent='root', *, folder=False):
         label='Folder' if folder else 'Playlist'
@@ -200,7 +308,7 @@ class NativePlaylistsMixin:
         name=name.strip()
         if not ok or not name:return
         if any(r['ParentID']==parent and r['Name']==name and r['rb_local_deleted']==0
-               for r in self.lib.source_playlist_catalog['nodes']):
+               for r in self._native_presentation().source_playlist_catalog['nodes']):
             self._flash_status('A playlist or folder with that name already exists here',8);return
         self._native_request('create',name=name,parent=parent,folder=folder)
 
@@ -210,7 +318,7 @@ class NativePlaylistsMixin:
         name,ok=QInputDialog.getText(self,'Rename rekordbox playlist','New name:',text=row['Name'])
         name=name.strip()
         if any(other['ID']!=identity and other['ParentID']==row['ParentID'] and other['Name']==name
-               and other['rb_local_deleted']==0 for other in self.lib.source_playlist_catalog['nodes']):
+               and other['rb_local_deleted']==0 for other in self._native_presentation().source_playlist_catalog['nodes']):
             self._flash_status('A playlist or folder with that name already exists here',8);return
         if ok and name and name!=row['Name']:
             self._native_request('rename',identity=identity,name=name)
@@ -232,9 +340,9 @@ class NativePlaylistsMixin:
         if row is None or row['Attribute']!=0:return
         existing={r['ContentID'] for r in self.lib.source_playlist_catalog['members']
                   if r['PlaylistID']==identity and r['rb_local_deleted']==0}
-        duplicates=[t.track_id for t in tracks if t.track_id in existing]
+        duplicates=[t.track_id for t in tracks if t.native_id in existing]
         allow=bool(duplicates) and self._confirm_duplicate_add(row['Name'],duplicates)
-        selected=tracks if allow else [t for t in tracks if t.track_id not in existing]
+        selected=tracks if allow else [t for t in tracks if t.native_id not in existing]
         if selected:self._native_request('append',identity=identity,tracks=selected,allow_duplicate=allow)
 
     def _native_remove(self, path, ids):
@@ -271,6 +379,7 @@ class NativePlaylistsMixin:
 
     def _native_apply_catalog(self,catalog,request):
         lib=self.lib;old={p.pid:p for p in lib.playlists}
+        native_tracks={t.native_id:t for t in lib.tracks_by_id.values()}
         active={r['ID']:r for r in catalog['nodes'] if r['rb_local_deleted']==0 and r['Attribute'] in (0,1,4)}
         children={}
         for row in active.values():children.setdefault(row['ParentID'],[]).append(row)
@@ -283,7 +392,8 @@ class NativePlaylistsMixin:
                 if row['ID'] in seen:raise ValueError('Native folder cycle')
                 if row['Attribute']==1:walk(row['ID'],path+[row['Name']],seen|{row['ID']})
                 elif row['Attribute']==0:
-                    keys=[r['ContentID'] for r in sorted(by_playlist.get(row['ID'],[]),key=lambda r:r['TrackNo'])]
+                    keys=[native_tracks[r['ContentID']].track_id if r['ContentID'] in native_tracks else r['ContentID']
+                          for r in sorted(by_playlist.get(row['ID'],[]),key=lambda r:r['TrackNo'])]
                     result.append(Playlist(row['Name'],path,keys,row['ID']))
                 elif row['ID'] in old:
                     result.append(Playlist(row['Name'],path,list(old[row['ID']].keys),row['ID']))
@@ -294,16 +404,18 @@ class NativePlaylistsMixin:
         pins=self.settings.setdefault('rekordbox_collection_tracks',{}).setdefault(lib.source_library_id,{})
         affected={t['track_id'] for t in request['tracks']}
         if request['operation']=='delete':
-            affected|={tid for p in lib.playlists if p.pid not in active for tid in p.keys}
+            affected|={lib.tracks_by_id[tid].native_id for p in lib.playlists if p.pid not in active for tid in p.keys if tid in lib.tracks_by_id}
         for tid in affected:
-            track=lib.tracks_by_id.get(tid)
+            track=native_tracks.get(tid)
             if track and track.source_uuid:pins[tid]=track.source_uuid
         current=getattr(self,'_view_key','') or ''
         prior=(self._native_view_playlist(current[3:]).pid if current.startswith('rb:') and self._native_view_playlist(current[3:]) else None)
         lib.playlists=result;lib.source_playlist_catalog=catalog
         if request['operation']=='remove':
             bag=self.removals.get(request['playlist_id'],{})
-            for track in request['tracks']:bag.pop(track['track_id'],None)
+            for track in request['tracks']:
+                current_track=native_tracks.get(track['track_id'])
+                bag.pop(current_track.track_id if current_track else track['track_id'],None)
             if not bag:self.removals.pop(request['playlist_id'],None)
         if prior:
             updated=next((p for p in result if p.pid==prior),None)
@@ -312,16 +424,4 @@ class NativePlaylistsMixin:
 
     def _native_refresh_view(self,request):
         self._populate_tree(engine.summary(self.lib));self._reload_current_view()
-        if request['operation']=='create':
-            def find(parent):
-                for i in range(parent.childCount()):
-                    item=parent.child(i)
-                    if item.data(0,RB_NODE_ROLE)==request['playlist_id']:return item
-                    found=find(item)
-                    if found:return found
-                return None
-            item=find(self.tree.invisibleRootItem())
-            if item:
-                if item.data(0,PATH_ROLE):self.tree.setCurrentItem(item)
-                else:item.setExpanded(True)
         self._cache_library();self._refresh_devices();self._refresh_graveyard()

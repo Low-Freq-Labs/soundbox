@@ -3656,18 +3656,26 @@ class TrackReanalysisMenu(unittest.TestCase):
     def test_singular_and_plural_actions_route_exact_selection(self):
         from PySide6.QtWidgets import QMenu
 
-        with mock.patch.object(_win, "_reanalyze_tracks") as reanalyze:
+        with mock.patch.object(_win, "_reanalyze_tracks") as reanalyze, \
+                mock.patch.object(_win, "_analyze_tracks") as analyze:
             one = QMenu(_win)
             _win._add_track_reanalysis_action(one, ["1"])
-            self.assertEqual(one.actions()[0].text(), "Reanalyze Track")
+            self.assertEqual([a.text() for a in one.actions()],["Analyze Track","Rebuild Waveform"])
             one.actions()[0].trigger()
+            analyze.assert_called_once_with(("1",))
+            reanalyze.assert_not_called()
+            one.actions()[1].trigger()
             reanalyze.assert_called_once_with(("1",))
 
             reanalyze.reset_mock()
+            analyze.reset_mock()
             many = QMenu(_win)
             _win._add_track_reanalysis_action(many, ["1", "2"])
-            self.assertEqual(many.actions()[0].text(), "Reanalyze 2 Tracks")
+            self.assertEqual([a.text() for a in many.actions()],["Analyze 2 Tracks","Rebuild 2 Waveforms"])
             many.actions()[0].trigger()
+            analyze.assert_called_once_with(("1","2"))
+            reanalyze.assert_not_called()
+            many.actions()[1].trigger()
             reanalyze.assert_called_once_with(("1", "2"))
 
 
@@ -6261,7 +6269,7 @@ class PlayerHardening(unittest.TestCase):
             _state_maintenance=False, _shutting_down=False,
             _device_operation_owned=lambda: False,
             tag_controller=SimpleNamespace(lib=Library({'nudge': track}, [], 'synthetic')),
-            grid_controller=SimpleNamespace(reason=lambda *_a, **_k: '',
+            grid_controller=SimpleNamespace(reason=lambda *_a, **_k: '', is_local=lambda _tid: False,
                 request=lambda *a, **k: saved.append((a, k)) or True))
         try:
             pb._track_id='nudge'; pb._src_path=str(track.path)

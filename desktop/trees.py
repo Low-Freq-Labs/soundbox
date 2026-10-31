@@ -6,8 +6,10 @@ display_path), cust (custom playlist name), trk (comma-joined track ids).
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QTableView,
     QTreeWidget, QTreeWidgetItem, QStyle, QStyleOptionViewItem,
@@ -193,33 +195,63 @@ class ArtistsTree(NoTypeAhead, QTreeWidget):
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
 
+def sidebar_row_geometry(rect, indentation=16):
+    """One branch/icon center and label start for every sidebar row kind."""
+    rect=QRectF(rect)
+    center=rect.left()-indentation/2+6
+    return (QRectF(center-6,rect.center().y()-6,12,12),rect.adjusted(8,0,-4,0))
+
+
+def _sidebar_icon(painter, box, kind, expanded=False):
+    path=QPainterPath()
+    if kind=='folder':
+        if expanded:path.moveTo(-4,-2);path.lineTo(0,2);path.lineTo(4,-2)
+        else:path.moveTo(-2,-4);path.lineTo(2,0);path.lineTo(-2,4)
+    elif kind=='home':
+        path.moveTo(-5,0);path.lineTo(0,-5);path.lineTo(5,0)
+        path.moveTo(-3.5,-1.5);path.lineTo(-3.5,5);path.lineTo(3.5,5);path.lineTo(3.5,-1.5)
+        path.moveTo(-1,5);path.lineTo(-1,1);path.lineTo(1,1);path.lineTo(1,5)
+    elif kind=='star':
+        for i in range(10):
+            angle=-math.pi/2+i*math.pi/5;radius=5 if i%2==0 else 2.3
+            point=(radius*math.cos(angle),radius*math.sin(angle))
+            if i:path.lineTo(*point)
+            else:path.moveTo(*point)
+        path.closeSubpath()
+    else:
+        path.addEllipse(QRectF(-4.5,1,4.5,3.5))
+        path.moveTo(0,2.5);path.lineTo(0,-5)
+        path.cubicTo(0,-2.5,4.5,-3,4.5,0)
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing,True)
+    # Center actual vector bounds, avoiding font bearings and asymmetric glyphs.
+    center=box.center()-path.boundingRect().center()
+    painter.translate(center)
+    pen=QPen(painter.pen().color(),1.25,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin)
+    painter.setPen(pen);painter.setBrush(Qt.NoBrush);painter.drawPath(path)
+    painter.restore()
+
+
 class _PlaylistDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         option = QStyleOptionViewItem(option)
         self.initStyleOption(option, index)
-        # Fill the original row before insetting its contents, so selected
-        # nested leaves have no gap between the branch and label backgrounds.
-        option.widget.style().drawPrimitive(
-            QStyle.PE_PanelItemViewItem, option, painter, option.widget)
-        option.rect.adjust(6, 0, 0, 0)
-        # A leaf's icon occupies the branch column, just as a folder's chevron
-        # does. Keep the model text/roles and the tree's hit/drag geometry intact.
-        if any(index.data(role) for role in (PATH_ROLE, CUSTOM_ROLE, COLLECTION_ROLE, ARTISTS_ROLE)):
-            self.initStyleOption(option, index)
-            icon, separator, text = option.text.partition('  ')
-            if separator:
-                option.text = text
-                style = option.widget.style()
-                style.drawControl(QStyle.CE_ItemViewItem, option, painter, option.widget)
-                painter.save()
-                selected = bool(option.state & QStyle.State_Selected)
-                painter.setPen(QColor(theme.ON_ACCENT if selected else theme.TEXT))
-                branch = option.rect.adjusted(-self.parent().indentation(), 0,
-                    -option.rect.width(), 0)
-                painter.drawText(branch, Qt.AlignCenter, icon)
-                painter.restore()
-                return
-        super().paint(painter, option, index)
+        icon,text=sidebar_row_geometry(option.rect,self.parent().indentation())
+        panel=QStyleOptionViewItem(option)
+        panel.rect.setLeft(0)
+        option.widget.style().drawPrimitive(QStyle.PE_PanelItemViewItem,panel,painter,option.widget)
+        kind=('home' if index.data(COLLECTION_ROLE) else 'star' if index.data(CUSTOM_ROLE)
+              else 'note' if index.data(PATH_ROLE) or index.data(ARTISTS_ROLE) else 'folder')
+        label=option.text
+        if kind!='folder' and label.partition('  ')[0] in ('♪','⌂','★'):
+            label=label.partition('  ')[2]
+        painter.save();painter.setFont(option.font)
+        selected=bool(option.state & QStyle.State_Selected)
+        painter.setPen(QColor(theme.ON_ACCENT if selected else theme.TEXT))
+        _sidebar_icon(painter,icon,kind,bool(option.state & QStyle.State_Open))
+        painter.drawText(text,Qt.AlignVCenter|Qt.AlignLeft,
+                         option.fontMetrics.elidedText(label,Qt.ElideRight,max(0,int(text.width()))))
+        painter.restore()
 
 
 class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
@@ -231,10 +263,9 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
         self.setItemDelegate(_PlaylistDelegate(self))
 
     def drawBranches(self, painter, rect, index):
-        painter.save()
-        painter.translate(6, 0)
-        super().drawBranches(painter, rect, index)
-        painter.restore()
+        # The delegate paints the branch and icon through the same geometry.
+        # Qt still owns expansion hit testing and keyboard navigation.
+        pass
 
     @staticmethod
     def is_folder(item):
@@ -320,7 +351,8 @@ def _audio_paths(md) -> list[str]:
     if not md.hasUrls():
         return []
     return [u.toLocalFile() for u in md.urls()
-            if u.isLocalFile() and is_audio(Path(u.toLocalFile()))]
+            if u.isLocalFile() and (is_audio(Path(u.toLocalFile()))
+                                   or Path(u.toLocalFile()).is_dir())]
 
 
 class SoundBoxTree(PlaylistFolderTree):

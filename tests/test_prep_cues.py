@@ -277,6 +277,7 @@ class CueEditingInterface(unittest.TestCase):
             _refresh_worker=None, _state_maintenance=False, _shutting_down=False,
             _device_operation_owned=lambda: False, _selected_ids=lambda: ['another-track'],
             _flash_status=mock.Mock())
+        window._local_cue_reason = lambda _tid: None  # this fixture exercises native cues
         self.assertTrue(MainWindow._edit_cue(window, 'hot', 0, 'add'))
         controller.request_cue.assert_called_once_with('1', 'hot', 0, 'add', 10003)
 

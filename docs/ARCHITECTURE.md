@@ -78,7 +78,7 @@ lets a later coherent native export supersede an older interrupted catalog inten
 USB/global My Settings use44 logical fields and byte-preserving selected patches;
 no automatic global propagation. usb_format revalidates the reviewed physical USB
 before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_info
-overrides feed display/export; browsercache schema2 and libcache schema9 preserve
+overrides feed display/export; browsercache schema3 and libcache schema10 preserve
 these fields without analysis/art rebuilds. The ordinary desktop playlist API
 shares the accepted Tag/Cue/Grid lane and has separate explicit authority. The
 historical standalone pilot under research has only its exact-plan approval,
@@ -106,7 +106,19 @@ record through the normal codec, upload the data, and remove the temporary
 record before worker retirement; the canonical cache remains absent.
 Summary uses a large cover beside inline caption/value rows.
 
-`desktop.analysis` owns the Analysis tab/dialog and cancellable TaskOwner jobs.
+`desktop.analysis` owns the Analysis tab and cancellable TaskOwner jobs.
+Manual and automatic analysis use the same background queue, without a dialog
+or progress bar. Each song retires/joins and saves independently before the next
+starts; later imports join the queue. Failed songs do not discard earlier results
+or prevent subsequent analysis. Completion updates just that browser row and the
+loaded grid/cues, preserving transport, waveform geometry and the current view.
+`soundbox.analysis_jobs` persists bound source/library/track/path/UUID intentions
+before worker admission. Active work remains queued until its merged result and
+retirement save atomically. Restart waits for a matching loaded library and uses
+the captured preferences; errors persist without automatic retry. These pending
+intents contain no completed musical data or native write authority. Browser
+Analyze Track uses this same queue; Rebuild Waveform remains the separate
+disposable-cache repair path.
 Its three inset groups align labels and 30-point control rows; the section header
 and preservation note retain the outer edge.
 `soundbox.analysis` captures one hashed local audio snapshot, then the optimized
@@ -120,9 +132,51 @@ prior data/provenance for the same bytes. Results are durable
 `settings.analysis_results`, keyed by canonical path with SHA-256, exact source
 identity and engine provenance, allowing a direct import and later native ID to
 share data. Playback overlays detected fallback grids in its existing worker;
-native/manual grids and source cues win. No waveform-cache rewrite or source
-DB/ANLZ publication is enabled. Full two-way analysis remains the explicit next
+native/manual grids and source cues win. Captured imports can now retain a
+revisioned manual `grid_draft` beside the untouched detector record. StateRepository
+commits it before browser/native RAM grid changes; late workers merge the newest
+draft and preserve its BPM as well as its rows. `soundbox.local_cues` retains
+revisioned captured-import cue drafts with the same save-before-presentation rule.
+Playback revalidates timestamp drift through SourceVerificationCache and an exact
+captured digest before overlaying completed detection; current native/manual data
+still wins. Local grid edits use the saved result instead of vetoing a click because
+the loaded waveform delivered an older fallback grid. EOF translations clip
+trailing rows beyond the captured duration. No waveform-cache rewrite or new
+source DB/ANLZ publication is enabled. The whole-v3 caller adds a nearby-integer
+prior only after three-section onset and attack checks; it records raw estimates
+and preserves contrary fractional/variable evidence and legacy results.
+Full two-way analysis remains the explicit next
 acceptance gate; see [the accepted stage](analysis-playlists-next.md).
+
+Shared-library registration research is separate from runtime writers:
+`research/native_library` constructs the observed bare WAV row and proves
+encrypted original-TEMP-only transactions/recovery. Its pure component contract
+compares pending base/current/intended values without app-origin ownership. Core
+workspaces have no source publisher; separate generated-WAV one-plan registration
+and initial-analysis source pilots require their own approvals, closed apps and
+the shared edit lock/journal. Initial analysis binds the already accepted bare
+track, native-share inode and a previously absent three-file directory; exact
+before/after recovery preserves unknown DB/XML/file states. Registration approval
+does not authorize analysis, and source journal mode is never normalized.
+It has no production authority or app integration. The old native interval still has
+explicit unrelated registry differences; the newer startup-complete bare-import
+reference now matches the full native inventory/XML exactly. Neither proof provisions
+registration/analysis/metadata authority. See its README and HANDOFF.
+The October31 multi-format workspace uses a distinct original-TEMP marker and
+adapter. `soundbox.media_probe` reads technical facts from captured containers
+with bundled header parsers, rather than a development ffprobe executable.
+A separate ten-generated-file native registration batch passed its exact-plan
+approval, publication and native reopen/normal-quit acceptance. The general
+`soundbox.rekordbox_registration_store` has a separate authority loader, insert-
+only content/counter authorizer, exact-path reuse, paired encrypted recovery and
+ordinary bounded retention. TEMP replay matches the complete actual native AFTER.
+It has no production authority or desktop caller yet. Stable logical IDs can be
+projected with `native_identity` while `Track.native_id` retains the native SQL ID;
+cache10 records that identity. Import injection cannot overwrite a projected
+native track. The real library bridge is not activated until every source consumer
+and durable import queue uses these bindings. Source DB journal mode is unchanged;
+only an exactly verified private TEMP working copy may normalize its own WAL
+before retiring recovery.
 
 The playlist research path now has a byte-preserving XML codec and a marked-TEMP
 paired transaction proof. XML is durable before SQL commit; complete recorded
@@ -393,7 +447,7 @@ V5 remains ready while the recurring background worker queues eligible local
 records for compact conversion, one track at a time. Interactive playback still
 loads old analysis immediately and can finish a selected upgrade ahead of the queue.
 The old record survives interruption or failure; manual metadata ownership and
-DB cue authority survive replacement. Source changes, forced Reanalyze Track and
+DB cue authority survive replacement. Source changes, explicit Rebuild Waveform and
 late imports use the same preparation path. Dataless background reads remain
 deferred and per-track preparation receipts still avoid repeated work. The receipt
 policy includes the compact model so old ready receipts cannot hide pending
@@ -1227,9 +1281,12 @@ replays,12 actual CRUD operations and Sonny's native inspection/normal quit.
 the Tag/Cue/Grid TaskOwner, waits for closed native apps, verifies source saves,
 and persists renewed retry identities/clocks before publication. A committed
 operation replays unchanged. Unstarted intents survive restart; active source
-work drains on normal quit. Collection UUID pins retain affected native songs
+work drains on normal quit. Durable matching-source/UUID delete intents project
+onto the sidebar immediately without changing the verified catalog/revision;
+source failure/discard restores the newest catalog presentation. Other pending
+create/rename/membership presentation remains separate work. Collection UUID pins retain affected native songs
 without granting registration or analysis authority. Raw playlist catalogs/clocks
-and empty folders travel in cache9; older snapshots paint read-only until verified.
+and empty folders travel in cache10; older snapshots paint read-only until verified.
 Catalog arrays encode bounded rows. CDJ capture also waits for durable playlist
 intents, rebinds native selections by PID, and rejects deleted selections or source
 changes before export. The ordinary backup-retirement pointer binds exact
@@ -1247,7 +1304,7 @@ rekordbox/agent process names through the OS, without a Python process walk or
 liveness cache. Library-cache serialization stays atomic but encodes/writes
 bounded records so the C JSON encoder cannot monopolize the GIL for a full library.
 
-Manual BPM uses the same immediate grid/FIFO path with a separate acceptance flag
+Native manual BPM uses the same immediate grid/FIFO path with a separate acceptance flag
 on library and track-bound authorities. Its native protocol additionally owns the
 primary contentFile hash/size/revision and AnalysisUpdated. Whole-row recovery
 binds those changes with DAT/EXT and SQL. Enter captures exact hundredths plus
@@ -1262,3 +1319,13 @@ same seven membership colors as the main lane. Its former dominant-band function
 is removed. No cache/schema/clock/transport change is required. Native before/after
 captures preserve all39 checked main drawables across three modes/13zooms. BLUE
 and RGB palette/geometry and the accepted 3BAND main lane remain unchanged.
+
+
+Native playlist presentation now derives create, rename, append, remove and delete
+feedback from persisted FIFO requests. The view retains generated target identities,
+exact order and the verified base revision; source catalogs and normalized playlists
+remain unchanged until commit. A newer source revision, failed head or foreign
+library stops projection. Retry/discard rebuild against the current source. Sidebar
+and browser use only this view; native caches and device capture retain the verified
+source and existing save barrier. Nested pending creations can receive later edits;
+background completion no longer steals navigation to a newly created playlist.
