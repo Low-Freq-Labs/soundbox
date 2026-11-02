@@ -1,6 +1,6 @@
 # Release test gate
 
-Updated October28, 2026. `./check.sh` builds native deck/CDJ code, runs lint/types, validates the
+Updated November1, 2026. `./check.sh` builds native deck/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU tests use an offscreen Qt process; all `test_native_deck` cases
 use a fresh Cocoa process. Both are mandatory. `--native` remains a compatible
@@ -53,8 +53,14 @@ The October 2 correction made the fragment composite the joint coverage and
 visible color returned by `resolve_interval_surface`. BLUE retains that exact
 area contract. The October6 conservative occupied-column RGB presentation is
 historical: current RGB384 uses exact area, other stops retain only the monotonic
-faint-coverage shoulder below0.18. RGB now translates continuously at every zoom;
-BLUE retains physical-pixel increments through384 and logical points at576–1500.
+faint-coverage shoulder below0.18. Current RGB uses logical-point increments at
+576/864; the October31 visually accepted correction uses physical-pixel increments
+at64/128/184. Other RGB stops and3BAND remain continuous. BLUE retains physical-pixel
+increments through384 and logical points at576–1500. The production offset helper
+is compiled independently across all modes, zooms, scales, phases and overlapping
+tile origins; restoring fractional128/184 motion must violate the targeted contract.
+Native drawables verify the matching hold/one-pixel advance and retained translation.
+HANDOFF distinguishes current source/release/install evidence.
 The October28 RGB edge update integrates encoded channels and decodes the final
 encoded-space background blend for Metal; BLUE remains linear-light. Both existing
 height/coverage visibility lifts, source extrema/colors, LOD, clocks and one-pixel
@@ -129,3 +135,42 @@ It contains copied native metadata/profiles/analysis plus one captured WAV and a
 explicit synthetic DTO. No harness opens live devices, source DBs or AppData.
 Restore exact fixture bytes; missing or changed inputs fail instead of skipping.
 Only the renderer binary and license notices are packaged, not these inputs.
+
+October31 transport ring correction adds two production-QSS/controller pixel
+checks under three accents: fixed-orange mouse/keyboard CUE, no idle/held/playing
+hover difference, and exact release. Native Cocoa focused replay passes too.
+These isolate the widget-local generic-rule precedence failure without sending
+input to the user's app or changing transport/keyboard routing.
+
+The combined new-SB-vector/ring correction passed1907 tests (1847 offscreen,
+60 Cocoa), signed31-module/native/asset checks, isolated bundle smoke and real
+safe installation/preservation. Original generic-hover mutation is rejected by
+both new pixel tests. Eight modern PNG ICNS entries survive native readback
+exactly; real NSApplication captures verify saved-color SB artwork. HANDOFF
+records exact installed fingerprint and the separate user visual approval.
+
+October31 approved shine/green-PLAY refinement extends the existing play pixel
+check to five accents, requiring identical active pixels and a green ring, with
+no hover difference. Independent vector comparison confines gray correction to
+the upper shine streak (293 default/current-white pixels at1024px; all changed
+pixels become exact#a8a8a9, all other pixels/alpha exact). Native ICNS readback
+matches all eight PNG representations. Final1907-test gate, signed package/smoke
+and actual installed preservation pass; final screenshot also shows green PLAY
+under the user's off-white theme during his own playback. HANDOFF has provenance.
+
+
+November1, 2026 (October31 prep/visual continuation): sourcebc3da7c6… passes all
+1923 tests:1863 offscreen in1053.294s plus60 Cocoa in61.253s, zero skips or expected
+failures. Render inspected.46 focused Cue/Grid/recovery tests also pass offscreen
+and Cocoa, and the all-zoom native drawable motion case passes independently.
+The initial offscreen pass found an older paused-CUE expectation of gray; that
+assertion was corrected to the newer orange-while-held requirement. Two intermediate
+runs were interrupted for receipt-admission/shutdown review. Only the final complete
+passing pair is the release result. Package/install evidence lives in HANDOFF.
+
+November1 final icon-size follow-up: sourceac92458f… passes the complete1923-test
+render gate (1863 offscreen1016.014s +60 Cocoa62.000s), zero skips/expected failures.
+Three focused icon tests pass both platforms; eight PNG ICNS representations
+read back exactly.37 packaged Python modules and both native payloads equal the
+prior bc3 bundle; only SVG/PNG/ICNS change. Signed package/smoke/install/relaunch
+and latest93-import/nine-analysis preservation pass. HANDOFF records exact hashes.

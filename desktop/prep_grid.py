@@ -21,7 +21,7 @@ def _grid_icon(action: str) -> QIcon:
     if action == "downbeat":
         painter.setPen(QPen(QColor(theme.TEXT_HI), 2))
         painter.drawLine(QPointF(18, 5), QPointF(18, 12))
-        painter.setPen(QPen(QColor("#ff3748"), 2))
+        painter.setPen(QPen(QColor(theme.GRID_RED), 2))
         painter.drawLine(QPointF(18, 12), QPointF(18, 20))
     else:
         xs = (16, 20, 24) if action == "left" else (6, 10, 14)
@@ -158,6 +158,10 @@ def grid_edit_buttons(parent=None) -> list[QToolButton]:
         button.setFocusPolicy(Qt.NoFocus)
         button.setToolTip(description + "\nLoad an analyzed rekordbox track to edit its grid.")
         button.setEnabled(False)
+        if action in ('left','right'):
+            button.setAutoRepeat(True)
+            button.setAutoRepeatDelay(300)
+            button.setAutoRepeatInterval(80)
         buttons.append(button)
     return buttons
 

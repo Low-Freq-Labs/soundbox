@@ -11,6 +11,7 @@ from dataclasses import asdict
 from uuid import UUID
 
 from .native_media import MediaIdentity
+from .native_paths import AliasProof
 from .rekordbox_write import ConflictError, WriteProofError, _cell, _quote, _rows
 
 REQUEST_FORMAT='soundbox-native-registration-request-v1'
@@ -83,9 +84,20 @@ def validate_request(request):
         raise WriteProofError('Explicit bounded native registration binding required')
     identities=set();uuids=set();paths=set();local=set()
     for claim in request['tracks']:
-        if not isinstance(claim,dict) or set(claim)!={'local_id','audio','native_id','native_uuid','timestamp','day'}:
+        if (not isinstance(claim,dict) or set(claim) not in
+                ({'local_id','audio','native_id','native_uuid','timestamp','day'},
+                 {'local_id','audio','native_id','native_uuid','timestamp','day','aliases'})):
             raise WriteProofError('Unknown registration track claim')
         audio=MediaIdentity.from_dict(claim['audio']);_native_id(claim['native_id']);_uuid(claim['native_uuid'])
+        aliases=claim.get('aliases',[])
+        if not isinstance(aliases,list) or len(aliases)>10000:
+            raise WriteProofError('Invalid native alias claims')
+        alias_paths=set()
+        for value in aliases:
+            alias=AliasProof.from_dict(value)
+            if alias.canonical!=audio.path or alias.epoch!=audio.epoch or alias.path in alias_paths:
+                raise ConflictError('Native alias does not bind the captured media')
+            alias_paths.add(alias.path)
         if not isinstance(claim['local_id'],str) or not claim['local_id'] or '\0' in claim['local_id']:
             raise WriteProofError('Stable local track identity required')
         if (claim['native_id'] in identities or claim['native_uuid'] in uuids
@@ -98,8 +110,10 @@ def validate_request(request):
     return request
 
 
-def make_claim(local_id,audio,*,native_id,native_uuid,timestamp,day):
-    return dict(local_id=local_id,audio=asdict(audio),native_id=native_id,native_uuid=native_uuid,timestamp=timestamp,day=day)
+def make_claim(local_id,audio,*,native_id,native_uuid,timestamp,day,aliases=()):
+    claim=dict(local_id=local_id,audio=asdict(audio),native_id=native_id,native_uuid=native_uuid,timestamp=timestamp,day=day)
+    if aliases:claim['aliases']=list(aliases)
+    return claim
 
 
 def encoded_row(conn,table,identity):
@@ -128,8 +142,14 @@ def build_plan(conn,request):
     changes=[];bindings=[];guards=[];existing_ids=set()
     for claim in request['tracks']:
         audio=MediaIdentity.from_dict(claim['audio'])
-        cursor=conn.execute('SELECT * FROM djmdContent WHERE FolderPath=?',(audio.path,))
+        aliases=[AliasProof.from_dict(value) for value in claim.get('aliases',[])]
+        paths=[audio.path,*(alias.path for alias in aliases)]
+        cursor=conn.execute('SELECT * FROM djmdContent WHERE FolderPath IN ('+','.join('?' for _ in paths)+')',paths)
         names=[v[0] for v in cursor.description];matching=[dict(zip(names,v,strict=True)) for v in cursor.fetchall()]
+        for alias in aliases:
+            if not any(row['ID']==alias.native_id and row['UUID']==alias.native_uuid and row['FolderPath']==alias.path
+                       for row in matching):
+                raise ConflictError('Native alias row changed since capture')
         if matching:
             if len(matching)!=1 or type(matching[0]['rb_local_deleted']) is not int or matching[0]['rb_local_deleted']!=0:
                 raise ConflictError('Historical or ambiguous native path requires reconciliation')
@@ -154,4 +174,5 @@ def build_plan(conn,request):
             registered=True
         bindings.append(dict(local_id=claim['local_id'],source=request['source'],library_id=request['library_id'],
             native_id=row['ID'],native_uuid=row['UUID'],canonical=audio.path,registered=registered))
+        if row['FolderPath']!=audio.path:bindings[-1]['native_path']=row['FolderPath']
     return dict(changes=changes,bindings=bindings,guards=guards)

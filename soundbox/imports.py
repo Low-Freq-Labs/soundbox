@@ -1,7 +1,8 @@
 """Imported (non-rekordbox) tracks — livesets etc. added straight into SoundBox.
 
-rekordbox never sees these. Files are REFERENCED in place (never copied, moved,
-or re-tagged — the same sacred rules as rekordbox sources). Each import gets a
+Native registration is queued separately. Files are referenced in place. The
+explicit float32-WAVE import exception replaces only unregistered audio with
+verified PCM24 and retains exact originals; other sources are never rewritten. Each import gets a
 stable ``sb-…`` id (can never collide with rekordbox's numeric TrackIDs), is
 recorded in library.json, and is injected into every loaded Library so it shows
 up in Collection, SoundBox playlists, art fetch and exports like any other
@@ -235,8 +236,11 @@ def inject(lib: Library, imported: dict, *, repair_missing=True) -> int:
     """Merge the imported tracks into a (re)loaded Library. Idempotent — safe
     to call after every rekordbox refresh. Missing legacy metadata is repaired
     from read-only source headers before Track rows are built."""
-    changed = refresh_metadata(imported) if repair_missing else 0
-    for tid, rec in imported.items():
+    # A removed native song must not be resurrected as a local Collection row.
+    # Keep its original record/drafts in durable state for recovery, not display.
+    available = {tid:rec for tid,rec in imported.items() if tid not in lib.source_binding_issues}
+    changed = refresh_metadata(available) if repair_missing else 0
+    for tid, rec in available.items():
         existing = lib.tracks_by_id.get(tid)
         # A verified native identity projection must retain source BPM/grid/cues.
         # The import record remains migration/curation input, not a replacement.

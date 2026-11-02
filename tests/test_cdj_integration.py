@@ -401,6 +401,33 @@ class CdjIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'native analysis and identity'):
             capture_metadata(self.lib,list(self.lib.tracks_by_id.values()))
 
+    def test_source_capture_translates_logical_ids_but_keeps_logical_display_overrides(self):
+        from dataclasses import replace
+        from soundbox.cdj_source import capture_metadata
+        original=self.lib.tracks_by_id['17'];logical=replace(original,track_id='sb-stable',source_native_id='17')
+        self.lib.tracks_by_id={'sb-stable':logical};self.playlist.keys=['sb-stable','sb-stable']
+        source=self.root/'master.db';source.write_bytes(b'explicit disposable source');self.lib.source=source
+        row=SimpleNamespace(**dict.fromkeys(('ContentLink CueUpdated AnalysisUpdated TrackInfoUpdated BPM Length '
+            'Rating ColorID ReleaseYear BitRate SampleRate FileSize TrackNo DiscNo BitDepth DJPlayCount Analysed').split(),0),
+            ID='17',UUID=logical.source_uuid,FolderPath=str(logical.path),rb_local_deleted=0,
+            Title='Native',Artist=None,Album=None,Genre=None,Label=None,Key=None,Commnt='',
+            DateCreated='',ReleaseDate='',HotCueAutoLoad='on',DeliveryControl='on',ISRC='',AnalysisDataPath='native')
+        db=mock.Mock();db.get_property.return_value=[SimpleNamespace(DBID='42')]
+        db.get_cue.return_value=[];db.get_my_tag.return_value=[];db.get_content_file.return_value=[]
+        current=Playlist(self.playlist.name,self.playlist.folder_path,['17','17'],self.playlist.pid)
+        with mock.patch('soundbox.rekordbox_db._copy_stable_snapshot'), \
+                mock.patch('pyrekordbox.Rekordbox6Database',return_value=db), \
+                mock.patch('soundbox.rekordbox_db._content_rows',return_value=[row]) as content, \
+                mock.patch('soundbox.rekordbox_db._read_tags',return_value=([],{})), \
+                mock.patch('soundbox.rekordbox_db._active_track_ids',return_value={'17'}), \
+                mock.patch('soundbox.rekordbox_db._read_playlists',return_value=[current]), \
+                mock.patch('soundbox.cdj_source.resolve_dat_path',return_value=Path(original.source_analysis_path)):
+            captured=capture_metadata(self.lib,[logical],titles={'sb-stable':'My title'},playlists=[self.playlist])
+        self.assertEqual(content.call_args.args[1],{'17'})
+        self.assertEqual(captured['tracks'][0]['id'],17)
+        self.assertEqual(captured['tracks'][0]['title'],'My title')
+        self.assertEqual(captured['track_extras'][0]['source_id'],17)
+
     def test_second_playlist_merges_only_new_inputs_and_retains_unrelated_bytes(self):
         from PIL import Image
         image = io.BytesIO();Image.new('RGB',(20,20),'red').save(image,format='JPEG')

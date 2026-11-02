@@ -37,7 +37,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   cancel before capture; mount/UUID and standalone intents survive deferral.
 - Preserve removed songs in Collection using exact native UUID pins bound to the
   source library. These pins are display retention, never registration or source
-  permission. Cache schema10 retains raw playlist rows/clocks and empty folders;
+  permission. Cache schema11 retains raw playlist rows/clocks, empty folders and
+  distinct logical/native IDs and raw native alias paths;
   encode its catalog one row at a time, as with tracks. Intelligent memberships
   retain their computed keys when their containing folder is renamed.
 - Acceptance captures keep full encrypted pairs. Normal retention keeps
@@ -45,6 +46,47 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   DB payload retirement must verify receipts/hashes, journal its own progress and
   resume safely; it must never touch unresolved or native-acceptance evidence.
 
+
+## Float-WAVE import conversion — November1
+
+- This import adapter is the explicit same-path exception before new-track
+  registration. Existing registered Collection conversion uses the separate
+  accepted media-conversion authority/controller and locator API; never route it
+  through INSERT-only registration. Device originals remain immutable.
+  Keep the common source worker/lock and fresh native catalog guards.
+- Same gain is intentional: Sonny preferred the clipped PCM24 audition to the
+  quieter alternative. No automatic normalization. Non-finite/malformed samples,
+  source races, redirected recovery and unrelated occupants fail without overwrite.
+- Persist conversion acknowledgement before registration or the next file.
+  Recovery verifies exact original/stage/output hashes. A failed local save must
+  replay the receipt, not convert again or discard manual musical edits. Saved
+  detections retain original SHA/epoch provenance plus the verified conversion.
+- Fence existing waveform publications before replacement. New interactive cooks
+  are transient while that import phase owns the lane. Refresh detail afterward
+  without replacing the audio transport or redetecting BPM/key.
+
+## Graveyard information and confirmed disposal — November1
+
+- Select from the visible Graveyard before browser/deck fallback. Button focus
+  does not change that target. Historical native rows are read-only info evidence,
+  never active Collection entries or general edit authority.
+- Count storage with stat/inode identity, without audio decode/hydration. Exact
+  old native rows can recover paths; `track <ID>` and title matches cannot.
+- Different native IDs can reference the same file. VOLATIVE’s removed93738342
+  and retained259251743 are a real same-path example, not two audio files. Keep
+  the file for the retained entry and show this explicitly in the Delete review.
+- Disposal is a separate accepted writer, never a playlist/cue authority bypass.
+  Persist concrete confirmation before mutation; keep the shared TaskOwner lane
+  through finished delivery/join and shutdown. Unknown journal prefixes block all
+  domains. Recover SQLite’s owned hot journal before making read-only snapshots.
+- Confirmed macOS disposal uses deterministic UUID-tagged exclusive same-volume
+  moves, source-parent fsync and exact-target F_FULLFSYNC. Opening/enumerating
+  protected Trash can fail even when the move is allowed; do not require that
+  access. Recovery checks exact tagged paths before legacy OS-name discovery;
+  never scan/hash unrelated Trash audio. The old QFile route is historical.
+- Metadata-only totals are not reclaimed capacity: Trash still occupies storage.
+  Retain SoundBox musical/curation data, latest encrypted pair and permanent small
+  receipts. Retire only verified older completed generated DB payloads.
 
 ## Repo hygiene
 - Current guidance and historical evidence are separated; see
@@ -136,7 +178,8 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - **Graveyard is an audition input surface.** Admit playback/cue/grid/wave/autoplay
   actions and selection-bound Load, while retaining native selection and blocking
   unrelated browser edits. Disable native input-method/typeahead ownership so
-  held C reaches the keyboard router. Auditions capture no queue; existing cues
+  held C reaches the keyboard router. Standard Cmd+A selects all before
+  configurable grid bindings dispatch. Auditions capture no queue; existing cues
   remain playable while new/deleted cues wait for restoration. General settings
   editors and dialogs retain their ordinary input boundary.
 - **Folder navigation is not playlist activation.** Check PATH_ROLE before
@@ -173,6 +216,17 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   data, not theme chrome. The render harness takes `--accent=#RRGGBB` and
   `--theme-text=white|black|#RRGGBB` and always
   resets its default to avoid prior fake-state colors leaking into snapshots.
+- **App icon SVG colors need explicit roles.** Preserve the user-supplied SVG
+  bytes; resolve its CSS class roles and currentColor in memory for Qt. Render
+  native ICNS sizes from the vector and retain PNG representations; legacy
+  iconutil encoding/readback changed transparent-edge RGB. The running Dock icon
+  changes only on saved color/launch, independently of picker preview.
+- **Widget-local QSS outranks application selectors.** Never apply generic accent
+  hover rules to CueBtn/DeckPlayBtn: they can override fixed orange CUE even when
+  the app rule has a named active selector. These controls receive only named
+  accent rules; hover must paint exactly like rest/playing. PLAY feedback is
+  fixed green#00c301 and CUE fixed orange, independently of theme. Production pixel
+  checks cover three accents, mouse/keyboard states and release.
 - **A tooltip must add information.** Never assign a cell's displayed string as
   its tooltip just to repeat fully visible text on hover. Keep tooltips for icon
   meaning, warnings, hidden diagnostics, or genuinely richer content.
@@ -254,11 +308,11 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   its one synchronous C call commits the AppKit child frame and Retina
   `drawableSize` before requesting a frame. Returning to generic resize wakes
   causes both a request storm and a one-frame small/stretched waveform.
-- **The track scrollbar begins below the headers.** Keep its persistent gutter
-  on TrackTable with ScrollBarAlwaysOn at the window's right edge. Reserve a
-  header-height widget above the actual bar using addScrollBarWidget(AlignTop),
-  rather than merely hiding a thumb whose hit area can enter the header. Artists
-  uses the same gutter/cap. There is no utility rail. The circle-i opens Summary/Info from a
+- **The track scrollbar begins below the headers.** BrowserScrollBar overlays
+  the row edge while headers use the full frame width. Qt’s hidden native bar
+  retains scrolling/range ownership; synchronize the visible control both ways,
+  including pageStep and viewport geometry. Do not reintroduce a reserved gutter
+  or automatic last-column stretching. Artists and USB use the same overlay. There is no utility rail. The circle-i opens Summary/Info from a
   bordered prep control before My Tags; Info and Settings share the 44×28 size,
   three-point corners and BG fill of the grid controls. Draw both icons centered
   on QRectF geometry; integer QRect centers and font bearings shift the ink.
@@ -272,8 +326,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   and saved-state restoration, then reconcile Artists. Ordinary layouts keep horizontal
   scrolling disabled; when selected fields exceed the minimum-width budget,
   enable scrolling in the regular/Artists/USB views rather than strand columns.
-  Fit against the browser viewport on Resize/Show so the scrollbar gutter
-  is excluded, including after resizing in Settings. Do not fit against a hidden Artists viewport's stale geometry.
+  Fit against the full browser viewport on Resize/Show, including after resizing in Settings. Do not fit against a hidden Artists viewport's stale geometry.
   TrackModel's fixed role constants belong outside its hot data() callback;
   unsupported paint roles need no row/key work or Qt enum lookup.
 - **Worker ownership does not mean an edit is saving.** Focus return rechecks
@@ -369,7 +422,13 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   new playback phase each frame.** Print height and amplitude-weighted RGB onto
   a private song-coordinate attribute lattice with four attributes per
   physical pixel at every zoom. RGB 576/864 use logical-point motion after the
-  native Gunslinger reference; other RGB stops remain fractional. RGB 384 retains October27 coverage C's exact area, and other RGB stops
+  native Gunslinger reference; the installed8e4 build keeps other RGB stops fractional.
+  The October31 installed285163dc build snaps only128/184 to physical pixels
+  after Sonny accepted the bottom BREATHE moving comparison. All1900 tests,
+  signed package/smoke/install/startup and exact curation/analysis preservation
+  pass (see HANDOFF). The subsequent approved third-stop/height pass adds
+  physical-pixel motion at64 and peak-retaining signed reconstruction at64–256.
+  Other RGB stops remain fractional. RGB 384 retains October27 coverage C's exact area, and other RGB stops
   use only the bounded faint-detail shoulder below 18% coverage. 3BAND also
   stays continuous. BLUE rounds its display offset to physical pixels
   through 384 points/s and logical points at 576–1500. Historically, logical points at
@@ -880,7 +939,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   Eligibility uses packed-only stream/grid reads; never expand every track into
   per-sample Python colors or generic ANLZ objects during discovery.
   A newly valid exact stream queues that one atomic V5 recook. The explicit
-  track-row Rebuild Waveform action remains the escape hatch and bypasses `is_ready`
+  track-row Analyze Track waveform-rebuild path bypasses `is_ready`
   for only the requested track. Both routes retain the old playable cache until
   a complete replacement is atomically stored and hot-refresh the deck after
   success. Never delete the record first, and never write source audio or
@@ -1225,10 +1284,41 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 - `rb_local_deleted` truthy = soft-deleted. Apply it at every visible endpoint:
   content, playlist nodes, ordinary membership rows, My Tag definitions, and
   My Tag associations. Filtering only the parent row is insufficient.
-- The rekordbox Collection is larger than its playlist-referenced set;
-  SoundBox intentionally loads only tracks reached from an active normal or
-  smart playlist because it is a playlist exporter. A newly tagged/added track
-  enters on the same refresh; a track removed from every playlist leaves.
+- The native reader now discovers all active audio content independently of
+  playlist membership. Admit verified FileType1/4/5/6/11/12; FileType19 placeholders
+  can contain paths and must stay excluded. Existing UUID pins remain readable
+  for old state but no longer determine Collection discovery. HANDOFF distinguishes
+  the current installed build from earlier playlist-scoped readers.
+- Direct imports persist source/library, ordered logical IDs/canonical paths,
+  destination UUID and analysis preference before source-worker admission.
+  Registration and membership requests persist before their SQL calls; verified
+  bindings persist before projection. A failed state save replays the same native
+  receipt. Retry renews proven uncommitted operations, preserving committed rows.
+  Cancellation must reconcile a committed registration before retiring its local
+  job; otherwise a failed state save can lose the stable binding. Keep the pump
+  paused through the confirmation and recheck ownership afterward. Own membership
+  rebase must also order XML clocks strictly when admissions share a millisecond.
+  All source domains share the existing worker/root/lock/journal; a pending import
+  is a separate export barrier, never part of its own worker's `owned` predicate.
+  Existing source aliases require durable inode/epoch proofs and exact raw-row
+  guards. Refresh/edit workers recheck canonical alias identity. Curation under
+  both IDs requires review, rather than an automatic curation merge. A native ID
+  without native analysis must retain captured local grid/cue drafts and pending
+  detection. No registration authority follows from these tests or a source read.
+- A stale imported/native binding must not invalidate an otherwise verified full
+  native snapshot. Normal native deletion is a per-song read concern. Browse with
+  only matching ID/UUID/raw/canonical claims projected; retain unmatched native rows
+  under their actual IDs. Omit unavailable bound imports from Collection injection
+  while preserving their durable records and drafts. Never reinsert a removed song
+  from a local import record. Default transaction projection remains strict;
+  malformed/duplicate/source-conflicting bindings still fail closed. An import job
+  for an unavailable binding stops before SQL, without disabling unrelated edits.
+  `source_binding_issues` is a transient read result, recomputed per snapshot.
+- Finder hover state must survive source readback rebuilding the sidebar during
+  the drag. Store a `QPersistentModelIndex`, which Qt invalidates when the row is
+  deleted; retaining a Python `QTreeWidgetItem` wrapper can dereference a deleted
+  C++ item on the next move/drop and prevent Collection admission. The regression
+  covers row replacement followed by a real file-drop event and durable intent.
 - Validate `Attribute`, parent folders, sibling `Seq`, membership `TrackNo`,
   reachability, stable IDs, and unique display paths before accepting a tree.
   Keep exact `TrackNo` order. An ambiguity or an unverified smart field must
@@ -2042,3 +2132,64 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   universal pixel parity. Preserve frozen inputs and compare actual native draws;
   the scoped39-frame main-lane before/after comparison is exact. See the
   [audit](rbxport-reference-audit-2026-10.md) for constants and limitations.
+
+
+- A completed detector result is not proof of native publication. Persist the
+  ordinary analysis intent, run it on the shared source lane, and require native
+  row/packet readback before retiring its receipt. Registration alone still
+  leaves BPM/key/grid/waveforms absent. Preserve logical/native IDs and current
+  playlist membership throughout. The latest BREATHE request explicitly requires
+  this automatic sharing; older generated pilots provide no permission.
+- An opening boundary beat can be omitted even when the later grid is correct.
+  Whole-v4 restores only an implicit beat1 before beat2 near one period, with
+  measured audio in the first1ms and a rising attack in4ms; it never shifts later
+  rows or invents an onset across silence. Preserve Sonny's newer manual BREATHE
+  draft exactly instead of installing the earlier proposed prepend-only draft.
+- Initial native analysis may use optional absent mixer/gain records, as the
+  accepted real reference and existing native rows demonstrate. Never copy the
+  generated32s fixture's gain/peak onto real music. Native integral PCM Length
+  reflects the last sample index; do not copy Length31 onto arbitrary durations.
+- Source save callbacks may arrive while the user is making new edits. Verify
+  old curation as preserved data plus recorded new actions, and inspect native
+  bookkeeping differences explicitly. Never restore older whole state because
+  an obsolete verification baseline no longer equals the live user library.
+
+
+- **Keep Dock icon commits out of live color preview.** The October31 request
+  applies the saved accent after OK and startup. Only `_apply_theme_color` invokes
+  `app_icon.apply_saved_icon`; `_render_theme` never does. Cancel must preserve the
+  prior application icon. Cache only the last normalized accent, preserve neutral
+  template pixels/alpha/shading. Persist through NSWorkspace custom-icon metadata
+  at the app root, never a rewrite of Contents or runtime re-signing. Ordinary
+  deep signature verification remains valid; strict packaging verification rejects
+  the user-owned Finder metadata, so verify strict signing before customization
+  and prove the signed Contents bytes separately afterward. Isolated/development
+  runs must never customize the installed app. Native icon captures need Display-ICC normalization before
+  comparing colors; Apple's native TIFF mode is not a generic Pillow fixture.
+
+- **Convert registered audio with its existing identity.** A cross-format native
+  Relocate may follow the old inode into a backup or reject the new extension.
+  Do not send users through a chooser for an automatic conversion. The separate
+  locator authority updates path/name/type/inode on the existing record, retaining
+  UUID, cues, grid, key/BPM, playlists/history/tags and XML. File conversion and
+  locator publication have distinct durable receipts on one shared source owner.
+  A crash between them resumes the existing conversion job. Never borrow bare
+  registration's INSERT permission, create duplicate content rows, or restore an
+  old entire library to repair a location.
+
+- **Trash directory access is separate from moving an exact owned file.** macOS
+  can allow rename into ~/.Trash while denying directory open/fsync/enumeration.
+  Never sync_dir(Trash) after rename. Sync the source parent and exact target inode
+  with F_FULLFSYNC. Deterministic UUID-tagged exclusive moves let recovery check
+  exact paths after process loss before progress publication. Validate under the
+  signed app identity; a Terminal/Codex-only test can have broader privacy access.
+
+- **Native terminal beats can sit past audio EOF after a nudge.** Do not truncate
+  durable native intentions to decoder duration: the accepted writer retains that
+  row, and a later opposite nudge can return it. Native prep v2 matches that exact
+  arithmetic; cue capture positions remain bounded by the actual audio.
+- **Grid and cue receipt shapes differ.** Only cues provide after_revision. Grid
+  confirmation reconstructs snapshot revision from encoded track/content-file
+  AFTER rows and actual DAT/EXT hashes. A test fixture that invents after_revision
+  for grids conceals restart/failed-ack bugs. Exact receipt/base proofs migrate
+  legacy intentions without reapplying an already committed nudge.

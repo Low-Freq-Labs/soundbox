@@ -7,6 +7,7 @@ import unittest
 
 from soundbox import native_media as media,native_registration_plan as planner
 from soundbox.rekordbox_write import ConflictError,WriteProofError,_connect,_state
+from soundbox.native_paths import capture_aliases, AliasProof
 from test_registration_proof import fixture,wave
 
 
@@ -48,6 +49,22 @@ class NativeRegistrationPlan(unittest.TestCase):
         self.assertEqual(plan['changes'],[]);self.assertFalse(plan['bindings'][0]['registered'])
         self.assertEqual(plan['bindings'][0]['native_id'],'1');self.assertEqual(plan['bindings'][0]['local_id'],'sb-original')
         self.assertEqual(len(plan['guards']),1);self.assertEqual(_state(self.conn),before)
+
+    def test_captured_symlink_alias_reuses_raw_native_identity_and_rejects_redirects(self):
+        alias=self.root/'legacy';alias.symlink_to(self.root,target_is_directory=True)
+        raw=str(alias/self.path.name)
+        self.native();self.conn.execute("UPDATE djmdContent SET FolderPath=? WHERE ID='1'",(raw,))
+        row=dict(zip([r[1] for r in self.conn.execute('PRAGMA table_info(djmdContent)')],
+                     self.conn.execute("SELECT * FROM djmdContent WHERE ID='1'").fetchone(),strict=True))
+        proofs=capture_aliases([row],self.facts)
+        request=self.request();request['tracks'][0]['aliases']=proofs
+        before=_state(self.conn);plan=planner.build_plan(self.conn,request)
+        self.assertEqual(plan['changes'],[]);self.assertEqual(plan['bindings'][0]['native_path'],raw)
+        self.assertEqual(plan['bindings'][0]['native_id'],'1');self.assertEqual(_state(self.conn),before)
+        alias.unlink();elsewhere=self.root/'elsewhere';elsewhere.mkdir();alias.symlink_to(elsewhere,target_is_directory=True)
+        with self.assertRaises((ConflictError,OSError)):AliasProof.from_dict(proofs[0]).revalidate()
+        bad=deepcopy(request);bad['tracks'][0]['aliases'][0]['native_uuid']='00000000-0000-4000-8000-000000000077'
+        with self.assertRaises(ConflictError):planner.build_plan(self.conn,bad)
 
     def test_historical_duplicate_path_wrong_file_type_and_colliding_seeds_fail_closed(self):
         for change in (dict(deleted=1),dict(file_type=6),dict(uuid='invalid')):

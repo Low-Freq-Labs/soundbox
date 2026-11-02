@@ -114,6 +114,23 @@ pub fn align_attacks(grid: &mut TempoResult, attacks: &rbl_analysis::attack::Att
     Some(offsets.map(|s|s*1000.0))
 }
 
+/// Recover a serialized boundary beat without shifting any fitted later beat.
+/// Beat 2 one period into a strong audio opening implies the omitted beat 1.
+/// Silent intros and grids with a deliberate later first beat remain unchanged.
+pub fn restore_opening_beat(grid: &mut TempoResult, samples: &[f32], rate: u32) -> bool {
+    let Some(first)=grid.beats.first() else { return false; };
+    if rate==0 || first.beat_number!=2 || grid.bpm<=0.0
+        || (f64::from(first.time_ms)-60_000.0/grid.bpm).abs()>15.0 { return false; }
+    let peak=|n:usize| samples.iter().take(n).fold(0.0_f32,|p,s|p.max(s.abs()));
+    let local=peak((rate as usize*30/1000).max(1));
+    if local<1e-5 || peak((rate as usize/1000).max(1))<local*0.01
+        || peak((rate as usize*4/1000).max(1))<local*0.1 { return false; }
+    let tempo=first.tempo_x100;
+    grid.beats.insert(0,rbl_analysis::Beat{beat_number:1,tempo_x100:tempo,time_ms:0});
+    grid.first_beat_secs=0.0;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +146,27 @@ mod tests {
             (-0.5 * (offset/0.004).powi(2)).exp() as f32
         }).collect();
         OnsetEnvelope { values, rate:1000.0, origin_secs:0.0 }
+    }
+    #[test]
+    fn missing_opening_downbeat_is_added_without_moving_later_rows_or_silent_intros() {
+        let mut result=grid(130.0,12.0);
+        result.beats=vec![rbl_analysis::Beat{beat_number:2,tempo_x100:13000,time_ms:461},
+                         rbl_analysis::Beat{beat_number:3,tempo_x100:13000,time_ms:923}];
+        let later=result.beats.clone();
+        let mut silent=result.clone();
+        assert!(!restore_opening_beat(&mut silent,&vec![0.0;2000],44100));
+        assert_eq!(silent.beats,later);
+        let mut attack=vec![0.0;2000];attack[1]=0.5;
+        assert!(restore_opening_beat(&mut result,&attack,44100));
+        assert_eq!(result.beats[0].time_ms,0);assert_eq!(result.beats[0].beat_number,1);
+        assert_eq!(&result.beats[1..],later);
+        assert!(!restore_opening_beat(&mut result,&attack,44100));
+        let mut delayed=silent.clone();delayed.beats[0].time_ms=520;
+        assert!(!restore_opening_beat(&mut delayed,&attack,44100));
+        let mut rise=vec![0.016_f32;2000];rise[130]=0.411;rise[300]=0.740;
+        assert!(restore_opening_beat(&mut silent.clone(),&rise,44100));
+        let mut late=vec![0.001_f32;2000];late[900]=0.740;
+        assert!(!restore_opening_beat(&mut silent,&late,44100));
     }
     #[test]
     fn biased_estimates_choose_whole_bpm_and_regenerate_phase_and_rows() {

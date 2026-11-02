@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from PySide6.QtCore import QObject, QThread, Signal, QEventLoop
 
 from soundbox import rekordbox_db
+from soundbox.native_paths import validate_track_path
 from soundbox.rekordbox_cue_store import PilotCueStore, load_cue_authority
 from soundbox.rekordbox_cues import CueEdit
 from soundbox.rekordbox_grid_store import PilotGridStore, load_grid_authority
@@ -49,6 +50,8 @@ class TagEditController(QObject):
         self.data_root = data_root
         self.owner = TaskOwner(self)
         self.lib = None
+        self.prep_priority = False
+        self.prep_update_status = ''
         self.verified = False
         self.busy = False
         self._pending = None
@@ -75,20 +78,34 @@ class TagEditController(QObject):
         self.grid_waiting = False
         self.grid_update_status = ''
         self.playlist_update_status = ''
+        self.registration_update_status = ''
+        self.analysis_update_status = ''
+        self.admission_paused = False
+        self.foreground_waiting = False
 
     @property
     def status_text(self):
         if not self.busy:
             return ''
-        return self.update_status_text or 'Checking saved grid…'
+        return self.update_status_text or ('Updating song…' if self._busy_kind=='analysis' else 'Checking saved grid…')
 
     @property
     def update_status_text(self):
         """Accepted edit intents only; a worker owning the lane is not a save."""
+        if self.busy and self._busy_kind == 'analysis':
+            return 'Updating song…'
         if self.busy and self._busy_kind == 'playlists':
-            return 'Updating rekordbox playlists…'
+            return 'Updating playlist…'
+        if self.busy and self._busy_kind == 'removal':
+            return 'Updating library…'
+        if self.busy and self._busy_kind == 'media':
+            return 'Converting audio…'
         if self.busy and self._busy_kind == 'tags':
             return 'Updating My Tags…'
+        if self.busy and self._busy_kind == 'registration':
+            return self.registration_update_status or 'Adding songs…'
+        if self.busy and self._busy_kind == 'registration-cancel':
+            return 'Cancelling pending imports…'
         if self._cue_queue and self.busy and self._busy_kind == 'cues':
             page = self._cue_queue[0].page
             return 'Updating hot cue…' if page == 'hot' else 'Updating memory cue…'
@@ -97,11 +114,11 @@ class TagEditController(QObject):
         if self._cue_queue:
             page = self._cue_queue[0].page
             return 'Updating hot cue…' if page == 'hot' else 'Updating memory cue…'
-        return self.playlist_update_status
+        return self.prep_update_status or self.playlist_update_status or self.registration_update_status or self.analysis_update_status
 
     @property
     def owned(self):
-        return self.busy or self.checking or bool(self._cue_queue) or self.grid_waiting
+        return self.busy or self.checking or bool(self._cue_queue) or self.grid_waiting or self.admission_paused
 
     def configure(self, lib, verified: bool):
         identity = (str(lib.source), lib.source_library_id) if lib else None
@@ -184,6 +201,33 @@ class TagEditController(QObject):
                 raise RuntimeError('Grid recovery has no accepted library permission; evidence preserved')
             PilotGridStore(authority.bind(record['track_id'], record['request']['track_uuid']),
                            self._write_root(lib)).recover()
+        elif record.get('format') == 'soundbox-native-registration-v1':
+            from soundbox.rekordbox_registration_store import RegistrationStore, load_authority as load_registration_authority
+            authority = load_registration_authority(self.data_root/'rekordbox-registration-authority.json',
+                                                    Path(lib.source),lib.source_library_id)
+            if authority is None:
+                raise RuntimeError('Registration recovery has no accepted library permission; evidence preserved')
+            RegistrationStore(authority,root).recover()
+        elif record.get('format') == 'soundbox-native-analysis-v1':
+            from soundbox.rekordbox_analysis_store import AnalysisStore, load_authority as analysis_authority
+            authority=analysis_authority(self.data_root/'rekordbox-analysis-authority.json',lib.source,lib.source_library_id)
+            if authority is None:raise RuntimeError('Analysis recovery has no accepted library permission')
+            AnalysisStore(authority,record['plan_folder']).recover()
+        elif record.get('format') == 'soundbox-native-removal-v1':
+            from soundbox.rekordbox_removal_store import RemovalStore,load_authority as removal_authority
+            authority=removal_authority(self.data_root/'rekordbox-removal-authority.json',lib.source,lib.source_library_id)
+            if authority is None:raise RuntimeError('Collection-deletion recovery has no accepted library permission')
+            RemovalStore(authority,self.data_root).recover()
+        elif record.get('format') == 'soundbox-native-media-conversion-v1':
+            from soundbox.media_conversion_store import ConversionStore,load_authority as media_authority
+            authority=media_authority(self.data_root/'rekordbox-media-conversion-authority.json',lib.source,lib.source_library_id)
+            if authority is None:raise RuntimeError('Media conversion recovery has no accepted library permission')
+            ConversionStore(authority,self.data_root).recover()
+        elif record.get('format') == 'soundbox-native-media-locator-v1':
+            from soundbox.rekordbox_locator_store import LocatorStore,load_authority as locator_authority
+            authority=locator_authority(self.data_root/'rekordbox-media-locator-authority.json',lib.source,lib.source_library_id)
+            if authority is None:raise RuntimeError('Media locator recovery has no matching permission')
+            LocatorStore(authority,self.data_root).recover()
         else:
             raise RuntimeError('Unrecognized rekordbox recovery state; evidence preserved')
 
@@ -195,11 +239,15 @@ class TagEditController(QObject):
         This runs in the serialized source-refresh worker, not the GUI thread.
         """
         from soundbox.rekordbox_playlist_store import load_authority as load_playlist_authority
+        from soundbox.rekordbox_registration_store import load_authority as load_registration_authority
+        from soundbox.rekordbox_removal_store import load_authority as load_removal_authority
         source = Path(source)
         for filename, loader in (('rekordbox-cue-authority.json', load_cue_authority),
                                  ('rekordbox-tag-authority.json', load_authority),
                                  ('rekordbox-grid-authority.json', load_grid_authority),
-                                 ('rekordbox-playlist-authority.json', load_playlist_authority)):
+                                 ('rekordbox-playlist-authority.json', load_playlist_authority),
+                                 ('rekordbox-registration-authority.json', load_registration_authority),
+                                 ('rekordbox-removal-authority.json', load_removal_authority)):
             path = self.data_root / filename
             if not path.exists() and not path.is_symlink():
                 continue
@@ -214,6 +262,8 @@ class TagEditController(QObject):
                 return
 
     def reason(self, selected_ids) -> str:
+        if self.prep_priority:return 'Confirming cue/grid saves…'
+        if self.admission_paused:return 'Confirming a library operation…'
         if self.owner.stopping or self._closing:
             return 'Finishing tag work…'
         if self.busy:
@@ -235,7 +285,7 @@ class TagEditController(QObject):
         return ''
 
     def probe(self):
-        if (self.owner.stopping or self._closing or self.busy or self.checking or self.lib is None
+        if (self.owner.stopping or self._closing or self.busy or self.checking or self.admission_paused or self.lib is None
                 or not self.verified or self.lib.source_kind != 'rekordbox-db'
                 or (self._requires_authority and self._authority is None)):
             return
@@ -260,6 +310,7 @@ class TagEditController(QObject):
                 if self._ready:
                     self._store = worker.result
             self.changed.emit()
+            if self._cue_queue and not self.prep_priority:self._start_next_cue()
             self.idle.emit()
 
         self.changed.emit()
@@ -276,7 +327,7 @@ class TagEditController(QObject):
         pending = self._pending
         for tid in ids:
             tags = set(lib.tracks_by_id[tid].source_tag_ids or [])
-            if pending and any(target.track_id == tid for target in pending.tracks):
+            if pending and any(target.track_id == lib.tracks_by_id[tid].native_id for target in pending.tracks):
                 if pending.present:
                     tags.add(pending.tag_id)
                 else:
@@ -293,7 +344,7 @@ class TagEditController(QObject):
         if tag is None or not tag.source_uuid:
             return False
         request = TagWriteRequest(lib.source_library_id, tuple(
-            SelectedTagTrack(tid, lib.tracks_by_id[tid].source_uuid,
+            SelectedTagTrack(lib.tracks_by_id[tid].native_id, lib.tracks_by_id[tid].source_uuid,
                              tag_id in lib.tracks_by_id[tid].source_tag_ids)
             for tid in ids), tag_id, tag.source_uuid, bool(present), tag.name)
         self.busy = True
@@ -303,6 +354,7 @@ class TagEditController(QObject):
 
         def save():
             self._recover_pending(lib)
+            for tid in ids:validate_track_path(lib.tracks_by_id[tid])
             if self._store is None:
                 self._store = self._store_factory(lib)
             self._store.apply(request)
@@ -314,10 +366,11 @@ class TagEditController(QObject):
         return True
 
     def cue_reason(self, track_id) -> str:
+        if self.prep_priority or self.busy and self._busy_kind == 'prep':
+            return 'Confirming cue/grid saves…'
+        if self.admission_paused:return 'Confirming a library operation…'
         if self.owner.stopping or self._closing:
             return 'Finishing library edits…'
-        if (self.busy and self._busy_kind not in ('cues', 'grid')) or self.checking:
-            return self.status_text or 'Checking library editing…'
         lib = self.lib
         if not lib or not self.verified or lib.source_kind != 'rekordbox-db':
             return 'Refresh a rekordbox database to edit cues'
@@ -341,7 +394,7 @@ class TagEditController(QObject):
         # Publish only the small deck overlay. The authoritative Library/cache
         # stays unchanged until independent source read-back succeeds.
         self.cue_changed.emit(track_id)
-        if not self.busy:
+        if not self.busy and not self.checking and not self.prep_priority:
             self._start_next_cue()
         return True
 
@@ -354,16 +407,38 @@ class TagEditController(QObject):
         return display(overlay(track, self._cue_queue, self._cue_aliases))
 
     def run_grid_job(self, callback, finished) -> bool:
+        if self.prep_priority:return False
         return self._run_source_job('grid',callback,finished)
 
+    def run_prep_job(self, callback, finished) -> bool:
+        if not self.prep_priority and (self._cue_queue or self.grid_waiting):return False
+        return self._run_source_job('prep', callback, finished)
+
     def run_playlist_job(self, callback, finished) -> bool:
-        if self._cue_queue or self.grid_waiting:
+        if self.prep_priority or self._cue_queue or self.grid_waiting:
             return False
         return self._run_source_job('playlists',callback,finished)
 
+    def run_analysis_job(self, callback, finished):
+        if self.foreground_waiting or self.prep_priority or self._cue_queue or self.grid_waiting:return False
+        return self._run_source_job('analysis',callback,finished)
+
+    def run_removal_job(self,callback,finished):
+        if self.prep_priority or self._cue_queue or self.grid_waiting:return False
+        return self._run_source_job('removal',callback,finished)
+
+    def run_media_job(self,callback,finished):
+        if self.foreground_waiting or self.prep_priority or self._cue_queue or self.grid_waiting:return False
+        return self._run_source_job('media',callback,finished)
+
+    def run_registration_job(self, callback, finished, *, cancelling=False) -> bool:
+        if self.prep_priority or self._cue_queue or self.grid_waiting:
+            return False
+        return self._run_source_job('registration-cancel' if cancelling else 'registration',callback,finished)
+
     def _run_source_job(self, kind, callback, finished) -> bool:
         """Grid work uses this same worker lane and finished/join ownership."""
-        if self.busy or self.checking or self.owner.stopping or self._closing:
+        if self.busy or self.checking or self.admission_paused or self.owner.stopping or self._closing:
             return False
         self.busy = True
         self._busy_kind = kind
@@ -373,7 +448,7 @@ class TagEditController(QObject):
             self.busy = False
             self._busy_kind = ''
             finished(worker)
-            if self._cue_queue and not self.busy:
+            if self._cue_queue and not self.busy and not self.prep_priority:
                 self._start_next_cue()
             self.changed.emit()
             if not self.busy:
@@ -385,6 +460,7 @@ class TagEditController(QObject):
         return True
 
     def _start_next_cue(self):
+        if self.prep_priority:return
         intent = self._cue_queue[0]
         lib, track_id = self.lib, intent.track_id
         track = lib.tracks_by_id[track_id]
@@ -396,7 +472,7 @@ class TagEditController(QObject):
             slot = ref['slot']
         elif intent.page == 'memory' and intent.operation == 'add':
             slot = sum(r['kind'] == 'memory' for r in track.source_cue_refs)
-        request = CueEdit(track_id, intent.track_uuid, track.source_cue_revision,
+        request = CueEdit(track.native_id, intent.track_uuid, track.source_cue_revision,
                           intent.page, slot, intent.operation, intent.position_ms,
                           ref['id'] if ref else '', ref['uuid'] if ref else '')
         self.busy = True
@@ -409,14 +485,15 @@ class TagEditController(QObject):
                 raise RuntimeError('Cue source changed before saving; refresh the library')
             if intent.operation == 'delete' and ref is None:
                 raise RuntimeError('Cue identity changed before deletion; refresh the library')
+            validate_track_path(track)
             self._recover_pending(lib)
             if self._cue_store_identity != identity:
-                self._cue_store = self._cue_store_factory(lib, track_id)
+                self._cue_store = self._cue_store_factory(lib, track.native_id)
                 self._cue_store_identity = identity
             self._cue_store.apply(request)
             snapshot = self._cue_store.snapshot()
             if (snapshot.track['ID'] != request.track_id or snapshot.track['UUID'] != request.track_uuid
-                    or snapshot.track['FolderPath'] != str(track.path)):
+                    or snapshot.track['FolderPath'] != str(track.native_path)):
                 raise RuntimeError('Cue source changed during read-back; refresh the library')
             return rekordbox_db.cue_snapshot_fields(snapshot)
 
@@ -429,10 +506,11 @@ class TagEditController(QObject):
         intent = self._cue_queue[0]
         self.last_operation = 'cues'
         lib = self.lib
-        track = lib.tracks_by_id.get(request.track_id) if lib else None
+        logical_id = intent.track_id
+        track = lib.tracks_by_id.get(logical_id) if lib else None
         if (not worker.error and (not lib
-                or (str(lib.source), lib.source_library_id, request.track_id) != identity
-                or not track or track.source_uuid != request.track_uuid
+                or (str(lib.source), lib.source_library_id, logical_id) != identity
+                or not track or track.native_id != request.track_id or track.source_uuid != request.track_uuid
                 or track.source_cue_revision != request.revision)):
             worker.error = 'Cue source changed while saving; refresh the library'
         if not worker.error:
@@ -446,7 +524,7 @@ class TagEditController(QObject):
                     worker.error = 'Cue read-back did not identify the new cue; refresh the library'
             # Even a bad post-save identity must reconcile to the verified DB,
             # never replay this potentially committed mutation blindly.
-            self.lib = replace(lib, tracks_by_id={**lib.tracks_by_id, request.track_id: edited})
+            self.lib = replace(lib, tracks_by_id={**lib.tracks_by_id, logical_id: edited})
         changed_tracks = {i.track_id for i in self._cue_queue}
         self._cue_queue.pop(0)
         self._pending_cue = None
@@ -457,13 +535,13 @@ class TagEditController(QObject):
             self._ready = False
             self._probe_error = worker.error
         if self._cue_queue:
-            self._start_next_cue()
+            if not self.prep_priority:self._start_next_cue()
         else:
             self._cue_aliases.clear()
         for track_id in changed_tracks:
             self.cue_changed.emit(track_id)
         if not worker.error:
-            self.cue_saved.emit(self.lib, request.track_id)
+            self.cue_saved.emit(self.lib, logical_id)
         if not self._cue_queue:
             self.changed.emit()
             if worker.error:
@@ -483,7 +561,7 @@ class TagEditController(QObject):
             else:
                 self.saved.emit(worker.result)
             self.changed.emit()
-        self._pending_cue = None
+        if self._cue_queue and not self.prep_priority and not self.busy:self._start_next_cue()
         self.idle.emit()
 
     def shutdown(self):

@@ -3,10 +3,10 @@ import copy
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt, QTimer
+from PySide6.QtGui import QColor, QImage, QMouseEvent, QPalette
 from PySide6.QtWidgets import (QApplication, QColorDialog, QFrame, QPushButton,
-                              QVBoxLayout)
+                              QStyle, QStyleOptionButton, QVBoxLayout)
 
 from desktop import theme
 from desktop.settings_page import SettingsPageMixin
@@ -62,7 +62,8 @@ class LiveTheme(unittest.TestCase):
         def finish():
             observed.update(accent=theme.PURPLE, lettering=theme.ON_ACCENT,
                             preferences=copy.deepcopy(self.frame.settings),
-                            fill=self.fill(self.frame.primary))
+                            fill=self.fill(self.frame.primary),
+                            icon_key=self.app.windowIcon().cacheKey())
             if accept:dialog.accept()
             else:dialog.reject()
         QTimer.singleShot(0, move)
@@ -92,6 +93,24 @@ class LiveTheme(unittest.TestCase):
         self.assertEqual(self.fill(self.frame.primary), '#169ba7')
         self.frame._schedule_settings_save.assert_called_once()
 
+    def test_icon_is_unchanged_during_preview_and_after_cancel(self):
+        before = self.app.windowIcon().cacheKey()
+        with mock.patch.object(self.app, 'setWindowIcon', wraps=self.app.setWindowIcon) as change:
+            observed = self.picker(False)
+        self.assertEqual(observed['icon_key'], before)
+        self.assertEqual(self.app.windowIcon().cacheKey(), before)
+        change.assert_not_called()
+
+    def test_icon_changes_once_only_after_ok(self):
+        before = self.app.windowIcon().cacheKey()
+        with mock.patch.object(self.app, 'setWindowIcon', wraps=self.app.setWindowIcon) as change:
+            observed = self.picker(True)
+            self.assertEqual(observed['icon_key'], before)
+            self.assertNotEqual(self.app.windowIcon().cacheKey(), before)
+            self.assertEqual(self.app._soundbox_icon_accent, '#169ba7')
+            self.frame._apply_theme_color(self.frame.settings['theme_accent'])
+            change.assert_called_once()
+
     def test_lettering_changes_immediately_and_custom_cancel_keeps_saved_choice(self):
         with mock.patch.object(self.app, 'setStyleSheet', wraps=self.app.setStyleSheet) as global_style:
             self.frame._apply_theme_text('black')
@@ -115,3 +134,84 @@ class LiveTheme(unittest.TestCase):
             self.assertEqual(self.fill(self.frame.cue), '#f62055')
         finally:
             hidden.close(); hidden.deleteLater()
+
+
+class TransportRingTheme(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        cls.controller = install(cls.app)
+
+    def setUp(self):
+        self.original = (theme.PURPLE, theme.ON_ACCENT)
+        self.frame = QFrame(); self.frame.setObjectName('TopBar')
+        layout = QVBoxLayout(self.frame)
+        self.cue = QPushButton('CUE'); self.cue.setObjectName('CueBtn')
+        self.play = QPushButton('▶'); self.play.setObjectName('DeckPlayBtn')
+        for button in (self.cue, self.play):
+            button.setFixedSize(48, 48); button.setFocusPolicy(Qt.NoFocus)
+            layout.addWidget(button)
+        self.frame.show(); self.app.processEvents()
+
+    def tearDown(self):
+        self.frame.close(); self.frame.deleteLater()
+        theme.set_accent(*self.original); self.controller.update()
+
+    def capture(self, button, *, hover=False, down=False, **properties):
+        button.setAttribute(Qt.WA_UnderMouse, hover)
+        button.setDown(down)
+        for key, value in properties.items():
+            button.setProperty(key, value)
+        button.style().unpolish(button); button.style().polish(button)
+        # QPushButton tracks hit-testing separately from WA_UnderMouse. Send
+        # directly to this private fixture; never move the system cursor.
+        point = QPointF(24, 24) if hover else QPointF(-1, -1)
+        self.app.sendEvent(button, QMouseEvent(
+            QEvent.MouseMove, point, point, Qt.NoButton, Qt.NoButton, Qt.NoModifier))
+        self.app.processEvents()
+        option = QStyleOptionButton(); button.initStyleOption(option)
+        self.assertEqual(bool(option.state & QStyle.State_MouseOver), hover)
+        whole = self.frame.grab().toImage()
+        at = button.mapTo(self.frame, QPoint(0, 0)); scale = whole.devicePixelRatio()
+        return whole.copy(round(at.x()*scale), round(at.y()*scale),
+                          round(button.width()*scale), round(button.height()*scale))
+
+    def test_cue_hover_is_inert_and_mouse_or_keyboard_hold_stays_orange(self):
+        import numpy as np
+        for accent in ('#00c301', '#168fc0', '#e34c26'):
+            theme.set_accent(accent); self.controller.update(); self.app.processEvents()
+            resting = self.capture(self.cue, active=False)
+            self.assertEqual(resting, self.capture(self.cue, hover=True, active=False))
+            for mouse in (False, True):
+                held = self.capture(self.cue, down=mouse, active=not mouse)
+                self.assertEqual(held, self.capture(
+                    self.cue, hover=True, down=mouse, active=not mouse))
+                image = held.convertToFormat(QImage.Format_RGBA8888)
+                data = np.ndarray((image.height(), image.width(), 4), dtype=np.uint8,
+                                  buffer=image.bits(), strides=(image.bytesPerLine(), 4, 1))
+                orange = (data[:, :, 0] > 200) & (data[:, :, 1] > 90) & (
+                    data[:, :, 1] < 175) & (data[:, :, 2] < 65)
+                self.assertGreater(int(orange.sum()), 20, accent)
+            self.assertEqual(resting, self.capture(self.cue, active=False))
+
+    def test_play_hover_is_inert_in_idle_pressed_and_playing_states(self):
+        import numpy as np
+        reference = None
+        for accent in ('#00c301', '#168fc0', '#e34c26', '#7b2fbe', '#fffdf4'):
+            theme.set_accent(accent); self.controller.update(); self.app.processEvents()
+            resting = self.capture(self.play, playing=False)
+            self.assertEqual(resting, self.capture(self.play, hover=True, playing=False))
+            for mouse in (False, True):
+                active = self.capture(self.play, down=mouse, playing=not mouse)
+                self.assertNotEqual(active, resting)
+                image = active.convertToFormat(QImage.Format_RGBA8888)
+                data = np.ndarray((image.height(), image.width(), 4), dtype=np.uint8,
+                                  buffer=image.bits(), strides=(image.bytesPerLine(), 4, 1))
+                green = (data[:, :, 1] > 130) & (data[:, :, 0] < 65) & (data[:, :, 2] < 65)
+                self.assertGreater(int(green.sum()), 20, accent)
+                if reference is None:
+                    reference = active
+                self.assertEqual(active, reference, accent)
+                self.assertEqual(active, self.capture(
+                    self.play, hover=True, down=mouse, playing=not mouse))
+            self.assertEqual(resting, self.capture(self.play, playing=False))

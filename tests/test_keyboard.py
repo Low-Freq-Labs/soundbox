@@ -12,6 +12,12 @@ def key(kind, code, modifiers=Qt.NoModifier, repeat=False):
 
 
 class Keymaps(unittest.TestCase):
+    def test_set_cue_follows_page_toggle_and_does_not_displace_existing_bindings(self):
+        ids=[c.id for c in COMMANDS];self.assertEqual(ids[ids.index('cues.toggle_page')+1],'cues.set')
+        mapping=Keymap();self.assertEqual(mapping.bindings('cues.set'),[])
+        mapping.assign('cues.set','V');self.assertEqual(Keymap(mapping.dump()).action('V'),'cues.set')
+        self.assertEqual(mapping.action('C'),'transport.cue')
+
     def test_defaults_are_unique_and_active_page_slots_have_requested_numbers(self):
         mapping = Keymap()
         self.assertEqual(len(BY_ID), len(COMMANDS))

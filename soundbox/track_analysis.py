@@ -2316,3 +2316,32 @@ def merge_import(native: dict | None, imported: dict | None) -> dict | None:
             "fingerprint": grid_fingerprint(list(source["beats"])),
         }
     return result
+
+
+def confirm_published_grid(cache_dir, track_id, audio_path, beats, detector_beats):
+    """Confirm just-published native rows without recooking the audio/waveform.
+
+    Only the exact captured detector or effective-draft grid may be promoted.
+    Different/newer manual data stays intact; source SQL is never inferred here.
+    """
+    tmp = None
+    try:
+        record = _read_container_manifest(cache_dir, track_id, audio_path)
+        if record is None:return False
+        target, manifest, payload = record
+        current=manifest.get('beats') or []
+        if current not in (beats,detector_beats):return False
+        provenance=dict(manifest.get('provenance') or {})
+        provenance.pop('user_data',None)
+        manifest['provenance']={**provenance,'grid':'rekordbox','owner':'soundbox','rekordbox_runtime_dependency':False}
+        manifest['beats']=list(beats)
+        manifest['grid_import']=dict(source='rekordbox-anlz',fingerprint=grid_fingerprint(beats))
+        encoded=json.dumps(manifest,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode()
+        tmp=target.with_name(f'.{target.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+        tmp.write_bytes(_HEADER.pack(_manifest_magic(manifest),len(encoded))+encoded+payload)
+        os.replace(tmp,target);return True
+    except Exception:
+        if tmp is not None:
+            try:tmp.unlink(missing_ok=True)
+            except OSError:pass
+        return False

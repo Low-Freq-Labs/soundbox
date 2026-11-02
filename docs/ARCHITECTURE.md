@@ -106,6 +106,28 @@ record through the normal codec, upload the data, and remove the temporary
 record before worker retirement; the canonical cache remains absent.
 Summary uses a large cover beside inline caption/value rows.
 
+`desktop.graveyard` reads one stable native DB/WAL snapshot on demand, then stats
+distinct canonical files. It never reads audio payloads for storage or info.
+Source/library-bound historical native rows retain exact provenance outside the
+active Collection; a numeric label alone never authorizes a file path. The i
+button uses this archive for native-deleted selections. Totals deduplicate inode
+aliases and distinguish unresolved paths from missing/unavailable files.
+
+`desktop.removal` prepares a concrete review on the common desktop source lane.
+The confirmed plan hash/selection persist before mutation and survive restart.
+`soundbox.rekordbox_removal_store` has a separate library/schema/version authority,
+paired encrypted DB/XML evidence, exact row/native-resource guards and OS Trash
+disposal with a bounded interruption tag. It models native local-0 physical
+removal/local-1 tombstones and suffix gap closure, preserving unrelated rows and
+SoundBox curation/analysis. Other active native references keep their shared audio;
+this is explicit in the review rather than broadening the selection. Recovery
+uses SQLite’s owned-journal rollback before classifying source state, restores
+uncommitted files/resources/XML, and independently confirms committed disposal.
+Only the latest completed full DB pair remains; older exact payloads retire
+resumably while row/XML/native-resource receipts stay. Unknown state blocks other
+domains. No broad orphan sweep, permanent unlink or title-based identity lookup.
+See `graveyard-delete-plan.md` for native reference and installed-state boundaries.
+
 `desktop.analysis` owns the Analysis tab and cancellable TaskOwner jobs.
 Manual and automatic analysis use the same background queue, without a dialog
 or progress bar. Each song retires/joins and saves independently before the next
@@ -117,8 +139,10 @@ before worker admission. Active work remains queued until its merged result and
 retirement save atomically. Restart waits for a matching loaded library and uses
 the captured preferences; errors persist without automatic retry. These pending
 intents contain no completed musical data or native write authority. Browser
-Analyze Track uses this same queue; Rebuild Waveform remains the separate
-disposable-cache repair path.
+Analyze Track uses this same queue and persists a waveform-rebuild intention.
+Successful detection schedules that selected cache replacement after its result
+is durable; failure retains the previous playable cache. With BPM and Key both
+unchecked it runs the existing waveform-only repair path.
 Its three inset groups align labels and 30-point control rows; the section header
 and preservation note retain the outer edge.
 `soundbox.analysis` captures one hashed local audio snapshot, then the optimized
@@ -141,12 +165,13 @@ Playback revalidates timestamp drift through SourceVerificationCache and an exac
 captured digest before overlaying completed detection; current native/manual data
 still wins. Local grid edits use the saved result instead of vetoing a click because
 the loaded waveform delivered an older fallback grid. EOF translations clip
-trailing rows beyond the captured duration. No waveform-cache rewrite or new
-source DB/ANLZ publication is enabled. The whole-v3 caller adds a nearby-integer
+trailing rows beyond the captured duration only in the unregistered draft route;
+native prep v2 retains terminal rows beyond EOF. Native publication uses the
+separate accepted registration/initial-analysis/Cue/Grid domains described below. The whole-v3 caller adds a nearby-integer
 prior only after three-section onset and attack checks; it records raw estimates
 and preserves contrary fractional/variable evidence and legacy results.
-Full two-way analysis remains the explicit next
-acceptance gate; see [the accepted stage](analysis-playlists-next.md).
+Broader codecs and existing-native-analysis replacement remain separate
+acceptance gates; see [the accepted stage](analysis-playlists-next.md).
 
 Shared-library registration research is separate from runtime writers:
 `research/native_library` constructs the observed bare WAV row and proves
@@ -170,11 +195,75 @@ approval, publication and native reopen/normal-quit acceptance. The general
 `soundbox.rekordbox_registration_store` has a separate authority loader, insert-
 only content/counter authorizer, exact-path reuse, paired encrypted recovery and
 ordinary bounded retention. TEMP replay matches the complete actual native AFTER.
-It has no production authority or desktop caller yet. Stable logical IDs can be
-projected with `native_identity` while `Track.native_id` retains the native SQL ID;
-cache10 records that identity. Import injection cannot overwrite a projected
-native track. The real library bridge is not activated until every source consumer
-and durable import queue uses these bindings. Source DB journal mode is unchanged;
+The direct-import continuation adds `desktop.shared_imports` and pure
+`soundbox.shared_imports` intentions. File and imported-track gestures durably
+bind source/library, destination UUID, order, preferences and request/receipt
+stages. They prepare, register/reuse, save bindings, prepare membership and verify
+source readback on the existing TagEditController source lane. SQL requests
+persist before execution; retries retain committed identities and renew only
+proven uncommitted requests. Cancellation reconciles committed registration
+receipts before retiring intentions; native rows and verified bindings survive.
+Fresh own membership commits rebase later app playlist requests and their XML
+clock order, without rebasing over independent native edits. Pending membership is a detached presentation and
+CDJ capture waits for the import FIFO. The exact two-generated-WAV source test
+passed complete planned AFTER/idempotence and native reopen/normal-quit acceptance.
+Sonny separately approved conditional ordinary registration, and its authority is
+provisioned for the exact library/schema/version and bare-format intersection.
+This does not license old-import backfill or native analysis/metadata publication;
+HANDOFF records installed workflow validation and provenance.
+The initial November1 delivery adds the explicit import-only source-audio exception in
+`soundbox.wave_conversion`. Before registration preparation, the shared source
+lane/lock verifies the accepted native catalog and excludes every registered path
+and alias. Float32 RIFF WAVE becomes same-path PCM24, preserving rate/frame count,
+ordered metadata chunks and original gain; Sonny selected clipped over-range
+peaks after auditioning original/clipped/reduced copies. Exact originals and
+before/after receipts live under AppData/wave-conversion-originals. A verified
+sibling stage replaces only the unchanged original atomically. Recovery accepts
+only exact before/after hashes; unknown occupants never get overwritten. Each
+conversion is acknowledged durably before touching another song or preparing
+registration. Latest saved grid/cue drafts and pending prep intents transfer
+through that exact sample-time mapping, with original analysis identity retained
+as provenance. No detector rerun or audio reload is required. Old waveform
+publishers are fenced; new interactive cooks use disposable state during the
+replacement, and the loaded detail refreshes afterward. Native SQL/analysis
+format authorities and all export immutability rules remain unchanged.
+The later whole-Collection request broadens the semantic audio scope;
+`cdj_compatibility` supplies actual-header checks and verified PCM24 conversion,
+canonical PCM-header normalization and resampling. The separate file-only
+`media_conversion_store` and desktop controller now queue each file durably on
+the common lane/lock/journal, retain exact originals and recover atomic WAV
+replacement or unregistered lossless→same-folder WAV. Native WAV acceptance
+passed; native cached technical columns stay stale, so epoch-bound actual header
+facts refresh only technical display/USB DTOs. New imports convert before bare
+registration and transfer current musical drafts/destination/IDs without
+redetection. The file-only WAV domain preserves native SQL and musical data.
+Existing codec/path changes use the separate `rekordbox_locator_store` authority
+and column allowlist: existing track path/name/type/inode, timestamp and local
+counters only. Two FLAC→WAV records passed explicit source publication and native
+reopen/load/normal-quit acceptance, preserving complete target rows afterward,
+all packets/XML and all non-registry tables. General locator authority now binds
+that profile. The source worker finishes conversion plus locator publication
+automatically before acknowledging current drafts and RAM paths; no manual
+Relocate step. Each phase has exact encrypted/file recovery and durable retry.
+The supported automatic pipeline is installed:124 WAV conversions completed with
+exact originals retained. Timing-unproven, cloud-deferred and unavailable files
+remain explicit; see [compatibility limits](cdj-media-compatibility.md).
+Stable logical IDs project with `native_identity` while `Track.native_id` retains
+the native SQL ID. `Track.native_path` preserves a raw native alias separately
+from its canonical playback/cache path. `native_paths` captures/rechecks alias
+inode/epoch proofs. Cache11 retains these fields; cue/grid/tag/CDJ adapters translate
+to native SQL IDs while UI/cache/curation retain logical IDs. Independent existing
+native-ID curation blocks activation until a reviewed merge. Import injection and
+late metadata probes cannot overwrite projected native data. Bare registration
+retains local musical drafts/detection until native analysis has its own acceptance.
+Read-only identity projection can isolate unavailable bindings per song instead
+of invalidating the full native source. `Library.source_binding_issues` is transient;
+`imports.inject` excludes those removed bound songs from Collection while retaining
+their durable records/drafts. Raw unmatched native identities remain unchanged.
+Transaction projection is strict by default, and affected import jobs stop before
+SQL. This is not automatic identity adoption, rebinding or musical-data migration.
+Collection discovery now includes all active supported native audio, excluding
+FileType19 placeholders regardless of path. Source DB journal mode is unchanged;
 only an exactly verified private TEMP working copy may normalize its own WAL
 before retiring recovery.
 
@@ -188,7 +277,8 @@ closed. Its exact October30 publication subsequently passed Sonny's native
 inspection and normal-save comparison; SQL commit alone never establishes that
 acceptance. That historical receipt grants no further operations. The broader
 ordinary-playlist API subsequently passed its separate October30 native/source
-acceptance below; registration and analysis publication remain gated.
+acceptance. Registration and initial WAV analysis now have independent accepted
+production domains above; broader analysis/metadata remain gated.
 
 ## Engine modules (`soundbox/`)
 
@@ -371,14 +461,18 @@ Flexible prep
 gaps redistribute around it. FooterBar draws a single full-width top separator at a fixed28-point height.
 Its progress/count/Cancel controls fit inside without changing browser geometry.
 
-TrackTable and Artists own persistent vertical-scrollbar gutters. An inert
-26-point header-height widget reserves the top, keeping the real scrollbar and
-hit area below the headers. Headers stay Interactive with a shared bounded width
+`desktop.browser_scrollbar.BrowserScrollBar` overlays a visible row scrollbar
+at the frame’s right edge in TrackTable, Artists and USB playlist views. Qt’s
+hidden native bar retains range, wheel/keyboard and24-point row scrolling;
+bidirectional value/range synchronization drives the visible control. Geometry
+starts below the header and follows viewport resize/show, including horizontal
+scrolling. Headers retain the full viewport width so FORMAT can be dragged to
+the frame without automatic stretching. Headers stay Interactive with a shared bounded width
 policy: manual drags change only the dragged section, clamped to the remaining
 free width without borrowing from Title. Window resizing gives spare width to
 Title; narrowing or showing extra columns can reduce other widths only as needed. Saved/default layouts fit under
 a guarded section-resize loop. The visible viewport's Resize/Show events supply the
-available width, excluding the gutter. Ordinary layouts fit without horizontal
+available width, including the row scrollbar’s overlaid strip. Ordinary layouts fit without horizontal
 scrolling; if selected fields exceed even their minimum widths, all three browser
 views allow horizontal scrolling so every field remains reachable. Saved layouts
 record columns_keys: restoring an older ten-column Qt header must explicitly keep
@@ -425,7 +519,7 @@ exact library/schema/version and per-track UUID authority; see
 [the prep plan](rekordbox-prep.md).
 Active `djmdCue` rows come from the same read-only live database snapshot as
 the library. Their normalized fingerprint and the exact normalized PQTZ beat
-rows update only the V5 manifest until SoundBox user data claims ownership;
+rows update only the disposable V5 manifest, reconciling durable pending edits;
 deleted database cues and later Rekordbox beat-grid corrections therefore land
 without touching the compressed analysis payload or decoding source audio.
 SoundBox's schema-V5 container owns the imported streams, grid/cues, source
@@ -447,7 +541,7 @@ V5 remains ready while the recurring background worker queues eligible local
 records for compact conversion, one track at a time. Interactive playback still
 loads old analysis immediately and can finish a selected upgrade ahead of the queue.
 The old record survives interruption or failure; manual metadata ownership and
-DB cue authority survive replacement. Source changes, explicit Rebuild Waveform and
+DB cue authority survive replacement. Source changes, explicit Analyze Track and
 late imports use the same preparation path. Dataless background reads remain
 deferred and per-track preparation receipts still avoid repeated work. The receipt
 policy includes the compact model so old ready receipts cannot hide pending
@@ -512,7 +606,14 @@ lattice to form the complete piecewise-linear profile; integrating those true
 segment spans avoids a hidden corner moving through a fixed probe interval.
 There is no translated RGBA texture or second coverage/color filter; every
 zoom retains the oversampled attribute lattice. RGB 576/864 use one logical-point display step, matching the native reference;
-other RGB stops and 3BAND retain fractional travel. BLUE rounds only its display offset to physical pixels
+RGB64/128/184 use one physical-pixel step after Sonny’s October31 moving
+comparison approvals; other RGB stops and3BAND retain fractional travel.
+RGB64–256 signed reconstruction retains the center-tap minimum/maximum,
+preventing the middle-zoom smoothing pass from shaving peaks. Neither source
+amplitudes nor display gain change; widest/close stops and BLUE/3BAND retain
+their existing geometry. The
+installed285163dc build passed1900 tests and source/state preservation (see
+HANDOFF). BLUE rounds only its display offset to physical pixels
 through 384 points/s and logical points at 576–1500, bounding its waveform-only
 error by half that increment. Audio, grid and seek clocks remain
 continuous in every mode. The antialias window is exactly one physical pixel.
@@ -538,7 +639,8 @@ contrast against the background is weighted before existing height
 premultiplication, preserving fine painted area rather than treating all peak
 bounds as occupied. No additional buffer, cache schema or per-frame source
 read is needed. If the physical/logical selections agree, color is unchanged.
-RGB 576/864 use logical-point motion; other RGB stops remain fractional. The broad occupied-column boost is
+RGB576/864 use logical-point motion; RGB64/128/184 use physical-pixel motion; other
+RGB stops remain fractional. The broad occupied-column boost is
 removed; normal coverage and hue are not brightened. Persisted
 extrema, mip data and the final physical-pixel integration window remain unchanged.
 BLUE/RGB at 24–256 px/s and 3BAND at 64–256 apply the same-LOD `[1, 2, 1]`
@@ -584,8 +686,8 @@ carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
 uses joint coverage/color integration. RGB 576/864 now use logical-point motion
-and the occupancy-weighted logical footprint above; other RGB stops remain
-continuous. RGB 384 keeps exact area; other RGB stops use only the faint shoulder described above. The installed September 30 correction additionally
+and the occupancy-weighted logical footprint above. The October31 RGB64/128/184
+phase corrections are described above; other RGB stops remain continuous. RGB384 keeps exact area; other RGB stops use only the faint shoulder described above. The installed September 30 correction additionally
 retains the original color-premultiplication weight through attribute interpolation;
 reconstructing that weight from interpolated signed bounds spuriously brightens
 polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
@@ -905,8 +1007,10 @@ refresh, preserving compressed waveform payloads.
 - **Drag-to-add works on the sidebar AND the main browser.** Dropping tracks or
   Finder audio onto the open view adds to the playlist it shows; Collection
   imports files only; Artists remains derived. Regular native rekordbox views
-  accept already registered track IDs through the accepted source worker; Finder
-  imports still require the separate registration protocol.
+  accept registered tracks through the accepted source worker. Direct imports
+  also capture Finder files and unregistered imported tracks into the
+  durable registration FIFO, gated by its separate native authority. Its installed
+  and native-acceptance state is recorded in HANDOFF.
   `TrackTable.resolve_drop` binds each drop to the active view.
 - **SoundBox playlist folders are local organization.** `soundbox.playlist_folders`
   validates a bounded nested `settings.custom_playlist_tree`: UUID/name/children
@@ -936,6 +1040,21 @@ color-dialog signals feed a16ms coalescing preview; previews never mutate saved
 preferences. OK commits once, Cancel restores the original accent/text roles. State load/restore reapplies both preferences. `desktop.wordmark.Wordmark`
 resolves the supplied SVG color layers in memory and occupies the original
 270×55 slot. The SVG is packaged data and part of the source fingerprint.
+
+The approved October31 `desktop.app_icon` path applies the committed accent to
+the running application icon after OK and at startup, independently of the16ms
+picker preview. It renders Sonny's supplied `soundbox-original-sb-icon.svg`,
+resolving its named accent/ink/highlight roles and border color for Qt while
+preserving authored letter outlines, clipping, dark tile and alpha. The approved
+project SVG removes one tiny ink cutout so its overlaid gray shine has no white
+streak; the supplied original remains untouched. The exact SVG is bundled
+and fingerprinted. Default PNG/ICNS derive from the same vector; eight modern PNG
+ICNS representations round-trip exactly through native iconutil readback.
+One normalized color per application avoids repeated rendering for text-only or
+repeated settings application. Qt's Cocoa application-icon API changes the running
+Dock/Command-Tab image; no bundle/Finder writes or extra preference files occur.
+Cancel does not touch the icon. Headless transaction/image checks and native
+NSApplication icon captures cover the commit path; HANDOFF gives installed status.
 
 Settings orders its tabs General, Analysis, My Settings, Keyboard, Graveyard, Connections; Graveyard
 uses the full width. A QTabBar is centered across the 40-pixel header, with Back on the left
@@ -1329,3 +1448,54 @@ library stops projection. Retry/discard rebuild against the current source. Side
 and browser use only this view; native caches and device capture retain the verified
 source and existing save barrier. Nested pending creations can receive later edits;
 background completion no longer steals navigation to a newly created playlist.
+
+
+### Ordinary initial saved-analysis publication
+
+The installed automatic path is `native_analysis_plan` + `rekordbox_analysis_store`,
+with `desktop.native_analysis` coordinating persisted intents on the existing
+Tag/Cue/Grid/Playlist/Registration worker. The separate analysis authority binds
+library/schema/version and accepted component profile. It permits initial full
+BPM/Grid+Key and fresh waveforms on bare stereo PCM16/24 WAV44.1/48kHz, with no
+gain, cue, audio, playlist or XML mutations. Unsupported/existing musical states
+fail closed rather than being overwritten. Native applications remain closed at
+write guards; owner waits back off and unstarted intents survive quit. Record,
+logical/native identity and prepared plan must match exactly before source SQL.
+
+The helper's `saved-analysis` command captures no detector decision: it receives
+saved beat rows, decodes only an explicit private local capture and renders the
+accepted native packet profile. The first two real-song accepted packet sets are
+byte-identical to the earlier explicit-reference renderer. Source publication
+stages a directory before its narrowly authorized DB commit, retaining encrypted
+paired DB/XML and packet evidence. Shared journal recovery verifies exact prefixes;
+a wholly unstarted stale plan can renew on current source without restoring old
+native data. Retention keeps the first ordinary reference and latest full pair;
+confirmed duplicate/older payload retirement is exact-hash checked and resumable.
+
+Only verified source readback updates the finished Track, cue identity, browser
+row and current RAM grid. Expected derived grid metadata may be promoted while
+all waveform payload bytes remain exact; different/newer manual data is retained.
+Captured detector records and manual drafts remain provenance and are never used
+as source authority. Existing analysis replacement/other codecs require their own compatible
+profiles. The initial-analysis payload excludes cue drafts; active prep transport
+queues them separately through the accepted cue API after analysis exists. Ordinary BREATHE publication passed native acceptance; the current installed
+2035-test delivery and exact evidence are recorded in HANDOFF.
+
+
+Captured-import and ordinary native prep intentions use `soundbox.prep_edits` and
+`desktop.prep_controller` with StateRepository persistence before presentation.
+Their per-track working component rows are temporary intentions, not source
+authority. The existing TagController lane prepares an exact accepted Cue/Grid
+request, persists it, then applies it and verifies component readback. Prepared
+requests reserve source priority from controller construction, including Tags and
+central Cue admission, until a matching committed native receipt is acknowledged;
+unknown receipts/source switches retain intentions and stop publication. Unrelated
+busy work never blocks new local clicks. Initial analysis strips cue drafts and
+acknowledges only captured grid-operation IDs, preserving newer edits. No new
+analysis codec/replacement or native deletion authority follows.
+
+ColorButton preserves QPushButton’s idle rendering while splitting swatch and hex
+hit targets. Hex editing commits validated six-digit RGB through the same settings
+transaction as picker OK. PlaylistFolderTree’s delegate opens plain-name inline
+editors; the configured browser.rename action dispatches sidebar focus before
+table/catalog rename, with existing local/native durable save routes.

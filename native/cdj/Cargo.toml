@@ -11,6 +11,7 @@ exclude = ["vendor/rbxport", "vendor/rbxport/crates/*"]
 rbl-export = { path = "vendor/rbxport/crates/rbl-export" }
 rbl-onelibrary = { path = "vendor/rbxport/crates/rbl-onelibrary" }
 rbl-pdb = { path = "vendor/rbxport/crates/rbl-pdb" }
+rbl-anlz = { path = "vendor/rbxport/crates/rbl-anlz" }
 rbl-analysis = { path = "vendor/rbxport/crates/rbl-analysis" }
 rbl-audio = { path = "vendor/rbxport/crates/rbl-audio" }
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }

@@ -140,7 +140,7 @@ class AnalysisMixin:
         results = self.settings.get('analysis_results', {})
         key = analysis.result_key(track.path)
         if (self._shutting_down or self._state_maintenance or results.get(key) != before
-                or not track.imported or track.source_uuid or track.source_analysis_path):
+                or not (track.imported or track.source_native_id) or track.source_analysis_path):
             raise ValueError('Track changed before saving the grid; reload it before editing')
         epoch = analysis.identity(track.path.stat())
         parts = self.player_bar._analysis_parts
@@ -169,6 +169,8 @@ class AnalysisMixin:
             self.player_bar.refresh_live_grid(track_id, track.path, resolved['beats'], resolved['bpm'])
 
     def _local_cue_reason(self, track_id):
+        prep=getattr(self,'prep_controller',None)
+        if prep and prep.handles(track_id):return prep.reason(track_id)
         if not self.grid_controller.is_local(track_id):
             return None
         if self._shutting_down:
@@ -177,6 +179,9 @@ class AnalysisMixin:
         return '' if record and record.get('beats') else 'Analyze BPM / Grid before editing cues'
 
     def _edit_local_cue(self, track, kind, slot, operation, position):
+        prep=getattr(self,'prep_controller',None)
+        if prep and prep.handles(track.track_id):
+            return prep.request_cue(track.track_id,kind,slot,operation,position)
         before = self._analysis_result(track)
         try:
             after = local_cues.edit(before, kind, slot, operation, position)
@@ -198,11 +203,12 @@ class AnalysisMixin:
         if not tracks: return
         prefs = analysis.options(self.settings.get('analysis'))
         if not (prefs['bpm'] or prefs['key']):
-            if not automatic: self._flash_status('Select BPM / Grid or Key in Settings')
+            if not automatic:self._reanalyze_tracks([track.track_id for track in tracks])
             return
         previous=self.settings.get(analysis_jobs.KEY,[])
         try:
-            jobs=analysis_jobs.admit(previous,self.lib,tracks,prefs,retry_failed=not automatic)
+            jobs=analysis_jobs.admit(previous,self.lib,tracks,prefs,retry_failed=not automatic,
+                                     rebuild_waveform=not automatic)
         except ValueError as exc:
             self._flash_status(str(exc),15);return
         if jobs!=previous:
@@ -242,6 +248,8 @@ class AnalysisMixin:
             return
         while self._analysis_queue:
             original, track, prefs, identity = self._analysis_queue.pop(0)
+            deletion=self.settings.get('graveyard_delete_intent')
+            if deletion and not deletion.get('error') and track.track_id in deletion['ids']:continue
             current = self.lib.tracks_by_id.get(track.track_id) if self.lib else None
             job=next((j for j in self.settings.get(analysis_jobs.KEY,[]) if j['id']==identity),None)
             if current is None or job is None or not analysis_jobs.matches(job,self.lib,current):
@@ -256,31 +264,47 @@ class AnalysisMixin:
 
     def _analysis_retired(self, worker):
         self._analysis_worker = None
-        if self._shutting_down or self._analysis_owner.stopping or worker.stop.is_set():
+        if self._shutting_down or self._analysis_owner.stopping:
+            return
+        if worker.stop.is_set():
+            QTimer.singleShot(0,self,self._start_next_analysis)
             return
         track = worker.tracks[0]
         try:
             if isinstance(worker.result, Exception):
                 raise worker.result
             current = self.lib.tracks_by_id.get(track.track_id) if self.lib else None
+            acquired_identity=bool(current and not track.source_uuid and current.source_native_id
+                                   and not current.source_analysis_path)
             if (self._state_maintenance or current is None or current.path != track.path
-                    or current.source_uuid != track.source_uuid
+                    or current.source_uuid != track.source_uuid and not acquired_identity
                     or self.lib.source != worker.library.source
                     or self.lib.source_library_id != worker.library.source_library_id):
                 raise ValueError('Track changed during analysis; analyze it again')
             before = self.settings.get('analysis_results', {})
             pending=self.settings.get(analysis_jobs.KEY,[])
+            rebuild=next((j.get('waveform',False) for j in pending if j['id']==worker.job_id),False)
             results = {key: analysis.merge_result(before.get(key), result, worker.preferences)
                        for key, result in worker.result.items()}
+            prep=getattr(self,'prep_controller',None)
+            prep_before=deepcopy(self.settings.get('pending_prep_edits',[]))
+            if prep:
+                results={key:prep.attach_result(current,result) for key,result in results.items()}
             retirement=analysis_jobs.finish(pending,worker.job_id)
             self.settings['analysis_results'] = {**before, **results}
             self.settings[analysis_jobs.KEY]=retirement
             if not self._save_state():
                 self.settings['analysis_results'] = before
                 self.settings[analysis_jobs.KEY]=pending
+                self.settings['pending_prep_edits']=prep_before
                 raise OSError('Analysis was not saved')
             self._invalidate_rows([track.track_id])
             self._refresh_analysis_row(track.track_id)
+            if rebuild and track.track_id not in getattr(self,'hidden',set()):
+                self._waveform_force_pending.add(track.track_id)
+                self._maybe_fill_waveforms()
+            publisher=getattr(self,'native_analysis_controller',None)
+            if publisher:publisher.discover()
             if self.player_bar.current_track() == track.track_id:
                 record = self._analysis_result(current)
                 self.player_bar.detected_analysis = record

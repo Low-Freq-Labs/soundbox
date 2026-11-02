@@ -105,12 +105,19 @@ class PlaylistFoldersMixin:
             self._commit_local_tree(nodes, select=(CUSTOM_FOLDER_ROLE, key))
         except (ValueError, KeyError) as exc:QMessageBox.information(self, 'Could not create folder', str(exc))
 
-    def _rename_local_node(self, kind, key):
-        nodes = self._local_playlist_tree(); _siblings, _index, node = folders.locate(nodes, kind, key)
+    def _rename_local_node(self, kind, key, value=None):
+        nodes = self._local_playlist_tree()
+        try:_siblings, _index, node = folders.locate(nodes, kind, key)
+        except KeyError:
+            self._flash_status('That '+kind+' has changed; select it again');return
         old = node['name'] if kind == 'folder' else key
-        value, ok = QInputDialog.getText(self, 'Rename '+kind, 'New name:', text=old)
+        if value is None:
+            role=CUSTOM_FOLDER_ROLE if kind=='folder' else CUSTOM_ROLE
+            item=next((i for i in self.sb_tree.findItems('',Qt.MatchContains|Qt.MatchRecursive)
+                       if i.data(0,role)==key),None)
+            return self.sb_tree.rename_inline(item,old,lambda text:self._rename_local_node(kind,key,text))
         value = value.strip()
-        if not ok or not value or value == old:return
+        if not value or value == old:return
         try:
             folders.name(value); custom = self.custom
             if kind == 'folder':node['name'] = value

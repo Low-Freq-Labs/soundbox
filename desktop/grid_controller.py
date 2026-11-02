@@ -85,11 +85,11 @@ class GridEditController(QObject):
                                        Path(lib.source), lib.source_library_id)
         if authority is None:
             raise RuntimeError('Grid editing is not enabled for this rekordbox library')
-        return PilotGridStore(authority.bind(track.track_id, track.source_uuid),
+        return PilotGridStore(authority.bind(track.native_id, track.source_uuid),
                               self.shared._write_root(lib))
 
     def _store_for(self, lib, track):
-        key = (str(lib.source), lib.source_library_id, track.track_id, track.source_uuid)
+        key = (str(lib.source), lib.source_library_id, track.track_id, track.native_id, track.source_uuid)
         if key not in self._stores:
             self._stores[key] = self._factory(lib, track)
         while len(self._stores) > 8:
@@ -103,14 +103,24 @@ class GridEditController(QObject):
         return self.shared.lib.tracks_by_id.get(tid) if self.shared.lib else None
 
     def is_local(self, tid):
+        prep=getattr(self.parent(),'prep_controller',None)
+        if prep is not None:return prep.handles(tid)
         track = self._track(tid)
-        return bool(track and track.imported and not track.source_uuid
+        return bool(track and (track.imported or track.source_native_id)
                     and not track.source_analysis_path and self.local_result and self.save_local)
 
     def _local_record(self, tid):
         return self.local_result(self._track(tid)) if self.is_local(tid) else None
 
     def _source_reason(self, tid):
+        if self.is_local(tid):
+            prep=getattr(self.parent(),'prep_controller',None)
+            if prep is not None:return prep.reason(tid,grid=True)
+            record=self._local_record(tid)
+            return '' if record and record.get('beats') else 'Analyze BPM / Grid before editing this track'
+        if self.shared.prep_priority or self.shared.busy and self.shared._busy_kind == 'prep':
+            return 'Confirming cue/grid saves…'
+        if self.shared.admission_paused:return 'Confirming a library operation…'
         if self._closing or self.shared.owner.stopping:
             return 'Finishing grid edits…'
         lib, track = self.shared.lib, self._track(tid)
@@ -146,7 +156,7 @@ class GridEditController(QObject):
         if reason:
             return reason
         if self.is_local(tid):
-            rows = local_grid.effective_result(self._local_record(tid))['beats']
+            rows = self.view(tid)[0]
             return '' if len({r[2] for r in rows}) == 1 else 'Manual BPM requires a constant-tempo grid'
         if self._requires_authority and not getattr(self._authority, 'manual_bpm_accepted', False):
             return 'Manual BPM editing awaits native acceptance for this library'
@@ -197,6 +207,8 @@ class GridEditController(QObject):
 
     def view(self, tid):
         if self.is_local(tid):
+            prep=getattr(self.parent(),'prep_controller',None)
+            if prep is not None:return prep.grid_view(tid)
             record = self._local_record(tid)
             if not record or not record.get('beats'):
                 return None
@@ -227,6 +239,8 @@ class GridEditController(QObject):
             self.rejected.emit(self.bpm_reason(tid))
             return False
         if self.is_local(tid):
+            prep=getattr(self.parent(),'prep_controller',None)
+            if prep is not None:return prep.request_grid(tid,operation,value)
             try:
                 record = self._local_record(tid)
                 # The durable captured result is the local edit base. A late
@@ -304,9 +318,11 @@ class GridEditController(QObject):
         self._drain()
 
     def _validate_snapshot(self, snapshot, cue_snapshot, track):
+        from soundbox.native_paths import validate_track_path
+        validate_track_path(track)
         if (snapshot.track != cue_snapshot.track or cue_snapshot.revision != track.source_cue_revision
                 or snapshot.track['UUID'] != track.source_uuid
-                or snapshot.track['FolderPath'] != str(track.path)):
+                or snapshot.track['ID'] != track.native_id or snapshot.track['FolderPath'] != str(track.native_path)):
             raise ConflictError('Track changed in rekordbox; refresh the library before editing')
         if (type(snapshot.track.get('Analysed')) is not int or snapshot.track['Analysed'] < 0
                 or type(snapshot.track.get('FileType')) is not int
@@ -344,7 +360,7 @@ class GridEditController(QObject):
         def load():
             self.shared._recover_pending(lib)
             snapshot = self._store_for(lib, track).snapshot()
-            cues = self.shared._cue_store_factory(lib, tid).snapshot()
+            cues = self.shared._cue_store_factory(lib, track.native_id).snapshot()
             self._validate_snapshot(snapshot, cues, track)
             return snapshot
 
@@ -410,12 +426,12 @@ class GridEditController(QObject):
                 raise ConflictError('Grid source changed before saving')
             self.shared._recover_pending(lib)
             store = self._store_for(lib, track)
-            cue_store = self.shared._cue_store_factory(lib, group.track_id)
+            cue_store = self.shared._cue_store_factory(lib, track.native_id)
             before, cue_before = store.snapshot(), cue_store.snapshot()
             self._validate_snapshot(before, cue_before, track)
             if (before.dat, before.ext) != (base.dat, base.ext):
                 raise ConflictError('Saved grid changed; refresh the track before editing')
-            request = GridEdit(group.track_id, group.track_uuid, before.revision,
+            request = GridEdit(track.native_id, group.track_uuid, before.revision,
                                 group.operation, group.value, tuple(group.nudges))
             store.apply(request)
             after, cues = store.snapshot(), cue_store.snapshot()

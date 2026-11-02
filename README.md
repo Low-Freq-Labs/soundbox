@@ -9,8 +9,10 @@ cover art, honest sync semantics.
 
 SoundBox is a desktop app for keeping a curated music library and exporting it
 to portable players. It reads rekordbox through snapshots, saves accepted My Tag,
-cue and grid edits to the source, keeps source audio unchanged and title/artist edits
-and artwork in SoundBox's own state, and
+cue and grid edits to the source, preserves source audio during ordinary playback/
+export, and keeps title/artist edits and artwork in SoundBox's own state. Explicit
+recoverable compatibility conversion and confirmed Graveyard Delete are separate
+audio-changing workflows. It
 provides a CoreAudio/Metal player for previewing tracks before export.
 
 ### Requirements
@@ -22,13 +24,16 @@ verified metadata. Grid controls support setting a bar start, whole-grid nudges,
 and constant-tempo double/half under the same accepted source boundary. Manual
 BPM entry on native tracks requires its separate acceptance flag; `138`, `138.0` and
 `138.00` all submit the same two-decimal value.
-Captured analysis on direct imports supports manual grid drafts independently;
-native registration and publication of those drafts remain pending.
+Direct imports register/reuse native records and durably route playlist membership.
+Captured imports and native songs admit durable cue/grid intentions during source
+work. Initial shared analysis supports the separately accepted bare stereo
+PCM16/24 WAV44.1/48kHz full BPM/Grid+Key profile; broader profiles remain gated.
 Smart-list creation remains a subsequent milestone.
 New cues appear and become usable immediately in the playing session while
 guarded database saves run in the background. The existing bottom-left footer
 names the edit being updated, then shows “Done” after verified persistence;
-normal quit finishes the queue, and a failed save restores verified cue state.
+normal quit drains accepted work. Durable prep intentions survive failure/restart
+and reconcile exact native receipts before retry; unknown source states stay guarded.
 Grid edits also update the loaded session immediately, including during the
 initial source check; verified saving remains in the background.
 
@@ -63,6 +68,7 @@ General Settings includes a **Theme color** picker and Reset button. The accent
 updates selections, controls and the SVG logo’s BOX layer immediately and persists
 with your settings. **Text color** independently selects White, Black or a custom
 color for lettering on theme-colored selections and buttons (White by default).
+Click a color swatch for the picker, or its hex text to type a six-digit RGB value.
 Both pickers preview live as you move through colors; OK saves and Cancel
 restores your previous appearance. Text-color switching updates immediately.
 Changing the accent never overrides that choice. The logo retains the previous
@@ -71,7 +77,8 @@ header footprint.
 ### First workflow
 
 1. Open the desktop app and browse the rekordbox library, or import audio from
-   Finder into Collection or a SoundBox playlist.
+   Finder into Collection, a SoundBox playlist or directly onto a native rekordbox
+   playlist. Compatible imports enter both Collection views without a separate save.
 2. Curate titles, artists, playlists, and cover art in SoundBox. Edits remain
    SoundBox-owned; they do not retag your source audio.
 3. Double-click a track to load it. Playing decks keep playing; paused decks stay
@@ -189,8 +196,22 @@ delete it. Drag existing registered tracks onto a native playlist and use Remove
 from Playlist to save membership changes to rekordbox. Songs remain in Collection.
 Edits wait while rekordbox or its agent is open and report success after verified
 publication; pending errors offer Retry or Discard. This accepted writer is bound
-to the current library/version. Intelligent/cloud edits and registering newly
-imported SoundBox files in rekordbox remain separate work.
+to the current library/version. Compatible direct imports register in Collection
+and route into their chosen native playlist through a durable queue. Intelligent/
+cloud edits remain separate. New float32 WAV imports automatically become24-bit
+integer WAVs at the same filename/path, with exact originals retained for recovery.
+Conversion preserves gain (over-range peaks clip, as selected after audition),
+frame timing, metadata and saved BPM/key/grid/cues. The broader Collection
+controller checks the common original-CDJ-2000/CDJ-3000 profile, converts eligible
+files in place and updates existing native paths automatically when an extension
+changes. Four real references retain their original backups and native acceptance;
+no manual Relocate step. The installed batch completed124 WAV conversions with
+exact originals retained. Timing-unproven, cloud-deferred and unavailable files
+remain explicit; see [compatibility limits](docs/cdj-media-compatibility.md).
+Device originals stay untouched.
+Native registration/analysis still use their
+accepted integer-WAV profiles. Unsupported or changed sources retain an error
+and their original import destination.
 
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
 temp snapshot — rekordbox can stay open) or an XML export as fallback; ↻
@@ -211,7 +232,8 @@ Collection before analysis, and BPM/Key populate one completed song at a time.
 Finished songs can be edited while later songs continue analyzing.
 Unfinished detection resumes after restart with the original job settings;
 failed songs wait for an explicit retry. The browser context menu also offers
-Analyze Track, with Rebuild Waveform kept as a separate display-recovery action.
+Analyze Track, which also rebuilds the selected waveform after detection succeeds.
+With BPM and Key unchecked, Analyze Track rebuilds only the waveform.
 Its default RBXport pipeline follows tempo
 changes with attack placement and downbeat selection, using the selected BPM
 range. Tracks within the thirty-minute/96M mono-sample bounds are analyzed
@@ -219,8 +241,9 @@ completely, with longer tails streamed and the grid continued
 at the last measured tempo. Inconclusive results preserve prior musical data for
 the same audio. Detected results are saved in SoundBox and
 can follow the same audio into a later native track ID. Existing saved grids/cues
-are preserved. Reverse analysis publication into rekordbox is still pending native
-acceptance; see [the exact stage](docs/analysis-playlists-next.md) and the
+are preserved. Automatic initial BPM/grid/key/waveform publication is accepted for bare stereo
+16/24-bit integer WAV44.1/48kHz. Other codecs/existing-analysis replacement remain
+separate profiles; see [the exact stage](docs/analysis-playlists-next.md) and the
 [upstream comparison](docs/rbxport-reference-audit-2026-10.md). Five grid buttons occupy the left, enabled for a ready accepted
 track with Analysis Lock off; the BPM field after the first-beat button shows
 `000.00` while empty. On an accepted constant grid, type a BPM and press Enter:
@@ -231,7 +254,10 @@ before the actual grid and browser update, preserving the detector's raw result
 and cues. Captured imports also retain durable Hot/Memory Cue drafts. Cloud
 metadata changes require a cached exact-byte proof before reusing analysis;
 they do not require reimporting or reanalyzing an unchanged song.
-Native registration/publication of those drafts remains unfinished.
+Captured-import cue/grid intentions remain editable while native work is busy,
+with persistence before presentation. Exact prepared requests and source receipts
+protect retry/restart. Cues publish through the accepted cue API after native
+analysis exists; native writes retain closed-rekordbox/agent and profile guards.
 Native playlist create, rename, delete and song membership edits appear as soon
 as their intent is safely saved; the shared background writer completes the native
 save, while failures offer retry or discard against the current source view.
@@ -264,9 +290,10 @@ cache instead of recooking unchanged audio, and on-demand placeholders are not
 hydrated by startup checks.
 
 **Sidebar.**
-- **⌂ Collection** — every loaded track (rekordbox playlist songs + direct
-  imports), newest first. Put new rekordbox songs in a playlist such as ALL LOCAL
-  and refresh SoundBox. Direct SoundBox imports do not yet register in rekordbox.
+- **⌂ Collection** — all active supported native audio plus direct imports,
+  newest first; native placeholders are excluded. Refresh discovers native songs
+  even without playlist membership. Compatible direct imports register/reuse their
+  native Collection identity and retain their intended playlist destination.
 - **♪ Artists** — the same pool grouped A→Z by effective artist, expandable
   per artist.
 - Both are pinned views *and* draggable playlists: drop one on a device to
@@ -324,21 +351,37 @@ Unmerge), **Suggest artists for Unknowns…**, named **Title Cleanup** rules
 (five defaults: Mixdown Label, Copy / Version tags, BPM / Key tags,
 Render / File tags, and Drop "(Original Mix)"; plus exact custom words/bracket
 tags or validated regex), neat-title edge-artist
-stripping. A track's context menu can copy its real on-disk filename or reveal
-the selected source directly in Finder. Removal has two explicit scopes: playlist menus offer
+stripping. A track's context menu can reveal the selected source directly in
+Finder. Analyze Track also rebuilds its waveform; the separate filename-copy,
+waveform-rebuild and cover-art URL actions are removed from this menu.
+Removal has two explicit scopes: playlist menus offer
 both **Remove from Playlist** (only that playlist) and **Remove from Collection**
 (global hide, restorable from the dated **Settings → Graveyard** tab); Collection
 offers only the latter. Graveyard restore is selection-scoped: select one,
 Shift/Cmd-select several, or use Cmd-A, then right-click **Restore**. There is
-no unconditional Restore All shortcut. Double-click a Graveyard track (or choose
+no unconditional Restore All shortcut. Cmd+A in Graveyard always selects tracks,
+even when another action has that binding. Double-click a Graveyard track (or choose
 Load Track) to audition it in the deck before restoring; it stays removed and
 does not join autoplay. Space, held C and existing cue keys work there. Cue
 creation/deletion waits until restoration. A global Graveyard entry immediately
 drops its disposable SoundBox waveform record and background preparation skips
 it; restoring the track prepares it again when its source remains available.
 Playlist-only removals retain analysis because the track can still be browsed
-and played elsewhere. Both removal scopes drift synced devices; rekordbox and
-source audio never change.
+and played elsewhere. Native playlist removal saves to rekordbox; ordinary
+restorable Collection hiding leaves its native record and audio untouched.
+
+Graveyard also shows total and selected file sizes using metadata, without
+decoding or downloading audio. Its i button follows the highlighted row, including
+exact historical identities recovered for native-deleted tracks. **Delete from
+Collection and disk…** prepares a selection-specific confirmation, removes the
+chosen native Collection entries and memberships, and moves their files to macOS
+Trash. Shared files still used by unselected Collection entries are explicitly
+kept in that review. Unknown paths remain guarded; entries independently proven
+absent from native Collection can use explicit local-only stale-entry dismissal.
+Known missing files can still have their Collection entries removed. Saved SoundBox musical/curation data
+remains. Disk space is reclaimed when Trash is emptied. This uses a separately
+accepted native deletion profile and the shared source worker/recovery journal;
+see [the deletion contract](docs/graveyard-delete-plan.md) and [installed status](docs/HANDOFF.md).
 
 **Cover art.** Local images, cache indexes and default-photo changes share one
 serialized state owner with backup/restore. Failed publication retains the previous
@@ -353,7 +396,11 @@ title orientation handles both `ARTIST - TITLE` and `TITLE - ARTIST`, and new
 cache entries retain `auto`/`manual` provenance. Manual per-track
 picker (image files in both builds; personal also offers search results and URL — an artist profile URL yields
 the avatar), an **Artist Pictures catalog** for avatar-wearing artists, and
-per-track blocking ("Remove cover art" is sticky). Settings also provides a
+per-track blocking ("Remove cover art" is sticky). The track menu has a
+personal-provider **Set cover art to artist profile** action immediately above
+Remove cover art. It uses the effective artist’s profile photo, without falling
+back to a track cover; a late request cannot overwrite a newer choice or artist edit.
+Settings also provides a
 managed **Default photos** pool: imported originals are copied into SoundBox,
 normalized, and deterministically randomized with exact-even distribution
 across visible tracks whose art is naturally missing or deliberately blocked.
@@ -466,14 +513,16 @@ A newly loaded track starts on its first analyzed beat. SoundBox V5 owns the
 prepared grid/cues, waveform streams, export eligibility, and signed detail.
 Complete Rekordbox analysis is reused first, with only a compact 1-ms detail
 supplement generated from audio; fallback analysis handles incomplete imports, while cues refresh by fingerprint from
-a read-only live-DB snapshot until SoundBox user data claims ownership.
+a read-only live-DB snapshot, reconciled with durable pending edit intentions.
 If a track was first cached before Rekordbox finished its display analysis,
 the recurring scan notices when a valid PWV3/PWV5/PWV7 stream appears for a
 mode still using SoundBox's fallback and atomically recooks only that track.
-Right-click **Rebuild Waveform** remains the explicit recovery path. **Analyze
-Track** runs BPM/Grid+Key detection in the background instead. Both waveform routes
-import only read-only ANLZ data; analysis preparation never modifies source audio
-or rekordbox data.
+Right-click **Analyze Track** runs the selected BPM/Grid+Key detection and rebuilds
+the waveform in the background. It is also the waveform recovery action when both
+detection components are unchecked. Both waveform routes
+read existing ANLZ through snapshots and preserve source audio. Completed
+initial detection can publish native BPM/key/grid/waveforms through the separately
+accepted shared-analysis writer; broader replacement profiles remain gated.
 Stored hot-cue colors appear as black-outlined A–H boxes on both the
 whole-track overview and scrolling waveform; memory cues use one consistent
 red upward arrow in both scales.
@@ -483,7 +532,8 @@ zoom levels in memory, omitting duplicate spectral analysis. Existing caches
 remain playable while eligible local tracks upgrade individually in the background;
 there is no need to load each song. Offloaded audio waits until it is local.
 Incomplete imports retain SoundBox's generated fallback colors.
-Player preparation leaves rekordbox and source audio unchanged. Native-deck failure disables
+Playback/cache preparation preserves source audio and native data; accepted
+cue/grid/initial-analysis saves use the separate guarded source worker. Native-deck failure disables
 playback with a diagnostic while library management remains available.
 
 **Devices & sync.** New connections appear as **Checking…**, then become usable
@@ -650,8 +700,14 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
   The accepted grid API changes only DAT/PQTZ, native EXT/PQT2 invalidation and
   the narrow BPM metadata/counter delta. Other analysis sections and metadata
   remain protected. Grid previews update immediately while the same shared
-  worker saves and verifies in background. See [the prep plan](docs/rekordbox-prep.md).
-- Source audio files are **never** modified, renamed, moved, or deleted.
+  worker saves and verifies in background. Ordinary registration, playlist CRUD,
+  initial supported WAV analysis, confirmed removal and conversion locator updates
+  each require their own independently accepted source authority and recovery.
+  See [the prep plan](docs/rekordbox-prep.md) and [current handoff](docs/HANDOFF.md).
+- Ordinary playback/export leaves source audio unchanged. Only the explicitly
+  authorized recoverable compatibility converters and user-confirmed Graveyard
+  Delete may replace/move desktop originals, with exact recovery and separate
+  source authorities. No general source cleanup or permanent deletion is granted.
 - Every export write lands **under an explicit export target** (the device), guarded
   so a target can never overlap the source library.
 - Writes below `iPod_Control` go only through the guarded MA446 stock adapter.

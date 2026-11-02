@@ -1,25 +1,74 @@
 # Shared library, analysis and player corrections
 
-October 30, 2026. This records Sonny's requested direction and the proposed next-
-session implementation sequence, incorporating screenshots and auto-analysis/BPM
-clarifications. The original planning pass changed no runtime code. Implementation
-has now started with local grid drafts, measured whole-tempo detection, durable
-delete presentation and shared sidebar geometry. See HANDOFF for their validation
-and installed status. Build148 is the starting point; the shared native workflow
-is still unfinished.
+Updated November1,2026. This plan began at build148 on October30. Direct shared
+imports, initial supported WAV analysis, durable prep and the requested player/
+Graveyard controls are now installed. The full shared-primary outcome still has
+broader codec/replacement/gain/metadata gates. [HANDOFF](HANDOFF.md) records the
+current binary and newest user state; dated research checkpoints below describe
+their original boundaries, not current production availability.
 
-## October31 next-session priority
+## October31 live import: ordinary automatic sharing
 
-Sonny explicitly requested the next session start with direct native playlist
-file drops and SoundBox Collection → rekordbox Collection registration. Both are
-still broken in the installed build. Do not require Collection-first importing.
-Use the proven registration foundations to complete durable registration/reuse,
-canonical identities, captured playlist destination and membership publication
-even when analysis is off or unfinished,
-then verify both Collections through restart/native reopen. Preserve the already
-imported WHOLE CLUB ROCKIN (`sb-5adee0814145`,174BPM/9A) and Innerbloom
-(`sb-19a5565cfb6d`,140BPM/6A). RGB/polish follows this work. This wrap-up publishes
-the current foundation; it does not claim those import paths are implemented.
+Sonny's newer BREATHE direct-to-ALL-LOCAL test exposed the missing automatic
+analysis publisher. He explicitly requires completed SB waveform/grid/BPM/key to
+appear natively without another question. The installed runtime now persists a
+full-result intent on the common source lane, renders only from captured bytes
+and saved rows, commits native packets/metadata recoverably, and updates the
+finished song without reloading audio or the library. The initial supported
+profile is bare stereo PCM16/24 WAV44.1/48kHz with full BPM/Grid+Key, preserving
+cues/gain/audio/XML/playlists. Existing native analysis replacement, other codecs
+remain separate profiles; cue drafts now travel independently through the
+accepted durable Cue API. Do not overstate analysis authority.
+
+At that October31 checkpoint BREATHE had281 rows,130/7A with first beat1 at0.
+Newer user edits now produce280 native rows and5 cues; preserve the current
+HANDOFF result, not the old checkpoint. The installed whole-v4 detector repairs the boundary omission with beat2/phase plus measured
+opening evidence and preserves later times. No reanalysis is needed for these
+saved results. The signed8e4 build passed1896 tests; its ordinary worker published
+BREATHE130/7A and his exact281-row grid with first1 at0. Native exact search,
+paused deck load and normal quit preserved all packets, memberships, XML and
+non-registry source tables; seven housekeeping registry differences stay explicit.
+SoundBox restart retained the publication without redetection or duplicate work.
+Native writes wait automatically while rekordbox/agent are open. HANDOFF records
+exact installed provenance and preservation evidence.
+
+## October31 user correction and current acceptance
+
+The earlier generated-only completion claim was rejected. Sonny required the
+already imported WHOLE CLUB ROCKIN and Innerbloom themselves to reach native
+Collection without reimport/reanalysis, and reported refresh failing on stale
+fixture bindings plus unwanted test songs in Collection. No more generated songs
+may be added to his library; synthetic tests remain isolated in TEMP only.
+
+Both real files are now registered under native3829367246/3204654453, retaining
+logical `sb-5adee0814145`/`sb-19a5565cfb6d`, their exact audio digests and saved musical
+results. Real rekordbox exact-search screenshots and normal-quit preservation
+prove Collection presence. Sonny then explicitly requested the saved musical components on those two.
+A separate exact two-song adapter published the saved grids/keys and newly rendered
+native waveforms without rerunning detection or copying generated gain values.
+Native exact searches, deck loads and normal quit passed:174/9A and140/6A,
+561/721 exact saved beats and all six packets preserved, every non-registry table
+and current playlist membership unchanged. Seven registry differences remain
+explicit. This older exact-two acceptance supplies compatibility evidence; the
+newer user request separately authorized the installed ordinary WAV publisher above.
+At that checkpoint88 imports remained. The newer verified delivery baseline is
+93 imports/1107 title overrides; live user changes supersede checkpoint counts.
+
+Read-only projection now isolates unavailable native bindings per song instead
+of invalidating the whole verified source. Removed bound imports stay out of
+Collection injection while durable drafts/curation survive. Default transaction
+projection and malformed/duplicate/source-conflict checks remain strict; an
+unavailable identity cannot publish new SQL. Actual pre-fix source replay and
+regressions and the1861-test release/install/repeated-refresh checks pass.
+The footer-completion and native-playlist-hover corrections are installed in the
+current signed build; see HANDOFF for installed provenance.
+HANDOFF records exact current evidence and installed provenance.
+
+The full shared-primary-library outcome below remains unfinished. General native
+analysis formats/existing-analysis replacement, gain/metadata and reviewed
+old-import migration need further proofs/acceptance. Requested RGB refinements
+have now passed actual comparison approval and installed verification. Existing generated tests or
+registration alone must never substitute for real-song or musical-data acceptance.
 
 ## Required outcome
 
@@ -52,10 +101,9 @@ same background path when automatic analysis is off. Each finished song must
 immediately admit manual BPM, grid and cue edits. A direct drop into either native
 or SoundBox playlists must also enter both apps' Collection. Existing imported
 Innerbloom (`sb-19a5565cfb6d`,140BPM/6A) must benefit without reimport/reanalysis.
-Current preservation baseline is87 imports/1105 title overrides; the86-import
-checkpoint and its evidence remain historical.
-The background/edit fixes are installed; native shared imports remain
-an independent unfinished acceptance/integration gate.
+The original87-import/1105-title checkpoint is historical; HANDOFF records
+current preservation counts. Background/edit fixes and direct native shared
+imports are installed with separate accepted authorities.
 
 ## Shared-database architecture and ordinary save behavior
 
@@ -348,6 +396,20 @@ existing local import and still reject the native playlist drop.
   ID, title, art, preferences and manually corrected data. No bulk reanalysis or
   registration of the other 84 imports is authorized by this plan.
 
+### October31 visual continuation
+
+Sonny clarified five/six clicks above widest as **128/184** and revoked computer
+control. The saved BREATHE recording now has matched headless production-Metal
+current/candidate clips at those exact stops, with BLUE and shoulder-removal
+controls. Candidate changes only RGB128/184 display phase to one physical pixel;
+all shader/LOD/contour/color/cache data remains exact.34 focused tests and native
+build pass. Sonny watched the opened review and explicitly accepted the bottom
+candidate. Full1900-test release/Cocoa gate, signed package, isolated smoke, safe
+installation and actual library/analysis preservation now pass. Installed build153
+fingerprint285163dc… is live with zero preparation. The six-second before/after
+shows current-at-review-time above/candidate below; HANDOFF records provenance,
+private evidence and measurement limits.
+
 ### 7. Reopen the exact RGB temporal problem
 
 The zoom ladder is 24,32,48,64,92,128,184,256,384,576,864,1152,1500 px/s.
@@ -447,7 +509,12 @@ visual acceptance and exact state preservation. Distinguish any outstanding
 capability/format/permission gate explicitly. Do not call the two-app workflow
 complete merely because registration, one detector test, or UI polish passed.
 
-## October30 implementation checkpoint
+## Historical October30 implementation checkpoint
+
+The remainder preserves the original research sequence. Statements about missing
+production authority or uninstalled work apply to these checkpoints only; current
+accepted registration/analysis/prep/deletion/conversion domains are described above
+and in AGENTS/CLAUDE/HANDOFF.
 
 The initial changes use `soundbox.local_grid` for revisioned manual drafts inside
 the captured analysis record. Raw detector BPM/rows/engine, first-cue identity,
@@ -574,3 +641,13 @@ now pass frozen/synthetic/disposable-copy proofs, and a standalone renderer emit
 fresh waveform packets. Waveforms differ from native, PQT2 initial invalidation
 needs acceptance, and gain/endpoint observations remain fixture-bound. No analysis
 source publisher/permission or production import/Collection integration is enabled.
+
+
+November1 installed prep refinement: per-song durable cue/grid intentions precede
+native admission for captured imports and ordinary native tracks. Exact v2 rows,
+prepared requests and actual receipt proofs protect restart/retry and newer edits;
+unknown states remain guarded. Initial analysis strips cues and acknowledges only
+its captured grid IDs. Collection/disk Delete uses its [separate accepted
+boundary](graveyard-delete-plan.md) and explicit user confirmation. Sonny confirms
+bulk Delete works. Conversion and locator publication have their own independent
+accepted domains; no codec/replacement authority follows merely from prep.

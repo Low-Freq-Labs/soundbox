@@ -4,11 +4,12 @@ Accepted scope October29, including Sonny's overnight correction: the three-line
 menu is immediately **right of Q**, with the same evenly distributed toolbar
 gaps. Analysis must ultimately work in either direction: importing/analyzing in
 SoundBox first or rekordbox first must preserve the same musical data, independent
-of author. The reverse source-publication acceptance below remains unfinished;
-the current detection stage must not be described as the completed round trip.
-The initial menu/local detection stage shipped in personal build142 after the
-complete offscreen/Cocoa gate. The later spacing/playback release is recorded
-in HANDOFF; shared source publication remains unfinished.
+of author. Direct native registration and initial shared full BPM/Grid+Key/
+waveforms on bare stereo PCM16/24 WAV44.1/48kHz now have separate accepted
+production authorities and are installed. Broader codecs, partial-component and
+existing-analysis replacement/gain/metadata remain gated. The dated native
+references below retain their original scope; they are not current missing-work
+claims or permission to broaden a writer.
 Actual installed provenance and validation are in [HANDOFF](HANDOFF.md).
 
 ## Implemented toolbar and USB behavior
@@ -76,13 +77,19 @@ SoundBox result. A key-only/grid-only run preserves the other result for the sam
 bytes. Playback validates the exact recorded filesystem identity in its existing
 worker. A native/manual grid wins over detected fallback; native cues remain
 source-authoritative. Detected values fill otherwise-empty browser BPM/key.
-For direct imports without existing cues, the optional first-beat cue is applied
-locally. This stage does **not** yet publish detected grids, Key or that optional
-cue back to the source database, and native CDJ export continues to capture native
-source analysis. These are temporary acceptance boundaries, not an author-based
-product policy. A detected result never grants the manual-grid writer new powers.
+For direct imports without existing cues, the optional first-beat cue is captured
+as a durable cue intention. Initial supported full WAV analysis publishes through
+its own authority; cue drafts use the separate accepted Cue API. Native CDJ export
+captures verified native source analysis. A detector result never grants the
+manual-grid writer new powers or authorizes replacing existing native analysis.
 
-## Remaining shared-analysis acceptance
+## Shared-analysis acceptance boundaries
+
+The initial full supported WAV and bare-registration gates described below have
+passed via independent production domains. Preserve these original native
+references; broader codecs, existing-analysis replacement and partial-component
+publication still require their own evidence. Do not repeat generated imports
+into Sonny's real library as a routine acceptance test.
 
 The accepted manual-grid API does not cover registering a new detected analysis,
 KeyID interning, initial analysis-file/contentFile registration or a direct-import
@@ -153,8 +160,9 @@ counter352283→352304 includes both import and analysis; no intermediate captur
 isolates those operations. Preserve the distinction between initial analysis
 and a Key-only recheck of existing analysis when implementing selection semantics.
 The third WAV is an exact verified copy of the generated reference; SoundBox-first
-remains unimported for the reverse-import proof. No further native action is
-currently requested; copy-only publication/recovery remains unfinished.
+remained unimported at this historical checkpoint. Subsequent independent
+registration/initial-WAV-analysis proofs and authorities completed those supported
+production paths. This reference supplies no broader publication authority.
 
 ## Ordinary source playlists — accepted October30
 
@@ -199,8 +207,9 @@ cache data and pins grant no registration/edit authority. Only the user-requeste
 October30 local veto3604899226/109556371 was cleared after its verified native
 removal; unrelated older local vetoes remain. The acceptance's own temporary
 folder was removed through the accepted writer afterward, preserving Collection,
-cues/analysis and XML. Intelligent/cloud mutations, new-file registration and
-reverse detected-analysis publication remain separate unfinished milestones.
+cues/analysis and XML. Intelligent/cloud mutations remain separate. New-file
+registration and initial supported WAV analysis later passed independent acceptance
+and are installed; broader analysis replacement/metadata remain gated.
 
 ## Historical prototype and first exact-plan pilot
 
@@ -355,8 +364,9 @@ newly playlist-scoped references now enter its read-only browser (3742 tracks,
 playlist, registration or analysis authority.
 
 The separate ordinary API acceptance above later completed general CRUD, other
-deletion shapes and sibling order. Direct registration and analysis publication
-still need their remaining implementation/acceptance.
+deletion shapes and sibling order. Direct registration and initial supported WAV
+analysis subsequently passed their independent production acceptance; the old
+exact-plan pilot grants no operations in those domains.
 Never reuse this approval for a different operation or refresh a stale plan.
 
 ## Private evidence

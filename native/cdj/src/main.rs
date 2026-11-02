@@ -7,6 +7,7 @@ mod merge;
 mod preferences;
 mod upgrade;
 mod analysis;
+mod saved_analysis;
 
 fn local(root: &Path, path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let path = path.canonicalize()?;
@@ -226,6 +227,7 @@ fn main() -> Result<(),Box<dyn Error>> {
     if root.starts_with("/Volumes")||root.starts_with("/dev")||root.parent().is_none(){return Err("local workspace required".into());}
     let result=match args[1].as_str(){
         "analyze" if args.len()==4=>analysis::run(&root,Path::new(&args[3]))?,
+        "saved-analysis" if args.len()==4=>saved_analysis::run(&root,Path::new(&args[3]))?,
         "inspect" if args.len()==3=>inspect(&root)?,
         "initialize" if args.len()==5=>{
             let request:serde_json::Value=serde_json::from_slice(&std::fs::read(local(&root,Path::new(&args[3]))?)?)?;

@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from .rekordbox_write import WriteProofError
 from .native_registration_plan import _native_id, _uuid
@@ -22,11 +23,13 @@ class Binding:
     native_id: str
     native_uuid: str
     canonical: str
+    native_path: str = ''
 
     def validate(self):
         if not isinstance(self.local_id, str) or not self.local_id:
             raise WriteProofError('Stable logical track identity is required')
         _canonical(self.source); _canonical(self.canonical)
+        if self.native_path:_canonical(self.native_path)
         _native_id(self.library_id); _native_id(self.native_id); _uuid(self.native_uuid)
 
 
@@ -44,7 +47,7 @@ def _canonical(value):
         raise WriteProofError('Explicit canonical path facts are required')
 
 
-def resolve(*, local_id, canonical, source, library_id, native_rows, previous=None, other_bindings=()):
+def resolve(*, local_id, canonical, source, library_id, native_rows, previous=None, other_bindings=(), aliases=()):
     """Propose reuse/register; a verified transaction must still own publication.
 
     Callers capture/verify the canonical path; this pure planner never resolves
@@ -57,8 +60,15 @@ def resolve(*, local_id, canonical, source, library_id, native_rows, previous=No
         previous.validate()
         if (previous.local_id, previous.source, previous.library_id) != (local_id, source, library_id):
             return IdentityDecision('conflict', None, (), 'Previous binding belongs to another track/source/library')
+    from .native_paths import AliasProof
+    proofs=[AliasProof.from_dict(value) for value in aliases]
+    if any(proof.canonical!=canonical for proof in proofs):raise WriteProofError('Alias belongs to a different canonical file')
+    paths={canonical,*(p.path for p in proofs)}
     active = []
-    matching = [deepcopy(row) for row in native_rows if row.get('FolderPath') == canonical]
+    matching = [deepcopy(row) for row in native_rows if row.get('FolderPath') in paths]
+    if any(not any((r.get('ID'),r.get('UUID'),r.get('FolderPath'))==(p.native_id,p.native_uuid,p.path)
+                   for r in matching) for p in proofs):
+        return IdentityDecision('conflict',None,tuple(matching),'Native alias row changed since capture')
     for row in matching:
         if type(row.get('rb_local_deleted')) is not int or row['rb_local_deleted'] not in (0, 1):
             return IdentityDecision('conflict', None, tuple(matching), 'Unknown native row history')
@@ -73,7 +83,8 @@ def resolve(*, local_id, canonical, source, library_id, native_rows, previous=No
             return IdentityDecision('conflict', None, candidates, 'Missing/historical native identity needs explicit reconciliation')
         return IdentityDecision('register', None, ())
     row = active[0]
-    binding = Binding(local_id, source, library_id, row['ID'], row['UUID'], canonical)
+    binding = Binding(local_id, source, library_id, row['ID'], row['UUID'], canonical,
+                      row['FolderPath'] if row['FolderPath']!=canonical else '')
     if previous is not None and previous != binding:
         return IdentityDecision('conflict', None, candidates, 'Native identity/path changed since the prior binding')
     for other in other_bindings:
@@ -84,39 +95,50 @@ def resolve(*, local_id, canonical, source, library_id, native_rows, previous=No
     return IdentityDecision('reuse', binding, candidates)
 
 
-def project(library, bindings):
+def project(library, bindings, *, unavailable=None):
     """Return a detached logical-ID view of a freshly verified native library.
 
     This is identity projection only: native musical fields and the raw source
     catalog remain unchanged. The caller must supply bindings from a verified
     registration/reuse receipt; this function neither reads nor writes SQL.
-    Every binding is checked before any result is returned. Old imports keep
+    Every binding is checked before any result is returned. Read-only browsing
+    may collect unavailable bindings without disabling unrelated native tracks;
+    the default remains strict for transaction/readback callers. Old imports keep
     their logical IDs for curation, custom playlists, caches and device records.
     """
     if library.source_kind != 'rekordbox-db':
         raise WriteProofError('Identity projection requires a native library')
-    by_native = {}; logical = set()
+    by_native = {}; logical = set(); native = set()
     for binding in bindings:
         binding.validate()
         if (binding.source != str(library.source) or binding.library_id != library.source_library_id
-                or binding.native_id in by_native or binding.local_id in logical):
+                or binding.native_id in native or binding.local_id in logical):
             raise WriteProofError('Conflicting identity projection source or aliases')
-        track = library.tracks_by_id.get(binding.native_id)
+        native.add(binding.native_id);logical.add(binding.local_id)
+        track = library.tracks_by_id.get(binding.native_id) or library.tracks_by_id.get(binding.local_id)
         if (track is None or track.native_id != binding.native_id or track.source_uuid != binding.native_uuid
-                or str(track.path) != binding.canonical or track.imported):
-            raise WriteProofError('Native track changed since its verified binding')
-        if binding.local_id != binding.native_id and binding.local_id in library.tracks_by_id:
+                or str(track.native_path) != (binding.native_path or binding.canonical)
+                or str(track.path)!=binding.canonical or track.imported):
+            if unavailable is None:
+                raise WriteProofError('Native track changed since its verified binding')
+            unavailable[binding.local_id] = 'The native song was removed or its identity/path changed'
+            continue
+        if (binding.local_id != binding.native_id and binding.local_id in library.tracks_by_id
+                and library.tracks_by_id[binding.local_id] is not track):
             raise WriteProofError('Logical identity is already occupied; preserve both tracks')
-        by_native[binding.native_id] = binding; logical.add(binding.local_id)
+        by_native[binding.native_id] = binding
     tracks = {}
     for tid, track in library.tracks_by_id.items():
-        binding = by_native.get(tid)
+        binding = by_native.get(track.native_id)
         if binding:
-            tracks[binding.local_id] = replace(track,track_id=binding.local_id,source_native_id=binding.native_id)
+            tracks[binding.local_id] = replace(track,track_id=binding.local_id,source_native_id=binding.native_id,
+                **(dict(location_uri='file://localhost'+quote(binding.canonical),source_native_path=binding.native_path)
+                   if binding.native_path else {}))
         else:
             tracks[tid] = replace(track)
     def key(tid):
         return by_native[tid].local_id if tid in by_native else tid
     playlists = [replace(p,keys=[key(tid) for tid in p.keys],added_keys=[key(tid) for tid in p.added_keys])
                  for p in library.playlists]
-    return replace(library,tracks_by_id=tracks,playlists=playlists)
+    return replace(library,tracks_by_id=tracks,playlists=playlists,
+                   source_binding_issues=dict(unavailable or {}))

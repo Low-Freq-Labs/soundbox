@@ -1,103 +1,42 @@
 # SoundBox — orientation (start here)
 
-SoundBox is a native macOS music-library app that bridges **rekordbox → stock
-or Rockbox iPods / USB players** and includes a high-refresh DJ-style player.
-Browse the live rekordbox library, curate it, edit existing My Tags and cues, and drag
-playlists onto a device with exact order, per-track cover art, and honest sync
-semantics. Built by Sonny (Low Freq Labs) with Claude and Codex.
+SoundBox is a native macOS music-library app bridging **rekordbox → stock or
+Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
+(Low Freq Labs) operates the personal build. Read this file and
+[docs/HANDOFF.md](docs/HANDOFF.md) at the start of every session.
 
-October28: Sonny advanced native CDJ USB integration to the active milestone.
-The dedicated `soundbox.cdj_*` pilot prepares classic Device Library and Device
-Library Plus together from a fresh source snapshot. October29: a USB playlist
-drop authorizes its recoverable generation without a second confirmation. Physical iPod acceptance remains pending. Sonny reports native USB playback, artwork
-and waveforms working; wider hardware acceptance and distribution review remain open. See `docs/ROADMAP.md` and
-`docs/cdj-usb-export.md`. Ordinary stock, dual and Rockbox/filesystem exporters
-retain their `/PIONEER` exclusion.
+Current delivery, November 1, 2026:
 
-October30 follow-up priority: Sonny requested a concrete plan before resetting
-context. Read docs/shared-library-workflow-plan.md and the current HANDOFF first.
-The target is the native rekordbox DB/sidecars as the shared primary library:
-ordinary compatible saves, no separate Save to rekordbox flow or app-branded
-footer, and no competing musical-data authority in AppData. It includes local manual BPM
-editing, whole-BPM preference for steady near-integer detection, immediate durable
-playlist feedback, exact sidebar alignment and the reported RGB92/128/184 motion.
-Automatic analysis is separate from engine choice; Sonny has now enabled it.
-Implementation has begun with captured-import manual grid drafts, a measured
-whole-tempo prior, durable delete presentation and common vector sidebar geometry.
-Current validation/installed status lives in HANDOFF. These are not native source
-authority: registration, detected-analysis publication and broader metadata still
-need their own proofs/acceptance. Drafts retain raw detector data and do not
-become a competing final musical store.
-Preserve his newer87 imports/1105 title overrides; old release snapshots are not
-restore targets. The original planning pass changed documentation/evidence only;
-Sonny has now resumed implementation. Closing rekordbox does not broaden the
-existing accepted write scopes.
+- Direct Collection/native-playlist imports register or reuse native records and
+  durably route membership through separately accepted writers. Initial shared
+  analysis supports bare stereo PCM16/24 WAV at44.1/48kHz with full BPM/Grid+Key;
+  broader codecs, existing-analysis replacement, gain and metadata need their own
+  acceptance. Research fixtures never confer production authority.
+- All ordinary native songs capture durable cue/grid intentions during unrelated
+  work. Prep v2 preserves native terminal rows beyond EOF and verifies actual
+  grid receipt fields. The previously stuck53 intentions are settled: four exact
+  grids and16 cues verified in native source; pending prep queue empty at delivery.
+- Boundary beat jumps clamp to available audio; mouse and shortcut holds repeat.
+  BLUE/3BAND middle zoom height and the third, gentle wide RGB correction are
+  installed. Sonny approved that RGB comparison after rejecting two darker ones.
+- Confirmed Graveyard Delete works:515 user disposals must be preserved. Four
+  absent native IDs/no verified paths can be cleared through explicit local-only
+  user confirmation. Never guess their files or restore pre-bulk library state.
+- Recoverable Collection compatibility conversion and automatic native locator
+  updates are installed.124 WAV conversions completed with exact originals kept;
+  a32kHz MP3 remains timing-unproven and unchanged. Cloud-deferred/unavailable
+  sources are not certified compatible. No manual Relocate workflow is required.
+- Saved white Dock icon survives actual normal quit. Current installed personal
+  build153 passed all2035 tests, package/signature/smoke and real-source readback.
+  HANDOFF separates that binary's dirty-source provenance from repository HEAD.
 
-October30 continued registration foundations are in
-`research/native_library`: independent bare-WAV row construction, marked-TEMP
-encrypted transactions/recovery and pure component/identity contracts. Core
-workspaces stay copy-only. A separate unintegrated one-plan source pilot accepts
-only the known generated SoundBox-first WAV, requires its own exact-plan approval,
-closed native apps/SoundBox and shared native-edit lock/journal. Cue transport
-reuse grants no Cue permission. Old synthetic-row/playlist approvals never
-authorize this pilot. No production app integration or registration/analysis
-authority exists; successful source SQL still needs native acceptance.
-The original frozen import interval retains explicit agentRegistry differences;
-strict replay of that old interval still reports a full mismatch. The newer
-startup-complete bare-import reference passes the entire semantic inventory/XML
-without exclusions; this is not source-writer acceptance. HANDOFF records current
-initial-analysis evidence and the next native gate. Existing accepted writer
-permissions remain unchanged.
-
-October30 import-flow correction: Sonny added Innerbloom (`sb-19a5565cfb6d`,
-140BPM/6A); that checkpoint had86 imports/1105 title overrides. Existing
-imports must benefit without reimport/reanalysis. Manual and automatic analysis
-now use a per-song background queue without popup/progress bar, updating each
-finished row independently. Captured imports admit local grid/cue drafts while
-native shared registration/publication remains unfinished. Cloud timestamp drift
-requires exact-byte verification before reusing completed analysis; it must not
-force a fallback grid/reload. See HANDOFF for validation/installed status.
-
-Initial-analysis continuation: `research/native_library/analysis_pilot.py` is a
-separate unintegrated source adapter for only the already accepted generated
-SoundBox-first track ID190717052/UUID2e47171e-a854-4b9c-be9b-128e28202cce
-and its exact known audio digest. It requires its own concrete plan and approval;
-the bare registration grant explicitly excluded analysis. It shares the native
-lock/journal, guards closed apps and native-share identity, stages encrypted
-DB/XML/packet evidence and recovers only exact DB/directory states. Preparation
-remains copy-only; no approval, native analysis acceptance or production authority
-is inferred. Sonny subsequently approved the exact prepared initial-analysis
-plan and it committed on the generated reference only. Native reopen/load/save/
-quit acceptance passed with exact target/packet preservation (see HANDOFF). This
-accepts only the known generated WAV; no general format/gain/endpoint policy or
-production authority was provisioned. Keep the
-core offline adapters TEMP-only and preserve all evidence.
-
-October31 continuation: the bundled read-only media header probe and separate
-`media_workspace`/`media_pilot` add recoverable multi-format registration proofs.
-The original WAV markers/scopes remain narrow. A ten-generated-file batch is
-prepared with encrypted paired evidence; it requires its own exact-plan source
-approval and native acceptance. Sonny approved that exact batch and publication
-committed; native reopen/normal-quit acceptance passed on all ten references.
-No general registration authority is provisioned. Durable detection restart
-intents are installed after the1811-test gate; the separate registration store and stable-ID bridge pass TEMP proofs but
-have no production authority or desktop import caller. Immediate native playlist
-create/rename/membership presentation is installed after the1836-test combined
-phase verification; HANDOFF retains the initial Cocoa cadence miss and clean
-full native recheck. The real library identity bridge remains unactivated. See HANDOFF for
-tested versus installed state and the fresh post-quit curated baseline.
-
-October31 wrap-up priority from Sonny: **start next session with direct shared
-imports**. Brand-new files must drop straight onto any native rekordbox playlist
-without a Collection-first step; SoundBox Collection imports must automatically
-register/reuse the song in rekordbox Collection. Both paths remain broken in the
-installed build. Preserve WHOLE CLUB ROCKIN (`sb-5adee0814145`,174BPM/9A) and
-Innerbloom (`sb-19a5565cfb6d`,140BPM/6A) without reimport/reanalysis. Complete
-identity-safe registration, durable destination/membership routing and both
-Collection views before RGB or more UI polish. Bare registration/membership
-must work with analysis off; broader native analysis publication must not block
-this first delivery. The accepted ten-file pilot is
-not ordinary import integration. HANDOFF gives the exact starting boundary.
+Sonny is now testing the installed app. No mouse/keyboard/Accessibility input into
+his real SoundBox or rekordbox; he operates native reference actions and Delete.
+Private fixtures/read-only snapshots and ordinary local build/install/relaunch
+remain permitted. Do not interrupt playback or reinstall for documentation alone.
+Preserve current curation, nine saved analyses, nine authorities and all disposal/
+conversion recovery. Older roadmap checkpoints are archived under docs/archive;
+they do not override the current handoff or authorize a rollback.
 
 ## Runtime instruction parity
 
@@ -144,16 +83,15 @@ repository can answer the question.
   Cue session overlays are immediately usable while a FIFO saves in background;
   only verified target metadata reaches Library/cache, without reloading audio or
   the whole library. Normal shutdown drains accepted cue intents before stopping
-  TaskOwners; failure cancels the unconfirmed tail and reconciles source state.
-  Abrupt exit can lose not-yet-started RAM intents. Transport state edges must not
+  TaskOwners. Ordinary native prep now persists per-song intentions before
+  presentation and retains them on failure/restart; source reconciliation and
+  exact receipt proofs precede retry. Legacy RAM-only overlays are not durable. Transport state edges must not
   scan library artwork or trigger device discovery. Grid native references and
   actual-source downbeat/BPM acceptance passed October 27. Intelligent-playlist creation remains disabled pending its own proof.
   Sonny normally operates the rekordbox UI for reference/acceptance actions.
-  On October30 he explicitly authorized slow, careful computer control to finish
-  the generated native reference checks. Verify the screen and a single exact
-  fixture selection before each edit; capture and verify the resulting delta.
-  This does not authorize edits to real music, destructive operations or new
-  source SQL publishers. See `docs/rekordbox-prep.md`.
+  His October31 no-controls instruction supersedes the earlier generated-fixture
+  input grant: do not automate inputs into either real app. Private fixtures and
+  read-only evidence remain allowed; no new source publisher is authorized. See `docs/rekordbox-prep.md`.
 - Ordinary desktop playlist/folder create, rename and delete plus registered-track
   append/remove passed native acceptance October30 through
   `soundbox.rekordbox_playlist_store`. Its separate explicit authority binds the
@@ -174,8 +112,38 @@ repository can answer the question.
   CDJ capture waits for these edits and rebinds native selections by stable ID;
   deleted selections or changed sources cancel before export. Exact UUID pins
   retain affected tracks in SoundBox Collection without registering new files.
-  Intelligent/cloud mutations and new-track registration remain separate gates.
-- Rekordbox analysis is read-only outside the accepted October 27 grid API.
+  Intelligent/cloud mutations remain separate gates; new-track registration uses
+  its separate accepted domain below.
+- Ordinary explicit file imports and imported-track playlist drops use the
+  separately accepted `soundbox.rekordbox_registration_store` authority, bound to
+  the exact native library/schema/rekordbox6.8.7.0303. Sonny approved its two-WAV
+  source test and conditional activation October31; native reopen/normal-quit
+  acceptance passed. Formats are MP3, AAC/ALAC M4A, FLAC and PCM16/24 WAV/AIFF
+  (native types1/4/5/6/11/12). Source SQL may only insert a bare content row and
+  advance localUpdateCount; existing content, XML, cues/analysis, metadata and
+  source audio remain untouched. Native playlist membership uses its own accepted
+  playlist domain after registration. Exact canonical/raw path, native ID/UUID
+  and durable alias/inode/epoch claims guard reuse; independent curation under
+  both logical/native IDs requires review. Queue source/destination/order/options
+  before admission, exact SQL requests before execution and verified bindings
+  before presentation. Restart/retry uses committed receipts; cancellation first
+  reconciles source effects and never deletes completed native songs. This domain
+  shares the existing source worker/root/lock/journal/closed-native-app guards and
+  encrypted paired recovery. Full acceptance archives remain retained; ordinary
+  completed transactions use bounded receipt-backed retention. A file gesture
+  authorizes its own native registration/membership without a separate save step.
+  No bulk old-import backfill or musical-data migration is granted by registration;
+  completed musical results/drafts survive bare native-ID acquisition unchanged.
+- Initial shared analysis uses the separately accepted `rekordbox_analysis_store`
+  authority for this exact library/schema/version. Only initial full BPM/Grid+Key
+  and native waveforms on bare stereo PCM16/24 WAV44.1/48kHz are accepted. Render
+  from captured bytes and saved rows, persist intentions and exact requests, and
+  publish via the common closed-native-app worker/lock/journal with encrypted
+  DB/XML and packet recovery. Preserve cues/gain/audio/XML/playlists and unrelated
+  rows/sections. Native readback precedes acknowledgement; newer manual drafts
+  survive. Other codecs, existing native analysis replacement, gain and broader
+  metadata require independent acceptance. Cue drafts use the separate cue API.
+- Other rekordbox analysis is read-only outside the accepted October27 grid API.
   `soundbox.rekordbox_grid_store.PilotGridStore` requires an explicitly accepted
   exact library/schema/version authority, bound per operation to the track/UUID,
   with rekordbox/agent closed. Only DAT/PQTZ and native EXT/PQT2 invalidation may
@@ -205,7 +173,56 @@ repository can answer the question.
   verified native-test baseline with closed rekordbox and native-saved 90 BPM;
   preserve those receipts and native counters/history. That grant does not
   authorize restoring another track or any secondary analysis cache.
-- Source audio files are **never** modified, renamed, moved, or deleted.
+- Ordinary reads, playback and exporters preserve source audio. Only the
+  explicitly authorized recoverable conversion and confirmed Delete domains
+  below may replace or move desktop originals; neither grants general cleanup.
+  November1 separate Graveyard exception: the user requested an actual confirmed
+  Collection-and-disk Delete button and will choose the targets himself. Only
+  `rekordbox_removal_store` with its separate accepted library/schema/version
+  authority, exact prepared selection/path confirmation, common source worker/
+  lock/journal and recoverable macOS Trash may remove those originals. Never
+  agent-delete real music during implementation/testing. Preserve files referenced
+  by unselected native entries and state this in the review; keep unresolved paths
+  instead of guessing. Keep SoundBox curation/analysis and exact coordinated native
+  recovery. No permanent unlink, Trash emptying, table purge or general orphan
+  cleanup is authorized. Existing exporter/source-immutability rules remain.
+
+  November1 explicit import-only exception: Sonny requested automatic float32
+  WAVE to24-bit integer WAVE at the same path, auditioned original/clipped/
+  reduced copies and selected same-gain clipping. Only new/unregistered desktop
+  imports may use `soundbox.wave_conversion`, on the shared source lane/lock,
+  with exact recoverable originals and verified atomic replacement. Keep sample
+  rate/frame timing, metadata, stable IDs, grids/key/cues and origin provenance.
+  This was the original import-only scope. Sonny subsequently authorized checking
+  the entire existing Collection for original CDJ-2000/CDJ-3000 compatibility and
+  recoverable replacement in place (November1). Two existing WAV audio references
+  are now converted with exact originals retained: Kaivon66027819 (24/44.1) and
+  Ichor9368146 (24/48). No source SQL, cues or analysis changed. Native Reload Tags/
+  load/normal-quit acceptance passed: actual headers are read correctly while
+  native cached technical columns stay stale. No existing-record technical-column
+  rewrite is granted; do not borrow registration or initial-analysis authority.
+  A separate accepted file-only conversion authority and durable controller are
+  implemented for same-path existing WAVE and unregistered lossless→WAVE; no
+  native SQL/analysis/cue writes belong to this domain. Actual header facts may
+  refresh epoch-bound technical display/USB DTOs, never musical fields. The
+  installed automatic batch completed124 WAV conversions with originals retained;
+  deferred/unavailable files and the32kHz MP3 error remain explicit in HANDOFF.
+  November1 direct-locator correction: Sonny explicitly instructed SoundBox to
+  replace the audio and point the existing DB records at the updated files,
+  rejecting manual Relocate. This supersedes the pending chooser workflow.
+  The separate `rekordbox_locator_store` column-restricted domain now preserves
+  existing IDs/UUIDs, BPM/key, cues, analysis, playlists/history/tags and XML.
+  Its authority is independent of bare registration. The two named FLAC records
+  (12592463/138854425) now point to their verified same-folder WAV replacements
+  through this narrowly authorized source transaction. Encrypted before/after
+  pairs, a shared recovery journal and verified originals remain. No whole-DB
+  restore occurred. Native reopen/load/normal-quit acceptance now preserves both
+  entire target rows, packets, XML and all non-registry tables; separate general
+  locator authority is provisioned and installed. Source integration automatically
+  finishes file conversion plus locator save on the common source worker; no
+  manual Relocate step is part of that workflow.
+  Device originals and all exporters remain immutable. No automatic gain reduction or
+  agent-performed Graveyard deletion is granted.
 - Every export write lands **under an explicit device target**, guarded so the
   target can never overlap the source library.
 - `soundbox.stock_ipod` is the only stock-firmware path allowed below
@@ -493,9 +510,9 @@ beat-count modes, standalone collection-song CDJ export and Analyze Track.
 Explicit detected BPM/Grid+Key results persist in backed-up library.json with
 path/audio digest/exact identity and can follow a later native track ID. Native
 and manual grids/source cues remain authoritative. Sonny requires analysis shared
-both ways independent of which app imports first; reverse detected-analysis/Key
-publication is still gated by its own native reference and authority, not the
-accepted manual-grid API. Ordinary native playlist management now has its own
+both ways independent of which app imports first. Initial supported full WAV
+analysis/Key publication now uses its independently accepted authority; broader
+profiles remain gated and never borrow the manual-grid API. Ordinary native playlist management now has its own
 October30 authority after11 exact native DB/XML/rollback replays and12 actual
 source CRUD operations followed by Sonny's native inspection/normal save. The
 current permission is separate from the earlier exact-plan Bridge Pilot approval
@@ -503,7 +520,7 @@ and the two specifically approved synthetic NEW-row reference seeds. Those old
 receipts never authorize arbitrary future source tests or changing existing
 sync flags. Preserve every native reference, approval and recovery archive.
 Current implementation/installed status lives in HANDOFF; the broader scope and
-remaining registration/analysis gates are in docs/analysis-playlists-next.md.
+remaining analysis-format/replacement gates are in docs/analysis-playlists-next.md.
 
 October30 upstream audit uses pinned rbxport b739d369 (also current upstream at
 audit time). Explicit detection defaults to its adaptive/high-precision pipeline,
@@ -635,7 +652,8 @@ derivation semantics change. Invalidating rows must also retire their checkpoint
 key; artwork policy/visibility and source authority remain independently fresh.
 
 Desktop accent roles come from `desktop.theme`, persisted as `settings.theme_accent`.
-Use those roles for UI chrome rather than fixed purple values. The supplied SVG
+Use those roles for UI chrome rather than fixed purple values. Semantic transport
+feedback stays fixed: green PLAY and orange held CUE, with gray idle rings. The supplied SVG
 wordmark stays in its 270×55 header slot; only BOX follows the accent. Waveform
 and cue data colors retain their musical/source meaning. `desktop.theme_controller`
 installs static QSS once, then changes only visible controls' accent declarations;
@@ -711,6 +729,11 @@ directory for the install, not a new trail of persistent backups.
    install with `ditto`. **Never use `rm -rf` for app installation.**
 5. Verify the signature, relaunch, and confirm the native-deck startup log,
    library load, zero unnecessary preparation, and curated-state integrity.
+   Verify fresh packages strictly before first launch. Saved-color Finder/Dock
+   customization adds OS-owned Icon\r/Finder metadata outside Contents: ordinary
+   deep verification and exact signed-Contents/identity checks must still pass.
+   Strict metadata rejection alone is not an invalid signed payload; never strip
+   the saved icon or re-sign a running app just to hide that distinction.
 
 After the installed app passes verification and Sonny accepts it, retain only the
 current `/Applications/Soundbox.app` and active source checkout. Remove the prior
@@ -732,8 +755,11 @@ fixtures remain protected. Keep future diagnostics lean: reuse existing snapshot
 for inspections, retain full DB pairs only when acceptance/recovery requires them,
 and remove generated packaging/scratch output after verified installation. Do not
 create a new full-library capture for every status/UI check. Preserve small
-comparison/approval/install receipts. Current preservation baseline is87 imports,
-1105 titles,490 artist overrides and520 hidden tracks; never reset older state.
+comparison/approval/install receipts. The verified delivery baseline is93 imports,1107 titles,490 artist overrides,
+10 custom playlists,519 hidden tracks, nine saved analyses, nine independent
+authorities and515 user disposal receipts. New user actions supersede these
+counts; inspect current state rather than restoring a checkpoint. Conversion
+originals, required references and unresolved recovery remain protected.
 
 ## Private / out of scope
 

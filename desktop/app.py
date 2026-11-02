@@ -101,6 +101,7 @@ from PySide6.QtCore import (
     QTimer, QItemSelectionModel,
 )
 from PySide6.QtGui import (
+    QKeySequence,
     QColor, QFontDatabase, QIcon, QPainter, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
@@ -144,6 +145,13 @@ from .mount_watch import mounted_volume_snapshot
 from .artpicker import ArtPickerDialog
 from .task_owner import TaskOwner
 from .tag_controller import TagEditController
+from .shared_imports import SharedImportController
+from .media_conversion import MediaConversionController
+from .graveyard import GraveyardController
+from .removal import RemovalController
+from .native_analysis import NativeAnalysisController
+from .prep_controller import PrepEditController
+from soundbox import shared_imports, analysis_jobs
 from .prep_tags import MyTagsButton
 from .prep_grid import BpmValue, grid_edit_buttons, quantize_button
 from .grid_controller import GridEditController
@@ -292,12 +300,9 @@ class SettingsButton(QPushButton):
 
 
 def _cap_browser_scrollbar(view, header):
-    """Reserve the header row above the actual vertical scrollbar hit area."""
-    cap = QWidget(view)
-    cap.setObjectName("BrowserScrollCap")
-    cap.setAttribute(Qt.WA_StyledBackground, True)
-    cap.setFixedHeight(header.height())
-    view.addScrollBarWidget(cap, Qt.AlignTop)
+    """Keep the scrollbar below the full-width, freely resizable header."""
+    from .browser_scrollbar import BrowserScrollBar
+    view._edge_scrollbar = BrowserScrollBar(view, header)
 
 
 class FooterBar(QWidget):
@@ -494,8 +499,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.settings.update(self._initial_state.get('settings') or {})
         self._apply_theme_color(self.settings.get('theme_accent'), save=False)
         self.playlist_controller = PlaylistEditController(self)
+        self.shared_import_controller = SharedImportController(self)
+        self.native_analysis_controller = NativeAnalysisController(self)
+        self.prep_controller = PrepEditController(self)
+        self.graveyard_controller = GraveyardController(self)
+        self.removal_controller = RemovalController(self)
+        self.media_controller = MediaConversionController(self)
         self._build_ui()
-        self.player_bar.analysis_cache_admitted = lambda tid: not self.grid_controller.pending(tid)
+        self.player_bar.analysis_cache_admitted = lambda tid: (
+            not self.grid_controller.pending(tid) and not self.shared_import_controller.converting(tid)
+            and not self.media_controller.converting(tid))
         self.tag_controller.changed.connect(self._sync_tags)
         self.tag_controller.changed.connect(self._sync_cue_editing)
         self.tag_controller.changed.connect(self._sync_rekordbox_connection)
@@ -756,8 +769,18 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             if not t.key and detected.get('key'):
                 result['key'] = detected['key']
         result.update(self.settings.get('track_info',{}).get(t.track_id,{}))
+        media=getattr(self,'media_controller',None)
+        actual=media.facts(t.track_id) if media else None
+        if actual and str(t.path)==actual['path']:
+            facts=actual['facts'];result['size']=actual['epoch'][2]
+            result['sampleRate']=str(facts['sample_rate'])
+            if facts.get('bits'):result['bitDepth']=str(facts['bits'])
         if t.imported and detected and detected.get('grid_draft'):
             result['bpm'] = f"{detected['bpm']:.2f}"
+        prep=getattr(self,'prep_controller',None)
+        if prep and prep.job(t.track_id):
+            view=prep.grid_view(t.track_id)
+            if view:result['bpm']=f'{view[1]:.2f}'
         if self.lib and t.source_tag_ids:
             result['myTags'] = ', '.join(tag.name for tag in self.lib.source_tags if tag.tag_id in t.source_tag_ids)
         return result
@@ -916,11 +939,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 QEvent.ShortcutOverride, QEvent.KeyPress, QEvent.KeyRelease):
             return super().eventFilter(obj, ev)
         focus = QApplication.focusWidget()
+        if focus is getattr(self,'_grave',None) and ev.matches(QKeySequence.SelectAll):
+            if ev.type()==QEvent.KeyPress:self._grave.selectAll()
+            ev.accept();return True
         browsing = self._space_should_play(focus)
         if focus is getattr(self, '_grave', None):
             action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
             browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
-                        or action in ('browser.load', 'app.settings'))
+                        or action in ('browser.load','browser.search', 'app.settings'))
         if focus is self.usb_device_pages.playlist_tree:
             action = self._keyboard_router.keymap.action(event_binding(ev)) or ''
             browsing = (action.startswith(('transport.', 'cues.', 'grid.', 'wave.', 'autoplay.'))
@@ -950,6 +976,31 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
 
     def _dispatch_keyboard_action(self, action):
         pb = self.player_bar
+        if action in ('transport.back','transport.forward'):
+            return pb.begin_beat_jump(-1 if action=='transport.back' else 1)
+        if action in ('grid.left', 'grid.right'):
+            # One timer per held action, shared by shortcut aliases. Capture the
+            # song at key-down: a held key must never start editing the next song.
+            operation = action.split('.')[1]
+            track_id = pb.current_track()
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            def release_grid():
+                timer.stop()
+                timer.deleteLater()
+            def repeat_grid():
+                focus = QApplication.focusWidget()
+                permitted = self._space_should_play(focus) or focus is getattr(self, '_grave', None)
+                if (not permitted or QApplication.activeModalWidget() is not None
+                        or QApplication.activePopupWidget() is not None
+                        or not self._edit_grid(operation, track_id=track_id)):
+                    timer.stop()
+                    return
+                timer.start(80)
+            timer.timeout.connect(repeat_grid)
+            if self._edit_grid(operation, track_id=track_id):
+                timer.start(300)
+            return release_grid
         if action == 'browser.load' and QApplication.focusWidget() is getattr(self, '_grave', None):
             self._grave_load(self._grave.currentItem())
             return None
@@ -1003,6 +1054,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             "cues.hot_page": lambda: pb.cue_panel.hot_tab.click(),
             "cues.memory_page": lambda: pb.cue_panel.memory_tab.click(),
             "cues.toggle_page": pb.cue_panel.toggle_page,
+            "cues.set": self._set_next_cue,
             "browser.rename": self._rename_current,
             "browser.load": self._load_browser_selection,
             "browser.search": lambda: self.search.setFocus(),
@@ -1022,6 +1074,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         elif action in commands:
             commands[action]()
         return None
+
+    def _set_next_cue(self):
+        panel=self.player_bar.cue_panel
+        if not panel._loaded:
+            self._flash_status('Load a track before setting a cue',5);return False
+        kind='hot' if panel.pages.currentIndex()==0 else 'memory'
+        slot=next((i for i,cue in enumerate(panel._cues[kind]) if cue is None),None)
+        if slot is None:
+            self._flash_status('All '+('Hot Cue' if kind=='hot' else 'Memory Cue')+' slots are full',5);return False
+        return self._edit_cue(kind,slot,'add')
 
     def _defer_library_prep(self, seconds: float = 0.75):
         worker = getattr(self, "_wf_fill_worker", None)
@@ -1062,6 +1124,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.model.set_filter(text)
         self._reseat_selection()
         self._filter_artists()
+        self._filter_graveyard()
 
     def _search_terms(self) -> list[str]:
         return self.search.text().strip().lower().split()
@@ -1437,8 +1500,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         bar = QWidget(); bar.setObjectName("TopBar")
         bar.setAttribute(Qt.WA_StyledBackground, True)
         # Whole-track overview + beat ruler + zoomed waveform stay in separate
-        # lanes, with enough height for the transport stack beside them.
-        bar.setMinimumHeight(218)
+        # lanes. The taller scrolling lane matches the rekordbox reference;
+        # the cue column and transport share the available layout height.
+        # Let the layout derive its minimum so short windows cannot compress
+        # the waveform underneath the prep controls.
         outer = QVBoxLayout(bar)
         # The deck begins at the true left edge so its transport section can be
         # geometrically centered; the header keeps its own breathing room.
@@ -1546,6 +1611,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.player_bar.now_playing_changed.connect(
             lambda *_: self.grid_controller.set_current(self.player_bar.current_track()))
         self.player_bar.track_ready.connect(lambda: self._grid_changed(self.player_bar.current_track()))
+        self.player_bar.track_ready.connect(self.media_controller.discover)
         self.player_bar.cue_panel.empty_pressed.connect(
             lambda kind, slot: self._edit_cue(kind, slot, 'add'))
         self.player_bar.playback_active_changed.connect(self._on_playback_active)
@@ -1660,8 +1726,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             return
         pb = self.player_bar
         reason = self.grid_controller.reason(pb.current_track(), allow_checking=True)
-        if not reason and (self._refresh_worker is not None or self._state_maintenance
-                           or self._device_operation_owned() or self._shutting_down):
+        if not reason and (self._state_maintenance or self._shutting_down):
             reason = 'Library operation in progress'
         if not reason and (pb._pending_autoplay or pb._native_error or not pb.cue_panel._loaded):
             reason = 'Wait for the track to finish loading'
@@ -1679,6 +1744,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self._sync_prep_bpm()
 
     def _grid_changed(self, track_id):
+        prep=getattr(self,'prep_controller',None)
+        if prep and prep.handles(track_id):
+            prep.refresh(track_id);self._sync_edit_status();return
         pb = self.player_bar
         track = self.tag_controller.lib.tracks_by_id.get(track_id) if self.tag_controller.lib else None
         view = self.grid_controller.view(track_id)
@@ -1693,8 +1761,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
     def _edit_grid(self, operation, value=0, *, track_id=None):
         self._sync_grid()
         pb = self.player_bar
-        if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
-                or self._device_operation_owned() or pb._pending_autoplay or pb._native_error
+        if (self._state_maintenance or self._shutting_down
+                or pb._pending_autoplay or pb._native_error
                 or not pb.cue_panel._loaded):
             return False
         tid = pb.current_track()
@@ -1780,13 +1848,18 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             self._prep_update_message = message
             self._set_status_text(message)
 
-    def _finish_edit_status(self):
+    def _finish_edit_status(self, *, quiet=False):
         """Only verified save callbacks can report completion, never probes."""
         if self.tag_controller.update_status_text:
             self._sync_edit_status()
         elif self._prep_update_message:
+            previous = self._prep_update_message
             self._prep_update_message = ''
-            self._flash_status('Done', 2)
+            if quiet:
+                if self.status_label.text() == previous:
+                    self._set_status_text('Ready')
+            else:
+                self._flash_status('Done', 2)
 
     def _sync_cue_editing(self):
         pb = self.player_bar
@@ -1795,15 +1868,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                   if pb.current_track() and pb.current_track() == getattr(self, '_cue_audition_track', None)
                   else local_reason if local_reason is not None
                   else self.tag_controller.cue_reason(pb.current_track()))
-        if not reason and (self._refresh_worker is not None or self._state_maintenance
-                           or self._device_operation_owned()):
+        if not reason and self._state_maintenance:
             reason = 'Library operation in progress'
         pb.cue_panel.set_editable(not reason, reason)
 
     def _edit_cue(self, kind, slot, operation):
         pb = self.player_bar
-        if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
-                or self._device_operation_owned()):
+        if self._state_maintenance or self._shutting_down:
             return False
         track_id = pb.current_track()
         if track_id and track_id == getattr(self, '_cue_audition_track', None):
@@ -2003,6 +2074,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.tree.setAcceptDrops(True)
         self.tree.setDropIndicatorShown(False)
         self.tree.tracks_dropped.connect(self._native_append)
+        self.tree.files_dropped.connect(self._native_import_files)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._native_tree_menu)
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -2095,6 +2167,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         # writable (custom playlist / Collection) or off-limits (Artists, rb:).
         self.table.setAcceptDrops(True)
         self.table.resolve_drop = self._resolve_table_drop
+        self.table.rekordbox_files_dropped.connect(self._native_import_files)
         self.table.tracks_dropped.connect(self._on_tracks_dropped)
         self.table.files_dropped.connect(
             lambda name, paths: self._import_files(paths, name or None))
@@ -2338,8 +2411,20 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         # (the instant-paint snapshot vs the live rekordbox read), so the per-path
         # landed-time cache MUST be dropped — otherwise a birthtime computed off
         # the snapshot sticks and defeats the newest-added sort.
+        try:
+            unavailable={}
+            self.lib=shared_imports.project(self.lib,self.settings.get(shared_imports.BINDINGS,[]),
+                                            unavailable=unavailable)
+            if unavailable:
+                LOG.info('Native Collection no longer contains %d bound imported track(s); other songs remain usable',
+                         len(unavailable))
+        except (RuntimeError,TypeError,ValueError) as exc:
+            self._rekordbox_source_verified=False
+            self._rekordbox_connection_error='Native identity needs reconciliation: '+str(exc)
+            LOG.error('%s',self._rekordbox_connection_error)
         self.tag_controller.configure(self.lib, self._rekordbox_source_verified)
-        if not self.grid_controller.pending(self.player_bar.current_track()):
+        if (not self.grid_controller.pending(self.player_bar.current_track())
+                and not self.grid_controller.is_local(self.player_bar.current_track())):
             self.player_bar.clear_live_grid()
         self.grid_controller.configure()
         self._landed_cache.clear()
@@ -2352,8 +2437,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             self._save_state()
         loaded = self.lib.tracks_by_id.get(self.player_bar.current_track())
         if loaded is not None:
+            cue_rows=(self.prep_controller.cue_rows(loaded.track_id)
+                      if self.prep_controller.handles(loaded.track_id)
+                      else getattr(loaded,'source_cues',None))
             self.player_bar.refresh_live_cues(
-                loaded.track_id, loaded.path, getattr(loaded, "source_cues", None))
+                loaded.track_id, loaded.path, cue_rows)
         self._sync_prep_bpm()
         # Presentation reuse is independent of source authority. Cue/tag edit
         # identities are refreshed above even when every browser input matches.
@@ -2382,6 +2470,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 self._row_cache.update({tid: row for tid, row in prepared_rows.items()
                                         if tid in self.lib.tracks_by_id})
         self._populate_tree(engine.summary(self.lib))
+        self.shared_import_controller.schedule()
+        self.native_analysis_controller.discover()
+        self.media_controller.discover()
         self._default_to_collection()
         # _refresh_custom restores the sidebar selection with signals BLOCKED
         # (unlike the rekordbox tree, whose re-select fires _on_rb_select), so
@@ -2650,8 +2741,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                  lib.track_count, len(lib.playlists))
         self._sync_rekordbox_connection()
         controller=getattr(self,'playlist_controller',None)
-        if controller and (controller.pending or controller.queue_error()):
+        imports_controller=getattr(self,'shared_import_controller',None)
+        analysis_controller=getattr(self,'native_analysis_controller',None)
+        if ((controller and (controller.pending or controller.queue_error())) or
+                (imports_controller and (imports_controller.pending or imports_controller.queue_error())) or
+                (analysis_controller and analysis_controller.pending)):
             self._sync_edit_status()
+        elif not self._rekordbox_source_verified:
+            self._flash_status(self._rekordbox_connection_error,20)
         elif not self._device_operation_owned():
             self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
@@ -3106,14 +3203,38 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.settings["import_dir"] = str(Path(paths[0]).parent)
         self._import_files(paths, playlist)
 
-    def _import_files(self, paths: list[str], playlist: str | None = None, *, _expanded=False):
-        """Add non-rekordbox audio files to SoundBox. Referenced in place —
-        never copied, moved or re-tagged. They join the track pool, so they
+    def _native_import_files(self, identity, paths):
+        row=self._native_node(identity)
+        if row and row['Attribute']==0:
+            self._import_files(paths,_native_destination=dict(kind='native',id=identity,uuid=row['UUID']))
+
+    def _queue_shared_import(self, tracks, destination):
+        if self.lib is None or self._shutting_down or self._state_maintenance:return False
+        before=self.settings.get(shared_imports.KEY,[])
+        try:
+            tracks=[replace(t,location_uri=t.path.resolve(strict=True).as_uri()) for t in tracks]
+            self.settings[shared_imports.KEY]=shared_imports.admit(before,self.lib,tracks,destination,
+                self.settings.get('analysis'))
+        except (OSError,ValueError,TypeError,RuntimeError) as exc:
+            self._flash_status(str(exc),15);return False
+        if not self._save_state():self.settings[shared_imports.KEY]=before;return False
+        self._native_pending_changed(rebuild=True)
+        self.shared_import_controller.schedule();return True
+
+    def _import_files(self, paths: list[str], playlist: str | None = None, *, _expanded=False,
+                      _native_destination=None, _source_identity=None, _preferences=None):
+        """Add non-rekordbox audio files to SoundBox, referenced in place.
+        Float32 WAV conversion belongs to the recoverable shared-import lane.
+        They join the track pool, so they
         appear in Collection automatically; `playlist` also adds them to that
         SoundBox playlist. Re-importing a file reuses its existing id (so
         overrides/art/playlist entries stick)."""
-        if self.lib is None:
+        if self.lib is None or self._shutting_down or self._state_maintenance:
             return
+        source_identity=(str(self.lib.source),self.lib.source_library_id)
+        preferences=shared_imports.import_preferences(self.settings.get('analysis') if _preferences is None else _preferences)
+        if _source_identity is not None and _source_identity!=source_identity:
+            self._flash_status('Import source changed while expanding the folder; drop it again',10);return
         if not _expanded and any(Path(p).expanduser().is_dir() for p in paths):
             from .task_owner import TaskOwner
             from .workers import OneShotTask
@@ -3127,17 +3248,22 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 if isinstance(job.result, Exception):
                     self._flash_status(f'Couldn’t import folder: {job.result}', 15)
                 else:
-                    self._import_files(job.result, playlist, _expanded=True)
+                    self._import_files(job.result, playlist, _expanded=True,
+                        _native_destination=_native_destination,_source_identity=source_identity,_preferences=preferences)
             self._import_tasks.adopt(worker, retired)
             worker.start()
             return
         before_imported = dict(self.imported)
-        by_path = {rec.get("path"): tid for tid, rec in self.imported.items()}
+        before_custom=deepcopy(self.custom)
+        before_jobs=deepcopy(self.settings.get(shared_imports.KEY,[]))
+        before_analysis_jobs=deepcopy(self.settings.get(analysis_jobs.KEY,[]))
+        by_path={str(t.path):tid for tid,t in self.lib.tracks_by_id.items()}
+        by_path.update({str(Path(rec['path']).resolve()):tid for tid,rec in self.imported.items()})
         ids: list[str] = []
         skipped: list[str] = []
         fresh_ids: list[str] = []
         for raw in paths:
-            p = Path(raw).expanduser()
+            p = Path(raw).expanduser().resolve()
             if not imports.is_audio(p) or not p.is_file():
                 skipped.append(p.name)
                 continue
@@ -3152,16 +3278,43 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 by_path[str(p)] = tid
             ids.append(tid)
         if ids:
+            ids=list(dict.fromkeys(ids))
+            if playlist:
+                bag=list(self.custom.get(playlist,[]));duplicates=[tid for tid in ids if tid in bag]
+                allow=bool(duplicates) and self._confirm_duplicate_add(playlist,duplicates)
+                self.custom[playlist]=bag+[tid for tid in ids if allow or tid not in bag]
+            if self.lib.source_kind=='rekordbox-db' and self.lib.source_library_id:
+                tracks=[imports.make_track(tid,self.imported[tid]) if tid in self.imported
+                        else self.lib.tracks_by_id[tid] for tid in ids]
+                tracks=[replace(t,location_uri=t.path.resolve(strict=True).as_uri()) for t in tracks]
+                destination=_native_destination or (dict(kind='custom',name=playlist) if playlist else dict(kind='collection'))
+                try:self.settings[shared_imports.KEY]=shared_imports.admit(before_jobs,self.lib,tracks,destination,
+                    preferences)
+                except (ValueError,TypeError,RuntimeError) as exc:
+                    self.imported=before_imported;self.custom=before_custom
+                    self._flash_status(str(exc),15);return
+            if fresh_ids and preferences['automatic'] and (preferences['bpm'] or preferences['key']):
+                try:self.settings[analysis_jobs.KEY]=analysis_jobs.admit(before_analysis_jobs,self.lib,
+                    [imports.make_track(tid,self.imported[tid]) for tid in fresh_ids],preferences)
+                except ValueError as exc:
+                    self.imported=before_imported;self.custom=before_custom;self.settings[shared_imports.KEY]=before_jobs
+                    self._flash_status(str(exc),15);return
             if not self._save_state():
                 self.imported = before_imported
+                self.custom=before_custom;self.settings[shared_imports.KEY]=before_jobs
+                self.settings[analysis_jobs.KEY]=before_analysis_jobs
                 return
             imports.inject(self.lib, self.imported, repair_missing=False)
             self._build_artist_registry()  # imported names join the deriver
             self._refresh_custom()         # Collection count includes them now
             LOG.info("Imported %d audio files (%d skipped)", len(ids), len(skipped))
             self._flash_status(f"Imported {len(ids)} ✓", 15)
-            if playlist:
-                self._on_tracks_dropped(playlist, ids)  # dupe-guarded add
+            self.shared_import_controller.schedule()
+            self.media_controller.discover()
+            if _native_destination:
+                self._native_pending_changed(rebuild=True)
+            elif playlist:
+                if getattr(self,'_view_key',None)==f'sb:{playlist}':self._show_custom(playlist)
             else:
                 # A Collection import must be visible immediately, even when
                 # an old search/header sort would otherwise hide its new rows.
@@ -3174,8 +3327,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 self._show_collection()
                 self._view_key = 'sb:Collection'
                 self.table.scrollToTop()
-            if fresh_ids and self.settings.get('analysis', {}).get('automatic') is True:
-                QTimer.singleShot(0, lambda captured=tuple(fresh_ids): self._analyze_tracks(captured, automatic=True))
+            if fresh_ids and preferences['automatic']:
+                QTimer.singleShot(0,self,self._resume_analysis_jobs)
             if fresh_ids:
                 self._probe_import_metadata(fresh_ids)
             self._arm_waveform_rechecks()
@@ -3219,7 +3372,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 for key in ('time', 'size', file_locations.BOOKMARK_KEY):
                     if key in rec:
                         current[key] = rec[key]
-                if self.lib is not None:
+                if self.lib is not None and (existing:=self.lib.tracks_by_id.get(tid)) is not None and existing.imported:
                     self.lib.tracks_by_id[tid] = imports.make_track(tid, current)
             self._save_state()
             self._invalidate_rows(list(job.result))
@@ -6135,9 +6288,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         return [i for i in (self.model._rows[r.row()].get("id") for r in rows) if i]
 
     def _table_context(self, pos):
-        """Right-click anywhere on a track row → the real menu (2026-07-02):
-        Edit (on Title/Artist), Copy File Name (the ON-DISK name — what SoundBox
-        displays is irrelevant), cover-art actions, Delete (SoundBox-only hide)."""
+        """Selected-track edits, Finder, analysis, artwork and removal scopes."""
         idx = self.table.indexAt(pos)
         if not idx.isValid():
             return
@@ -6175,8 +6326,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         menu.addAction("Choose cover art…", lambda: self._art_pick(tid))
         if self.providers.allows("artwork.search"):
             menu.addAction("Fetch cover art now", lambda: self._art_fetch_one(tid))
-        if self.providers.allows("artwork.url"):
-            menu.addAction("Set cover art from URL…", lambda: self._art_from_url(tid))
+        if (self.providers.allows('artwork.search')
+                and callable(getattr(self.providers.artwork,'fetch_profile_art',None))):
+            menu.addAction('Set cover art to artist profile',lambda:self._art_artist_profile(tid))
         # A managed default is not a per-track cover and cannot be removed from
         # this menu: blocked tracks intentionally receive defaults too. Only a
         # real cover/avatar exposes the per-track Remove action.
@@ -6195,20 +6347,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             "Analyze Track" if n == 1 else f"Analyze {n} Tracks",
             lambda selected=tuple(ids): self._analyze_tracks(selected),
         )
-        menu.addAction(
-            "Rebuild Waveform" if n == 1 else f"Rebuild {n} Waveforms",
-            lambda selected=tuple(ids): self._reanalyze_tracks(selected),
-        )
 
     def _add_track_file_actions(
             self, menu: QMenu, ids: list[str], *, reveal: bool = True):
         """Add source-file utilities in their stable menu order."""
         selected = tuple(ids)
-        n = len(selected)
-        menu.addAction(
-            "Copy File Name" if n == 1 else f"Copy {n} File Names",
-            lambda: self._copy_filenames(list(selected)),
-        )
         if reveal:
             menu.addAction(
                 "Open in Finder",
@@ -6297,7 +6440,20 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
     def _rename_current(self):
         """⌘R — inline-rename the highlighted CELL (Artist cell → artist,
         else Title) in whichever browser has focus: table or Artists page."""
-        if QApplication.focusWidget() is self.artists_view:
+        focus = QApplication.focusWidget()
+        for tree in (self.tree, self.sb_tree):
+            if focus is tree or focus is not None and tree.isAncestorOf(focus):
+                item=tree.currentItem()
+                if item is None:return
+                if tree is self.tree:
+                    identity=item.data(0,RB_NODE_ROLE)
+                    if identity:self._native_rename(identity)
+                else:
+                    folder=item.data(0,CUSTOM_FOLDER_ROLE)
+                    name=item.data(0,CUSTOM_ROLE)
+                    if folder or name:self._rename_local_node('folder' if folder else 'playlist',folder or name)
+                return
+        if focus is self.artists_view:
             it = self.artists_view.currentItem()
             if it is not None and it.data(0, ARTIST_TRACK_ROLE):
                 col = self.artists_view.currentColumn()
@@ -6674,12 +6830,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             self._refresh_model_art()
             self._queue_stock_artwork((tid,))
 
-    def _run_oneshot(self, tid, fn):
+    def _run_oneshot(self, tid, fn, *, guard=None):
         if self._shutting_down or self._state_maintenance:
             return
         if self._background_status_available():
             self._set_status_text("Fetching…")
         w = _OneShotArt(tid, fn)
+        w.result_guard=guard
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
         w.done.connect(self._on_oneshot)
@@ -6699,6 +6856,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
     def _on_oneshot(self, tid, res):
         if self._shutting_down or self._state_maintenance:
             return
+        guard=getattr(self.sender(),'result_guard',None)
+        if guard is not None and not guard():return
         if isinstance(res, Exception):
             # Honest failure: the fetch BROKE (network, block, bug) — that is
             # not "no art found". Log the whole story; keep the flash short
@@ -6725,6 +6884,28 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
                                            self.lib.artist_registry, stem=t.path.stem)
         self._run_oneshot(tid, lambda: self.providers.artwork.fetch_best(artist, title))
+
+    @_provider_action('artwork.search')
+    @_art_ui_action
+    def _art_artist_profile(self, tid):
+        fetch=getattr(self.providers.artwork,'fetch_profile_art',None)
+        track=self.lib.tracks_by_id.get(tid) if self.lib else None
+        if track is None or not callable(fetch):return
+        def artist_for(current):
+            title=self.titles.get(tid) or current.name
+            return metadata.effective_artist(tid,title,current.artist,self.overrides,True,
+                self.lib.artist_registry,stem=current.path.stem)
+        artist=artist_for(track)
+        if not artist or artist==metadata.UNKNOWN_ARTIST:
+            self._flash_status('Set the track’s artist before choosing its profile picture',8);return
+        def snapshot():
+            try:return self.art_cache.cover_snapshot(tid)
+            except ValueError:return None
+        before=snapshot()
+        def current():
+            candidate=self.lib.tracks_by_id.get(tid) if self.lib else None
+            return bool(candidate and artist_for(candidate)==artist and snapshot()==before)
+        self._run_oneshot(tid,lambda:fetch(artist),guard=current)
 
     @_provider_action("artwork.url")
     def _art_from_url(self, tid):
@@ -7446,6 +7627,18 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self._shutting_down = True
         if getattr(self,'playlist_controller',None) is not None:
             self.playlist_controller.stop()
+        if getattr(self,'shared_import_controller',None) is not None:
+            self.shared_import_controller.stop()
+        if getattr(self,'native_analysis_controller',None) is not None:
+            self.native_analysis_controller.stop()
+        if getattr(self,'prep_controller',None) is not None:
+            self.prep_controller.stop()
+        if getattr(self,'graveyard_controller',None) is not None:
+            self.graveyard_controller.shutdown()
+        if getattr(self,'removal_controller',None) is not None:
+            self.removal_controller.stop()
+        if getattr(self,'media_controller',None) is not None:
+            self.media_controller.stop()
         self._cdj_waiting = None
         keyboard = getattr(self, "_keyboard_router", None)
         if keyboard is not None:
@@ -7584,7 +7777,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         if not force and self._stock_view_warming:
             self._start_ipod_loading_status()
             return False
-        playlist_status=getattr(getattr(self,'tag_controller',None),'playlist_update_status','')
+        controller=getattr(self,'tag_controller',None)
+        playlist_status=(getattr(controller,'playlist_update_status','')
+                         or getattr(controller,'registration_update_status',''))
         if text=='Ready' and playlist_status:
             text=playlist_status
         if (text == "Ready" and self._preparing_library
@@ -7695,6 +7890,10 @@ def make_app() -> QApplication:
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--isolated-trash-check':
+        from soundbox.mac_trash import check_synthetic
+        check_synthetic(Path(sys.argv[2]).resolve())
+        return
     if len(sys.argv) == 4 and sys.argv[1] == '--benchmark-startup':
         from .startup_check import run
         run(Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve())

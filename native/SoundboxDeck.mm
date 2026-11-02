@@ -99,6 +99,25 @@ struct WaveSample {
     float b;
 };
 
+static double waveformAttributeOffset(
+        uint32_t mode, float zoom, float drawableScale,
+        double exactCenter, int64_t tileCenter, float samplesPerPixel) {
+    // Keep a feature's raster phase fixed at the reported middle RGB
+    // stops. Fractional phase changes thin tips and color coverage despite
+    // unchanged song attributes. Use one physical pixel here; retain BLUE
+    // and the accepted logical-point RGB motion at 576/864.
+    const bool middleRGB = mode == 2
+        && (zoom == 64.0f || zoom == 128.0f || zoom == 184.0f);
+    const bool logicalRGB = mode == 2 && (zoom == 576.0f || zoom == 864.0f);
+    const bool continuous = mode == 3
+        || (mode == 2 && !middleRGB && !logicalRGB);
+    const double pixelStep = zoom <= 384.0f ? 1.0 : drawableScale;
+    const double quantum = samplesPerPixel * pixelStep;
+    return (continuous ? exactCenter
+        : std::round(exactCenter / quantum) * quantum)
+        - static_cast<double>(tileCenter);
+}
+
 struct DisplayWaveform {
     id<MTLBuffer> buffer = nil;
     NSUInteger sampleCount = 0;
@@ -2633,23 +2652,11 @@ public:
             static_cast<uint32_t>(std::min<NSUInteger>(
                 waveAttributeCount_,
                 std::numeric_limits<uint32_t>::max()));
-        // The native Gunslinger reference retains one logical-pixel raster
-        // phase (two physical pixels on Retina). Use that motion unit at
-        // RGB 576/864; other RGB stops and 3BAND remain continuous. BLUE keeps
-        // physical-pixel steps wide and logical-point steps close.
-        const bool continuousWaveform = uniforms.waveformMode == 3
-            || (uniforms.waveformMode == 2
-                && uniforms.pixelsPerSecond != 576.0f
-                && uniforms.pixelsPerSecond != 864.0f);
-        const double displayPixelStep = uniforms.pixelsPerSecond <= 384.0f
-            ? 1.0 : drawableScale;
         uniforms.waveAttributeCurrentOffset = static_cast<float>(
-            (continuousWaveform
-                ? exactAttributeCenter
-                : std::round(exactAttributeCenter
-                    / (attributeSamplesPerPixel * displayPixelStep))
-                    * attributeSamplesPerPixel * displayPixelStep)
-            - static_cast<double>(waveAttributeCenter_));
+            waveformAttributeOffset(
+                uniforms.waveformMode, uniforms.pixelsPerSecond, drawableScale,
+                exactAttributeCenter, waveAttributeCenter_,
+                attributeSamplesPerPixel));
         uniforms.waveAttributeSamplesPerPixel =
             attributeSamplesPerPixel;
         uniforms.waveAttributeValid =
@@ -3352,6 +3359,12 @@ inline float3 display_srgb_to_linear(float3 value) {
         (value + 0.055) / 1.055, float3(2.4));
     return select(upper, lower, value <= float3(0.04045));
 }
+inline float3 linear_to_display_srgb(float3 value) {
+    value = saturate(value);
+    const float3 lower = value * 12.92;
+    const float3 upper = 1.055 * pow(value, float3(1.0 / 2.4)) - 0.055;
+    return select(upper, lower, value <= float3(0.0031308));
+}
 vertex Out wave_surface_vertex(uint id [[vertex_id]]) {
     const float2 positions[3] = {
         float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)
@@ -3779,6 +3792,30 @@ inline float signed_interval_occupancy(
     return saturate(fineArea / max(coveredSpan * coarseWidth, 1e-8));
 }
 
+inline float wide_interval_occupancy(
+        const device AudioEnvelopeSample *samples,
+        uint fineOffset, uint fineCount, uint fineDivisor,
+        uint coarseCell, uint coarseDivisor,
+        float coarseMinimum, float coarseMaximum, float minimumWidth) {
+    if (fineCount == 0 || fineDivisor == 0 || coarseDivisor <= fineDivisor) return 1.0;
+    const uint begin = coarseCell * coarseDivisor;
+    const uint end = begin + coarseDivisor;
+    const uint first = begin / fineDivisor;
+    const uint last = min(fineCount, (end + fineDivisor - 1u) / fineDivisor);
+    if (first >= last || last - first > 256u) return 1.0;
+    float area = 0.0;
+    float span = 0.0;
+    for (uint cell = first; cell < last; ++cell) {
+        const float overlap = float(min(end, (cell + 1u) * fineDivisor)
+            - max(begin, cell * fineDivisor));
+        const AudioEnvelopeSample fine = samples[fineOffset + cell];
+        area += max(abs(float(fine.maximum) - float(fine.minimum)) / 32767.0, minimumWidth) * overlap;
+        span += overlap;
+    }
+    const float width = max(abs(coarseMaximum - coarseMinimum), minimumWidth);
+    return saturate(area / max(span * width, 1e-8));
+}
+
 inline float3 interval_occupancy_color(float3 color, float occupancy) {
     // Encode the represented area as contrast against the unchanged background.
     // Premultiplication below keeps this attached to the fixed song lattice.
@@ -3894,6 +3931,14 @@ kernel void wave_attribute_kernel(
             + 2.0 * smoothWave.colorWeight
             + rightSmoothWave.colorWeight) * 0.25,
         waveFilter);
+    if (u.waveformMode == 3 && midrangeFilter > 0.0) {
+        // Retain each band's own center peak through the middle zooms, as
+        // signed RGB already does. Keep PWV7's independent calibrated layers.
+        stableWave.weightedColor = max(sharpWave.weightedColor, stableWave.weightedColor);
+        stableWave.height = max(max(stableWave.weightedColor.r,
+            stableWave.weightedColor.g), stableWave.weightedColor.b);
+        stableWave.colorWeight = stableWave.height;
+    }
     const float heightWeight = mix(
         sharpWave.colorWeight, stableWave.colorWeight, stableKernel);
     const float3 weightedColor = mix(
@@ -4030,10 +4075,18 @@ kernel void wave_attribute_kernel(
                     sharpDetail.upper, filtered.x, midrangeFilter);
                 sharpDetail.lower = mix(
                     sharpDetail.lower, filtered.y, midrangeFilter);
-                sharpDetail.minimum = mix(
-                    sharpDetail.minimum, filtered.z, midrangeFilter);
-                sharpDetail.maximum = mix(
-                    sharpDetail.maximum, filtered.w, midrangeFilter);
+                // Middle RGB reconstruction must not average away the
+                // center tap's signed peaks. Retain its interval while
+                // keeping the existing song-space neighbor reconstruction.
+                const bool preserveSignedPeaks = u.waveformMode != 3
+                    && u.pixelsPerSecond >= 64.0
+                    && u.pixelsPerSecond <= 256.0;
+                sharpDetail.minimum = preserveSignedPeaks
+                    ? min(sharpDetail.minimum, filtered.z)
+                    : mix(sharpDetail.minimum, filtered.z, midrangeFilter);
+                sharpDetail.maximum = preserveSignedPeaks
+                    ? max(sharpDetail.maximum, filtered.w)
+                    : mix(sharpDetail.maximum, filtered.w, midrangeFilter);
             }
         }
         if (sharpDetail.valid > 0.0) {
@@ -4044,6 +4097,28 @@ kernel void wave_attribute_kernel(
             upperHeight = sharpDetail.maximum;
             lowerHeight = sharpDetail.minimum;
             height = max(abs(upperHeight), abs(lowerHeight));
+            if (u.waveformMode == 2 && u.pixelsPerSecond <= 92.0) {
+                // Wide min/max bins cover the full peak range, but their
+                // fine signed intervals occupy only part of that area. Use
+                // measured occupancy for color contrast instead of painting
+                // every wide bin at the brightest constituent color.
+                const int coarseCell = int(clock.detailIndex / detailDivisor)
+                    + int(floor((float(clock.detailIndex % detailDivisor) + detailLocal)
+                        / float(detailDivisor)));
+                if (coarseCell >= 0) {
+                    const float laneHalf = max(4.0, (u.heightPoints - 49.0) * 0.5 - 4.0);
+                    const float occupancy = wide_interval_occupancy(
+                        audioDetailSamples, u.audioDetailMipOffsets[0],
+                        u.audioDetailMipCounts[0], u.audioDetailMipDivisors[0],
+                        uint(coarseCell), detailDivisor, lowerHeight, upperHeight,
+                        1.0 / (scale * laneHalf));
+                    const float3 background = display_srgb_to_linear(float3(13.0, 14.0, 18.0) / 255.0);
+                    // Keep wide-view legibility: use measured fine area as a
+                    // gentle contrast guide, not a full opacity replacement.
+                    const float gentleOccupancy = mix(1.0, occupancy, 0.25);
+                    color = linear_to_display_srgb(mix(background, display_srgb_to_linear(color), gentleOccupancy));
+                }
+            }
             if (logicalRGBDetail && detailLevel != physicalDetailLevel) {
                 const int coarseCell = int(clock.detailIndex / detailDivisor)
                     + int(floor((float(clock.detailIndex % detailDivisor) + detailLocal)

@@ -20,8 +20,9 @@ BPM_RANGES = ((70,180),(48,95),(58,115),(68,135),(78,155),(88,175),
 DEFAULTS = dict(bpm=True, key=True, bpm_range=0, first_cue=False, process='Normal')
 LEGACY_ENGINE = 'rbxport-b739d369-constant-v1'
 ADAPTIVE_ENGINE = 'rbxport-b739d369-adaptive-v2'
-ENGINE = 'rbxport-b739d369-whole-v3'
-_ENGINES = frozenset((LEGACY_ENGINE, ADAPTIVE_ENGINE, ENGINE))
+PREVIOUS_ENGINE = 'rbxport-b739d369-whole-v3'
+ENGINE = 'rbxport-b739d369-whole-v4'
+_ENGINES = frozenset((LEGACY_ENGINE, ADAPTIVE_ENGINE, PREVIOUS_ENGINE, ENGINE))
 
 
 def options(value=None):
@@ -103,7 +104,7 @@ def _source_context(library, track):
         db = Rekordbox6Database(path=str(target))
         try:
             properties = list(db.get_property())
-            row = db.get_content(ID=track.track_id)
+            row = db.get_content(ID=track.native_id)
             if (len(properties) != 1 or str(properties[0].DBID) != library.source_library_id
                     or row is None or _deleted(row) or str(row.UUID) != track.source_uuid
                     or Path(row.FolderPath).resolve(strict=True) != track.path.resolve(strict=True)):
@@ -113,9 +114,11 @@ def _source_context(library, track):
                 raise ValueError('Unknown source analysis flags')
             if flags & 0x80:
                 raise ValueError('Analysis Lock is on')
-            return dict(library_id=library.source_library_id, uuid=track.source_uuid,
+            context=dict(library_id=library.source_library_id, uuid=track.source_uuid,
                         flags=flags, bpm=row.BPM, key=row.KeyID,
                         analysis_updated=row.AnalysisUpdated, analysis_path=row.AnalysisDataPath)
+            if track.source_native_id and not row.AnalysisDataPath:context['bare_registration']=True
+            return context
         finally:
             db.close()
 
@@ -221,11 +224,12 @@ def playback_data(data, record, path, *, verification_cache=None, should_cancel=
     from .local_grid import effective_result
     resolved = effective_result(record)
     cues = data.get('cues') or []
-    if record.get('cue_draft') is not None and not record.get('source_context'):
+    captured_cues=not record.get('source_context') or (record.get('source_context') or {}).get('bare_registration') is True
+    if record.get('cue_draft') is not None and captured_cues:
         from .local_cues import cues as draft_cues
         cues = draft_cues(record)
     if (not cues and record.get('cue_draft') is None and record.get('first_cue') is not None
-            and not record.get('source_context')):
+            and captured_cues):
         cues = [dict(kind='memory', slot=0, position_ms=record['first_cue'], comment='First analyzed beat')]
     return {**data, 'beats': deepcopy(resolved['beats']), 'cues': cues,
             'provenance': {**provenance,

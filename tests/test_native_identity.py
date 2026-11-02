@@ -76,5 +76,45 @@ class IdentityProjection(unittest.TestCase):
         self.assertEqual(project(self.lib,[]).tracks_by_id,self.lib.tracks_by_id)
         with self.assertRaises(WriteProofError):project(replace(self.lib,source_kind='rekordbox-xml'),[self.binding])
 
+    def test_native_removal_does_not_disable_other_bindings_or_resurrect_local_collection(self):
+        missing=replace(self.binding,local_id='sb-removed',native_id='44',canonical='/canonical/removed.wav')
+        before=deepcopy(self.lib);issues={}
+        visible=project(self.lib,[self.binding,missing],unavailable=issues)
+        self.assertEqual(visible.tracks_by_id['sb-existing'].native_id,'42')
+        self.assertEqual(visible.tracks_by_id['43'],self.other)
+        self.assertEqual(set(issues),{'sb-removed'})
+        self.assertEqual(visible.source_binding_issues,issues)
+        self.assertEqual(visible.source_playlist_catalog,before.source_playlist_catalog)
+        records={'sb-removed':dict(path='/canonical/removed.wav',time=193,size=10)}
+        originals=deepcopy(records)
+        imports.inject(visible,records,repair_missing=False)
+        self.assertNotIn('sb-removed',visible.tracks_by_id)
+        self.assertEqual(records,originals)
+        self.assertEqual(self.lib,before)
+        with self.assertRaises(WriteProofError):project(self.lib,[self.binding,missing])
+
+    def test_browsing_never_adopts_replacement_uuid_or_swallows_structural_conflicts(self):
+        changed=replace(self.track,source_uuid='00000000-0000-4000-8000-000000000002')
+        library=replace(self.lib,tracks_by_id={**self.lib.tracks_by_id,'42':changed})
+        issues={};visible=project(library,[self.binding],unavailable=issues)
+        self.assertNotIn('sb-existing',visible.tracks_by_id)
+        self.assertEqual(visible.tracks_by_id['42'],changed)
+        self.assertIn('sb-existing',issues)
+        for bindings in ([self.binding,self.binding],[replace(self.binding,source='/other/master.db')]):
+            with self.assertRaises(WriteProofError):project(library,bindings,unavailable={})
+
+    def test_alias_projection_retains_native_path_and_cache_identity_separately(self):
+        binding=replace(self.binding,canonical='/current/song.wav',native_path='/canonical/song.wav')
+        self.lib.tracks_by_id['42']=replace(self.track,location_uri='file:///current/song.wav',
+                                           source_native_path='/canonical/song.wav')
+        projected=project(self.lib,[binding]);track=projected.tracks_by_id['sb-existing']
+        self.assertEqual(str(track.path),'/current/song.wav')
+        self.assertEqual(str(track.native_path),'/canonical/song.wav')
+        self.assertEqual(track.native_id,'42')
+        self.lib.source_playlist_catalog={};projected.source_playlist_catalog={}
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'cache.json';libcache.dump(projected,path)
+            self.assertEqual(asdict(libcache.load(path).tracks_by_id['sb-existing']),asdict(track))
+
 
 if __name__=='__main__':unittest.main()

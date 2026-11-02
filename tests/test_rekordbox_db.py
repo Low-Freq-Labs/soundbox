@@ -256,7 +256,7 @@ class TrackMapping(unittest.TestCase):
                     AnalysisDataPath="/PIONEER/USBANLZ/x/ANLZ0000.DAT",
                     BPM=14567, Key=Named("Gm"), Length=200,
                     DateCreated="2026-01-02 03:04", Genre=Named("Dub"),
-                    FileSize=9, BitRate=1411, Rating=0, ReleaseYear=2026)
+                    FileSize=9, FileType=11, BitRate=1411, Rating=0, ReleaseYear=2026)
         base.update(kw)
         return Row(**base)
 
@@ -320,7 +320,7 @@ class SelectedDatabase(unittest.TestCase):
             self.assertTrue(snapshots)
             self.assertFalse(snapshots[0].parent.exists())
 
-    def test_collection_pin_keeps_only_the_same_active_native_uuid_after_last_membership_removal(self):
+    def test_collection_discovers_active_audio_without_membership_or_pins_and_excludes_placeholders(self):
         from soundbox import rekordbox_db
         track=TrackMapping()._track(UUID='expected-native-uuid')
         db=FakeDB(tracks=[track]);db.close=lambda:None
@@ -330,13 +330,16 @@ class SelectedDatabase(unittest.TestCase):
                     mock.patch.object(rekordbox_db,'_playlist_catalog',return_value={}), \
                     mock.patch.object(rekordbox_db,'_populate_cue_edit_state'):
                 lib=rekordbox_db.load_live(source)
-                self.assertEqual(lib.tracks_by_id,{})
+                self.assertEqual(set(lib.tracks_by_id),{'265095720'})
                 lib=rekordbox_db.load_live(source,retain_tracks={'synthetic-library':{'265095720':'expected-native-uuid'}})
                 self.assertEqual(set(lib.tracks_by_id),{'265095720'})
                 wrong=rekordbox_db.load_live(source,retain_tracks={'synthetic-library':{'265095720':'replaced-uuid'}})
-                self.assertEqual(wrong.tracks_by_id,{})
+                self.assertEqual(set(wrong.tracks_by_id),{'265095720'})
                 foreign=rekordbox_db.load_live(source,retain_tracks={'another-library':{'265095720':'expected-native-uuid'}})
-                self.assertEqual(foreign.tracks_by_id,{})
+                self.assertEqual(set(foreign.tracks_by_id),{'265095720'})
+                track.FileType=19
+                self.assertEqual(rekordbox_db.load_live(source).tracks_by_id,{})
+                track.FileType=11
                 track.rb_local_deleted=1
                 deleted=rekordbox_db.load_live(source,retain_tracks={'synthetic-library':{'265095720':'expected-native-uuid'}})
                 self.assertEqual(deleted.tracks_by_id,{})

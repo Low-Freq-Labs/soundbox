@@ -6,6 +6,8 @@ apply to their original checkpoints. They do not override current guidance.
 Start with [HANDOFF](../HANDOFF.md), [ROADMAP](../ROADMAP.md),
 [PLAYER](../PLAYER.md) or [ARCHITECTURE](../ARCHITECTURE.md).
 
+- [Roadmap checkpoints through November 1](roadmap-checkpoints-through-2026-11-01.md)
+- [Handoff before Graveyard implementation](handoff-2026-11-01-before-graveyard.md)
 - [Player experiment history, July–September](player-history-2026-07-to-09.md)
 - [Resolved storage audit](storage-audit-2026-07.md)
 - [Completed repeated-work audit](repeated-work-audit-2026-09.md)

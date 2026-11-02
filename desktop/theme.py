@@ -21,6 +21,7 @@ TEXT_HI = "#f2f4f8"
 
 DEFAULT_ACCENT = PURPLE
 DEFAULT_ACCENT_TEXT = '#ffffff'
+GRID_RED = '#ed3343'
 
 QSS = f"""
 QWidget {{
@@ -49,7 +50,7 @@ QPlainTextEdit#TrackComments {{ background: {BG}; border: 1px solid {CONTROL_BOR
 }}
 #NowPlaying {{
     color: {TEXT_HI}; background: transparent; border: none;
-    padding: 0 12px; font-size: 14px; font-weight: 600;
+    padding: 0 12px; font-size: 15px; font-weight: 600;
 }}
 #AutoplayStack {{ background: transparent; border: none; }}
 QPushButton#AutoplayUp, QPushButton#AutoplayRandom, QPushButton#AutoplayDown {{
@@ -197,7 +198,7 @@ QPushButton#CueSlot[filled="true"]:hover {{
 }}
 QPushButton#CueTab {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 3px;
-    color: {TEXT_DIM}; font-size: 8px; font-weight: 700; padding: 0;
+    color: {TEXT_DIM}; font-size: 9px; font-weight: 700; padding: 0;
 }}
 QPushButton#CueTab:checked {{
     color: #18c8ff; border-color: #168fc0; background: #111b23;
@@ -221,7 +222,7 @@ QPushButton#BeatSelectorBtn:hover {{ color: {TEXT_HI}; background: {BG}; }}
 QPushButton#BeatSelectorBtn::menu-indicator {{ image: none; width: 0; }}
 QPushButton#TransportBtn {{
     background: {BG}; border: 1px solid {BORDER}; border-radius: 4px;
-    color: {TEXT_HI}; font-size: 12px; font-weight: 700; padding: 0;
+    color: {TEXT_HI}; font-size: 14px; font-weight: 700; padding: 0;
 }}
 QPushButton#TransportBtn:hover {{
     border-color: {PURPLE_LIGHT}; color: {PURPLE_LIGHT}; background: {PANEL};
@@ -231,27 +232,30 @@ QPushButton#TransportBtn:disabled {{
     background: {BG}; border-color: {BORDER}; color: #454955;
 }}
 QPushButton#CueBtn {{
-    background: transparent; border: 1px solid #f08a19; border-radius: 21px;
-    color: white; font-size: 10px; font-weight: 800; padding: 0;
+    background: transparent; border: 1px solid {TEXT}; border-radius: 24px;
+    color: {TEXT}; font-size: 11px; font-weight: 800; padding: 0;
 }}
 QPushButton#CueBtn:hover {{
-    background: #3a2919; border-color: #ffad42; color: white;
+    background: transparent; border-color: {TEXT}; color: {TEXT};
 }}
 QPushButton#CueBtn:pressed, QPushButton#CueBtn[active="true"] {{
-    background: #f08a19; border-color: #f08a19; color: white;
+    background: transparent; border-color: #f08a19; color: {TEXT_HI};
 }}
 QPushButton#DeckPlayBtn {{
-    background: transparent; border: 1px solid {PURPLE}; border-radius: 21px;
-    color: white; font-size: 12px; font-weight: 700; padding: 0;
+    background: transparent; border: 1px solid {TEXT}; border-radius: 24px;
+    color: {TEXT}; font-size: 14px; font-weight: 700; padding: 0;
 }}
 QPushButton#DeckPlayBtn:hover {{
-    background: #28173a; border-color: {PURPLE_LIGHT};
+    background: transparent; border-color: {TEXT}; color: {TEXT};
 }}
-QPushButton#DeckPlayBtn:pressed, QPushButton#DeckPlayBtn[playing="true"] {{
-    background: {PURPLE}; border-color: {PURPLE}; color: @ON_ACCENT@;
+QPushButton#DeckPlayBtn:pressed {{
+    background: transparent; border-color: #00c301; color: {TEXT_HI};
+}}
+QPushButton#DeckPlayBtn[playing="true"] {{
+    background: transparent; border-color: #00c301; color: {TEXT_HI};
 }}
 QPushButton#DeckPlayBtn[playing="true"]:hover {{
-    background: {PURPLE_LIGHT}; border-color: {PURPLE_LIGHT};
+    background: transparent; border-color: #00c301; color: {TEXT_HI};
 }}
 QPushButton#CueBtn:disabled, QPushButton#DeckPlayBtn:disabled {{
     background: {BG}; border-color: {BORDER}; color: #454955;
@@ -313,7 +317,7 @@ QToolButton#GridEditButton {{ background: {BG}; border: 1px solid {BORDER};
 QToolButton#QuantizeButton {{ background: {BG}; color: {TEXT_DIM};
     border: 1px solid {BORDER}; border-radius: 3px; padding: 0;
     font-size: 16px; font-weight: 600; }}
-QToolButton#QuantizeButton:checked {{ background: {BG}; color: #ff3748; }}
+QToolButton#QuantizeButton:checked {{ background: {BG}; color: {GRID_RED}; }}
 QToolButton#QuantizeButton:hover {{ border-color: {TEXT_DIM}; }}
 QToolButton#MyTagsButton {{ background: {BG}; border: 1px solid {BORDER};
     border-radius: 3px; padding: 2px 20px 2px 10px; color: {TEXT}; }}
@@ -327,9 +331,11 @@ QCheckBox#MyTagCheck {{ spacing: 8px; padding: 0; margin: 0; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 5px; min-height: 24px; }}
 QScrollBar::handle:vertical:hover {{ background: {PURPLE}; }}
+QScrollBar[wheelScrolling="true"]::handle:vertical {{ background: {PURPLE}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; }}
 QScrollBar::handle:horizontal {{ background: {BORDER}; border-radius: 5px; min-width: 24px; }}
+QScrollBar[wheelScrolling="true"]::handle:horizontal {{ background: {PURPLE}; }}
 
 QProgressBar {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 4px;
                 height: 16px; text-align: center; color: {TEXT_HI}; font-size: 11px; }}

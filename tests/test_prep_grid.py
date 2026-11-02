@@ -147,6 +147,19 @@ class GridInterface(unittest.TestCase):
         self.assertEqual(self.requests, [])
         self.assertEqual(self.dat, self.original)
 
+    def test_logical_id_retains_cache_and_signal_keys_while_native_grid_and_cue_stores_use_sql_id(self):
+        original=self.shared.lib.tracks_by_id['7']
+        logical=replace(original,track_id='sb-stable',source_native_id='7')
+        self.shared.lib=replace(self.shared.lib,tracks_by_id={'sb-stable':logical})
+        self.grid.configure();saved=[];self.grid.saved.connect(lambda _lib,tid:saved.append(tid))
+        with mock.patch.object(self.shared,'_cue_store_factory',wraps=self.shared._cue_store_factory) as cues:
+            self.grid.set_current('sb-stable');self.wait_for(lambda:not self.grid.reason('sb-stable') and not self.shared.busy)
+            self.assertTrue(self.grid.request('sb-stable','double'))
+            self.wait_for(lambda:not self.shared.owned)
+            self.assertTrue(all(call.args[1]=='7' for call in cues.call_args_list))
+        self.assertEqual(self.requests[-1].track_id,'7');self.assertEqual(saved,['sb-stable'])
+        self.assertEqual(set(self.shared.lib.tracks_by_id),{'sb-stable'})
+
     def test_accepted_grid_and_bpm_intents_report_specific_update_status(self):
         for operation, value, message in (
                 ('shift', 1, 'Updating beatgrid…'),

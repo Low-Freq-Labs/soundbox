@@ -23,7 +23,7 @@ class RekordboxSection(QWidget):
         heading = QLabel("REKORDBOX")
         heading.setObjectName("SettingsSection")
         layout.addWidget(heading)
-        text = QLabel("Read-only library snapshots. Your rekordbox database and source audio are never changed.")
+        text = QLabel("Browse and edit your shared rekordbox library. Source audio files stay unchanged.")
         text.setWordWrap(True)
         layout.addWidget(text)
         self.status = QLabel()

@@ -1342,9 +1342,9 @@ class NativeDeckContract(unittest.TestCase):
             "encoding": "song-anchored-extrema-i16le-v1",
         })
         self.deck.set_waveform_mode('RGB')
-        for zoom in (576, 864):
+        for zoom in (24,32,48,64,92,576,864):
             self.deck.set_zoom(zoom)
-            self.deck.set_visual_position(500, True)
+            self.deck.set_visual_position(1000 if zoom<=92 else 500, True)
             QTest.qWait(50)
             self.deck.diagnostic_begin_frame_trace(1, 64)
             self.deck.request_display()
@@ -1358,7 +1358,8 @@ class NativeDeckContract(unittest.TestCase):
             frame = np.frombuffer((output / 'frames.bgra').read_bytes(), dtype='u1').reshape(
                 manifest['crop_height_pixels'], 64, 4)
             scale = self.deck.diagnostic_view_geometry()[2] / self.host.width()
-            expected = [9, 7, 134] if scale > 1.5 else [0, 0, 255]
+            expected = ([2,2,241] if zoom<=92 else
+                        [9,7,134] if scale>1.5 else [0,0,255])
             pixel = frame[manifest['crop_height_pixels'] // 2, 20, :3].astype(int)
             self.assertLessEqual(int(np.abs(pixel - expected).max()), 2)
 
@@ -1475,7 +1476,7 @@ class NativeDeckContract(unittest.TestCase):
                     for base in ((50000, 42704) if zoom == 864 else (50000,)):
                         first = capture(base)
                         first_record = dict(last_record)
-                        continuous_rgb = mode == "RGB" and zoom not in (576, 864)
+                        continuous_rgb = mode == "RGB" and zoom not in (64, 128, 184, 576, 864)
                         point_rate = round(zoom)
                         common = math.gcd(44100, point_rate)
                         shift = round(point_rate / common * scale)

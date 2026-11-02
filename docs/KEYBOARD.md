@@ -16,6 +16,9 @@ Newly created cues appear and can be previewed immediately while database saves
 run in background. The creation press/release itself stays inert for preview.
 The existing defaults remain Space for play/pause, C for held session CUE, and
 Command-R for Rename selected item (including the artist-pictures catalog).
+For a focused playlist/folder sidebar row, Rename edits its plain name inline;
+Enter saves and Escape cancels. Icons/counts stay outside the editor.
+Graveyard’s standard Cmd+A selects all before configurable grid actions.
 Additional cue defaults:
 
 | Key | Action |
@@ -84,3 +87,21 @@ autorepeat, multiple holds, page switching, failed-save rollback and text-focus
 boundaries. Source changes require the full release/render gate and installed
 native-player acceptance; see [HANDOFF](HANDOFF.md) for the current state and
 [PLAYER](PLAYER.md) for the cue editing/transport contract.
+
+November1 candidate adds unassigned **Set cue** directly below **Toggle cue page**.
+It captures at the current playhead into the first empty slot on the active Hot
+or Memory page, with the existing Quantize and durable-save rules. It never jumps
+to or overwrites a filled slot, and a held key does not repeat capture. Assign it
+in Settings → Keyboard without displacing an existing shortcut. **Focus search**
+also works from Graveyard; its global query filters the Graveyard list. Restore
+keeps the visible list anchor. Holding the on-screen left/right grid arrows repeats
+shifts until release; other grid buttons remain single action.
+
+Held grid-left/right shortcuts now repeat after300ms at80ms intervals, sharing
+one timer across aliases and using the same durable edit path as the buttons.
+Release, deactivation, text/modal focus, a different loaded track or an edit error
+stops repetition. Other single-press commands retain their existing behavior.
+
+Jump backward/forward shortcuts are physical holds: immediate jump,300ms delay,
+then100ms repeats until release, focus loss or track change. Oversized jumps use
+the remaining audio and stop at0/duration, with or without a native beat grid.

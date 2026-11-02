@@ -13,8 +13,9 @@ existing-track source pilot are documented in
 [analysis-playlists-next.md](analysis-playlists-next.md). Ordinary playlist/folder
 CRUD and registered-track membership passed separate October30 native acceptance
 and now have their own production authority and app integration. New-track
-registration, reverse detected-analysis publication and broader metadata writes
-remain separate gates. The current shared-library transition is in
+registration and initial full BPM/Grid+Key/native waveforms on supported bare
+stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
+are installed. Broader analysis replacement/codecs/gain/metadata remain gated. The current shared-library transition is in
 [shared-library-workflow-plan.md](shared-library-workflow-plan.md).
 
 ## Original October26 scope, with subsequently accepted grid behavior

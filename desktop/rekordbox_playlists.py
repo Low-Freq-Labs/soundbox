@@ -85,7 +85,7 @@ class PlaylistEditController(QObject):
         w._native_pending_changed(rebuild=True)
         LOG.info('Playlist intent admitted: operation=%s persist_ms=%.2f feedback_ms=%.2f',
                  request['operation'],(admitted-started)*1000,(time.monotonic()-started)*1000)
-        self.status('Saving playlist edits…');self.schedule();return True
+        self.status('Updating playlist…');self.schedule();return True
 
     def schedule(self):
         if self.closing:return
@@ -101,6 +101,8 @@ class PlaylistEditController(QObject):
         if self.closing or not self.pending:return
         if self.queue_error():self.status(self.queue_error());return
         if self.pending[0].get('error'):return
+        imports=getattr(w,'shared_import_controller',None)
+        if imports and imports.source_priority:self.timer.start();return
         if (self.tags.owned or w._refresh_worker is not None or w._state_maintenance
                 or w._device_operation_owned()):
             self.timer.start();return
@@ -154,7 +156,9 @@ class PlaylistEditController(QObject):
                 self.fail('Saved in rekordbox; SoundBox state could not be saved. Retry after fixing storage.');return
             self.not_before=0
             if not self.closing:w._native_refresh_view(job['request'])
-            self.status('Saving playlist edits…' if self.pending else '')
+            self.status('Updating playlist…' if self.pending else '')
+            finish=getattr(w,'_finish_edit_status',None)
+            if not self.pending and finish:finish(quiet=True)
             self.schedule()
         self.tags.run_playlist_job(work,completed)
 
@@ -174,7 +178,7 @@ class PlaylistEditController(QObject):
         jobs[0].update(error='',retry=True);w.settings[QUEUE]=jobs
         if w._save_state():
             w._native_pending_changed(rebuild=True)
-            self.status('Retrying rekordbox playlist edit…');self.not_before=0;self.schedule()
+            self.status('Updating playlist…');self.not_before=0;self.schedule()
         else:w.settings[QUEUE]=previous
 
     def discard(self):
@@ -208,7 +212,12 @@ class NativePlaylistsMixin:
         controller=getattr(self,'playlist_controller',None)
         if not self.lib or not controller or controller.queue_error():return self.lib
         from soundbox.playlist_presentation import project
-        return project(self.lib,controller.pending)
+        library=project(self.lib,controller.pending)
+        imports=getattr(self,'shared_import_controller',None)
+        if imports and not imports.queue_error():
+            from soundbox.shared_imports import present
+            library=present(library,imports.pending)
+        return library
 
     def _native_pending_deletions(self):
         """Rows absent from this source's durable presentation, including new IDs."""
@@ -315,12 +324,18 @@ class NativePlaylistsMixin:
     def _native_rename(self, identity):
         row=self._native_node(identity)
         if row is None:return
-        name,ok=QInputDialog.getText(self,'Rename rekordbox playlist','New name:',text=row['Name'])
+        item=self._find_tree_item('',identity=identity)
+        self.tree.rename_inline(item,row['Name'],lambda name:self._native_rename_commit(identity,row['Name'],name))
+
+    def _native_rename_commit(self, identity, previous, name):
+        row=self._native_node(identity)
+        if row is None or row['Name']!=previous:
+            self._flash_status('Playlist changed before renaming; try again',8);return
         name=name.strip()
         if any(other['ID']!=identity and other['ParentID']==row['ParentID'] and other['Name']==name
                and other['rb_local_deleted']==0 for other in self._native_presentation().source_playlist_catalog['nodes']):
             self._flash_status('A playlist or folder with that name already exists here',8);return
-        if ok and name and name!=row['Name']:
+        if name and name!=row['Name']:
             self._native_request('rename',identity=identity,name=name)
 
     def _native_delete(self, identity):
@@ -335,7 +350,12 @@ class NativePlaylistsMixin:
     def _native_append(self, identity, ids):
         tracks=[self.lib.tracks_by_id.get(tid) for tid in ids] if self.lib else []
         if any(t is None or not t.source_uuid or t.imported for t in tracks):
-            self._flash_status('Add these tracks to rekordbox Collection first',10);return
+            controller=getattr(self,'shared_import_controller',None)
+            row=self._native_node(identity)
+            if controller and row and row['Attribute']==0 and tracks and all(t is not None for t in tracks):
+                self._queue_shared_import(tracks,dict(kind='native',id=identity,uuid=row['UUID']))
+            else:self._flash_status('Refresh the library before adding these tracks',10)
+            return
         row=self._native_node(identity)
         if row is None or row['Attribute']!=0:return
         existing={r['ContentID'] for r in self.lib.source_playlist_catalog['members']
@@ -372,6 +392,17 @@ class NativePlaylistsMixin:
         if self.playlist_controller.pending:
             menu.addSeparator();menu.addAction('Retry pending edits',self.playlist_controller.retry)
             discard=menu.addAction('Discard pending edits',self.playlist_controller.discard)
+            discard.setEnabled(not self.tag_controller.owned)
+        prep=getattr(self,'prep_controller',None)
+        if prep and (prep.pending or prep.errors):
+            menu.addAction('Retry cue/grid saves',prep.retry)
+        publisher=getattr(self,'native_analysis_controller',None)
+        if publisher and publisher.pending:
+            menu.addSeparator();menu.addAction('Retry sharing analysis',publisher.retry)
+        imports=getattr(self,'shared_import_controller',None)
+        if imports and imports.pending:
+            menu.addSeparator();menu.addAction('Retry pending imports',imports.retry)
+            discard=menu.addAction('Discard pending imports',imports.discard)
             discard.setEnabled(not self.tag_controller.owned)
 
     def _native_tree_menu(self,pos):

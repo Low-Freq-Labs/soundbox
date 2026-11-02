@@ -75,17 +75,9 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
             except (AttributeError,TypeError,ValueError) as exc:
                 logging.getLogger(__name__).warning('Playlist edit identity unavailable: %s',exc)
                 catalog = {}
-            # Preserve playlist scope before collecting edit identities. This
-            # metadata never adds tracks or schedules preparation.
-            referenced = {k for pl in playlists for k in pl.keys}
-            retained = (retain_tracks or {}).get(library_id, {})
-            if not isinstance(retained,dict):retained = {}
-            pinned = {k for k,v in retained.items() if isinstance(k,str) and isinstance(v,str)} & active_ids
-            tracks_by_id = _read_tracks(db, source, memberships, track_ids=referenced|pinned)
-            for tid in pinned:
-                track = tracks_by_id.get(tid)
-                if track is not None and track.source_uuid != retained[tid]:
-                    if tid not in referenced:tracks_by_id.pop(tid)
+            # Collection is shared independently of playlist membership. Native
+            # FileType 19 rows are placeholders, even when they contain paths.
+            tracks_by_id = _read_tracks(db, source, memberships, track_ids=_audio_track_ids(db))
             try:
                 _populate_cue_edit_state(db, tracks_by_id)
             except Exception as exc:  # optional write identity must not disable browsing
@@ -93,14 +85,22 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
                 for track in tracks_by_id.values():
                     track.source_cue_revision = ''
                     track.source_cue_refs = []
+            # Resolve local path aliases in this reader worker, preserving raw
+            # SQL paths separately. Admission can then reuse the same file ID
+            # without filesystem walks on the GUI thread.
+            for track in tracks_by_id.values():
+                try:canonical=track.path.resolve(strict=True)
+                except (OSError,RuntimeError):continue
+                if canonical!=track.path:
+                    track.source_native_path=str(track.path)
+                    track.location_uri='file://localhost'+quote(str(canonical))
         finally:
             try:
                 db.close()
             except Exception:  # noqa: BLE001
                 pass
-        # Keep the established playlist scope plus exact UUID pins retained by
-        # native edits. Removing a last playlist reference must not remove that
-        # song from SoundBox Collection on the next refresh.
+        # UUID pins remain readable for older state; Collection no longer needs
+        # a playlist or a pin to discover an active native audio record.
         return Library(
             tracks_by_id=tracks_by_id,
             playlists=playlists,
@@ -269,6 +269,17 @@ def _active_track_ids(db) -> set[str]:
         return {str(row[0]) for row in query.with_entities(DjmdContent.ID).filter(
             func.coalesce(DjmdContent.rb_local_deleted, 0) == 0)}
     return {str(row.ID) for row in query if not _deleted(row)}
+
+
+def _audio_track_ids(db) -> set[str]:
+    from pyrekordbox.db6.tables import DjmdContent
+    from sqlalchemy import func
+    query = db.get_content()
+    types = (1, 4, 5, 6, 11, 12)
+    if hasattr(query, 'with_entities'):
+        return {str(row[0]) for row in query.with_entities(DjmdContent.ID).filter(
+            func.coalesce(DjmdContent.rb_local_deleted, 0) == 0, DjmdContent.FileType.in_(types))}
+    return {str(row.ID) for row in query if not _deleted(row) and getattr(row,'FileType',None) in types}
 
 
 def _content_rows(db, track_ids):

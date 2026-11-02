@@ -353,8 +353,13 @@ class SettingsPage(unittest.TestCase):
                 command = 'grid.' + action
                 self.assertIn(command, BY_ID)
                 self.assertEqual(mapping.bindings(command), [])
-                _win._dispatch_keyboard_action(command)
-                edit.assert_called_with(action)
+                release = _win._dispatch_keyboard_action(command)
+                if action in ('left', 'right'):
+                    edit.assert_called_with(action, track_id=_win.player_bar.current_track())
+                else:
+                    edit.assert_called_with(action)
+                if release:
+                    release()
             _win._dispatch_keyboard_action('grid.quantize')
             toggle.assert_called_once()
         self.assertNotIn('grid.bpm', BY_ID)
@@ -3660,46 +3665,40 @@ class TrackReanalysisMenu(unittest.TestCase):
                 mock.patch.object(_win, "_analyze_tracks") as analyze:
             one = QMenu(_win)
             _win._add_track_reanalysis_action(one, ["1"])
-            self.assertEqual([a.text() for a in one.actions()],["Analyze Track","Rebuild Waveform"])
+            self.assertEqual([a.text() for a in one.actions()],["Analyze Track"])
             one.actions()[0].trigger()
             analyze.assert_called_once_with(("1",))
             reanalyze.assert_not_called()
-            one.actions()[1].trigger()
-            reanalyze.assert_called_once_with(("1",))
 
             reanalyze.reset_mock()
             analyze.reset_mock()
             many = QMenu(_win)
             _win._add_track_reanalysis_action(many, ["1", "2"])
-            self.assertEqual([a.text() for a in many.actions()],["Analyze 2 Tracks","Rebuild 2 Waveforms"])
+            self.assertEqual([a.text() for a in many.actions()],["Analyze 2 Tracks"])
             many.actions()[0].trigger()
             analyze.assert_called_once_with(("1","2"))
             reanalyze.assert_not_called()
-            many.actions()[1].trigger()
-            reanalyze.assert_called_once_with(("1", "2"))
 
 
 class TrackFileMenu(unittest.TestCase):
-    def test_open_in_finder_is_directly_below_copy_and_routes_selection(self):
+    def test_only_open_in_finder_remains_and_routes_selection(self):
         from PySide6.QtWidgets import QMenu
 
         with mock.patch.object(_win, "_open_in_finder") as reveal:
             menu = QMenu(_win)
             _win._add_track_file_actions(menu, ["1", "2"])
             self.assertEqual([action.text() for action in menu.actions()], [
-                "Copy 2 File Names", "Open in Finder",
+                "Open in Finder",
             ])
-            menu.actions()[1].trigger()
+            menu.actions()[0].trigger()
             reveal.assert_called_once_with(("1", "2"))
 
-    def test_artist_header_copy_does_not_offer_bulk_finder_reveal(self):
+    def test_artist_header_does_not_offer_bulk_file_utilities(self):
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu(_win)
         _win._add_track_file_actions(menu, ["1", "2"], reveal=False)
-        self.assertEqual([action.text() for action in menu.actions()], [
-            "Copy 2 File Names",
-        ])
+        self.assertEqual(menu.actions(), [])
 
     def test_open_in_finder_reveals_exact_existing_source_paths(self):
         expected = [
@@ -4201,7 +4200,7 @@ class BrowserColumnInteraction(unittest.TestCase):
         self.assertEqual(self.header.length(), _win.artists_view.viewport().width())
         self.assertEqual(_win.artists_view.columnWidth(0), self.header.sectionSize(0))
 
-    def test_columns_fit_and_scrollbar_starts_below_header_at_both_ends(self):
+    def test_columns_reach_frame_and_overlaid_scrollbar_starts_below_header_at_both_ends(self):
         from PySide6.QtWidgets import QStyle, QStyleOptionSlider
         _win.model.set_rows([{'id': str(i), 'title': f'Track {i}'} for i in range(300)])
         self.header.resizeSection(0, _win.table.width() + 100)
@@ -4216,14 +4215,17 @@ class BrowserColumnInteraction(unittest.TestCase):
             else:
                 _win._show_collection()
             _app.processEvents()
-            bar = view.verticalScrollBar()
+            bar = view._edge_scrollbar.bar
             self.assertLessEqual(header.length(), view.viewport().width())
             self.assertLessEqual(header.mapTo(view, QPoint(header.length(), 0)).x(),
-                                 bar.mapTo(view, QPoint(0, 0)).x())
+                                 view.contentsRect().right()+1)
+            self.assertEqual(view.viewport().geometry().right(),view.contentsRect().right())
+            self.assertEqual(header.geometry().right(),view.contentsRect().right())
             header_bottom = header.mapTo(view, QPoint(0, header.height())).y()
             self.assertEqual(bar.mapTo(view, QPoint(0, 0)).y(), header_bottom)
             for position in (bar.minimum(), bar.maximum(), bar.minimum()):
                 bar.setValue(position)
+                self.assertEqual(view.verticalScrollBar().value(),position)
                 option = QStyleOptionSlider()
                 option.initFrom(bar)
                 option.orientation = Qt.Vertical
@@ -4593,6 +4595,28 @@ class PrepEditStatus(unittest.TestCase):
         clear_old()
         self.assertEqual(_win.status_label.text(), 'Updating hot cue…')
 
+    def test_verified_playlist_completion_clears_active_banner_quietly(self):
+        self.status.return_value = 'Updating playlist…'
+        _win._sync_edit_status()
+        self.status.return_value = ''
+        with mock.patch.object(_win, '_flash_status') as flash:
+            _win._finish_edit_status(quiet=True)
+            flash.assert_not_called()
+        self.assertEqual(_win.status_label.text(), 'Ready')
+        self.assertEqual(_win._prep_update_message, '')
+
+    def test_verified_quiet_completion_preserves_newer_work_and_other_status(self):
+        self.status.return_value = 'Updating playlist…'
+        _win._sync_edit_status()
+        self.status.return_value = 'Updating hot cue…'
+        _win._finish_edit_status(quiet=True)
+        self.assertEqual(_win.status_label.text(), 'Updating hot cue…')
+        self.status.return_value = ''
+        _win._set_status_text('Playback error')
+        _win._finish_edit_status(quiet=True)
+        self.assertEqual(_win.status_label.text(), 'Playback error')
+        self.assertEqual(_win._prep_update_message, '')
+
     def test_failed_edit_reports_the_specific_operation_without_done(self):
         self.status.return_value = 'Updating BPM…'
         _win._sync_edit_status()
@@ -4648,6 +4672,8 @@ class PlayerHardening(unittest.TestCase):
             pb.shutdown()
 
     def test_quantized_session_cue_relocates_once_and_existing_cues_preview_exactly(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
         from desktop.player import PlayerBar, SessionCueState
         pb = PlayerBar()
         try:
@@ -4658,11 +4684,14 @@ class PlayerHardening(unittest.TestCase):
             with mock.patch.object(pb, 'is_playing', return_value=False), \
                     mock.patch.object(pb, '_set_position') as seek, \
                     mock.patch.object(pb, '_start_cue_preview') as preview:
-                pb._cue_press()
+                release=MainWindow._dispatch_keyboard_action(SimpleNamespace(player_bar=pb),'transport.cue')
                 self.assertEqual(pb._cue_ms, 1433)
                 self.assertEqual(pb._session_cue_state, SessionCueState.SET)
                 seek.assert_called_once_with(1433)
                 preview.assert_not_called()
+                self.assertTrue(pb.cue_btn.property('active'))
+                release()
+                self.assertFalse(pb.cue_btn.property('active'))
                 pb._cue_press()
                 preview.assert_called_once_with(1433, ('session', -1))
                 pb._marker_cue_press('hot', 0, 1101)
@@ -4971,12 +5000,13 @@ class PlayerHardening(unittest.TestCase):
 
             pb._move_clean(34_567)
             pb.cue_btn.pressed.emit()
-            # The first CUE press after a paused manual move only relocates the
-            # transient orange marker. It does not start a preview.
-            self.assertFalse(pb.cue_btn.property("active"))
+            # The first paused press relocates the marker and holds the orange
+            # ring, without starting preview playback.
+            self.assertTrue(pb.cue_btn.property("active"))
             self.assertFalse(state["playing"])
             self.assertEqual(pb.wave._session_cue_ms, 34_567)
             pb.cue_btn.released.emit()
+            self.assertFalse(pb.cue_btn.property("active"))
             pb.cue_btn.pressed.emit()
             self.assertTrue(pb.cue_btn.property("active"))
             self.assertFalse(pb.play_btn.property("playing"))
@@ -5233,11 +5263,11 @@ class PlayerHardening(unittest.TestCase):
             pb._dur = 30_000
             self.assertEqual(pb._beat_delta_ms(), 8_000)  # 16 beats at 120 BPM
             pb._pos = 7_999
-            self.assertIsNone(pb._beat_jump_target(-1))
+            self.assertEqual(pb._beat_jump_target(-1),0)
             self.assertEqual(pb._beat_jump_target(1), 15_999)
             pb._pos = 22_001
             self.assertEqual(pb._beat_jump_target(-1), 14_001)
-            self.assertIsNone(pb._beat_jump_target(1))
+            self.assertEqual(pb._beat_jump_target(1),30_000)
         finally:
             pb.shutdown_waveforms()
 
@@ -5252,7 +5282,7 @@ class PlayerHardening(unittest.TestCase):
             pb._beat_grid = [i * 500 + (40 if i >= 10 else 0) for i in range(40)]
             pb._pos = 5_140  # 100ms into grid beat at 5.040s
             self.assertEqual(pb._beat_jump_target(1), 13_140)
-            self.assertIsNone(pb._beat_jump_target(-1))  # fewer than 16 behind
+            self.assertEqual(pb._beat_jump_target(-1),0)  # partial jump reaches the beginning
             pb._pos = 13_140
             self.assertEqual(pb._beat_jump_target(-1), 5_140)
         finally:
@@ -5413,17 +5443,21 @@ class PlayerHardening(unittest.TestCase):
             pb.cue_btn.pressed.emit()
             self.assertEqual(pb._cue_ms, 20_000)
             self.assertEqual(pb._session_cue_state, SessionCueState.SET)
+            self.assertTrue(pb.cue_btn.property('active'))
             self.assertFalse(pb._cue_preview_active)
             self.assertFalse(state["playing"])
             self.assertEqual(events, [("seek", 20_000)])
             pb.cue_btn.released.emit()
+            self.assertFalse(pb.cue_btn.property('active'))
 
             pb.cue_btn.pressed.emit()
             self.assertTrue(pb._cue_preview_active)
+            self.assertTrue(pb.cue_btn.property('active'))
             self.assertTrue(state["playing"])
             self.assertEqual(events[-2:], [("seek", 20_000), ("play",)])
             pb.cue_btn.released.emit()
             self.assertFalse(state["playing"])
+            self.assertFalse(pb.cue_btn.property('active'))
 
             pb._move_clean(31_000)
             self.assertEqual(
@@ -7471,7 +7505,11 @@ class FixLinksUI(unittest.TestCase):
         import tempfile
         from pathlib import Path
         self._td = tempfile.TemporaryDirectory()
-        self.old = Path(self._td.name) / "Mersiv Sound Haven 2021.m4a"
+        # Admission now records canonical paths. macOS exposes its TEMP root
+        # through /var as well as /private/var; repair expectations must bind
+        # the admitted path rather than a different spelling of that root.
+        base = Path(self._td.name).resolve()
+        self.old = base / "Mersiv Sound Haven 2021.m4a"
         self.old.write_bytes(b"x")
         self._saved = dict(_win.imported)
         self._saved_waveform_rechecks = _win._waveform_rechecks_enabled
@@ -7480,7 +7518,7 @@ class FixLinksUI(unittest.TestCase):
         _win.imported = {}
         _win._import_files([str(self.old)])
         (self.tid,) = _win.imported
-        self.new = Path(self._td.name) / "pt.1" / self.old.name
+        self.new = base / "pt.1" / self.old.name
         self.new.parent.mkdir()
         self.old.rename(self.new)  # the user's "move everything into a folder"
 

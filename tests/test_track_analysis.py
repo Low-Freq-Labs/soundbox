@@ -921,6 +921,22 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(got["provenance"]["grid"], "soundbox-manual")
         self.assertEqual(got["provenance"]["user_data"], "soundbox")
 
+    def test_verified_native_grid_confirmation_preserves_every_waveform_payload_byte(self):
+        cache=self.root/'analysis';raw=[[2,461,130.0],[3,923,130.0]];published=[[1,0,130.0],*raw]
+        track_analysis.store(cache,'confirmed',self.audio,dict(detail_heights=b'wave',detail_rate=6144.0,
+            overview_heights=b'\x20',overview_rgb=b'\x0e\x00\x00',beats=raw))
+        before=track_analysis._read_container_manifest(cache,'confirmed',self.audio)[2]
+        self.assertTrue(track_analysis.confirm_published_grid(cache,'confirmed',self.audio,published,raw))
+        after=track_analysis._read_container_manifest(cache,'confirmed',self.audio)
+        self.assertEqual(after[2],before)
+        self.assertEqual(after[1]['beats'],published)
+        self.assertEqual(after[1]['provenance']['grid'],'rekordbox')
+        newer=[[1,100,130.0],[2,561,130.0]]
+        self.assertTrue(track_analysis.update_user_data(cache,'confirmed',self.audio,beats=newer,cues=[]))
+        exact=track_analysis._read_container_manifest(cache,'confirmed',self.audio)
+        self.assertFalse(track_analysis.confirm_published_grid(cache,'confirmed',self.audio,published,raw))
+        self.assertEqual(track_analysis._read_container_manifest(cache,'confirmed',self.audio),exact)
+
     def test_imported_cues_sync_manifest_without_touching_payload(self):
         cache = self.root / "analysis"
         initial = [{"kind": "hot", "slot": 0, "position_ms": 100}]

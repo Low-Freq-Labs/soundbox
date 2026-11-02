@@ -1,19 +1,62 @@
 # SoundBox player
 
-Current as of 2026-10-30. This is the player reference: shipped behavior,
+Current as of 2026-11-01. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
-The initial October29 menu, beat-count modes and local detection stage shipped
-in personal build142 after the complete offscreen/Cocoa gate. Reverse analysis
-publication remains unfinished; see [HANDOFF](HANDOFF.md).
+Initial shared analysis is installed for bare stereo PCM16/24 WAV44.1/48kHz
+full BPM/Grid+Key and native waveforms. Broader codecs/existing-analysis
+replacement remain gated; [HANDOFF](HANDOFF.md) records exact installed proof.
 
 Graveyard auditions use the same loaded deck and playback keys (Space, held C,
 existing cue triggers and zoom), with no supplying autoplay queue. Its selected
 track is the Load target. Existing cues stay playable; cue creation/deletion
 waits for restoration or an ordinary browser load. Auditioning does not restore
-membership or persist hidden waveform records.
+membership or persist hidden waveform records. The prep-strip i button uses the
+current highlighted Graveyard row while that tab is visible, including playlist
+removals; clicking the button can move focus without changing its target. Empty
+or unavailable rows never fall back to a stale browser or loaded-deck song.
+Other tabs retain the ordinary browser/deck information target.
+Native-deleted rows can use a source-bound historical native identity for this
+read-only dialog; no unrelated loaded song is substituted. Confirmed Graveyard
+disposal stops a selected loaded track only after the committed receipt, and
+preserves its stored musical data. Unaffected decks are not reloaded.
+
+## October31 taller-player layout and saved-accent icon
+
+Sonny confirmed the RGB motion fix and requested a taller rekordbox-like player.
+The approved source prefers a200pt waveform view, with the header's minimum derived
+from actual layout content. Standalone WaveformBar minimum and native waveform/
+audio/motion math stay unchanged. Refinements now use42×28 nav/jump buttons,
+20×16 navigation icons, centered vertical48×48 CUE then PLAY with6pt between,
+12pt additional space below the jump selector, and12pt dropdown top inset for
+logo clearance. Hot/Memory tabs are equally28pt tall with9px text, taking a small
+equal share from the four pad rows. The actual tall view reaches205pt under this
+left stack. Fit/containment checks cover four window sizes; Qt enforces the usable
+minimum rather than overlapping controls. This layout, corrected original-SB icon
+and fixed-green PLAY/orange-CUE/no-hover behavior are installed;
+HANDOFF records exact package and preservation evidence.
+
+PLAY now uses the same transparent interior as CUE, with existing light-gray
+outline/icon while paused and a fixed green outline while playing, regardless
+of theme accent. Hover/press stay unfilled. The existing PAUSE glyph and transport-intent behavior remain; CUE's
+held ring is orange until release, with the same transparent interior. Idle CUE
+uses gray like idle PLAY. The latest correction removes hover changes entirely
+and isolates fixed-orange CUE from generic theme hover rules.
+
+The Dock icon also uses the committed accent after color-picker OK and restores
+it on launch. Live picker motion and Cancel leave the icon unchanged. The supplied
+SVG's letter outlines, dark tile, transparency and authored highlights are
+preserved. The tiny white streak in the upper gray shine now matches its gray
+surroundings; other1024px pixels/alpha remain exact.
+Sonny's original-SB icon replaces the earlier bar design; its default PNG/ICNS
+are rendered from that same vector. Only the named accent shapes/border change. The
+saved icon also persists after exit using NSWorkspace custom-icon metadata on
+the app root. Contents, the signed ICNS, executable and signing identity remain
+unchanged. Isolated/development runs never customize the installed app.
+Repeated application of the same saved color does not recook the icon. This is
+installed behavior; HANDOFF records exact package and preservation evidence.
 
 ## Implemented player behavior
 
@@ -61,7 +104,9 @@ Below the player, the browser reaches the window's right edge without a utility
 rail. Its persistent vertical scrollbar and thumb start below the 26-point
 column-header row. The footer retains one full-width top divider.
 
-Columns stay within the scrollbar boundary. Manual header drags resize only the
+Columns can reach the frame’s right edge, including FORMAT. The visible scrollbar
+overlays the row edge below the header; it reserves no column-width gutter.
+Manual header drags resize only the
 dragged column, using any free width and stopping at the right edge without taking
 space from Title or another column. Narrow a column first to make room when the
 row is full. Window resizing gives spare space to Title; narrowing the window or
@@ -90,7 +135,8 @@ error instead. Focus-return saved-grid checks are silent and never report a save
 
 The transport layout field has matching rounded corners and an inset chevron;
 its menu retains native behavior. The field text has an 11-pixel left inset.
-Track/jump rows and columns use equal 5-pixel gaps. The Q uses semibold lettering.
+The centered track title uses15px semibold type. Track/jump rows and columns use
+equal5-pixel gaps. Q uses semibold lettering and checked red#ed3343.
 
 Quantize uses a checkable **Q** after the five grid controls: red when on, grey
 when off, independent of theme accent. It is a global SoundBox setting, initially
@@ -109,7 +155,18 @@ Loop authoring remains outside the current prep UI. Settings → Keyboard →
 Beatgrid exposes unassigned bindings for all five operations and Toggle Quantize;
 BPM Value is excluded. Paused bar-start edits use the visible cursor; playing
 edits capture the native playhead. Q never snaps a grid-edit target.
-Once the deck is loaded, a grid click can be captured while its initial saved-grid
+Captured imports use a durable per-song prep journal for cue/grid intentions,
+even while registration, initial native analysis, playlist/export work or refresh
+is busy. State saves before immediate RAM feedback; actual save/binding errors
+block that song and keep its intentions for retry. Initial analysis publishes
+only its captured grid IDs; newer clicks remain queued. Cues publish separately
+through the accepted cue API, after native analysis is present. Exact prepared
+requests persist before source writes, and committed receipts prevent duplicate
+replay after a failed local acknowledgement. Native writes still wait for closed
+rekordbox/agent and existing accepted profile/identity/Analysis Lock guards.
+Unstarted intentions survive restart; cache/audio reload is unnecessary.
+
+For other native tracks, once the deck is loaded, a grid click can be captured while its initial saved-grid
 check is running. Its loaded RAM rows update both waveform scales, native grid,
 BPM, beat jumps and Q targets immediately. The FIFO retains track/UUID/path and
 position. Loaded rows are presentation only: the checked snapshot must match
@@ -140,7 +197,9 @@ Transport controls:
   4 bars, 8 bars, or 16 bars.
 - Grid-aware jumps preserve the current offset inside the beat and follow
   Rekordbox's exact timestamps, including variable-tempo grids. Edge buttons
-  disable when the requested jump is unavailable.
+  clamp oversized jumps to the available audio at0/duration; only the reached
+  boundary disables that direction. Held mouse buttons and shortcuts repeat after
+  300ms at100ms intervals until release, focus loss or track change.
   Audio before the first saved grid row uses that grid's first interval for
   jump counting, so a forward jump from audio zero or a cue just before the
   grid start can return backward. This extrapolates transport arithmetic only;
@@ -155,11 +214,16 @@ Transport controls:
   cue begins a new momentary gate.
   Session CUE state is never written to Rekordbox or the audio file.
 - The transport state is visually unambiguous: every held cue lights the white
-  CUE label on an orange fill. During a paused audition PLAY stays an outline;
-  a playing hot-cue jump keeps PLAY filled. Space promotes a held audition into
-  transport playback, filling PLAY with the accent; release
-  then clears only CUE. Paused transport uses the accent outline (purple by default). The PLAY
-  glyph becomes PAUSE only with that filled transport state; decoder playback
+  CUE ring orange, returning to gray on release, with no interior fill. During
+  a paused audition PLAY stays gray; ordinary playback uses fixed green `#00c301`.
+  Space promotes a held audition into transport playback; release clears only
+  CUE. Hovering changes neither button in idle, held or playing states; only
+  click/Space transport intent or held click/C cue intent changes the rings.
+  The first paused C press that sets/relocates the session cue also holds the
+  orange ring until release, even though it starts no preview.
+  CUE orange remains independent of the theme accent. Both interiors match the
+  parent panel. The PLAY glyph becomes PAUSE only
+  with that active transport state; decoder playback
   during an unlatched cue preview continues to show the PLAY glyph.
 - By default, `C` is the keyboard equivalent of pressing/releasing CUE while a
   browser surface has focus. The packaged entrypoint disables Cocoa
@@ -261,14 +325,12 @@ Cue panel:
   Memory deletions follow cue identity through chronological renumbering.
   Successful saves publish only the target's verified Track/Library metadata;
   they neither reload audio nor reparse/prepare the whole library. Immutable
-  publication keeps background/cache readers on their original snapshot. Only
-  verified data reaches the library cache, once the queue drains. Failure cancels
-  the unconfirmed tail, restores verified cues and requests source reconciliation;
-  the backend still resolves uncertain transactions before another write.
-  Normal quit closes edit admission and drains every accepted queued edit before
-  stopping worker owners. The RAM overlay is pending presentation, not durable
-  success; abrupt termination can lose not-yet-started edits. Native transaction
-  recovery remains responsible for any write that had started.
+  publication keeps background/cache readers on their original snapshot. Ordinary
+  native/import prep persists intentions before presentation and exact prepared
+  requests before publication. Failure retains those intentions and reconciles
+  source/receipts before retry; unknown recovery blocks writes. Normal quit closes
+  admission and drains accepted work before stopping owners. RAM presentation
+  alone is not proof of native success; durable intentions survive restart.
 - `source_cue_revision` and `source_cue_refs` retain raw edit identities outside
   display cues/waveform fingerprints. Snapshot cache schema 7 reads older 4–6
   caches; cached data cannot grant write permission. No whole-library recook is
@@ -479,8 +541,11 @@ keeps tonal passages as continuous oscillating traces and lets noisy passages
 widen naturally; the modes differ only in their PWV3/PWV5 color compositor.
 Both use output-footprint-selected extrema. Compact supplements hold signed
 1-ms cells at close zoom; spatial antialiasing resolves their coverage.
-RGB 576/864 use logical-point translation; other RGB stops and 3BAND remain
-continuous. BLUE rounds to physical pixels through 384 points/s, then logical
+RGB64/128/184 use physical-pixel translation; RGB576/864 use logical-point
+translation. Other RGB stops and3BAND remain continuous. At RGB64–256,
+signed-interval reconstruction retains the center tap’s peaks instead of
+averaging them away. This restores middle-zoom height without gain changes,
+new cache data or changes to other modes/stops. BLUE rounds to physical pixels through 384 points/s, then logical
 points at 576–1500. Audio, seek and grid clocks remain continuous in every mode.
 The minimum signed stroke is one physical pixel before antialiasing, replacing
 the fixed 3.6-point width that made thin carriers visibly thick on Retina.
@@ -594,7 +659,7 @@ resolved beneath Rekordbox's `share/` directory for analysis fallback:
 SoundBox then persists the complete canonical record independently; prepared
 playback does not reopen Rekordbox analysis. Exact normalized grid and cue
 fingerprints are refreshed into V5 through atomic manifest-only updates until
-a future SoundBox edit claims ownership. Correcting Rekordbox's initial
+a verified source edit supplies a newer revision. Correcting Rekordbox's initial
 automatic beat grid therefore reaches SoundBox on the next live-library
 refresh without reanalyzing audio, and waveform payload bytes never change
 during either metadata refresh.
@@ -602,9 +667,10 @@ Complete, consistent PWV3/5/7 imports with a grid use `waveform_detail.DetailSup
 no FFT, filter bank or beat detector runs. The source is decoded once in bounded
 chunks for exact song-anchored 1-ms stereo-midpoint signed extrema. The overview
 comes from PWV5. Incomplete imports or unsupported supplemental decoders retain
-the existing full analyzer and its generated display modes/spectral master. No player code opens Rekordbox files for writing. No SoundBox
-player operation updates `master.db`, ANLZ data, or source audio. Existing My Tag
-assignments have a separate guarded database API, outside the player.
+the existing full analyzer and its generated display modes/spectral master. Playback/render code does not open native files for writing. My Tag, Cue/Grid
+and initial shared-analysis publication use separate accepted APIs through the
+shared source worker. Playback/cache generation does not change source audio;
+authorized compatibility conversion is a distinct recoverable domain.
 
 ## SoundBox-owned caches
 
@@ -659,7 +725,7 @@ A current compact record stays on the small-manifest path. A legacy detail model
 or mode whose provenance still says `soundbox-analysis` may probe its current
 read-only PWV3/PWV5/PWV7 payload; unchanged ineligible records reuse receipts. A newly valid stream
 queues only that track for a normal atomic recook. The browser's per-track
-**Rebuild Waveform** action remains the explicit recovery path and deliberately
+**Analyze Track** action includes waveform rebuilding and deliberately
 bypasses the ready-manifest shortcut for only the selected record. Both routes
 decode the unchanged source again and publish a verified V5 replacement. The
 old playable cache stays in place if decoding or storage fails, a loaded deck
@@ -720,7 +786,7 @@ rechecks completion and dataless status after waiting, never runs a full analyze
 when a compact upgrade fails, and retains the prior record on cancellation/failure.
 Manual grid/cue ownership and authoritative DB cues survive conversion. Preparation
 receipts include the compact model, so older ready receipts cannot suppress the
-new work. Rebuild Waveform uses the same import-first path. Dataless old-cache
+new work. Analyze Track's waveform rebuild uses the same import-first path. Dataless old-cache
 upgrades defer until the source becomes local; no background download is requested.
 
 The compact import path also supports local AAC/ALAC through QAudioDecoder when
@@ -920,7 +986,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
   the final drawable never refilters an already-antialiased edge. Every zoom
   uses four attributes per physical pixel. RGB 576/864 use logical-point motion;
-  other RGB stops and 3BAND use
+  RGB64/128/184 use physical-pixel motion; other RGB stops and3BAND use
   continuous fractional translation. BLUE rounds only its display offset:
   physical-pixel increments through 384 points/s, logical points at 576–1500.
   Its position error is at most half the chosen increment.
@@ -1112,53 +1178,43 @@ not current implementation instructions or pending work.
 
 ## Grid editing and deferred prep work
 
-The October 26 [prep plan](rekordbox-prep.md) now includes accepted My Tag,
-Hot/Memory cue and grid source protocols. Installed provenance and user review
-status are in HANDOFF. Grid controls set a bar start, nudge the entire grid by
-the zoom-scaled 50/25/10/5/3/2/1-ms step (Shift triples it), double or halve
-constant BPM. The closest 1152–1500 views retain 1/3-ms precision. Buttons require the loaded
-accepted native track, exact source identity, a valid grid and Analysis Lock off.
-Unregistered imports with captured BPM/Grid analysis now have a separate manual
-draft route through the same controls. It preserves the detector's raw estimate,
-anchor/cues and exact capture binding, commits the draft before updating browser
-and RAM grid, and survives restart/reanalysis. It never calls the native writer.
-Waveform-only fallback grids remain ineligible for this route. See HANDOFF for
-installed status and the shared-workflow plan for remaining native persistence.
-Completed detection replaces the loaded fallback in place. A stale waveform does
-not require reloading before editing. Local translations discard rows past EOF,
-including a detected beat exactly at the audio endpoint. Unregistered captured
-imports admit Hot/Memory Cue drafts through the same controls, persisted before
-live cue publication and preserved through later grid edits/reanalysis.
-The BPM field shows `000.00` while empty and loaded/session BPM with two decimals.
-Inputs such as `138`, `138.0` and `138.00` submit the same exact hundredths and
-reconcile to `138.00`. Native manual entry requires separate acceptance for the library and a constant
-grid. Enter submits the captured track/value; Escape or focus loss cancels typing.
-Track changes abandon unfinished input. A disputed final beat can use the source
-worker's bounded PCM header endpoint proof, with native-tested exact-EOF inclusion;
-the RAM preview reconciles its terminal row after verification. Other source
-formats or nonintegral endpoints remain guarded when PWV3 cannot prove the row. The grid previews immediately, while the
-browser BPM updates only after each successful background save verifies, without
-loading another song. Failed saves restore the confirmed deck grid and leave the
-browser value unchanged. Browser selection alone does not change the deck field.
+The [prep protocol](rekordbox-prep.md) has accepted My Tag, Hot/Memory Cue and grid
+source APIs. Ordinary native tracks and captured imports now use durable per-song
+intentions before presentation, so unrelated registration, detection, conversion,
+export or refresh does not veto local cue/grid capture. Actual source publication
+still requires exact identity, the domain's accepted authority, a valid grid when
+needed, Analysis Lock off, closed rekordbox/agent and a verified shared recovery
+state. A real error can block the affected action; it retains durable intentions
+for exact reconciliation/retry rather than discarding them.
 
-Grid edits immediately update bar/beat labels, jump geometry and native guides,
-without seeking or changing audio/waveforms/cues. Opening partial bars count as
-bar 0; earlier bars remain when setting a later downbeat. RAM previews and live
-cues override late manifest/overview uploads. The native generation-bound setter
-swaps only grid buffers, leaving cached wave attributes and audio clock intact.
-A fresh library application releases the completed overlay/pin so later external
-rekordbox corrections can replace it; accepted queued edits remain protected.
-Background nudges coalesce after 250 ms inactivity with a one-second group limit;
-ordered offsets preserve zero-crossing clipping. Other operations retain FIFO
-order. Cue creation stays immediate during grid saving and shares its source lane.
+Grid controls set a bar start, nudge by the zoom-scaled50/25/10/5/3/2/1-ms step
+(Shift triples it), double/halve constant BPM, or enter manual constant BPM under
+its separate acceptance flag. Mouse and shortcut holds repeat until release;
+track change/focus loss stops the hold. The BPM field shows000.00 empty and two
+decimals loaded;138,138.0 and138.00 submit the same exact hundredths. Enter submits;
+Escape/focus loss cancels typing, and track changes abandon unfinished input.
 
-Verified source saves update only target BPM/revision and V5 grid metadata.
-Preparation cache writes already in flight are fenced in the source worker,
-without deleting records or blocking GUI/transport. Failure cancels unconfirmed
-edits and reconciles source state. Normal quit drains accepted grid work before
-cue/TaskOwner shutdown. Variable-tempo scaling, source intelligent
-playlist creation and the opt-in full-Collection setting remain later work.
-See [ROADMAP](ROADMAP.md) and the prep protocol for exact limits.
+Captured-import drafts preserve raw detector results and capture provenance. Native
+prep v2 uses exact accepted writer arithmetic: retain terminal rows beyond EOF
+while shifting, allowing later opposite nudges to bring them back. The separate
+unregistered draft route clips to its capture duration. Manual-BPM endpoint proof
+still uses the accepted bounded PCM header protocol when required; unknown formats
+or endpoints remain guarded. A stale waveform never requires reload before using
+an already completed valid grid.
+
+Edits update resident grid, cue markers, jump geometry and bar labels without
+seeking/reloading audio or regenerating waveform payloads. Opening partial bars
+count as bar0. RAM previews and live cues override late older cache uploads. Only
+verified native readback updates source metadata/cache; durable presentation is
+not a successful-save claim. Native grid receipts contain track/content-file AFTER
+rows plus DAT/EXT hashes; only Cue receipts contain after_revision. Exact legacy
+receipt/base proofs reconcile already committed nudges without repeating them.
+
+Normal quit drains accepted source work before TaskOwner shutdown. Unstarted
+durable intentions survive restart. Unknown recovery stays guarded; no whole-library
+restore, cache purge or detector rerun is part of retry. Variable-tempo scaling and
+intelligent-playlist creation remain separate work. Active supported native
+Collection audio is already discovered without playlist membership.
 
 ## Explicit analysis default — October30
 
@@ -1171,9 +1227,9 @@ continue in the queue. Existing completed imports use this same edit route.
 Pending detection persists before worker admission; each result and its job
 retirement save together. Interrupted jobs resume after the matching library
 loads, using their captured settings; failed jobs wait for explicit Analyze Track.
-Both the loaded-track and browser context menus offer Analyze Track. Rebuild
-Waveform separately refreshes the disposable display cache and preserves musical
-data. Neither detection admission nor restart displays an analysis popup/bar.
+Both the loaded-track and browser context menus offer Analyze Track, which also
+rebuilds the disposable waveform. There is no separate Rebuild Waveform menu
+action. With detection components unchecked it performs waveform-only repair. Neither detection admission nor restart displays an analysis popup/bar.
 Playback verifies unchanged captured bytes across cloud metadata drift instead
 of silently dropping completed analysis for a waveform fallback.
 
@@ -1184,7 +1240,8 @@ scheduling priorities, not genre presets. The head is bounded to30minutes/96M
 mono samples; the tail is streamed and checked before carrying the last measured
 tempo to its duration. `analysis_scope` and sample counts record the measured span.
 Native/manual grids and source cues remain authoritative. Detected analysis is
-SoundBox data, with no new native registration/publication authority. Legacy
+captured provenance; the separate accepted initial WAV analysis profile publishes
+native components. Other codecs/replacement profiles remain gated. Legacy
 constant-v1 results remain usable; partial/inconclusive reanalysis preserves
 previous components for the same bytes and records their actual engine provenance.
 This separate explicit detector does not replace the waveform fallback analyzer
@@ -1195,3 +1252,30 @@ steady results, using three-section onset fits and consistent captured attack
 phase before regenerating the grid. Raw estimates and the fit measurements remain
 available; fractional/variable and legacy results stay valid. This policy is
 independent of manual input, native grids and the automatic-analysis toggle.
+
+## November1 control follow-up
+
+The bar-start glyph uses the same fixed#ed3343 as enabled Q. The on-screen left/
+right grid buttons repeat after a300ms hold at80ms intervals, using the existing
+per-edit durable source/draft path and stopping on release/disable. Keyboard
+**Set cue** is unassigned by default, immediately below Toggle cue page, and
+captures the first empty slot of the active page using the normal edit/Quantize
+guards. A full page reports that no slot is available; existing cues are preserved.
+Global Search includes Graveyard metadata and Restore keeps its visible anchor.
+Trackpad/momentum briefly colors the actual scrollbar thumb in the current theme;
+feedback ends300ms after the last movement without changing column geometry.
+See HANDOFF for tested versus installed state.
+
+Native prep intentions use v2 exact native grid arithmetic, retaining terminal
+rows beyond EOF during shifts so later left nudges can bring them back. Native
+grid receipt verification uses track/content-file AFTER cells plus DAT/EXT hashes;
+only cue receipts provide after_revision. Exact legacy intention/receipt proofs
+permit reconciliation without replaying an already committed shift. Ordinary
+native tracks share durable local capture while source publication serializes.
+
+November1 approved visual refinement: BLUE middle zooms preserve signed center
+peaks as RGB does, while3BAND preserves each independent band's center peak.
+RGB24/32/48/64/92 use a gentle25% linear-light correction toward measured fine
+signed-interval occupancy. The first two full-strength candidates were rejected
+as too dark; the quarter-strength actual render was approved. Close zooms retain
+their accepted color transfer, geometry and source footprint.

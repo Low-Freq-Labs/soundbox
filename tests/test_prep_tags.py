@@ -147,6 +147,24 @@ class TagInterface(unittest.TestCase):
             controller.shutdown()
             self.assertFalse(controller.request(['1'],'tag',False))
 
+    def test_logical_selection_sends_native_id_and_retains_logical_pending_preview(self):
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as td:
+            lib=_library();track=lib.tracks_by_id.pop('2')
+            lib.tracks_by_id['sb-stable']=replace(track,track_id='sb-stable',source_native_id='2')
+            requests=[];release=threading.Event()
+            class Store:
+                def apply(self,request):requests.append(request);release.wait(5)
+            controller=TagEditController(Path(td),store_factory=lambda _:Store(),loader=lambda _:lib)
+            controller.configure(lib,True)
+            try:
+                self.assertTrue(controller.request(['sb-stable'],'tag',True))
+                self.assertEqual(controller.selected_tags(['sb-stable']),[{'tag'}])
+                self.wait_for(lambda:bool(requests))
+                self.assertEqual(requests[0].tracks[0].track_id,'2')
+            finally:
+                release.set();controller.shutdown()
+
     def test_failure_discards_preview_and_does_not_emit_saved(self):
         with tempfile.TemporaryDirectory() as td:
             class Store:

@@ -33,6 +33,8 @@ class Wordmark(QWidget):
                 svg.remove(child)
             elif child.get('id') == 'box':
                 child.set('fill', color)
+            elif child.get('id') == 'box-shine':
+                child.set('stroke', color)
             elif child.get('id') == 'sound':
                 child.set('fill', '#ffffff')
         if not self.renderer.load(QByteArray(ET.tostring(svg))):

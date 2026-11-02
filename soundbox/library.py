@@ -65,10 +65,15 @@ class Track:
     # Logical IDs survive first registration; only native adapters use this ID.
     # Empty retains the original native/XML identity convention.
     source_native_id: str = ""
+    source_native_path: str = ""
 
     @property
     def native_id(self) -> str:
         return self.source_native_id or self.track_id
+
+    @property
+    def native_path(self) -> Path:
+        return Path(self.source_native_path) if self.source_native_path else self.path
 
     @property
     def path(self) -> Path:
@@ -102,7 +107,7 @@ class Track:
         short_secs: int = _JUNK_MAX_SECONDS,
     ) -> bool:
         """Whether this source track matches SoundBox's cue-marker filter."""
-        if self.imported:
+        if self.imported or self.source_native_id:
             return False
         bpm = (self.bpm or "").strip()
         try:
@@ -198,6 +203,9 @@ class Library:
     source_library_id: str = ""
     # Read-only native playlist identities/history for exact edit baselines.
     source_playlist_catalog: dict = field(default_factory=dict)
+    # Read-only identity failures apply to individual bindings, not the source.
+    # Recomputed from the native snapshot; never confers write authority.
+    source_binding_issues: dict[str, str] = field(default_factory=dict)
 
     @property
     def track_count(self) -> int:

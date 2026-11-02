@@ -11,6 +11,7 @@ profile = os.environ.get("SOUNDBOX_BUILD_PROFILE", "personal")
 config = composition(profile)
 manifest = write_manifest(profile, Path(SPECPATH) / "build" / profile / "composition")
 datas = [(str(manifest), "."), ("assets/soundbox-wordmark.svg", "assets"),
+         ("assets/soundbox-original-sb-icon.svg", "assets"),
          ("soundbox/my_settings_fields.json", "soundbox"),
          ("native/cdj/vendor/rbxport/LICENSE", "licenses/rbxport"),
          ("native/cdj/vendor/rbxport/crates/rbl-deck/vendor/rubberband/COPYING", "licenses/rbxport")]

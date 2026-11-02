@@ -7,8 +7,8 @@ with their owning component.
 """
 import re
 
-from PySide6.QtCore import QEvent, QObject
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QEvent, QObject,QTimer
+from PySide6.QtWidgets import QWidget,QAbstractScrollArea
 
 from . import theme
 from .choices import ComboBox, Menu
@@ -50,6 +50,11 @@ class ThemeController(QObject):
         if key not in self._cache:
             chosen = []
             for selector, declarations, kind, name in self.rules:
+                if widget.objectName() in ('CueBtn', 'DeckPlayBtn') and not name:
+                    # Widget-local generic hover rules outrank the application
+                    # sheet's dedicated cue/play states. Keep their rings tied
+                    # exclusively to explicit cue/transport intent.
+                    continue
                 if name and widget.objectName() != name:
                     continue
                 if kind and not widget.inherits(kind):
@@ -91,6 +96,15 @@ class ThemeController(QObject):
             self._updating = False
 
     def eventFilter(self, obj, event):
+        if event.type()==QEvent.Wheel and isinstance(obj,QWidget):
+            area=obj
+            while area is not None and not isinstance(area,QAbstractScrollArea):area=area.parentWidget()
+            if area is not None:
+                vertical=bool(event.pixelDelta().y() or event.angleDelta().y())
+                horizontal=bool(event.pixelDelta().x() or event.angleDelta().x())
+                if vertical:
+                    self._scroll_feedback(getattr(area,'_soundbox_overlay_scrollbar',area.verticalScrollBar()))
+                if horizontal:self._scroll_feedback(area.horizontalScrollBar())
         if (not self._updating and event.type() == QEvent.Show
                 and isinstance(obj, QWidget)):
             self._updating = True
@@ -99,6 +113,19 @@ class ThemeController(QObject):
             finally:
                 self._updating = False
         return False
+
+    @staticmethod
+    def _scroll_feedback(bar):
+        if bar.maximum()<=bar.minimum():return
+        def active(value):
+            if bool(bar.property('wheelScrolling'))==value:return
+            bar.setProperty('wheelScrolling',value)
+            bar.style().unpolish(bar);bar.style().polish(bar);bar.update()
+        timer=getattr(bar,'_soundbox_scroll_feedback',None)
+        if timer is None:
+            timer=QTimer(bar);timer.setSingleShot(True);timer.setInterval(300)
+            timer.timeout.connect(lambda:active(False));bar._soundbox_scroll_feedback=timer
+        active(True);timer.start()
 
 
 def install(app):

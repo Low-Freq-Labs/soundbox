@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
-    QButtonGroup, QGridLayout, QHBoxLayout, QPushButton,
+    QApplication, QButtonGroup, QGridLayout, QHBoxLayout, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 from .choices import ComboBox as QComboBox, Menu as QMenu
@@ -1427,7 +1427,7 @@ class CuePanel(QWidget):
         button.setCheckable(True)
         button.setFocusPolicy(Qt.NoFocus)
         button.setCursor(Qt.PointingHandCursor)
-        button.setFixedHeight(18)
+        button.setFixedHeight(28)
         button.clicked.connect(
             lambda _checked=False, index=page: self.pages.setCurrentIndex(index))
         return button
@@ -1587,6 +1587,7 @@ class PlayerBar(QWidget):
         self._cue_ms = 0
         self._session_cue_state = SessionCueState.UNSET
         self._cue_preview_active = False
+        self._session_cue_held = False
         self._cue_preview_latched = False
         self._cue_preview_target = 0
         self._cue_preview_control: tuple[str, int] | None = None
@@ -1629,8 +1630,8 @@ class PlayerBar(QWidget):
         self.next_btn = self._button("", "TransportBtn", "Next track")
         self.previous_btn.setIcon(_track_nav_icon(-1))
         self.next_btn.setIcon(_track_nav_icon(1))
-        self.previous_btn.setIconSize(QSize(18, 14))
-        self.next_btn.setIconSize(QSize(18, 14))
+        self.previous_btn.setIconSize(QSize(20, 16))
+        self.next_btn.setIconSize(QSize(20, 16))
         self.beat_back_btn = self._button("◀", "TransportBtn", "Jump backward")
         self.beat_forward_btn = self._button("▶", "TransportBtn", "Jump forward")
         self.cue_btn = self._button("CUE", "CueBtn",
@@ -1640,15 +1641,17 @@ class PlayerBar(QWidget):
         self.play_btn.setProperty("playing", False)
         for b in (self.previous_btn, self.next_btn, self.beat_back_btn,
                   self.beat_forward_btn):
-            b.setFixedSize(42, 26)
-        self.cue_btn.setFixedSize(42, 42)
-        self.play_btn.setFixedSize(42, 42)
+            b.setFixedSize(42, 28)
+        self.cue_btn.setFixedSize(48, 48)
+        self.play_btn.setFixedSize(48, 48)
         self.previous_btn.clicked.connect(
             lambda _checked=False: self.previous_requested.emit())
         self.next_btn.clicked.connect(
             lambda _checked=False: self.next_requested.emit())
-        self.beat_back_btn.clicked.connect(lambda: self._beat_jump(-1))
-        self.beat_forward_btn.clicked.connect(lambda: self._beat_jump(1))
+        self._jump_holds = {}
+        for button,direction in ((self.beat_back_btn,-1),(self.beat_forward_btn,1)):
+            button.pressed.connect(lambda b=button,d=direction: self._press_jump_button(b,d))
+            button.released.connect(lambda b=button: self._release_jump_button(b))
         self.cue_btn.pressed.connect(self._cue_press)
         self.cue_btn.released.connect(self._cue_release)
         self.play_btn.clicked.connect(self.toggle)
@@ -1672,7 +1675,7 @@ class PlayerBar(QWidget):
         # but let the deck own that width and center the controls within it.
         deck.setFixedWidth(116)
         dl = QVBoxLayout(deck)
-        dl.setContentsMargins(13, 0 if embedded_transport else 4, 14,
+        dl.setContentsMargins(13, 0 if embedded_transport else 12, 14,
                               0 if embedded_transport else 3)
         dl.setSpacing(5)
         self.layout_selector = None
@@ -1696,9 +1699,10 @@ class PlayerBar(QWidget):
         jump.addWidget(self.beat_back_btn); jump.addWidget(self.beat_forward_btn)
         dl.addLayout(jump)
         dl.addWidget(self.beat_selector_btn)
-        dl.addSpacing(5)
-        bottom = QHBoxLayout(); bottom.setSpacing(5)
-        bottom.addWidget(self.cue_btn); bottom.addWidget(self.play_btn)
+        dl.addSpacing(12)
+        bottom = QVBoxLayout(); bottom.setSpacing(6)
+        bottom.addWidget(self.cue_btn, 0, Qt.AlignHCenter)
+        bottom.addWidget(self.play_btn, 0, Qt.AlignHCenter)
         dl.addLayout(bottom)
         if embedded_transport:
             dl.addStretch(1)
@@ -1797,15 +1801,23 @@ class PlayerBar(QWidget):
         """Keep cue gating visually separate from transport playback."""
         if not hasattr(self, "cue_btn") or not hasattr(self, "play_btn"):
             return
-        # The glyph follows the same explicit transport intent as the purple
-        # fill. Momentary cue preview may run the decoder, but it must continue
+        # The glyph follows the same explicit transport intent as the accent
+        # outline. Momentary cue preview may run the decoder, but it must continue
         # to show Play until Space promotes it into normal playback.
         self.play_btn.setText(
             "❚❚" if self._transport_play_active else "▶")
         self._set_dynamic_property(
-            self.cue_btn, "active", self._cue_preview_active)
+            self.cue_btn, "active", self._session_cue_held or self._cue_preview_active)
         self._set_dynamic_property(
             self.play_btn, "playing", self._transport_play_active)
+
+    def sizeHint(self) -> QSize:
+        # Prefer a 200pt view (151pt scrolling lane), keeping the existing
+        # overview/ruler. Retain the smaller minimum so short windows fit.
+        # Metal derives its vertical geometry from the actual allocated size.
+        hint = super().sizeHint()
+        hint.setHeight(max(hint.height(), 208))  # view plus layout margins
+        return hint
 
     def current_track(self) -> str | None:
         return self._track_id
@@ -2239,6 +2251,8 @@ class PlayerBar(QWidget):
         """
         if not self._src_path:
             return
+        self._session_cue_held = True
+        self._sync_deck_button_states()
         self._begin_transport_intent()
         if (not self.is_playing() and not self._pause_pending
                 and self._session_cue_state
@@ -2252,7 +2266,9 @@ class PlayerBar(QWidget):
 
     def _cue_release(self):
         """Release the physical CUE control without disturbing another cue."""
+        self._session_cue_held = False
         self._release_cue_preview(("session", -1))
+        self._sync_deck_button_states()
 
     def _marker_cue_press(self, kind: str, slot: int, target: int):
         """Hot cues preserve ordinary playback; paused cues retain hold-preview."""
@@ -2330,6 +2346,7 @@ class PlayerBar(QWidget):
             finish()
 
     def _reset_cue_preview(self):
+        self._session_cue_held = False
         self._cue_preview_active = False
         self._cue_preview_latched = False
         self._cue_preview_target = 0
@@ -2379,6 +2396,8 @@ class PlayerBar(QWidget):
                 if self._bpm > 0 else 0)
 
     def _beat_jump_target(self, direction: int) -> int | None:
+        if not self._dur or (self._pos<=0 if direction<0 else self._pos>=self._dur):
+            return None
         if self._beat_grid:
             # Preserve the playhead's offset within its current beat while using
             # rekordbox's exact timestamps. This remains correct across a
@@ -2387,14 +2406,14 @@ class PlayerBar(QWidget):
             target_idx = anchor + (
                 -self._jump_beats if direction < 0 else self._jump_beats)
             if target_idx >= len(self._beat_grid):
-                return None
+                return self._dur
             # Audio can start before the first saved grid row (or a cue can be
             # one millisecond before it). Count that lead-in on the first beat
             # interval rather than clamping it to beat zero with a negative
             # offset, which makes the inverse jump count one beat too few.
             if anchor < 0 or target_idx < 0:
                 if len(self._beat_grid) < 2:
-                    return None
+                    return 0 if direction<0 else self._dur
                 step = self._beat_grid[1] - self._beat_grid[0]
                 if step <= 0:
                     return None
@@ -2403,20 +2422,45 @@ class PlayerBar(QWidget):
                     target_idx = anchor + (
                         -self._jump_beats if direction < 0 else self._jump_beats)
                     if target_idx >= len(self._beat_grid):
-                        return None
+                        return self._dur
                 at = lambda index: (self._beat_grid[index] if index >= 0
                                     else self._beat_grid[0] + index * step)
                 target = at(target_idx) + self._pos - at(anchor)
             else:
                 target = self._beat_grid[target_idx] + self._pos - self._beat_grid[anchor]
-            if target < 0 or not self._dur or target > self._dur:
-                return None
-            return target
+            return max(0,min(self._dur,target))
         delta = self._beat_delta_ms()
         target = self._pos + (-delta if direction < 0 else delta)
-        if not delta or target < 0 or not self._dur or target > self._dur:
+        if not delta:
             return None
-        return target
+        return max(0,min(self._dur,target))
+
+    def begin_beat_jump(self,direction):
+        """Immediate step, then repeat until release, focus loss or track change."""
+        timer=QTimer(self);timer.setSingleShot(True)
+        identity=(self._src_path,self.current_track(),self._analysis_generation)
+        def release():
+            timer.stop();timer.deleteLater()
+        def repeat():
+            if ((self._src_path,self.current_track(),self._analysis_generation)!=identity
+                    or not self.window().isActiveWindow()
+                    or QApplication.activeModalWidget() is not None
+                    or QApplication.activePopupWidget() is not None
+                    or self._beat_jump_target(direction) is None):
+                timer.stop();return
+            self._beat_jump(direction);timer.start(100)
+        timer.timeout.connect(repeat)
+        self._beat_jump(direction)
+        if self._beat_jump_target(direction) is not None:timer.start(300)
+        return release
+
+    def _press_jump_button(self,button,direction):
+        self._release_jump_button(button)
+        self._jump_holds[button]=self.begin_beat_jump(direction)
+
+    def _release_jump_button(self,button):
+        release=self._jump_holds.pop(button,None)
+        if release:release()
 
     def _beat_jump(self, direction: int):
         target = self._beat_jump_target(direction)

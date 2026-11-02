@@ -84,6 +84,17 @@ class NativePlaylistGestures(unittest.TestCase):
         self.assertEqual(self.window.lib.playlists[0].name,'Second')
         self.assertNotIn(QUEUE,self.window.settings) if QUEUE not in self.window.settings else self.assertEqual(self.window.settings[QUEUE],[])
 
+    def test_verified_fifo_completion_finishes_status_after_busy_banner(self):
+        self.window._finish_edit_status=mock.Mock()
+        active=[]
+        self.window.tag_controller.changed.connect(lambda:active.append(self.window.tag_controller.update_status_text))
+        self.controller.enqueue(self.rename('Saved'))
+        self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertIn('Updating playlist…',active)
+        self.assertNotIn('Updating rekordbox playlists…',active)
+        self.window._finish_edit_status.assert_called_once_with(quiet=True)
+        self.assertEqual(self.window.tag_controller.update_status_text,'')
+
     def test_local_persistence_failure_does_not_admit_native_worker_or_hide_a_track(self):
         before=copy.deepcopy(self.window.settings);self.window._save_state.return_value=False
         with mock.patch.object(self.window.tag_controller,'run_playlist_job') as worker:

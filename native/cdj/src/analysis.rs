@@ -97,7 +97,10 @@ pub fn run(root: &Path, request: &Path) -> Result<serde_json::Value, Box<dyn Err
             Some(policy)
         } else { None }
     } else { None };
-    if let Some(ref mut grid) = tempo { grid.extend_to(duration); }
+    if let Some(ref mut grid) = tempo {
+        grid.extend_to(duration);
+        soundbox_cdj::whole_tempo::restore_opening_beat(grid,&samples,rate);
+    }
     let beats = tempo.as_ref().map(|g| g.beats.iter().map(|b|
         json!([b.beat_number, b.time_ms, f64::from(b.tempo_x100)/100.0])).collect::<Vec<_>>());
     Ok(json!({"bpm":tempo.as_ref().map(|g|g.bpm), "confidence":tempo.as_ref().map(|g|g.confidence),

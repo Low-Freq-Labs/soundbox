@@ -1,8 +1,9 @@
 """Accepted bare registrations with encrypted evidence and shared source ownership.
 
 This domain inserts new content rows and advances only the local native counter.
-Exact-path reuse never edits an existing song. Audio, cues, analysis, playlists
-and XML remain immutable. A separate explicit library/version authority is
+Exact-path reuse never edits an existing song. Registration SQL preserves audio,
+cues, analysis, playlists and XML. The explicit float-import conversion is a
+separate recoverable phase before registration. A library/version authority is
 required; Cue transport supplies guards/locking, never registration permission.
 """
 from dataclasses import dataclass
@@ -12,9 +13,13 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import secrets
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from . import native_registration_plan as planner
-from .native_media import MediaIdentity
+from .native_media import MediaIdentity, capture_media
+from .native_paths import AliasProof, capture_aliases
 from .rekordbox_cue_store import CueWriteAuthority,PilotCueStore
 from .rekordbox_tags import NATIVE_VERSION,_schema
 from .rekordbox_write import (ConflictError,RecoveryRequired,WriteProofError,_connect,_digest,_identity,
@@ -211,10 +216,142 @@ class RegistrationStore:
             try:
                 for b in bindings:
                     row=planner.encoded_row(conn,'djmdContent',b['native_id'])
-                    if not row or row['UUID']!=b['native_uuid'] or row['FolderPath']!=b['canonical'] or row['rb_local_deleted']!=0:
+                    if not row or row['UUID']!=b['native_uuid'] or row['FolderPath']!=b.get('native_path',b['canonical']) or row['rb_local_deleted']!=0:
                         raise ConflictError('A completed registration was removed or rebound; do not recreate it automatically')
+                    if b.get('native_path') and Path(b['native_path']).resolve(strict=True)!=Path(b['canonical']):
+                        raise ConflictError('A completed native media alias changed; preserve both identities')
             finally:conn.close()
         return bindings
+
+    def _media_current(self,request):
+        for claim in request['tracks']:
+            MediaIdentity.from_dict(claim['audio']).revalidate()
+            for value in claim.get('aliases',[]):AliasProof.from_dict(value).revalidate()
+
+    def prepare(self, tracks, *, operation_id=None):
+        """Capture an intention without source mutation; persist it before apply."""
+        from .rekordbox_write import _rows
+        with self.lease._lock():
+            self._recover_locked();self.lease._guard()
+            with encrypted_backup(self.database) as snapshot:
+                conn=_connect(snapshot,readonly=True)
+                try:
+                    rows=_rows(conn,'djmdContent');occupied={r['ID'] for r in rows};claims=[]
+                    with tempfile.TemporaryDirectory(prefix='soundbox-import-capture-') as scratch:
+                        for track in tracks:
+                            audio=capture_media(Path(track['path']),scratch,expected_sha256=track.get('sha256'))
+                            native_id=str(secrets.randbelow(2**32-1)+1)
+                            while native_id in occupied:native_id=str(secrets.randbelow(2**32-1)+1)
+                            occupied.add(native_id);now=datetime.now(timezone.utc)
+                            claims.append(planner.make_claim(track['id'],audio,native_id=native_id,native_uuid=str(uuid4()),
+                                timestamp=now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00',day=now.strftime('%Y-%m-%d'),
+                                aliases=capture_aliases(rows,audio)))
+                    request=dict(format=planner.REQUEST_FORMAT,operation_id=operation_id or str(uuid4()),
+                        source=str(self.database),library_id=self.authority.library_id,
+                        schema_sha256=self.authority.schema_sha256,tracks=claims)
+                    self._plan(conn,request)
+                finally:conn.close()
+            self.lease._guard();self._media_current(request)
+            return request
+
+    def convert_imports(self, tracks, recovery_root, operation_id, *, expected=None, acknowledged=(),
+                        reduce_gain=False, clip_overs=True, before_replace=lambda _tid:None):
+        """Explicit import-only audio exception; native registration stays separate.
+
+        No registered path/alias is ever replaced. Hold the common source lock,
+        require the accepted catalog, and recheck native ownership before each
+        publication. Sonny selected same-gain clipped PCM24 after auditioning
+        original/clipped/reduced copies. The GUI persists each identity transfer
+        before prepare(); this never broadens the accepted native format profile.
+        """
+        from . import wave_conversion as conversion
+        from .analysis import identity
+        from .rekordbox_write import _rows
+        expected = expected or {}; receipts = []
+        with self.lease._lock():
+            self._recover_locked(); self.lease._guard()
+            with encrypted_backup(self.database) as snapshot:
+                conn = _connect(snapshot, readonly=True)
+                try:
+                    if (_identity(conn) != (self.authority.library_id,'6000')
+                            or _schema(conn) != self.authority.schema_sha256):
+                        raise WriteProofError('Conversion source library/schema changed')
+                    native_paths = set()
+                    for row in _rows(conn,'djmdContent'):
+                        if row.get('FolderPath'):
+                            native_paths.add(str(Path(row['FolderPath']).resolve()))
+                finally:conn.close()
+            before = identity(self.database.stat())
+            wal = self.database.with_name(self.database.name+'-wal')
+            wal_before = identity(wal.stat()) if wal.exists() else None
+            def guard():
+                self.lease._guard()
+                if (identity(self.database.stat()) != before
+                        or (identity(wal.stat()) if wal.exists() else None) != wal_before):
+                    raise ConflictError('Native catalog changed before WAVE conversion')
+                before_replace(track['id'])
+            for track in tracks:
+                path = Path(track['path'])
+                if str(path.resolve(strict=True)) in native_paths:continue
+                if track['id'] in acknowledged:continue
+                try:
+                    receipt = conversion.convert(path,Path(recovery_root),operation_id,track['id'],
+                        expected_sha256=expected.get(track['id']),reduce_gain=reduce_gain,
+                        clip_overs=clip_overs,guard=guard)
+                except ValueError as exc:raise ValueError(f'{path.name}: {exc}') from exc
+                if receipt is not None:
+                    # Persist this identity transfer before touching another
+                    # song; a later unsupported file must not strand its data.
+                    receipts.append(receipt);break
+            return receipts
+
+    def prepare_retry(self, request):
+        """Keep committed receipts; renew only a proven uncommitted intention."""
+        self._scope(request)
+        with self.lease._lock():
+            self._recover_locked();self.lease._guard()
+            archive=self.root/('registration-'+request['operation_id'])
+            if archive.exists() or archive.is_symlink():
+                _regular(archive/'operation.json');record=json.loads((archive/'operation.json').read_bytes())
+                if _digest(record['request'])!=_digest(request):raise RecoveryRequired('Registration retry identity changed')
+                result=archive/'result.json'
+                if result.exists():
+                    _regular(result);receipt=json.loads(result.read_bytes())
+                    if {k:receipt.get(k) for k in record}!=record:raise RecoveryRequired('Registration retry receipt differs')
+                    if receipt.get('outcome')=='committed':
+                        self._bindings_current(record['bindings']);return request
+                    if receipt.get('outcome')!='rolled-back':raise RecoveryRequired('Unknown registration retry outcome')
+                else:self._validate_record(record)
+        return self.prepare([dict(id=c['local_id'],path=c['audio']['path']) for c in request['tracks']])
+
+    def committed_bindings(self, request):
+        """Reconcile cancellation without publishing a new registration."""
+        self._scope(request)
+        with self.lease._lock():
+            self._recover_locked();self.lease._guard()
+            archive=self.root/('registration-'+request['operation_id'])
+            if not archive.exists() and not archive.is_symlink():return []
+            _regular(archive/'operation.json');record=json.loads((archive/'operation.json').read_bytes())
+            if _digest(record['request'])!=_digest(request):raise RecoveryRequired('Registration cancellation identity changed')
+            result=archive/'result.json'
+            if result.exists():
+                _regular(result);receipt=json.loads(result.read_bytes())
+                if {k:receipt.get(k) for k in record}!=record:raise RecoveryRequired('Registration cancellation receipt differs')
+                if receipt.get('outcome')=='committed':
+                    self._rotate(archive);return self._bindings_current(record['bindings'])
+                if receipt.get('outcome')=='rolled-back':return []
+                raise RecoveryRequired('Unknown registration cancellation outcome')
+            self._validate_record(record)
+            # An archive can precede journal publication. Source SQL cannot. A
+            # claimed new row without its journal/receipt is an unknown state.
+            with encrypted_backup(self.database) as snapshot:
+                conn=_connect(snapshot,readonly=True)
+                try:
+                    if any(c['table']=='djmdContent' and planner.encoded_row(conn,'djmdContent',c['id']) is not None
+                           for c in record['changes']):
+                        raise RecoveryRequired('Unreceipted registration rows block cancellation')
+                finally:conn.close()
+            return []
 
     def apply(self,request):
         request=json.loads(_json(request));self._scope(request)
@@ -234,8 +371,7 @@ class RegistrationStore:
                 # A crash after staging but before journal publication can only
                 # resume after complete evidence validation and exact live BEFORE.
                 self._validate_record(record)
-            audio=[MediaIdentity.from_dict(c['audio']) for c in request['tracks']]
-            for facts in audio:facts.revalidate()
+            self._media_current(request)
             if record is None:
                 xml_bytes=self.xml.read_bytes()
                 with encrypted_backup(self.database) as snapshot:
@@ -266,12 +402,12 @@ class RegistrationStore:
                     raise ConflictError('Native registration base changed before save')
                 if any(planner.encoded_row(conn,'djmdContent',g['id'])!=g['row'] for g in record['guards']):
                     raise ConflictError('An existing native path changed before reuse')
-                for facts in audio:facts.revalidate()
+                self._media_current(request)
                 atomic_bytes(self.journal,_json(record));_fault('journal-ready')
                 self._apply_sql(conn,record['changes'])
                 if not _matches(conn,final):raise WriteProofError('Registration live readback differs')
                 _fault('sql-applied');self.lease._guard()
-                for facts in audio:facts.revalidate()
+                self._media_current(request)
                 if _sha(self.xml)!=record['payload_sha256']['before.xml']:raise ConflictError('XML changed before registration commit')
                 conn.commit();_fault('sql-committed')
             except BaseException:conn.rollback();raise

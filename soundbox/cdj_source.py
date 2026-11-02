@@ -20,11 +20,34 @@ def _number(value, *, maximum=0xFFFFFFFF):
     return number
 
 
+def _actual_technical(track,observed,path):
+    """Actual header facts override stale cached technical columns only.
+
+    Native Reload Tags/deck load can leave old FileSize/BitDepth/SampleRate in
+    master.db after a compatible same-path replacement. Bind the header result
+    to this exact canonical file epoch; musical/native identity stays untouched.
+    Export's normal captured-byte proof still follows before device publication.
+    """
+    if not observed:return
+    from .analysis import identity
+    try:
+        if (str(path.resolve(strict=True))!=observed['path']
+                or identity(path.stat())!=observed['epoch'] or observed['facts']['status']!='compatible'):return
+        facts=observed['facts'];bits=int(facts.get('bits') or 0);channels=int(facts['channels']);rate=int(facts['sample_rate'])
+        if rate not in (44100,48000) or channels not in (1,2):return
+        track['sample_rate']=rate;track['file_size']=observed['epoch'][2]
+        if bits in (16,24) and facts.get('family') in ('wav','aiff'):
+            track['metadata']['bit_depth']=bits;track['bitrate']=bits*channels*rate//1000
+    except (OSError,ValueError,KeyError,TypeError):return
+
+
 def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=None):
     """Return an explicit renderer DTO, bound to selected native IDs and UUIDs."""
     if library.source_kind != 'rekordbox-db':
         raise ValueError('CDJ export currently requires a native rekordbox library')
-    expected = {track.track_id: track for track in tracks}
+    expected = {track.native_id: track for track in tracks}
+    if len(expected) != len(tracks):
+        raise ValueError('Selected logical tracks share an ambiguous native identity')
     if any(track.imported or not track.source_uuid for track in tracks):
         raise ValueError('CDJ export requires native analysis and identity for every selected track')
     from pyrekordbox import Rekordbox6Database
@@ -46,7 +69,8 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                     fresh = {p.pid:p for p in rekordbox_db._read_playlists(db,rekordbox_db._active_track_ids(db))}
                     for cached in selected:
                         current = fresh.get(cached.pid)
-                        if current is None or (current.name,current.folder_path,current.keys) != (cached.name,cached.folder_path,cached.keys):
+                        native_keys=[library.tracks_by_id[key].native_id for key in cached.keys]
+                        if current is None or (current.name,current.folder_path,current.keys) != (cached.name,cached.folder_path,native_keys):
                             raise ValueError('Source playlist changed; refresh the library and retry CDJ export')
                         playlist_proofs.append([current.pid,current.name,current.folder_path,current.keys])
             rows = {str(row.ID): row for row in rekordbox_db._content_rows(db, set(expected))}
@@ -107,8 +131,8 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                 if analysis is None:
                     raise ValueError(f'Native analysis is missing: {selected.name}')
                 raw_title, raw_artist = row.Title or '', row.Artist.Name if row.Artist else ''
-                title = metadata.effective_title(tid, raw_title, raw_artist, titles, library.title_junk)
-                artist = metadata.effective_artist(tid, raw_title, raw_artist, artists,
+                title = metadata.effective_title(selected.track_id, raw_title, raw_artist, titles, library.title_junk)
+                artist = metadata.effective_artist(selected.track_id, raw_title, raw_artist, artists,
                     True, library.artist_registry, path.stem)
                 cue_rows = sorted(cues.get(tid, []), key=lambda c: (c['kind'], c['time_ms']))
                 extra = dict(source_id=_number(tid), content_link=_number(row.ContentLink),
@@ -132,7 +156,8 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                     cues=cue_rows, device=None, analysis=[], analysis_source=str(analysis), source_unavailable=False,
                     artwork=None, my_tags=[_number(value) for value in memberships.get(tid, [])])
                 from .track_info import exported
-                exported(track,getattr(library,'info_overrides',{}).get(tid,{}))
+                exported(track,getattr(library,'info_overrides',{}).get(selected.track_id,{}))
+                _actual_technical(track,getattr(library,'media_facts',{}).get(selected.track_id),path)
                 result.append(track)
                 extras.append(extra)
                 proofs.append(dict(uuid=str(row.UUID), track=track, extra=extra))

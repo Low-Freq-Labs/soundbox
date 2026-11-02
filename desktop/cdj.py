@@ -14,8 +14,14 @@ from .devices import device_facts
 
 def _source_edits_pending(host):
     controller=getattr(host,'playlist_controller',None)
+    imports=getattr(host,'shared_import_controller',None)
+    analysis=getattr(host,'native_analysis_controller',None)
+    prep=getattr(host,'prep_controller',None)
+    media=getattr(host,'media_controller',None)
     return bool(host.tag_controller.owned or controller and
-                (controller.pending or controller.queue_error()))
+                (controller.pending or controller.queue_error()) or imports and
+                (imports.pending or imports.queue_error()) or analysis and analysis.pending or prep and prep.pending
+                or media and (media.scan_again or media.tasks.pending or any(not j['error'] for j in media.pending)))
 
 
 class CdjWorker(QThread):

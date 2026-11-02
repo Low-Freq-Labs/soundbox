@@ -19,8 +19,9 @@ def validate(jobs):
     if not isinstance(jobs,list) or len(jobs)>100000:raise ValueError('Saved analysis queue is invalid')
     ids=set();tracks=set()
     for job in jobs:
-        if not isinstance(job,dict) or set(job)!=FIELDS or job['format']!=FORMAT:
+        if not isinstance(job,dict) or set(job) not in (FIELDS,FIELDS|{'waveform'}) or job['format']!=FORMAT:
             raise ValueError('Saved analysis intent is invalid')
+        if type(job.get('waveform',False)) is not bool:raise ValueError('Invalid waveform rebuild intention')
         try:valid_id=str(UUID(job['id']))==job['id'] and UUID(job['id']).version==4
         except (ValueError,TypeError,AttributeError):valid_id=False
         if not valid_id or job['id'] in ids:raise ValueError('Ambiguous analysis operation identity')
@@ -42,18 +43,23 @@ def validate(jobs):
 
 def matches(job,library,track):
     return (job['source']==str(library.source or '') and job['library_id']==str(library.source_library_id or '')
-            and job['track_id']==track.track_id and job['path']==str(track.path) and job['source_uuid']==track.source_uuid)
+            and job['track_id']==track.track_id and job['path']==str(track.path)
+            and (job['source_uuid']==track.source_uuid or
+                 not job['source_uuid'] and track.source_native_id and not track.source_analysis_path))
 
 
-def admit(jobs,library,tracks,preferences,*,retry_failed=True):
+def admit(jobs,library,tracks,preferences,*,retry_failed=True,rebuild_waveform=False):
     validate(jobs);result=deepcopy(jobs);prefs=options(preferences)
     for track in tracks:
         source=str(library.source or '');library_id=str(library.source_library_id or '')
         prior=next((j for j in result if (j['source'],j['library_id'],j['track_id'])==(source,library_id,track.track_id)),None)
-        if prior and matches(prior,library,track) and (prior['state']=='queued' or not retry_failed):continue
+        if prior and matches(prior,library,track) and (prior['state']=='queued' or not retry_failed):
+            if rebuild_waveform:prior['waveform']=True
+            continue
         if prior:result.remove(prior)
         result.append(dict(format=FORMAT,id=str(uuid4()),source=source,library_id=library_id,
-            track_id=track.track_id,path=str(track.path),source_uuid=track.source_uuid,preferences=dict(prefs),state='queued',error=''))
+            track_id=track.track_id,path=str(track.path),source_uuid=track.source_uuid,preferences=dict(prefs),state='queued',error='',
+            waveform=bool(rebuild_waveform)))
     validate(result);return result
 
 

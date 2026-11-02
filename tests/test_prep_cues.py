@@ -86,6 +86,33 @@ class CueEditingInterface(unittest.TestCase):
             self.assertEqual(controller.last_operation, 'cues')
             controller.shutdown()
 
+    def test_logical_cue_selection_uses_native_sql_identity_and_emits_logical_saved_key(self):
+        from dataclasses import replace
+        from uuid import uuid4
+        from soundbox import rekordbox_db
+        from soundbox.rekordbox_cues import CueIdentities
+        from tests.test_rekordbox_cues import snapshot, plan, advance
+        with tempfile.TemporaryDirectory() as td:
+            state=snapshot();state.track.update(ID='1',FolderPath='/synthetic/one.wav')
+            lib=library();track=replace(lib.tracks_by_id['1'],track_id='sb-stable',source_native_id='1',
+                source_uuid=state.track['UUID'],**rekordbox_db.cue_snapshot_fields(state))
+            lib.tracks_by_id={'sb-stable':track};requests=[];bound=[];saved=[]
+            class Store:
+                def apply(self,request):
+                    nonlocal state
+                    requests.append(request)
+                    state=advance(state,plan(state,request,identities=CueIdentities('100',str(uuid4()),str(uuid4()))))
+                def snapshot(self):return state
+            def factory(_lib,tid):bound.append(tid);return Store()
+            controller=TagEditController(Path(td),cue_store_factory=factory)
+            controller.configure(lib,True);controller.cue_saved.connect(lambda _lib,tid:saved.append(tid))
+            try:
+                self.assertTrue(controller.request_cue('sb-stable','hot',0,'add',10003))
+                self.wait_for(lambda:not controller.busy)
+                self.assertEqual(requests[0].track_id,'1');self.assertEqual(bound,['1'])
+                self.assertEqual(saved,['sb-stable']);self.assertEqual(set(controller.lib.tracks_by_id),{'sb-stable'})
+            finally:controller.shutdown()
+
     def test_session_is_immediate_and_queue_rebases_memory_and_native_delete_identities(self):
         from dataclasses import replace
         from uuid import uuid4

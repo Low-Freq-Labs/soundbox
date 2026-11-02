@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QStyledItemDelegate, QTableView,
+    QAbstractItemView, QApplication, QLineEdit, QStyledItemDelegate, QTableView,
     QTreeWidget, QTreeWidgetItem, QStyle, QStyleOptionViewItem,
 )
 
@@ -233,6 +233,31 @@ def _sidebar_icon(painter, box, kind, expanded=False):
 
 
 class _PlaylistDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        context = getattr(self.parent(), '_inline_rename', None)
+        if not context or context[0] != index:return None
+        editor = QLineEdit(parent)
+        editor.setObjectName('PlaylistNameEditor')
+        editor._rename_name, editor._rename_save = context[1:]
+        return editor
+
+    def setEditorData(self, editor, index):
+        editor.setText(editor._rename_name); editor.selectAll()
+
+    def setModelData(self, editor, model, index):
+        value = editor.text().strip()
+        if value and value != editor._rename_name:
+            save = editor._rename_save
+            QTimer.singleShot(0, self.parent(), lambda: save(value))
+
+    def updateEditorGeometry(self, editor, option, index):
+        _icon, text = sidebar_row_geometry(option.rect, self.parent().indentation())
+        editor.setGeometry(text.toAlignedRect())
+
+    def destroyEditor(self, editor, index):
+        self.parent()._inline_rename = None
+        super().destroyEditor(editor, index)
+
     def paint(self, painter, option, index):
         option = QStyleOptionViewItem(option)
         self.initStyleOption(option, index)
@@ -261,6 +286,15 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
         self.setExpandsOnDoubleClick(False)
         self.setIndentation(16)
         self.setItemDelegate(_PlaylistDelegate(self))
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+    def rename_inline(self, item, name, save):
+        if item is None:return False
+        index = self.indexFromItem(item)
+        self._inline_rename = (QPersistentModelIndex(index), name, save)
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self.setCurrentItem(item); self.setFocus(); self.editItem(item, 0)
+        return True
 
     def drawBranches(self, painter, rect, index):
         # The delegate paints the branch and icon through the same geometry.
@@ -305,6 +339,22 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
 class PlaylistTree(PlaylistFolderTree):
     """Rekordbox playlist tree — drag source (rb)."""
     tracks_dropped = Signal(str, list)  # native playlist ID, track IDs
+    files_dropped = Signal(str, list)
+
+    def __init__(self):
+        super().__init__()
+        self.setDropIndicatorShown(False)
+        self._hover = QPersistentModelIndex()
+
+    def _set_hover(self, item):
+        index = QPersistentModelIndex(self.indexFromItem(item)) if item is not None else QPersistentModelIndex()
+        if index == self._hover:
+            return
+        if self._hover.isValid():
+            self.itemFromIndex(QModelIndex(self._hover)).setBackground(0, QBrush())
+        self._hover = index
+        if item is not None:
+            item.setBackground(0, QColor(theme.PURPLE))
 
     def mimeData(self, items):  # type: ignore[override]
         paths: list[str] = []
@@ -323,18 +373,30 @@ class PlaylistTree(PlaylistFolderTree):
 
 
     def dragEnterEvent(self, event):
-        if 'trk\t' in event.mimeData().text():event.acceptProposedAction()
+        if 'trk\t' in event.mimeData().text() or _audio_paths(event.mimeData()):event.acceptProposedAction()
         else:event.ignore()
 
     def dragMoveEvent(self, event):
         item=self.itemAt(event.position().toPoint())
-        if item and item.data(0,PATH_ROLE) and item.data(0,RB_NODE_KIND_ROLE)==0 and 'trk\t' in event.mimeData().text():
+        if (item and item.data(0,PATH_ROLE) and item.data(0,RB_NODE_KIND_ROLE)==0
+                and ('trk\t' in event.mimeData().text() or _audio_paths(event.mimeData()))):
+            self._set_hover(item)
             event.acceptProposedAction()
-        else:event.ignore()
+        else:
+            self._set_hover(None)
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._set_hover(None)
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
+        self._set_hover(None)
         item=self.itemAt(event.position().toPoint())
         if item is None or not item.data(0,PATH_ROLE) or item.data(0,RB_NODE_KIND_ROLE)!=0:event.ignore();return
+        files=_audio_paths(event.mimeData())
+        if files and item.data(0,RB_NODE_ROLE):
+            self.files_dropped.emit(item.data(0,RB_NODE_ROLE),files);event.acceptProposedAction();return
         ids=[]
         for line in event.mimeData().text().split('\n'):
             kind,_,value=line.partition('\t')
@@ -372,7 +434,7 @@ class SoundBoxTree(PlaylistFolderTree):
         self.setDropIndicatorShown(False)
         self.setRootIsDecorated(True)
         self.setIndentation(16)
-        self._hover = None
+        self._hover = QPersistentModelIndex()
         self._insert_row: int | None = None  # reorder line position (top-level row)
         self._insert_y = None
 
@@ -411,11 +473,15 @@ class SoundBoxTree(PlaylistFolderTree):
         _start_chip_drag(self, self.mimeData(items), label, actions)
 
     def _set_hover(self, item):
-        if item is self._hover:
+        index = QPersistentModelIndex(self.indexFromItem(item)) if item is not None else QPersistentModelIndex()
+        if index == self._hover:
             return
-        if self._hover is not None:
-            self._hover.setBackground(0, QBrush())
-        self._hover = item
+        # Source readback can rebuild the sidebar during a Finder drag. Qt
+        # invalidates this index when its row is deleted; a Python item wrapper
+        # would still point at the freed C++ object on the next move/drop.
+        if self._hover.isValid():
+            self.itemFromIndex(QModelIndex(self._hover)).setBackground(0, QBrush())
+        self._hover = index
         if item is not None:
             item.setBackground(0, QColor(theme.PURPLE))  # glow the playlist target
 
@@ -634,6 +700,7 @@ class TrackTable(NoTypeAhead, QTableView):
     writer; source-only file imports remain a separate registration protocol."""
     tracks_dropped = Signal(str, list)  # custom playlist name, [track_ids]
     rekordbox_tracks_dropped = Signal(str, list)
+    rekordbox_files_dropped = Signal(str, list)
     files_dropped = Signal(str, list)   # name ("" = Collection, import only), [paths]
 
     #: set by the app to () -> ("playlist", name) | ("collection", "") | None
@@ -668,7 +735,7 @@ class TrackTable(NoTypeAhead, QTableView):
             return
         kind, _name = tgt
         md = e.mimeData()
-        if _audio_paths(md) and kind!="rekordbox":
+        if _audio_paths(md):
             e.acceptProposedAction()  # Finder files import into any writable view
         elif "trk\t" in md.text() and kind in ("playlist","rekordbox") and e.source() is not self:
             e.acceptProposedAction()  # existing tracks add only to a real playlist
@@ -682,9 +749,9 @@ class TrackTable(NoTypeAhead, QTableView):
             return
         kind, name = tgt
         files = _audio_paths(e.mimeData())
-        if files and kind=="rekordbox":e.ignore();return
         if files:
-            self.files_dropped.emit(name if kind == "playlist" else "", files)
+            if kind=='rekordbox':self.rekordbox_files_dropped.emit(name,files)
+            else:self.files_dropped.emit(name if kind == "playlist" else "", files)
             e.acceptProposedAction()
             return
         if kind in ("playlist","rekordbox") and e.source() is not self:

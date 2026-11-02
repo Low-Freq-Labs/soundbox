@@ -14,6 +14,7 @@ from test_registration_pilot import source_fixture
 from test_registration_proof import wave
 from soundbox import native_media as media,native_registration_plan as plan,rekordbox_registration_store as store
 from soundbox import rekordbox_cue_store as cues,rekordbox_tags as tags
+from soundbox.native_paths import capture_aliases
 from soundbox.rekordbox_write import _connect,_state,ConflictError,RecoveryRequired,WriteProofError
 from research.cdj_export.playlist_transaction import _inventory
 
@@ -81,6 +82,24 @@ class RegistrationStore(unittest.TestCase):
         current=_inventory(self.writer.database)
         with self.assertRaises(ConflictError):self.writer.apply(self.request)
         self.assertEqual(_inventory(self.writer.database),current)
+
+    def test_alias_reuse_is_read_only_and_rechecks_the_alias_before_source_sql(self):
+        alias=self.root/'legacy';alias.symlink_to(self.root,target_is_directory=True)
+        raw=str(alias/self.audio.name)
+        conn=_connect(self.writer.database)
+        try:
+            conn.execute("UPDATE djmdContent SET FolderPath=?,UUID=?,MasterDBID='123',FileType=11 WHERE ID='1'",(raw,str(uuid4())))
+            cursor=conn.execute('SELECT * FROM djmdContent');names=[c[0] for c in cursor.description]
+            rows=[dict(zip(names,r,strict=True)) for r in cursor.fetchall()]
+        finally:conn.close()
+        request=self.make_request();request['tracks'][0]['aliases']=capture_aliases(rows,self.facts)
+        before=_inventory(self.writer.database);bindings=self.writer.apply(request)
+        self.assertEqual(bindings[0]['native_id'],'1');self.assertEqual(bindings[0]['native_path'],raw)
+        self.assertEqual(_inventory(self.writer.database),before)
+        alias.unlink();alias.symlink_to(self.source,target_is_directory=True)
+        with mock.patch.object(self.writer.lease,'_connect') as c:
+            with self.assertRaises((ConflictError,OSError)):self.writer.apply(request)
+            c.assert_not_called()
 
     def test_native_app_open_and_audio_drift_block_before_source_sql(self):
         with mock.patch.object(cues,'_closed',side_effect=WriteProofError('native open')),mock.patch.object(self.writer.lease,'_connect') as c:

@@ -221,6 +221,35 @@ lives in `soundbox.native_registration_plan`, `soundbox.native_media` and
 `soundbox.native_identity`; research wrappers reuse it. The separate general
 `soundbox.rekordbox_registration_store` passes eleven encrypted synthetic source tests
 (including nine actual exits and shared-domain exclusion) and complete native
-candidate replay on TEMP only. Production authority and desktop import integration
-are not provisioned. General initial analysis, gain/codec endpoints and component
-publication remain separate gates. HANDOFF records exact evidence/provenance.
+candidate replay on TEMP only at that checkpoint. Ordinary registration later
+received its own accepted production authority and desktop integration; the
+research pilot itself supplies neither. Initial supported WAV analysis likewise
+uses a separately accepted production domain. Broader codecs/gain/replacement
+remain gated; HANDOFF records current evidence/provenance.
+
+
+## Requested saved components on the two real imports (October31)
+
+`component_analysis.py` is a separate pure PCM16/24 WAV saved-grid/key/waveform
+planner. It preserves Length and existing musical data, creates no mixer/gain or
+cue rows and requires the packet grid to equal the complete saved result. The
+standalone `component_pilot.py` is fixed to the two real native IDs/UUIDs/audio
+hashes/BPM/keys requested by Sonny, with new exact plan/authorization/recovery
+formats. It does not widen `analysis_pilot.py`, the fixed generated-WAV gain cache,
+registration permission or the TEMP-only SQL adapters. Prepared pairs can chain
+on copies before either publishes. The source path remains independently guarded
+by closed apps, the common lease/journal, immutable audio identity, private paired
+encrypted evidence and exact DB/directory recovery. Its SQL authorizer excludes
+gain/mixer/cue/audio/XML/playlist and unrelated metadata changes.
+
+The current two-song request supplied the new semantic authorization; the receipt
+explicitly distinguishes that from user review of a plan hash. Both publications
+committed and passed native exact Collection search, paused deck load and normal
+quit: WHOLE174/9A (561 beats), Innerbloom140/6A (721 beats), six exact packets and
+all non-registry tables including memberships preserved. Seven native registry
+housekeeping differences remain explicit. This accepts these two transfers only;
+the two-song pilot itself has no production authority loader or automatic
+desktop publisher. The later independently accepted ordinary WAV analysis domain
+is installed; it does not grant general codec/gain/partial-component permission.
+Current evidence and installed state are in HANDOFF. Synthetic tests stay TEMP-only; no new songs enter the user
+library for this work.

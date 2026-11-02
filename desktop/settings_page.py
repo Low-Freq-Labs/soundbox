@@ -15,11 +15,13 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QColorDialog, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QAbstractItemView,
     QScrollArea, QStackedWidget, QTabBar, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 from .choices import ComboBox as QComboBox, Menu as QMenu
 from .trees import GraveyardTree
+from .color_button import ColorButton
 
 _GRAVE_ROLE = Qt.UserRole + 11  # ("del", tid, None) | ("rem", tid, pid)
 
@@ -41,6 +43,8 @@ class SettingsPageMixin:
         color = self._render_theme(value, text_color)
         self.settings['theme_accent'] = color
         self._sync_theme_text_controls()
+        from .app_icon import apply_saved_icon
+        apply_saved_icon(QApplication.instance(), color, persist=not getattr(self, '_isolated', True))
         if save:
             self._schedule_settings_save()
 
@@ -229,10 +233,19 @@ class SettingsPageMixin:
         self._grave.setContextMenuPolicy(Qt.CustomContextMenu)
         self._grave.customContextMenuRequested.connect(self._grave_menu)
         self._grave.itemDoubleClicked.connect(lambda item, _column: self._grave_load(item))
+        self._grave.itemSelectionChanged.connect(self.graveyard_controller.selection_changed)
         gl.addWidget(self._grave, 1)
+        self._grave_storage=QLabel('');self._grave_storage.setObjectName('SettingsSub')
+        gl.addWidget(self._grave_storage)
+        self._grave_delete=QPushButton('Delete from Collection and disk…')
+        self._grave_delete.clicked.connect(self.removal_controller.request)
+        self._grave_delete.setEnabled(False)
+        self._grave.itemSelectionChanged.connect(lambda:self._grave_delete.setEnabled(bool(self._grave.selectedItems())))
+        gl.addWidget(self._grave_delete,0,Qt.AlignRight)
+        self._settings_tabs.currentChanged.connect(self.graveyard_controller.schedule)
         gsub = QLabel("Tracks removed from Collection (and removed from playlists) "
-                      "rest here — rekordbox and disk untouched. Double-click to load and listen. Select one or "
-                      "Shift/Cmd-select several, then right-click to restore; "
+                      "rest here. Double-click to load and listen. Select one or "
+                      "Shift/Cmd-select several, then restore or delete from Collection and disk. Deletion asks first and moves files to Trash; "
                       "Cmd-A selects all.")
         gsub.setObjectName("SettingsSub"); gsub.setWordWrap(True)
         gl.addWidget(gsub)
@@ -246,6 +259,7 @@ class SettingsPageMixin:
         self._rules.setObjectName("TitleRules")
         self._rules.setHeaderHidden(True)
         self._rules.setRootIsDecorated(False)
+        self._rules.setSelectionMode(QAbstractItemView.NoSelection)
         self._rules.itemChanged.connect(self._on_rule_toggled)
         self._rules.setContextMenuPolicy(Qt.CustomContextMenu)
         self._rules.customContextMenuRequested.connect(self._rules_menu)
@@ -277,10 +291,11 @@ class SettingsPageMixin:
         appearance_row = QHBoxLayout(appearance)
         appearance_row.setContentsMargins(0, 0, 0, 0)
         appearance_row.setSpacing(6)
-        self._theme_color = QPushButton(theme.PURPLE.upper())
+        self._theme_color = ColorButton(theme.PURPLE.upper())
         self._theme_color.setCursor(Qt.PointingHandCursor)
         self._theme_color.setToolTip('Choose the app accent color')
         self._theme_color.clicked.connect(self._choose_theme_color)
+        self._theme_color.hex_committed.connect(lambda value: self._apply_theme_color(value, save=True))
         reset_color = QPushButton("Reset")
         reset_color.setCursor(Qt.PointingHandCursor)
         reset_color.setToolTip('Restore the default purple accent')
@@ -300,10 +315,12 @@ class SettingsPageMixin:
         self._theme_text_mode.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         for label, mode in (('White', 'white'), ('Black', 'black'), ('Custom', 'custom')):
             self._theme_text_mode.addItem(label, mode)
-        self._theme_text_color = QPushButton()
+        self._theme_text_color = ColorButton()
         self._theme_text_color.setCursor(Qt.PointingHandCursor)
         self._theme_text_color.setToolTip('Choose text color for theme-colored selections and buttons')
         self._theme_text_color.clicked.connect(self._choose_theme_text_color)
+        self._theme_text_color.hex_committed.connect(
+            lambda value: self._apply_theme_text('custom', value, save=True))
         self._theme_text_mode.currentIndexChanged.connect(
             lambda _index: self._apply_theme_text(self._theme_text_mode.currentData(), save=True))
         text_row.addWidget(self._theme_text_mode)
@@ -468,6 +485,14 @@ class SettingsPageMixin:
         g = getattr(self, "_grave", None)
         if g is None:
             return
+        old_items=[g.topLevelItem(i) for i in range(g.topLevelItemCount())]
+        old_keys=[tuple(item.data(0,_GRAVE_ROLE)) for item in old_items]
+        selected={tuple(item.data(0,_GRAVE_ROLE)) for item in g.selectedItems()}
+        current=g.currentItem();current_key=tuple(current.data(0,_GRAVE_ROLE)) if current else None
+        current_at=old_items.index(current) if current in old_items else 0
+        first=g.itemAt(1,1);first_at=old_items.index(first) if first in old_items else 0
+        offset=g.visualItemRect(first).top() if first else 0
+        scroll=g.verticalScrollBar().value();horizontal=g.horizontalScrollBar().value()
         by_pid = {p.pid: p.name for p in (self.lib.playlists if self.lib else [])}
 
         def title_of(tid):
@@ -477,16 +502,56 @@ class SettingsPageMixin:
         g.setSortingEnabled(False)
         g.clear()
         for tid in sorted(self.hidden):
+            if tid in self.settings.get('graveyard_disposals',{}):continue
             it = QTreeWidgetItem([title_of(tid), self.hidden_dates.get(tid, "")])
             it.setData(0, _GRAVE_ROLE, ("del", tid, None))
             g.addTopLevelItem(it)
         for pid, bag in self.removals.items():
             pname = by_pid.get(pid, "?")
             for tid, date in bag.items():
+                if tid in self.settings.get('graveyard_disposals',{}):continue
                 it = QTreeWidgetItem([f"{title_of(tid)}   (from {pname})", date or ""])
                 it.setData(0, _GRAVE_ROLE, ("rem", tid, pid))
                 g.addTopLevelItem(it)
         g.setSortingEnabled(True)
+        self._filter_graveyard()
+        new_items=[g.topLevelItem(i) for i in range(g.topLevelItemCount())]
+        by_key={tuple(item.data(0,_GRAVE_ROLE)):item for item in new_items}
+        current=by_key.get(current_key)
+        if current is None and new_items:
+            current=new_items[min(current_at,len(new_items)-1)]
+        if current is not None:g.setCurrentItem(current)
+        for item in new_items:item.setSelected(tuple(item.data(0,_GRAVE_ROLE)) in selected and not item.isHidden())
+        anchors=old_keys[first_at:]+list(reversed(old_keys[:first_at]))
+        anchor=next((by_key[key] for key in anchors if key in by_key and not by_key[key].isHidden()),None)
+        if anchor is not None:
+            g.scrollToItem(anchor,QAbstractItemView.PositionAtTop)
+            if g.verticalScrollMode()==QAbstractItemView.ScrollPerPixel:
+                g.verticalScrollBar().setValue(g.verticalScrollBar().value()-offset)
+        else:g.verticalScrollBar().setValue(scroll)
+        g.horizontalScrollBar().setValue(horizontal)
+        controller=getattr(self,'graveyard_controller',None)
+        if controller:controller.schedule()
+
+    def _filter_graveyard(self):
+        g=getattr(self,'_grave',None)
+        if g is None:return
+        from .model import row_matches
+        terms=self._search_terms()
+        controller=getattr(self,'graveyard_controller',None)
+        for i in range(g.topLevelItemCount()):
+            item=g.topLevelItem(i);data=item.data(0,_GRAVE_ROLE)
+            if not data:continue
+            tid=data[1];row=controller.info(tid) if controller else None
+            if row is None:
+                track=self.lib.tracks_by_id.get(tid) if self.lib else None
+                row=dict(title=item.text(0),artist=self.overrides.get(tid) or (track.artist if track else ''),
+                    bpm=track.bpm if track else '',key=track.key if track else '',
+                    genre=track.genre if track else '',format=track.path.suffix.lstrip('.') if track else '')
+            hidden=bool(terms) and not row_matches(row,terms)
+            if hidden:item.setSelected(False)
+            item.setHidden(hidden)
+        if controller:controller.selection_changed()
 
     def _grave_menu(self, pos):
         g = self._grave
@@ -496,6 +561,9 @@ class SettingsPageMixin:
             menu.addAction('Load Track', lambda: self._grave_load(item))
             menu.addSeparator()
         self._add_grave_restore_action(menu)
+        if g.selectedItems():
+            menu.addSeparator()
+            menu.addAction('Delete from Collection and disk…',self.removal_controller.request)
         if not menu.isEmpty():
             menu.exec(g.mapToGlobal(pos))
 
@@ -796,6 +864,7 @@ class SettingsPageMixin:
             self._refresh_graveyard()  # the graveyard reflects the latest deletes
             self._refresh_title_rules()
         self.body_stack.setCurrentIndex(0 if on_settings else 1)
+        self.graveyard_controller.schedule()
 
     def _close_settings(self):
         self.body_stack.setCurrentIndex(0)

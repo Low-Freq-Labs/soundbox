@@ -27,6 +27,14 @@ class AnalysisJobs(unittest.TestCase):
                        {'track_id':'other'},{'source_uuid':'new-uuid'}):
             self.assertFalse(jobs.matches({**job,**change},self.lib,self.track))
 
+    def test_manual_waveform_request_survives_restart_and_upgrades_an_active_automatic_job(self):
+        queued=jobs.admit([],self.lib,[self.track],{})
+        legacy=deepcopy(queued);legacy[0].pop('waveform');jobs.validate(legacy)
+        manual=jobs.admit(legacy,self.lib,[self.track],{},rebuild_waveform=True)
+        self.assertTrue(manual[0]['waveform']);self.assertEqual(manual[0]['id'],queued[0]['id'])
+        saved=json.loads(json.dumps(manual));jobs.validate(saved);self.assertTrue(saved[0]['waveform'])
+        self.assertFalse(queued[0]['waveform'])
+
     def test_failure_does_not_restart_automatically_and_explicit_retry_gets_a_new_identity(self):
         queued=jobs.admit([],self.lib,[self.track],{})
         failed=jobs.failed(queued,queued[0]['id'],'Unreadable file')

@@ -818,6 +818,7 @@ name = "soundbox-cdj"
 version = "0.1.0"
 dependencies = [
  "rbl-analysis",
+ "rbl-anlz",
  "rbl-audio",
  "rbl-export",
  "rbl-onelibrary",

@@ -175,9 +175,27 @@ class TrackInfoMixin:
                 row=self.usb_device_pages._display_rows.get(song.path,{})
                 TrackInfoDialog(dict(row,location=str(self.usb_device_pages._snapshot.target)+song.path),parent=self).exec()
                 return
-        track=self._selected_track()
-        if track is None and self.lib:
-            track=self.lib.tracks_by_id.get(self.player_bar.current_track())
+        grave=getattr(self,'_grave',None)
+        if grave is not None and grave.isVisible():
+            from .settings_page import _GRAVE_ROLE
+            item=grave.currentItem()
+            if item is None or not item.isSelected():
+                item=next(iter(grave.selectedItems()),None)
+            data=item.data(0,_GRAVE_ROLE) if item is not None else None
+            track=self.lib.tracks_by_id.get(data[1]) if self.lib and data else None
+            if track is None:
+                controller=getattr(self,'graveyard_controller',None)
+                row=controller.info(data[1]) if controller and data else None
+                if row:
+                    tid=data[1]
+                    TrackInfoDialog(row,artwork=lambda:self.art_cache.image_path(tid),parent=self).exec();return
+                if controller:controller.schedule()
+                self._flash_status('Track is no longer in the library' if data else
+                                   'Select a Graveyard track to view its information');return
+        else:
+            track=self._selected_track()
+            if track is None and self.lib:
+                track=self.lib.tracks_by_id.get(self.player_bar.current_track())
         if track is None:
             self._flash_status('Select a track to view its information');return
         tid=track.track_id
