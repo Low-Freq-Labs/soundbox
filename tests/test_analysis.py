@@ -34,6 +34,23 @@ class CapturedAnalysis(unittest.TestCase):
     def detect(self, **preferences):
         return analysis.analyze(self.lib,self.track,{**analysis.DEFAULTS,**preferences})
 
+    def test_automatic_long_sets_skip_dsp_even_when_import_duration_was_unknown(self):
+        from types import SimpleNamespace
+        before=self.audio.read_bytes()
+        for known in (0,901):
+            self.track.total_time=known
+            with mock.patch('soundbox.media_probe.read_media_header',return_value=SimpleNamespace(duration=901)) as header, \
+                    mock.patch('soundbox.cdj_usb.run_renderer',side_effect=AssertionError('No automatic BPM/key for a long set')):
+                self.assertIsNone(analysis.analyze(self.lib,self.track,automatic=True))
+                self.assertEqual(header.call_count,1 if known==0 else 0)
+        self.assertEqual(self.audio.read_bytes(),before)
+
+    def test_explicit_long_analysis_remains_available_without_removing_saved_data(self):
+        self.track.total_time=901
+        with mock.patch('soundbox.cdj_usb.run_renderer',return_value={**self.record(),'confidence':1}) as renderer:
+            result=analysis.analyze(self.lib,self.track)
+        renderer.assert_called_once();self.assertEqual(result['bpm'],120)
+
     def test_real_engine_outputs_milliseconds_bpm_and_keeps_canonical_bytes(self):
         before = self.audio.read_bytes()
         result = self.detect(key=False,first_cue=True)

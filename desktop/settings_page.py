@@ -125,7 +125,7 @@ class SettingsPageMixin:
     def _choose_theme_text_color(self):
         self._theme_picker(text=True)
 
-    def _apply_settings_to_lib(self, *, invalidate_rows=True):
+    def _apply_settings_to_lib(self, *, invalidate_rows=True, configure_artwork=True):
         """Push current settings onto the loaded library (a pure display/export
         filter — never modifies rekordbox)."""
         if self.lib is not None:
@@ -140,13 +140,19 @@ class SettingsPageMixin:
             for playlist in self.lib.playlists:
                 playlist.added_keys = list(
                     self.playlist_additions.get(playlist.pid, ()))
+            controller=getattr(self,'unification_controller',None)
+            state=controller.state() if controller else None
+            aliases=({node['id']:'cust:'+key[7:] for key,node in state['nodes'].items()
+                      if key.startswith('custom:')} if state and state['customs_done'] else {})
+            for playlist in self.lib.playlists:playlist.export_key=aliases.get(playlist.pid,'')
             self.lib.title_junk = self._title_junk()
             # The default-photo pool is balanced only across tracks that can
             # actually appear or export. Graveyard tracks stay out of its
             # assignment universe just as they stay out of SoundBox views.
             try:
-                self.art_cache.configure_default_tracks(
-                    tid for tid in self.lib.tracks_by_id if tid not in self.hidden)
+                if configure_artwork:
+                    self.art_cache.configure_default_tracks(
+                        tid for tid in self.lib.tracks_by_id if tid not in self.hidden)
             except (OSError, ValueError) as exc:
                 LOG.error("Default artwork assignments were not saved: %s", exc)
                 self._flash_status("Default artwork assignments NOT saved — check space/permissions", 20)

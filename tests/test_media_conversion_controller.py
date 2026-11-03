@@ -16,7 +16,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from test_media_conversion_store import fixture,UUID
-from desktop.media_conversion import MediaConversionController
+from desktop.media_conversion import MediaConversionController,_load_format_cache,_save_format_cache
 from desktop.tag_controller import TagEditController
 from soundbox import analysis,media_conversion_store as store,media_conversion_jobs as jobs
 from soundbox import rekordbox_cue_store as cues,rekordbox_tags as tags
@@ -64,6 +64,79 @@ class BackgroundConversion(unittest.TestCase):
         end=time.monotonic()+30
         while not predicate() and time.monotonic()<end:QTest.qWait(10)
         self.assertTrue(predicate(),repr(self.controller.pending))
+
+    def cache_compatible_audio(self):
+        import numpy as np
+        import soundfile as sf
+        from soundbox import cdj_compatibility
+        sf.write(self.audio,np.zeros((44100*5,2)),44100,subtype='PCM_16')
+        facts=cdj_compatibility.inspect(self.audio)
+        self.assertEqual(facts['status'],'compatible')
+        entries={str(self.audio):dict(epoch=analysis.identity(self.audio.stat()),facts=facts,
+                                      tracks=[dict(id='stale-other-library-id',path='/never/open/stale.wav',native=None)])}
+        cache=self.root/'data/media-format-cache.json'
+        _save_format_cache(cache,str(self.window.lib.source),self.window.lib.source_library_id,entries)
+        return cache,entries
+
+    def test_persisted_technical_cache_reuses_exact_source_epoch_and_rebinds_current_tracks(self):
+        cache,entries=self.cache_compatible_audio();w=self.window
+        audio_sha=hashlib.sha256(self.audio.read_bytes()).hexdigest();database_sha=hashlib.sha256((self.source/'master.db').read_bytes()).hexdigest()
+        with mock.patch('desktop.media_conversion.compatibility.inspect',side_effect=AssertionError('unchanged header reread')), \
+                mock.patch.object(self.writer,'convert') as convert, \
+                mock.patch.object(w,'_save_state',wraps=w._save_state) as save:
+            self.controller.discover();self.wait(lambda:self.controller._cache_identity is not None)
+            self.assertEqual(self.controller.facts('1')['facts'],entries[str(self.audio)]['facts'])
+            self.assertEqual(set(w.lib.media_facts),{'1'})
+            self.assertEqual(self.controller.cache[str(self.audio)]['tracks'][0]['id'],'1')
+            convert.assert_not_called();save.assert_not_called()
+        self.assertEqual(hashlib.sha256(self.audio.read_bytes()).hexdigest(),audio_sha)
+        self.assertEqual(hashlib.sha256((self.source/'master.db').read_bytes()).hexdigest(),database_sha)
+        self.assertEqual(w.settings,{})
+        self.assertEqual(_load_format_cache(cache,str(w.lib.source),'other-library'),{})
+
+    def test_each_epoch_field_and_changed_cache_bytes_force_header_reinspection(self):
+        from soundbox import cdj_compatibility
+        inspect=cdj_compatibility.inspect
+        for field in range(5):
+            cache,entries=self.cache_compatible_audio();entries[str(self.audio)]['epoch'][field]+=1
+            _save_format_cache(cache,str(self.window.lib.source),self.window.lib.source_library_id,entries)
+            self.controller.cache={};self.controller._cache_identity=None
+            with mock.patch('desktop.media_conversion.compatibility.inspect',side_effect=inspect) as probe:
+                self.controller.discover();self.wait(lambda:self.controller._cache_identity is not None)
+                self.assertEqual(probe.call_count,1,field)
+        cache,entries=self.cache_compatible_audio();body=json.loads(cache.read_bytes())
+        body['entries'][str(self.audio)]['facts']['sample_rate']=48000;cache.write_text(json.dumps(body))
+        self.controller.cache={};self.controller._cache_identity=None
+        with mock.patch('desktop.media_conversion.compatibility.inspect',side_effect=inspect) as probe:
+            self.controller.discover();self.wait(lambda:self.controller._cache_identity is not None)
+            self.assertEqual(probe.call_count,1)
+            self.assertEqual(self.controller.facts('1')['facts']['sample_rate'],44100)
+
+    def test_dataless_file_stays_deferred_even_with_a_matching_compatible_cache(self):
+        self.cache_compatible_audio();original=Path.stat;audio=self.audio
+        def placeholder(path,*args,**kwargs):
+            info=original(path,*args,**kwargs)
+            if path!=audio:return info
+            return SimpleNamespace(st_dev=info.st_dev,st_ino=info.st_ino,st_size=info.st_size,
+                st_mtime_ns=info.st_mtime_ns,st_ctime_ns=info.st_ctime_ns,st_flags=0x40000000)
+        with mock.patch.object(Path,'stat',placeholder), \
+                mock.patch('desktop.media_conversion.compatibility.inspect',side_effect=AssertionError('placeholder opened')):
+            self.controller.discover();self.wait(lambda:self.controller._cache_identity is not None)
+            self.assertEqual(self.controller.cache[str(self.audio)]['facts']['status'],'deferred')
+            self.assertEqual(self.window.lib.media_facts,{})
+
+    def test_invalid_or_foreign_cache_and_cache_write_failure_do_not_block_current_facts(self):
+        cache,entries=self.cache_compatible_audio();w=self.window
+        for source,library in ((str(w.lib.source)+'-foreign',w.lib.source_library_id),(str(w.lib.source),'foreign')):
+            _save_format_cache(cache,source,library,entries)
+            self.assertEqual(_load_format_cache(cache,str(w.lib.source),w.lib.source_library_id),{})
+        cache.write_text('{broken')
+        self.assertEqual(_load_format_cache(cache,str(w.lib.source),w.lib.source_library_id),{})
+        with mock.patch('desktop.media_conversion.atomic_bytes',side_effect=OSError('cache disk unavailable')), \
+                self.assertLogs('soundbox',level='WARNING'):
+            self.controller.discover();self.wait(lambda:self.controller._cache_identity is not None)
+        self.assertEqual(self.controller.facts('1')['facts']['sample_rate'],44100)
+        self.assertEqual(w.settings,{})
 
     def test_queue_precedes_admission_and_latest_manual_grid_cue_and_curation_survive_conversion(self):
         w=self.window;key=analysis.result_key(self.audio);raw=self.audio.read_bytes();before_db=(self.source/'master.db').read_bytes()

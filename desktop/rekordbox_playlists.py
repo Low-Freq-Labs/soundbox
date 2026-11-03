@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
+import json
 import logging
 from pathlib import Path
 import time
@@ -11,10 +13,11 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from soundbox import engine
 from soundbox.library import Playlist
-from soundbox.rekordbox_playlist_store import PlaylistStore, load_authority, request_for, validate_request
+from soundbox.rekordbox_playlist_store import PlaylistStore, load_authority, request_for, validate_request, command_requests
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed
 from .choices import Menu
-from .trees import COLLECTION_ROLE, PATH_ROLE, RB_NODE_ROLE
+from .trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, NATIVE_TREE_ROLE,
+                    PATH_ROLE, RB_NODE_ROLE, PINNED_TREE_ROLE, sidebar_choice_icon)
 
 QUEUE='rekordbox_playlist_edits'
 LOG=logging.getLogger('soundbox')
@@ -67,13 +70,37 @@ class PlaylistEditController(QObject):
             if not message and previous and getattr(w,'_prep_update_message',None)==previous:
                 w._prep_update_message='';w._set_status_text('Ready')
 
+    def reorder_reason(self):
+        reason=self.reason()
+        if reason or self.factory:return reason
+        lib=self.window.lib
+        authority=load_authority(self.tags.data_root/'rekordbox-playlist-authority.json',lib.source,lib.source_library_id)
+        return '' if authority and authority.reorder_accepted else 'Native playlist reordering awaits acceptance for this library'
+
     def enqueue(self, request):
         started=time.monotonic()
         validate_request(request)
-        reason=self.reason()
+        reason=self.reorder_reason() if request['operation']=='reorder' else self.reason()
         if reason:self.window._flash_status(reason,10);return False
         if len(self.pending)>=256:
             self.window._flash_status('Wait for pending playlist edits to finish',10);return False
+        # A bounded create+append batch can capture a target's independent XML
+        # clock a few milliseconds ahead. A rapid subsequent gesture must
+        # advance that exact queued clock before its own durable admission.
+        # Never infer it from SQL time or read source XML on the GUI thread.
+        request=deepcopy(request);clocks={}
+        for pending in self.pending:
+            if (pending['source']!=str(self.window.lib.source)
+                    or pending['library_id']!=self.window.lib.source_library_id):continue
+            for command in command_requests(pending['request']):
+                identity=command['playlist_id'];clocks[identity]=max(clocks.get(identity,0),command['xml_timestamp'])
+        for command in command_requests(request):
+            identity=command['playlist_id']
+            command['xml_timestamp']=max(command['xml_timestamp'],clocks.get(identity,0)+1)
+            clocks[identity]=command['xml_timestamp']
+        try:validate_request(request)
+        except WriteProofError as exc:
+            self.window._flash_status(str(exc),10);return False
         w=self.window;old=deepcopy(w.settings.get(QUEUE,[]))
         job=dict(source=str(w.lib.source),library_id=w.lib.source_library_id,request=deepcopy(request),error='',retry=False)
         w.settings[QUEUE]=[*old,job]
@@ -149,6 +176,7 @@ class PlaylistEditController(QObject):
                 if (later['source']==job['source'] and later['library_id']==job['library_id']
                         and later['request']['revision']==job['request']['revision']):
                     later['request']['revision']=new_catalog['revision']
+                    for command in command_requests(later['request']):command['revision']=new_catalog['revision']
             w.settings[QUEUE]=tail
             w._native_apply_catalog(new_catalog,job['request'])
             if not w._save_state():
@@ -198,6 +226,61 @@ class PlaylistEditController(QObject):
 
 
 class NativePlaylistsMixin:
+    def _local_playlist_icon_key(self,name):
+        lib=self.lib
+        return json.dumps(['local',str(lib.source) if lib else '',
+                           lib.source_library_id if lib else '',name],separators=(',',':'))
+
+    def _playlist_icon_key(self,index):
+        if (not index.isValid() or index.data(COLLECTION_ROLE) or index.data(ARTISTS_ROLE)
+                or not (index.data(PATH_ROLE) or index.data(CUSTOM_ROLE))):return None
+        if not index.data(NATIVE_TREE_ROLE):
+            return self._local_playlist_icon_key(index.data(CUSTOM_ROLE)) if index.data(CUSTOM_ROLE) else None
+        lib=self.lib
+        if not lib or lib.source_kind!='rekordbox-db':return None
+        nodes=(lib.source_playlist_catalog or {}).get('nodes',[])
+        scope=(str(lib.source),lib.source_library_id)
+        cached=getattr(self,'_playlist_icon_catalog',None)
+        if cached is None or cached[0]!=scope or cached[1] is not nodes:
+            cached=(scope,nodes,{row['ID']:row for row in nodes})
+            self._playlist_icon_catalog=cached
+        row=cached[2].get(index.data(RB_NODE_ROLE))
+        if (not row or row.get('rb_local_deleted')!=0 or row.get('Attribute') not in (0,4)
+                or not row.get('UUID')):return None
+        return json.dumps(['native',*scope,row['ID'],row['UUID']],separators=(',',':'))
+
+    def _playlist_icon_kind(self,index,default):
+        values=self.settings.get('playlist_icons',{})
+        kind=values.get(self._playlist_icon_key(index)) if isinstance(values,dict) else None
+        return kind if kind in ('star','note','crate') else default
+
+    def _set_playlist_icon(self,tree,index,expected,kind):
+        if (expected is None or kind not in ('star','note','crate')
+                or expected!=self._playlist_icon_key(index)):
+            self._flash_status('That playlist changed; open its icon menu again',8);return False
+        if getattr(self,'_state_maintenance',False) or getattr(self,'_shutting_down',False):return False
+        previous=self.settings.get('playlist_icons');present='playlist_icons' in self.settings
+        values=dict(previous) if isinstance(previous,dict) else {}
+        values[expected]=kind;self.settings['playlist_icons']=values
+        if not self._save_state():
+            if present:self.settings['playlist_icons']=previous
+            else:self.settings.pop('playlist_icons',None)
+            return False
+        tree.viewport().update()
+        return True
+
+    def _playlist_icon_menu(self,tree,item):
+        from PySide6.QtCore import QPersistentModelIndex
+        index=QPersistentModelIndex(tree.indexFromItem(item))
+        key=self._playlist_icon_key(index)
+        if key is None:return None
+        current=tree.sidebar_icon_kind(index);menu=Menu(self)
+        for label,kind in (('Star','star'),('Music note','note'),('Vinyl crate','crate')):
+            action=menu.addAction(sidebar_choice_icon(kind),label)
+            action.setCheckable(True);action.setChecked(kind==current)
+            action.triggered.connect(lambda _checked=False,k=kind:self._set_playlist_icon(tree,index,key,k))
+        return menu
+
     def _native_reconcile_source(self):
         """Request a fresh owned snapshot after a failed/discarded source intent."""
         refresh=getattr(self,'_start_rekordbox_refresh',None)
@@ -210,41 +293,68 @@ class NativePlaylistsMixin:
 
     def _native_presentation(self):
         controller=getattr(self,'playlist_controller',None)
-        if not self.lib or not controller or controller.queue_error():return self.lib
-        from soundbox.playlist_presentation import project
-        library=project(self.lib,controller.pending)
+        if not self.lib or not controller or controller.queue_error():
+            self._native_presentation_cache=None
+            return self.lib
+        from soundbox.playlist_presentation import project,copy_catalog
         imports=getattr(self,'shared_import_controller',None)
+        pending=controller.pending
+        if pending and self.lib.source_playlist_catalog and not (imports and imports.pending):
+            lib=self.lib;catalog=lib.source_playlist_catalog
+            # Compare native scalar rows and copied durable intents by value,
+            # including in-place UUID/error/clock changes. Object identity alone
+            # cannot establish a valid presentation after source reconciliation.
+            identities=tuple((key,t.track_id,t.native_id,t.source_uuid) for key,t in lib.tracks_by_id.items())
+            smart={r['ID'] for r in catalog.get('nodes',[]) if r.get('Attribute')==4}
+            intelligent=tuple((p.pid,tuple(p.keys)) for p in lib.playlists if p.pid in smart)
+            inputs=(str(lib.source),lib.source_library_id,identities,intelligent)
+            cached=getattr(self,'_native_presentation_cache',None)
+            if not (cached and cached[0]==inputs and cached[1]==catalog and cached[2]==pending):
+                projected=project(lib,pending)
+                cached=(inputs,copy_catalog(catalog),deepcopy(pending),projected.playlists,projected.source_playlist_catalog)
+                self._native_presentation_cache=cached
+            # Current filters, hidden IDs, artist registry, tracks, source tags
+            # and other library metadata always come from the current Library.
+            library=replace(lib,playlists=cached[3],source_playlist_catalog=cached[4])
+        else:
+            self._native_presentation_cache=None
+            library=project(self.lib,pending)
         if imports and not imports.queue_error():
             from soundbox.shared_imports import present
             library=present(library,imports.pending)
         return library
 
-    def _native_pending_deletions(self):
+    def _native_pending_deletions(self, *, presentation=None):
         """Rows absent from this source's durable presentation, including new IDs."""
         controller=getattr(self,'playlist_controller',None);lib=self.lib
         if not lib or not controller or controller.queue_error() or not controller.pending:return set()
         known={r['ID'] for r in lib.source_playlist_catalog.get('nodes',[]) if r['rb_local_deleted']==0}
-        known|={job['request']['playlist_id'] for job in controller.pending
+        known|={command['playlist_id'] for job in controller.pending
                 if job['source']==str(lib.source) and job['library_id']==lib.source_library_id
-                and job['request']['operation']=='create'}
-        visible={r['ID'] for r in self._native_presentation().source_playlist_catalog.get('nodes',[]) if r['rb_local_deleted']==0}
+                for command in command_requests(job['request']) if command['operation']=='create'}
+        presentation=self._native_presentation() if presentation is None else presentation
+        visible={r['ID'] for r in presentation.source_playlist_catalog.get('nodes',[]) if r['rb_local_deleted']==0}
         return known-visible
 
-    def _native_pending_changed(self, *, rebuild=False):
+    def _native_pending_changed(self, *, rebuild=False,presentation=None):
         # The small test controller host has no sidebar; source behavior remains
         # independently testable. The desktop applies this in the admission turn.
         if not hasattr(self,'tree') or self.lib is None:return
-        removed=self._native_pending_deletions()
+        if rebuild and presentation is None:presentation=self._native_presentation()
+        removed=self._native_pending_deletions(presentation=presentation)
         identity=(str(self.lib.source),self.lib.source_library_id) if self.lib else None
         expanded=(set(getattr(self,'_pending_native_expansion',set()))
                   if identity==getattr(self,'_pending_native_identity',None) else set())
         self._pending_native_identity=identity
+        present=set();now_expanded=set()
         def remember(parent):
             for i in range(parent.childCount()):
                 item=parent.child(i)
-                if item.isExpanded():expanded.add(item.data(0,RB_NODE_ROLE))
+                identity=item.data(0,RB_NODE_ROLE);present.add(identity)
+                if item.isExpanded():now_expanded.add(identity)
                 remember(item)
         remember(self.tree.invisibleRootItem())
+        expanded.difference_update(present);expanded.update(now_expanded)
         self._pending_native_expansion=expanded
         current=getattr(self,'_view_key','') or ''
         active=getattr(self,'_active_native_playlist_id',None)
@@ -262,9 +372,9 @@ class NativePlaylistsMixin:
             self._restore_view('sb:Collection')
         if rebuild:
             if current.startswith('rb:') and active:
-                updated=next((p for p in self._native_presentation().playlists if p.pid==active),None)
+                updated=next((p for p in presentation.playlists if p.pid==active),None)
                 if updated:self._view_key='rb:'+updated.display_path
-            self._populate_tree(engine.summary(self.lib))
+            self._populate_tree(engine.summary(self.lib),presentation=presentation)
             if current.startswith('rb:') and active not in removed:self._reload_current_view()
             def restore(parent):
                 for i in range(parent.childCount()):
@@ -320,6 +430,21 @@ class NativePlaylistsMixin:
                for r in self._native_presentation().source_playlist_catalog['nodes']):
             self._flash_status('A playlist or folder with that name already exists here',8);return
         self._native_request('create',name=name,parent=parent,folder=folder)
+
+    def _native_reorder(self,identity,anchor_id,after):
+        reason=self.playlist_controller.reorder_reason()
+        if reason:self._flash_status(reason,8);return False
+        item=self._find_tree_item('',identity)
+        if item is None or item.data(0,PINNED_TREE_ROLE):return False
+        target=self._native_node(identity);anchor=self._native_node(anchor_id)
+        if not target or not anchor or target['ParentID']!=anchor['ParentID']:return False
+        siblings=sorted((r for r in self._native_presentation().source_playlist_catalog['nodes']
+                         if r['ParentID']==target['ParentID'] and r['rb_local_deleted']==0),key=lambda r:r['Seq'])
+        original=[r['ID'] for r in siblings];updated=[value for value in original if value!=identity]
+        if anchor_id not in updated:return False
+        updated.insert(updated.index(anchor_id)+int(after),identity)
+        if original==updated:return True
+        return self._native_request('reorder',identity=identity,anchor_id=anchor_id,after=after)
 
     def _native_rename(self, identity):
         row=self._native_node(identity)
@@ -406,6 +531,10 @@ class NativePlaylistsMixin:
             discard.setEnabled(not self.tag_controller.owned)
 
     def _native_tree_menu(self,pos):
+        item=self.tree.playlist_icon_item_at(pos)
+        menu=self._playlist_icon_menu(self.tree,item) if item is not None else None
+        if menu is not None:
+            menu.exec(self.tree.viewport().mapToGlobal(pos));return
         self._native_menu(self.tree.itemAt(pos)).exec(self.tree.viewport().mapToGlobal(pos))
 
     def _native_apply_catalog(self,catalog,request):
@@ -433,7 +562,8 @@ class NativePlaylistsMixin:
         # reference disappears. Exact UUID pins survive refresh/restart, confer
         # no source permission and never register/retag audio.
         pins=self.settings.setdefault('rekordbox_collection_tracks',{}).setdefault(lib.source_library_id,{})
-        affected={t['track_id'] for t in request['tracks']}
+        commands=command_requests(request)
+        affected={t['track_id'] for command in commands for t in command['tracks']}
         if request['operation']=='delete':
             affected|={lib.tracks_by_id[tid].native_id for p in lib.playlists if p.pid not in active for tid in p.keys if tid in lib.tracks_by_id}
         for tid in affected:
@@ -442,17 +572,23 @@ class NativePlaylistsMixin:
         current=getattr(self,'_view_key','') or ''
         prior=(self._native_view_playlist(current[3:]).pid if current.startswith('rb:') and self._native_view_playlist(current[3:]) else None)
         lib.playlists=result;lib.source_playlist_catalog=catalog
-        if request['operation']=='remove':
-            bag=self.removals.get(request['playlist_id'],{})
-            for track in request['tracks']:
+        for command in commands:
+            if command['operation']!='remove':continue
+            bag=self.removals.get(command['playlist_id'],{})
+            for track in command['tracks']:
                 current_track=native_tracks.get(track['track_id'])
                 bag.pop(current_track.track_id if current_track else track['track_id'],None)
-            if not bag:self.removals.pop(request['playlist_id'],None)
+            if not bag:self.removals.pop(command['playlist_id'],None)
         if prior:
             updated=next((p for p in result if p.pid==prior),None)
             self._view_key='rb:'+updated.display_path if updated else 'sb:Collection'
-        self._apply_settings_to_lib()
+        self._apply_settings_to_lib(invalidate_rows=False,configure_artwork=False)
+        self._sync_playlists_cache=None
 
     def _native_refresh_view(self,request):
-        self._populate_tree(engine.summary(self.lib));self._reload_current_view()
-        self._cache_library();self._refresh_devices();self._refresh_graveyard()
+        self._populate_tree(engine.summary(self.lib))
+        if (getattr(self,'_view_key','') or '').startswith('rb:'):self._reload_current_view()
+        self._cache_library()
+        # Ordinary device polling observes the invalidated playlist inventory.
+        # A source playlist save neither changes Collection nor its artwork.
+        if any(command['operation'] in ('delete','remove','rename') for command in command_requests(request)):self._refresh_graveyard()

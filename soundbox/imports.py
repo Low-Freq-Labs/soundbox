@@ -245,6 +245,9 @@ def inject(lib: Library, imported: dict, *, repair_missing=True) -> int:
         # A verified native identity projection must retain source BPM/grid/cues.
         # The import record remains migration/curation input, not a replacement.
         if existing is not None and existing.source_native_id and not existing.imported:
+            # Acquiring a native ID is not a new import into SoundBox. Keep
+            # the original local add-time without replacing native music data.
+            if rec.get('added_ts'):existing.added_ts=float(rec['added_ts'])
             continue
         lib.tracks_by_id[tid] = make_track(tid, rec)
     return changed

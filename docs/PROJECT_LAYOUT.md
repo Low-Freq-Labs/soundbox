@@ -1,6 +1,6 @@
 # Project layout and retention
 
-Reviewed October30, 2026. This describes the checkout, not the installed app's
+Reviewed November2, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 
 ## Active checkout
@@ -16,7 +16,7 @@ library or waveform caches.
 | `build/native/`, `build/check/` | Current development native library and latest release reports |
 | `build/rekordbox-write-proof/` | Small private copy-only prep-write evidence; no live-write authority |
 | AppData `rekordbox_recovery/` | Private native-reference evidence, encrypted baselines and shared Tag/Cue/Grid receipts; preserve unresolved recovery |
-| AppData `rekordbox-{tag,cue,grid,playlist}-authority.json` | Separate accepted source/library/schema/version scopes; manual BPM has an additional gate; source selection never generates permission |
+| AppData `rekordbox-*-authority.json` | Nine independent accepted domains: tags, cues, grid, playlists, registration, initial analysis, removal, media conversion and media locator. Manual BPM/reordering have additional gates; source selection never grants permission |
 | `soundbox-ipod-ref/`, `soundbox-waveform-ref/` | Private read-only regression fixtures and recovery/research captures |
 | `soundbox-cdj-ref/` | Private read-only CDJ research fixtures |
 
@@ -38,12 +38,35 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
+## Current accepted retention — November2
+
+The full wrap-up verified the final personal build154, exact signed Contents,
+native startup and current curation before retiring seven known obsolete
+SoundBox rollback bundles. The duplicate `dist/personal` distribution and obsolete
+`build/personal` PyInstaller intermediates were also retired. Their exact owner,
+profile, executable hashes and signatures were checked before removal; no app
+rollback remains in the retired temporary root.
+
+Removed16,535generated files (2,407,736,190logical bytes);
+observed filesystem availability increased2,471,178,240bytes.
+APFS sharing and unrelated activity can change available space independently.
+The installed app, active checkout/venv, `build/native`, `build/check`, checked
+CDJ release binary, all source/device/waveform reference roots, live AppData,
+native recovery and exact conversion originals remain intact. No music or Trash
+cleanup was performed. Small preflight/retirement/provenance/state receipts:
+`~/Library/Logs/Soundbox/wrap-2026-11-02/`.
+
+`./build_app.sh` recreates the retired packaging output when needed. The existing
+installed binary remains valid without those duplicates. Exact installed/repository
+provenance and final preservation facts are in [HANDOFF](HANDOFF.md).
+
 ## Cleanup — October31
 
 Sonny explicitly requested reducing accumulated diagnostics, backup copies and
 extra app/packaging storage. Removed22,117 generated files, all five obsolete app
 bundles, duplicate dist/packaging, compiler/Python caches and loose scratch files.
-The installed verified app remains; no rollback bundle remains. Build retains
+At that October31 checkpoint the installed verified app remained and no rollback
+bundle remained. Current retention is recorded in the November2 section and HANDOFF. Build retains
 about18MiB of checked native/CDJ/analysis binaries, release reports and small proof
 records. Source, unfinished research and regression tests are retained.
 
@@ -62,8 +85,8 @@ reduced from6.7GiB; about6.8GiB of actual filesystem free space was reclaimed ov
 APFS shared-block directory sizes must not be summed as unique physical storage.
 Receipts: `~/Library/Logs/Soundbox/cleanup-2026-10-31/`.
 
-The latest user state is87 imports/1105 titles/490 artist overrides/520 hidden/
-4043 canonical art files, preserved through cleanup/restart. Keep future diagnostics
+At the October31 cleanup snapshot,87 imports/1105 titles/490 artist overrides/
+520hidden/4043canonical art files were preserved through cleanup/restart. Keep future diagnostics
 bounded: reuse snapshots for inspection, retain full DB pairs only for required
 acceptance/recovery, and retire generated packaging/scratch output after verified
 installation. Current exact state/build/retention is in HANDOFF.
@@ -103,7 +126,7 @@ curation. Post-install cleanup retains only fallback147 and the16MiB checked
 binaries/reports;146 and regenerated packaging/compiler output are retired.
 Final restart and retention facts are recorded in HANDOFF.
 
-## Current UI/waveform evidence — October30
+## Historical UI/waveform evidence — October30
 
 The October29/30 alignment, choices and Graveyard release has fresh private QA
 at `~/Library/Logs/Soundbox/choices-graveyard-waveform-2026-10-29/`: frozen

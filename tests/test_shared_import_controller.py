@@ -243,6 +243,59 @@ class SharedImports(unittest.TestCase):
         self.registration.apply(renewed)
         self.assertEqual(self.registration.prepare_retry(renewed),renewed)
 
+    def test_preparation_refreshes_one_post_capture_metadata_change_with_the_same_audio_hash(self):
+        import soundbox.rekordbox_registration_store as module
+        track=self.admit(('one',),native=False)[0]
+        database=self.database.read_bytes();capture=module.capture_media;captured=[]
+        def metadata_after_capture(*args,**kwargs):
+            value=capture(*args,**kwargs);captured.append(value)
+            if len(captured)==1:track.path.chmod(track.path.stat().st_mode ^ 0o100)
+            return value
+        with mock.patch.object(module,'capture_media',side_effect=metadata_after_capture):
+            request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.assertEqual(len(captured),2)
+        self.assertEqual(captured[0].sha256,captured[1].sha256)
+        self.assertNotEqual(captured[0].epoch,captured[1].epoch)
+        self.assertEqual(request['tracks'][0]['audio']['sha256'],captured[0].sha256)
+        self.assertEqual(self.database.read_bytes(),database)
+        self.registration._media_current(request)
+
+    def test_import_refresh_persists_new_pinned_request_before_exactly_one_registration(self):
+        track=self.admit(('one',),native=False)[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.controller.pending[0]['request']=request
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        refreshed=[s[jobs.KEY][0] for s in self.saves if s.get(jobs.KEY) and s[jobs.KEY][0].get('media_refreshes')==1]
+        self.assertTrue(refreshed)
+        self.assertNotEqual(refreshed[0]['request']['operation_id'],request['operation_id'])
+        self.assertEqual(refreshed[0]['request']['tracks'][0]['audio']['sha256'],request['tracks'][0]['audio']['sha256'])
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+        self.assertEqual(len(self.window.settings[jobs.BINDINGS]),1)
+
+    def test_metadata_refresh_rejects_changed_bytes_even_with_original_size_and_mtime(self):
+        import os
+        track=self.admit(('one',),native=False)[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.controller.pending[0]['request']=request;before=self.database.read_bytes();info=track.path.stat()
+        raw=bytearray(track.path.read_bytes());raw[-1]=1;track.path.write_bytes(raw)
+        os.utime(track.path,ns=(info.st_atime_ns,info.st_mtime_ns))
+        self.controller.schedule();self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertEqual(self.database.read_bytes(),before)
+        self.assertEqual(self.window.settings.get(jobs.BINDINGS,[]),[])
+
+    def test_metadata_refresh_budget_survives_repeated_provider_changes(self):
+        track=self.admit(('one',),native=False)[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.controller.pending[0]['request']=request;before=self.database.read_bytes();apply=self.registration.apply
+        def changing_metadata(request):
+            track.path.chmod(track.path.stat().st_mode ^ 0o100)
+            return apply(request)
+        with mock.patch.object(self.registration,'apply',side_effect=changing_metadata):
+            self.controller.schedule();self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertEqual(self.controller.pending[0]['media_refreshes'],1)
+        self.assertEqual(self.database.read_bytes(),before)
+
     def test_float_import_converts_before_registration_and_preserves_saved_grid_and_key(self):
         import numpy as np
         import soundfile as sf

@@ -107,7 +107,10 @@ def plan(base, audio: MediaIdentity, images, *, share_root, seeds, result, techn
     _native_id(keys[0]['ID']);packet_shape(images,Path(audio.path).name,duration)
     beats=read_grid(images['.DAT'])
     expected=[(r[0],round(r[2]*100),r[1]) for r in result['beats']]
-    if [(b.number,b.tempo,b.time_ms) for b in beats]!=expected or any(b.tempo!=round(result['bpm']*100) for b in beats):
+    # The saved detector grid may change tempo while its headline BPM stays
+    # fixed. Bind every native row to that exact grid, including its endpoint;
+    # requiring every row to equal the headline would discard valid changes.
+    if [(b.number,b.tempo,b.time_ms) for b in beats]!=expected:
         raise WriteProofError('Packet grid must equal the complete saved grid, including its exact endpoint')
     if any(b.number!=beats[i-1].number%4+1 for i,b in enumerate(beats) if i):
         raise WriteProofError('Invalid saved bar numbering')

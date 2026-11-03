@@ -456,7 +456,7 @@ class TagEditController(QObject):
 
         worker = _TagTask(callback)
         self.owner.adopt(worker, completed)
-        worker.start()
+        worker.start(QThread.LowPriority if kind in ('playlists','analysis','registration','media') else QThread.InheritPriority)
         return True
 
     def _start_next_cue(self):

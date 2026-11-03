@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import tempfile
 from uuid import UUID
 
 from . import cdj_compatibility as compatibility
@@ -235,31 +236,37 @@ class ConversionStore:
                     raise ConflictError('Completed conversion belongs to different audio bytes')
                 result.update(epoch=identity(target.stat()),size=target.stat().st_size,facts=compatibility.inspect(target));return result
             _audio(path)
-            facts=compatibility.inspect(path)
-            if facts['status']=='compatible':return dict(unchanged=True,path=str(path),epoch=identity(path.stat()),facts=facts)
-            if facts['status']!='convert':raise WriteProofError(facts['reason'])
-            if facts.get('codec') in ('mp3','aac'):
-                raise WriteProofError('This compressed format needs a verified timing-preserving conversion; original retained')
-            if target!=path:
-                self._codec_bindings(path,native)
-                if path.stat().st_dev!=self.data_root.stat().st_dev:raise WriteProofError('Codec replacement requires the desktop recovery volume')
-            else:self._bindings(path,native)
-            if target!=path and (target.exists() or target.is_symlink()):raise ConflictError('A same-name WAVE already exists; original retained')
-            folder.mkdir(parents=True,exist_ok=True,mode=0o700)
-            if folder.resolve()!=folder:raise WriteProofError('Conversion backup redirects')
-            if (folder/'plan.json').exists():
-                plan=self._load(folder,_sha(folder/'plan.json'))
-                if plan['path']!=str(path) or plan['native']!=list(native):raise ConflictError('Prepared conversion identity changed')
-                record=dict(format=FORMAT,source=str(self.database),library_id=self.authority.library_id,
-                    source_file_id=list(self.file_id),folder=str(folder),plan_sha256=_sha(folder/'plan.json'))
-                self.lease._guard();atomic_bytes(self.journal,_json(record));return self._recover_locked()
-            stage=path.parent/('.soundbox-media-'+operation_id+'.wav')
-            if stage.exists() or stage.is_symlink():raise RecoveryRequired('Unjournaled conversion stage already exists')
-            epoch=identity(self.database.stat())
-            wal=self.database.with_name(self.database.name+'-wal');wal_epoch=identity(wal.stat()) if wal.exists() else None
-            stage_epoch=None
-            try:
-                with acquire_source(SourceContract(path),folder) as captured:
+            # Provider header seeks can fail even after a successful stream.
+            # Inspect and render the one verified local capture, never reopen
+            # the canonical cloud file just to classify its container.
+            with tempfile.TemporaryDirectory(prefix='soundbox-media-capture-') as scratch, \
+                    acquire_source(SourceContract(path),Path(scratch).resolve()) as captured:
+                facts=compatibility.inspect(captured.path)
+                if identity(_audio(path))!=identity(captured.observation):
+                    raise ConflictError('Audio changed during compatibility inspection')
+                if facts['status']=='compatible':return dict(unchanged=True,path=str(path),epoch=identity(captured.observation),facts=facts)
+                if facts['status']!='convert':raise WriteProofError(facts['reason'])
+                if facts.get('codec') in ('mp3','aac'):
+                    raise WriteProofError('This compressed format needs a verified timing-preserving conversion; original retained')
+                if target!=path:
+                    self._codec_bindings(path,native)
+                    if path.stat().st_dev!=self.data_root.stat().st_dev:raise WriteProofError('Codec replacement requires the desktop recovery volume')
+                else:self._bindings(path,native)
+                if target!=path and (target.exists() or target.is_symlink()):raise ConflictError('A same-name WAVE already exists; original retained')
+                folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+                if folder.resolve()!=folder:raise WriteProofError('Conversion backup redirects')
+                if (folder/'plan.json').exists():
+                    plan=self._load(folder,_sha(folder/'plan.json'))
+                    if plan['path']!=str(path) or plan['native']!=list(native):raise ConflictError('Prepared conversion identity changed')
+                    record=dict(format=FORMAT,source=str(self.database),library_id=self.authority.library_id,
+                        source_file_id=list(self.file_id),folder=str(folder),plan_sha256=_sha(folder/'plan.json'))
+                    self.lease._guard();atomic_bytes(self.journal,_json(record));return self._recover_locked()
+                stage=path.parent/('.soundbox-media-'+operation_id+'.wav')
+                if stage.exists() or stage.is_symlink():raise RecoveryRequired('Unjournaled conversion stage already exists')
+                epoch=identity(self.database.stat())
+                wal=self.database.with_name(self.database.name+'-wal');wal_epoch=identity(wal.stat()) if wal.exists() else None
+                stage_epoch=None
+                try:
                     original=folder/('original'+path.suffix.lower())
                     if original.exists():
                         _regular(original)
@@ -295,7 +302,7 @@ class ConversionStore:
                     self.lease._guard()
                     if identity(_audio(path))!=identity(captured.observation):raise ConflictError('Audio changed before replacement')
                     atomic_bytes(self.journal,_json(record));_fault('journal')
-                return self._recover_locked()
-            finally:
-                if (not self.journal.exists() and not (folder/'plan.json').exists() and stage_epoch is not None
-                        and stage.exists() and not stage.is_symlink() and identity(stage.stat())==stage_epoch):stage.unlink()
+                    return self._recover_locked()
+                finally:
+                    if (not self.journal.exists() and not (folder/'plan.json').exists() and stage_epoch is not None
+                            and stage.exists() and not stage.is_symlink() and identity(stage.stat())==stage_epoch):stage.unlink()

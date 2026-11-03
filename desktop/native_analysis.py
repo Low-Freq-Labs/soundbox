@@ -73,6 +73,7 @@ class NativeAnalysisController(QObject):
     def __init__(self,window,*,factory=None):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=factory;self.closing=False;self.active='';self.not_before=0.0
+        self._grid_revalidated=set()
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(2000)
         self.timer.timeout.connect(self.pump);self.tags.idle.connect(self.schedule)
         self.tags.changed.connect(self.discover)
@@ -97,7 +98,14 @@ class NativeAnalysisController(QObject):
         except (ValueError,WriteProofError):return
         authority=load_authority(self.tags.data_root/'rekordbox-analysis-authority.json',w.lib.source,w.lib.source_library_id)
         if authority is None and self.factory is None:return
-        queued={j['local_id'] for j in self.pending};queue=deepcopy(self.pending)
+        queued={j['local_id'] for j in self.pending};queue=deepcopy(self.pending);revalidated=[]
+        # Older builds rejected valid adaptive grids after exact packet equality
+        # had already passed. Revalidate that one obsolete refusal once per
+        # controller lifetime; the current planner still checks every row.
+        obsolete='Packet grid must equal the complete saved grid, including its exact endpoint'
+        for job in queue:
+            if job['error']==obsolete and job['id'] not in self._grid_revalidated:
+                revalidated.append(job['id']);job['error']=''
         done=w.settings.get(DONE,{})
         if not isinstance(done,dict):return
         for tid,track in w.lib.tracks_by_id.items():
@@ -118,6 +126,7 @@ class NativeAnalysisController(QObject):
         if queue!=self.pending:
             old=w.settings.get(KEY,[]);w.settings[KEY]=queue
             if not w._save_state():w.settings[KEY]=old;return
+        self._grid_revalidated.update(revalidated)
         self.schedule()
 
     def pump(self):
@@ -125,28 +134,31 @@ class NativeAnalysisController(QObject):
         if self.closing or w._shutting_down or not self.pending:return
         try:validate(self.pending)
         except (ValueError,WriteProofError) as exc:self.fail(str(exc));return
-        if self.pending[0]['error']:return
+        selected=next((j for j in self.pending if not j['error']),None)
+        if selected is None:
+            self.status('Analysis needs attention — '+self.pending[0]['error']);return
         if (self.tags.owned or w._refresh_worker is not None or w._state_maintenance
                 or w._device_operation_owned() or getattr(w,'_analysis_worker',None) is not None):
             self.timer.start();return
         if time.monotonic()<self.not_before:self.timer.start();return
         lib=w.lib
-        job=deepcopy(self.pending[0]);tid=job['local_id'];track=lib.tracks_by_id.get(tid) if lib else None
+        job=deepcopy(selected);tid=job['local_id'];track=lib.tracks_by_id.get(tid) if lib else None
         if (not w.lib or not self.tags.verified or str(w.lib.source)!=job['source'] or w.lib.source_library_id!=job['library_id']
                 or tid in getattr(w.lib,'source_binding_issues',{}) or track is None
                 or (track.native_id,track.source_uuid)!=(job['native_id'],job['uuid'])
                 or str(track.path)!=job['record']['path']):
-            self.fail('Analysis belongs to a different source identity');return
+            self.fail('Analysis belongs to a different source identity',job['id']);return
         record=analysis.saved_result(w.settings.get('analysis_results',{}),track)
         folder=self.tags.data_root/'native-analysis-plans'/job['id']
         # A newer local draft can replace an unstarted intent. Once a concrete
         # plan exists its own receipt must reconcile before admitting new data.
         if record and digest(record)!=digest(job['record']) and not folder.exists():
-            old=deepcopy(self.pending);queue=deepcopy(old);queue[0]['record']=deepcopy(record);w.settings[KEY]=queue
+            old=deepcopy(self.pending);queue=deepcopy(old)
+            next(j for j in queue if j['id']==job['id'])['record']=deepcopy(record);w.settings[KEY]=queue
             if not w._save_state():w.settings[KEY]=old
             self.schedule();return
         authority=load_authority(self.tags.data_root/'rekordbox-analysis-authority.json',w.lib.source,w.lib.source_library_id)
-        if authority is None and self.factory is None:self.fail('Native analysis awaits library acceptance');return
+        if authority is None and self.factory is None:self.fail('Native analysis awaits library acceptance',job['id']);return
         confirmed=tuple(w.settings.get(RECEIPTS,[]))
         payload=publication_record(job['record'])
         def work():
@@ -192,7 +204,7 @@ class NativeAnalysisController(QObject):
                     self.not_before=time.monotonic()+2
                     self.status('Analysis pending — quit rekordbox to save')
                     if not self.closing:self.timer.start()
-                else:self.fail(worker.error)
+                else:self.fail(worker.error,job['id'])
                 return
             result=worker.result
             if result.get('waiting'):
@@ -201,13 +213,13 @@ class NativeAnalysisController(QObject):
                 if not self.closing:self.timer.start()
                 return
             if not w.lib or str(w.lib.source)!=job['source'] or w.lib.source_library_id!=job['library_id']:
-                self.fail('Analysis saved in the original library; switch back to finish');return
-            old=deepcopy(w.settings);w.settings[KEY]=deepcopy(self.pending[1:])
+                self.fail('Analysis saved in the original library; switch back to finish',job['id']);return
+            old=deepcopy(w.settings);w.settings[KEY]=deepcopy([j for j in self.pending if j['id']!=job['id']])
             w.settings[DONE]={**w.settings.get(DONE,{}),tid:digest(job['record'])}
             w.settings[RECEIPTS]=list(dict.fromkeys([*w.settings.get(RECEIPTS,[]),job['id']]))
             prep=getattr(w,'prep_controller',None)
             if prep:prep.ack_initial(tid,job['record'])
-            if not w._save_state():w.settings.clear();w.settings.update(old);self.fail('Analysis saved; local receipt could not be saved');return
+            if not w._save_state():w.settings.clear();w.settings.update(old);self.fail('Analysis saved; local receipt could not be saved',job['id']);return
             current=w.lib.tracks_by_id.get(tid)
             if current and (current.native_id,current.source_uuid)==(job['native_id'],job['uuid']):
                 row=result['row']
@@ -234,14 +246,18 @@ class NativeAnalysisController(QObject):
         if not self.tags.run_analysis_job(work,completed):self.active='';self.timer.start()
         else:self.status('Updating song…')
 
-    def fail(self,message):
-        self.timer.stop();w=self.window
+    def fail(self,message,job_id=None):
+        self.timer.stop();w=self.window;can_continue=False
         try:
             validate(self.pending);queue=deepcopy(self.pending)
-            if queue:queue[0]['error']=str(message)[:4096];w.settings[KEY]=queue;w._save_state()
+            target=next((j for j in queue if j['id']==job_id),None) if job_id else next(iter(queue),None)
+            if target is not None:
+                target['error']=str(message)[:4096];w.settings[KEY]=queue;w._save_state()
+            can_continue=any(not j['error'] for j in queue)
         except (ValueError,WriteProofError):pass
         self.status('Analysis needs attention — '+str(message))
         w._flash_status('Couldn’t share analysis: '+str(message),15)
+        if can_continue:self.schedule()
 
     def retry(self):
         try:validate(self.pending)

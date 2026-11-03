@@ -37,7 +37,7 @@ class Window(QFrame,NativePlaylistsMixin):
         self._save_state=mock.Mock(return_value=True);self._flash_status=mock.Mock()
         self._native_refresh_view=mock.Mock();self._device_operation_owned=lambda:False
 
-    def _apply_settings_to_lib(self):
+    def _apply_settings_to_lib(self, *, invalidate_rows=True, configure_artwork=True):
         self.lib.removed_by_playlist=copy.deepcopy(self.removals)
 
 

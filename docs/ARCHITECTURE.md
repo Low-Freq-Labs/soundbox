@@ -5,6 +5,10 @@
 Current debt and staged extraction plan: [September software audit](software-audit-2026-09.md).
 Measured startup/browser/recurring-work findings and unshipped candidates:
 [October efficiency audit](efficiency-audit-2026-10.md).
+The [November performance audit](performance-audit.md),
+[cloud identity audit](cloud-library-audit.md), and
+[test-runtime audit](testing-runtime-audit.md) record the subsequent measured
+changes and remaining costs.
 Its implementation follow-up batches artwork policy reads and source relationships,
 constructs playlist-scoped Track rows, counts visible membership without sorting,
 and preserves unchanged display inputs
@@ -147,8 +151,10 @@ Its three inset groups align labels and 30-point control rows; the section heade
 and preservation note retain the outer edge.
 `soundbox.analysis` captures one hashed local audio snapshot, then the optimized
 Rust helper reuses pinned rbxport DSP. Decoding checks bounds before collection
-and bounds the analysis head to thirty minutes/96million mono samples. The
-remaining tail is streamed, with finite/frame/format checks, before extending the
+and bounds the analysis head to thirty minutes/96million mono samples. Automatic
+BPM/key detection skips songs over900seconds, including imports whose duration
+is learned from the captured header; saved/native/manual musical data and explicit
+analysis remain available. The remaining tail is streamed, with finite/frame/format checks, before extending the
 last measured tempo. The default adaptive/high-precision pipeline follows tempo
 changes and uses upstream downbeat/key rules without a genre selector. Legacy
 constant-v1 results remain valid; partial/inconclusive components preserve their
@@ -209,7 +215,9 @@ CDJ capture waits for the import FIFO. The exact two-generated-WAV source test
 passed complete planned AFTER/idempotence and native reopen/normal-quit acceptance.
 Sonny separately approved conditional ordinary registration, and its authority is
 provisioned for the exact library/schema/version and bare-format intersection.
-This does not license old-import backfill or native analysis/metadata publication;
+Sonny’s November1 explicit playlist-unification request separately authorizes
+existing visible-import backfill through this accepted API. It grants no broader
+native analysis/metadata publication;
 HANDOFF records installed workflow validation and provenance.
 The initial November1 delivery adds the explicit import-only source-audio exception in
 `soundbox.wave_conversion`. Before registration preparation, the shared source
@@ -539,7 +547,9 @@ builds `1/2/3/4/6/8/12/16/24/32/48/64` mips in memory. Incomplete imports and co
 not supported by the supplemental decoder retain full fallback analysis. Old
 V5 remains ready while the recurring background worker queues eligible local
 records for compact conversion, one track at a time. Interactive playback still
-loads old analysis immediately and can finish a selected upgrade ahead of the queue.
+loads old analysis immediately and can finish a selected upgrade ahead of the
+queue. That upgrade is saved for the next load; it does not republish a different
+waveform onto an already complete loaded deck.
 The old record survives interruption or failure; manual metadata ownership and
 DB cue authority survive replacement. Source changes, explicit Analyze Track and
 late imports use the same preparation path. Dataless background reads remain
@@ -558,8 +568,15 @@ Loading remains generation-guarded: native decode, manifest, overview and detail
 All cache decoding and native waveform preparation stay off the UI thread.
 The native host never expands an unused Qt envelope during detail delivery.
 PWV5 carrier repair is vectorized without changing its output, and native
-display-stream publication checks the generation under its render lock. A complete
-native upload presents overview and all three display modes together. Source
+display-stream publication checks the generation under its render lock. The first visible
+waveform waits for complete overview, display modes and signed contour, for every
+duration; manifest/grid/cues still become ready first. Partial caches wait for
+repair before painting a provisional surface. Interactive reads omit only unused
+spectral_24; default/full APIs and whole-record audits retain it. A fixed128KiB
+native lookup matches all65536 original signed-transfer outputs exactly, reducing
+upload cost without changing geometry or palette. Grouped drawing rechecks its
+upload guard under the render mutex before snapshotting buffers; skipped draws
+retain the dirty flag and advertise no unsent presentation. Source
 replacement rejects late generations. Native ABI 6 retains the tested
 timeline load contract. Tagged MPEG-1/LAME header facts are read on the decode
 thread, matched to the decoder's rate/valid-frame count, and restore leading
@@ -567,8 +584,10 @@ samples to both playback and supplemental analysis. Seek and duration use that
 same clock. Unknown headers retain their decoded origin; mismatched recognized
 headers fail closed. No blanket MP3 timestamp is used.
 
-The renderer uses linear amplitude, a 0.84 ceiling and its existing continuous
-quiet-signal shoulder. Close BLUE/RGB hold signed cells and interpolate full-range
+The renderer uses linear amplitude, a0.84 base ceiling and its existing continuous
+quiet-signal shoulder. Main BLUE and3BAND apply their separately calibrated
+1.06/1.20 height factors, bounded to the lane; palette transfer stays independent.
+Close BLUE/RGB hold signed cells and interpolate full-range
 PWV5 colors (14/7/7 channel divisors); 3BAND uses original 150-Hz rows, a one-row
 sampling offset, and linear layers with the measured membership palette. Paired
 75-Hz rows, the artificial eight-percent facet, four-pixel close extrema footprint
@@ -612,8 +631,9 @@ RGB64–256 signed reconstruction retains the center-tap minimum/maximum,
 preventing the middle-zoom smoothing pass from shaving peaks. Neither source
 amplitudes nor display gain change; widest/close stops and BLUE/3BAND retain
 their existing geometry. The
-installed285163dc build passed1900 tests and source/state preservation (see
-HANDOFF). BLUE rounds only its display offset to physical pixels
+historical October31 build285163dc passed1900 tests and source/state
+preservation; current installed provenance is in HANDOFF. BLUE rounds only its
+display offset to physical pixels
 through 384 points/s and logical points at 576–1500, bounding its waveform-only
 error by half that increment. Audio, grid and seek clocks remain
 continuous in every mode. The antialias window is exactly one physical pixel.
@@ -628,17 +648,16 @@ PWV5 RGB accumulates premultiplied display-encoded channels; BLUE's center/width
 dependent radial field retains premultiplied linear light. BLUE splits at coverage and radial branch changes
 and uses four-point Gauss-Legendre quadrature within each branch; evaluating
 the nonlinear field only at the coverage centroid produced visible color error.
-BLUE retains linear-light joint-area compositing. RGB384 keeps the geometric
-coverage of Sonny's October27 C, with the selected October28 encoded-color blend. Other RGB stops apply only a smooth monotonic faint-detail shoulder
-below 18% coverage: c′=c×(1+1.5×(1−c/0.18)²), with premultiplied color scaled by
+BLUE retains linear-light joint-area compositing. RGB applies a smooth monotonic
+faint-detail shoulder consistently at every stop below18% coverage:
+c′=c×(1+1.5×(1−c/0.18)²), with premultiplied color scaled by
 c′/c. It adds at most 0.04 coverage, leaves zero empty and joins exact area at 18%.
-At RGB 576/864, attribute preparation also measures occupancy: the overlapping
-original physical-footprint intervals' minimum-stroke widths divided by the
-coarse interval's width, weighted by source span and bounded to 0–1. Encoded
-contrast against the background is weighted before existing height
-premultiplication, preserving fine painted area rather than treating all peak
-bounds as occupied. No additional buffer, cache schema or per-frame source
-read is needed. If the physical/logical selections agree, color is unchanged.
+November2 replaces the former zoom-specific color-occupancy corrections. RGB
+uses the supplied92pt/s reference color field at every zoom; its reference
+fine-area contrast is evaluated on the song clock independently of the displayed
+geometry LOD. BLUE likewise samples its palette at the reference footprint;
+three-band retains its fixed native palette. No source/cache bytes change.
+The faint RGB edge shoulder applies consistently below18% coverage, including384.
 RGB576/864 use logical-point motion; RGB64/128/184 use physical-pixel motion; other
 RGB stops remain fractional. The broad occupied-column boost is
 removed; normal coverage and hue are not brightened. Persisted
@@ -686,8 +705,10 @@ carrier distinct from dropped presentation or camera sampling in later
 sessions.
 At close BLUE/RGB stops the renderer preserves the detailed signed contour and
 uses joint coverage/color integration. RGB 576/864 now use logical-point motion
-and the occupancy-weighted logical footprint above. The October31 RGB64/128/184
-phase corrections are described above; other RGB stops remain continuous. RGB384 keeps exact area; other RGB stops use only the faint shoulder described above. The installed September 30 correction additionally
+while the fixed reference color field remains independent of the displayed
+geometry footprint. The October31 RGB64/128/184 phase corrections are described
+above; other RGB stops remain continuous. The faint shoulder above applies at
+every RGB stop, including384. The installed September 30 correction additionally
 retains the original color-premultiplication weight through attribute interpolation;
 reconstructing that weight from interpolated signed bounds spuriously brightens
 polarity/dominant-boundary crossings. Geometry and coverage are unchanged.
@@ -715,8 +736,10 @@ visible in one grouped native commit; the display link skips the incomplete
 transaction so resolution promotion cannot alter a waveform already on screen.
 Library preparation builds V5 incrementally, pauses during
 playback, pauses full audio cooking below 20 GiB free until 25 GiB is
-available, and
-can hot-swap finished analysis or cue metadata onto the current track.
+available. Grid/cue metadata can update the current track without replacing its
+waveform. An upgrade performed by an interactive valid-cache load waits for the
+next load before presentation; recurring source/analysis refreshes remain explicit
+preparation deliveries. Analyze Track remains an intentional waveform rebuild.
 `preparation_inventory` persists disposable scheduling receipts for analysis and
 stock art. Analysis polls stat identities every 60 seconds; unchanged entries
 skip record/ANLZ reads. Changed entries share one header; a 30-minute fallback
@@ -999,34 +1022,54 @@ refresh, preserving compressed waveform payloads.
   a genuinely new playlist = new pid = fresh export.
 - **Device filenames = SoundBox effective titles**, always (sanitized +
   length-budgeted; source files never renamed).
-- **Collection order = newest-ADDED first**, one timeline across both planes:
+- **Browser default order = newest-ADDED first in Collection and every playlist**, one timeline across both planes:
   `Track.added_ts` = rekordbox `created_at` for mirror tracks, SoundBox import
   time for imported audio (falls back to file birthtime when unknown). See the
   GOTCHAS caching note: `added_ts` must survive `libcache`; known dates do not
   resolve media paths. Only unknown-date birthtime fallback uses `_landed_cache`.
 - **Drag-to-add works on the sidebar AND the main browser.** Dropping tracks or
   Finder audio onto the open view adds to the playlist it shows; Collection
-  imports files only; Artists remains derived. Regular native rekordbox views
+  imports files only; Artists is always an ephemeral SoundBox grouping and
+  never a source playlist destination. Regular native rekordbox views
   accept registered tracks through the accepted source worker. Direct imports
   also capture Finder files and unregistered imported tracks into the
   durable registration FIFO, gated by its separate native authority. Its installed
   and native-acceptance state is recorded in HANDOFF.
   `TrackTable.resolve_drop` binds each drop to the active view.
-- **SoundBox playlist folders are local organization.** `soundbox.playlist_folders`
-  validates a bounded nested `settings.custom_playlist_tree`: UUID/name/children
-  folder records and references to existing custom playlist names. Membership
-  remains in the original custom dictionary. Legacy playlists remain at root;
-  explicit empty folders and expanded IDs survive save/restore. UI mutations save
-  before rebuilding and restore prior RAM state on refusal. Cycles, duplicate
-  folder identities/sibling folder names and repeated playlist references fail.
-  Folder clicks only navigate; they do not select another playlist or replace
-  the active browser view. `PlaylistFolderTree` retains the pressed folder's
-  persistent model index for dragging, independently of the active playlist.
-  Reload/drop/removal context stays bound to the active view; imports still
-  target an individual playlist or Collection. Folder drags expand to ordinary
-  playlist intents. Export `folder_path` follows the hierarchy while existing
-  `cust:<name>` identities and per-playlist song order survive folder moves.
-  Composite Rockbox catalogue filenames remain numbered and top-level.
+- **One Playlists tree, with durable native unification.**
+  `soundbox.playlist_unification` describes only the original local custom hierarchy; `desktop.playlist_unification` sequences the accepted registration and
+  playlist FIFOs. Exact source/library and generated ID/UUID mappings persist
+  with each admitted operation. Custom display cuts over only after native
+  memberships (including duplicate order) verify. Original local dictionaries
+  remain preserved; the native playlist’s `export_key` retains its old custom
+  device identity. That binding never grants source or device-adoption authority.
+  Artists instead groups effective display metadata inside SoundBox. Fresh native
+  libraries create no migration state, artist folder, per-artist playlists or
+  reconciliation queue. Existing completed custom migrations return immediately
+  before scanning tracks or probing source authority. The discontinued internal
+  native-artist attempt is archived by exact IDs/UUIDs for recovery; those exact
+  generated rows were removed through the accepted playlist delete transaction,
+  preserving Collection, audio, user playlists and XML history. An unrelated
+  user-native folder named Artists remains ordinary and reorderable.
+  Legacy custom/visible-import migration is a one-time internal upgrade, with no
+  normal UI command or inferred backfill merely from source selection.
+  The unified sidebar has one selection and scrollbar; folder navigation leaves
+  the active browser view alone. Legacy local-only sources retain bounded
+  `custom_playlist_tree` organization. Source membership/export order stays exact.
+  Collection and virtual Artists remain fixed; ordinary native siblings reorder
+  through an independently accepted exact-library capability. Each durable request
+  binds selected/anchor IDs, UUIDs, parent and revision before source publication.
+- **Playlist icons are local presentation.** An icon-only right click offers Star,
+  Music note and Vinyl crate for playlist rows, including intelligent playlists.
+  Native preferences bind source path/library ID/playlist ID/UUID; stale menus
+  reject changed identities. The delegate uses a catalog-scoped row index and
+  dictionary lookup, and a successful local save only repaints the viewport.
+  Folder icons, Collection home and Artists person remain fixed. Legacy local
+  rename/delete moves or removes only its own preference in the same state save.
+- **Track/display preparation is bounded.** Path decoding is cached against its
+  exact URI without stat/resolve;
+  conversion facts use an ID index rather than a collection scan per displayed
+  song. Grid arrival has its own readiness signal, independent of decoder timing.
 
 ## Settings, keyboard and optional account state
 
@@ -1203,7 +1246,7 @@ tracks receive a deterministic-random, exact-balanced pool assignment without
 changing their underlying cache state. Rebalancing preserves valid assignments
 and moves only the minimum required, preventing unrelated device-art drift. The
 settings payload also stores the last
-closed window geometry, table columns, and Rekordbox/Soundbox/Devices splitter
+closed window geometry, table columns, and Playlists/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
 the outer geometry before applying inner pane sizes.
 `state_repository` owns schema validation, recovery, rotating history and saves,
@@ -1399,13 +1442,23 @@ replays,12 actual CRUD operations and Sonny's native inspection/normal quit.
 `desktop.rekordbox_playlists` persists immutable FIFO intents before admission to
 the Tag/Cue/Grid TaskOwner, waits for closed native apps, verifies source saves,
 and persists renewed retry identities/clocks before publication. A committed
-operation replays unchanged. Unstarted intents survive restart; active source
-work drains on normal quit. Durable matching-source/UUID delete intents project
+operation replays unchanged. Unstarted intents survive restart. UI close/Cmd+Q
+keeps the app, input and pumps open while captured import/detection/source saves
+remain; the next Quit proceeds when they finish. Explicit teardown still retains
+unstarted durable intents. Durable matching-source/UUID delete intents project
 onto the sidebar immediately without changing the verified catalog/revision;
-source failure/discard restores the newest catalog presentation. Other pending
-create/rename/membership presentation remains separate work. Collection UUID pins retain affected native songs
+source failure/discard restores the newest catalog presentation. Persisted create,
+rename and membership intents also project immediate feedback, including nested
+pending creations. Collection UUID pins retain affected native songs
 without granting registration or analysis authority. Raw playlist catalogs/clocks
-and empty folders travel in cache10; older snapshots paint read-only until verified.
+and empty folders travel in cache11; older snapshots paint read-only until verified.
+Bounded transaction envelopes compose at most64 accepted create/append/remove
+commands and16384 memberships through the same writer/lock/journal/paired backup.
+Exact child identities and clocks persist before admission. Pure row/counter
+chains and initial/final revisions reproduce sequential DB/XML effects; source,
+authority, payload and closed-app guards stay fresh. Immutable XML parsing and
+one instance-local verified semantic reconstruction may be reused within bounded
+lifetimes; registration and reorder never enter these envelopes.
 Catalog arrays encode bounded rows. CDJ capture also waits for durable playlist
 intents, rebinds native selections by PID, and rejects deleted selections or source
 changes before export. The ordinary backup-retirement pointer binds exact
@@ -1459,7 +1512,7 @@ library/schema/version and accepted component profile. It permits initial full
 BPM/Grid+Key and fresh waveforms on bare stereo PCM16/24 WAV44.1/48kHz, with no
 gain, cue, audio, playlist or XML mutations. Unsupported/existing musical states
 fail closed rather than being overwritten. Native applications remain closed at
-write guards; owner waits back off and unstarted intents survive quit. Record,
+write guards; owner waits back off and unstarted intents survive explicit teardown. Record,
 logical/native identity and prepared plan must match exactly before source SQL.
 
 The helper's `saved-analysis` command captures no detector decision: it receives
@@ -1478,8 +1531,13 @@ all waveform payload bytes remain exact; different/newer manual data is retained
 Captured detector records and manual drafts remain provenance and are never used
 as source authority. Existing analysis replacement/other codecs require their own compatible
 profiles. The initial-analysis payload excludes cue drafts; active prep transport
-queues them separately through the accepted cue API after analysis exists. Ordinary BREATHE publication passed native acceptance; the current installed
-2035-test delivery and exact evidence are recorded in HANDOFF.
+queues them separately through the accepted cue API after analysis exists. Every
+packet beat number/tempo/time must equal the complete saved grid and endpoint;
+the headline BPM does not require every adaptive row to share one tempo. Failed
+songs retain their own operation IDs while healthy imports continue. The legacy
+uniform-grid refusal is revalidated once without an input veto or repeated loop.
+Ordinary BREATHE publication passed native acceptance; current release and
+actual-source readback evidence are recorded in HANDOFF.
 
 
 Captured-import and ordinary native prep intentions use `soundbox.prep_edits` and
@@ -1490,7 +1548,14 @@ request, persists it, then applies it and verifies component readback. Prepared
 requests reserve source priority from controller construction, including Tags and
 central Cue admission, until a matching committed native receipt is acknowledged;
 unknown receipts/source switches retain intentions and stop publication. Unrelated
-busy work never blocks new local clicks. Initial analysis strips cue drafts and
+busy work and background-analysis errors do not block new local clicks. Ctime-only
+source drift retains gestures immediately against the original epoch/SHA while the
+existing worker performs a pinned exact-byte check; only verified bytes renew
+identity. Actual changes preserve intentions and fail publication. Late callbacks
+and continued gestures recheck source/library/path bindings, including legitimate
+first native-ID acquisition, before updating presentation or appending a gesture.
+Transient pre-intent refusals do not latch an enduring input veto. Initial
+analysis strips cue drafts and
 acknowledges only captured grid-operation IDs, preserving newer edits. No new
 analysis codec/replacement or native deletion authority follows.
 

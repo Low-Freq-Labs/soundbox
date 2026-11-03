@@ -83,6 +83,25 @@ its own authority; cue drafts use the separate accepted Cue API. Native CDJ expo
 captures verified native source analysis. A detector result never grants the
 manual-grid writer new powers or authorizes replacing existing native analysis.
 
+## November2 import and prep correction
+
+Initial full supported WAV publication compares every packet beat's number,
+timestamp and tempo to the complete saved grid, including its exact endpoint.
+The headline BPM need not equal every adaptive beat's tempo. The redundant
+constant-tempo assumption rejected Sonny's valid155→150BPM import; the installed
+correction preserves the exact saved rows and all existing source/authority/SQL
+limits. Actual readback verifies449beats and the saved key for that import.
+
+Cue/grid intentions remain immediately usable while the native save is pending
+or another song's analysis fails. Ctime-only cloud drift stores the exact gesture
+against original bytes before a SHA-pinned worker check renews identity; actual
+byte changes retain the intention and fail publication. Source/library/path checks
+also protect late callbacks and presentation. Analysis errors retain their own
+operation IDs while healthy imports continue. UI close/Cmd+Q stays open until
+captured imports/detection/source saves finish, with editing and source pumps
+active; ordinary read-only preparation does not block Quit. Full release and
+actual installed evidence are recorded in [HANDOFF](HANDOFF.md).
+
 ## Shared-analysis acceptance boundaries
 
 The initial full supported WAV and bare-registration gates described below have

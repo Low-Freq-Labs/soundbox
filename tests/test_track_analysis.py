@@ -347,6 +347,51 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertFalse(track_analysis.verify_complete(
             cache, "selective", self.audio))
 
+    def test_playback_detail_can_omit_only_the_unused_spectral_master(self):
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        self.assertIsNotNone(data)
+        for version in (4, 5):
+            with self.subTest(version=version):
+                cache = self.root / f"selective-v{version}"
+                if version == 4:
+                    self._write_v4(cache, "playback", data)
+                else:
+                    track_analysis.store(cache, "playback", self.audio, data)
+                complete = track_analysis.load_detail(cache, "playback", self.audio)
+                self.assertEqual(complete["_spectral_24"], data["spectral_bands"])
+                with mock.patch.object(track_analysis, "_load_sections",
+                                       wraps=track_analysis._load_sections) as read:
+                    playback = track_analysis.load_detail(
+                        cache, "playback", self.audio, include_spectral=False)
+                self.assertTrue(read.call_args_list)
+                self.assertTrue(all("spectral_24" not in call.args[3]
+                                    for call in read.call_args_list))
+                self.assertEqual(playback, {**complete, "_spectral_24": b""})
+                self.assertTrue(track_analysis.verify_complete(cache, "playback", self.audio))
+
+    def test_skipped_spectral_corruption_never_hides_corrupt_display_sections(self):
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        self.assertIsNotNone(data)
+        for version in (4, 5):
+            with self.subTest(version=version):
+                cache = self.root / f"corrupt-spectral-v{version}"
+                path = (self._write_v4(cache, "playback", data) if version == 4
+                        else track_analysis.store(cache, "playback", self.audio, data))
+                raw = bytearray(path.read_bytes())
+                _magic, size = track_analysis._HEADER.unpack_from(raw)
+                payload = track_analysis._HEADER.size + size
+                manifest = json.loads(raw[track_analysis._HEADER.size:payload])
+                raw[payload + manifest["sections"]["spectral_24"]["offset"]] ^= 0x55
+                path.write_bytes(raw)
+                self.assertIsNone(track_analysis.load_detail(cache, "playback", self.audio))
+                self.assertIsNotNone(track_analysis.load_detail(
+                    cache, "playback", self.audio, include_spectral=False))
+                self.assertFalse(track_analysis.verify_complete(cache, "playback", self.audio))
+                raw[payload + manifest["sections"]["rgb_detail"]["offset"]] ^= 0x55
+                path.write_bytes(raw)
+                self.assertIsNone(track_analysis.load_detail(
+                    cache, "playback", self.audio, include_spectral=False))
+
     def test_legacy_black_audible_rows_inherit_nearest_valid_hue(self):
         cache = self.root / "analysis"
         track_analysis.store(cache, "repair", self.audio, {
@@ -730,6 +775,24 @@ class TrackAnalysisStore(unittest.TestCase):
         self.assertEqual(beats[0][0], 1)
         self.assertEqual(beats[0][1], 0)
         self.assertAlmostEqual(beats[0][2], 120, delta=1)
+
+    def test_fallback_tempo_stops_above_fifteen_minutes_without_entering_fft(self):
+        from soundbox.analysis import automatic_music_allowed
+        self.assertTrue(automatic_music_allowed(900))
+        self.assertFalse(automatic_music_allowed(900.01))
+        with mock.patch('numpy.fft.rfft',side_effect=AssertionError('Long sets need waveforms, not tempo detection')):
+            self.assertEqual(track_analysis._beat_grid(np.ones(135001,dtype=np.float32),150),[])
+        self.assertTrue(track_analysis._beat_grid(np.ones(135000,dtype=np.float32),150,bpm_hint=120))
+
+    def test_long_cached_fallback_grid_is_omitted_without_discarding_native_or_manual_grids(self):
+        manifest=dict(detail_rate=1000,detail_base_count=900001,beats=[[1,0,140]],
+                      provenance=dict(grid='soundbox-zero-anchor'))
+        with mock.patch.object(track_analysis,'_read_manifest_header',return_value=(Path('cache'),manifest,0)):
+            self.assertEqual(track_analysis.load_manifest('cache','track','audio')['beats'],[])
+            self.assertEqual(manifest['beats'],[[1,0,140]])
+            for owner in ('rekordbox','soundbox-manual','soundbox-detected'):
+                manifest['provenance']['grid']=owner
+                self.assertEqual(track_analysis.load_manifest('cache','track','audio')['beats'],[[1,0,140]])
 
     def test_soundbox_rgb_wins_while_rekordbox_grid_and_cues_seed_record(self):
         native = {

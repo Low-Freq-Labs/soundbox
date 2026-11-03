@@ -32,7 +32,9 @@ Smart-list creation remains a subsequent milestone.
 New cues appear and become usable immediately in the playing session while
 guarded database saves run in the background. The existing bottom-left footer
 names the edit being updated, then shows “Done” after verified persistence;
-normal quit drains accepted work. Durable prep intentions survive failure/restart
+window close and Cmd+Q keep SoundBox open while captured imports, analysis or
+source saves remain; editing and save workers stay available. Quit again after
+those saves finish. Durable prep intentions survive failure/restart
 and reconcile exact native receipts before retry; unknown source states stay guarded.
 Grid edits also update the loaded session immediately, including during the
 initial source check; verified saving remains in the background.
@@ -183,6 +185,11 @@ in [the documentation archive](docs/archive/README.md).
 
 The [October efficiency audit](docs/efficiency-audit-2026-10.md) measures startup,
 browser and recurring work and separates candidate improvements from shipped behavior.
+The [November performance audit](docs/performance-audit.md),
+[cloud identity audit](docs/cloud-library-audit.md),
+[test-runtime audit](docs/testing-runtime-audit.md), and
+[native playlist ordering guide](docs/native-playlist-order.md) record the newer
+measurements and organization/loading contracts.
 The [software audit](docs/software-audit-2026-09.md) records architecture and
 lifecycle gaps. The [release boundary](docs/release-boundaries.md)
 defines the shared app and optional personal providers. The public build excludes
@@ -209,9 +216,10 @@ no manual Relocate step. The installed batch completed124 WAV conversions with
 exact originals retained. Timing-unproven, cloud-deferred and unavailable files
 remain explicit; see [compatibility limits](docs/cdj-media-compatibility.md).
 Device originals stay untouched.
-Native registration/analysis still use their
-accepted integer-WAV profiles. Unsupported or changed sources retain an error
-and their original import destination.
+Native registration accepts the separately proven MP3, AAC/ALAC M4A, FLAC and
+PCM16/24 WAV/AIFF profiles. Initial native analysis has the narrower accepted
+stereo PCM16/24 WAV44.1/48kHz profile. Unsupported or changed sources retain
+their intention and original import destination.
 
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
 temp snapshot — rekordbox can stay open) or an XML export as fallback; ↻
@@ -229,7 +237,9 @@ and starts Analyze Track in the background using Settings → Analysis preferenc
 There is no analysis popup or progress bar. Automatic detection is opt-in (off
 for new settings); when enabled, folder/file imports appear at the top of
 Collection before analysis, and BPM/Key populate one completed song at a time.
-Finished songs can be edited while later songs continue analyzing.
+Finished songs can be edited while later songs continue analyzing. Automatic
+BPM/key detection skips songs longer than15minutes, preserving existing musical
+data; explicit analysis remains available.
 Unfinished detection resumes after restart with the original job settings;
 failed songs wait for an explicit retry. The browser context menu also offers
 Analyze Track, which also rebuilds the selected waveform after detection succeeds.
@@ -251,16 +261,20 @@ the loaded grid changes immediately, saves in the background, and the browser BP
 updates as soon as that save verifies. Captured BPM/Grid analysis on a direct
 import can also be corrected through these controls: its manual draft persists
 before the actual grid and browser update, preserving the detector's raw result
-and cues. Captured imports also retain durable Hot/Memory Cue drafts. Cloud
-metadata changes require a cached exact-byte proof before reusing analysis;
-they do not require reimporting or reanalyzing an unchanged song.
+and cues. Captured imports also retain durable Hot/Memory Cue drafts. Ctime-only cloud
+metadata drift captures the gesture durably against its original bytes, then
+verifies the original SHA-256 on the existing worker before renewing identity.
+Changed bytes remain guarded; unchanged audio needs no reimport or reanalysis.
 Captured-import cue/grid intentions remain editable while native work is busy,
 with persistence before presentation. Exact prepared requests and source receipts
 protect retry/restart. Cues publish through the accepted cue API after native
 analysis exists; native writes retain closed-rekordbox/agent and profile guards.
 Native playlist create, rename, delete and song membership edits appear as soon
 as their intent is safely saved; the shared background writer completes the native
-save, while failures offer retry or discard against the current source view.
+save, while failures offer retry or discard against the current source view. A
+failed native-analysis save retains its own song intention while other imported
+songs continue saving. Full supported WAV publication preserves every adaptive
+beat tempo and endpoint; the headline BPM need not be constant across the grid.
 Steady detections now test nearby whole BPM against onsets and attack timing;
 genuine fractional/variable grids remain valid. Escape or leaving the field cancels typing. The checklist menu matches the button width and uses two columns, with separated
 rows and wrapped availability text. Tags read down the left column, then down the
@@ -289,28 +303,27 @@ Cloud-provider timestamp normalization is content-verified against the existing
 cache instead of recooking unchanged audio, and on-demand placeholders are not
 hydrated by startup checks.
 
-**Sidebar.**
-- **⌂ Collection** — all active supported native audio plus direct imports,
-  newest first; native placeholders are excluded. Refresh discovers native songs
-  even without playlist membership. Compatible direct imports register/reuse their
-  native Collection identity and retain their intended playlist destination.
-- **♪ Artists** — the same pool grouped A→Z by effective artist, expandable
-  per artist.
-- Both are pinned views *and* draggable playlists: drop one on a device to
-  export the whole pool in that view's order.
-- **★ SoundBox playlists** — your own: drag tracks in and organize playlists in
-  nested folders. Right-click offers **New Playlist, New Folder, Rename, Delete**;
-  the header + also creates playlists/folders. Drag rows between folders or back
-  to the root; dragging a folder to a device exports its descendant playlists
-  in order. Folder moves preserve playlist identities and song order. Deleting
-  a folder reviews its contained playlists; songs remain in Collection and on disk.
-  Duplicate adds prompt
-  Add Anyway/Skip (Skip default). Names `Collection`/`Artists` are reserved.
-  Playlist names remain unique across the SoundBox folders.
-  Clicking a folder only expands/collapses it; the browser keeps its current
-  Collection/playlist until you choose a playlist inside, in either tree.
-- **⛃ Devices** — external drives only, auto-detected; drag any playlist
-  (rekordbox, SoundBox, or a pinned view) onto one to start its guarded export flow.
+**Sidebar.** One **Playlists** tree contains Collection, native folders/playlists,
+and any legacy playlists waiting for their native merge. **Collection** includes
+native songs, divider/test entries and direct imports, newest added first. Every
+playlist opens newest first; header sorting changes the view only, preserving
+native/export order. Up/Down after selecting a playlist browse its tracks.
+
+Playlists and folders use rekordbox directly. **Artists** is a SoundBox-only
+view grouping the current Collection. It creates no native folders, per-artist
+playlists or background database jobs. Collection and Artists stay fixed at the
+top; ordinary native playlists and folders can be reordered. Right-click directly
+on a playlist icon for **Star**, **Music note**, or **Vinyl crate**. Only playlist
+icons are configurable: Artists stays a person, Collection stays home and folders
+keep their expansion icons. Choices are local SoundBox preferences and preserve
+the active playlist/track. The old split-library arrangement has a one-time
+internal upgrade,
+with durable restart recovery. There is no merge command or recurring migration
+step. New Playlist/New Folder/Rename/Delete use the accepted native writer;
+deleting a playlist preserves Collection and files. Legacy local-only sources
+retain their local organization. Folders expand
+without replacing the active playlist. **Devices** remains a separate section;
+playlist/folder drops use the guarded exporter appropriate to the device.
 
 **USB dashboard.** Tabs are Overview, Playlists, Category, Sort, Column, Color and
 My Settings. Edit native browse/sort order, default right column, color titles and
@@ -507,8 +520,11 @@ the deck was playing, or loads paused when it was paused. Space only toggles the
 loaded deck, and C is momentary CUE. Grabbing the playing waveform pauses it
 immediately; releasing without moving resumes from the exact held timestamp.
 A native atomic hold uses the frame actually visible under the fixed playhead,
-not a lagging UI poll. Prepared overview and ultra buffers become visible
-together, so long sets never inflate when detail finishes loading.
+not a lagging UI poll. Complete overview, mode streams and signed detail become
+visible together, so a long AAC/ALAC set first appears at its finished size and
+color. Manifest/grid/cue readiness remains immediate. Partial caches wait for
+repair, and an upgrade performed by that load is saved for the next load without
+replacing the waveform already on screen.
 A newly loaded track starts on its first analyzed beat. SoundBox V5 owns the
 prepared grid/cues, waveform streams, export eligibility, and signed detail.
 Complete Rekordbox analysis is reused first, with only a compact 1-ms detail
@@ -530,7 +546,10 @@ Waveform colors and three-band shapes come directly from imported rekordbox
 analysis when complete. Compact caches store one signed detail base and build
 zoom levels in memory, omitting duplicate spectral analysis. Existing caches
 remain playable while eligible local tracks upgrade individually in the background;
-there is no need to load each song. Offloaded audio waits until it is local.
+there is no need to load each song. Interactive reads omit the unused spectral
+master while still validating displayed streams. A bounded native transfer lookup
+keeps the original geometry/palette exact and reduces upload cost. Offloaded audio
+waits until it is local.
 Incomplete imports retain SoundBox's generated fallback colors.
 Playback/cache preparation preserves source audio and native data; accepted
 cue/grid/initial-analysis saves use the separate guarded source worker. Native-deck failure disables

@@ -92,6 +92,9 @@ def validate(queue):
                 or job.get('prepared') is not None and not isinstance(job['prepared'], dict)):
             raise ValueError('Invalid pending prep identity')
         if job['version']==2 and not job['native_ready']:raise ValueError('Native prep requires registered analysis')
+        if (type(job.get('identity_pending',False)) is not bool or job.get('identity_pending') and
+                (job['version']!=1 or not _hex(job['sha256']) or job['prepared'] is not None)):
+            raise ValueError('Invalid pending prep audio proof')
         seen.add(job['track_id'])
         if job['sha256'] and not _hex(job['sha256']):
             raise ValueError('Invalid pending audio digest')

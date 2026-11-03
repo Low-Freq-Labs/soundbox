@@ -92,6 +92,30 @@ static float displayWaveformHeight(float linearHeight) {
         bounded * 65535.0f)));
 }
 
+
+// A signed cache row has only 65,536 possible values. Preserve the exact
+// scalar transfer once instead of repeating its transcendental math for every
+// sample of a long set. C++ static initialization also serializes concurrent
+// first uploads; the immutable table occupies 128 KiB for the process lifetime.
+static const std::array<int16_t, 65536> &signedWaveformDisplayTable() {
+    static const std::array<int16_t, 65536> values = [] {
+        std::array<int16_t, 65536> result{};
+        for (uint32_t index = 0; index < result.size(); ++index) {
+            const int16_t encoded = static_cast<int16_t>(index);
+            const float magnitude = std::abs(
+                static_cast<int>(encoded)) / 32767.0f;
+            const float displayed = displayWaveformHeight(magnitude);
+            result[index] = static_cast<int16_t>(std::clamp(
+                std::lround(std::copysign(
+                    displayed * 32767.0f,
+                    static_cast<float>(encoded))),
+                -32767L, 32767L));
+        }
+        return result;
+    }();
+    return values;
+}
+
 struct WaveSample {
     float height;
     float r;
@@ -2177,24 +2201,17 @@ public:
             mipDivisors[level] = divisor;
             totalCount += levelCounts[level];
         }
-        const auto displaySigned = [](int16_t encoded) {
-            const float magnitude = std::abs(
-                static_cast<int>(encoded)) / 32767.0f;
-            const float displayed = displayWaveformHeight(magnitude);
-            return static_cast<int16_t>(std::clamp(
-                std::lround(std::copysign(
-                    displayed * 32767.0f,
-                    static_cast<float>(encoded))),
-                -32767L, 32767L));
-        };
+        const auto &displaySigned = signedWaveformDisplayTable();
         std::vector<AudioEnvelopeSample> pyramid;
         pyramid.reserve(totalCount);
         for (size_t index = 0; index < totalCount; ++index) {
             if (minimum[index] > maximum[index]) {
                 return false;
             }
-            const int16_t displayedMinimum = displaySigned(minimum[index]);
-            const int16_t displayedMaximum = displaySigned(maximum[index]);
+            const int16_t displayedMinimum =
+                displaySigned[static_cast<uint16_t>(minimum[index])];
+            const int16_t displayedMaximum =
+                displaySigned[static_cast<uint16_t>(maximum[index])];
             const uint16_t upper = static_cast<uint16_t>(std::clamp(
                 static_cast<int>(displayedMaximum) * 2, 0, 65535));
             const uint16_t lower = static_cast<uint16_t>(std::clamp(
@@ -2393,14 +2410,6 @@ public:
         uniforms.widthPoints = static_cast<float>(size.width);
         uniforms.heightPoints = static_cast<float>(size.height);
         uniforms.drawableScale = drawableScale;
-        {
-            std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
-            if (presentedFrames_->generation == submittedGeneration) {
-                presentedFrames_->scheduledTarget =
-                    update.targetPresentationTimestamp;
-                presentedFrames_->scheduledFrame = submittedFrame;
-            }
-        }
         uniforms.durationSeconds = static_cast<float>(
             durationFrames_.load(std::memory_order_acquire) / rate);
         BeatPosition currentBeat{};
@@ -2413,8 +2422,21 @@ public:
         NSUInteger gridVertexCount = 0;
         NSUInteger sessionCueVertexCount = 0;
         NSUInteger cueVertexCount = 0;
+        uint64_t waveformRevision = 0;
         {
             std::lock_guard<std::mutex> lock(renderMutex_);
+            // A grouped upload can begin after the early draw-admission check
+            // and install its overview before we acquire this mutex. Do not
+            // snapshot that intermediate surface; endWaveformUpdate wakes the
+            // completed group, and the skipped frame still owes a repaint.
+            if (waveformUpdateDepth_.load(std::memory_order_acquire) > 0) {
+                displayDirty_.store(true, std::memory_order_release);
+                return;
+            }
+            // The attribute-cache revision belongs to these exact buffers.
+            // Loading it after unlocking can pair an older complete surface
+            // with a newer upload's revision and retain the older silhouette.
+            waveformRevision = waveformRevision_.load(std::memory_order_acquire);
             uniforms.samplesPerSecond = waveSamplesPerSecond_;
             uniforms.sampleCount = static_cast<uint32_t>(
                 std::min<NSUInteger>(
@@ -2469,6 +2491,14 @@ public:
             sessionCueVertexCount = sessionCueVertexCount_;
             cueVertexCount = cueVertexCount_;
             hasCurrentBeat = rulerPosition(currentSeconds, currentBeat);
+        }
+        {
+            std::lock_guard<std::mutex> lock(presentedFrames_->mutex);
+            if (presentedFrames_->generation == submittedGeneration) {
+                presentedFrames_->scheduledTarget =
+                    update.targetPresentationTimestamp;
+                presentedFrames_->scheduledFrame = submittedFrame;
+            }
         }
         setUniformPosition(uniforms, exactFrame, rate);
 
@@ -2557,8 +2587,6 @@ public:
                 ? desiredAttributeCount : 0;
             waveAttributeRevision_ = 0;
         }
-        const uint64_t waveformRevision =
-            waveformRevision_.load(std::memory_order_acquire);
         const double exactAttributeCenter =
             exactFrame / rate
             * static_cast<double>(uniforms.pixelsPerSecond)
@@ -3816,11 +3844,53 @@ inline float wide_interval_occupancy(
     return saturate(area / max(span * width, 1e-8));
 }
 
-inline float3 interval_occupancy_color(float3 color, float occupancy) {
-    // Encode the represented area as contrast against the unchanged background.
-    // Premultiplication below keeps this attached to the fixed song lattice.
-    const float3 background = float3(13.0, 14.0, 18.0) / 255.0;
+inline float3 interval_occupancy_color(
+        float3 color, float occupancy,
+        float3 background = float3(13.0, 14.0, 18.0) / 255.0) {
     return mix(background, color, occupancy);
+}
+
+inline float3 reference_wave_color(
+        const device WaveSample *samples,
+        const device AudioEnvelopeSample *detail,
+        constant Uniforms &u, WaveAttributeClock clock,
+        float secondOffset, float scale) {
+    // Sonny's reference is the 92 pt/s RGB display. Evaluate its palette on
+    // the song clock at every zoom; geometry alone chooses a variable LOD.
+    // Neither wider peak bins nor close-detail occupancy may brighten/dim it.
+    const float referencePixels = 92.0;
+    const uint level = detail_lod(u.samplesPerSecond / (referencePixels * scale), u.waveMipCount);
+    const float local = clock.wavePhase + secondOffset * u.samplesPerSecond;
+    const float offset = 0.5 * u.samplesPerSecond / (referencePixels * scale);
+    const WaveTap center = wave_tap(samples,u.waveMipOffsets[level],u.waveMipCounts[level],clock.waveIndex,local,level);
+    const WaveTap left = wave_tap(samples,u.waveMipOffsets[level],u.waveMipCounts[level],clock.waveIndex,local-offset,level);
+    const WaveTap right = wave_tap(samples,u.waveMipOffsets[level],u.waveMipCounts[level],clock.waveIndex,local+offset,level);
+    const bool neighbors = left.valid > 0.0 && right.valid > 0.0;
+    const float3 weighted = neighbors ? (left.weightedColor + 2.0*center.weightedColor + right.weightedColor)*0.25 : center.weightedColor;
+    const float weight = neighbors ? (left.colorWeight + 2.0*center.colorWeight + right.colorWeight)*0.25 : center.colorWeight;
+    float3 color = recover_rgb_color(weighted,weight,
+        linear_wave_color(samples,u.waveMipOffsets[level],u.waveMipCounts[level],clock.waveIndex,local,level));
+    if (u.waveformMode != 2 || u.audioDetailSampleCount == 0 || u.audioDetailMipCount == 0) return color;
+    const float footprint = u.audioDetailSamplesPerSecond / (referencePixels * scale);
+    const uint detailLevel = audio_detail_lod(footprint,u.audioDetailMipDivisors,u.audioDetailMipCount);
+    const uint divisor = u.audioDetailMipDivisors[detailLevel];
+    const float detailLocal = clock.detailPhase + secondOffset*u.audioDetailSamplesPerSecond;
+    const EnvelopeTap centerDetail = sharp_envelope_tap(detail,u.audioDetailMipOffsets[detailLevel],u.audioDetailMipCounts[detailLevel],clock.detailIndex,detailLocal,divisor);
+    if (centerDetail.valid <= 0.0) return color;
+    const EnvelopeTap leftDetail = sharp_envelope_tap(detail,u.audioDetailMipOffsets[detailLevel],u.audioDetailMipCounts[detailLevel],clock.detailIndex,detailLocal-footprint*1.5,divisor);
+    const EnvelopeTap rightDetail = sharp_envelope_tap(detail,u.audioDetailMipOffsets[detailLevel],u.audioDetailMipCounts[detailLevel],clock.detailIndex,detailLocal+footprint*1.5,divisor);
+    float minimum = centerDetail.minimum, maximum = centerDetail.maximum;
+    if (leftDetail.valid > 0.0 && rightDetail.valid > 0.0) {
+        minimum = min(minimum,(leftDetail.minimum+2.0*minimum+rightDetail.minimum)*0.25);
+        maximum = max(maximum,(leftDetail.maximum+2.0*maximum+rightDetail.maximum)*0.25);
+    }
+    const int cell = int(clock.detailIndex/divisor) + int(floor((float(clock.detailIndex%divisor)+detailLocal)/float(divisor)));
+    if (cell < 0) return color;
+    const float halfHeight = max(4.0,(u.heightPoints-49.0)*0.5-4.0);
+    const float occupancy = wide_interval_occupancy(detail,u.audioDetailMipOffsets[0],u.audioDetailMipCounts[0],u.audioDetailMipDivisors[0],uint(cell),divisor,minimum,maximum,1.0/(scale*halfHeight));
+    const float3 background = display_srgb_to_linear(float3(13.0,14.0,18.0)/255.0);
+    return linear_to_display_srgb(interval_occupancy_color(
+        display_srgb_to_linear(color),mix(1.0,occupancy,0.25),background));
 }
 
 kernel void wave_attribute_kernel(
@@ -3947,23 +4017,15 @@ kernel void wave_attribute_kernel(
         stableKernel);
     float3 color = weightedColor
         / max(heightWeight, 0.0001);
-    if (u.waveformMode == 2) {
-        // Interpolate full-range PWV5 channels on their authored row clock.
-        const float3 crispColor = linear_wave_color(
-            samples,
-            u.waveMipOffsets[waveLevel],
-            u.waveMipCounts[waveLevel],
-            clock.waveIndex,
-            clock.wavePhase + secondOffset * u.samplesPerSecond,
-            waveLevel);
-        color = mix(
-            recover_rgb_color(weightedColor, heightWeight, crispColor), crispColor,
-            smoothstep(92.0, 184.0, u.pixelsPerSecond));
-    }
+    if (u.waveformMode != 3) color = reference_wave_color(samples,audioDetailSamples,u,clock,secondOffset,scale);
     float height = mix(
         sharpWave.height, stableWave.height, stableKernel);
     float upperHeight = height;
-    float lowerHeight = u.waveformMode == 3 ? height : -height;
+    // Before the mode streams arrive, the compact overview uses the legacy
+    // symmetric surface (mode 0). Its lower side is a positive magnitude;
+    // only BLUE/RGB's signed-interval renderer consumes a negative minimum.
+    float lowerHeight = u.waveformMode == 1 || u.waveformMode == 2
+        ? -height : height;
     // BLUE and RGB use close-resolution audio geometry together with their
     // authored PWV3/PWV5 amplitude and color. 3BAND remains three native
     // PWV7 layers and bypasses the audio contour.
@@ -4097,46 +4159,20 @@ kernel void wave_attribute_kernel(
             upperHeight = sharpDetail.maximum;
             lowerHeight = sharpDetail.minimum;
             height = max(abs(upperHeight), abs(lowerHeight));
-            if (u.waveformMode == 2 && u.pixelsPerSecond <= 92.0) {
-                // Wide min/max bins cover the full peak range, but their
-                // fine signed intervals occupy only part of that area. Use
-                // measured occupancy for color contrast instead of painting
-                // every wide bin at the brightest constituent color.
-                const int coarseCell = int(clock.detailIndex / detailDivisor)
-                    + int(floor((float(clock.detailIndex % detailDivisor) + detailLocal)
-                        / float(detailDivisor)));
-                if (coarseCell >= 0) {
-                    const float laneHalf = max(4.0, (u.heightPoints - 49.0) * 0.5 - 4.0);
-                    const float occupancy = wide_interval_occupancy(
-                        audioDetailSamples, u.audioDetailMipOffsets[0],
-                        u.audioDetailMipCounts[0], u.audioDetailMipDivisors[0],
-                        uint(coarseCell), detailDivisor, lowerHeight, upperHeight,
-                        1.0 / (scale * laneHalf));
-                    const float3 background = display_srgb_to_linear(float3(13.0, 14.0, 18.0) / 255.0);
-                    // Keep wide-view legibility: use measured fine area as a
-                    // gentle contrast guide, not a full opacity replacement.
-                    const float gentleOccupancy = mix(1.0, occupancy, 0.25);
-                    color = linear_to_display_srgb(mix(background, display_srgb_to_linear(color), gentleOccupancy));
-                }
-            }
-            if (logicalRGBDetail && detailLevel != physicalDetailLevel) {
-                const int coarseCell = int(clock.detailIndex / detailDivisor)
-                    + int(floor((float(clock.detailIndex % detailDivisor) + detailLocal)
-                        / float(detailDivisor)));
-                if (coarseCell >= 0) {
-                    const float heightScale = max(4.0, (u.heightPoints - 49.0) * 0.5 - 4.0);
-                    const float minimumWidth = 1.0 / (scale * heightScale);
-                    const float occupancy = signed_interval_occupancy(
-                        audioDetailSamples,
-                        u.audioDetailMipOffsets[physicalDetailLevel],
-                        u.audioDetailMipCounts[physicalDetailLevel],
-                        u.audioDetailMipDivisors[physicalDetailLevel],
-                        uint(coarseCell), detailDivisor,
-                        lowerHeight, upperHeight, minimumWidth);
-                    color = interval_occupancy_color(color, occupancy);
-                }
-            }
+
         }
+    }
+    // Main-lane display headroom is independent of saved/overview amplitudes.
+    // Retain PWV7's three independent layers and signed BLUE zero crossings.
+    if (u.waveformMode == 3) {
+        const float3 bands = min(color * height * 1.20, float3(1.0));
+        height = max(max(bands.r, bands.g), bands.b);
+        color = bands / max(height, 0.0001);
+        upperHeight = lowerHeight = height;
+    } else if (u.waveformMode == 1) {
+        upperHeight = clamp(upperHeight * 1.06, -1.0, 1.0);
+        lowerHeight = clamp(lowerHeight * 1.06, -1.0, 1.0);
+        height = max(abs(upperHeight), abs(lowerHeight));
     }
     // Store premultiplied RGB on the fixed lattice. Interpolating straight
     // color and height separately, then multiplying them in the fragment,
@@ -4914,11 +4950,10 @@ fragment float4 wave_surface_fragment(
                 signedPosition, heightScale, antialias,
                 u.waveformMode == 1);
             if (u.waveformMode == 2 && interval.coverage > 0.0
-                    && u.pixelsPerSecond != 384.0 && interval.coverage < 0.18) {
+                    && interval.coverage < 0.18) {
                 // Help only genuinely faint subpixel detail, regardless of hue.
                 // The smooth, monotonic shoulder joins exact area at 18%:
                 // no visibility floor, no broad occupied-column opacity boost.
-                // Preserve accepted C's exact-area presentation at 384.
                 const float fade = 1.0 - interval.coverage / 0.18;
                 const float faintCoverage = interval.coverage * (1.0 + 1.5 * fade * fade);
                 interval.premultipliedColor *= faintCoverage / interval.coverage;

@@ -1,11 +1,29 @@
 # Shared library, analysis and player corrections
 
-Updated November1,2026. This plan began at build148 on October30. Direct shared
+Updated November2,2026. This plan began at build148 on October30. Direct shared
 imports, initial supported WAV analysis, durable prep and the requested player/
 Graveyard controls are now installed. The full shared-primary outcome still has
 broader codec/replacement/gain/metadata gates. [HANDOFF](HANDOFF.md) records the
 current binary and newest user state; dated research checkpoints below describe
 their original boundaries, not current production availability.
+
+The November2 delivery completes the one-time native Collection/custom merge,
+accepted native sibling reorder and virtual-only Artists correction. The complete
+waveform now appears once at its finished geometry/palette, including long
+AAC/ALAC sets; actual bytes, manual musical edits and source authority remain
+preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences,
+with fixed person Artists, home Collection and folder icons. All2144cases passed
+for that dated delivery; HANDOFF separates repository HEAD from installed build154
+and records its exact source fingerprint, signature and curated-state proof.
+
+Local prep stays usable while analysis saves fail or cloud ctime changes: each
+gesture is durable before a worker proves the original bytes. Adaptive saved
+grids preserve every tempo/endpoint, and failed native-analysis songs no longer
+stall healthy imports. UI Quit stays open while captured import/analysis/source
+saves remain, with input and pumps active; the next Quit proceeds when complete.
+Automatic BPM/key detection skips songs over15minutes; explicit/manual/native
+results remain available. Broader analysis codecs/replacement/gain/metadata still
+require independent acceptance.
 
 ## October31 live import: ordinary automatic sharing
 
@@ -51,8 +69,9 @@ Native exact searches, deck loads and normal quit passed:174/9A and140/6A,
 and current playlist membership unchanged. Seven registry differences remain
 explicit. This older exact-two acceptance supplies compatibility evidence; the
 newer user request separately authorized the installed ordinary WAV publisher above.
-At that checkpoint88 imports remained. The newer verified delivery baseline is
-93 imports/1107 title overrides; live user changes supersede checkpoint counts.
+At that checkpoint88 imports remained. A later November1 checkpoint recorded
+93imports/1107title overrides. These are historical counts; HANDOFF records the
+current preservation baseline and live user changes supersede it.
 
 Read-only projection now isolates unavailable native bindings per song instead
 of invalidating the whole verified source. Removed bound imports stay out of
@@ -65,10 +84,13 @@ current signed build; see HANDOFF for installed provenance.
 HANDOFF records exact current evidence and installed provenance.
 
 The full shared-primary-library outcome below remains unfinished. General native
-analysis formats/existing-analysis replacement, gain/metadata and reviewed
-old-import migration need further proofs/acceptance. Requested RGB refinements
-have now passed actual comparison approval and installed verification. Existing generated tests or
-registration alone must never substitute for real-song or musical-data acceptance.
+analysis formats/existing-analysis replacement and gain/metadata need further
+proofs/acceptance. Sonny's November1 request separately authorizes visible old-import
+registration and custom playlist migration through the existing accepted
+writers; HANDOFF records current implementation and actual-source completion.
+The earlier RGB refinement and the subsequent fixed92pt/s reference palette
+passed their dated comparison/release/install checks. Existing generated
+tests or registration alone never substitute for musical-data acceptance.
 
 ## Required outcome
 
@@ -114,8 +136,9 @@ identities, analysis, cues and update protocols when acting as the editor.
 
 - Both apps' ordinary song playlists use native playlist IDs and membership rows.
   If sidebar groups remain, they are organization/presentation, not independent
-  copies of musical membership. Prepare migration bindings for the ten existing
-  custom playlists/tree and stable device playlist IDs; do not duplicate them.
+  copies of musical membership. The ten legacy custom playlists/tree were migrated
+  with exact native bindings and stable device playlist identities; do not
+  duplicate them or rerun the completed upgrade.
   Derived views/provider-specific features remain views or app-specific state
   where there is no native musical-library counterpart.
 - AppData retains preferences, bookmarks/identity aliases, disposable read/render
@@ -190,7 +213,12 @@ playlist-delete-latency.png, sidebar-alignment.png, abba-empty-bpm-key.png.
 The first observed-case capture records the earlier fallback cache; re-read
 current state at resume because Sonny is actively testing the track.
 
-## Implementation sequence
+## Original October30 implementation sequence
+
+The numbered phases below preserve the original implementation/acceptance plan,
+not a current TODO list. The installed November2 status above supersedes completed
+steps; broader unaccepted profiles remain bounded by their separate gates.
+
 
 ### 1. Unblock local BPM/grid correction and resolve whole-BPM detection
 
@@ -405,8 +433,9 @@ controls. Candidate changes only RGB128/184 display phase to one physical pixel;
 all shader/LOD/contour/color/cache data remains exact.34 focused tests and native
 build pass. Sonny watched the opened review and explicitly accepted the bottom
 candidate. Full1900-test release/Cocoa gate, signed package, isolated smoke, safe
-installation and actual library/analysis preservation now pass. Installed build153
-fingerprint285163dc… is live with zero preparation. The six-second before/after
+installation and actual library/analysis preservation passed at that October31
+checkpoint. Build153 fingerprint285163dc… was then live with zero preparation;
+it is historical and is superseded by the current HANDOFF delivery. The six-second before/after
 shows current-at-review-time above/candidate below; HANDOFF records provenance,
 private evidence and measurement limits.
 
@@ -568,7 +597,7 @@ Native/custom folders and leaves at the same depth share these exact rectangles.
 Qt retains expansion, selection, drag and keyboard behavior. Cocoa captures are
 under the private implementation evidence root; RGB renderer behavior is unchanged.
 
-### Shared-store component contract: next implementation boundary
+### Historical shared-store component contract: then-next boundary
 
 Current musical editor inventory (existing controls, not a claim of native support):
 
@@ -651,3 +680,12 @@ its captured grid IDs. Collection/disk Delete uses its [separate accepted
 boundary](graveyard-delete-plan.md) and explicit user confirmation. Sonny confirms
 bulk Delete works. Conversion and locator publication have their own independent
 accepted domains; no codec/replacement authority follows merely from prep.
+
+## November2 Artists correction
+
+Artists is a virtual SoundBox grouping of Collection, with no native folder,
+per-artist playlists or maintenance jobs. This supersedes the earlier internal
+native-artist proposal. Only real user playlists/folders use the native writers.
+The discontinued generated tree was removed by exact recorded IDs/UUIDs through
+the accepted playlist-delete transaction; songs, real memberships and recovery
+remain preserved. Release users never perform this internal cleanup or migration.

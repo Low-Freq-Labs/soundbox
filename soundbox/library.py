@@ -78,7 +78,12 @@ class Track:
     @property
     def path(self) -> Path:
         """Decoded local filesystem path (not verified to exist)."""
-        return decode_location(self.location_uri)
+        uri=self.location_uri
+        cached=getattr(self,'_decoded_location',None)
+        if cached is None or cached[0]!=uri:
+            cached=(uri,decode_location(uri))
+            self._decoded_location=cached
+        return cached[1]
 
     @property
     def duration_str(self) -> str:
@@ -172,6 +177,9 @@ class Playlist:
     # remains untouched; recognized additions made in a managed Rockbox
     # playlist are published here only after the coordinated device commit.
     added_keys: list[str] = field(default_factory=list)
+    # Preserve a former SoundBox playlist's device identity after native adoption.
+    # This is an export binding, never native source-edit authority.
+    export_key: str = ""
 
     @property
     def effective_keys(self) -> list[str]:

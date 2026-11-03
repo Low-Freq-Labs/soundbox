@@ -6,7 +6,7 @@ cues, analysis, playlists and XML. The explicit float-import conversion is a
 separate recoverable phase before registration. A library/version authority is
 required; Cue transport supplies guards/locking, never registration permission.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass,asdict
 import json
 import os
 from pathlib import Path
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from . import native_registration_plan as planner
-from .native_media import MediaIdentity, capture_media
+from .native_media import MediaIdentity, capture_media,epoch as media_epoch
 from .native_paths import AliasProof, capture_aliases
 from .rekordbox_cue_store import CueWriteAuthority,PilotCueStore
 from .rekordbox_tags import NATIVE_VERSION,_schema
@@ -228,6 +228,17 @@ class RegistrationStore:
             MediaIdentity.from_dict(claim['audio']).revalidate()
             for value in claim.get('aliases',[]):AliasProof.from_dict(value).revalidate()
 
+    def media_metadata_drift_only(self,request):
+        """Eligibility for a new exact capture, never permission to use old facts."""
+        self._scope(request);changed=False
+        for claim in request['tracks']:
+            audio=MediaIdentity.from_dict(claim['audio']);path=Path(audio.path)
+            if path!=path.resolve(strict=True) or path.is_symlink():return False
+            current=media_epoch(path.stat())
+            if current[:4]!=audio.epoch[:4]:return False
+            changed=changed or current!=audio.epoch
+        return changed
+
     def prepare(self, tracks, *, operation_id=None):
         """Capture an intention without source mutation; persist it before apply."""
         from .rekordbox_write import _rows
@@ -251,7 +262,24 @@ class RegistrationStore:
                         schema_sha256=self.authority.schema_sha256,tracks=claims)
                     self._plan(conn,request)
                 finally:conn.close()
-            self.lease._guard();self._media_current(request)
+            self.lease._guard()
+            try:self._media_current(request)
+            except ConflictError:
+                if not self.media_metadata_drift_only(request):raise
+                # One refresh only, pinned to the exact captured audio. SeaDrive
+                # can finish a metadata update just after a successful stream.
+                with tempfile.TemporaryDirectory(prefix='soundbox-import-refresh-') as scratch:
+                    for claim in claims:
+                        before=claim['audio']
+                        audio=asdict(capture_media(Path(before['path']),scratch,expected_sha256=before['sha256']))
+                        audio['epoch']=list(audio['epoch'])
+                        if {k:v for k,v in audio.items() if k!='epoch'}!={k:v for k,v in before.items() if k!='epoch'}:
+                            raise ConflictError('Captured media facts changed during metadata refresh')
+                        claim['audio']=audio
+                        for alias in claim.get('aliases',[]):
+                            alias['epoch']=audio['epoch']
+                            AliasProof.from_dict(alias).revalidate()
+                self.lease._guard();self._media_current(request)
             return request
 
     def convert_imports(self, tracks, recovery_root, operation_id, *, expected=None, acknowledged=(),
@@ -305,7 +333,7 @@ class RegistrationStore:
                     receipts.append(receipt);break
             return receipts
 
-    def prepare_retry(self, request):
+    def prepare_retry(self, request, *, preserve_audio=False):
         """Keep committed receipts; renew only a proven uncommitted intention."""
         self._scope(request)
         with self.lease._lock():
@@ -322,7 +350,8 @@ class RegistrationStore:
                         self._bindings_current(record['bindings']);return request
                     if receipt.get('outcome')!='rolled-back':raise RecoveryRequired('Unknown registration retry outcome')
                 else:self._validate_record(record)
-        return self.prepare([dict(id=c['local_id'],path=c['audio']['path']) for c in request['tracks']])
+        return self.prepare([dict(id=c['local_id'],path=c['audio']['path'],
+            **({'sha256':c['audio']['sha256']} if preserve_audio else {})) for c in request['tracks']])
 
     def committed_bindings(self, request):
         """Reconcile cancellation without publishing a new registration."""

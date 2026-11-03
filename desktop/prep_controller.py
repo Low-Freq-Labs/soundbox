@@ -2,6 +2,8 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
+from pathlib import Path
+import tempfile
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, QTimer
@@ -34,6 +36,11 @@ class PrepEditController(QObject):
         queue=self.pending
         return next((j for j in queue if isinstance(j,dict) and j.get('track_id')==tid),None) if isinstance(queue,list) else None
 
+    @staticmethod
+    def _job_matches(job, lib, track):
+        return bool(lib and track and job['path']==str(track.path)
+                    and (job['source'],job['library_id']) in (('',''),(str(lib.source),lib.source_library_id)))
+
     def handles(self, tid):
         lib=self.window.lib; track=lib.tracks_by_id.get(tid) if lib else None
         return bool(track and (self.job(tid) or track.imported or track.source_native_id
@@ -45,20 +52,21 @@ class PrepEditController(QObject):
         try:edits.validate(self.pending)
         except ValueError as exc:return str(exc)
         job=self.job(tid)
+        track=self.window.lib.tracks_by_id.get(tid) if self.window.lib else None
+        if job and not self._job_matches(job,self.window.lib,track):
+            return 'Prep edits belong to a different source; intentions preserved'
         error=self.errors.get(tid) or (job or {}).get('error')
         if error:return error
         issue=getattr(self.window.lib,'source_binding_issues',{}).get(tid) if self.window.lib else None
         if issue:return str(issue)
-        publisher=getattr(self.window,'native_analysis_controller',None)
-        failed=next((j['error'] for j in publisher.pending if j.get('local_id')==tid and j.get('error')), '') if publisher else ''
-        if failed:return failed
         if grid and not self.grid_view(tid):return 'Load a track with a beat grid before editing it'
         return ''
 
     def grid_view(self, tid):
-        job=self.job(tid)
-        if job and job['grid']:return job['grid'], job['grid'][0][2]
         w=self.window; track=w.lib.tracks_by_id.get(tid) if w.lib else None
+        job=self.job(tid)
+        if job and not self._job_matches(job,w.lib,track):return None
+        if job and job['grid']:return job['grid'], job['grid'][0][2]
         record=w._analysis_result(track) if track else None
         if track and track.source_analysis_path:
             pb=getattr(w,'player_bar',None)
@@ -74,8 +82,10 @@ class PrepEditController(QObject):
 
     def cue_rows(self, tid):
         job=self.job(tid)
-        if job:return deepcopy(job['cues'])
         track=self.window.lib.tracks_by_id.get(tid) if self.window.lib else None
+        if job:
+            if self._job_matches(job,self.window.lib,track):return deepcopy(job['cues'])
+            return deepcopy(track.source_cues or []) if track else []
         if track and track.source_analysis_path:return deepcopy(track.source_cues or [])
         record=self.window._analysis_result(track) if track else None
         return local_cues.cues(record) if record else []
@@ -83,10 +93,16 @@ class PrepEditController(QObject):
     def _new(self, track):
         w=self.window; record=w._analysis_result(track) if not track.source_analysis_path else None; pb=w.player_bar
         epoch=analysis.identity(track.path.stat())
+        identity_pending=False
         if record and epoch!=record['epoch'] and not (
                 pb.current_track()==track.track_id and pb._analysis_parts.get('_detected_sha256')==record['sha256']
                 and pb._analysis_parts.get('_detected_epoch')==epoch):
-            raise ValueError('Loaded audio identity changed; reload this track before editing')
+            if pb.current_track()!=track.track_id or epoch[:4]!=record['epoch'][:4]:
+                raise ValueError('Loaded audio identity changed; reload this track before editing')
+            # Preserve the gesture against its original captured bytes. Only a
+            # worker's exact SHA proof may renew this cloud metadata identity;
+            # the pending intention grants no source publication permission.
+            identity_pending=True;epoch=list(record['epoch'])
         view=self.grid_view(track.track_id)
         job=dict(version=2 if track.source_analysis_path else 1,id=str(uuid4()),track_id=track.track_id,path=str(track.path),epoch=epoch,
             native_ready=bool(track.source_analysis_path),
@@ -94,6 +110,7 @@ class PrepEditController(QObject):
             source=str(w.lib.source) if w.lib.source_kind=='rekordbox-db' else '',
             library_id=w.lib.source_library_id if w.lib.source_kind=='rekordbox-db' else '',
             grid=deepcopy(view[0]) if view else [],cues=edits.cues(track.source_cues),operations=[],prepared=None,error='')
+        if identity_pending:job['identity_pending']=True
         # A requested first-beat Memory cue is a real pending cue intention too.
         for cue in local_cues.cues(record) if record and not track.source_analysis_path else []:
             job=edits.operation(job,'cue','add',page=cue['kind'],slot=cue['slot'],position=cue['position_ms'])
@@ -122,7 +139,10 @@ class PrepEditController(QObject):
         if reason:self.window._flash_status(reason,10);return False
         w=self.window; previous=deepcopy(w.settings)
         try:
-            track=w.lib.tracks_by_id[tid]; old=self.job(tid); job=deepcopy(old or self._new(track))
+            track=w.lib.tracks_by_id[tid]; old=self.job(tid)
+            if old and not self._job_matches(old,w.lib,track):
+                raise ValueError('Prep edits belong to a different source; intentions preserved')
+            job=deepcopy(old or self._new(track))
             after=edits.operation(job,kind,operation,value,**cue)
             if after==job:return True
             record=w._analysis_result(track); updated=self._record(record,after)
@@ -130,7 +150,7 @@ class PrepEditController(QObject):
             if updated is not None:w.settings['analysis_results']={**w.settings.get('analysis_results',{}),analysis.result_key(track.path):updated}
             if not w._save_state():raise OSError('The edit could not be saved; check available space and retry')
         except (OSError,ValueError,RuntimeError) as exc:
-            w.settings.clear();w.settings.update(previous);self.errors[tid]=str(exc)
+            w.settings.clear();w.settings.update(previous)
             w._flash_status(str(exc),15);w._sync_grid();w._sync_cue_editing();return False
         self.refresh(tid);self.schedule();return True
 
@@ -161,6 +181,8 @@ class PrepEditController(QObject):
     def refresh(self, tid, result=None):
         w=self.window;track=w.lib.tracks_by_id.get(tid) if w.lib else None
         if track is None or self.closing or w._shutting_down:return
+        job=self.job(tid)
+        if job and not self._job_matches(job,w.lib,track):return
         w._invalidate_rows([tid]); view=self.grid_view(tid) if self.handles(tid) else None
         if view:w._update_browser_bpm(tid,f'{view[1]:.2f}')
         pb=w.player_bar
@@ -182,14 +204,15 @@ class PrepEditController(QObject):
         if self.tags.prep_update_status!=message:
             self.tags.prep_update_status=message;self.tags.changed.emit()
 
-    def _fail(self, tid, error):
+    def _fail(self, tid, error, *, refresh=True):
         job=self.job(tid)
         if job:
             queue=deepcopy(self.pending)
             next(j for j in queue if j['track_id']==tid)['error']=str(error)[:4096]
             self.window.settings[edits.KEY]=queue;self.window._save_state()
         self.errors[tid]=str(error);self._status('Prep edits need attention: '+str(error))
-        self.window._flash_status('Couldn’t save prep edits: '+str(error),15);self.refresh(tid)
+        self.window._flash_status('Couldn’t save prep edits: '+str(error),15)
+        if refresh:self.refresh(tid)
 
     def _stores(self, lib, track):
         validate_track_path(track)
@@ -225,6 +248,62 @@ class PrepEditController(QObject):
                 or receipt.get('outcome')!='committed' or after_revision!=snapshot.revision):
             raise WriteProofError('Prep save needs reconciliation; intentions preserved')
 
+    def _renew_identity(self, job):
+        """Read-only SHA renewal on the existing owned source worker lane."""
+        from soundbox.source_acquisition import SourceContract, acquire_source
+        from soundbox.source_verification import SourceVerificationCache
+        path=Path(job['path'])
+        if analysis.identity(path.stat())[:4]!=job['epoch'][:4]:
+            raise ValueError('Audio changed while prep edits were waiting; intentions preserved')
+        def captured_hash(canonical):
+            with tempfile.TemporaryDirectory(prefix='soundbox-prep-identity-') as area:
+                with acquire_source(SourceContract(canonical,job['epoch'][2],job['sha256']),Path(area)) as snapshot:
+                    return snapshot.sha256
+        digest,info=SourceVerificationCache(self.window._track_analysis_dir).verify(path,captured_hash)
+        epoch=analysis.identity(info)
+        if digest!=job['sha256'] or epoch[:4]!=job['epoch'][:4]:
+            raise ValueError('Audio changed while prep edits were waiting; intentions preserved')
+        return dict(sha256=digest,epoch=epoch)
+
+    def _check_identity(self, job, lib, track):
+        """Keep newer captured gestures while their original bytes are checked."""
+        w=self.window;tid=job['track_id']
+        binding=(str(lib.source),lib.source_library_id,track.native_id,track.source_uuid,str(track.path))
+        def completed(worker):
+            self.busy=False
+            current=self.job(tid)
+            if not current or current['id']!=job['id']:return
+            latest=w.lib.tracks_by_id.get(tid) if w.lib else None
+            acquired=bool(latest and job['version']==1 and track.imported and not track.source_uuid
+                          and not track.source_native_id and latest.source_native_id and latest.source_uuid
+                          and tid not in getattr(w.lib,'source_binding_issues',{}))
+            if (not latest or (str(w.lib.source),w.lib.source_library_id,str(latest.path))!=(binding[0],binding[1],binding[4])
+                    or (latest.native_id,latest.source_uuid)!=binding[2:4] and not acquired):
+                self._fail(tid,'Prep audio proof belongs to its original source; intentions preserved',refresh=False);return
+            if worker.error:self._fail(tid,worker.error);return
+            proof=worker.result
+            try:
+                if (not current.get('identity_pending') or
+                        any(current[key]!=job[key] for key in ('id','path','sha256','epoch','source','library_id'))
+                        or analysis.identity(Path(job['path']).stat())!=proof['epoch']):
+                    raise ValueError('Audio changed while prep edits were checked; intentions preserved')
+                previous=deepcopy(w.settings);queue=deepcopy(self.pending)
+                renewed=next(j for j in queue if j['track_id']==tid)
+                renewed['epoch']=proof['epoch'];renewed.pop('identity_pending')
+                w.settings[edits.KEY]=queue
+                if not w._save_state():
+                    w.settings.clear();w.settings.update(previous)
+                    raise OSError('Audio proof could not be saved; prep intentions preserved')
+            except (OSError,ValueError) as exc:self._fail(tid,exc);return
+            pb=w.player_bar
+            if not self.closing and not w._shutting_down and pb.current_track()==tid:
+                pb._analysis_parts.update(_detected_sha256=proof['sha256'],_detected_epoch=proof['epoch'])
+            self.errors.pop(tid,None);self.refresh(tid);self.schedule()
+        self.busy=True
+        if not self.tags.run_prep_job(lambda:self._renew_identity(job),completed):
+            self.busy=False;self.timer.start(2000)
+        else:self._status('Checking audio for cue/grid edits…')
+
     def pump(self):
         w=self.window
         if self.closing or w._shutting_down or self.busy:return
@@ -247,11 +326,15 @@ class PrepEditController(QObject):
         lib=w.lib;track=lib.tracks_by_id.get(tid) if lib else None
         if not lib or lib.source_kind!='rekordbox-db' or not self.tags.verified:
             self.timer.start(2000);return
-        if not track or track.imported or not track.source_analysis_path:
+        if not track:
             self.timer.start(2000);return
         if ((job['source'],job['library_id']) not in (('',''),(str(lib.source),lib.source_library_id))
                 or str(track.path)!=job['path'] or tid in getattr(lib,'source_binding_issues',{})):
             self._fail(tid,'Prep edits belong to a different source; intentions preserved');return
+        if job.get('identity_pending'):
+            self._check_identity(job,lib,track);return
+        if track.imported or not track.source_analysis_path:
+            self.timer.start(2000);return
         op=job['operations'][0]
         def work():
             try:assert_rekordbox_closed()

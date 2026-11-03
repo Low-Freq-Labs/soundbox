@@ -53,4 +53,4 @@ class ProviderReadRetry:
 def source_read_error(source: Path, error: BaseException) -> str:
     return (f"Cannot read source: {source}\n{error}\n"
             "If this file is stored in a cloud drive, check that the drive is "
-            "connected and the file is available, then retry Sync.")
+            "connected and the file is available, then retry the operation.")

@@ -8,10 +8,25 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
+from types import MappingProxyType
 
 _NODE = re.compile(rb'<NODE\b(?:"[^"]*"|\'[^\']*\'|[^\'">])*/>')
 _CLOSE = re.compile(rb'(?m)^[\t ]*</PLAYLISTS[\t ]*>')
 _TIME = re.compile(rb'(\bTimestamp\s*=\s*)([\'"])([0-9]+)\2')
+_PARSE_SESSION: ContextVar[OrderedDict|None]=ContextVar('soundbox_playlist_xml_parse_session',default=None)
+
+
+@contextmanager
+def parsing_session():
+    """Reuse four exact immutable XML inputs during one pure plan only."""
+    if _PARSE_SESSION.get() is not None:
+        yield;return
+    token=_PARSE_SESSION.set(OrderedDict())
+    try:yield
+    finally:_PARSE_SESSION.reset(token)
 
 
 def _id(value):
@@ -22,6 +37,19 @@ def _id(value):
 
 
 def _parse(payload):
+    if type(payload) is not bytes:raise ValueError('Unverified playlist XML framing')
+    cache=_PARSE_SESSION.get()
+    if cache is not None and payload in cache:
+        cache.move_to_end(payload)
+        return cache[payload]
+    result=_parse_uncached(payload)
+    if cache is not None:
+        cache[payload]=result
+        if len(cache)>4:cache.popitem(last=False)
+    return result
+
+
+def _parse_uncached(payload):
     if (type(payload) is not bytes or len(payload) > 4*1024*1024
             or re.search(rb'<!\s*(?:DOCTYPE|ENTITY)\b', payload, re.I)):
         raise ValueError('Unverified playlist XML framing')
@@ -51,8 +79,8 @@ def _parse(payload):
         # for the parsed node. Independently parse each lexical token.
         if ET.fromstring(token.group()).attrib != node.attrib:
             raise ValueError('XML lexical/semantic node mismatch')
-        rows[identity] = (node.attrib, token.span())
-    return rows, closes[0]
+        rows[identity] = (MappingProxyType(dict(node.attrib)), token.span())
+    return MappingProxyType(rows), closes[0]
 
 
 def identities(payload):
@@ -119,11 +147,12 @@ def retain_deleted(payload, playlist_id):
     return payload
 
 
-def validate_transition(before, after, changes, *, missing_targets=()):
+def validate_transition(before, after, changes, *, missing_targets=(),touched_playlists=()):
     """Prove the complete lexical XML delta is confined to planned root IDs."""
     final, _ = _parse(after)
     original, _ = _parse(before)
     created = [];targets: dict[str, None] = {};deleted = set()
+    for identity in touched_playlists:_target(before,identity);targets[identity]=None
     for change in changes:
         if change['table'] not in ('djmdPlaylist', 'djmdSongPlaylist'):
             continue

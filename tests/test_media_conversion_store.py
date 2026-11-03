@@ -30,6 +30,23 @@ def fixture(root):
 
 
 class ExistingMediaConversion(unittest.TestCase):
+    def test_compatible_cloud_style_source_is_inspected_only_from_captured_bytes(self):
+        import wave as pcm_wave
+        with pcm_wave.open(str(self.audio),'wb') as output:
+            output.setnchannels(2);output.setsampwidth(2);output.setframerate(44100)
+            output.writeframes(b'\0'*44100*4)
+        audio=self.audio.read_bytes();database=(self.source/'master.db').read_bytes()
+        inspect=store.compatibility.inspect
+        def captured_only(path):
+            self.assertNotEqual(Path(path),self.audio,'A cloud provider must not be reopened for header seeks')
+            return inspect(path)
+        with mock.patch.object(store.compatibility,'inspect',side_effect=captured_only):
+            result=self.convert()
+        self.assertTrue(result['unchanged']);self.assertEqual(result['facts']['status'],'compatible')
+        self.assertEqual(self.audio.read_bytes(),audio)
+        self.assertEqual((self.source/'master.db').read_bytes(),database)
+        self.assertFalse(self.writer._folder(self.op).exists())
+
     def setUp(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);self.root=Path(temp.name).resolve()
         self.source,self.audio,schema=fixture(self.root)

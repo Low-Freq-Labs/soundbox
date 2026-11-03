@@ -20,9 +20,11 @@ def validate(jobs):
         raise WriteProofError('Saved import queue is invalid; evidence preserved')
     identities=set()
     for job in jobs:
-        if not isinstance(job,dict) or set(job)!={'id','source','library_id','tracks','destination',
+        if not isinstance(job,dict) or set(job)-{'media_refreshes'}!={'id','source','library_id','tracks','destination',
                 'preferences','request','bindings','membership','error','retry'}:
             raise WriteProofError('Unknown shared import intention')
+        if type(job.get('media_refreshes',0)) is not int or job.get('media_refreshes',0) not in (0,1):
+            raise WriteProofError('Invalid captured-media refresh budget')
         _uuid(job['id']);_canonical(job['source']);_native_id(job['library_id'])
         if job['id'] in identities:raise WriteProofError('Duplicate import operation')
         identities.add(job['id'])
@@ -82,7 +84,7 @@ def admit(jobs, library, tracks, destination, preferences):
     validate(jobs)
     job=dict(id=str(uuid4()),source=str(library.source),library_id=library.source_library_id,
         tracks=[dict(id=t.track_id,path=str(t.path)) for t in tracks],destination=deepcopy(destination),
-        preferences=import_preferences(preferences),request=None,bindings=[],membership=None,error='',retry=False)
+        preferences=import_preferences(preferences),request=None,bindings=[],membership=None,error='',retry=False,media_refreshes=0)
     result=[*deepcopy(jobs),job];validate(result)
     return result
 
@@ -127,6 +129,7 @@ def present(library, pending):
     """Logical rows only; catalog/revision/native memberships stay exact."""
     from dataclasses import replace
     validate(pending)
+    if not pending:return library
     playlists=list(library.playlists)
     for job in pending:
         dest=job['destination']

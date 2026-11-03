@@ -19,9 +19,10 @@ def validate(jobs):
     if not isinstance(jobs,list) or len(jobs)>100000:raise ValueError('Saved analysis queue is invalid')
     ids=set();tracks=set()
     for job in jobs:
-        if not isinstance(job,dict) or set(job) not in (FIELDS,FIELDS|{'waveform'}) or job['format']!=FORMAT:
+        if not isinstance(job,dict) or not FIELDS<=set(job)<=FIELDS|{'waveform','automatic'} or job['format']!=FORMAT:
             raise ValueError('Saved analysis intent is invalid')
         if type(job.get('waveform',False)) is not bool:raise ValueError('Invalid waveform rebuild intention')
+        if type(job.get('automatic',False)) is not bool:raise ValueError('Invalid automatic analysis intention')
         try:valid_id=str(UUID(job['id']))==job['id'] and UUID(job['id']).version==4
         except (ValueError,TypeError,AttributeError):valid_id=False
         if not valid_id or job['id'] in ids:raise ValueError('Ambiguous analysis operation identity')
@@ -48,9 +49,12 @@ def matches(job,library,track):
                  not job['source_uuid'] and track.source_native_id and not track.source_analysis_path))
 
 
-def admit(jobs,library,tracks,preferences,*,retry_failed=True,rebuild_waveform=False):
+def admit(jobs,library,tracks,preferences,*,retry_failed=True,rebuild_waveform=False,automatic=False):
     validate(jobs);result=deepcopy(jobs);prefs=options(preferences)
     for track in tracks:
+        if automatic:
+            from .analysis import automatic_music_allowed
+            if not automatic_music_allowed(track.total_time):continue
         source=str(library.source or '');library_id=str(library.source_library_id or '')
         prior=next((j for j in result if (j['source'],j['library_id'],j['track_id'])==(source,library_id,track.track_id)),None)
         if prior and matches(prior,library,track) and (prior['state']=='queued' or not retry_failed):
@@ -60,6 +64,7 @@ def admit(jobs,library,tracks,preferences,*,retry_failed=True,rebuild_waveform=F
         result.append(dict(format=FORMAT,id=str(uuid4()),source=source,library_id=library_id,
             track_id=track.track_id,path=str(track.path),source_uuid=track.source_uuid,preferences=dict(prefs),state='queued',error='',
             waveform=bool(rebuild_waveform)))
+        if automatic:result[-1]['automatic']=True
     validate(result);return result
 
 

@@ -214,7 +214,7 @@ def rgb_faint_oracle(row):
     coverage = integral[0]
     if coverage == 0:
         return linear_color(row[50:53])
-    if row[6] != 384 and coverage < .18:
+    if coverage < .18:
         coverage += 1.5 * coverage * (1-coverage/.18)**2
     return linear_color(row[50:53] * (1 - coverage)
                         + integral[1:] / integral[0] * coverage)
@@ -469,18 +469,19 @@ class WaveformGPUMath(unittest.TestCase):
         self.assertTrue((actual[:, :5] >= -2e-6).all())
         self.assertTrue((actual[:, :5] <= 1+2e-6).all())
 
-    def test_rgb_384_uses_exact_visible_pixel_area_across_colors_and_signed_profiles(self):
+    def test_rgb_384_uses_the_same_reference_edge_visibility_as_other_zooms(self):
         rows = self.interval_cases()
         rows[:, 6] = 384
         expected = np.array([rgb_faint_oracle(row) for row in rows])
         actual = self.execute(rows)[:, 4:7]
         np.testing.assert_allclose(actual, expected, atol=3e-5, rtol=0)
-        # Accidentally enabling the faint shoulder at accepted C must fail
-        # the independent exact-area oracle without changing geometry or hue.
-        old = self.source.replace('&& u.pixelsPerSecond != 384.0', '')
+        # The November2 fixed reference supersedes the former 384 exception.
+        # Reintroducing that exception must fail without changing geometry/hue.
+        old = self.source.replace('&& interval.coverage < 0.18)',
+            '&& u.pixelsPerSecond != 384.0 && interval.coverage < 0.18)')
         self.assertNotEqual(old, self.source)
-        boosted = self.execute(rows, old)[:, 4:7]
-        self.assertGreater(float(np.max(encoded_color(boosted) - encoded_color(actual))), .02)
+        dimmed = self.execute(rows, old)[:, 4:7]
+        self.assertGreater(float(np.max(encoded_color(actual) - encoded_color(dimmed))), .02)
 
     def test_blue_thin_intervals_keep_cyan_instead_of_a_fixed_white_core(self):
         rows = []
@@ -665,7 +666,7 @@ class WaveformGPUMath(unittest.TestCase):
                     row[50:53] = background
                     rows.append(row)
                     lifted = coverage
-                    if zoom != 384 and coverage < .18:
+                    if coverage < .18:
                         lifted += 1.5 * coverage * (1-coverage/.18)**2
                     expected.append(linear_color(background*(1-lifted)
                                                  + np.array(color)*lifted))

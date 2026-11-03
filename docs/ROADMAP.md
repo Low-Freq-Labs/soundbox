@@ -1,14 +1,15 @@
 # SoundBox roadmap
 
-Updated November 1, 2026. [HANDOFF](HANDOFF.md) records the installed binary,
+Updated November 2, 2026. [HANDOFF](HANDOFF.md) records the installed binary,
 verification and preservation baseline. This roadmap describes current behavior
 and remaining work. Older release hashes, test counts and original pending gates
 are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11-01.md).
 
 ## Delivered personal runtime
 
-The installed personal build passed all2035 offscreen/Cocoa tests, signed-package,
-safe-install and actual-source readback checks. It includes:
+The November2 personal delivery passed all2144 offscreen/Cocoa tests, signed
+package/native smoke, safe-install and curated-state checks. Exact binary/source
+provenance belongs in HANDOFF. It includes:
 
 - Shared Collection/native-playlist imports with stable identities, durable
   destination routing and ordinary native playlist CRUD. Analysis can be off for
@@ -20,16 +21,28 @@ safe-install and actual-source readback checks. It includes:
 - Durable native/import cue/grid capture during unrelated work, exact v2 grid
   arithmetic and receipt reconciliation. The previously stuck53 intentions now
   match four final native grids and16 cues, with no pending prep queue at delivery.
-- Clamped boundary jumps, held mouse/keyboard repetition, consistent BLUE/3BAND
-  middle-zoom height and user-approved gentle wide RGB colors. Prior accepted
-  close-zoom rendering and musical clocks remain protected.
+- Clamped boundary jumps and held mouse/keyboard repetition; calibrated
+  BLUE/3BAND height and a fixed92pt/s RGB reference palette across all13zooms.
+  Complete waveform first paint avoids AAC/ALAC preview resizing, with lower
+  cache/read/upload costs and preserved geometry, color and musical clocks.
+- One native Playlists tree, newest-added-first browser views and accepted native
+  sibling reordering, with Collection/virtual Artists fixed at the top. The
+  requested one-time legacy Collection/custom merge is complete; Artists creates
+  no native records or ongoing jobs. Playlist-only Star/Music note/Vinyl crate
+  choices persist locally; Artists uses a fixed person icon.
+- Stable selection, scroll, folder expansion and Edit Tags geometry across native
+  updates. Native analysis preserves adaptive tempo changes; errored songs do not
+  stall healthy imports. Ctime-only prep drift keeps gestures durable during an
+  exact-byte worker check. UI Quit stays open while captured saves finish, with
+  editing and save pumps active.
 - Inline hex colors and sidebar rename, fixed-green PLAY/orange held CUE with no
   hover state, corrected/padded SB icon and saved-accent persistence after quit,
   freely draggable rightmost columns and trackpad scrollbar feedback.
 - Graveyard search/info/storage, position-preserving Restore and confirmed
   Collection/disk Delete with recoverable Trash/shared-file protection. Sonny
-  confirms bulk Delete works;515 disposal receipts are current state. Four absent
-  identities offer explicit local-only dismissal through the same user button.
+  confirms bulk Delete works;515 file-disposal receipts and four user-confirmed
+  local dismissals are current state. Absent identities offer explicit local-only
+  dismissal through the same user button.
 - Automatic recoverable compatibility conversion and existing-record locator
   updates.124 WAV conversions completed with exact originals retained. Combined
   Analyze rebuilds waveforms; artist-profile artwork is available above Remove.
@@ -48,13 +61,13 @@ See the [implementation plan](shared-library-workflow-plan.md).
   evidence; existing-native-analysis replacement, gain and broader metadata are
   not accepted by the initial WAV profile. Intelligent/cloud edits, tag-definition
   management, Undo/Redo and title/artist write-back remain separate scope.
-- Review remaining old imports without bulk identity adoption or reanalysis of
-  preserved songs. Existing independent logical/native curation requires review.
 - Resolve unsupported compatibility cases only with verified timing/layout and
   recovery. One32kHz MP3 is unchanged/timing-unproven; cloud-deferred/unavailable
   files are explicit. No claim that every Collection file is universally verified.
 - Preserve exact conversion originals, user cues/grids, native memberships and
   disposal receipts; never restore an old whole library to repair one component.
+  The discontinued generated artist tree is removed; retain its exact recovery
+  evidence and never recreate it. Current user state supersedes migration counts.
 
 ## Device acceptance and performance
 

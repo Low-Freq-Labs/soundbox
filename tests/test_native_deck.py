@@ -892,6 +892,119 @@ class NativeDeckContract(unittest.TestCase):
         self.assertEqual(self.deck.diagnostic_analysis_shape(), (4, 150.0))
         self.assertEqual(self.deck.diagnostic_detail_shape(), (6, 6144.0))
 
+    def test_nested_waveform_group_reveals_only_the_completed_surface(self):
+        import numpy as np
+
+        self.host.resize(800, 166)
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        self.deck.begin_track(200)
+        self.deck.set_waveform_mode('RGB')
+        self.deck.set_zoom(92)
+        self.deck.set_visual_position(1000, True)
+        overview = {'_overview_heights': bytes([240]) * 300,
+                    '_overview_rgb': bytes([14, 0, 0]) * 300, 'sample_rate': 150.0}
+        detail = {'_blue_detail': bytes([255]) * 300,
+                  '_rgb_detail': bytes.fromhex('e07c') * 300,
+                  '_detail_bands': bytes([60, 45, 30]) * 300,
+                  '_audio_detail': {'rate': 1000.0, 'base_count': 2000,
+                      'mip_divisors': [1], 'mip_counts': [2000],
+                      'range_min_mips': [struct.pack('<2000h', *([-8000] * 2000))],
+                      'range_max_mips': [struct.pack('<2000h', *([8000] * 2000))],
+                      'encoding': 'song-anchored-extrema-i16le-v1'}}
+        self.deck._lib.sb_deck_begin_waveform_update(self.deck._handle)
+        self.deck._lib.sb_deck_begin_waveform_update(self.deck._handle)
+        try:
+            # The compact silhouette is intentionally much taller than detail.
+            self.assertTrue(self.deck.set_overview(overview, 200))
+            QTest.qWait(50)  # retire any frame snapshotted before the outer group
+            self.deck.diagnostic_begin_frame_trace(1, 64)
+            self.deck.request_display()
+            QTest.qWait(100)
+            self.assertEqual(self.deck.diagnostic_frame_trace_status()['gpu_completed_frames'], 0)
+            self.assertEqual(self.deck.set_complete_analysis(overview, detail, 200), (True, True))
+        finally:
+            self.deck._lib.sb_deck_end_waveform_update(self.deck._handle)
+            # The remaining outer group must still suppress the completed
+            # child's wake, without consuming the final static repaint.
+            self.deck.request_display()
+            QTest.qWait(100)
+            held = self.deck.diagnostic_frame_trace_status()['gpu_completed_frames']
+            self.deck._lib.sb_deck_end_waveform_update(self.deck._handle)
+        self.assertEqual(held, 0)
+        self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()['presentation_completed_frames'] == 1)
+        def finish(name):
+            output = Path(self.temp.name) / name
+            self.deck.diagnostic_finish_frame_trace(output)
+            info = json.loads((output / 'manifest.json').read_text())
+            return np.frombuffer((output / 'frames.bgra').read_bytes(), dtype='u1').reshape(
+                info['crop_height_pixels'], 64, 4)[30:-30, 16:48, :3].copy()
+        first = finish('group-first')
+        self.deck.diagnostic_begin_frame_trace(1, 64)
+        self.deck.request_display()
+        self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()['presentation_completed_frames'] == 1)
+        np.testing.assert_array_equal(first, finish('group-static'))
+
+    def test_progressive_overview_draws_both_halves_before_detail_arrives(self):
+        import numpy as np
+
+        self.host.resize(800, 166)
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() > 0)
+        detail = {
+            "_blue_detail": bytes([255]) * 300,
+            "_rgb_detail": bytes.fromhex("e07c") * 300,
+            "_detail_bands": bytes([100, 80, 60]) * 300,
+            "_audio_detail": {
+                "rate": 1000.0, "base_count": 2000,
+                "mip_divisors": [1], "mip_counts": [2000],
+                "range_min_mips": [struct.pack("<2000h", *([-16000] * 2000))],
+                "range_max_mips": [struct.pack("<2000h", *([16000] * 2000))],
+                "encoding": "song-anchored-extrema-i16le-v1",
+            },
+        }
+        for generation, (encoding, mode) in enumerate(
+                ((encoding, mode) for encoding in ("u8", "linear-u16le")
+                 for mode in ("BLUE", "RGB", "3BAND")), start=100):
+            with self.subTest(encoding=encoding, mode=mode):
+                self.assertTrue(self.deck.begin_track(generation))
+                self.deck.set_waveform_mode(mode)
+                self.deck.set_zoom(92)
+                overview = {
+                    "_overview_heights": (bytes([160]) * 300 if encoding == "u8"
+                                          else struct.pack("<300H", *([40000] * 300))),
+                    "_overview_rgb": bytes([14, 0, 0]) * 300,
+                    "_height_encoding": encoding,
+                    "sample_rate": 150.0,
+                }
+                self.assertTrue(self.deck.set_overview(overview, generation))
+                self.deck.set_visual_position(1000, True)
+                for stage in ("overview", "complete"):
+                    if stage == "complete":
+                        self.assertEqual(self.deck.set_complete_analysis(
+                            overview, detail, generation), (True, True))
+                    self.deck.diagnostic_begin_frame_trace(1, 64)
+                    self.deck.request_display()
+                    self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                        "gpu_completed_frames"] == 1)
+                    self._wait_until(lambda: self.deck.diagnostic_frame_trace_status()[
+                        "presentation_completed_frames"] == 1)
+                    output = Path(self.temp.name) / f"progressive-{generation}-{stage}"
+                    self.deck.diagnostic_finish_frame_trace(output)
+                    manifest = json.loads((output / "manifest.json").read_text())
+                    pixels = np.frombuffer((output / "frames.bgra").read_bytes(), dtype="u1")
+                    frame = pixels.reshape(manifest["crop_height_pixels"], 64, 4)
+                    # Trace strips are at the main lane's edges and the fixed
+                    # playhead is central. Sample one interior column, away
+                    # from both, on each side of the waveform's zero line.
+                    column = frame[30:-30, 20, :3].astype(int)
+                    colored = (column.max(1) > 50) & (column.max(1) - column.min(1) > 35)
+                    half = len(colored) // 2
+                    upper, lower = int(colored[:half].sum()), int(colored[-half:].sum())
+                    self.assertGreater(upper, 16, (stage, upper, lower))
+                    self.assertGreater(lower, 16, (stage, upper, lower))
+                    self.assertLessEqual(abs(upper - lower), 2, (stage, upper, lower))
+
     def test_u16_channel_peak_analysis_preserves_quiet_display_detail(self):
         overview = {
             "_overview_heights": struct.pack(
@@ -931,6 +1044,28 @@ class NativeDeckContract(unittest.TestCase):
             self.deck.diagnostic_detail_peak(), 0.84, places=4)
         self.assertGreater(
             self.deck.diagnostic_audio_detail_buffer_bytes(), 0)
+
+    def test_signed_range_display_table_matches_all_original_scalar_outputs(self):
+        # Frozen from the pre-lookup arm64 scalar transfer for all int16 bit
+        # patterns, including -32768. Compile the actual production helper;
+        # no diagnostic export or duplicate implementation enters the dylib.
+        source = (Path(__file__).resolve().parents[1] / 'native/SoundboxDeck.mm').read_text()
+        start = source.index('constexpr float kWaveformDisplayExponent')
+        end = source.index('\nstruct WaveSample', start)
+        unit = Path(self.temp.name) / 'signed-display-table.cpp'
+        executable = unit.with_suffix('')
+        unit.write_text('#include <algorithm>\n#include <array>\n#include <cmath>\n'
+                        '#include <cstdint>\n#include <cstdio>\n' + source[start:end] +
+                        '\nint main() { const auto &table = signedWaveformDisplayTable(); '
+                        'return std::fwrite(table.data(), sizeof(int16_t), table.size(), stdout) '
+                        '== table.size() ? 0 : 1; }\n')
+        subprocess.run(['clang++', '-O3', '-std=c++20', '-arch', 'arm64',
+                        '-mmacosx-version-min=14.0', str(unit), '-o', str(executable)],
+                       check=True, capture_output=True)
+        encoded = subprocess.check_output([str(executable)])
+        self.assertEqual(len(encoded), 65536 * 2)
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(),
+                         '398c6757103c026e126094b3b969d3dbda1e54c80b0674f1cd203fd9e815ab70')
 
     def test_v5_prebuilt_range_mips_install_without_rebuilding_base_streams(self):
         base_count = 256
@@ -1357,11 +1492,42 @@ class NativeDeckContract(unittest.TestCase):
             manifest = json.loads((output / 'manifest.json').read_text())
             frame = np.frombuffer((output / 'frames.bgra').read_bytes(), dtype='u1').reshape(
                 manifest['crop_height_pixels'], 64, 4)
-            scale = self.deck.diagnostic_view_geometry()[2] / self.host.width()
-            expected = ([2,2,241] if zoom<=92 else
-                        [9,7,134] if scale>1.5 else [0,0,255])
+            # The user selected 92 pt/s as the fixed palette reference. The
+            # same song area now keeps its 87.5% linear-light contrast at every
+            # zoom, including the former wide/close brightness discontinuities.
+            expected = [2,2,241]
             pixel = frame[manifest['crop_height_pixels'] // 2, 20, :3].astype(int)
             self.assertLessEqual(int(np.abs(pixel - expected).max()), 2)
+
+    def test_each_waveform_mode_keeps_its_palette_across_all_thirteen_zooms(self):
+        import numpy as np
+        self.host.resize(800,166)
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda:self.deck.duration()>0)
+        self.deck.set_analysis({'heights':[.5]*300,'colors':[[255,0,0]]*300,'sample_rate':150.0})
+        self.assertTrue(self.deck._set_waveform_streams({'_blue_detail':bytes([255])*300,
+            '_rgb_detail':bytes.fromhex('e07c')*300,'_detail_bands':bytes([60,45,30])*300},150.0))
+        self.deck.set_audio_detail({'rate':1000.0,'base_count':2000,'mip_divisors':[1,2],
+            'mip_counts':[2000,1000],'range_min_mips':[struct.pack('<2000h',*([-16000]*2000)),struct.pack('<1000h',*([-16000]*1000))],
+            'range_max_mips':[struct.pack('<2000h',*([16000]*2000)),struct.pack('<1000h',*([16000]*1000))],
+            'encoding':'song-anchored-extrema-i16le-v1'})
+        for mode in ('BLUE','RGB','3BAND'):
+            self.deck.set_waveform_mode(mode);reference=None
+            for zoom in (92,24,32,48,64,128,184,256,384,576,864,1152,1500):
+                self.deck.set_zoom(zoom);self.deck.set_visual_position(1000,True);QTest.qWait(30)
+                self.deck.diagnostic_begin_frame_trace(1,64);self.deck.request_display()
+                self._wait_until(lambda:self.deck.diagnostic_frame_trace_status()['gpu_completed_frames']==1)
+                self._wait_until(lambda:self.deck.diagnostic_frame_trace_status()['presentation_completed_frames']==1)
+                output=Path(self.temp.name)/f'fixed-palette-{mode}-{zoom}-{time.time_ns()}'
+                self.deck.diagnostic_finish_frame_trace(output)
+                manifest=json.loads((output/'manifest.json').read_text())
+                frame=np.frombuffer((output/'frames.bgra').read_bytes(),dtype='u1').reshape(manifest['crop_height_pixels'],64,4)
+                # Sample filled interiors at several heights; no ruler, cues,
+                # playhead, envelope boundaries or transparent fine gaps.
+                palette=frame[[len(frame)//2-8,len(frame)//2,len(frame)//2+8],20,:3].astype(int)
+                if reference is None:reference=palette
+                with self.subTest(mode=mode,zoom=zoom):
+                    self.assertLessEqual(int(np.abs(palette-reference).max()),2)
 
     def test_rgb_palette_is_not_dimmed_by_zero_compact_height(self):
         import numpy as np

@@ -111,6 +111,45 @@ def rename(playlist,counter,*,name,timestamp):
                 playlist=after,counter=current,source_write_authority=False)
 
 
+def reorder(playlists,counter,*,identity,anchor_id,after=False,timestamp,sibling_timestamp=None):
+    """Compose native adjacent swaps within one existing parent.
+
+    The November 2 native reference updates the dragged row first (+1), then
+    its adjacent sibling (+2), preserving every field except Seq/local clock.
+    Long moves repeat that primitive; they never infer a different multi-row
+    native counter protocol or change ParentID/membership.
+    """
+    selected=[r for r in playlists if r.get('ID')==identity]
+    anchors=[r for r in playlists if r.get('ID')==anchor_id]
+    if len(selected)!=1 or len(anchors)!=1 or identity==anchor_id or type(after) is not bool:
+        raise ValueError('Expected distinct exact native reorder identities')
+    target,anchor=selected[0],anchors[0]
+    _ordinary(target,folder=True);_ordinary(anchor,folder=True)
+    if target['ParentID']!=anchor['ParentID']:
+        raise ValueError('Reordering cannot transfer a playlist to another folder')
+    siblings=_siblings(playlists,target['ParentID'])
+    order=[r['ID'] for r in siblings];wanted=[i for i in order if i!=identity]
+    wanted.insert(wanted.index(anchor_id)+int(after),identity)
+    nodes=deepcopy(playlists);by_id={r['ID']:r for r in nodes}
+    current=deepcopy(counter);changes: list[dict] = []
+    while order.index(identity)!=wanted.index(identity):
+        index=order.index(identity);step=1 if index<wanted.index(identity) else -1
+        neighbor_id=order[index+step]
+        old_target,old_neighbor=by_id[identity],by_id[neighbor_id]
+        _ordinary(old_neighbor,folder=True)
+        first=_counter(current);second=_counter(first)
+        new_target={**old_target,'Seq':old_neighbor['Seq'],'updated_at':timestamp,'rb_local_usn':first['int_1']}
+        new_neighbor={**old_neighbor,'Seq':old_target['Seq'],'updated_at':sibling_timestamp or timestamp,
+                      'rb_local_usn':second['int_1']}
+        changes.extend((dict(table='djmdPlaylist',id=identity,before=deepcopy(old_target),after=new_target),
+                        dict(table='djmdPlaylist',id=neighbor_id,before=deepcopy(old_neighbor),after=new_neighbor),
+                        dict(table='agentRegistry',id='localUpdateCount',before=current,after=second)))
+        by_id[identity]=new_target;by_id[neighbor_id]=new_neighbor;current=second
+        order[index],order[index+step]=order[index+step],order[index]
+    return dict(changes=changes,playlists=[by_id[r['ID']] for r in nodes],counter=current,
+                source_write_authority=False)
+
+
 def append(playlist,members,counter,content,*,identity,uuid,timestamp,allow_duplicate=False):
     rows=_base(playlist,members,counter)
     if content.get('rb_local_deleted') or not content.get('ID') or not content.get('UUID'):

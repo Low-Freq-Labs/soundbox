@@ -97,11 +97,11 @@ def setup_logging() -> Path | None:
     return logpath
 
 from PySide6.QtCore import (
-    QEvent, QFileSystemWatcher, QPointF, QProcess, QRect, QRectF, QSize, Qt, QThread,
-    QTimer, QItemSelectionModel,
+    QEvent, QFileSystemWatcher, QPoint, QPointF, QProcess, QRect, QRectF, QSize, Qt, QThread,
+    QTimer, QItemSelectionModel, QItemSelection,
 )
 from PySide6.QtGui import (
-    QKeySequence,
+    QKeySequence, QCursor,
     QColor, QFontDatabase, QIcon, QPainter, QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
@@ -172,7 +172,7 @@ from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
     CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, PATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE,
-    ArtistsTree, CellEditDelegate, DeviceTree, PlaylistTree, SoundBoxTree, TrackTable,
+    ArtistsTree, CellEditDelegate, DeviceTree, UnifiedPlaylistTree, TrackTable, NATIVE_TREE_ROLE, PINNED_TREE_ROLE,
 )
 
 from .workers import (
@@ -505,6 +505,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.graveyard_controller = GraveyardController(self)
         self.removal_controller = RemovalController(self)
         self.media_controller = MediaConversionController(self)
+        from .playlist_unification import PlaylistUnificationController
+        self.unification_controller = PlaylistUnificationController(self)
         self._build_ui()
         self.player_bar.analysis_cache_admitted = lambda tid: (
             not self.grid_controller.pending(tid) and not self.shared_import_controller.converting(tid)
@@ -702,6 +704,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 "settings": self.settings,
             })
             self.setWindowTitle("Soundbox")
+            controller=getattr(self,'unification_controller',None)
+            if controller:controller.schedule()
             if self._state_repository.backup_error:
                 LOG.warning("Library saved, but rotating backup failed: %s",
                             self._state_repository.backup_error)
@@ -786,10 +790,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         return result
 
     def _rows_for(self, tracks) -> list[dict]:
-        return [self._row_for(t) for t in tracks]
+        return [self._row_for(t) for t in sorted(tracks,
+                key=lambda t:(-self._landed_time(t),t.name.casefold()))]
 
     def _playlist_rows(self, display_path: str) -> list[dict]:
-        """Rows for a rekordbox playlist, in sacred order — via the row cache."""
+        """Newest-added browser order; native/export membership order stays exact."""
         pl = self._native_view_playlist(display_path)
         return self._rows_for(self.lib.resolve(pl)) if pl is not None else []
 
@@ -853,6 +858,50 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         LOG.info("Row cache warmed: %d rows", len(res))
 
     def _reload_current_view(self):
+        """Refresh rows without stealing the user's selection or scroll seat."""
+        seat=self._browser_seat()
+        previous=self.model._rows
+        self._render_current_view()
+        if self.model._rows is not previous:self._restore_browser_seat(seat)
+
+    def _set_refreshed_rows(self,rows):
+        clean=lambda row:{k:v for k,v in row.items() if k!='_hay'}
+        if len(rows)==len(self.model._all_rows) and all(clean(a)==clean(b) for a,b in zip(rows,self.model._all_rows)):
+            return
+        self.model.set_rows(rows)
+
+    def _browser_seat(self):
+        rows=self.model._rows;selection=self.table.selectionModel()
+        index=self.table.currentIndex();top=self.table.indexAt(QPoint(0,0))
+        return dict(current=rows[index.row()].get('id') if index.isValid() else None,
+                    column=index.column() if index.isValid() else 0,
+                    selected={rows[i.row()].get('id') for i in selection.selectedRows()},
+                    top=rows[top.row()].get('id') if top.isValid() else None,
+                    top_row=top.row(),scroll=self.table.verticalScrollBar().value(),
+                    horizontal=self.table.horizontalScrollBar().value())
+
+    def _restore_browser_seat(self,seat):
+        by_id={row.get('id'):i for i,row in enumerate(self.model._rows)}
+        selection=self.table.selectionModel();blocked=selection.blockSignals(True)
+        try:
+            selected=QItemSelection()
+            for identity in seat['selected']:
+                if identity in by_id:
+                    i=by_id[identity]
+                    selected.select(self.model.index(i,0),self.model.index(i,self.model.columnCount()-1))
+            selection.select(selected,QItemSelectionModel.ClearAndSelect)
+            if seat['current'] in by_id:
+                selection.setCurrentIndex(self.model.index(by_id[seat['current']],seat['column']),QItemSelectionModel.NoUpdate)
+            self.table.doItemsLayout()
+            scroll=seat['scroll']
+            if seat['top'] in by_id:
+                delta=by_id[seat['top']]-seat['top_row']
+                scroll+=delta if self.table.verticalScrollMode()==QAbstractItemView.ScrollPerItem else delta*self.table.verticalHeader().defaultSectionSize()
+            self.table.verticalScrollBar().setValue(scroll)
+            self.table.horizontalScrollBar().setValue(seat['horizontal'])
+        finally:selection.blockSignals(blocked)
+
+    def _render_current_view(self):
         """Re-render whatever playlist is showing so a settings change takes
         effect immediately. Updates the table rows only — does NOT switch the
         visible page (so toggling on the Settings page keeps you there)."""
@@ -860,7 +909,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             return
         cur = self.tree.currentItem()
         if cur is not None and cur.data(0, PATH_ROLE):
-            self.model.set_rows(self._annotate_art(
+            self._set_refreshed_rows(self._annotate_art(
                 self._playlist_rows(cur.data(0, PATH_ROLE))))
             return
         cur = self.sb_tree.currentItem()
@@ -874,13 +923,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
                       if i not in self.hidden
                       and (t := self.lib.tracks_by_id.get(i))]
-            self.model.set_rows(self._annotate_art(self._rows_for(tracks)))
+            self._set_refreshed_rows(self._annotate_art(self._rows_for(tracks)))
             return
         # A folder may own keyboard/mouse navigation while the browser keeps
         # showing its previous playlist. Refresh that actual active view.
         key = getattr(self, '_view_key', '') or ''
         if key.startswith('rb:'):
-            self.model.set_rows(self._annotate_art(self._playlist_rows(key[3:])))
+            self._set_refreshed_rows(self._annotate_art(self._playlist_rows(key[3:])))
         elif key == 'sb:Collection':self._show_collection()
         elif key == 'sb:Artists':self._show_artists()
         elif key.startswith('sb:') and key[3:] in self.custom:self._show_custom(key[3:])
@@ -892,6 +941,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
 
     # ---------- player ----------
     def eventFilter(self, obj, ev):
+        if (obj is QApplication.instance() and ev.type() == QEvent.Quit
+                and self._defer_quit_for_saves()):
+            ev.ignore()
+            return True
         if (ev.type() in (QEvent.Resize, QEvent.Show)
                 and getattr(self, '_browser_columns_shown', False)
                 and (obj is self.table.viewport()
@@ -912,6 +965,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         # search, settings trees, dialogs, and the device browser keep their
         # native text/toggle behavior. Text editing retains its standard chords.
         if ev.type() in (
+                QEvent.KeyPress,QEvent.MouseButtonPress,QEvent.MouseButtonRelease,
                 QEvent.Wheel, QEvent.Resize, QEvent.ApplicationActivate,
                 QEvent.ApplicationDeactivate):
             self._defer_library_prep(
@@ -957,6 +1011,15 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         browsing = (browsing and QApplication.activeModalWidget() is None
                     and QApplication.activePopupWidget() is None
                     and not self._shutting_down and not self._state_maintenance)
+        if (browsing and (focus in (self.tree,self.sb_tree) or obj in (self.tree,self.sb_tree))
+                and ev.key() in (Qt.Key_Up,Qt.Key_Down)
+                and ev.modifiers() in (Qt.NoModifier,Qt.ShiftModifier)
+                and self.stack.currentIndex()==0):
+            # Sidebar clicks choose a playlist; arrows browse its songs.
+            if ev.type()==QEvent.KeyPress:
+                self.table.setFocus(Qt.ShortcutFocusReason)
+                self.table.keyPressEvent(ev)
+            ev.accept();return True
         if self._keyboard_router.handle(ev, browsing):
             return True
         return super().eventFilter(obj, ev)
@@ -1086,6 +1149,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         return self._edit_cue(kind,slot,'add')
 
     def _defer_library_prep(self, seconds: float = 0.75):
+        self._background_library_not_before=time.monotonic()+seconds
         worker = getattr(self, "_wf_fill_worker", None)
         if worker is not None:
             worker.defer_for_interaction(seconds)
@@ -1093,8 +1157,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
     def _space_should_play(self, w) -> bool:
         """Focus policy for the Space shortcut (kept separate so it's directly
         testable — offscreen focus doesn't propagate reliably)."""
-        return w is None or w in (self.table, self.tree, self.sb_tree,
-                                  self.device_tree, self.artists_view)
+        return (w is None or w in (self,self.table,self.tree,self.sb_tree,
+                                  self.device_tree,self.artists_view)
+                or (not isinstance(w,QLineEdit) and self.player_bar.isAncestorOf(w)))
 
     def _remember_current(self, idx, _prev=None):
         """Sticky memory of the selected track id — survives filters/sorts that
@@ -1611,6 +1676,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.player_bar.now_playing_changed.connect(
             lambda *_: self.grid_controller.set_current(self.player_bar.current_track()))
         self.player_bar.track_ready.connect(lambda: self._grid_changed(self.player_bar.current_track()))
+        self.player_bar.grid_ready.connect(lambda: self._grid_changed(self.player_bar.current_track()))
         self.player_bar.track_ready.connect(self.media_controller.discover)
         self.player_bar.cue_panel.empty_pressed.connect(
             lambda kind, slot: self._edit_cue(kind, slot, 'add'))
@@ -2055,48 +2121,30 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         panel.setAttribute(Qt.WA_StyledBackground, True)  # paint the right divider
         v = QVBoxLayout(panel); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
 
-        # The SOUNDBOX and DEVICES header bars ARE the resize grips: each one is
-        # mounted inside a vertical-splitter handle, so grabbing the bar and
-        # dragging it up/down trades space with the section above. The REKORDBOX
-        # header stays fixed at the top. Sizes persist via settings
-        # ("sidebar_split", saved with the column layout at quit).
-        rb_pane = QWidget()
-        pv = QVBoxLayout(rb_pane); pv.setContentsMargins(0, 0, 0, 0); pv.setSpacing(0)
-        rb_header = self._section_header("REKORDBOX PLAYLISTS", "↻", self._refresh_rekordbox)
-        rb_header.setContextMenuPolicy(Qt.CustomContextMenu)
-        rb_header.customContextMenuRequested.connect(
-            lambda pos, w=rb_header: self._rb_header_menu(w, pos))
-        pv.addWidget(rb_header)
-        self.tree = PlaylistTree()
+        playlists = QWidget()
+        pv = QVBoxLayout(playlists); pv.setContentsMargins(0,0,0,0); pv.setSpacing(0)
+        header = self._section_header("PLAYLISTS", "+", self._new_playlist_menu)
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(lambda pos:self._rb_header_menu(header,pos))
+        pv.addWidget(header)
+        self.tree = UnifiedPlaylistTree()
+        self.sb_tree = self.tree  # compatibility names refer to the same model/scrollbar
         self.tree.setHeaderHidden(True)
-        self.tree.setDragEnabled(True)
-        self.tree.setDragDropMode(QAbstractItemView.DragDrop)
-        self.tree.setAcceptDrops(True)
-        self.tree.setDropIndicatorShown(False)
-        self.tree.tracks_dropped.connect(self._native_append)
-        self.tree.files_dropped.connect(self._native_import_files)
-        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self._native_tree_menu)
-        self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.tree.setVerticalScrollMode(QAbstractItemView.ScrollPerItem)
         self.tree.setMinimumHeight(72)
-        self.tree.currentItemChanged.connect(self._on_rb_select)
+        self.tree.currentItemChanged.connect(self._on_playlist_select)
         self.tree.itemExpanded.connect(self._collapse_siblings)
+        self.tree.itemExpanded.connect(lambda item:self._local_folder_expanded(item,True))
+        self.tree.itemCollapsed.connect(lambda item:self._local_folder_expanded(item,False))
+        self.tree.native_tracks_dropped.connect(self._native_append)
+        self.tree.native_reordered.connect(self._native_reorder)
+        self.tree.native_files_dropped.connect(self._native_import_files)
+        self.tree.tracks_dropped.connect(self._on_tracks_dropped)
+        self.tree.playlist_moved.connect(self._move_custom)
+        self.tree.node_moved.connect(self._move_local_node)
+        self.tree.files_dropped.connect(lambda name,paths:self._import_files(paths,name or None))
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._playlist_menu)
         pv.addWidget(self.tree)
-
-        self.sb_tree = SoundBoxTree()
-        self.sb_tree.setHeaderHidden(True)
-        self.sb_tree.setMinimumHeight(48)
-        self.sb_tree.currentItemChanged.connect(self._on_custom_select)
-        self.sb_tree.tracks_dropped.connect(self._on_tracks_dropped)
-        self.sb_tree.playlist_moved.connect(self._move_custom)
-        self.sb_tree.node_moved.connect(self._move_local_node)
-        self.sb_tree.itemExpanded.connect(lambda item:self._local_folder_expanded(item, True))
-        self.sb_tree.itemCollapsed.connect(lambda item:self._local_folder_expanded(item, False))
-        self.sb_tree.files_dropped.connect(
-            lambda name, paths: self._import_files(paths, name or None))
-        self.sb_tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.sb_tree.customContextMenuRequested.connect(self._sb_menu)
 
         self.device_tree = DeviceTree()
         self.device_tree.setHeaderHidden(True)
@@ -2109,22 +2157,39 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         split = QSplitter(Qt.Vertical)
         split.setObjectName("SidebarSplit")
         split.setChildrenCollapsible(False)
-        split.addWidget(rb_pane)
-        split.addWidget(self.sb_tree)
+        split.addWidget(playlists)
         split.addWidget(self.device_tree)
-        split.setHandleWidth(26)  # exactly one section-header bar tall
-        for i, header in ((1, self._section_header("SOUNDBOX PLAYLISTS", "+",
-                                                   self._new_soundbox_item_menu, top=True)),
-                          (2, self._section_header("DEVICES", top=True))):
-            h = split.handle(i)
-            hl = QVBoxLayout(h); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(0)
-            hl.addWidget(header)  # the bar fills (and paints over) the handle
-        split.setStretchFactor(0, 3)  # window resizes go mostly to rekordbox…
-        split.setStretchFactor(1, 2)  # …then SoundBox; devices keep their size
-        split.setStretchFactor(2, 0)
+        split.setHandleWidth(26)
+        handle_layout = QVBoxLayout(split.handle(1))
+        handle_layout.setContentsMargins(0,0,0,0)
+        handle_layout.addWidget(self._section_header("DEVICES",top=True))
+        split.setStretchFactor(0,1)
+        split.setStretchFactor(1,0)
         self._sidebar_split = split
         v.addWidget(split)
         return panel
+
+    def _on_playlist_select(self,cur,previous):
+        if cur and cur.data(0,NATIVE_TREE_ROLE):self._on_rb_select(cur,previous)
+        else:self._on_custom_select(cur,previous)
+
+    def _playlist_menu(self,pos):
+        item=self.tree.itemAt(pos)
+        native=bool(self.lib and self.lib.source_kind=='rekordbox-db')
+        if (item and item.data(0,NATIVE_TREE_ROLE)
+                or native and (item is None or item.data(0,COLLECTION_ROLE) or item.data(0,ARTISTS_ROLE))):
+            self._native_tree_menu(pos)
+        else:self._sb_menu(pos)
+
+    def _new_playlist_menu(self):
+        if not self.lib or self.lib.source_kind!='rekordbox-db':
+            self._new_soundbox_item_menu();return
+        menu=QMenu(self)
+        item=self.tree.currentItem()
+        parent=item.data(0,RB_NODE_ROLE) if item and item.data(0,RB_NODE_KIND_ROLE)==1 else 'root'
+        menu.addAction('New Playlist',lambda:self._native_new(parent or 'root'))
+        menu.addAction('New Folder',lambda:self._native_new(parent or 'root',folder=True))
+        menu.exec(QCursor.pos())
 
     def _main_stack(self) -> QWidget:
         self.stack = QStackedWidget()
@@ -2397,6 +2462,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.stack.setCurrentIndex(0)
         self._cache_library()  # snapshot for the next instant paint
         self._arm_waveform_rechecks()
+        self.unification_controller.schedule()
         if self.providers.allows("artwork.search"):
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
@@ -2429,7 +2495,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.grid_controller.configure()
         self._landed_cache.clear()
         self._sync_playlists_cache = None
-        sb_cur = self.sb_tree.currentItem()  # selection BEFORE the rebuild
+        had_view=bool(getattr(self,'_view_key',None))
         repaired = imports.inject(self.lib, self.imported)  # livesets rejoin the pool
         if repaired:
             LOG.info("Repaired duration/size metadata for %d imported track(s)",
@@ -2474,24 +2540,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self.native_analysis_controller.discover()
         self.media_controller.discover()
         self._default_to_collection()
-        # _refresh_custom restores the sidebar selection with signals BLOCKED
-        # (unlike the rekordbox tree, whose re-select fires _on_rb_select), so
-        # when a refresh lands while Collection / Artists / a custom playlist
-        # is showing, the visible rows must be re-rendered by hand — otherwise
-        # new rekordbox adds stay invisible until you click away and back.
-        # sb_cur guards the first load: _default_to_collection just selected
-        # Collection with signals live, so it already rendered.
-        cur = self.sb_tree.currentItem()
-        if sb_cur is not None and cur is not None:
-            if cur.data(0, ARTISTS_ROLE):
-                self._show_artists()
-            else:
-                self._stash_view()  # keep the seat across the fresh rows
-                key = getattr(self, "_view_key", None)
-                self._reload_current_view()
-                if key:
-                    self._view_key = None  # same view, new rows — force re-seat
-                    self._restore_view(key)
+        if had_view:self._reload_current_view()
 
     def _cache_library(self):
         """Snapshot the current library to disk OFF the UI thread, so the next
@@ -2558,53 +2607,86 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 stack.append(it.child(i))
         return None
 
-    def _populate_tree(self, summary: dict):
-        presentation=self._native_presentation()
+    def _populate_tree(self, summary: dict, *, presentation=None):
+        presentation=self._native_presentation() if presentation is None else presentation
         if presentation is not None and presentation is not self.lib:
             summary=engine.summary(presentation)
-        # Remember what the user was viewing so a refresh doesn't dump them onto a
-        # random playlist. Signals blocked during the rebuild so no stray
-        # currentItemChanged fires _on_rb_select mid-repopulate.
-        prev = None
         cur = self.tree.currentItem()
-        if cur is not None:
-            prev = cur.data(0, PATH_ROLE)
-        active = getattr(self, '_view_key', '') or ''
-        if cur is not None and not prev and active.startswith('rb:'):
-            prev = active[3:]
-        prev_pid=(getattr(self,'_active_native_playlist_id',None) if active.startswith('rb:') else None)
-        self.tree.blockSignals(True)
+        identity_role=Qt.UserRole+82
+        current_id=cur.data(0,identity_role) if cur else None
+        scroll=self.tree.verticalScrollBar().value()
+        horizontal=self.tree.horizontalScrollBar().value()
+        blocked=self.tree.blockSignals(True)
+        updates=self.tree.updatesEnabled();self.tree.setUpdatesEnabled(False)
         try:
-            self.tree.clear()
-            pending_deletions=self._native_pending_deletions()
-            for child in summary["tree"].get("children", []):
-                def visible(node):
-                    if node.get('pid') in pending_deletions:return None
-                    return {**node,'children':[v for c in node.get('children',[]) if (v:=visible(c)) is not None]}
-                projected=visible(child)
-                if projected is not None:self.tree.addTopLevelItem(self._make_item(projected))
+            from soundbox.playlist_unification import hidden_native_roots
+            state=self.unification_controller.state()
+            pending_deletions=self._native_pending_deletions(presentation=presentation) | hidden_native_roots(
+                state,presentation.source_playlist_catalog if presentation else self.lib.source_playlist_catalog)
+            children=summary["tree"].get("children", [])
+            def visible(node):
+                if node.get('pid') in pending_deletions:return None
+                return {**node,'children':[v for c in node.get('children',[]) if (v:=visible(c)) is not None]}
+            projected=[v for child in children if (v:=visible(child)) is not None]
+            # Reuse native items by stable ID. Saving an unrelated playlist
+            # must not destroy expanded folders, editors or the user's seat.
+            root=self.tree.invisibleRootItem();existing={}
+            def collect(parent):
+                for i in range(parent.childCount()):
+                    item=parent.child(i)
+                    if item.data(0,NATIVE_TREE_ROLE):existing[item.data(0,identity_role)]=item
+                    collect(item)
+            collect(root);wanted=set()
+            aliases=self.unification_controller.export_aliases()
+            def reconcile(parent,nodes,offset=0,path=''):
+                for number,node in enumerate(nodes,offset):
+                    full_path=path+' / '+node['name'] if path else node['name']
+                    identity=node.get('pid') or node.get('path') or full_path
+                    wanted.add(identity)
+                    item=existing.get(identity)
+                    if item is None:
+                        item=self._make_item({**node,'children':[]})
+                    item.setData(0,identity_role,identity)
+                    item.setText(0,f"♪  {node['name']}  ({node['count']})" if node['type']=='playlist' else node['name'])
+                    item.setData(0,PATH_ROLE,node.get('path') if node['type']=='playlist' else None)
+                    item.setData(0,CUSTOM_ROLE,aliases.get(identity))
+                    item.setData(0,PINNED_TREE_ROLE,False)
+                    owner=item.parent() or (root if item.treeWidget() is self.tree else None)
+                    if owner is not parent or parent.indexOfChild(item)!=number:
+                        if owner is not None:owner.takeChild(owner.indexOfChild(item))
+                        parent.insertChild(number,item)
+                    reconcile(item,node.get('children',[]),path=full_path)
+            offset=sum(bool(root.child(i).data(0,COLLECTION_ROLE) or root.child(i).data(0,ARTISTS_ROLE))
+                       for i in range(root.childCount()))
+            reconcile(root,projected,offset)
+            for identity,item in existing.items():
+                if identity not in wanted:
+                    owner=item.parent() or root
+                    owner.takeChild(owner.indexOfChild(item))
+            self._refresh_custom()
+            if current_id in wanted:
+                item=next((item for item in self.tree.findItems('',Qt.MatchContains|Qt.MatchRecursive)
+                           if item.data(0,identity_role)==current_id),None)
+                if item is not None:self.tree.setCurrentItem(item)
+            active=getattr(self,'_view_key','') or ''
+            if active.startswith('rb:'):
+                item=self._find_tree_item('',getattr(self,'_active_native_playlist_id',None))
+                if item is not None and item.data(0,PATH_ROLE):self._view_key='rb:'+item.data(0,PATH_ROLE)
+            self.tree.doItemsLayout()
+            self.tree.verticalScrollBar().setValue(scroll)
+            self.tree.horizontalScrollBar().setValue(horizontal)
         finally:
-            self.tree.blockSignals(False)
-        self._refresh_custom()  # Collection count tracks the freshly loaded library
-        # Restore the prior selection if it still exists (expand to it + re-show rows).
-        if prev:
-            it = self._find_tree_item(prev,prev_pid)
-            if it is not None:
-                self._accordion_guard = True
-                p = it.parent()
-                while p is not None:
-                    p.setExpanded(True)
-                    p = p.parent()
-                self._accordion_guard = False
-                self.tree.setCurrentItem(it)  # fires _on_rb_select → re-shows its rows
-                self.tree.scrollToItem(it)
-        # else: collapsed by default; accordion handles the rest
-        self._native_pending_changed()
+            self.tree.blockSignals(blocked)
+            self.tree.setUpdatesEnabled(updates)
+        self._native_pending_changed(presentation=presentation)
 
     def _make_item(self, node: dict) -> QTreeWidgetItem:
         it = QTreeWidgetItem()
+        it.setData(0,NATIVE_TREE_ROLE,True)
         it.setData(0,RB_NODE_ROLE,node.get("pid"))
         it.setData(0,RB_NODE_KIND_ROLE,node.get("attribute"))
+        alias=self.unification_controller.export_aliases().get(node.get('pid'))
+        if alias:it.setData(0,CUSTOM_ROLE,alias)
         if node["type"] == "playlist":
             it.setText(0, f"♪  {node['name']}  ({node['count']})")
             it.setData(0, PATH_ROLE, node["path"])
@@ -2753,6 +2835,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             self._flash_status("Updated ✓", 6)
         self._cache_library()  # refresh the snapshot for the next instant paint
         self._arm_waveform_rechecks()
+        self.unification_controller.schedule()
         if self.providers.allows("artwork.search"):
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
@@ -2926,6 +3009,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self._view_key = key
         if not switching:
             return
+        self.table.sortByColumn(-1,Qt.AscendingOrder)
         tid, scroll = getattr(self, "_view_memory", {}).get(key, (None, 0))
         if tid:
             for i, r in enumerate(self.model._rows):
@@ -2955,7 +3039,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
 
     # ---------- custom (SoundBox) playlists ----------
     def _new_custom(self):
-        self._new_local_playlist()
+        if self.lib and self.lib.source_kind=='rekordbox-db':self._native_new()
+        else:self._new_local_playlist()
 
     def _custom_name_taken(self, name: str) -> bool:
         """Custom names must not collide with each other OR the two exportable
@@ -3012,16 +3097,18 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         keep_artists = bool(cur and cur.data(0, ARTISTS_ROLE))
         keep_name = cur.data(0, CUSTOM_ROLE) if cur else None
         keep_folder = cur.data(0, CUSTOM_FOLDER_ROLE) if cur else None
-        self.sb_tree.blockSignals(True)
+        blocked=self.sb_tree.blockSignals(True)
         try:
-            self.sb_tree.clear()
+            for index in range(self.sb_tree.topLevelItemCount()-1,-1,-1):
+                if not self.sb_tree.topLevelItem(index).data(0,NATIVE_TREE_ROLE):self.sb_tree.takeTopLevelItem(index)
             # Built-in "Collection" pinned first: every track in one view. No
             # CUSTOM_ROLE (can't be renamed/deleted/reordered), but draggable
             # onto a device as a whole-pool playlist (sbview mime).
             tracks = self._visible_collection_tracks()
             coll = QTreeWidgetItem([f"⌂  Collection  ({len(tracks)})"])
             coll.setData(0, COLLECTION_ROLE, True)
-            self.sb_tree.addTopLevelItem(coll)
+            coll.setData(0,PINNED_TREE_ROLE,True)
+            self.sb_tree.insertTopLevelItem(0,coll)
             if keep_coll:
                 self.sb_tree.setCurrentItem(coll)
             # Built-in "Artists": opens the BROWSER-side folder view (artist
@@ -3039,12 +3126,15 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 cached_count = self._artist_count_cache = (generation, len(names))
             arts = QTreeWidgetItem([f"♪  Artists  ({cached_count[1]})"])
             arts.setData(0, ARTISTS_ROLE, True)
-            self.sb_tree.addTopLevelItem(arts)
+            arts.setData(0,PINNED_TREE_ROLE,True)
+            state=self.unification_controller.state()
+            self.sb_tree.insertTopLevelItem(1,arts)
             if keep_artists:
                 self.sb_tree.setCurrentItem(arts)
-            self._populate_custom_folders(keep_name, keep_folder)
+            if not state or not state['customs_done']:
+                self._populate_custom_folders(keep_name, keep_folder)
         finally:
-            self.sb_tree.blockSignals(False)
+            self.sb_tree.blockSignals(blocked)
 
     def _resolve_table_drop(self):
         """What a drop on the main browser targets, or None to reject it.
@@ -3069,6 +3159,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         return None  # derived/unsupported views
 
     def _on_tracks_dropped(self, name: str, ids: list[str]):
+        state=self.unification_controller.state()
+        if state and state['customs_done']:
+            binding=state['nodes'].get('custom:'+name)
+            if binding:self._native_append(binding['id'],ids)
+            else:self._flash_status('Choose a current native playlist before adding songs',8)
+            return
         bag = self.custom.setdefault(name, [])
         dupes = [i for i in ids if i in bag]
         # Adding the same song TWICE must be a choice, never an accident:
@@ -3295,7 +3391,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                     self._flash_status(str(exc),15);return
             if fresh_ids and preferences['automatic'] and (preferences['bpm'] or preferences['key']):
                 try:self.settings[analysis_jobs.KEY]=analysis_jobs.admit(before_analysis_jobs,self.lib,
-                    [imports.make_track(tid,self.imported[tid]) for tid in fresh_ids],preferences)
+                    [imports.make_track(tid,self.imported[tid]) for tid in fresh_ids],preferences,automatic=True)
                 except ValueError as exc:
                     self.imported=before_imported;self.custom=before_custom;self.settings[shared_imports.KEY]=before_jobs
                     self._flash_status(str(exc),15);return
@@ -3613,6 +3709,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         drift/resync recognize them by identity (they aren't in lib.playlists).
         Mirrors the `cust` branch of _resolve_jobs."""
         custom = getattr(self, "custom", None) or {}
+        state=self.unification_controller.state()
+        if state and state['customs_done']:
+            by_id={p.pid:p for p in self.lib.playlists}
+            return [replace(by_id[node['id']],export_key='cust:'+key[7:])
+                    for key,node in state['nodes'].items()
+                    if key.startswith('custom:') and node['id'] in by_id]
         from soundbox.playlist_folders import paths
         locations = paths(self._local_playlist_tree())
         return [Playlist(name=n, folder_path=locations.get(n, []), keys=list(ids))
@@ -3642,7 +3744,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             return self._sync_playlists_cache
         views = [self._view_playlist(v) for v in ("collection", "artists")]
         self._sync_playlists_cache = (
-            self._custom_playlists() + [p for p in views if p is not None])
+            [p for p in self._custom_playlists() if not p.pid] + [p for p in views if p is not None])
         return self._sync_playlists_cache
 
     def _device_label(
@@ -5008,6 +5110,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         facts = device_facts(dev)
         identity_key = self._stock_device_key(dev, profile)
         adoptable_playlist_keys = {f"cust:{name}" for name in self.custom}
+        state=self.unification_controller.state()
+        if state and state['customs_done']:
+            adoptable_playlist_keys-={'cust:'+key[7:] for key in state['nodes'] if key.startswith('custom:')}
         worker = ProgressTask(
             lambda callback: plan_dual_ipod_sync(
                 library,
@@ -5830,6 +5935,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                         [str(part) for part in folder],
                         [str(track_id) for track_id in tracks],
                         pid=str(row.get("pid") or ""),
+                        export_key=key if key.startswith('cust:') and row.get('pid') else '',
                     )
                     if device_manifest.playlist_key(playlist) != key:
                         raise ValueError(
@@ -6445,7 +6551,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             if focus is tree or focus is not None and tree.isAncestorOf(focus):
                 item=tree.currentItem()
                 if item is None:return
-                if tree is self.tree:
+                if item.data(0,NATIVE_TREE_ROLE):
                     identity=item.data(0,RB_NODE_ROLE)
                     if identity:self._native_rename(identity)
                 else:
@@ -7321,11 +7427,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         (after settings load). Sort is deliberately NOT restored — a playlist
         opening pre-sorted would read as the wrong (non-rekordbox) order."""
         sizes = self.settings.get("sidebar_split")
-        if (isinstance(sizes, list) and len(sizes) == 3
+        if (isinstance(sizes, list) and len(sizes) in (2,3)
                 and all(isinstance(x, int) and x >= 0 for x in sizes) and sum(sizes)):
-            self._sidebar_split.setSizes(sizes)
+            self._sidebar_split.setSizes([sum(sizes[:2]),sizes[2]] if len(sizes)==3 else sizes)
         else:
-            self._sidebar_split.setSizes([600, 400, 96])  # classic proportions
+            self._sidebar_split.setSizes([1000, 96])  # classic proportions
         state = self.settings.get("columns_state")
         if not state:
             self._sync_artist_columns()
@@ -7358,6 +7464,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 if pl:
                     pls.append(pl)
             elif kind == "cust":
+                state=self.unification_controller.state()
+                if state and state['customs_done']:
+                    mapped=next((p for p in self._custom_playlists()
+                                 if p.export_key=='cust:'+val),None)
+                    if mapped:pls.append(mapped)
+                    continue
                 ids = self.custom.get(val, [])
                 if ids:
                     from soundbox.playlist_folders import paths
@@ -7637,6 +7749,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             self.graveyard_controller.shutdown()
         if getattr(self,'removal_controller',None) is not None:
             self.removal_controller.stop()
+        if getattr(self,'unification_controller',None) is not None:
+            self.unification_controller.stop()
         if getattr(self,'media_controller',None) is not None:
             self.media_controller.stop()
         self._cdj_waiting = None
@@ -7717,9 +7831,56 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             loop.exec()
         self._shutdown_waiting = False
 
+    def _pending_save_reason(self):
+        """Quit admission only: ordinary editing and source pumps stay open."""
+        if getattr(self, '_shutting_down', False):
+            return ''
+        settings = getattr(self, 'settings', {})
+        for key in ('shared_import_jobs', 'analysis_jobs', 'native_analysis_jobs',
+                    'pending_prep_edits', 'rekordbox_playlist_edits'):
+            queue = settings.get(key, [])
+            if queue:
+                if not isinstance(queue, list):
+                    return 'A saved edit queue needs attention; SoundBox remains open'
+                error = next((job.get('error') for job in queue
+                              if isinstance(job, dict) and job.get('error')), '')
+                if error:
+                    return 'Save needs attention — ' + str(error)
+                return 'Finishing saves — SoundBox remains open'
+        removal = settings.get('graveyard_delete_intent')
+        if removal:
+            return ('Save needs attention — ' + str(removal['error'])
+                    if isinstance(removal, dict) and removal.get('error')
+                    else 'Finishing saves — SoundBox remains open')
+        tags = getattr(self, 'tag_controller', None)
+        grid = getattr(self, 'grid_controller', None)
+        active_grid = getattr(grid, '_active', None)
+        grid_probe = (isinstance(active_grid, tuple) and len(active_grid) == 2
+                      and active_grid[0] == 'probe')
+        if (getattr(self, '_analysis_worker', None) is not None
+                or getattr(getattr(self, '_import_tasks', None), 'pending', 0)
+                or getattr(tags, '_cue_queue', None)
+                or getattr(grid, '_queue', None)
+                or (active_grid is not None and not grid_probe)
+                or (getattr(tags, 'busy', False)
+                    and not (grid_probe and getattr(tags, '_busy_kind', '') == 'grid')
+                    and getattr(tags, '_busy_kind', '') in (
+                        'tags', 'cues', 'grid', 'prep', 'playlists', 'analysis',
+                        'registration', 'registration-cancel', 'removal', 'media'))):
+            return 'Finishing saves — SoundBox remains open'
+        return ''
+
+    def _defer_quit_for_saves(self):
+        reason = self._pending_save_reason()
+        if not reason:
+            return False
+        self._flash_status(reason, 10)
+        return True
+
     def closeEvent(self, event):
         if (getattr(self, "_shutdown_waiting", False)
-                or getattr(self, "_state_maintenance", False)):
+                or getattr(self, "_state_maintenance", False)
+                or self._defer_quit_for_saves()):
             event.ignore()
             return
         self.shutdown()

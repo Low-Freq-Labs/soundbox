@@ -5,6 +5,23 @@ import json
 from pathlib import Path
 
 
+def verify_workers(report):
+    workers=report.get('workers')
+    if not isinstance(workers,list) or not workers:raise ValueError('Missing worker reports')
+    seen=set()
+    for worker in workers:
+        selected=worker['selected']
+        if (worker['phase']!=report['phase'] or worker['inventory']!=report['inventory']
+                or not selected or len(set(selected))!=len(selected) or seen.intersection(selected)
+                or worker.get('workers') or worker.get('exit_code')!=0
+                or not worker['passed'] or worker['skipped'] or worker['expected_failures']
+                or worker['ran']!=len(selected)):
+            raise ValueError('Every isolated worker must run its unique complete partition and pass')
+        seen.update(selected)
+    if seen!=set(report['selected']) or report['ran']!=sum(w['ran'] for w in workers):
+        raise ValueError('Worker partitions do not cover the phase exactly')
+
+
 def verify(reports: list[dict]) -> int:
     if len(reports) != 2 or {r['phase'] for r in reports} != {'offscreen', 'native'}:
         raise ValueError('Both required Qt phases must report')
@@ -13,6 +30,7 @@ def verify(reports: list[dict]) -> int:
         raise ValueError('Empty or duplicate discovered inventory')
     seen = set()
     for report in reports:
+        if 'workers' in report:verify_workers(report)
         selected = report['selected']
         if report['inventory'] != inventory:
             raise ValueError('Test inventory changed between processes')

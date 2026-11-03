@@ -141,6 +141,27 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   app loader. Ordinary playlists later passed a separate October30 acceptance and
   use their own explicit authority; analysis publication remains separate.
 
+## Stable native waveform loading
+
+- Interactive first paint waits for complete mode streams and signed detail;
+  manifest/grid/cues still become ready first. A compact-only preview followed
+  by full detail changes the main silhouette and palette. Do not reintroduce a
+  duration-specific early commit. Partial caches wait for repair. A selected-load
+  worker saves its own valid-cache upgrade for the next load; separate fill
+  completions and explicit reanalysis retain targeted loaded-deck refresh.
+- Grouped uploads must check their depth inside the render mutex before taking
+  a buffer snapshot. Checking at draw entry alone races with an upload starting
+  before that snapshot. Restore the dirty flag on a skipped draw, and advertise
+  scheduled presentation only after a valid snapshot. Capture its waveform
+  revision under that same lock; reading a newer revision after unlocking can
+  retain old attributes for a new complete buffer.
+- Public compact mode0 uses positive upper/lower magnitudes; BLUE/RGB modes1/2
+  use signed intervals. This sign contract remains separate from publication.
+- Interactive detail reads can omit spectral_24, which has no renderer consumer;
+  full default APIs and audits still validate it. All displayed sections retain
+  checksums. The bounded signed-transfer lookup must reproduce the original
+  scalar's65536 outputs exactly; it changes cost, never geometry or palette.
+
 ## Qt / PySide6 (these bite HARD)
 - **Tree stripes and embedded controls need explicit geometry.** QTreeView paints
   alternate backgrounds only for real items. Device BrowserDetailTree extends
@@ -440,7 +461,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   generous guarded margin scaled by the attribute density and absolute
   integer-song-coordinate recentering so regeneration cannot create a viewport
   seam.
-- **Coarser extrema need an occupancy-aware color resolve.** The accepted RGB
+- **Historical occupancy correction, superseded November2.** The accepted RGB
   576/864 follow-up selects one logical-pixel source footprint and one logical-
   point motion unit (two physical pixels on Retina). A plain 2-ms peak envelope
   improved glisten but increased painted area/brightness. Keep the original
@@ -811,13 +832,12 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   must group both native uploads while presentation is suspended and commit
   them together. Painting the overview while a long ultra section is still
   decompressing/building makes the waveform visibly change size on promotion.
-- Prep grid buttons use the accepted source writer; independent SoundBox manual
-  V5 ownership remains protected. Import precedence is unchanged: a valid
-  Rekordbox grid wins exactly; otherwise use the zero-anchored fallback. Never
-  infer that boundary from AAC/ALAC/WAV or a filename—those only happened to
-  identify Sonny's current sets. Player load must apply the same zero-anchor
-  contract immediately to a legacy fallback while bulk metadata migration is
-  still in progress.
+- Prep grid buttons use the accepted source writer; manual SoundBox ownership
+  remains protected. Native/manual/saved grids retain their source priority.
+  Only eligible short tracks may use the zero-anchored automatic fallback;
+  sets over900seconds keep their waveform without an invented BPM/key/grid.
+  Never infer this boundary from AAC/ALAC/WAV or a filename. Legacy zero-anchor
+  metadata is reconciled through the same bounded read-only rules.
 - Custom QWidget with layout `stretch=1` may not expand — also set
   `setSizePolicy(Expanding, …)`.
 - QSS: `QLabel { background: transparent }` or you get dark boxes behind text.
@@ -970,7 +990,7 @@ the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
   sharing one source path. Sidebar counts use unsorted visible membership, never
   the Collection's newest-added sorting path.
 - **Restoring a tree selection with signals BLOCKED re-renders NOTHING.** The
-  two sidebars are asymmetric: `_populate_tree` re-selects an rb playlist with
+  two row-rebuild paths in the unified sidebar are asymmetric: `_populate_tree` re-selects a native playlist with
   signals LIVE (fires `_on_rb_select` → fresh rows), but `_refresh_custom`
   re-seats Collection/Artists/custom inside `blockSignals(True)` — the table
   keeps its old rows. So any path that swaps `self.lib` under a live SoundBox
@@ -1590,8 +1610,10 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   device playlist is still valid. Use that proof in downstream stock/Rockbox
   source mappings too: fixing only the append reader leaves moved sources
   failing later as unavailable or unowned. Keep original manifest recovery
-  bytes and hash moved sources before reusing derivatives. Only custom SoundBox playlists accept incoming
-  membership; never create new rekordbox playlist overlays. Baseline-check and
+  bytes and hash moved sources before reusing derivatives. Only local custom
+  SoundBox playlists accept incoming membership; native-adopted customs retain
+  their device key but do not adopt incoming device edits. Never create new
+  rekordbox playlist overlays. Baseline-check and
   persist the exact custom membership before device writes. Deduplicate custom
   membership by track ID, canonical source, or exact source bytes. Normal Sync
   may reuse matching committed hashes; otherwise hash only size-matched
@@ -2193,3 +2215,19 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   AFTER rows and actual DAT/EXT hashes. A test fixture that invents after_revision
   for grids conceals restart/failed-ack bugs. Exact receipt/base proofs migrate
   legacy intentions without reapplying an already committed nudge.
+
+## November1 unified-playlist follow-up
+
+- `tree` and `sb_tree` now alias one widget. Source rows carry `NATIVE_TREE_ROLE`
+  even when XML lacks a native ID; rebuild only the intended row domain. Folder
+  navigation keeps the previous active playlist. Sidebar Up/Down route into the
+  track table without changing the sidebar selection.
+- Decoder-ready and grid-ready are independent events. Refresh grid admission on
+  the manifest signal too; otherwise a fast decoder can leave bar-start disabled.
+- Use indexed conversion facts for browser rows. A scan of the entire conversion
+  cache for each song made Collection clicks quadratic. Decoded Track.path caches
+  only its URI conversion; filesystem/native authority still validates separately.
+- Native merge mappings persist with admitted source requests. Never infer a
+  binding from an existing name or discard original custom data to cut over UI.
+  A native adopted custom keeps its original device export key, but it cannot
+  adopt iPod additions. All source domains retain their own authorities.

@@ -88,7 +88,8 @@ boundaries. Source changes require the full release/render gate and installed
 native-player acceptance; see [HANDOFF](HANDOFF.md) for the current state and
 [PLAYER](PLAYER.md) for the cue editing/transport contract.
 
-November1 candidate adds unassigned **Set cue** directly below **Toggle cue page**.
+The installed November1 follow-up adds unassigned **Set cue** directly below
+**Toggle cue page**.
 It captures at the current playhead into the first empty slot on the active Hot
 or Memory page, with the existing Quantize and durable-save rules. It never jumps
 to or overwrites a filled slot, and a held key does not repeat capture. Assign it
@@ -105,3 +106,9 @@ stops repetition. Other single-press commands retain their existing behavior.
 Jump backward/forward shortcuts are physical holds: immediate jump,300ms delay,
 then100ms repeats until release, focus loss or track change. Oversized jumps use
 the remaining audio and stop at0/duration, with or without a native beat grid.
+
+November1 playlist follow-up: Up/Down from the playlist sidebar route into the
+active track table, preserving Shift selection; they never choose another playlist.
+Session CUE (its button and mapped keys) cannot take over while a Hot or Memory
+Cue is physically held. Grid-manifest arrival refreshes the bar-start controls
+independently of audio readiness, preserving the user’s Command-A mapping.

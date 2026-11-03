@@ -408,11 +408,18 @@ class WaveformWorker(QThread):
             cache_dir, self.track_id, self.path)
         if self.isInterruptionRequested():
             return True, overview is not None, False
+        # The compact overview is not the scrolling lane's final geometry.
+        # Publish both surfaces together so a long cached track never grows or
+        # changes palette when its signed ranges and native streams arrive.
         detail = load_detail(
-            cache_dir, self.track_id, self.path)
+            cache_dir, self.track_id, self.path, include_spectral=False)
         if self.isInterruptionRequested():
             return True, overview is not None, detail is not None
-        if overview is not None and self.native_backend is not None:
+        if overview is None or detail is None:
+            # A damaged/incomplete cache may be repaired below. Its provisional
+            # silhouette must not become a visible first frame in the meantime.
+            return True, overview is not None, detail is not None
+        if self.native_backend is not None:
             combined = {**manifest, **overview}
             if (detail is not None
                     and hasattr(
@@ -428,8 +435,10 @@ class WaveformWorker(QThread):
                     combined, self.generation):
                 overview["_native_uploaded"] = True
         if overview is not None:
+            # The non-native fallback also receives its final contour before
+            # its first repaint, rather than a compact-only intermediate model.
             self.overview_ready.emit(
-                self.path, self.generation, overview)
+                self.path, self.generation, {**overview, **detail})
         if detail is not None:
             if (self.native_backend is not None
                     and not detail.get("_native_uploaded")):
@@ -441,6 +450,11 @@ class WaveformWorker(QThread):
 
     def run(self):
         if self.transient_analysis:
+            # A blocked publication does not forbid reading a valid existing
+            # waveform. In particular a compatible AAC registration must not
+            # send an already-cached hours-long set through another decode.
+            if self.track_analysis_dir and all(self._load_stages(self.track_analysis_dir)):
+                return
             # Audition hidden songs through the same checked analysis codec,
             # without recreating their canonical record. Signals/GPU uploads
             # retain the loaded bytes after this private directory is removed.
@@ -492,8 +506,10 @@ class WaveformWorker(QThread):
                     prepared = with_imported_cues(prepared, existing.get("cues") or [])
                 self.cache_writes.publish(self.track_id, lambda: track_store(
                     cache_dir, self.track_id, self.path, prepared))
-                if checkpoint():
+                if checkpoint() and not all(present):
                     self._load_stages(cache_dir)
+                # A valid older cache is already on deck. Keep its completed
+                # surface stable; the upgraded cache is ready for the next load.
         except Exception:  # noqa: BLE001
             if not self.isInterruptionRequested():
                 self.manifest_ready.emit(self.path, self.generation, {})
@@ -1554,6 +1570,7 @@ class PlayerBar(QWidget):
     waveform_zoom_changed = Signal(float)
     load_diagnostic = Signal(str, float)  # phase, milliseconds since load intent
     track_ready = Signal()
+    grid_ready = Signal()
 
     def __init__(
             self, jump_mode: str = "16 BEATS",
@@ -1810,6 +1827,9 @@ class PlayerBar(QWidget):
             self.cue_btn, "active", self._session_cue_held or self._cue_preview_active)
         self._set_dynamic_property(
             self.play_btn, "playing", self._transport_play_active)
+        panel=getattr(self,'cue_panel',None)
+        self.cue_btn.setEnabled(bool(self._src_path) and self._playback_available
+                                and not (panel and panel._pressed_controls))
 
     def sizeHint(self) -> QSize:
         # Prefer a 200pt view (151pt scrolling lane), keeping the existing
@@ -2249,7 +2269,7 @@ class PlayerBar(QWidget):
 
         Cue state is session-only. Nothing is written to rekordbox or audio.
         """
-        if not self._src_path:
+        if not self._src_path or self.cue_panel._pressed_controls:
             return
         self._session_cue_held = True
         self._sync_deck_button_states()
@@ -2278,9 +2298,11 @@ class PlayerBar(QWidget):
             self._start_cue_preview(target, (kind, slot), keep_playing=True)
         else:
             self._start_cue_preview(target, (kind, slot))
+        self._sync_deck_button_states()
 
     def _marker_cue_release(self, kind: str, slot: int):
         self._release_cue_preview((kind, slot))
+        self._sync_deck_button_states()
 
     def _start_cue_preview(
             self, target: int, control: tuple[str, int], *, keep_playing: bool = False):
@@ -2835,6 +2857,7 @@ class PlayerBar(QWidget):
             self._pending_start_ms = self._beat_grid[0] if self._beat_grid else 0
             self._try_pending_autoplay()
         self._update_transport()
+        self.grid_ready.emit()
 
     def _on_analysis_overview(
             self, path: str, analysis_path: str,
@@ -2871,6 +2894,7 @@ class PlayerBar(QWidget):
         if self._live_cues is not None:
             data = dict(data)
             data["cues"] = list(self._live_cues)
+        self._analysis_parts.update(data)
         self.wave.set_analysis(data)
         self.cue_panel.set_cues(list(data.get("cues") or []))
         if hasattr(self.player, "set_analysis"):
@@ -2882,6 +2906,7 @@ class PlayerBar(QWidget):
         if self._pending_autoplay:
             self._pending_start_ms = self._beat_grid[0] if self._beat_grid else 0
             self._try_pending_autoplay()
+        self.grid_ready.emit()
 
     def refresh_audio_detail(self, path: str):
         """Apply a just-finished canonical V5 record to the current deck."""

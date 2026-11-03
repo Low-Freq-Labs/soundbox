@@ -287,7 +287,7 @@ def save(device_root, manifest: dict) -> None:
 def playlist_key(playlist) -> str:
     """Identity used in the manifest: the stable rekordbox ID when present, else a
     name-based key for in-app custom playlists (which have no rekordbox ID)."""
-    return playlist.pid or f"cust:{playlist.name}"
+    return getattr(playlist,'export_key','') or playlist.pid or f"cust:{playlist.name}"
 
 
 def current_playlists_by_key(library, extra=None) -> dict:

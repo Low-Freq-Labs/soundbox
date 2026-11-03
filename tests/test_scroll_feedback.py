@@ -30,7 +30,16 @@ class ScrollFeedback(unittest.TestCase):
                 self.assertTrue(any(image.pixelColor(x,y)==QColor(color) for y in range(image.height()) for x in range(image.width())))
                 QTest.qWait(160);self.app.sendEvent(table.viewport(),event);QTest.qWait(180)
                 self.assertTrue(edge.bar.property('wheelScrolling'))
-                QTest.qWait(180);self.assertFalse(edge.bar.property('wheelScrolling'))
+                end=QWheelEvent(QPointF(30,60),QPointF(30,60),QPoint(),QPoint(),Qt.NoButton,Qt.NoModifier,Qt.ScrollEnd,False)
+                self.app.sendEvent(table.viewport(),end)
+                self.assertFalse(edge.bar.property('wheelScrolling'))
+                self.assertFalse(edge.bar._soundbox_scroll_feedback.isActive())
+                # A conventional mouse has no phase/end event. Its feedback
+                # must also clear promptly, rather than the former 300 ms tail.
+                wheel=QWheelEvent(QPointF(30,60),QPointF(30,60),QPoint(),QPoint(0,-120),Qt.NoButton,Qt.NoModifier,Qt.NoScrollPhase,False)
+                self.app.sendEvent(table.viewport(),wheel)
+                self.assertTrue(edge.bar.property('wheelScrolling'))
+                QTest.qWait(60);self.assertFalse(edge.bar.property('wheelScrolling'))
         finally:
             table.close();table.deleteLater();theme.set_accent(*previous);self.controller.update();self.app.processEvents()
 

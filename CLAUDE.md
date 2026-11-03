@@ -5,7 +5,7 @@ Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
 (Low Freq Labs) operates the personal build. Read this file and
 [docs/HANDOFF.md](docs/HANDOFF.md) at the start of every session.
 
-Current delivery, November 1, 2026:
+Current delivery, November 2, 2026:
 
 - Direct Collection/native-playlist imports register or reuse native records and
   durably route membership through separately accepted writers. Initial shared
@@ -16,25 +16,50 @@ Current delivery, November 1, 2026:
   work. Prep v2 preserves native terminal rows beyond EOF and verifies actual
   grid receipt fields. The previously stuck53 intentions are settled: four exact
   grids and16 cues verified in native source; pending prep queue empty at delivery.
-- Boundary beat jumps clamp to available audio; mouse and shortcut holds repeat.
-  BLUE/3BAND middle zoom height and the third, gentle wide RGB correction are
-  installed. Sonny approved that RGB comparison after rejecting two darker ones.
-- Confirmed Graveyard Delete works:515 user disposals must be preserved. Four
-  absent native IDs/no verified paths can be cleared through explicit local-only
-  user confirmation. Never guess their files or restore pre-bulk library state.
+- Boundary beat jumps clamp to audio; mouse/shortcut holds repeat. Installed154
+  has the prior BLUE/3BAND height and wide RGB correction. November2 supersedes
+  zoom-dependent brightness: the supplied Gorilla Glue92pt/s RGB frame is the
+  fixed palette reference; motion/geometry remain separate. The final installed154 matches it and passed2144 tests; Artists is
+  virtual-only. HANDOFF distinguishes each dirty-source fingerprint.
+- Confirmed Graveyard Delete works:515 user disposals and four user-confirmed
+  local dismissals of absent native IDs must be preserved. Never guess those
+  entries' files or restore pre-bulk library state.
 - Recoverable Collection compatibility conversion and automatic native locator
   updates are installed.124 WAV conversions completed with exact originals kept;
   a32kHz MP3 remains timing-unproven and unchanged. Cloud-deferred/unavailable
   sources are not certified compatible. No manual Relocate workflow is required.
-- Saved white Dock icon survives actual normal quit. Current installed personal
-  build153 passed all2035 tests, package/signature/smoke and real-source readback.
-  HANDOFF separates that binary's dirty-source provenance from repository HEAD.
+- Saved white Dock icon survives actual normal quit. Installed personal build154
+  passed2144 tests and package/signature/smoke/curation checks. All83 old visible
+  imports now have native identities; Collection3291 and all10 native custom
+  memberships are independently verified. Sonny then canceled native artist
+  generation: Artists is virtual-only, with NO native artist folder/playlists or
+  ongoing jobs. The1527 generated playlists/root were removed by exact IDs/UUIDs
+  through the accepted playlist delete API, preserving all songs/real memberships.
+  Installed source preserves UI/navigation/transport,
+  reuses exact technical/projection caches and bounds cloud metadata renewal.
+  The approved scoped reorder pilot passed Sonny’s native reopen/normal
+  quit check; original order is restored and general reordering is enabled.
+  HANDOFF has exact current provenance and acceptance status. November2 follow-up
+  is installed: complete waveforms appear at their finished size; complete
+  adaptive grids publish exactly; cloud-ctime prep keeps durable gestures while
+  verifying bytes off the UI thread; failed analysis saves do not stall other
+  songs. UI Quit stays open until captured saves finish, with input/pumps live.
+  Sonny's new Jantsen import now has449native beats with155→150BPM, saved key and
+  exact endpoint verified. Current94imports/10analyses/92bindings supersede the
+  earlier93/9/91 baseline. Nine authorities remain byte-exact.
+
+Evening follow-up is installed: complete first-frame waveform publication
+replaces the resizing compact preview; checksum-preserving cache reads and an
+exact128KiB native transfer lookup reduce load cost. Right-click a playlist icon
+for Star, Music note or Vinyl crate. Only playlists are configurable; Artists is
+fixed person, Collection home and folders unchanged. All2144tests and package/
+native smoke/installed curation checks pass. HANDOFF records exact provenance.
 
 Sonny is now testing the installed app. No mouse/keyboard/Accessibility input into
 his real SoundBox or rekordbox; he operates native reference actions and Delete.
 Private fixtures/read-only snapshots and ordinary local build/install/relaunch
 remain permitted. Do not interrupt playback or reinstall for documentation alone.
-Preserve current curation, nine saved analyses, nine authorities and all disposal/
+Preserve current curation, ten saved analyses, nine authorities and all disposal/
 conversion recovery. Older roadmap checkpoints are archived under docs/archive;
 they do not override the current handoff or authorize a rollback.
 
@@ -108,10 +133,22 @@ repository can answer the question.
   Pending UI intents persist before worker admission and survive restart; no
   local veto substitutes for a source save. Retry renews stale/rolled-back intent
   identity/revision/clock, while committed receipts replay idempotently. Normal
-  quit drains active source work; unstarted playlist intents remain durable.
+  UI Quit/close remains open while captured import/analysis/source saves remain,
+  with input and source pumps live; the next Quit proceeds once complete.
+  Explicit teardown still retains any unstarted durable intents.
   CDJ capture waits for these edits and rebinds native selections by stable ID;
   deleted selections or changed sources cancel before export. Exact UUID pins
   retain affected tracks in SoundBox Collection without registering new files.
+  Bounded envelopes compose at most64 already accepted create/append/remove
+  commands and16384 memberships through this SAME writer/lock/journal/paired
+  backup. Exact child identities/clocks persist before admission; pure row/counter
+  chains and initial/final revisions reproduce sequential DB/XML effects. Every
+  guard still hashes recovery payloads and checks source/authority/apps freshly;
+  only exact immutable XML parsing and previously verified semantic reconstruction
+  may be reused within their bounded lifetimes. No registration/reorder enters
+  these envelopes. Reorder has an independent default-false capability and native
+  reference proof; its source-to-native reopen pilot passed November2 and the
+  exact-library general capability is provisioned.
   Intelligent/cloud mutations remain separate gates; new-track registration uses
   its separate accepted domain below.
 - Ordinary explicit file imports and imported-track playlist drops use the
@@ -132,8 +169,16 @@ repository can answer the question.
   encrypted paired recovery. Full acceptance archives remain retained; ordinary
   completed transactions use bounded receipt-backed retention. A file gesture
   authorizes its own native registration/membership without a separate save step.
-  No bulk old-import backfill or musical-data migration is granted by registration;
-  completed musical results/drafts survive bare native-ID acquisition unchanged.
+  November1 follow-up: Sonny explicitly requested backfilling his existing visible
+  SoundBox-only Collection and migrating all custom folders/playlists plus native
+  Artists/artist playlists into this exact library. November2 supersedes that
+  artist portion: Artists is virtual-only, the exact generated hierarchy is
+  removed through accepted playlist deletion, and no native artist jobs recur.
+  The real custom/Collection upgrade is a durable, source-bound
+  composition of the accepted registration and playlist APIs, not permission for
+  new source publishers or broader musical-data migration. Preserve completed
+  musical results/drafts and hidden/disposed songs. Sonny also requested showing
+  native divider/test entries: disable hide-untracked for this merge.
 - Initial shared analysis uses the separately accepted `rekordbox_analysis_store`
   authority for this exact library/schema/version. Only initial full BPM/Grid+Key
   and native waveforms on bare stereo PCM16/24 WAV44.1/48kHz are accepted. Render
@@ -532,17 +577,26 @@ all seven layer-overlap colors. Accepted main-lane RGB/BLUE/3BAND geometry and
 color remain protected by before/after native drawables. See the dated reference
 audit for exact upstream values, observed differences and validation limits.
 
-SoundBox playlist folders are local organization in the bounded, validated
-`settings.custom_playlist_tree`; membership remains in `custom`. Folder moves
-preserve song order and existing `cust:<name>` device identities, while export
-receives the actual folder_path. Folder drags expand to descendant playlist
-intents. Collection/Artists stay pinned; folder deletion reviews its contained
-playlists and preserves Collection/source audio. The context menu is New Playlist,
-New Folder, Rename, Delete. Composite Rockbox catalogue files remain numbered and
-top-level. These local folders remain independent of the separately accepted
-native playlist writer and never register new source tracks.
-Folder clicks only expand/collapse; only selecting a playlist activates its view.
-Navigation focus must not retarget browser refreshes, track drops or removal actions.
+The sidebar uses one Playlists tree and one scrollbar, plus Devices. Existing
+local organization remains in `settings.custom_playlist_tree` and `custom` as
+preserved migration input. Explicit `settings.playlist_unification` binds the
+requested merge to one source/library and records exact created native identities
+alongside the existing persisted FIFOs. Register visible old imports first; create
+custom folders/playlists with exact order/duplicates, then cut over their display
+only after verified readback. Artists remains a virtual SoundBox grouping of
+Collection; it creates no native folder, per-artist playlist or maintenance job.
+Native names alone never authorize adoption. Unresolved identities, source changes
+and unknown recovery retain the intentions and fail closed. No deletion/restoration
+of user music belongs to migration.
+Original custom device keys remain export bindings after native adoption; native
+playlists never adopt device-side additions or publish them back to rekordbox.
+This is a one-time internal upgrade, not a release-user workflow. No merge command
+belongs in the UI. Fresh native libraries create no migration state or artist
+organization job; source selection alone never activates old-import/custom
+backfill. New playlists/folders use the existing accepted native writer. Legacy local-only
+sources retain local folder handling. Folder clicks expand/collapse without changing
+the active track view. Up/Down after playlist selection browse its songs; native
+and export membership order stays exact while browser rows default newest first.
 
 ## Documentation map
 
@@ -564,6 +618,10 @@ Navigation focus must not retarget browser refreshes, track drops or removal act
 | `docs/DEVICES.md` | Rockbox/stock/dual-boot/generic layouts, capability boundaries, and validation |
 | `docs/ARCHITECTURE.md` | Engine/desktop/native layout, data model, persistence, build/install |
 | `docs/GOTCHAS.md` | Hard-won Qt/QThread/native-player/rekordbox/Rockbox traps |
+| `docs/testing-runtime-audit.md` | Complete test timing, isolation and three-worker gate |
+| `docs/cloud-library-audit.md` | Native/SoundBox/SeaDrive identity, cache and hydration friction |
+| `docs/performance-audit.md` | Measured UI/background work and remaining performance costs |
+| `docs/native-playlist-order.md` | Persisted reorder proof and independent acceptance boundary |
 | `docs/IDEAS.md` | Exploratory quality-of-life concepts that require UX workshop before commitment |
 | `docs/cdj-usb-export.md` | CDJ USB R&D and `research/cdj_export/` status |
 | `docs/archive/storage-audit-2026-07.md` | Resolved storage audit; full backups remain deliberate |
@@ -636,8 +694,11 @@ Waveform preparation is import-first for complete PWV3/PWV5/PWV7 streams plus gr
 Compact V5 stores one 1-ms signed-detail supplement and builds zoom mips in
 memory; incomplete imports retain the full fallback analyzer. Old V5 remains
 ready while eligible local records upgrade one at a time in background preparation
-or on selected-track load. Dataless sources defer until local; never invalidate
-the whole library at startup. Preserve manual grid/cue
+or on selected-track load. The selected-load worker keeps its already-valid surface while saving its own
+upgrade for the next load. Separate preparation/reanalysis notifications retain
+their targeted refresh behavior. First waveform publication waits
+for complete geometry, while manifest/grid/cues remain immediate. Dataless sources
+defer until local; never invalidate the whole library at startup. Preserve manual grid/cue
 ownership and authoritative DB cues. MP3 source-origin changes must couple
 analysis, audible playback, duration and seeks; never shift only the waveform.
 Playback-origin header probes belong to the native decode thread; the bounded
@@ -672,8 +733,10 @@ reopened targeted Gunslinger red-glisten work at RGB 576/864 and supplied a new
 native recording. He accepted the combined RGB 576/864 motion/footprint/occupancy
 comparison. Sonny has now reopened stability across all zoom levels. Wide
 BLUE/RGB use conservative physical-pixel LOD and the middle stops' song-space
-reconstruction; every mode/zoom integrates every lattice corner. Accepted close
-RGB motion/footprint/occupancy remains intact. Current release/install state and
+reconstruction; every mode/zoom integrates every lattice corner. November2 now
+supersedes the historical zoom-dependent RGB color/occupancy corrections: evaluate
+the supplied92pt/s palette on the song clock at every zoom. Geometry, footprints
+and motion remain independent; do not reinstate per-zoom palette gains. Current release/install state and
 fresh frozen phase comparisons are in HANDOFF; visual acceptance remains open.
 Mini RGB brightness matching retains the main RGB faint-only shoulder and
 encoded-space blend; BLUE retains its existing resolve, and the October30 3BAND
@@ -691,8 +754,9 @@ Current guidance stays in `docs/`; superseded experiments belong in
     ./build_cdj.sh        # pinned local Rust CDJ renderer; --test adds Rust checks
     ./build_app.sh        # personal → dist/personal/Soundbox.app, then stable signing
 
-- The release gate routes every discovered test exactly once into offscreen or
-  Cocoa processes and reconciles their inventories. Skips, expected failures,
+- The release gate routes every discovered test exactly once into three isolated
+  offscreen workers followed by the serial Cocoa process, preserving module
+  fixtures/order and reconciling exact worker/phase inventories. Skips, expected failures,
   missing fixtures and unrun tests fail the gate. Headless Metal oracles and
   native drawable/playback tests always run on the supported arm64 Mac.
   Required offline iPod, frozen waveform and CDJ snapshots are private, read-only
@@ -755,9 +819,9 @@ fixtures remain protected. Keep future diagnostics lean: reuse existing snapshot
 for inspections, retain full DB pairs only when acceptance/recovery requires them,
 and remove generated packaging/scratch output after verified installation. Do not
 create a new full-library capture for every status/UI check. Preserve small
-comparison/approval/install receipts. The verified delivery baseline is93 imports,1107 titles,490 artist overrides,
-10 custom playlists,519 hidden tracks, nine saved analyses, nine independent
-authorities and515 user disposal receipts. New user actions supersede these
+comparison/approval/install receipts. The verified delivery baseline is94 imports,1107 titles,490 artist overrides,
+10 custom playlists,519 hidden tracks, ten saved analyses,92 native bindings, nine
+independent authorities and515 user disposal receipts. New user actions supersede these
 counts; inspect current state rather than restoring a checkpoint. Conversion
 originals, required references and unresolved recovery remain protected.
 

@@ -12,7 +12,7 @@ from soundbox import rekordbox_db, shared_imports as jobs, wave_conversion, anal
 from soundbox.rekordbox_registration_store import RegistrationStore, load_authority
 from soundbox.rekordbox_playlist_store import (PlaylistStore, load_authority as playlist_authority,
     request_for, validate_request as validate_playlist_request)
-from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed
+from soundbox.rekordbox_write import ConflictError,WriteProofError, assert_rekordbox_closed
 
 
 class SharedImportController(QObject):
@@ -154,7 +154,12 @@ class SharedImportController(QObject):
                 pinned=[{**t,**({'sha256':expected[t['id']]} if expected.get(t['id']) else {})} for t in job['tracks']]
                 return dict(request=store.prepare(pinned,operation_id=job['id']))
             if not job['bindings']:
-                bindings=[{k:v for k,v in b.items() if k!='registered'} for b in store.apply(job['request'])]
+                try:result=store.apply(job['request'])
+                except ConflictError as exc:
+                    if (str(exc)!='Captured media identity changed' or job.get('media_refreshes',0)
+                            or not store.media_metadata_drift_only(job['request'])):raise
+                    return dict(request=store.prepare_retry(job['request'],preserve_audio=True),media_refresh=True)
+                bindings=[{k:v for k,v in b.items() if k!='registered'} for b in result]
                 return dict(bindings=bindings,library=self.loader(lib.source))
             if job['destination']['kind']=='native':
                 store.apply(job['request'])  # verify the completed source binding
@@ -201,6 +206,7 @@ class SharedImportController(QObject):
                     w.settings.clear();w.settings.update(updated);w.imported=imported
                 for key in ('request','bindings','membership'):
                     if key in value:queue[0][key]=value[key]
+                if value.get('media_refresh'):queue[0]['media_refreshes']=1
                 queue[0]['retry']=False
                 if value.get('catalog_rebase'):
                     old_revision,new_revision=value['catalog_rebase']

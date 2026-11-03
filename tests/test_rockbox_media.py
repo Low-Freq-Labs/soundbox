@@ -219,7 +219,7 @@ class RockboxAudioDerivative(unittest.TestCase):
             source.write_bytes(source.read_bytes() + b"changed")
 
             with self.assertRaisesRegex(
-                    RockboxMediaError, "source changed after dry-run"):
+                    RockboxMediaError, "captured bytes differ"):
                 cache.materialize(planned)
             self.assertFalse(list(cache.root.rglob("*.mp3")))
 

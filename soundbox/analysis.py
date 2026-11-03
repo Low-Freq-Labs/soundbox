@@ -23,6 +23,13 @@ ADAPTIVE_ENGINE = 'rbxport-b739d369-adaptive-v2'
 PREVIOUS_ENGINE = 'rbxport-b739d369-whole-v3'
 ENGINE = 'rbxport-b739d369-whole-v4'
 _ENGINES = frozenset((LEGACY_ENGINE, ADAPTIVE_ENGINE, PREVIOUS_ENGINE, ENGINE))
+AUTOMATIC_MUSIC_MAX_SECONDS = 15 * 60
+
+
+def automatic_music_allowed(seconds):
+    try:value=float(seconds or 0)
+    except (TypeError,ValueError):return False
+    return math.isfinite(value) and 0<=value<=AUTOMATIC_MUSIC_MAX_SECONDS
 
 
 def options(value=None):
@@ -123,9 +130,10 @@ def _source_context(library, track):
             db.close()
 
 
-def analyze(library, track, preferences=None, *, should_cancel=lambda:False):
+def analyze(library, track, preferences=None, *, should_cancel=lambda:False,automatic=False):
     from .cdj_usb import run_renderer
     prefs = options(preferences)
+    if automatic and not automatic_music_allowed(track.total_time):return None
     if not (prefs['bpm'] or prefs['key']):
         raise ValueError('Select BPM / Grid or Key')
     source_context = _source_context(library, track)
@@ -135,6 +143,12 @@ def analyze(library, track, preferences=None, *, should_cancel=lambda:False):
     with tempfile.TemporaryDirectory(prefix='soundbox-analysis-') as folder:
         root = Path(folder).resolve()
         with acquire_source(SourceContract(source), root, should_cancel=should_cancel) as snapshot:
+            if automatic:
+                # Newly dropped files initially have unknown duration. Inspect
+                # the immutable capture before invoking BPM/key DSP.
+                from .media_probe import read_media_header
+                duration=float(read_media_header(snapshot.path).duration)
+                if not automatic_music_allowed(duration):return None
             low, high = BPM_RANGES[prefs['bpm_range']]
             request = root/'analysis.json'
             request.write_text(json.dumps(dict(audio=str(snapshot.path), bpm=prefs['bpm'], key=prefs['key'],

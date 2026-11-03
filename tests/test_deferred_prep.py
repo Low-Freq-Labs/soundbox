@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 import math
+import os
 import threading
 from types import SimpleNamespace
 import unittest
@@ -282,3 +283,157 @@ class DurablePrep(unittest.TestCase):
         self.controller.timer.stop();self.controller.pump()
         self.assertEqual(self.writes,[]);self.assertEqual(self.controller.pending[0]['cues'][0]['position_ms'],777)
         self.assertFalse(self.controller.pending[0]['error'])
+
+    def bare_track(self):
+        track=self.window.lib.tracks_by_id[self.tid]
+        track=replace(track,source_analysis_path='')
+        self.window.lib.tracks_by_id[self.tid]=track
+        return track
+
+    def test_background_analysis_failure_does_not_veto_durable_local_prep(self):
+        self.bare_track();self.native.shared.busy=True
+        self.window.native_analysis_controller=SimpleNamespace(pending=[
+            dict(local_id=self.tid,error='Packet publication needs attention')])
+        self.assertTrue(self.controller.request_grid(self.tid,'shift',1))
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        durable=json.loads((self.native.shared.data_root/'state.json').read_bytes())
+        self.assertEqual(durable[prep_edits.KEY],self.controller.pending)
+        self.assertEqual(len(self.controller.pending[0]['operations']),2)
+        record=self.window._analysis_result(self.window.lib.tracks_by_id[self.tid])
+        self.assertEqual(record['grid_draft']['beats'],self.controller.pending[0]['grid'])
+        self.assertEqual(record['cue_draft']['cues'][0]['position_ms'],777)
+        self.assertEqual(self.writes,[])
+        self.native.shared.busy=False
+
+    def test_cloud_ctime_drift_captures_new_gestures_during_owned_sha_check(self):
+        from soundbox.source_acquisition import acquire_source
+        track=self.bare_track();original=analysis.identity(track.path.stat())
+        self.native.shared.busy=True
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.assertEqual(analysis.identity(track.path.stat())[:4],original[:4])
+        self.assertNotEqual(analysis.identity(track.path.stat()),original)
+        self.assertTrue(self.controller.request_grid(self.tid,'shift',1))
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        job=self.controller.pending[0];identity=job['id']
+        self.assertTrue(job['identity_pending']);self.assertEqual(job['epoch'],original)
+        entered=threading.Event();self.gate=threading.Event();main_thread=threading.get_ident()
+        def capture(*args,**kwargs):
+            self.assertNotEqual(threading.get_ident(),main_thread)
+            durable=json.loads((self.native.shared.data_root/'state.json').read_bytes())
+            self.assertTrue(durable[prep_edits.KEY][0]['identity_pending'])
+            entered.set();self.gate.wait(5)
+            return acquire_source(*args,**kwargs)
+        with mock.patch('soundbox.source_acquisition.acquire_source',side_effect=capture):
+            self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
+            self.wait(entered.is_set)
+            self.assertTrue(self.controller.request_cue(self.tid,'hot',1,'add',888))
+            self.gate.set()
+            self.wait(lambda:not self.native.shared.busy and not self.controller.pending[0].get('identity_pending'))
+        job=self.controller.pending[0]
+        self.assertEqual(job['id'],identity);self.assertEqual(len(job['operations']),3)
+        self.assertEqual(job['epoch'],analysis.identity(track.path.stat()))
+        self.assertEqual(self.window.player_bar._analysis_parts['_detected_epoch'],job['epoch'])
+        self.assertEqual(self.window.player_bar._analysis_parts['beats'],job['grid'])
+        self.assertEqual([c['position_ms'] for c in job['cues']],[777,888])
+        self.assertFalse(job['error']);self.assertEqual(self.writes,[])
+
+    def test_cloud_audio_proof_is_durable_across_restart(self):
+        track=self.bare_track();self.native.shared.busy=True
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.assertTrue(self.controller.request_cue(self.tid,'memory',0,'add',1234))
+        identity=self.controller.pending[0]['id'];self.controller.stop()
+        self.window.settings=json.loads((self.native.shared.data_root/'state.json').read_bytes())
+        self.controller=PrepEditController(self.window);self.window.prep_controller=self.controller
+        self.native.shared.busy=False;self.controller.pump()
+        self.wait(lambda:not self.native.shared.busy and not self.controller.pending[0].get('identity_pending'))
+        job=self.controller.pending[0]
+        self.assertEqual(job['id'],identity);self.assertEqual(job['cues'][0]['position_ms'],1234)
+        self.assertFalse(job['error']);self.assertEqual(self.writes,[])
+
+    def test_late_audio_proof_cannot_publish_into_another_library_same_track_id(self):
+        from soundbox.source_acquisition import acquire_source
+        track=self.bare_track();self.native.shared.busy=True
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        original=deepcopy(self.controller.pending[0]);entered=threading.Event();self.gate=threading.Event()
+        def capture(*args,**kwargs):
+            entered.set();self.gate.wait(5)
+            return acquire_source(*args,**kwargs)
+        pb=self.window.player_bar;pb.refresh_live_grid=mock.Mock();pb.refresh_live_cues.reset_mock()
+        parts=deepcopy(pb._analysis_parts)
+        with mock.patch('soundbox.source_acquisition.acquire_source',side_effect=capture):
+            self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
+            self.wait(entered.is_set)
+            current=replace(track,source_uuid='11111111-1111-4111-8111-111111111111')
+            self.window.lib=replace(self.window.lib,source_library_id='another-library',tracks_by_id={self.tid:current})
+            self.gate.set();self.wait(lambda:not self.native.shared.busy)
+        job=self.controller.pending[0]
+        self.assertEqual(job['epoch'],original['epoch']);self.assertTrue(job['identity_pending'])
+        self.assertEqual(job['operations'],original['operations'])
+        self.assertIn('original source',job['error']);self.assertEqual(self.writes,[])
+        self.assertEqual(pb._analysis_parts,parts)
+        pb.refresh_live_grid.assert_not_called();pb.refresh_live_cues.assert_not_called()
+        self.assertIsNone(self.controller.grid_view(self.tid))
+        self.assertEqual(self.controller.cue_rows(self.tid),current.source_cues or [])
+        self.assertNotIn(777,[cue['position_ms'] for cue in self.controller.cue_rows(self.tid)])
+        self.controller.refresh(self.tid)
+        self.assertEqual(pb._analysis_parts,parts)
+        pb.refresh_live_grid.assert_not_called();pb.refresh_live_cues.assert_not_called()
+
+    def test_audio_proof_survives_legitimate_bare_import_native_identity_acquisition(self):
+        from soundbox.source_acquisition import acquire_source
+        native=self.bare_track();track=replace(native,imported=True,source_native_id='',source_uuid='')
+        self.window.lib.tracks_by_id[self.tid]=track;self.native.shared.busy=True
+        track.path.chmod(track.path.stat().st_mode ^ 0o100)
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        entered=threading.Event();self.gate=threading.Event()
+        def capture(*args,**kwargs):
+            entered.set();self.gate.wait(5)
+            return acquire_source(*args,**kwargs)
+        with mock.patch('soundbox.source_acquisition.acquire_source',side_effect=capture):
+            self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
+            self.wait(entered.is_set)
+            self.window.lib.tracks_by_id[self.tid]=replace(native,source_native_id='registered-native-id')
+            self.gate.set()
+            self.wait(lambda:not self.native.shared.busy and not self.controller.pending[0].get('identity_pending'))
+        self.assertFalse(self.controller.pending[0]['error'])
+        self.assertEqual(self.controller.pending[0]['cues'][0]['position_ms'],777)
+        self.assertEqual(self.writes,[])
+
+    def test_existing_prep_job_cannot_append_into_another_source_or_path(self):
+        track=self.bare_track();self.native.shared.busy=True
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        original=deepcopy(self.controller.pending);record=deepcopy(self.window._analysis_result(track))
+        for foreign in (replace(self.window.lib,source_library_id='another-library'),
+                        replace(self.window.lib,tracks_by_id={self.tid:replace(track,location_uri=(track.path.parent/'other.wav').as_uri())})):
+            with self.subTest(source=foreign.source_library_id,path=foreign.tracks_by_id[self.tid].path):
+                self.window.lib=foreign
+                self.assertFalse(self.controller.request_cue(self.tid,'hot',1,'add',888))
+                self.assertEqual(self.controller.pending,original)
+                self.assertEqual(self.window.settings['analysis_results'][analysis.result_key(track.path)],record)
+        self.assertEqual(self.writes,[]);self.native.shared.busy=False
+
+    def test_matching_stat_fields_never_accept_changed_bytes_for_prep(self):
+        track=self.bare_track();self.native.shared.busy=True
+        original=track.path.stat();before=track.path.read_bytes()
+        track.path.write_bytes(bytes([before[0]^1])+before[1:])
+        os.utime(track.path,ns=(original.st_atime_ns,original.st_mtime_ns))
+        self.assertEqual(analysis.identity(track.path.stat())[:4],analysis.identity(original)[:4])
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
+        self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.native.shared.busy)
+        job=self.controller.pending[0]
+        self.assertTrue(job['identity_pending']);self.assertEqual(len(job['operations']),1)
+        self.assertIn('captured bytes differ',job['error']);self.assertEqual(self.writes,[])
+
+    def test_transient_identity_refusal_recovers_after_fresh_analysis(self):
+        track=self.bare_track();self.native.shared.busy=True
+        track.path.write_bytes(track.path.read_bytes()+b'changed')
+        self.assertFalse(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.assertFalse(self.controller.pending);self.assertNotIn(self.tid,self.controller.errors)
+        record=self.window._analysis_result(track)
+        record.update(epoch=analysis.identity(track.path.stat()),size=track.path.stat().st_size,
+                      sha256=hashlib.sha256(track.path.read_bytes()).hexdigest())
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.assertEqual(self.controller.pending[0]['cues'][0]['position_ms'],777)
+        self.native.shared.busy=False

@@ -1,5 +1,10 @@
 # Rekordbox prep editing — approved plan and milestone gates
 
+Native sibling ordering, its independent acceptance flag, playlist-only icon
+preferences and bounded native commands are documented in
+[native-playlist-order.md](native-playlist-order.md). Artists is a virtual
+SoundBox view and creates no native organization jobs.
+
 Approved October 26, 2026. This document separates the agreed product behavior
 from implemented My Tag/cue work and remaining prep work. Sonny asked to
 proceed slowly and review each milestone before continuing. Native tag and DB-only
@@ -224,9 +229,16 @@ pyrekordbox supplies useful models, decoding and SQLCipher access; SoundBox adds
 this narrow native-derived transaction/recovery protocol. This is an independent
 integration, not an official rekordbox write service.
 
-## Remaining milestones and review
+## Accepted cue milestone and retained native references
 
 ### Milestone 3 — cue editing and native acceptance
+
+The native references below preserve the October26/27 protocol and its original
+RAM-session FIFO. Current ordinary native/import prep uses later durable per-song
+intentions before presentation; source failures retain them for reconciliation.
+Normal UI Quit keeps the usable app and source pumps open until captured saves
+finish. The old RAM-tail loss descriptions below are historical, not current
+admission or persistence requirements. Exact installed proof is in HANDOFF.
 
 Native reference captures now cover WAV (No Trust), MP3 (Juice), AIFF (Back
 Then), and an older synchronized aggregate containing existing cues (Jungle
@@ -318,7 +330,8 @@ is cached. Failure removes the unconfirmed tail and reconciles the source; norma
 quit drains accepted edits before stopping workers. Abrupt termination can lose
 not-yet-started RAM edits, never grant them durable success. Cue transport uses
 short 3-ms clickless envelopes, one target seek, and no library-wide artwork scan
-or device discovery on pause edges. Grid work is paused for player acceptance.
+or device discovery on pause edges. At that October27 checkpoint, grid work was
+paused for player acceptance; milestone4 below subsequently passed.
 
 Startup/source refresh reconciles prior authorized work before copying the DB,
 without trusting cached library metadata. Unknown recovery stops the read. The
@@ -467,11 +480,13 @@ publications are fenced in the source worker before saving. Verified grid rows
 update only V5 metadata, preserving waveform payloads. Browser BPM updates target
 one track, reconciling active BPM sort/filter without restarting playback.
 
-Failure drops the unconfirmed grid tail, restores the verified preview and requests
-source reconciliation. Normal shutdown flushes accepted grid groups before cue
-and TaskOwner shutdown. Abrupt exit can lose not-yet-started RAM edits; transactions
-already started retain durable recovery. Passing synthetic tests or source pilots
-alone does not certify installed interaction or physical device behavior.
+The original grid-controller FIFO dropped an unconfirmed RAM tail on failure and
+requested source reconciliation. Current ordinary prep instead retains durable
+per-song intentions, exact prepared requests and receipts for reconciliation;
+newer local gestures survive an earlier save. Normal UI Quit defers while captured
+saves remain, with editing/pumps live. Explicit teardown still drains accepted
+active work and preserves unstarted durable intentions. Passing synthetic tests
+or source pilots alone does not certify physical device behavior.
 
 Every user-facing milestone requires the full release/render gate, inspected UI,
 safe build/install/relaunch and curated-state verification. Current validation,

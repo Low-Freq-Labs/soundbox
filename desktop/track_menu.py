@@ -39,6 +39,9 @@ class TrackMenuMixin:
             action.setChecked(self.settings.get('waveform_mode', '3BAND') == mode)
             group.addAction(action)
             action.triggered.connect(lambda _checked=False, value=mode: self._on_waveform_mode_changed(value))
+        colors.ensurePolished()
+        colors.setFixedWidth(max(colors.fontMetrics().horizontalAdvance(action.text())
+                                 for action in colors.actions())+48)
         counts = menu.addMenu('Beat Count Display')
         group = QActionGroup(counts)
         for mode, title in enumerate(MODES):

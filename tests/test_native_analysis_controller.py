@@ -1,5 +1,6 @@
 """Real owned source lane and durable analysis handoff with an isolated GUI."""
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -48,6 +49,7 @@ class NativeAnalysisQueue(unittest.TestCase):
 
     def close(self):
         self.controller.stop()
+        if not self.window.tag_controller.owner.pending:self.window.tag_controller.busy=False
         if self.block:self.block.set()
         self.window.tag_controller.shutdown();self.window.deleteLater();self.app.processEvents()
 
@@ -56,6 +58,69 @@ class NativeAnalysisQueue(unittest.TestCase):
         limit=QTimer();limit.setSingleShot(True);limit.timeout.connect(loop.quit);poll.start();limit.start(5000)
         if not condition():loop.exec()
         poll.stop();limit.stop();self.assertTrue(condition())
+
+    def add_second(self):
+        original=self.window.lib.tracks_by_id['sb-one']
+        track=replace(original,track_id='sb-two',name='Two',location_uri='file:///synthetic/two.wav',
+            source_native_id='124',source_uuid='00000000-0000-4000-8000-000000000124')
+        self.window.lib.tracks_by_id[track.track_id]=track
+        record={**deepcopy(self.record),'path':str(track.path)}
+        self.window.settings['analysis_results'][result_key(track.path)]=record
+        return track
+
+    def test_failed_song_does_not_block_another_import_or_lose_its_intent(self):
+        self.window.tag_controller.busy=True;self.controller.discover()
+        failed=self.controller.pending[0];failed['error']='Audio bytes changed'
+        before=deepcopy(failed);track=self.add_second();self.controller.discover()
+        self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:track.track_id in self.window.settings.get(DONE,{}) and not self.window.tag_controller.owned)
+        self.assertEqual([j['local_id'] for j in self.calls],['sb-two'])
+        self.assertEqual(self.controller.pending,[before])
+        self.assertFalse(self.window.lib.tracks_by_id['sb-one'].source_analysis_path)
+        self.assertNotIn('sb-one',self.window.settings[DONE])
+        self.assertTrue(self.window.lib.tracks_by_id['sb-two'].source_analysis_path)
+
+    def test_second_failed_song_marks_its_own_intent_and_preserves_first_failure(self):
+        self.window.tag_controller.busy=True;self.controller.discover()
+        self.controller.pending[0]['error']='First failed';before=deepcopy(self.controller.pending[0])
+        self.add_second();self.controller.discover();self.error=RuntimeError('Second failed')
+        self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:all(j['error'] for j in self.controller.pending) and not self.window.tag_controller.owned)
+        self.assertEqual(self.controller.pending[0],before)
+        self.assertEqual(self.controller.pending[1]['error'],'Second failed')
+        self.assertEqual([j['local_id'] for j in self.calls],['sb-two'])
+
+    def test_obsolete_uniform_grid_refusal_is_revalidated_once_without_manual_retry(self):
+        self.window.tag_controller.busy=True;self.controller.discover()
+        job=self.controller.pending[0];identity=job['id']
+        job['error']='Packet grid must equal the complete saved grid, including its exact endpoint'
+        self.controller.discover()
+        self.assertFalse(self.controller.pending[0]['error'])
+        self.assertEqual(self.controller.pending[0]['id'],identity)
+        self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual([j['id'] for j in self.calls],[identity])
+
+    def test_failed_retry_persistence_can_revalidate_when_storage_recovers(self):
+        self.window.tag_controller.busy=True;self.controller.discover()
+        job=self.controller.pending[0]
+        job['error']='Packet grid must equal the complete saved grid, including its exact endpoint'
+        self.save_ok=False;self.controller.discover()
+        self.assertTrue(self.controller.pending[0]['error'])
+        self.save_ok=True;self.controller.discover()
+        self.assertFalse(self.controller.pending[0]['error'])
+        self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.calls),1)
+
+    def test_real_grid_mismatch_is_not_retried_in_a_loop(self):
+        message='Packet grid must equal the complete saved grid, including its exact endpoint'
+        self.error=RuntimeError(message);self.controller.discover()
+        self.wait(lambda:len(self.calls)==2 and self.controller.pending[0]['error'] and not self.window.tag_controller.owned)
+        for _ in range(5):
+            self.controller.discover();self.controller.pump();self.app.processEvents()
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(self.controller.pending[0]['error'],message)
 
     def test_finished_result_is_durable_before_worker_and_updates_only_the_finished_song(self):
         old=deepcopy(self.record);self.controller.discover()

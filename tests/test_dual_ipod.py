@@ -70,6 +70,19 @@ class _ArtCache:
 
 
 class DualIpodSyncTests(unittest.TestCase):
+    def test_native_adopted_custom_retains_device_identity_through_planning_and_rename(self):
+        self.playlist.pid='1000';self.playlist.export_key='cust:Original'
+        commit_dual_ipod_sync(self._plan())
+        before=device_manifest.load_composite(self.ipod)
+        self.assertEqual(set(before['playlists']),{'cust:Original'})
+        self.playlist.name='Renamed in native library'
+        plan=self._plan(reconcile=True)
+        commit_dual_ipod_sync(plan)
+        after=device_manifest.load_composite(self.ipod)
+        self.assertEqual(set(after['playlists']),{'cust:Original'})
+        self.assertEqual(after['playlists']['cust:Original']['name'],self.playlist.name)
+        self.assertEqual(len(after['files']),len(before['files']))
+        self.assertFalse(engine.device_drift(self.library,self.ipod).any())
     @contextmanager
     def _forbid_device_inventory_reads(self, allowed=()):
         roots = [str(self.ipod.absolute()), str(self.ipod.resolve())]

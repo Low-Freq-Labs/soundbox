@@ -70,7 +70,8 @@ class TagInterface(unittest.TestCase):
             self.assertLess(button.checkboxes["a"].geometry().bottom(), button.checkboxes["b"].y())
             button.set_state(tags, [set()], 'Close rekordbox and its background agent before editing tags')
             self.assertEqual(button.popup.width(), short)
-            self.assertGreater(button.summary.height(), button.summary.fontMetrics().height())
+            self.assertEqual(button.summary.height(), button.summary.fontMetrics().height())
+            self.assertIn('Close rekordbox',button.summary.toolTip())
         finally:
             button.popup.close()
             button.deleteLater()
@@ -114,6 +115,24 @@ class TagInterface(unittest.TestCase):
         self.assertEqual(button.checkboxes['tag'].checkState(),Qt.Checked)
         self.assertFalse(button.checkboxes['tag'].isEnabled())
         button.deleteLater()
+
+    def test_save_status_changes_do_not_relayout_an_open_tag_popup(self):
+        from unittest import mock
+        button=MyTagsButton();button.setFixedWidth(240)
+        tags=_library().source_tags
+        button.set_state(tags,[{'tag'}]);button.popup.popup(QPoint(100,100));self.app.processEvents()
+        geometry=button.popup.geometry();summary=button.summary.geometry();box=button.checkboxes['tag']
+        try:
+            with mock.patch.object(button._content_action,'changed') as changed:
+                for reason in ('Updating playlist…','','Confirming cue/grid saves…',''):
+                    button.set_state(tags,[{'tag'}],reason)
+                    self.app.processEvents()
+                    self.assertEqual(button.popup.geometry(),geometry)
+                    self.assertEqual(button.summary.geometry(),summary)
+                    self.assertIs(button.checkboxes['tag'],box)
+                    self.assertTrue(button.popup.isVisible())
+                changed.emit.assert_not_called()
+        finally:button.popup.close();button.deleteLater()
 
     def test_request_captures_selected_ids_and_uuid_before_a_selection_change(self):
         with tempfile.TemporaryDirectory() as td:

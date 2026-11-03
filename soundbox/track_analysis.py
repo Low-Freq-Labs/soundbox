@@ -359,6 +359,8 @@ def _beat_grid(flux, rate: float, bpm_hint: float = 0) -> list[list]:
     onset = np.asarray(flux, dtype=np.float32).reshape(-1)
     if onset.size < 2 or not np.isfinite(rate) or rate <= 0:
         return []
+    from .analysis import automatic_music_allowed
+    if not automatic_music_allowed(onset.size/rate):return []
     onset = np.nan_to_num(onset, copy=False)
     onset = np.maximum(onset - np.median(onset), 0)
     onset = np.convolve(
@@ -752,7 +754,7 @@ def load_manifest(
         if record is None:
             return None
         _target, manifest, _payload_offset = record
-        return {
+        result: dict = {
             "schema": int(manifest.get("schema") or 0),
             "timeline_lead_frames": int(manifest.get("timeline_lead_frames") or 0),
             "timeline_sample_rate": int(manifest.get("timeline_sample_rate") or 0),
@@ -785,6 +787,12 @@ def load_manifest(
             "cue_import": dict(manifest.get("cue_import") or {}),
             "eligibility": dict(manifest.get("eligibility") or {}),
         }
+        from .analysis import automatic_music_allowed
+        rate=result['detail_rate']
+        if (rate>0 and not automatic_music_allowed(result['detail_base_count']/rate)
+                and result['provenance'].get('grid')=='soundbox-zero-anchor'):
+            result['beats']=[]
+        return result
     except Exception:  # noqa: BLE001 - corruption/staleness is a clean miss
         return None
 
@@ -1013,8 +1021,13 @@ def _load_v5_range_mips(
 
 def load_detail(
         cache_dir: str | Path, track_id: str,
-        audio_path: str | Path) -> dict | None:
-    """Load ultra detail independently from manifest and overview sections."""
+        audio_path: str | Path, *, include_spectral: bool = True) -> dict | None:
+    """Load detail, optionally omitting the unused playback spectral master.
+
+    The default retains the full public payload. Interactive playback can skip
+    that independent section while every displayed stream keeps its checksum.
+    Full-record verification still audits all canonical sections.
+    """
     try:
         header = _read_manifest_header(cache_dir, track_id, audio_path)
         if header is None:
@@ -1023,9 +1036,9 @@ def load_detail(
         if manifest.get("schema") == SCHEMA:
             loaded = _load_sections(
                 cache_dir, track_id, audio_path,
-                (("blue_detail", "rgb_detail", "three_band")
-                 if manifest.get("waveform_model") == DETAIL_MODEL else
-                 ("spectral_24", "blue_detail", "rgb_detail", "three_band")))
+                (("spectral_24",) if include_spectral
+                 and manifest.get("waveform_model") != DETAIL_MODEL else ())
+                + ("blue_detail", "rgb_detail", "three_band"))
             if loaded is None:
                 return None
             sections = loaded[1]
@@ -1042,8 +1055,8 @@ def load_detail(
             }
         loaded = _load_sections(
             cache_dir, track_id, audio_path,
-            ("detail", "spectral_24", "blue_detail", "rgb_detail",
-             "three_band"))
+            ("detail",) + (("spectral_24",) if include_spectral else ())
+            + ("blue_detail", "rgb_detail", "three_band"))
         if loaded is None:
             return None
         manifest, sections = loaded
@@ -1078,7 +1091,7 @@ def load_detail(
                 "encoding": str(manifest.get("height_encoding") or ""),
                 **range_rows,
             },
-            "_spectral_24": sections["spectral_24"],
+            "_spectral_24": sections.get("spectral_24", b""),
             "_blue_detail": sections["blue_detail"],
             "_rgb_detail": sections["rgb_detail"],
             "_detail_bands": sections["three_band"],
@@ -2166,12 +2179,12 @@ class StreamingAnalyzer:
             rgb_detail = bytes(len(overview) * 2)
             three_band = bytes(len(overview) * 3)
 
-        flux = (
-            np.concatenate(self._flux)
-            if self._flux else np.empty(0, dtype=np.float32))
+        from .analysis import automatic_music_allowed
+        beats=[]
+        if automatic_music_allowed(len(detail_bytes)/(2*self.detail_rate)):
+            flux = (np.concatenate(self._flux) if self._flux else np.empty(0,dtype=np.float32))
+            beats = _beat_grid(flux,self.sample_rate/self.color_hop,bpm_hint)
         self._flux.clear()
-        beats = _beat_grid(
-            flux, self.sample_rate / self.color_hop, bpm_hint)
         return {
             "detail_heights": detail_bytes,
             "detail_lower_heights": detail_lower_bytes,

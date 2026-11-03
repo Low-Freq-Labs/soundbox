@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from PySide6.QtCore import QPointF, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPolygonF
 from PySide6.QtWidgets import (
     QCheckBox, QLabel, QStyle, QStyleOption, QToolButton,
@@ -31,12 +31,13 @@ class MyTagsButton(QToolButton):
         self.summary = QLabel("Select tracks to edit tags", self.content)
         self.summary.setObjectName("MyTagsSummary")
         self.summary.setTextFormat(Qt.PlainText)
-        self.summary.setWordWrap(True)
+        self.summary.setWordWrap(False)
         self._labels = {}
         self._membership_tips = {}
         self.checkboxes: dict[str, QCheckBox] = {}
         self._signature = None
         self._rendering = False
+        self._popup_layout=None
         action = QWidgetAction(self.popup)
         action.setDefaultWidget(self.content)
         self.popup.addAction(action)
@@ -82,7 +83,8 @@ class MyTagsButton(QToolButton):
             self._signature = signature
         self._rendering = True
         try:
-            self.summary.setText(reason or f"{len(selected_tags)} selected")
+            self.summary.setText(f"{len(selected_tags)} selected" if selected_tags else 'Select tracks')
+            self.summary.setToolTip(reason)
             for tid, box in self.checkboxes.items():
                 count = sum(tid in assigned for assigned in selected_tags)
                 state = (Qt.Unchecked if not count else
@@ -98,6 +100,9 @@ class MyTagsButton(QToolButton):
         self._size_popup()
 
     def _size_popup(self):
+        signature=(self.width(),self._signature,self.font().toString())
+        if self._popup_layout==signature:return
+        self._popup_layout=signature
         self.ensurePolished()
         option = QStyleOption()
         option.initFrom(self.popup)
@@ -116,9 +121,7 @@ class MyTagsButton(QToolButton):
         columns = 2 if widest <= column_width else 1
         rows = (len(self.checkboxes) + columns - 1) // columns
         self.summary.ensurePolished()
-        header_height = max(self.summary.fontMetrics().height(),
-            self.summary.fontMetrics().boundingRect(
-                QRect(0, 0, width, 10000), Qt.TextWordWrap, self.summary.text()).height())
+        header_height = self.summary.fontMetrics().height()
         self.summary.setGeometry(8, 8, width, header_height)
         first_y = 8 + header_height + 6
         row_height = max([24] + [box.fontMetrics().height() + 8 for box in self.checkboxes.values()])

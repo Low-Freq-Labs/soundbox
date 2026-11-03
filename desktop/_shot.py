@@ -168,8 +168,11 @@ def _render() -> None:
         win.playlist_controller.factory=_deny_live_source
         win._native_request=_deny_live_source
         win._populate_tree(engine.summary(win.lib))
-    win.tree.topLevelItem(0).setExpanded(True)
-    win.tree.setCurrentItem(win.tree.topLevelItem(0).child(0))
+    from .trees import NATIVE_TREE_ROLE
+    root=next(win.tree.topLevelItem(i) for i in range(win.tree.topLevelItemCount())
+              if win.tree.topLevelItem(i).data(0,NATIVE_TREE_ROLE))
+    root.setExpanded(True)
+    win.tree.setCurrentItem(root.child(0))
     # Paint the transport in a representative loaded state without opening any
     # real audio file or starting QtMultimedia playback.
     pb = win.player_bar

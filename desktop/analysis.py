@@ -97,10 +97,11 @@ class AnalysisControls(QWidget):
 class AnalysisWorker(QThread):
     progress = Signal(int, int, str)
 
-    def __init__(self, library, tracks, preferences, previous):
+    def __init__(self, library, tracks, preferences, previous,*,automatic=False):
         super().__init__()
         self.library, self.tracks = library, tracks
         self.preferences, self.previous = preferences, previous
+        self.automatic=automatic
         self.stop = threading.Event()
         self.result = None
 
@@ -113,7 +114,10 @@ class AnalysisWorker(QThread):
             for index, track in enumerate(self.tracks):
                 if self.stop.is_set(): raise RuntimeError('Analysis cancelled')
                 self.progress.emit(index, len(self.tracks), track.name)
-                result = analysis.analyze(self.library, track, self.preferences, should_cancel=self.stop.is_set)
+                arguments=dict(should_cancel=self.stop.is_set)
+                if self.automatic:arguments['automatic']=True
+                result = analysis.analyze(self.library, track, self.preferences, **arguments)
+                if result is None:continue
                 key = analysis.result_key(result['path'])
                 results[key] = analysis.merge_result(self.previous.get(key), result, self.preferences)
             self.result = results
@@ -200,6 +204,7 @@ class AnalysisMixin:
         if self.lib is None or self._shutting_down or self._state_maintenance:
             return
         tracks = [self.lib.tracks_by_id[tid] for tid in dict.fromkeys(track_ids) if tid in self.lib.tracks_by_id]
+        if automatic:tracks=[t for t in tracks if analysis.automatic_music_allowed(t.total_time)]
         if not tracks: return
         prefs = analysis.options(self.settings.get('analysis'))
         if not (prefs['bpm'] or prefs['key']):
@@ -208,7 +213,7 @@ class AnalysisMixin:
         previous=self.settings.get(analysis_jobs.KEY,[])
         try:
             jobs=analysis_jobs.admit(previous,self.lib,tracks,prefs,retry_failed=not automatic,
-                                     rebuild_waveform=not automatic)
+                                     rebuild_waveform=not automatic,automatic=automatic)
         except ValueError as exc:
             self._flash_status(str(exc),15);return
         if jobs!=previous:
@@ -255,7 +260,7 @@ class AnalysisMixin:
             if current is None or job is None or not analysis_jobs.matches(job,self.lib,current):
                 continue
             worker = AnalysisWorker(original, [track], prefs,
-                                    deepcopy(self.settings.get('analysis_results', {})))
+                                    deepcopy(self.settings.get('analysis_results', {})),automatic=job.get('automatic',False))
             self._analysis_worker = worker
             worker.job_id=identity
             self._analysis_owner.adopt(worker, self._analysis_retired)
@@ -308,7 +313,7 @@ class AnalysisMixin:
             if self.player_bar.current_track() == track.track_id:
                 record = self._analysis_result(current)
                 self.player_bar.detected_analysis = record
-                if self.grid_controller.is_local(track.track_id) and record.get('beats'):
+                if record and self.grid_controller.is_local(track.track_id) and record.get('beats'):
                     # Analysis completion changes musical metadata only. Do not
                     # restart waveform preparation or leave a fallback on deck.
                     self._local_grid_saved(track.track_id)

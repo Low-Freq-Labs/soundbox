@@ -1,6 +1,9 @@
 """Background format audit and per-song recoverable conversion; no user controls."""
 from copy import deepcopy
 import json
+import hashlib
+import logging
+import math
 from pathlib import Path
 import stat
 from uuid import uuid4
@@ -14,12 +17,62 @@ from soundbox.state_io import atomic_bytes
 from .task_owner import TaskOwner
 from .workers import OneShotTask
 
+LOG=logging.getLogger('soundbox')
+_CACHE_SCHEMA=1
+
+
+def _cache_digest(entries):
+    return hashlib.sha256(json.dumps(entries,sort_keys=True,allow_nan=False,
+                                    separators=(',',':')).encode()).hexdigest()
+
+
+def _load_format_cache(path,source,library_id):
+    """Technical display hints only; source publication always inspects anew."""
+    try:
+        if path.is_symlink() or path.stat().st_size>16*1024**2:return {}
+        data=json.loads(path.read_bytes());entries=data['entries']
+        if (data.get('schema')!=_CACHE_SCHEMA or data.get('source')!=source
+                or data.get('library_id')!=library_id or not isinstance(entries,dict)
+                or _cache_digest(entries)!=data.get('sha256')):return {}
+        result={}
+        profiles={('wav','pcm_s16le'):(16,),('wav','pcm_s24le'):(24,),
+                  ('aiff','pcm_s16be'):(16,),('aiff','pcm_s24be'):(24,),
+                  ('mp3','mp3'):(0,),('m4a','aac'):(0,16,24,32)}
+        for canonical,entry in entries.items():
+            if (not isinstance(canonical,str) or not Path(canonical).is_absolute()
+                    or str(Path(canonical))!=canonical or '..' in Path(canonical).parts
+                    or '\0' in canonical or not isinstance(entry,dict)):continue
+            epoch,facts=entry.get('epoch'),entry.get('facts')
+            if (not isinstance(epoch,list) or len(epoch)!=5
+                    or any(type(value) is not int or value<0 for value in epoch)
+                    or not epoch[1] or not epoch[2] or not isinstance(facts,dict)
+                    or facts.get('profile')!=compatibility.PROFILE or facts.get('status')!='compatible'
+                    or facts.get('sample_rate') not in (44100,48000) or facts.get('channels') not in (1,2)
+                    or facts.get('bits') not in profiles.get((facts.get('family'),facts.get('codec')),())
+                    or type(facts.get('duration')) not in (int,float)
+                    or not math.isfinite(facts['duration']) or facts['duration']<=0):continue
+            # Never reuse cached track membership/native IDs. A fresh scan
+            # binds these facts to current tracks only after exact stat checks.
+            result[canonical]=dict(epoch=epoch,facts=facts)
+        return result
+    except (OSError,ValueError,KeyError,TypeError):return {}
+
+
+def _save_format_cache(path,source,library_id,entries):
+    try:
+        if path.is_symlink():return
+        data=dict(schema=_CACHE_SCHEMA,source=source,library_id=library_id,
+                  entries=entries,sha256=_cache_digest(entries))
+        atomic_bytes(path,json.dumps(data,allow_nan=False).encode())
+    except (OSError,ValueError,TypeError) as exc:
+        LOG.warning('Technical media cache could not be saved: %s',exc)
+
 
 class MediaConversionController(QObject):
     def __init__(self,window,*,factory=None):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=factory;self.closing=False;self.active=set();self.tasks=TaskOwner(self)
-        self.cache={};self.scan_again=False
+        self.cache={};self._cache_identity=None;self.scan_again=False
         self.scan_timer=QTimer(self);self.scan_timer.setSingleShot(True);self.scan_timer.setInterval(500)
         self.scan_timer.timeout.connect(self.scan)
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(1000);self.timer.timeout.connect(self.pump)
@@ -31,10 +84,8 @@ class MediaConversionController(QObject):
     def converting(self,tid):return tid in self.active
 
     def facts(self,tid):
-        for path,entry in self.cache.items():
-            if entry['facts']['status']=='compatible' and any(t['id']==tid for t in entry['tracks']):
-                return dict(path=path,epoch=entry['epoch'],facts=entry['facts'])
-        return None
+        lib=self.window.lib
+        return getattr(lib,'media_facts',{}).get(tid) if lib else None
 
     def _publish_facts(self):
         if self.window.lib:
@@ -60,9 +111,14 @@ class MediaConversionController(QObject):
         lib=w.lib;hidden=set(w.hidden)|{tid for bag in w.removals.values() for tid in bag}
         tracks=[dict(id=t.track_id,path=str(t.path),native=dict(id=t.native_id,uuid=t.source_uuid) if t.source_uuid else None)
                 for t in lib.tracks_by_id.values() if t.track_id not in hidden]
-        prior=deepcopy(self.cache);self.scan_again=False
+        identity=(str(lib.source),lib.source_library_id)
+        prior=deepcopy(self.cache) if self._cache_identity==identity else {}
+        load_saved=self._cache_identity!=identity
+        cache_path=self.tags.data_root/'media-format-cache.json'
+        self.scan_again=False
         def work():
             from mutagen import MutagenError
+            known=_load_format_cache(cache_path,*identity) if load_saved else prior
             result={}
             for track in tracks:
                 if worker.cancellation.is_set():break
@@ -72,21 +128,21 @@ class MediaConversionController(QObject):
                     if key in result:result[key]['tracks'].append(track);continue
                     if getattr(s,'st_flags',0)&getattr(stat,'SF_DATALESS',0x40000000):
                         facts=dict(status='deferred',reason='Cloud file is not local')
-                    elif prior.get(key,{}).get('epoch')==epoch:
-                        facts=prior[key]['facts']
+                    elif known.get(key,{}).get('epoch')==epoch and known[key]['facts'].get('status')=='compatible':
+                        facts=known[key]['facts']
                     else:facts=compatibility.inspect(path)
                     result[key]=dict(epoch=epoch,facts=facts,tracks=[track])
                 except (OSError,RuntimeError,ValueError,MutagenError) as exc:
                     result[str(path)]=dict(epoch=None,facts=dict(status='error',reason=str(exc)),tracks=[track])
+            if not worker.cancellation.is_set():_save_format_cache(cache_path,*identity,result)
             return result
         worker=OneShotTask(work,log_label='Audio format check')
         def finished(task):
             if self.closing or w._shutting_down:return
             if w.lib is not lib:self.discover();return
             if isinstance(task.result,Exception):w._flash_status('Audio format check needs attention — '+str(task.result),10);return
-            self.cache=task.result
+            self.cache=task.result;self._cache_identity=identity
             self._publish_facts()
-            atomic_bytes(self.tags.data_root/'media-format-cache.json',json.dumps(dict(source=str(lib.source),library_id=lib.source_library_id,entries=self.cache)).encode())
             queue=deepcopy(self.pending);jobs.validate(queue);known={j['path'] for j in queue}
             for job in queue:
                 if (job['error'] and self.cache.get(job['path'],{}).get('facts',{}).get('status')=='compatible'

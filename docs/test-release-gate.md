@@ -1,9 +1,11 @@
 # Release test gate
 
-Updated November1, 2026. `./check.sh` builds native deck/CDJ code, runs lint/types, validates the
+Updated November2, 2026. `./check.sh` builds native deck/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
-Ordinary/UI/GPU tests use an offscreen Qt process; all `test_native_deck` cases
-use a fresh Cocoa process. Both are mandatory. `--native` remains a compatible
+Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
+stay together and the complete inventory is reconciled across workers. All
+`test_native_deck` cases then use one fresh, serial Cocoa process. Both phases
+are mandatory. `--native` remains a compatible
 alias; `--render` additionally saves the hermetic main-window render.
 
 Each process records its complete discovered inventory and selected IDs under
@@ -13,6 +15,11 @@ missing compiler, encoder, Metal device or Cocoa session cannot produce a clean
 release result. The supported release host is arm64 macOS 14+ with the project's
 pinned developer requirements and native build tools; fixture AAC/MP3 encoding
 also requires FFmpeg and LAME on PATH.
+
+The [November2 runtime audit](testing-runtime-audit.md) records the complete
+timing review, isolation checks and a controlled encrypted-subset comparison.
+Each case still runs with its existing cipher/recovery settings. Module weights
+affect scheduling only; new tests cannot be excluded by missing timing hints.
 
 ## Required private fixtures
 
@@ -52,8 +59,10 @@ horizontal parts of one pixel; taking the smaller average overfills it.
 The October 2 correction made the fragment composite the joint coverage and
 visible color returned by `resolve_interval_surface`. BLUE retains that exact
 area contract. The October6 conservative occupied-column RGB presentation is
-historical: current RGB384 uses exact area, other stops retain only the monotonic
-faint-coverage shoulder below0.18. Current RGB uses logical-point increments at
+historical. Current RGB retains the monotonic faint-coverage shoulder below0.18
+at every zoom, including384; its filled palette evaluates the same accepted
+92pt/s song-clock reference at every stop. Geometry, LOD and motion remain
+independent of that color policy. Current RGB uses logical-point increments at
 576/864; the October31 visually accepted correction uses physical-pixel increments
 at64/128/184. Other RGB stops and3BAND remain continuous. BLUE retains physical-pixel
 increments through384 and logical points at576–1500. The production offset helper
@@ -174,3 +183,16 @@ Three focused icon tests pass both platforms; eight PNG ICNS representations
 read back exactly.37 packaged Python modules and both native payloads equal the
 prior bc3 bundle; only SVG/PNG/ICNS change. Signed package/smoke/install/relaunch
 and latest93-import/nine-analysis preservation pass. HANDOFF records exact hashes.
+
+## November2 final delivery
+
+The final complete gate for source `bacf1b48…` passed 2144 cases: 2080 offscreen
+in 481.233s and 64 Cocoa in 67.834s, zero skips or expected failures. These are dated
+results, not a hard-coded inventory. New coverage includes complete first-visible
+waveform publication, partial-cache repair without provisional paint, selected-load
+valid-cache upgrades deferred to the next load, exhaustive 65536-input signed-transfer
+parity, grouped native upload/presentation races, and playlist-only icon persistence and
+fixed-row exclusions. Existing native all-zoom palette/motion tests still run.
+Package/native smoke and actual installed curation verification subsequently
+passed. Exact binary fingerprint, source revision and remaining acceptance limits
+belong in [HANDOFF](HANDOFF.md).

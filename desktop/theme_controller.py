@@ -7,7 +7,7 @@ with their owning component.
 """
 import re
 
-from PySide6.QtCore import QEvent, QObject,QTimer
+from PySide6.QtCore import QEvent, QObject,QTimer,Qt
 from PySide6.QtWidgets import QWidget,QAbstractScrollArea
 
 from . import theme
@@ -102,9 +102,10 @@ class ThemeController(QObject):
             if area is not None:
                 vertical=bool(event.pixelDelta().y() or event.angleDelta().y())
                 horizontal=bool(event.pixelDelta().x() or event.angleDelta().x())
-                if vertical:
-                    self._scroll_feedback(getattr(area,'_soundbox_overlay_scrollbar',area.verticalScrollBar()))
-                if horizontal:self._scroll_feedback(area.horizontalScrollBar())
+                ended=event.phase()==Qt.ScrollEnd
+                if vertical or ended:
+                    self._scroll_feedback(getattr(area,'_soundbox_overlay_scrollbar',area.verticalScrollBar()),phase=event.phase())
+                if horizontal or ended:self._scroll_feedback(area.horizontalScrollBar(),phase=event.phase())
         if (not self._updating and event.type() == QEvent.Show
                 and isinstance(obj, QWidget)):
             self._updating = True
@@ -115,7 +116,7 @@ class ThemeController(QObject):
         return False
 
     @staticmethod
-    def _scroll_feedback(bar):
+    def _scroll_feedback(bar,*,phase=Qt.NoScrollPhase):
         if bar.maximum()<=bar.minimum():return
         def active(value):
             if bool(bar.property('wheelScrolling'))==value:return
@@ -123,9 +124,13 @@ class ThemeController(QObject):
             bar.style().unpolish(bar);bar.style().polish(bar);bar.update()
         timer=getattr(bar,'_soundbox_scroll_feedback',None)
         if timer is None:
-            timer=QTimer(bar);timer.setSingleShot(True);timer.setInterval(300)
+            # Phase-less mouse wheels have no end event. One missed display
+            # frame clears their feedback; trackpads clear on ScrollEnd itself.
+            timer=QTimer(bar);timer.setSingleShot(True);timer.setInterval(32)
             timer.timeout.connect(lambda:active(False));bar._soundbox_scroll_feedback=timer
-        active(True);timer.start()
+        timer.stop()
+        active(phase!=Qt.ScrollEnd)
+        if phase==Qt.NoScrollPhase:timer.start()
 
 
 def install(app):

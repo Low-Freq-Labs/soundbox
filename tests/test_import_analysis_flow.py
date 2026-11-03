@@ -114,7 +114,7 @@ class ImportAnalysisFlow(unittest.TestCase):
         release = threading.Event(); self.addCleanup(release.set)
         self.win.model.set_rows([self.win._row_for(t) for t in (first,second,third)])
         self.win.settings['analysis'] = dict(automatic=True)
-        def detect(_lib, track, _prefs, *, should_cancel):
+        def detect(_lib, track, _prefs, *, should_cancel,automatic=False):
             if track == second:
                 while not release.wait(.005):
                     if should_cancel(): raise RuntimeError('cancelled')
@@ -435,15 +435,20 @@ class ImportAnalysisFlow(unittest.TestCase):
         track=self.track('disk-full');record=self.result(track);key=analysis.result_key(track.path)
         self.win.settings['analysis_results']={key:record};pb=self.load(track,record)
         before=deepcopy(self.win.settings)
+        disk_before=self.win._data_file.read_bytes() if self.win._data_file.exists() else None
         with mock.patch.object(self.win,'_save_state',return_value=False), \
-                mock.patch.object(pb,'refresh_live_grid') as paint:
+                mock.patch.object(pb,'refresh_live_grid') as paint, \
+                mock.patch.object(self.win,'_flash_status') as status:
             self.assertFalse(self.win._edit_grid('shift',1))
         self.assertEqual(self.win.settings,before);paint.assert_not_called()
-        self.assertIn('could not be saved',self.win.prep_controller.reason(track.track_id))
-        self.win.prep_controller.retry()
+        self.assertEqual(self.win._data_file.read_bytes() if self.win._data_file.exists() else None,disk_before)
+        self.assertIn('could not be saved',status.call_args.args[0])
+        # Storage recovery needs no sticky input veto or manual Retry action.
         self.assertEqual(self.win.prep_controller.reason(track.track_id),'')
         self.assertTrue(self.win._edit_grid('shift',1))
         self.assertTrue(self.win.prep_controller.pending)
+        self.assertEqual(StateRepository(self.win._data_file).load()['settings']['pending_prep_edits'],
+                         self.win.prep_controller.pending)
 
     def test_cmd_r_renames_focused_playlist_inline_and_keeps_membership(self):
         from desktop.trees import CUSTOM_ROLE

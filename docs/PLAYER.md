@@ -1,6 +1,6 @@
 # SoundBox player
 
-Current as of 2026-11-01. This is the player reference: shipped behavior,
+Current as of 2026-11-02. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
@@ -8,6 +8,62 @@ changing the deck.
 Initial shared analysis is installed for bare stereo PCM16/24 WAV44.1/48kHz
 full BPM/Grid+Key and native waveforms. Broader codecs/existing-analysis
 replacement remain gated; [HANDOFF](HANDOFF.md) records exact installed proof.
+
+## November2 installed behavior
+
+The supplied Gorilla Glue RGB screenshot at92pt/s is the fixed color reference.
+Its rendered frame remains pixel-exact. Main-lane RGB evaluates that same
+song-anchored color field at every zoom, including its25% reference fine-area
+correction; it no longer switches between wide dimming, close occupancy dimming
+and different color interpolation curves. BLUE also uses the same reference
+color sampling footprint at every zoom. Three-band retains its fixed seven-color
+native palette and independent layer heights. Geometry, source detail, zoom
+footprints and motion remain separate from palette transfer. All13 zooms keep
+each mode's filled palette in the native drawable regression. This supersedes
+the historical per-zoom color/occupancy policies described below.
+
+Automatic BPM/key detection skips songs over900 seconds, including new imports
+whose duration becomes known only from captured container headers. Existing
+native/manual/saved musical data is preserved; explicit analysis remains available.
+Long cached zero-anchor fallback grids no longer fabricate tempo for sets.
+Interactive loading publishes the complete overview, native mode streams and
+signed contour as one visible surface for every duration. Manifest/grid/cue
+readiness remains immediate; a partial cache waits for repair before painting a
+provisional waveform. A selected-load worker upgrading its own valid older cache
+saves the replacement for the next load instead of republishing that worker's
+already displayed surface. Separate preparation completions, explicit reanalysis
+and native metadata refreshes retain their targeted refresh paths. Interactive reads skip
+the unused spectral master; default/full cache APIs and audits retain it.
+A bounded128KiB native signed-transfer lookup is bit-exact across all65536 inputs.
+Grouped uploads recheck their guard under the render lock before snapshotting
+buffers, so an in-flight draw cannot expose the intermediate compact silhouette. The attribute-cache revision is captured in that same locked snapshot, so newer
+uploads cannot tag older buffers with their revision.
+The public compact fallback still uses positive upper/lower magnitudes; only
+BLUE/RGB intervals use a negative lower bound. Its earlier lower-half bug remains
+covered. A valid cache remains readable when new publication is blocked, which
+alone must never force an AAC/ALAC decode.
+
+Captured import prep stays available while native analysis saves or reports a
+per-song failure. Ctime-only cloud metadata drift preserves each exact cue/grid
+intention immediately; the existing source worker verifies its original SHA-256
+before renewing identity. Real byte changes retain intentions with an error.
+Late proofs recheck the current library/track binding before presentation. No
+full-file hash runs on the UI thread and no audio reload is required for ordinary
+hydration. Native publication verifies every saved adaptive-grid row, tempo and
+endpoint; the headline BPM does not require all beat rows to share one tempo.
+An errored song keeps its intent while other imported songs continue saving.
+Normal window close/Cmd+Q stays open while captured import/analysis/source saves
+remain; editing and source pumps keep running. Ordinary waveform/artwork reads do
+not prevent Quit. The next Quit proceeds once those saves finish.
+
+Playlist saves do not reload audio, seek, replace a grid or reset a held cue/scrub.
+Unrelated saves leave Collection rows intact. Relevant refreshes preserve current
+and selected track IDs plus the top visible song, column and scroll offset.
+Sidebar reconciliation retains item objects/expansion and avoids selection
+signals. Artists is virtual-only and enqueues no native organization work; the
+source worker runs background playlist work at low priority. Edit Tags keeps stable
+geometry across save-status changes. Scroll feedback clears on ScrollEnd itself;
+phase-less wheels use a32ms inactivity fallback.
 
 Graveyard auditions use the same loaded deck and playback keys (Space, held C,
 existing cue triggers and zoom), with no supplying autoplay queue. Its selected
@@ -103,6 +159,12 @@ introduced. A source change resets it to `0:00/0:00` while duration loads.
 Below the player, the browser reaches the window's right edge without a utility
 rail. Its persistent vertical scrollbar and thumb start below the 26-point
 column-header row. The footer retains one full-width top divider.
+
+The Playlists sidebar keeps Collection's home icon, Artists' person icon and
+folder expansion icons fixed. Only playlist icons are configurable: right-click
+the icon for Star, Music note or Vinyl crate. These scoped local preferences
+preserve navigation and do not enqueue native database writes. Right-clicking
+row text retains the ordinary playlist menu.
 
 Columns can reach the frame’s right edge, including FORMAT. The visible scrollbar
 overlays the row edge below the header; it reserves no column-width gutter.
@@ -637,9 +699,10 @@ player.
 
 ## Analysis ownership and read-only Rekordbox import
 
-The September 29 implementation reuses complete imported waveform streams and
-adds only a 1-ms signed detail supplement. Sonny accepted the isolated visual
-candidate; production validation/install status is in [HANDOFF.md](HANDOFF.md).
+The September29 reuse implementation is a retained historical reference: it
+reuses complete imported waveform streams and adds a1-ms signed detail supplement.
+Sonny accepted its isolated visual comparison; current production validation and
+installed provenance are in [HANDOFF.md](HANDOFF.md).
 The [reuse audit](archive/waveform-reuse-audit-2026-09.md) separates measured evidence from
 remaining visual/format acceptance. Existing caches remain usable during gradual
 conversion; launch does not invalidate the whole library.
@@ -728,9 +791,11 @@ queues only that track for a normal atomic recook. The browser's per-track
 **Analyze Track** action includes waveform rebuilding and deliberately
 bypasses the ready-manifest shortcut for only the selected record. Both routes
 decode the unchanged source again and publish a verified V5 replacement. The
-old playable cache stays in place if decoding or storage fails, a loaded deck
-hot-refreshes after success, and neither source audio nor Rekordbox data is
-written.
+old playable cache stays in place if decoding or storage fails. Initial or
+explicitly forced preparation can hot-refresh the loaded deck after success;
+an interactive upgrade of an already valid cache saves for the next load and
+must not replace the current surface. Neither route writes source audio or
+Rekordbox data.
 
 The fallback analyzer streams PCM in bounded memory, derives approximately
 6144 peak windows/second, keeps a normalized 24-band master, and builds the
@@ -739,15 +804,19 @@ paths:
 LP 100 Hz, HP 300 + LP 3000 Hz, and HP 1500 Hz. One-millisecond band peaks use
 approximately 25/3/1 ms low/mid/high holds before a local per-column energy
 transfer, overlap correction, green restraint, blue lift, and compact
-quantization. When no valid Rekordbox grid exists, the analyzer derives a
-constant-tempo grid from FFT autocorrelation and anchors beat 1 at exactly
-`0:00`. The fallback path is NumPy-only and has no runtime JIT.
+quantization. For tracks up to900seconds without a valid native/manual/saved
+grid, the analyzer may derive a constant-tempo FFT-autocorrelation fallback and
+anchor beat1at exactly`0:00`. Longer sets receive waveform preparation without
+an invented automatic BPM/key or fallback grid; explicit musical analysis remains
+available. The fallback path is NumPy-only and has no runtime JIT.
 For incomplete imports, Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips.
-Complete imports use the compact native-rate supplement below. Export eligibility is
-deliberately separate: only MP3, WAV, AIFF/AIF, and FLAC are future-CDJ
-candidates; AAC/ALAC/M4A/MP4 are player-only under the current SoundBox policy.
-This is not a statement of every CDJ's codec support, nor proof of a valid device
-export. The separate [CDJ acceptance plan](cdj-usb-export.md) governs that work.
+Complete imports use the compact native-rate supplement below. The canonical
+waveform cache's legacy eligibility labels are separate from native CDJ export
+admission. CDJ export captures fresh native identity/analysis and validates actual
+media headers; compatible AAC-in-M4A is supported by that path. ALAC/FLAC need the
+separately accepted compatibility conversion for the conservative original
+CDJ-2000/CDJ-3000 profile. None of this broadens initial source-analysis publication
+beyond its accepted bare-WAV scope. See [the CDJ guide](cdj-usb-export.md).
 
 Fallback/legacy geometry is analyzed at approximately 6144 cells/second from the
 stereo midpoint, which preserves the
@@ -1210,9 +1279,12 @@ not a successful-save claim. Native grid receipts contain track/content-file AFT
 rows plus DAT/EXT hashes; only Cue receipts contain after_revision. Exact legacy
 receipt/base proofs reconcile already committed nudges without repeating them.
 
-Normal quit drains accepted source work before TaskOwner shutdown. Unstarted
-durable intentions survive restart. Unknown recovery stays guarded; no whole-library
-restore, cache purge or detector rerun is part of retry. Variable-tempo scaling and
+Normal UI close/Cmd+Q keeps the usable app and source pumps open while captured
+imports/detection/source saves remain. The next Quit proceeds after completion;
+ordinary waveform/artwork/read-only preparation does not block it. Explicit
+teardown still drains accepted active work and preserves unstarted durable
+intentions. Unknown recovery stays guarded; no whole-library restore, cache purge
+or detector rerun is part of retry. Variable-tempo scaling and
 intelligent-playlist creation remain separate work. Active supported native
 Collection audio is already discovered without playlist membership.
 
@@ -1263,7 +1335,7 @@ captures the first empty slot of the active page using the normal edit/Quantize
 guards. A full page reports that no slot is available; existing cues are preserved.
 Global Search includes Graveyard metadata and Restore keeps its visible anchor.
 Trackpad/momentum briefly colors the actual scrollbar thumb in the current theme;
-feedback ends300ms after the last movement without changing column geometry.
+feedback ends on ScrollEnd itself, with a32ms fallback for phase-less wheels.
 See HANDOFF for tested versus installed state.
 
 Native prep intentions use v2 exact native grid arithmetic, retaining terminal
@@ -1273,9 +1345,21 @@ only cue receipts provide after_revision. Exact legacy intention/receipt proofs
 permit reconciliation without replaying an already committed shift. Ordinary
 native tracks share durable local capture while source publication serializes.
 
-November1 approved visual refinement: BLUE middle zooms preserve signed center
+Historical November1 visual refinement (per-zoom color policy superseded by
+the November2 fixed92pt/s reference above): BLUE middle zooms preserve signed center
 peaks as RGB does, while3BAND preserves each independent band's center peak.
 RGB24/32/48/64/92 use a gentle25% linear-light correction toward measured fine
 signed-interval occupancy. The first two full-strength candidates were rejected
 as too dark; the quarter-strength actual render was approved. Close zooms retain
 their accepted color transfer, geometry and source footprint.
+
+Historical November1 follow-up (color policy superseded above): BLUE main-lane signed amplitudes gain6%
+and3BAND’s independent main-lane layers gain20%, bounded to the lane. RGB height,
+overviews and saved musical/display payloads are unchanged. RGB24/32/48/64 use40%
+of measured fine-area contrast correction plus82% encoded contrast against the
+background; RGB92 retains25% occupancy correction without that dimming. Sonny
+rejected the first subtle candidate and approved this visibly darker RGB render.
+The BLUE/3BAND height changes remain installed; the per-zoom RGB color policy is
+historical and must not be reinstated.
+A separate grid-ready signal refreshes edit admission when the manifest arrives
+after audio readiness. Session CUE is disabled during physical Hot/Memory holds.

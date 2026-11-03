@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox, QTreeWidgetItem
 from .choices import Menu as QMenu
 
 from soundbox import playlist_folders as folders
-from .trees import CUSTOM_ROLE, CUSTOM_FOLDER_ROLE
+from .trees import CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, NATIVE_TREE_ROLE
 
 
 class PlaylistFoldersMixin:
@@ -20,15 +20,24 @@ class PlaylistFoldersMixin:
         if item.data(0, CUSTOM_FOLDER_ROLE):return item.data(0, CUSTOM_FOLDER_ROLE)
         return item.parent().data(0, CUSTOM_FOLDER_ROLE) if item.parent() else ''
 
-    def _commit_local_tree(self, nodes, custom=None, *, select=None):
+    def _commit_local_tree(self, nodes, custom=None, *, select=None, icon_rename=None):
         previous = self.custom
         existed = 'custom_playlist_tree' in self.settings
         old_tree = self.settings.get('custom_playlist_tree')
         old_expanded = self.settings.get('custom_playlist_expanded')
+        old_icons=self.settings.get('playlist_icons');had_icons='playlist_icons' in self.settings
         members = previous if custom is None else custom
         nodes = folders.reconcile(members, nodes)
         self.custom = {n['playlist']:members[n['playlist']] for n, _ in folders.walk(nodes) if 'playlist' in n}
         self.settings['custom_playlist_tree'] = nodes
+        icon_key=getattr(self,'_local_playlist_icon_key',None)
+        if isinstance(old_icons,dict) and icon_key:
+            icons=dict(old_icons)
+            if icon_rename:
+                old,new=map(icon_key,icon_rename)
+                if old in icons:icons[new]=icons[old]
+            for name in previous.keys()-members.keys():icons.pop(icon_key(name),None)
+            self.settings['playlist_icons']=icons
         if old_expanded is not None:
             live = {n['folder'] for n, _ in folders.walk(nodes) if 'folder' in n}
             self.settings['custom_playlist_expanded'] = [key for key in old_expanded if key in live]
@@ -37,6 +46,8 @@ class PlaylistFoldersMixin:
             if existed:self.settings['custom_playlist_tree'] = old_tree
             else:self.settings.pop('custom_playlist_tree', None)
             if old_expanded is not None:self.settings['custom_playlist_expanded'] = old_expanded
+            if had_icons:self.settings['playlist_icons']=old_icons
+            else:self.settings.pop('playlist_icons',None)
             return False
         self._refresh_custom()
         if select:
@@ -50,7 +61,10 @@ class PlaylistFoldersMixin:
 
     def _populate_custom_folders(self, keep_name, keep_folder):
         expanded = set(self.settings.get('custom_playlist_expanded', []))
+        root_index=next((i for i in range(self.sb_tree.topLevelItemCount())
+                         if self.sb_tree.topLevelItem(i).data(0,NATIVE_TREE_ROLE)),self.sb_tree.topLevelItemCount())
         def add(nodes, parent=None):
+            nonlocal root_index
             for node in nodes:
                 if 'folder' in node:
                     item = QTreeWidgetItem([node['name']])
@@ -62,7 +76,8 @@ class PlaylistFoldersMixin:
                     item = QTreeWidgetItem([f'★  {key}  ({len(self.custom[key])})'])
                     item.setData(0, CUSTOM_ROLE, key)
                 if parent:parent.addChild(item)
-                else:self.sb_tree.addTopLevelItem(item)
+                else:
+                    self.sb_tree.insertTopLevelItem(root_index,item);root_index+=1
                 if 'folder' in node:
                     add(node['children'], item); item.setExpanded(node['folder'] in expanded)
                 if (item.data(0, CUSTOM_ROLE) == keep_name and keep_name is not None
@@ -127,7 +142,8 @@ class PlaylistFoldersMixin:
                 custom = {value if name == key else name:ids for name, ids in self.custom.items()}
             folders.validate(nodes)
             self._commit_local_tree(nodes, custom, select=(CUSTOM_FOLDER_ROLE if kind == 'folder' else CUSTOM_ROLE,
-                                                         key if kind == 'folder' else value))
+                                                         key if kind == 'folder' else value),
+                                    icon_rename=(key,value) if kind=='playlist' else None)
         except ValueError as exc:QMessageBox.information(self, 'Could not rename '+kind, str(exc))
 
     def _delete_local_node(self, kind, key):
@@ -157,6 +173,11 @@ class PlaylistFoldersMixin:
         menu.exec(QCursor.pos())
 
     def _soundbox_context_menu(self, pos):
+        icon=self.sb_tree.playlist_icon_item_at(pos)
+        chooser=getattr(self,'_playlist_icon_menu',None)
+        menu=chooser(self.sb_tree,icon) if chooser and icon is not None else None
+        if menu is not None:
+            menu.exec(self.sb_tree.viewport().mapToGlobal(pos));return
         item = self.sb_tree.itemAt(pos)
         menu = self._local_context_menu(item)
         menu.exec(self.sb_tree.viewport().mapToGlobal(pos))

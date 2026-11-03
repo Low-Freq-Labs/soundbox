@@ -101,6 +101,49 @@ class AnalysisPublication(unittest.TestCase):
         self.assertTrue(packet['_blue_detail']);self.assertTrue(packet['_rgb_detail']);self.assertTrue(packet['_detail_bands'])
         self.assertEqual(obj.apply(),'already-completed')
 
+    def test_adaptive_saved_grid_retains_each_tempo_and_exact_terminal_row(self):
+        from copy import deepcopy
+        from dataclasses import replace
+        from fractions import Fraction
+        from desktop.native_analysis import readback
+        from soundbox import native_analysis_plan as planner
+        from soundbox.native_media import MediaIdentity
+        from soundbox.rekordbox_grid import read_grid, replace_grid
+
+        baseline=self.instance();result=deepcopy(baseline.plan['result'])
+        result['bpm']=155.0;result['beats']=[];clock=Fraction(0)
+        while clock<=32:
+            index=len(result['beats']);tempo=155 if index<40 else 150
+            result['beats'].append([index%4+1,int(clock*1000),float(tempo)])
+            clock+=Fraction(60,tempo)
+        operation=str(uuid4());folder=self.folder.parent/operation
+        store.prepare(self.authority,'123',baseline.plan['track_uuid'],result,folder,
+                      data_root=Path(baseline.plan['data_root']),operation_id=operation)
+        obj=store.AnalysisStore(self.authority,folder)
+        images={Path(name).suffix:(folder/name).read_bytes() for name in store.NAMES}
+        grid=read_grid(images['.DAT'])
+        self.assertEqual([[beat.number,beat.time_ms,beat.tempo/100] for beat in grid],result['beats'])
+        conn=_connect(self.folder/'before.db',readonly=True)
+        try:base=store._base(conn,'123')
+        finally:conn.close()
+        for change in ('tempo','time','terminal'):
+            changed=list(grid)
+            if change=='tempo':changed[41]=replace(changed[41],tempo=14900)
+            elif change=='time':changed[41]=replace(changed[41],time_ms=changed[41].time_ms+1)
+            else:changed.pop()
+            altered={**images,'.DAT':replace_grid(images['.DAT'],tuple(changed))}
+            with self.subTest(change=change),self.assertRaisesRegex(WriteProofError,'complete saved grid'):
+                planner.plan(base,MediaIdentity.from_dict(obj.plan['audio']),altered,
+                             share_root=obj.plan['share'],seeds=obj.plan['seeds'],result=result,
+                             technical=obj.plan['technical'],native_length=True)
+        audio=Path(result['path']);original=audio.read_bytes();xml=obj.xml.read_bytes()
+        self.assertEqual(obj.apply(),'123');self.assertEqual(self.state(),obj.plan['after'])
+        saved=readback(self.source/'master.db','123',obj.plan['track_uuid'])
+        self.assertEqual(saved['row']['BPM'],15500)
+        self.assertEqual(saved['beats'],result['beats'])
+        self.assertEqual(audio.read_bytes(),original);self.assertEqual(obj.xml.read_bytes(),xml)
+        self.assertEqual(obj.apply(),'already-completed')
+
     def test_foreign_authority_source_scope_and_changed_plan_cannot_publish(self):
         obj=self.instance()
         foreign=store.AnalysisAuthority(self.authority.database,'789',self.authority.schema_sha256,'0'*64,True)

@@ -92,6 +92,14 @@ class _FakeArt:
 
 
 class LocalPlaylistFolders(unittest.TestCase):
+    def test_unified_sidebar_keeps_local_rename_until_native_cutover(self):
+        item=_win.sb_tree.topLevelItem(2).child(0)
+        _win.sb_tree.setCurrentItem(item)
+        with mock.patch('desktop.app.QApplication.focusWidget',return_value=_win.tree), \
+                mock.patch.object(_win,'_rename_local_node') as rename:
+            _win._rename_current()
+            rename.assert_called_once_with('playlist','A')
+
     def setUp(self):
         from copy import deepcopy
         self.old_custom=_win.custom
@@ -138,14 +146,14 @@ class LocalPlaylistFolders(unittest.TestCase):
         self.assertEqual([r['id'] for r in _win.model._rows],before)
         _win.sb_tree.setCurrentItem(folder.child(0))
         self.assertEqual(_win._view_key,'sb:A')
-        self.assertEqual([r['id'] for r in _win.model._rows],['1','2'])
+        self.assertEqual([r['id'] for r in _win.model._rows],['2','1'])
 
     def test_rekordbox_folder_keeps_active_view_and_track_action_scope(self):
         from PySide6.QtWidgets import QMenu
         from PySide6.QtTest import QTest
         collection=_win.sb_tree.topLevelItem(0);_win.sb_tree.setCurrentItem(collection)
         before=[r['id'] for r in _win.model._rows]
-        folder=_win.tree.topLevelItem(0);folder.setExpanded(False);_app.processEvents()
+        folder=_win._find_tree_item('CRATES / SET ONE').parent();folder.setExpanded(False);_app.processEvents()
         QTest.mouseClick(_win.tree.viewport(),Qt.LeftButton,pos=_win.tree.visualItemRect(folder).center())
         self.assertTrue(folder.isExpanded())
         self.assertEqual(_win._view_key,'sb:Collection')
@@ -255,18 +263,51 @@ class CollectionView(unittest.TestCase):
 
 
 class PlaylistSelection(unittest.TestCase):
-    def test_rows_in_sacred_order(self):
+    def test_adopted_custom_add_uses_native_writer_and_keeps_archive(self):
+        from dataclasses import replace
+        from soundbox import playlist_unification as merge
+        lib=_win.lib;settings=dict(_win.settings)
+        try:
+            _win.lib=replace(lib,source_kind='rekordbox-db',source_library_id='123')
+            state=merge.new(lib.source,'123');state['customs_done']=True
+            state['nodes']['custom:Favorites']=dict(id='1000',uuid='00000000-0000-4000-8000-000000000001')
+            _win.settings[merge.KEY]=state
+            before=dict(_win.custom)
+            with mock.patch.object(_win,'_native_append') as append:
+                _win._on_tracks_dropped('Favorites',['1'])
+                append.assert_called_once_with('1000',['1'])
+            self.assertEqual(_win.custom,before)
+            with mock.patch.object(_win,'_native_tree_menu') as native, mock.patch.object(_win,'_sb_menu') as local:
+                item=_win.sb_tree.topLevelItem(0)
+                with mock.patch.object(_win.tree,'itemAt',return_value=item):_win._playlist_menu(QPoint(1,1))
+                native.assert_called_once();local.assert_not_called()
+        finally:_win.lib=lib;_win.settings=settings
+
+    def test_sidebar_arrows_move_inside_the_active_playlist(self):
+        from PySide6.QtTest import QTest
+        item=_win._find_tree_item('CRATES / SET ONE')
+        _win.tree.setCurrentItem(item);_win._reload_current_view()
+        _win.table.setCurrentIndex(_win.model.index(0,0))
+        _win.tree.setFocus()
+        QTest.keyClick(_win.tree,Qt.Key_Down)
+        self.assertIs(_win.tree.currentItem(),item)
+        self.assertEqual(_win.table.currentIndex().row(),1)
+        QTest.keyClick(_win.table,Qt.Key_Up)
+        self.assertEqual(_win.table.currentIndex().row(),0)
+
+    def test_newest_first_display_preserves_native_export_order(self):
         it = _win._find_tree_item("CRATES / SET ONE")
         self.assertIsNotNone(it)
         _win.tree.setCurrentItem(it)
         _app.processEvents()
-        self.assertEqual([r["id"] for r in _win.model._rows], ["3", "1"])
+        self.assertEqual([r["id"] for r in _win.model._rows], ["1", "3"])
 
     def test_select_only_clears_other_trees(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
         _win.tree.setCurrentItem(_win._find_tree_item("CRATES / SET ONE"))
         _app.processEvents()
-        self.assertIsNone(_win.sb_tree.currentItem())
+        self.assertIs(_win.sb_tree.currentItem(),_win.tree.currentItem())
+        self.assertIs(_win.sb_tree,_win.tree)
 
 
 class BrowserDropTarget(unittest.TestCase):
@@ -310,7 +351,7 @@ class ArtColumn(unittest.TestCase):
             _win._reload_current_view()
         finally:
             _win.art_cache = real
-        self.assertEqual([r["art"] for r in _win.model._rows], ["cover", "miss"])
+        self.assertEqual([r["art"] for r in _win.model._rows], ["miss", "cover"])
 
 
 class SortAndSearch(unittest.TestCase):
@@ -324,7 +365,7 @@ class SortAndSearch(unittest.TestCase):
         _win.table.sortByColumn(bpm, Qt.DescendingOrder)
         self.assertEqual([r["id"] for r in _win.model._rows], ["1", "3"])
         _win.table.sortByColumn(-1, Qt.AscendingOrder)
-        self.assertEqual([r["id"] for r in _win.model._rows], ["3", "1"])
+        self.assertEqual([r["id"] for r in _win.model._rows], ["1", "3"])
 
     def test_search_filters_titles(self):
         _win.search.setText("brav")
@@ -743,7 +784,7 @@ class DeviceLabels(unittest.TestCase):
             saved = json.loads(_win._data_file.read_text())
             self.assertEqual(saved["custom"]["Device Picks"], ["1", "2"])
             _win._show_custom("Device Picks")
-            self.assertEqual([r["id"] for r in _win.model._rows], ["1", "2"])
+            self.assertEqual([r["id"] for r in _win.model._rows], ["2", "1"])
         finally:
             _win.custom = old_custom
             _win._refresh_custom()
@@ -4629,6 +4670,98 @@ class PrepEditStatus(unittest.TestCase):
 
 
 class PlayerHardening(unittest.TestCase):
+    def test_playlist_worker_edges_preserve_held_cues_scrub_and_loaded_deck(self):
+        import threading
+        import time
+        from desktop.player import PlayerBar
+        from PySide6.QtTest import QTest
+        pb=PlayerBar();pb._track_id='1';pb._src_path=str(_win.lib.tracks_by_id['1'].path)
+        pb._dur=60000;pb._playback_available=True;pb._native_error=''
+        pb.cue_panel.set_loaded(True)
+        pb.cue_panel.set_cues([dict(kind=kind,slot=0,position_ms=500) for kind in ('hot','memory')])
+        entered=threading.Event();release=threading.Event()
+        try:
+            with mock.patch.object(_win,'player_bar',pb), \
+                    mock.patch.object(_win.grid_controller,'reason',return_value=''), \
+                    mock.patch.object(_win.grid_controller,'bpm_reason',return_value=''), \
+                    mock.patch.object(_win.grid_controller,'view',return_value=([[1,0,120]],120)), \
+                    mock.patch.object(_win.tag_controller,'cue_reason',return_value=''), \
+                    mock.patch.object(_win,'_cache_library'), \
+                    mock.patch.object(pb,'_start_cue_preview'), \
+                    mock.patch.object(pb.player,'setSource') as load, \
+                    mock.patch.object(pb.player,'setPosition') as seek, \
+                    mock.patch.object(pb.player,'set_grid') as grid, \
+                    mock.patch.object(pb.player,'pause') as pause, \
+                    mock.patch.object(pb.player,'play') as play:
+                pb.cue_panel._press('memory',0)
+                pb._deck_drag_active=True;pb.wave._drag_origin_ms=1234;pb.wave._drag_preview_ms=1456
+                pb._transport_play_active=True
+                def work():entered.set();release.wait(5)
+                self.assertTrue(_win.tag_controller.run_playlist_job(work,
+                    lambda _worker:_win._native_refresh_view({'operation':'append'})))
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(_win.grid_edit_buttons[0].isEnabled())
+                release.set();deadline=time.monotonic()+5
+                while _win.tag_controller.busy and time.monotonic()<deadline:QTest.qWait(5)
+                self.assertFalse(_win.tag_controller.busy)
+                self.assertIn(('memory',0),pb.cue_panel._pressed_controls)
+                self.assertTrue(pb._deck_drag_active);self.assertTrue(pb.wave.is_dragging())
+                self.assertEqual(pb.wave._drag_preview_ms,1456)
+                self.assertTrue(pb._transport_play_active)
+                self.assertTrue(_win.grid_edit_buttons[0].isEnabled())
+                for call in (load,seek,grid,pause,play):call.assert_not_called()
+        finally:
+            release.set();pb._deck_drag_active=False;pb.wave._drag_origin_ms=None
+            pb.cue_panel._pressed_controls.clear();pb.shutdown();_win._sync_grid()
+
+    def test_marker_hold_blocks_session_cue_keyboard_and_button_for_both_pages(self):
+        from desktop.player import PlayerBar
+        pb=PlayerBar();pb._src_path='/synthetic/audio';pb._dur=60000
+        pb._playback_available=True;pb.cue_panel.set_loaded(True)
+        pb.cue_panel.set_cues([dict(kind=kind,slot=0,position_ms=500) for kind in ('hot','memory')])
+        try:
+            with mock.patch.object(pb,'_start_cue_preview') as preview:
+                for kind in ('hot','memory'):
+                    pb.cue_panel._press(kind,0)
+                    self.assertFalse(pb.cue_btn.isEnabled())
+                    preview.reset_mock()
+                    pb._cue_press();pb.cue_btn.click();pb._cue_release()
+                    preview.assert_not_called()
+                    self.assertIn((kind,0),pb.cue_panel._pressed_controls)
+                    pb.cue_panel._release(kind,0)
+                    self.assertTrue(pb.cue_btn.isEnabled())
+        finally:pb.shutdown()
+
+    def test_late_grid_enables_bar_start_and_its_cmd_a_binding(self):
+        from desktop.player import PlayerBar
+        from desktop.keyboard import Keymap
+        from PySide6.QtTest import QTest
+        pb=PlayerBar();pb._track_id='1';pb._src_path=str(_win.lib.tracks_by_id['1'].path)
+        pb._dur=60000;pb._pending_autoplay=False;pb._playback_available=True
+        pb._native_error=''
+        pb.cue_panel.set_loaded(True)
+        pb.grid_ready.connect(lambda:_win._grid_changed('1'))
+        old_map=_win._keyboard_router.keymap
+        try:
+            with mock.patch.object(_win,'player_bar',pb), \
+                    mock.patch.object(_win.grid_controller,'reason',side_effect=lambda *_a,**_k:'' if pb._analysis_parts.get('beats') else 'Waiting for grid'), \
+                    mock.patch.object(_win.grid_controller,'is_local',return_value=True), \
+                    mock.patch.object(_win.grid_controller,'view',return_value=None), \
+                    mock.patch.object(_win.grid_controller,'bpm_reason',return_value=''), \
+                    mock.patch.object(_win,'_edit_grid') as edit:
+                _win._sync_grid();self.assertFalse(_win.grid_edit_buttons[0].isEnabled())
+                pb._on_analysis_manifest(pb._src_path,'',pb._analysis_generation,
+                    dict(beats=[[1,100,120],[2,600,120]],cues=[]))
+                self.assertTrue(_win.grid_edit_buttons[0].isEnabled())
+                _win.grid_edit_buttons[0].click();edit.assert_called_once_with('downbeat')
+                edit.reset_mock()
+                _win._keyboard_router.keymap=Keymap(dict(schema=1,bindings={'grid.downbeat':['Ctrl+A']}))
+                _win.table.setFocus();QTest.keyClick(_win.table,Qt.Key_A,Qt.ControlModifier)
+                edit.assert_called_once_with('downbeat')
+        finally:
+            _win._keyboard_router.release_all();_win._keyboard_router.keymap=old_map
+            pb.shutdown();_win._sync_grid()
+
     def test_grid_capture_uses_visible_paused_cursor_and_fresh_playing_position(self):
         from desktop.player import PlayerBar
         pb = PlayerBar()
@@ -6922,8 +7055,8 @@ class AutoplaySemantics(unittest.TestCase):
         playlist = _win._find_tree_item("CRATES / SET ONE")
         _win.tree.setCurrentItem(playlist)
         _app.processEvents()
-        _win._capture_autoplay_context("3")
-        self.assertEqual(_win._autoplay_order, ["3", "1"])
+        _win._capture_autoplay_context("1")
+        self.assertEqual(_win._autoplay_order, ["1", "3"])
 
         # Browse elsewhere after playback starts; the frozen origin remains.
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(0))
@@ -7400,7 +7533,8 @@ class PlaylistReorder(unittest.TestCase):
         _win._move_custom("B", 0)
         first = _win.sb_tree._first_custom_row()
         names = [_win.sb_tree.topLevelItem(i).data(0, CUSTOM_ROLE)
-                 for i in range(first, _win.sb_tree.topLevelItemCount())]
+                 for i in range(first, _win.sb_tree.topLevelItemCount())
+                 if _win.sb_tree.topLevelItem(i).data(0,CUSTOM_ROLE)]
         self.assertEqual(names, ["B", "A", "C"])
 
     def test_drop_row_clamps_below_pinned(self):
@@ -7622,24 +7756,23 @@ class SidebarSplit(unittest.TestCase):
     """SOUNDBOX/DEVICES header bars are splitter handles: drag to resize, sizes
     persist with the column layout."""
 
-    def test_three_panes_and_header_bars_in_handles(self):
+    def test_unified_playlists_and_devices_header_bar(self):
         from PySide6.QtWidgets import QLabel
         s = _win._sidebar_split
-        self.assertEqual(s.count(), 3)
+        self.assertEqual(s.count(), 2)
+        self.assertIs(_win.tree,_win.sb_tree)
         h1 = " ".join(x.text() for x in s.handle(1).findChildren(QLabel))
-        h2 = " ".join(x.text() for x in s.handle(2).findChildren(QLabel))
-        self.assertIn("SOUNDBOX PLAYLISTS", h1)
-        self.assertIn("DEVICES", h2)
+        self.assertIn("DEVICES", h1)
 
     def test_sizes_persist_roundtrip(self):
         _win.resize(1100, 800)
         _app.processEvents()
         s = _win._sidebar_split
-        s.setSizes([300, 200, 120])
+        s.setSizes([500, 120])
         _win._save_columns()
         saved = list(_win.settings["sidebar_split"])
-        self.assertEqual(len(saved), 3)
-        s.setSizes([saved[0] + 80, max(48, saved[1] - 80), saved[2]])
+        self.assertEqual(len(saved), 2)
+        s.setSizes([saved[0] + 80, max(48, saved[1] - 80)])
         _win._restore_columns()
         self.assertEqual(s.sizes(), saved)
 
@@ -7663,14 +7796,14 @@ class SidebarSplit(unittest.TestCase):
             _win.resize(760, 700)
             _app.processEvents()
             saved_size = (_win.width(), _win.height())
-            _win._sidebar_split.setSizes([280, 260, 96])
+            _win._sidebar_split.setSizes([540, 96])
             _win._save_columns()
             saved_geometry = _win.settings["window_geometry"]
             saved_rect = list(_win.settings["window_rect"])
             saved_split = list(_win.settings["sidebar_split"])
 
             _win.resize(900, 650)
-            _win._sidebar_split.setSizes([100, 100, 100])
+            _win._sidebar_split.setSizes([200, 100])
             _win.settings["window_geometry"] = saved_geometry
             _win.settings["window_rect"] = saved_rect
             _win.settings["sidebar_split"] = saved_split
@@ -9064,6 +9197,81 @@ class WaveformRapidLoad(unittest.TestCase):
         self.assertTrue(self.pb._analysis_parts.get('_overview_heights'))
         self.assertTrue(self.pb._analysis_parts.get('_audio_detail'))
 
+    def test_blocked_cache_publication_still_reads_existing_waveform_without_decoding(self):
+        from desktop.player import WaveformWorker
+        from soundbox.track_analysis import COLOR_MODEL,store,cache_path
+        canonical=Path(self.cache)/'readable-cache'
+        store(canonical,'cached',self.paths[0],dict(detail_heights=b'\x20\x80\xff',detail_rate=6144.,
+            overview_heights=b'\x40\xff',overview_rgb=b'\x01\x02\x03\x04\x05\x06',color_model=COLOR_MODEL,beats=[]))
+        target=cache_path(canonical,'cached');before=target.read_bytes()
+        worker=WaveformWorker(self.paths[0],track_id='cached',track_analysis_dir=canonical)
+        worker.transient_analysis=True;visible=[]
+        worker.overview_ready.connect(lambda *_:visible.append(True))
+        with mock.patch('soundbox.track_analysis.analyze_soundfile',side_effect=AssertionError('Cached source must not decode')), \
+                mock.patch('desktop.player.qt_detail_peaks',side_effect=AssertionError('Cached AAC must not decode')), \
+                mock.patch('soundbox.track_analysis.store',side_effect=AssertionError('Publication remains blocked')):
+            worker.run()
+        self.assertTrue(visible);self.assertEqual(target.read_bytes(),before)
+
+    def test_long_cached_waveform_first_paint_uses_complete_geometry(self):
+        from desktop.player import WaveformWorker
+        backend=mock.Mock();backend.set_complete_analysis.return_value=(True,True)
+        worker=WaveformWorker(self.paths[0],track_id='long',track_analysis_dir=self.cache,native_backend=backend)
+        events=[];worker.manifest_ready.connect(lambda *_:events.append('manifest'))
+        worker.overview_ready.connect(lambda *_:events.append('overview'))
+        worker.detail_ready.connect(lambda *_:events.append('detail'))
+        overview={'_overview_heights':b'\xff','_overview_rgb':b'\xff\x00\x00'}
+        detailed={'_audio_detail':{'rate':1000}}
+        def detail(*_,**options):
+            self.assertEqual(events,['manifest'])
+            backend.set_overview.assert_not_called()
+            backend.set_complete_analysis.assert_not_called()
+            self.assertEqual(options,{'include_spectral':False})
+            return detailed
+        def complete(preview,contour,generation):
+            self.assertEqual(events,['manifest'])
+            self.assertEqual(preview['_overview_heights'],overview['_overview_heights'])
+            self.assertIs(contour,detailed)
+            return True,True
+        backend.set_complete_analysis.side_effect=complete
+        with mock.patch('soundbox.track_analysis.load_manifest',return_value=dict(detail_rate=1000,detail_base_count=900001)), \
+                mock.patch('soundbox.track_analysis.load_overview',return_value=overview), \
+                mock.patch('soundbox.track_analysis.load_detail',side_effect=detail):
+            self.assertEqual(worker._load_stages(),(True,True,True))
+        self.assertEqual(events,['manifest','overview','detail'])
+        backend.set_complete_analysis.assert_called_once()
+        backend.set_overview.assert_not_called();backend.set_audio_detail.assert_not_called()
+        self.assertTrue(overview['_native_uploaded']);self.assertTrue(detailed['_native_uploaded'])
+
+    def test_incomplete_cached_waveform_waits_for_its_repaired_contour(self):
+        from desktop.player import WaveformWorker
+        backend=mock.Mock()
+        worker=WaveformWorker(self.paths[0],track_id='partial',track_analysis_dir=self.cache,native_backend=backend)
+        visible=[];worker.overview_ready.connect(lambda *_:visible.append('overview'))
+        worker.detail_ready.connect(lambda *_:visible.append('detail'))
+        with mock.patch('soundbox.track_analysis.load_manifest',return_value={}), \
+                mock.patch('soundbox.track_analysis.load_overview',return_value={'_overview_heights':b'\xff'}), \
+                mock.patch('soundbox.track_analysis.load_detail',return_value=None):
+            self.assertEqual(worker._load_stages(),(True,True,False))
+        self.assertFalse(visible)
+        backend.set_overview.assert_not_called();backend.set_complete_analysis.assert_not_called()
+        backend.set_audio_detail.assert_not_called()
+
+    def test_valid_cached_surface_does_not_resize_when_background_upgrade_finishes(self):
+        from desktop.player import WaveformWorker
+        from soundbox.track_analysis import WAVEFORM_MODEL
+        worker=WaveformWorker(self.paths[0],analysis_path='/synthetic/ANLZ.DAT',
+            track_id='old-valid',track_analysis_dir=self.cache)
+        with mock.patch.object(worker,'_load_stages',return_value=(True,True,True)) as publish, \
+                mock.patch('soundbox.track_analysis.load_manifest',return_value={'waveform_model':WAVEFORM_MODEL}), \
+                mock.patch('soundbox.track_analysis.is_dataless_source',return_value=False), \
+                mock.patch('soundbox.rekordbox_analysis.read',return_value={}), \
+                mock.patch('soundbox.waveform_detail.complete_import',return_value=True), \
+                mock.patch('soundbox.waveform_detail.analyze_imported',return_value={'completed':'new cache'}), \
+                mock.patch('soundbox.track_analysis.store',return_value=True) as save:
+            worker._run(self.cache)
+        save.assert_called_once();publish.assert_called_once_with(self.cache)
+
     def test_canonical_rekordbox_grid_keeps_exact_first_beat(self):
         from pathlib import Path
         from soundbox.track_analysis import COLOR_MODEL, store
@@ -9104,7 +9312,7 @@ class WaveformRapidLoad(unittest.TestCase):
         worker = WaveformWorker(self.paths[0], track_id="stale",
                                 track_analysis_dir=self.cache, native_backend=backend)
         cancelled = False
-        def read_detail(*_args):
+        def read_detail(*_args,**_kwargs):
             nonlocal cancelled
             cancelled = True
             return {"_audio_detail": {"rate": 1000}}

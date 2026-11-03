@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QLineEdit, QStyledItemDelegate, QTableView,
     QTreeWidget, QTreeWidgetItem, QStyle, QStyleOptionViewItem,
@@ -92,7 +92,7 @@ def _chip_pixmap(text: str) -> QPixmap:
 
 def _start_chip_drag(view, md, label: str, actions) -> None:
     """Begin a drag from `view` carrying `md`, using the chip pixmap as the ghost."""
-    if md is None or not md.hasText():
+    if md is None or not (md.hasText() or md.hasFormat('application/x-soundbox-native-playlist')):
         return
     drag = QDrag(view)
     drag.setMimeData(md)
@@ -218,6 +218,19 @@ def _sidebar_icon(painter, box, kind, expanded=False):
             if i:path.lineTo(*point)
             else:path.moveTo(*point)
         path.closeSubpath()
+    elif kind=='person':
+        path.addEllipse(QRectF(-2.25,-5,4.5,4.5))
+        path.moveTo(-4.5,5);path.lineTo(-4.5,3.5)
+        path.cubicTo(-4.5,-.5,4.5,-.5,4.5,3.5);path.lineTo(4.5,5)
+        path.closeSubpath()
+    elif kind=='crate':
+        # A tilted sleeve and a record peek above the slatted crate front.
+        path.moveTo(-4,-1);path.lineTo(-4.7,-4);path.lineTo(-1,-5);path.lineTo(-.7,-4)
+        path.moveTo(-2,-1);path.cubicTo(-2.5,-5.5,4.5,-5.5,4,-1)
+        path.moveTo(.3,-1);path.cubicTo(.1,-2.5,2.8,-2.5,2.5,-1)
+        path.addRect(QRectF(-5,-1,10,6))
+        path.moveTo(-2,1);path.lineTo(-2,3)
+        path.moveTo(2,1);path.lineTo(2,3)
     else:
         path.addEllipse(QRectF(-4.5,1,4.5,3.5))
         path.moveTo(0,2.5);path.lineTo(0,-5)
@@ -230,6 +243,14 @@ def _sidebar_icon(painter, box, kind, expanded=False):
     pen=QPen(painter.pen().color(),1.25,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin)
     painter.setPen(pen);painter.setBrush(Qt.NoBrush);painter.drawPath(path)
     painter.restore()
+
+
+def sidebar_choice_icon(kind):
+    pixmap=QPixmap(20,20);pixmap.fill(Qt.transparent)
+    painter=QPainter(pixmap);painter.setPen(QColor(theme.TEXT))
+    _sidebar_icon(painter,QRectF(4,4,12,12),kind)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class _PlaylistDelegate(QStyledItemDelegate):
@@ -265,8 +286,7 @@ class _PlaylistDelegate(QStyledItemDelegate):
         panel=QStyleOptionViewItem(option)
         panel.rect.setLeft(0)
         option.widget.style().drawPrimitive(QStyle.PE_PanelItemViewItem,panel,painter,option.widget)
-        kind=('home' if index.data(COLLECTION_ROLE) else 'star' if index.data(CUSTOM_ROLE)
-              else 'note' if index.data(PATH_ROLE) or index.data(ARTISTS_ROLE) else 'folder')
+        kind=self.parent().sidebar_icon_kind(index)
         label=option.text
         if kind!='folder' and label.partition('  ')[0] in ('♪','⌂','★'):
             label=label.partition('  ')[2]
@@ -301,12 +321,28 @@ class PlaylistFolderTree(NoTypeAhead, QTreeWidget):
         # Qt still owns expansion hit testing and keyboard navigation.
         pass
 
+    def sidebar_icon_kind(self,index):
+        if index.data(COLLECTION_ROLE):return 'home'
+        if index.data(ARTISTS_ROLE):return 'person'
+        default='star' if index.data(CUSTOM_ROLE) else 'note' if index.data(PATH_ROLE) else 'folder'
+        getter=getattr(self.window(),'_playlist_icon_kind',None)
+        return getter(index,default) if getter and default!='folder' else default
+
+    def playlist_icon_item_at(self,pos):
+        item=self.itemAt(pos)
+        if (item is None or item.data(0,COLLECTION_ROLE) or item.data(0,ARTISTS_ROLE)
+                or not (item.data(0,PATH_ROLE) or item.data(0,CUSTOM_ROLE))):return None
+        icon,_text=sidebar_row_geometry(self.visualItemRect(item),self.indentation())
+        return item if icon.contains(pos) else None
+
     @staticmethod
     def is_folder(item):
         return item is not None and not any(item.data(0, role) for role in
             (PATH_ROLE, CUSTOM_ROLE, COLLECTION_ROLE, ARTISTS_ROLE))
 
     def mousePressEvent(self, event):
+        if event.button()==Qt.RightButton and self.playlist_icon_item_at(event.position().toPoint()):
+            event.accept();return
         item = self.itemAt(event.position().toPoint())
         self._folder_press = (QPersistentModelIndex(self.indexFromItem(item))
             if event.button() == Qt.LeftButton and self.is_folder(item) else None)
@@ -627,6 +663,105 @@ class SoundBoxTree(PlaylistFolderTree):
         p.setPen(QPen(QColor(theme.PURPLE_LIGHT), 2))
         p.drawLine(0, y, self.viewport().width(), y)
         p.end()
+
+
+NATIVE_TREE_ROLE = Qt.UserRole + 80
+PINNED_TREE_ROLE = Qt.UserRole + 81
+
+
+class UnifiedPlaylistTree(SoundBoxTree):
+    """One navigation surface for native and not-yet-migrated local playlists."""
+    native_tracks_dropped = Signal(str,list)
+    native_files_dropped = Signal(str,list)
+    native_reordered = Signal(str,str,bool)  # dragged ID, anchor ID, after
+    _native_mime = 'application/x-soundbox-native-playlist'
+
+    def mimeData(self,items):
+        local=[item for item in items if not item.data(0,NATIVE_TREE_ROLE)]
+        md=SoundBoxTree.mimeData(self,local)
+        lines=md.text().splitlines()
+        for item in items:
+            if item in local:continue
+            if item.data(0,CUSTOM_ROLE):lines.append('cust\t'+item.data(0,CUSTOM_ROLE))
+            else:lines.extend('rb\t'+path for path in _descendant_rb_paths(item))
+        if len(items)==1 and items[0].data(0,NATIVE_TREE_ROLE) and not items[0].data(0,PINNED_TREE_ROLE):
+            identity=items[0].data(0,RB_NODE_ROLE)
+            if identity:md.setData(self._native_mime,str(identity).encode('ascii'))
+        md.setText('\n'.join(dict.fromkeys(lines)));return md
+
+    def startDrag(self,actions):
+        items=self._playlist_drag_items()
+        if items:
+            md=self.mimeData(items)
+            if md.hasText() or md.hasFormat(self._native_mime):_start_chip_drag(self,md,items[0].text(0),actions)
+
+    def _native_drop_destination(self,pos,identity):
+        source=next((item for item in self.findItems('',Qt.MatchContains|Qt.MatchRecursive)
+                     if item.data(0,RB_NODE_ROLE)==identity),None)
+        if source is None or source.data(0,PINNED_TREE_ROLE):return None
+        parent=source.parent();root=parent or self.invisibleRootItem()
+        candidates=[root.child(i) for i in range(root.childCount())
+                    if root.child(i).data(0,NATIVE_TREE_ROLE) and not root.child(i).data(0,PINNED_TREE_ROLE)
+                    and root.child(i) is not source]
+        if not candidates:return None
+        item=self.itemAt(pos)
+        if item is None:
+            if parent is not None:return None
+            item=candidates[-1];after=True
+        elif parent is None and item.data(0,PINNED_TREE_ROLE):
+            item=candidates[0];after=False
+        else:
+            # Hovering an expanded root folder's contents still addresses
+            # that root sibling; no drag implicitly reparents native items.
+            while item is not None and item.parent() is not parent:item=item.parent()
+            if item not in candidates:return None
+            after=pos.y()>self.visualItemRect(item).center().y()
+        rect=self.visualItemRect(item)
+        if after:
+            last=item
+            while last.isExpanded() and last.childCount():last=last.child(last.childCount()-1)
+            rect=self.visualItemRect(last)
+        y=rect.bottom() if after else rect.top()
+        return item.data(0,RB_NODE_ROLE),after,y
+
+    def _native_drag(self,event):
+        if event.source() is not self or not event.mimeData().hasFormat(self._native_mime):return None
+        try:identity=bytes(event.mimeData().data(self._native_mime)).decode('ascii')
+        except UnicodeError:return None
+        return identity,self._native_drop_destination(event.position().toPoint(),identity)
+
+    def dragMoveEvent(self,event):
+        reorder=self._native_drag(event)
+        if reorder is not None:
+            _identity,destination=reorder
+            self._set_hover(None);self._set_insert(None)
+            if destination is None:event.ignore();return
+            self._insert_y=destination[2];self.viewport().update();event.acceptProposedAction();return
+        item=self.itemAt(event.position().toPoint())
+        if item and item.data(0,NATIVE_TREE_ROLE):
+            PlaylistTree.dragMoveEvent(self,event)
+        else:SoundBoxTree.dragMoveEvent(self,event)
+
+    def dropEvent(self,event):
+        reorder=self._native_drag(event)
+        if reorder is not None:
+            identity,destination=reorder;self._set_hover(None);self._set_insert(None)
+            if destination is None:event.ignore();return
+            anchor,after,_y=destination
+            self.native_reordered.emit(identity,anchor,after);event.acceptProposedAction();return
+        item=self.itemAt(event.position().toPoint())
+        if item and item.data(0,NATIVE_TREE_ROLE):
+            self._set_hover(None);self._set_insert(None)
+            if not item.data(0,PATH_ROLE) or item.data(0,RB_NODE_KIND_ROLE)!=0:event.ignore();return
+            files=_audio_paths(event.mimeData())
+            if files:self.native_files_dropped.emit(item.data(0,RB_NODE_ROLE),files);event.acceptProposedAction();return
+            ids=[]
+            for line in event.mimeData().text().splitlines():
+                kind,_,value=line.partition('\t')
+                if kind=='trk':ids.extend(i for i in value.split(',') if i)
+            if ids:self.native_tracks_dropped.emit(item.data(0,RB_NODE_ROLE),ids);event.acceptProposedAction()
+            else:event.ignore()
+        else:SoundBoxTree.dropEvent(self,event)
 
 
 class DeviceTree(NoTypeAhead, QTreeWidget):

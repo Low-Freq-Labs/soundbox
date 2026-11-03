@@ -835,10 +835,11 @@ class NativeWaveformShader(unittest.TestCase):
         )[1].split(
             "constant uint kIntegrationTaps", 1
         )[0]
-        self.assertIn("if (u.waveformMode == 2)", kernel)
-        self.assertIn("linear_wave_color(", kernel)
-        self.assertIn(
-            "smoothstep(92.0, 184.0, u.pixelsPerSecond)", kernel)
+        self.assertIn("reference_wave_color(samples,audioDetailSamples,u,clock,secondOffset,scale)", kernel)
+        reference=self.shader.split('inline float3 reference_wave_color(',1)[1].split('kernel void wave_attribute_kernel',1)[0]
+        self.assertIn('linear_wave_color(',reference)
+        self.assertIn('const float referencePixels = 92.0;',reference)
+        self.assertNotIn('u.pixelsPerSecond',reference)
 
     def test_exact_display_modes_do_not_punch_gaps_between_rows(self):
         kernel = self.shader.split(

@@ -3,18 +3,30 @@
 The result is a UI view only. Never cache it as native source state, feed its
 catalog to a writer, or export it before the existing source FIFO has drained.
 """
-from copy import deepcopy
 from dataclasses import replace
 
 from .library import Playlist
+from .rekordbox_playlist_store import command_requests
+
+
+def copy_catalog(catalog):
+    """Copy native SQL row mappings without recursively copying scalar cells.
+
+    SQLite cells are immutable numbers/text/BLOB/None. Projection assigns only
+    top-level fields; independent maps preserve the authoritative source rows.
+    This remains a presentation copy and never grants publication authority.
+    """
+    return {**catalog,'nodes':[dict(row) for row in catalog['nodes']],
+            'members':[dict(row) for row in catalog['members']]}
 
 
 def project(library, jobs):
     if not jobs or not library.source_playlist_catalog:return library
-    catalog=deepcopy(library.source_playlist_catalog)
+    catalog=copy_catalog(library.source_playlist_catalog)
     nodes=catalog['nodes'];members=catalog['members'];base=catalog['revision']
     native_tracks={t.native_id:t for t in library.tracks_by_id.values()}
-    for job in jobs:
+    commands=({**job,'request':command} for job in jobs for command in command_requests(job['request']))
+    for job in commands:
         if (job['error'] or job['source']!=str(library.source) or job['library_id']!=library.source_library_id):break
         request=job['request']
         # A newer native snapshot may already include an interrupted commit.
@@ -32,6 +44,17 @@ def project(library, jobs):
             continue
         if target is None or target['UUID']!=request['playlist_uuid']:break
         if operation=='rename':target['Name']=request['name']
+        elif operation=='reorder':
+            anchor=next((r for r in nodes if r['ID']==request['anchor_id'] and r['rb_local_deleted']==0),None)
+            if (anchor is None or anchor['UUID']!=request['anchor_uuid'] or target['ParentID']!=request['parent']
+                    or anchor['ParentID']!=target['ParentID'] or target['Attribute'] not in (0,1)
+                    or anchor['Attribute'] not in (0,1)):break
+            siblings=sorted((r for r in nodes if r['ParentID']==target['ParentID'] and r['rb_local_deleted']==0),key=lambda r:r['Seq'])
+            if [r['Seq'] for r in siblings]!=list(range(1,len(siblings)+1)):break
+            reordered=[r for r in siblings if r['ID']!=target['ID']]
+            position=next(i for i,r in enumerate(reordered) if r['ID']==anchor['ID'])+int(request['after'])
+            reordered.insert(position,target)
+            for position,row in enumerate(reordered,1):row['Seq']=position
         elif operation=='delete':
             deleted={identity}
             while True:

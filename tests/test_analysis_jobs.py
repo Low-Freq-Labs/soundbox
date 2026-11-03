@@ -9,6 +9,17 @@ from soundbox.library import Library,Track
 
 
 class AnalysisJobs(unittest.TestCase):
+    def test_automatic_policy_is_durable_and_skips_known_long_sets(self):
+        from soundbox.library import Library,Track
+        track=Track('long','Set','','file:///not-read/set.m4a',total_time=901)
+        lib=Library({'long':track},[],'synthetic')
+        self.assertEqual(jobs.admit([],lib,[track],None,automatic=True),[])
+        track.total_time=0
+        queued=jobs.admit([],lib,[track],None,automatic=True)
+        self.assertTrue(queued[0]['automatic']);jobs.validate(queued)
+        manual=jobs.admit([],lib,[track],None)
+        self.assertNotIn('automatic',manual[0]);jobs.validate(manual)
+
     def setUp(self):
         self.track=Track('stable','Example','',Path('/captured/example.wav').as_uri(),imported=True)
         self.lib=Library({'stable':self.track},[],'synthetic')

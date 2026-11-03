@@ -1122,6 +1122,7 @@ def _combined_playlists(
                 [str(part) for part in folder],
                 [str(track_id) for track_id in tracks],
                 pid=str(row.get("pid") or ""),
+                export_key=key if key.startswith('cust:') and row.get('pid') else '',
             )
         output.append(current_playlist)
         seen.add(key)
@@ -1281,7 +1282,8 @@ def _filtered_playlists(
                 continue
             keys.append(track.track_id)
         output.append(Playlist(
-            playlist.name, list(playlist.folder_path), keys, pid=playlist.pid))
+            playlist.name, list(playlist.folder_path), keys, pid=playlist.pid,
+            export_key=playlist.export_key))
     return output, list(missing.values()), list(unsupported.values())
 
 
@@ -1585,7 +1587,7 @@ def plan_dual_ipod_sync(
         respect_selected_order=respect_selected_order,
     )
     # Work on copies: planning must not mutate the running app's playlists.
-    combined = [Playlist(p.name, list(p.folder_path), list(p.effective_keys), pid=p.pid)
+    combined = [replace(p,folder_path=list(p.folder_path),keys=list(p.effective_keys),added_keys=[])
                 for p in combined]
     before_membership = {legacy_manifest.playlist_key(p): tuple(p.keys) for p in combined}
     playlist_baselines = None

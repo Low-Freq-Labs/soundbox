@@ -8,6 +8,7 @@ admits only the exact before/before, before/after or after/after affected state.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -29,6 +30,26 @@ from .state_io import atomic_bytes, copy_state, sync_dir
 
 FORMAT = 'soundbox-native-playlists-v1'
 PAYLOADS = ('before.db','after.db','before.xml','after.xml')
+MAX_BATCH_COMMANDS = 64
+
+
+def command_requests(request):
+    """Validated bounded commands; batches never widen the native write scope."""
+    return request['requests'] if request.get('operation')=='batch' else [request]
+
+
+def batch_for(catalog,requests):
+    request=dict(operation_id=uuid4().hex,operation='batch',revision=catalog['revision'],requests=deepcopy(requests))
+    validate_request(request)
+    # Independent native XML clocks must advance even when create+append are
+    # captured in one GUI millisecond. Capture this BEFORE durable admission;
+    # publication/recovery consume these exact child requests unchanged.
+    previous=0
+    for child in request['requests']:
+        child['xml_timestamp']=max(child['xml_timestamp'],previous+1)
+        previous=child['xml_timestamp']
+    validate_request(request)
+    return request
 
 
 @dataclass(frozen=True)
@@ -44,13 +65,16 @@ class PlaylistAuthority:
     # Native acceptance keeps its complete pairs. Normal editing keeps the
     # latest verified full pair plus permanent row/XML/operation receipts.
     retain_full_backups: bool = False
+    # Reordering has its own native reference/acceptance. Existing CRUD
+    # authorities remain readable and never silently acquire this capability.
+    reorder_accepted: bool = False
 
     def __post_init__(self):
         if self.accepted is not True:
             raise WriteProofError('Playlist writing requires native acceptance')
         CueWriteAuthority(self.database,self.library_id,self.schema_sha256,
                           'playlist-authority',self.application_version)
-        if (type(self.retain_full_backups) is not bool
+        if (type(self.retain_full_backups) is not bool or type(self.reorder_accepted) is not bool
                 or not isinstance(self.pilot_playlist_ids,tuple)
                 or any(not isinstance(v,str) or not v for v in self.pilot_playlist_ids)):
             raise WriteProofError('Invalid playlist pilot bindings')
@@ -166,6 +190,7 @@ class PlaylistStore:
         self.journal=self.root/'transaction.json'
         info=self.database.stat();self.file_id=(info.st_dev,info.st_ino)
         self.lease=_Lease(self)
+        self._verified_recovery_record_key: tuple[str,PlaylistAuthority]|None=None
 
     def _guard_xml(self):
         _regular(self.xml)
@@ -194,6 +219,8 @@ class PlaylistStore:
             if json.loads((archive/'operation.json').read_bytes())!=record:
                 raise RecoveryRequired('Playlist recovery record differs from its archive')
             self._check_scope(record['request'])
+            semantic_key=(hashlib.sha256(_json(record)).hexdigest(),a)
+            if semantic_key==self._verified_recovery_record_key:return record
             # Validate all evidence and intent on a fresh TEMP copy before the
             # live SQL connection is allowed to recover SQLite's own journal.
             with tempfile.TemporaryDirectory(prefix='soundbox-playlist-recovery-') as area:
@@ -208,6 +235,11 @@ class PlaylistStore:
                             or expected['xml']!=(archive/'after.xml').read_bytes()):
                         raise RecoveryRequired('Playlist recovery exceeds its original intent')
                 finally:conn.close()
+            # Only the expensive pure semantic reconstruction is reused. Every
+            # invocation above still verifies ALL current payload bytes, exact
+            # journal/archive equality, source identity and authority. A changed
+            # byte/record cannot hit this one-entry instance-local memo.
+            self._verified_recovery_record_key=semantic_key
             return record
         except (OSError,ValueError,KeyError,TypeError) as exc:
             raise RecoveryRequired('Playlist recovery is incomplete; evidence preserved') from exc
@@ -300,7 +332,7 @@ class PlaylistStore:
                 # plan to the live source. SQL cannot mutate unrelated domains.
                 first,final=_affected(plan['changes'])
                 if not _matches(conn,first):raise ConflictError('Native playlist selection changed before save')
-                for selected in request['tracks']:
+                for selected in (track for command in command_requests(request) for track in command['tracks']):
                     track=row(conn,'djmdContent',selected['track_id'])
                     if not track or track['UUID']!=selected['uuid'] or track['rb_local_deleted']!=0:
                         raise ConflictError('Native Collection track changed before save')
@@ -416,10 +448,20 @@ class PlaylistStore:
                     raise RecoveryRequired('Unknown playlist retry outcome; evidence preserved')
             current=self.snapshot()
             stamp,clock=_timestamps()
+            if request['operation']=='batch':
+                children=[{**child,'operation_id':uuid4().hex,'revision':current['revision'],
+                           'timestamp':stamp,'survivor_timestamp':stamp,'xml_timestamp':clock}
+                          for child in request['requests']]
+                return batch_for(current,children)
             return {**request,'operation_id':uuid4().hex,'revision':current['revision'],
                     'timestamp':stamp,'survivor_timestamp':stamp,'xml_timestamp':clock}
 
     def _check_scope(self, request):
+        if request.get('operation')=='batch':
+            for child in request['requests']:self._check_scope(child)
+            return
+        if request.get('operation')=='reorder' and not self.authority.reorder_accepted:
+            raise WriteProofError('Native playlist reordering requires separate acceptance')
         bound=self.authority.pilot_playlist_ids
         if bound and request.get('playlist_id') not in bound:
             raise WriteProofError('This acceptance pilot binds a different playlist')
@@ -439,9 +481,19 @@ class PlaylistStore:
                     raise WriteProofError('Pilot cannot change another playlist membership')
 
     def snapshot(self):
-        with encrypted_backup(self.database) as captured:
+        # A catalog observation is a read-only DB/WAL snapshot. Publication's
+        # before/after pairs keep their full encrypted backup/integrity checks;
+        # do not repeat that whole renderer just to return committed rows.
+        from .rekordbox_db import _copy_stable_snapshot
+        with tempfile.TemporaryDirectory(prefix='soundbox-playlist-read-') as area:
+            captured=Path(area).resolve()/'master.db'
+            _copy_stable_snapshot(self.database,captured)
             conn=_connect(captured,readonly=True)
-            try:return catalog(conn)
+            try:
+                if (_identity(conn)!=(self.authority.library_id,'6000')
+                        or _schema(conn)!=self.authority.schema_sha256):
+                    raise ConflictError('Native playlist read library/schema changed')
+                return catalog(conn)
             finally:conn.close()
 
 
@@ -455,19 +507,50 @@ def catalog(conn):
 
 
 def build_plan(conn, request, before_xml):
+    with xml.parsing_session():return _build_plan(conn,request,before_xml)
+
+
+def _build_plan(conn, request, before_xml):
+    validate_request(request)
+    if request['operation']!='batch':return _single_plan(conn,request,before_xml)
+    original=catalog(conn)
+    if original['revision']!=request['revision']:
+        raise ConflictError('Native playlist batch baseline changed; refresh and retry')
+    current=deepcopy(original);counter=row(conn,'agentRegistry','localUpdateCount')
+    changes=[];payload=before_xml
+    for child in request['requests']:
+        # Every child binds the envelope's one external catalog revision.
+        # Intermediate state stays private and is checked row/counter by row;
+        # do not hash the whole library for each intermediate command.
+        plan=_single_plan(conn,child,payload,current=current,counter=counter)
+        changes.extend(plan['changes']);payload=plan['xml']
+        for change in plan['changes']:
+            if change['table']=='agentRegistry':
+                if counter!=change['before']:raise ConflictError('Native batch counter chain changed')
+                counter=change['after'];continue
+            field='nodes' if change['table']=='djmdPlaylist' else 'members'
+            rows=current[field];index=next((i for i,r in enumerate(rows) if r['ID']==change['id']),None)
+            prior=rows[index] if index is not None else None
+            if prior!=change['before']:raise ConflictError('Native batch row chain changed')
+            if change['after'] is None:
+                if index is not None:rows.pop(index)
+            elif index is None:rows.append(deepcopy(change['after']))
+            else:rows[index]=deepcopy(change['after'])
+    current['revision']=planner.revision(current['nodes'],current['members'])
+    return dict(changes=changes,xml=payload,catalog=current)
+
+
+def _single_plan(conn, request, before_xml, *, current=None,counter=None):
     from datetime import datetime
     validate_request(request)
-    current=catalog(conn);nodes=current['nodes'];members=current['members']
-    if (set(request)!={'operation_id','operation','playlist_id','playlist_uuid','revision','name',
-                       'parent','tracks','timestamp','survivor_timestamp','xml_timestamp','folder','allow_duplicate'}
-            or len(request['operation_id'])!=32
-            or any(c not in '0123456789abcdef' for c in request['operation_id'])
-            or current['revision']!=request['revision']):
+    current=catalog(conn) if current is None else current
+    nodes=current['nodes'];members=current['members']
+    if current['revision']!=request['revision']:
         raise ConflictError('Native playlist baseline/intent changed; refresh and retry')
     for field in ('timestamp','survivor_timestamp'):
         datetime.fromisoformat(request[field].replace(' +00:00','+00:00'))
     target_id=request['playlist_id'];op=request['operation']
-    counter=row(conn,'agentRegistry','localUpdateCount')
+    counter=row(conn,'agentRegistry','localUpdateCount') if counter is None else counter
     changes=[];after_xml=before_xml
     target=next((r for r in nodes if r['ID']==target_id),None)
     if op=='create':
@@ -483,6 +566,12 @@ def build_plan(conn, request, before_xml):
             raise ConflictError('Native playlist identity disappeared or was replaced')
         if op=='rename':
             changes=planner.rename(target,counter,name=request['name'],timestamp=request['timestamp'])['changes']
+        elif op=='reorder':
+            anchor=next((r for r in nodes if r['ID']==request['anchor_id']),None)
+            if anchor is None or anchor['UUID']!=request['anchor_uuid'] or target['ParentID']!=request['parent']:
+                raise ConflictError('Native reorder anchor or parent changed')
+            changes=planner.reorder(nodes,counter,identity=target_id,anchor_id=request['anchor_id'],
+                after=request['after'],timestamp=request['timestamp'],sibling_timestamp=request['survivor_timestamp'])['changes']
         elif op=='delete':
             changes=planner.delete(nodes,members,counter,identity=target_id,timestamp=request['timestamp'],member_timestamp=request['survivor_timestamp'],sibling_timestamp=request['survivor_timestamp'])['changes']
         elif op in ('append','remove'):
@@ -531,7 +620,8 @@ def build_plan(conn, request, before_xml):
             after_xml=xml.append_node(after_xml,target_id,*missing[target_id])
         else:
             raise ConflictError('Expected native playlist XML entry disappeared')
-    xml.validate_transition(before_xml,after_xml,changes,missing_targets=missing)
+    xml.validate_transition(before_xml,after_xml,changes,missing_targets=missing,
+                            touched_playlists=(target_id,) if op=='reorder' and changes else ())
     return dict(changes=changes,xml=after_xml,catalog=current)
 
 
@@ -542,42 +632,70 @@ def _timestamps():
 
 
 def request_for(catalog, operation, *, identity=None, name='', parent='root', folder=False,
-                tracks=(), allow_duplicate=False):
+                tracks=(), allow_duplicate=False,anchor_id=None,after=False):
     nodes=catalog['nodes'];target=next((r for r in nodes if r['ID']==identity),None)
     if operation=='create':
         occupied={r['ID'] for r in nodes};identity=str(secrets.randbelow(2**32-1)+1)
         while identity in occupied:identity=str(secrets.randbelow(2**32-1)+1)
     elif target is None:raise ValueError('Native playlist is no longer in the library')
     stamp,clock=_timestamps()
-    return dict(operation_id=uuid4().hex,operation=operation,playlist_id=identity,
+    request=dict(operation_id=uuid4().hex,operation=operation,playlist_id=identity,
         playlist_uuid=target['UUID'] if target else str(uuid4()),revision=catalog['revision'],
         name=name,parent=parent,folder=bool(folder),timestamp=stamp,survivor_timestamp=stamp,
         xml_timestamp=clock,allow_duplicate=bool(allow_duplicate),
         tracks=[dict(track_id=getattr(t,'native_id',t.track_id),uuid=t.source_uuid,id=str(uuid4()),membership_uuid=str(uuid4()))
                 for t in tracks])
+    if operation=='reorder':
+        anchor=next((r for r in nodes if r['ID']==anchor_id),None)
+        if anchor is None or target is None:raise ValueError('Native reorder anchor is no longer in the library')
+        request.update(parent=target['ParentID'],anchor_id=anchor_id,anchor_uuid=anchor['UUID'],after=after)
+    validate_request(request)
+    return request
 
 
 
 def validate_request(request):
+    if isinstance(request,dict) and request.get('operation')=='batch':
+        if (set(request)!={'operation_id','operation','revision','requests'}
+                or not isinstance(request['requests'],list) or not 1<=len(request['requests'])<=MAX_BATCH_COMMANDS):
+            raise WriteProofError('Invalid native playlist command batch')
+        for field,length in (('operation_id',32),('revision',64)):
+            value=request[field]
+            if type(value) is not str or len(value)!=length or any(c not in '0123456789abcdef' for c in value):
+                raise WriteProofError('Invalid native playlist batch identity')
+        ids={request['operation_id']}
+        selected=0
+        for child in request['requests']:
+            if not isinstance(child,dict) or child.get('operation') not in ('create','append','remove'):
+                raise WriteProofError('Native playlist batch exceeds accepted commands')
+            validate_request(child)
+            if child['revision']!=request['revision'] or child['operation_id'] in ids:
+                raise WriteProofError('Native playlist batch has a changed or repeated command')
+            ids.add(child['operation_id'])
+            selected+=len(child['tracks'])
+        if selected>16384:raise WriteProofError('Native playlist batch selection is too large')
+        return
     fields={'operation_id','operation','playlist_id','playlist_uuid','revision','name','parent','tracks',
             'timestamp','survivor_timestamp','xml_timestamp','folder','allow_duplicate'}
+    if isinstance(request,dict) and request.get('operation')=='reorder':fields|={'anchor_id','anchor_uuid','after'}
     if not isinstance(request,dict) or set(request)!=fields:
         raise WriteProofError('Unknown native playlist intent format')
     for key,length in (('operation_id',32),('revision',64)):
         value=request[key]
         if type(value) is not str or len(value)!=length or any(c not in '0123456789abcdef' for c in value):
             raise WriteProofError('Invalid native playlist operation identity')
-    for key in ('playlist_id','parent'):
+    for key in (('playlist_id','parent','anchor_id') if request['operation']=='reorder' else ('playlist_id','parent')):
         value=request[key]
         if key=='parent' and value=='root':continue
         if (type(value) is not str or not value.isascii() or not value.isdecimal()
                 or not 0<int(value)<2**32 or str(int(value))!=value):
             raise WriteProofError('Invalid native playlist target identity')
     try:
-        if str(UUID(request['playlist_uuid']))!=request['playlist_uuid']:raise ValueError('UUID')
+        for key in (('playlist_uuid','anchor_uuid') if request['operation']=='reorder' else ('playlist_uuid',)):
+            if str(UUID(request[key]))!=request[key]:raise ValueError('UUID')
     except (ValueError,TypeError,AttributeError) as exc:
         raise WriteProofError('Invalid native playlist UUID') from exc
-    if (request['operation'] not in ('create','rename','delete','append','remove')
+    if (request['operation'] not in ('create','rename','delete','append','remove','reorder')
             or type(request['folder']) is not bool or type(request['allow_duplicate']) is not bool
             or type(request['xml_timestamp']) is not int or not 0<request['xml_timestamp']<2**63
             or type(request['name']) is not str or '\0' in request['name']
@@ -586,6 +704,8 @@ def validate_request(request):
     if (bool(request['tracks'])!=(request['operation'] in ('append','remove'))
             or request['operation'] in ('create','rename') and not request['name'].strip()):
         raise WriteProofError('Native playlist operation has an invalid selection')
+    if request['operation']=='reorder' and (type(request['after']) is not bool or request['anchor_id']==request['playlist_id']):
+        raise WriteProofError('Invalid native reorder anchor')
     from datetime import datetime
     for field in ('timestamp','survivor_timestamp'):
         value=request[field]

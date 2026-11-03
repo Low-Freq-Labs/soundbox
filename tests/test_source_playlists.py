@@ -37,6 +37,96 @@ class SourcePlaylists(unittest.TestCase):
         try:return _state(conn),{t:_rows(conn,t) for t in ('djmdPlaylist','djmdSongPlaylist','agentRegistry','djmdContent')}
         finally:conn.close()
 
+    def reorder_fixture(self,*,accepted=True):
+        from dataclasses import replace
+        from soundbox import rekordbox_playlist_xml as codec
+        conn=_connect(self.database)
+        try:
+            original=_rows(conn,'djmdPlaylist')[0]
+            columns=list(original)
+            for index in (1,2):
+                node={**original,'ID':str(1000+index),'Seq':index+1,'Name':f'Node {index}',
+                      'Attribute':int(index==1),'UUID':f'00000000-0000-4000-8000-{index+1:012d}','rb_local_synced':index%2}
+                conn.execute(f'INSERT INTO djmdPlaylist ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)})',[node[k] for k in columns])
+        finally:conn.close()
+        raw=self.writer.xml.read_bytes()
+        for index in (1,2):raw=codec.append_node(raw,str(1000+index),attribute=int(index==1))
+        self.writer.xml.write_bytes(raw)
+        self.authority=replace(self.authority,reorder_accepted=accepted)
+        self.writer=store.PlaylistStore(self.authority,self.recovery)
+
+    def test_reorder_is_separately_gated_and_an_old_authority_cannot_publish_it(self):
+        self.reorder_fixture(accepted=False)
+        request=self.request('reorder',identity='1002',anchor_id='1000')
+        before=self.inspect();xml_before=self.writer.xml.read_bytes()
+        with mock.patch.object(store,'encrypted_backup',side_effect=AssertionError('No publication preparation before permission')):
+            with self.assertRaisesRegex(WriteProofError,'separate acceptance'):self.writer.apply(request)
+        self.assertEqual(self.inspect(),before);self.assertEqual(self.writer.xml.read_bytes(),xml_before)
+
+    def test_long_reorder_composes_native_adjacent_clocks_and_touches_only_dragged_xml(self):
+        from soundbox import rekordbox_playlist_xml as codec
+        self.reorder_fixture();before,rows=self.inspect();xml_before=self.writer.xml.read_bytes()
+        request=self.request('reorder',identity='1002',anchor_id='1000')
+        self.writer.apply(request);after,changed=self.inspect()
+        nodes={r['ID']:r for r in changed['djmdPlaylist']}
+        self.assertEqual([r['ID'] for r in sorted(nodes.values(),key=lambda r:r['Seq'])],['1002','1000','1001'])
+        self.assertEqual({key:value['rb_local_usn'] for key,value in nodes.items()},{'1002':43,'1000':44,'1001':42})
+        counter=next(r for r in changed['agentRegistry'] if r['registry_id']=='localUpdateCount')
+        self.assertEqual(counter['int_1'],44)
+        self.assertEqual(after['tables']['djmdSongPlaylist'],before['tables']['djmdSongPlaylist'])
+        for table,value in before['tables'].items():
+            if table not in ('djmdPlaylist','agentRegistry'):self.assertEqual(after['tables'][table],value,table)
+        self.assertEqual(self.writer.xml.read_bytes(),codec.touch(xml_before,'1002',request['xml_timestamp']))
+        for old in rows['djmdPlaylist']:
+            actual=nodes[old['ID']]
+            self.assertEqual({k:v for k,v in actual.items() if k not in ('Seq','updated_at','rb_local_usn')},
+                             {k:v for k,v in old.items() if k not in ('Seq','updated_at','rb_local_usn')})
+        first=self.inspect();raw=self.database.read_bytes(),self.writer.xml.read_bytes()
+        self.writer.apply(request)
+        self.assertEqual(self.inspect(),first);self.assertEqual((self.database.read_bytes(),self.writer.xml.read_bytes()),raw)
+
+    def test_reorder_rejects_stale_anchor_cross_parent_cloud_and_nonordinary_rows(self):
+        self.reorder_fixture()
+        request=self.request('reorder',identity='1002',anchor_id='1000')
+        invalid=copy.deepcopy(request);invalid['anchor_uuid']='00000000-0000-4000-8000-000000000099'
+        before=self.inspect();raw=self.writer.xml.read_bytes()
+        with self.assertRaises(ConflictError):self.writer.apply(invalid)
+        for field,value in (('ParentID','1001'),('usn',9),('Attribute',4)):
+            conn=_connect(self.database)
+            try:conn.execute(f'UPDATE djmdPlaylist SET {field}=? WHERE ID=?',(value,'1000'))
+            finally:conn.close()
+            denied=self.request('reorder',identity='1002',anchor_id='1000')
+            with self.assertRaises(ValueError):self.writer.apply(denied)
+            conn=_connect(self.database)
+            try:conn.execute(f'UPDATE djmdPlaylist SET {field}=? WHERE ID=?',(next(r for r in before[1]['djmdPlaylist'] if r['ID']=='1000')[field],'1000'))
+            finally:conn.close()
+        self.assertEqual(self.inspect(),before);self.assertEqual(self.writer.xml.read_bytes(),raw)
+
+    def test_interrupted_reorder_preserves_exact_pair_and_replays_after_recovery(self):
+        self.reorder_fixture();before=self.inspect();xml_before=self.writer.xml.read_bytes()
+        request=self.request('reorder',identity='1002',anchor_id='1000')
+        def interrupt(phase):
+            if phase=='xml-published':raise RuntimeError('interrupted reorder')
+        with mock.patch.object(store,'_fault',side_effect=interrupt):
+            with self.assertRaisesRegex(RuntimeError,'interrupted reorder'):self.writer.apply(request)
+        self.assertEqual(self.writer.recover(),'rolled-back')
+        self.assertEqual(self.inspect(),before);self.assertEqual(self.writer.xml.read_bytes(),xml_before)
+        renewed=self.writer.prepare_retry(request);self.writer.apply(renewed)
+        self.assertEqual([r['ID'] for r in sorted(self.writer.snapshot()['nodes'],key=lambda r:r['Seq'])],['1002','1000','1001'])
+
+    def test_catalog_snapshot_reads_committed_wal_without_rewriting_source_or_rendering_backups(self):
+        conn=_connect(self.database)
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute("UPDATE djmdPlaylist SET Name='Committed WAL' WHERE ID='1000'")
+            wal=self.database.with_name('master.db-wal')
+            before=self.database.read_bytes(),wal.read_bytes()
+            with mock.patch.object(store,'encrypted_backup',side_effect=AssertionError('Catalog reads are not publication backups')):
+                observed=self.writer.snapshot()
+            self.assertEqual(observed['nodes'][0]['Name'],'Committed WAL')
+            self.assertEqual((self.database.read_bytes(),wal.read_bytes()),before)
+        finally:conn.close()
+
     def test_native_folder_playlist_song_lifecycle_retains_collection_and_xml_history(self):
         original,_=self.inspect()
         folder=self.request('create',name='Folder',folder=True);self.writer.apply(folder)

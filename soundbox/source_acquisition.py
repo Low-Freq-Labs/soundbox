@@ -114,7 +114,7 @@ def acquire_source(
             value = digest.hexdigest()
             if contract.sha256 is not None:
                 if size != expected_size or value != contract.sha256:
-                    raise SourceAcquisitionError(f"Rockbox source changed after dry-run (captured bytes differ): {canonical}")
+                    raise SourceAcquisitionError(f"Source audio changed (captured bytes differ from the expected audio): {canonical}")
                 # Exact bytes are authoritative even across eviction/rehydration.
                 break
             stable = (_identity(before) == _identity(opened)

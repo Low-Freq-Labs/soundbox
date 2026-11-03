@@ -10,6 +10,36 @@ from soundbox.library import Library, Playlist, Track
 
 
 class LibraryBoundaryTests(unittest.TestCase):
+    def test_decoded_path_cache_follows_uri_changes_without_filesystem_probes(self):
+        from unittest import mock
+        from soundbox.paths import decode_location
+        track=Track('one','One','','file:///tmp/first%20song.wav')
+        with mock.patch('soundbox.library.decode_location',wraps=decode_location) as decode:
+            self.assertEqual(track.path,Path('/tmp/first song.wav'))
+            self.assertEqual(track.path,Path('/tmp/first song.wav'))
+            self.assertEqual(decode.call_count,1)
+            track.location_uri='file:///tmp/second.wav'
+            self.assertEqual(track.path,Path('/tmp/second.wav'))
+            self.assertEqual(decode.call_count,2)
+        # A background read can overlap a locator change. Publish the URI/path
+        # pair together so the old reader cannot label its old path as new.
+        from threading import Event,Thread
+        entered=Event();release=Event();observed=[]
+        track=Track('one','One','','file:///tmp/old.wav')
+        def overlap(uri):
+            if uri.endswith('/old.wav'):
+                entered.set();release.wait(3)
+            return decode_location(uri)
+        with mock.patch('soundbox.library.decode_location',side_effect=overlap):
+            worker=Thread(target=lambda:observed.append(track.path));worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                track.location_uri='file:///tmp/new.wav'
+                self.assertEqual(track.path,Path('/tmp/new.wav'))
+            finally:release.set();worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(observed,[Path('/tmp/old.wav')])
+            self.assertEqual(track.path,Path('/tmp/new.wav'))
     def test_model_has_no_provider_dependency(self):
         tree = ast.parse(Path("soundbox/library.py").read_text(encoding="utf-8"))
         imports = {
