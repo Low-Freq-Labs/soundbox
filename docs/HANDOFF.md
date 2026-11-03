@@ -1,9 +1,9 @@
 # SoundBox current handoff
 
 Updated November3,2026 for Sonny's full wrap-up. Repository branch: `main`.
-Application source release: recorded in the documentation closure commit.
-The working changes are committed/pushed by this wrap-up; use `git log -1` for
-its documentation-bearing tip. **SoundBox is installed, open and left alone for
+Application source release: `9a023536ac01b94665f32d0c22db7d5c020fdebc`.
+The final documentation closure follows that source commit; use `git log -1`
+for the exact published `main` tip. The completed work is committed and pushed. **SoundBox is installed, open and left alone for
 Sonny's testing.** Do not quit/reinstall or send mouse, keyboard or Accessibility
 input into his real SoundBox/rekordbox. No new work is queued for the agent.
 

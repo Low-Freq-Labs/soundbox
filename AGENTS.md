@@ -11,8 +11,9 @@ Personal build155 is installed and normally reopened at `/Applications/Soundbox.
 Signed base revision27a7bcf2a9505207419b88f7af2659bd33781785, dirty=true; runtime
 `3f380662c25e7de3026a2ede901b2eef77efbb4c7ba3a16bdf395df93ade717d`, executable
 `5cdea66fd9141e972444fd15f918e540c6d9bd1f009a89216381f8ae681c6f43`.
-The final wrap-up commits/pushes the matching source; it does not restamp or
-reinstall this running app. HANDOFF distinguishes source-release Git history
+Application source release `9a023536ac01b94665f32d0c22db7d5c020fdebc` is committed/pushed;
+the documentation closure follows it. This does not restamp or reinstall the
+running app. HANDOFF distinguishes source-release Git history
 from signed installed provenance.
 
 - Initial full grid/key/native waveforms are accepted on bare stereo PCM16/24
