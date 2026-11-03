@@ -130,7 +130,8 @@ def _source_context(library, track):
             db.close()
 
 
-def analyze(library, track, preferences=None, *, should_cancel=lambda:False,automatic=False):
+def analyze(library, track, preferences=None, *, should_cancel=lambda:False,automatic=False,
+            expected_sha256=None):
     from .cdj_usb import run_renderer
     prefs = options(preferences)
     if automatic and not automatic_music_allowed(track.total_time):return None
@@ -142,7 +143,7 @@ def analyze(library, track, preferences=None, *, should_cancel=lambda:False,auto
         raise ValueError('Unsupported analysis audio format')
     with tempfile.TemporaryDirectory(prefix='soundbox-analysis-') as folder:
         root = Path(folder).resolve()
-        with acquire_source(SourceContract(source), root, should_cancel=should_cancel) as snapshot:
+        with acquire_source(SourceContract(source,sha256=expected_sha256), root, should_cancel=should_cancel) as snapshot:
             if automatic:
                 # Newly dropped files initially have unknown duration. Inspect
                 # the immutable capture before invoking BPM/key DSP.
@@ -233,10 +234,10 @@ def playback_data(data, record, path, *, verification_cache=None, should_cancel=
     provenance = data.get('provenance') or {}
     if provenance.get('grid') in {'rekordbox', 'soundbox-manual'} or provenance.get('user_data') == 'soundbox':
         return data
-    if not record.get('beats'):
-        return data
     from .local_grid import effective_result
     resolved = effective_result(record)
+    if not resolved.get('beats'):
+        return data
     cues = data.get('cues') or []
     captured_cues=not record.get('source_context') or (record.get('source_context') or {}).get('bare_registration') is True
     if record.get('cue_draft') is not None and captured_cues:

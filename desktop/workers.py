@@ -8,6 +8,7 @@ last ref in a custom-signal slot GC's the thread mid-run → SIGABRT.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import subprocess
 import threading
@@ -508,7 +509,7 @@ class ArtFillWorker(QThread):
         hidden = getattr(self.lib, "hidden_ids", set())
         if callable(profile_fetch):
             replaced = attempted = 0
-            for track in self.lib.tracks_by_id.values():
+            for track in tuple(self.lib.tracks_by_id.values()):
                 self._wait_for_playback()
                 if self._stop:
                     return
@@ -543,7 +544,7 @@ class ArtFillWorker(QThread):
             if attempted:
                 LOG.info("Excluded artwork profiles: %d replaced / %d checked; unavailable profiles stay hidden", replaced, attempted)
         todo = []
-        for t in self.lib.tracks_by_id.values():
+        for t in tuple(self.lib.tracks_by_id.values()):
             if t.track_id in hidden:
                 continue  # deleted from SoundBox — don't fetch for it
             if self.cache.status(t.track_id) is not None:
@@ -633,7 +634,7 @@ class StockArtworkPrepWorker(QThread):
             hidden = getattr(self.lib, "hidden_ids", set())
             images = []
             seen_paths: set[Path] = set()
-            for track in self.lib.tracks_by_id.values():
+            for track in tuple(self.lib.tracks_by_id.values()):
                 if track.track_id in hidden:
                     continue
                 image = self.art_cache.image_path(track.track_id)
@@ -699,6 +700,7 @@ class WaveformFillWorker(QThread):
     progress = Signal(int, int)  # done, total
     tasks_ready = Signal(int)  # scan complete; actual metadata/analysis work
     detail_ready = Signal(str)  # audio path; receiver reloads canonical V5
+    bpm_ready = Signal(object)  # source-bound display estimate, never saved analysis
     storage_paused = Signal(bool, object, object)  # paused, free/resume bytes (64-bit)
     power_policy_changed = Signal(str)  # ac, battery, low-power
 
@@ -745,6 +747,59 @@ class WaveformFillWorker(QThread):
         """Keep the loaded track in the foreground lane until it changes."""
         with self._priority_lock:
             self._priority_path = str(path or "")
+
+    def _publish_bpm(self, track):
+        """Project a completed fallback's tempo without reading audio/payloads.
+
+        This is disposable presentation metadata. Native/detected/manual grids
+        remain separate, and a miss explicitly clears a previously shown estimate.
+        """
+        if (self.isInterruptionRequested() or getattr(track, 'bpm', '')
+                or getattr(track, 'source_analysis_path', '') or self._track_is_hidden(track.track_id)):
+            return
+        from soundbox import analysis, track_analysis
+        path = track.path
+        value = dict(track_id=str(track.track_id), path=str(path), track_size=track.size,
+                     source=str(self.lib.source), source_kind=self.lib.source_kind,
+                     library_id=self.lib.source_library_id, native_id=track.native_id,
+                     uuid=track.source_uuid, size=track.size, epoch=None, bpm=None,
+                     provenance='soundbox-zero-anchor')
+        try:
+            before = path.stat()
+            value.update(size=before.st_size, epoch=analysis.identity(before))
+            with track_analysis.manifest_probe():
+                manifest = (track_analysis.load_manifest(self.track_analysis_dir, track.track_id, path)
+                            if self.track_analysis_dir else None)
+                header = (track_analysis._read_manifest_header(
+                    self.track_analysis_dir, track.track_id, path) if manifest else None)
+                ready = bool(manifest and track_analysis.is_ready(
+                    self.track_analysis_dir, track.track_id, path))
+            if (ready and (not track.size or track.size == before.st_size)
+                    and not track_analysis.is_dataless_source(path)
+                    and manifest['provenance'].get('grid') == 'soundbox-zero-anchor'
+                    and not manifest['provenance'].get('user_data')
+                    and header and header[1].get('source', {}).get('identity')
+                    == f'{before.st_size}:{before.st_mtime_ns}'):
+                rows = manifest.get('beats') or []
+                if 1 < len(rows) <= 400000:
+                    bpm = float(rows[0][2])
+                    previous = -1
+                    valid = math.isfinite(bpm) and 0 < bpm <= 1000
+                    for row in rows:
+                        if (len(row) != 3 or row[0] not in (1, 2, 3, 4)
+                                or not math.isfinite(float(row[1])) or row[1] < 0
+                                or row[1] <= previous or float(row[2]) != bpm):
+                            valid = False
+                            break
+                        previous = row[1]
+                    if valid and rows[0][1] == 0:
+                        value['bpm'] = bpm
+            if analysis.identity(path.stat()) != value['epoch']:
+                value['bpm'] = None
+        except (OSError, ValueError, TypeError, KeyError, IndexError, OverflowError):
+            value['bpm'] = None
+        if not self.isInterruptionRequested() and not self._track_is_hidden(track.track_id):
+            self.bpm_ready.emit(value)
 
     def _foreground_path(self) -> str:
         with self._priority_lock:
@@ -957,7 +1012,7 @@ class WaveformFillWorker(QThread):
             tuple[str, str, str, str, float, list[dict] | None, list | None]
         ] = []
         adopted_identities = 0
-        for t in self.lib.tracks_by_id.values():
+        for t in tuple(self.lib.tracks_by_id.values()):
             if self.isInterruptionRequested():
                 break
             try:
@@ -976,6 +1031,7 @@ class WaveformFillWorker(QThread):
                         paths += [dat, dat.with_suffix('.EXT'), dat.with_suffix('.2EX')]
                     inputs = [policy, source_cues, getattr(t, 'bpm', '')]
                     before = signature(paths, inputs)
+                    self._publish_bpm(t)
                     retry_key = 'fallback:' + track_id
                     if (inventory is not None and track_id not in self.force_track_ids
                             and inventory.matches(track_id, before)
@@ -1181,6 +1237,7 @@ class WaveformFillWorker(QThread):
                         else:
                             done += 1
                             self.detail_ready.emit(path)
+                            self._publish_bpm(self.lib.tracks_by_id[track_id])
                         self.progress.emit(i, total)
                         time.sleep(self.DELAY)
                         continue
@@ -1249,6 +1306,9 @@ class WaveformFillWorker(QThread):
                         self.detail_ready.emit(path)
             except Exception as exc:  # noqa: BLE001 — one bad track never stops prep
                 LOG.debug("Library preparation failed for %s: %r", path, exc)
+            track = self.lib.tracks_by_id.get(track_id)
+            if track is not None:
+                self._publish_bpm(track)
             if self._track_is_hidden(track_id) and self.track_analysis_dir:
                 # A main-thread removal may land in the narrow interval after
                 # the pre-store check. Reassert the no-Graveyard-cache contract

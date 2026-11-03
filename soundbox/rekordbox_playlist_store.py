@@ -274,12 +274,14 @@ class PlaylistStore:
         return outcome
 
     def recover(self):
-        with self.lease._lock():return self._recover_locked()
+        with xml.parsing_session(), self.lease._lock():return self._recover_locked()
 
     def apply(self, request):
         """Publish one exact durable user intent; replay is operation-ID idempotent."""
         validate_request(request)
-        with self.lease._lock():
+        # Guards still reread the current XML every time. Reuse only the bounded
+        # immutable parse of identical bytes across this one transaction.
+        with xml.parsing_session(), self.lease._lock():
             self._recover_locked();self._guard_xml()
             self._resume_retirement()
             archive=self.root/('playlist-'+request['operation_id'])
@@ -436,7 +438,7 @@ class PlaylistStore:
         new operation is generated for an already committed source transaction.
         """
         validate_request(request)
-        with self.lease._lock():
+        with xml.parsing_session(), self.lease._lock():
             self._recover_locked();self._check_scope(request)
             archive=self.root/('playlist-'+request['operation_id'])
             if archive.exists():

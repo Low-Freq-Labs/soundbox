@@ -198,25 +198,32 @@ class TrackModel(QAbstractTableModel):
                                   self.index(len(self._rows) - 1, ART_COL),
                                   [Qt.DisplayRole, Qt.ToolTipRole])
 
-    def update_bpm(self, track_id: str, bpm: str) -> bool:
+    def update_bpm(self, track_id: str, bpm: str, *, estimated: bool = False) -> bool:
         """Update one track; reset only when filtering/BPM sorting can move it."""
-        return self.update_analysis(track_id, bpm=bpm)
+        return self.update_analysis(track_id, bpm=bpm, bpm_estimated=estimated)
 
     def update_analysis(self, track_id: str, **values) -> bool:
-        if not values or set(values) - {'bpm', 'key'}:
+        if (not values or set(values) - {'bpm', 'key', 'bpm_estimated'}
+                or 'bpm_estimated' in values and type(values['bpm_estimated']) is not bool):
             raise ValueError('Invalid analysis columns')
-        changed = False
+        changed: set[str] = set()
         for row in self._all_rows:
-            if row.get('id') == track_id and any(row.get(k) != v for k, v in values.items()):
+            if row.get('id') == track_id:
+                fields = {k for k, v in values.items() if row.get(k) != v}
+                if not fields:
+                    continue
                 row.update(values)
-                row.pop('_hay', None)
-                changed = True
+                if fields & {'bpm', 'key'}:
+                    row.pop('_hay', None)
+                changed.update(fields)
         if not changed:
             return False
-        if self._filter or self._sort and self._sort[0] in values:
+        if (self._filter and changed & {'bpm', 'key'}
+                or self._sort and self._sort[0] in changed):
             self._apply_filter()
             return True
-        columns = [i for i, (key, _label, _hidden) in enumerate(COLUMNS) if key in values]
+        columns = [i for i, (key, _label, _hidden) in enumerate(COLUMNS)
+                   if key in changed or key == 'bpm' and 'bpm_estimated' in changed]
         for index, row in enumerate(self._rows):
             if row.get('id') == track_id:
                 self.dataChanged.emit(self.index(index, min(columns)), self.index(index, max(columns)),
@@ -239,6 +246,10 @@ class TrackModel(QAbstractTableModel):
             return self._rows[index.row()].get(key, "")
         if role == _TOOLTIP_ROLE and key == "art":
             return _ART_TIP.get(self._rows[index.row()].get(key, ""), "")
+        if role == _TOOLTIP_ROLE and key == 'bpm':
+            row = self._rows[index.row()]
+            if row.get('bpm_estimated') and row.get('bpm'):
+                return 'Estimated BPM from waveform'
         if role == _ALIGNMENT_ROLE:
             if key == "art":
                 return _CENTER_ALIGNMENT

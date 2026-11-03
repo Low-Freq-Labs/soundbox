@@ -253,3 +253,49 @@ desktop publisher. The later independently accepted ordinary WAV analysis domain
 is installed; it does not grant general codec/gain/partial-component permission.
 Current evidence and installed state are in HANDOFF. Synthetic tests stay TEMP-only; no new songs enter the user
 library for this work.
+
+## MP3 initial-analysis preparation — November2
+
+`mp3_seek.py`, `mp3_timing.py` and `mp3_analysis_audit.py` inspect explicit bounded
+MP3/reference packet inputs and render only a TEMP audio capture. They reconstruct
+the observed no-Info/Xing CBR seek section, compare VBR frame boundaries and keep
+header/renderer/native clocks separate. The audit writes one new report outside
+the protected inputs; a seek mismatch exits nonzero. It never borrows native seek
+bytes for a generated packet, writes SQL, publishes source files or grants authority.
+
+```sh
+.venv/bin/python -m research.native_library.mp3_analysis_audit SOURCE.mp3 \
+  --native-dat FROZEN/ANLZ0000.DAT --native-ext FROZEN/ANLZ0000.EXT \
+  --native-2ex FROZEN/ANLZ0000.2EX --report NEW_REPORT.json
+```
+
+Native PPTH must name that exact source filename; all paths must be canonical
+desktop files. The current renderer still emits an empty seek table, so the
+native MP3 comparisons deliberately report a mismatch. Isolated native MP3 row/
+counter references, general VBR generation and source candidate acceptance remain
+open. See [the MP3 work record](../../docs/mp3-shared-analysis.md).
+
+Sonny subsequently completed three isolated MP3 analyses. `mp3_seek.vbr_pvbr`
+reconstructs both independent Xing-VBR references exactly, with unsupported
+profiles rejected. `mp3_analysis_plan.py` is a pure CBR component proposal and
+`mp3_analysis_pilot.py` is a separately scoped exact-plan source adapter. The
+pilot is fixed to one generated candidate name/hash/120BPM/8B/273ms grid. It
+requires its own strict boolean approval bound to the full plan hash, native
+identity, library/schema/version/source/destination root; it rejects all grid
+drafts. Preparation never creates approval or source authority.
+
+The pilot inherits the proven DB/directory transaction and recovery order with
+fresh closed-SoundBox/rekordbox/agent checks and the same shared lease/root/lock.
+Its journal format `soundbox-exact-cbr-analysis-pilot-v1` deliberately remains
+unknown to ordinary desktop recovery. If interrupted, preserve every payload and
+use only the same `MP3AnalysisPilot(plan_folder, approval_file).recover()` with
+closed apps; an unknown state blocks other source edits. Native acceptance and
+production authority remain separate. Sonny explicitly approved the exact CBR
+pilot and accepted native load/opening/middle/tail/normal quit. Complete readback
+preserves target/packets/XML/audio/non-registry data, with five startup registry
+deltas explicit. The pilot is terminal and must never be replayed. Its original
+code and full native recovery remain protected. The core scanner/planner promotion
+retains exact old proposal outputs; research wrappers reexport those APIs.
+Production uses its own accepted CBR authority/store/FIFO and contains no research
+modules. Build155passed2200tests/package/native/curation checks and is installed;
+VBR/Info/gapless/mono/48kHz publication remains outside that accepted profile.

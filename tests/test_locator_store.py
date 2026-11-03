@@ -1,6 +1,8 @@
 """Existing-record relocation proofs on encrypted TEMP libraries only."""
-from dataclasses import asdict
+from dataclasses import asdict,replace
+from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,7 +13,7 @@ from unittest import mock
 from test_registration_pilot import source_fixture
 from test_registration_proof import wave
 from soundbox import rekordbox_locator_store as locator,rekordbox_cue_store as cues,rekordbox_tags as tags
-from soundbox.rekordbox_write import _connect,_state,ConflictError,RecoveryRequired
+from soundbox.rekordbox_write import _connect,_state,ConflictError,RecoveryRequired,WriteProofError
 
 
 class LocatorWrites(unittest.TestCase):
@@ -107,3 +109,97 @@ w.apply(b['plan'])
         (self.writer.root/plan['archive']/'after.db').write_bytes(b'bad')
         with mock.patch.object(self.writer.lease,'_connect') as connection,self.assertRaises(RecoveryRequired):self.writer.apply(plan)
         connection.assert_not_called()
+
+    def test_recovery_memo_keeps_fresh_hashes_and_revalidates_changed_intentions(self):
+        record=self.writer.prepare(self.tracks);folder=self.writer.root/record['archive']
+        # Restart has no successful preparation proof to reuse.
+        self.writer=locator.LocatorStore(self.authority,self.root/'data')
+        original=(folder/'operation.json').read_bytes()
+        with (mock.patch.object(locator,'_state',wraps=locator._state) as inventory,
+              mock.patch.object(self.writer,'_plan',wraps=self.writer._plan) as reconstruct,
+              mock.patch.object(locator,'_sha',wraps=locator._sha) as hashes):
+            self.writer._validate(record);self.writer._validate(deepcopy(record))
+            self.assertEqual(inventory.call_count,2);self.assertEqual(reconstruct.call_count,1)
+            self.assertEqual(hashes.call_count,8)
+            with (mock.patch.object(cues,'_closed',side_effect=WriteProofError('native open')),
+                  mock.patch.object(self.writer.lease,'_connect') as source_sql,self.assertRaises(WriteProofError)):
+                self.writer.apply(record)
+            source_sql.assert_not_called()
+            changed=deepcopy(record);changed['timestamp']='2100-01-01 00:00:00.123 +00:00'
+            (folder/'operation.json').write_text(json.dumps(changed))
+            self.writer.journal.write_text(json.dumps(changed))
+            with mock.patch.object(self.writer.lease,'_connect') as source_sql,self.assertRaises(RecoveryRequired):self.writer.recover()
+            source_sql.assert_not_called();self.writer.journal.unlink()
+            self.assertEqual(reconstruct.call_count,2)
+            (folder/'operation.json').write_bytes(original)
+            payload=folder/'after.db';before=payload.read_bytes();payload.write_bytes(before+b'unknown')
+            count=inventory.call_count
+            with self.assertRaises(RecoveryRequired):self.writer._validate(record)
+            self.assertEqual(inventory.call_count,count);payload.write_bytes(before)
+            self.writer.authority=replace(self.authority,authorization_sha256='1'*64)
+            with self.assertRaises(RecoveryRequired):self.writer._validate(record)
+            self.assertEqual(inventory.call_count,count)
+            self.writer.authority=self.authority
+            replacement=self.root/'replaced.db';replacement.write_bytes(self.writer.database.read_bytes())
+            os.replace(replacement,self.writer.database)
+            with self.assertRaises(RecoveryRequired):self.writer._validate(record)
+            self.assertEqual(inventory.call_count,count)
+
+    def test_prepared_pair_reuses_its_semantics_but_hashes_all_payloads_before_sql(self):
+        record=self.writer.prepare(self.tracks);folder=self.writer.root/record['archive']
+        with (mock.patch.object(locator,'_state',wraps=locator._state) as inventory,
+              mock.patch.object(self.writer,'_plan',wraps=self.writer._plan) as reconstruct,
+              mock.patch.object(locator,'_sha',wraps=locator._sha) as hashes):
+            self.writer._validate(deepcopy(record));self.writer._validate(record)
+            self.assertEqual(inventory.call_count,0);self.assertEqual(reconstruct.call_count,0)
+            self.assertEqual(hashes.call_count,8)
+            payload=folder/'after.db';stat=payload.stat();raw=payload.read_bytes()
+            payload.write_bytes(raw[:-1]+bytes((raw[-1]^1,)))
+            os.utime(payload,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+            with mock.patch.object(self.writer.lease,'_connect') as source_sql,self.assertRaises(RecoveryRequired):
+                self.writer.apply(record)
+            source_sql.assert_not_called();self.assertEqual(inventory.call_count,0)
+
+    def test_unexpected_staged_target_cannot_seed_preparation_proof(self):
+        before=self.snapshot();apply=locator._apply
+        def unexpected_target(conn,changes):
+            apply(conn,changes)
+            conn.execute("UPDATE djmdContent SET Title='unexpected staging edit' WHERE ID='1'")
+        with mock.patch.object(locator,'_apply',side_effect=unexpected_target),self.assertRaises(WriteProofError):
+            self.writer.prepare(self.tracks)
+        self.assertIsNone(self.writer._verified_recovery_record_key)
+        self.assertEqual(self.snapshot(),before)
+        self.assertFalse(any(self.writer.root.glob('media-locator-*/operation.json')))
+
+    def test_changed_prepared_record_misses_seed_and_reconstructs_its_scope(self):
+        record=self.writer.prepare(self.tracks);changed=deepcopy(record)
+        changed['timestamp']='2100-01-01 00:00:00.123 +00:00'
+        (self.writer.root/record['archive']/'operation.json').write_text(json.dumps(changed))
+        with (mock.patch.object(locator,'_state',wraps=locator._state) as inventory,
+              mock.patch.object(self.writer,'_plan',wraps=self.writer._plan) as reconstruct,
+              mock.patch.object(self.writer.lease,'_connect') as source_sql,self.assertRaises(RecoveryRequired)):
+            self.writer.apply(changed)
+        self.assertGreater(inventory.call_count,0);reconstruct.assert_called_once();source_sql.assert_not_called()
+
+    def test_corruption_during_archive_creation_cannot_seed_or_publish_a_prepared_pair(self):
+        before=self.snapshot();copy=locator.copy_state;atomic=locator.atomic_bytes
+        for name in locator.PAYLOADS:
+            with self.subTest(payload=name):
+                def corrupt(path):
+                    if path.name==name:
+                        with path.open('r+b') as handle:
+                            first=handle.read(1);handle.seek(0);handle.write(bytes((first[0]^1,)))
+                def corrupt_copy(src,dst):
+                    copy(src,dst);corrupt(dst)
+                def corrupt_atomic(path,payload):
+                    atomic(path,payload);corrupt(path)
+                with (mock.patch.object(locator,'copy_state',side_effect=corrupt_copy),
+                      mock.patch.object(locator,'atomic_bytes',side_effect=corrupt_atomic),
+                      mock.patch.object(self.writer.lease,'_connect') as source_sql,
+                      self.assertRaisesRegex(WriteProofError,'archive differs')):
+                    self.writer.prepare(self.tracks)
+                source_sql.assert_not_called()
+                self.assertIsNone(self.writer._verified_recovery_record_key)
+                self.assertFalse(self.writer.journal.exists())
+                self.assertFalse(any(self.writer.root.glob('media-locator-*/operation.json')))
+                self.assertEqual(self.snapshot(),before)

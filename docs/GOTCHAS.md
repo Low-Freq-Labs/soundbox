@@ -3,6 +3,48 @@
 Hard-won + researched. **Read before touching workers, playlists, sync, art, or
 the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 
+## Preparation priority and harmless metadata drift — November3
+
+- Compatibility preparation is a prerequisite; local waveform/BPM/key work then
+  precedes new native DB writes. Persist wave completion and each detector phase.
+  Never run key during a supposedly BPM-only helper call. Pins bind every stage
+  to the same full audio SHA; do not silently substitute changed bytes.
+- Deferred cue/grid intentions count as pending work, but must not count as an
+  active source worker when admitting required conversion. Otherwise local prep
+  and the deferred writers deadlock. Later import jobs may preflight compatibility
+  without reordering source writes. Ack the selected job by exact ID/index.
+- A cue priority timer must not overlap another source task. Closing admission
+  still permits accepted queued cues to drain; treating `_closing` as a ban on
+  that drain strands normal quit.
+- `native_media.metadata_identity_proof` is worker-scoped and selected by validated
+  path/SHA/size/first-four epoch fields. Ctime-only changes get a stable exact-byte
+  check, with at most8fresh full-epoch proofs reused within the worker. Default
+  MediaIdentity remains strict. Continuous metadata motion waits quietly with
+  backoff. Plans, saved results and recorded epochs are not rewritten, and
+  changed bytes/path/inode/size/mtime remain protected. Reconcile exact committed
+  receipts before treating an unfinished newer detector job as a publication gate.
+- Cache publication must bind the captured source epoch, rather than write old
+  waveform data with a newly changed file header. Reject before atomic replace
+  when the source changes; metadata-only retry reuses decoded waveform data.
+  Background discovery snapshots mutable track dictionaries: importing mid-scan
+  must not raise `dictionary changed size during iteration`.
+- Selecting an existing Memory Cue also moves the regular temporary CUE anchor
+  to that exact target. Do not quantize recalled saved positions or emit cue-create
+  signals; hot-cue preview behavior and all saved cue rows remain unchanged.
+
+## Browser BPM and inconclusive detection — November3
+
+A saved key does not imply an accepted BPM: detector confidence below0.5 clears
+its BPM/grid. STINK MODE and SUPERSONIC exposed a second display path: loading
+their waveform supplied a zero-anchor estimate through Prep.refresh, but background
+completion did not update Collection. Background cache hits/completions now emit
+source-bound, header-only presentation snapshots. The GUI checks the exact worker,
+Library and track binding; native/saved detector/manual BPM wins. Invalid caches
+clear the estimate. The tooltip labels it; it never enters analysis_results or a
+native save request. Do not lower confidence or treat a cache as source authority.
+Manual drafts over an empty detector grid must resolve before playback's empty-grid
+test, after unchanged source-identity and native/manual provenance guards.
+
 ## Native playlist writer — accepted October30
 
 - A local membership veto is not a rekordbox save. The writer replaces the
@@ -2231,3 +2273,47 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   binding from an existing name or discard original custom data to cut over UI.
   A native adopted custom keeps its original device export key, but it cannot
   adopt iPod additions. All source domains retain their own authorities.
+
+## November2 native command performance follow-up
+
+- Reuse only successful immutable reconstruction keyed by exact raw plan/record,
+  authority/profile and verified payload digests. Fresh source/apps/paths, ALL
+  payload hashes and SQL/readback guards still run on every use. The bounded
+  analysis memo is4entries/30seconds and retains no plan objects or connections.
+- An analysis store constructor already loads/verifies its plan. Check that
+  `store.plan` matches the durable job before apply and retry; a separate loader
+  repeats large encrypted inventories. Keep legacy WAV and separate CBR dispatch.
+- Collection registration can finish from its one fresh full library observation
+  only after strict native binding projection and atomic durable acknowledgement.
+  Failed local saves replay committed source receipts. Tags retain full refresh
+  for intelligent memberships; native playlist saves use their targeted catalog.
+- Cue handle reuse requires fresh authority, source inode and exact native ID/
+  UUID/path bindings. Underlying backup counter/epoch verification, closed-app
+  and recovery guards remain live. Never turn store reuse into a media proof cache.
+- Native command timing logs measure worker callback execution, excluding queued
+  wait and GUI acknowledgement. Private-copy performance is not observed native
+  UI or cloud latency. Sonny is keeping SoundBox closed during this delivery.
+
+## November2 second native performance pass
+
+- Process absence is never cached. The native kernel-query helper caches only
+  its loaded function interface; malformed/denied/incomplete snapshots fall back
+  to strict pgrep. Test with uniquely named private processes, never fake real
+  rekordbox names while Sonny's actual app is open. Verify all three packaged
+  native binaries against tested code/data sections, including the process dylib.
+- A plan memo seeded in prepare must bind the ARCHIVED bytes to the exact bytes
+  actually proved. Computing a first archive hash after an unchecked copy can
+  bless corruption. Locator tests fault all four transfers before first archive
+  hashing; proof-bracketed known digests must match before seeding.
+- Promoting every delayed prep timer without a native-owner deadline spins source
+  workers: the common worker emits both changed and idle after completion. Keep
+  a separate monotonic native-open backoff; tests send repeated wake signals and
+  require zero new probes before deadline, then one fresh attempt.
+- Integer-WAV import no-op detection is header-only only when canonical, known
+  PCM16/24 and no conversion receipt exists. Receipt/dangling link/symlink/unknown
+  headers remain on the old guarded path. Real registration still captures bytes.
+  Broader compatibility conversion retains provider-safe captured-header reads.
+- Cue saves do not rewrite an already identical derived grid cache. Compare its
+  small header with fresh native grid readback; grid edits or external grid
+  changes keep normal fencing/refresh, and malformed disposable cache cannot
+  stall the independently verified cue save.

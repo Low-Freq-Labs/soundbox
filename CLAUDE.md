@@ -5,63 +5,51 @@ Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
 (Low Freq Labs) operates the personal build. Read this file and
 [docs/HANDOFF.md](docs/HANDOFF.md) at the start of every session.
 
-Current delivery, November 2, 2026:
+## Current delivery — November3,2026
 
-- Direct Collection/native-playlist imports register or reuse native records and
-  durably route membership through separately accepted writers. Initial shared
-  analysis supports bare stereo PCM16/24 WAV at44.1/48kHz with full BPM/Grid+Key;
-  broader codecs, existing-analysis replacement, gain and metadata need their own
-  acceptance. Research fixtures never confer production authority.
-- All ordinary native songs capture durable cue/grid intentions during unrelated
-  work. Prep v2 preserves native terminal rows beyond EOF and verifies actual
-  grid receipt fields. The previously stuck53 intentions are settled: four exact
-  grids and16 cues verified in native source; pending prep queue empty at delivery.
-- Boundary beat jumps clamp to audio; mouse/shortcut holds repeat. Installed154
-  has the prior BLUE/3BAND height and wide RGB correction. November2 supersedes
-  zoom-dependent brightness: the supplied Gorilla Glue92pt/s RGB frame is the
-  fixed palette reference; motion/geometry remain separate. The final installed154 matches it and passed2144 tests; Artists is
-  virtual-only. HANDOFF distinguishes each dirty-source fingerprint.
-- Confirmed Graveyard Delete works:515 user disposals and four user-confirmed
-  local dismissals of absent native IDs must be preserved. Never guess those
-  entries' files or restore pre-bulk library state.
-- Recoverable Collection compatibility conversion and automatic native locator
-  updates are installed.124 WAV conversions completed with exact originals kept;
-  a32kHz MP3 remains timing-unproven and unchanged. Cloud-deferred/unavailable
-  sources are not certified compatible. No manual Relocate workflow is required.
-- Saved white Dock icon survives actual normal quit. Installed personal build154
-  passed2144 tests and package/signature/smoke/curation checks. All83 old visible
-  imports now have native identities; Collection3291 and all10 native custom
-  memberships are independently verified. Sonny then canceled native artist
-  generation: Artists is virtual-only, with NO native artist folder/playlists or
-  ongoing jobs. The1527 generated playlists/root were removed by exact IDs/UUIDs
-  through the accepted playlist delete API, preserving all songs/real memberships.
-  Installed source preserves UI/navigation/transport,
-  reuses exact technical/projection caches and bounds cloud metadata renewal.
-  The approved scoped reorder pilot passed Sonny’s native reopen/normal
-  quit check; original order is restored and general reordering is enabled.
-  HANDOFF has exact current provenance and acceptance status. November2 follow-up
-  is installed: complete waveforms appear at their finished size; complete
-  adaptive grids publish exactly; cloud-ctime prep keeps durable gestures while
-  verifying bytes off the UI thread; failed analysis saves do not stall other
-  songs. UI Quit stays open until captured saves finish, with input/pumps live.
-  Sonny's new Jantsen import now has449native beats with155→150BPM, saved key and
-  exact endpoint verified. Current94imports/10analyses/92bindings supersede the
-  earlier93/9/91 baseline. Nine authorities remain byte-exact.
+Personal build155 is installed and normally reopened at `/Applications/Soundbox.app`.
+Signed base revision27a7bcf2a9505207419b88f7af2659bd33781785, dirty=true; runtime
+`3f380662c25e7de3026a2ede901b2eef77efbb4c7ba3a16bdf395df93ade717d`, executable
+`5cdea66fd9141e972444fd15f918e540c6d9bd1f009a89216381f8ae681c6f43`.
+The final wrap-up commits/pushes the matching source; it does not restamp or
+reinstall this running app. HANDOFF distinguishes source-release Git history
+from signed installed provenance.
 
-Evening follow-up is installed: complete first-frame waveform publication
-replaces the resizing compact preview; checksum-preserving cache reads and an
-exact128KiB native transfer lookup reduce load cost. Right-click a playlist icon
-for Star, Music note or Vinyl crate. Only playlists are configurable; Artists is
-fixed person, Collection home and folders unchanged. All2144tests and package/
-native smoke/installed curation checks pass. HANDOFF records exact provenance.
+- Initial full grid/key/native waveforms are accepted on bare stereo PCM16/24
+  WAV44.1/48kHz and, independently, bare unlocked MPEG-1 CBR stereo44.1kHz MP3
+  without Info/Xing. Other profiles/replacement/gain/metadata remain separate.
+- Native registration and ordinary playlist CRUD/membership/reorder use their
+  accepted independent authorities on the one worker/root/lock/recovery lane.
+  Two per-command performance passes retain fresh source/authority/apps/payload/
+  SQL proofs; only verified pure immutable reconstruction is reused.
+- Required conversion→waveform→BPM→key precedes new DB work, with durable phase/
+  SHA checkpoints and preserved FIFO. Selected worker-scoped ctime drift gets
+  quiet exact-byte proof without changing plans/recorded epochs. Native/manual
+  musical data wins; browser waveform estimates confer no source authority.
+- Memory Cue recall also sets the regular temporary CUE point exactly. Duplicate
+  confirmation is compact with safe default Skip; crate has the reference's
+  clean rim/handle, straight sides and flat bottom. Saved playlist choices and
+  white Dock icon survive. Palette/geometry/transport improvements remain intact.
+- All2341tests,156packaged first-party modules, native code/data parity, signing,
+  isolated startup and actual normal curated startup passed. At final check,
+  complete library bytes and10authorities were exact;100imports/16analyses/
+  98bindings/524hidden curation and five empty save queues are dated evidence.
+  The formerly blocked Mocha save now verifies145 BPM/9A/425beats in native source.
+- Preserve515user disposals/four local dismissals,124converted WAV originals,
+  every newer saved edit and all native recovery/acceptance material. One missing
+  binding/unresolved path and the old32kHz MP3 conversion error remain explicit.
+  Artists is virtual-only; its removed1527native hierarchy entries must never recur.
 
-Sonny is now testing the installed app. No mouse/keyboard/Accessibility input into
-his real SoundBox or rekordbox; he operates native reference actions and Delete.
-Private fixtures/read-only snapshots and ordinary local build/install/relaunch
-remain permitted. Do not interrupt playback or reinstall for documentation alone.
-Preserve current curation, ten saved analyses, nine authorities and all disposal/
-conversion recovery. Older roadmap checkpoints are archived under docs/archive;
-they do not override the current handoff or authorize a rollback.
+Sonny requested full wrap-up and is playing with the installed app. Leave it
+running; no mouse/keyboard/Accessibility inputs into his real SoundBox/rekordbox,
+no playback interruption and no documentation-only reinstall. Earlier one-off
+permission to stop the quit-blocked process does not grant general termination.
+Private fixtures/read-only snapshots and ordinary local development remain
+permitted. All four obsolete temporary prior apps/rollback root and redundant
+packaging outputs were retired; current app/source, required fixtures, native
+build/check outputs, originals and recovery stay protected. Current facts and
+unfinished profile gates live in HANDOFF; archived checkpoints never authorize
+rollback, source publication or restoring disposed files.
 
 ## Runtime instruction parity
 
@@ -188,6 +176,15 @@ repository can answer the question.
   rows/sections. Native readback precedes acknowledgement; newer manual drafts
   survive. Other codecs, existing native analysis replacement, gain and broader
   metadata require independent acceptance. Cue drafts use the separate cue API.
+  November2 separate MP3 acceptance: `rekordbox_cbr_analysis_store` admits only
+  initial full saved grid/key/waveforms on bare unlocked MPEG-1 CBR/no-Info/Xing
+  stereo44.1kHz MP3. It independently scans captured frames and constructs PVBR,
+  preserves native Length/gain/cues/audio/XML/playlists, and keeps original durable
+  results through exact-SHA ctime renewal. Authority/plan/journal/retention are
+  separate from WAV v1; the worker/root/lock/closed-native-app guards are shared.
+  Legacy jobs keep their original WAV profile, with no implicit MP3 reinterpretation.
+  Research wrappers/fixtures never grant source authority. Other MP3 profiles,
+  source analysis replacement, gain and metadata remain separate gates.
 - Other rekordbox analysis is read-only outside the accepted October27 grid API.
   `soundbox.rekordbox_grid_store.PilotGridStore` requires an explicitly accepted
   exact library/schema/version authority, bound per operation to the track/UUID,
@@ -750,7 +747,7 @@ Current guidance stays in `docs/`; superseded experiments belong in
     ./check.sh            # lint/build/types + all offscreen/Cocoa tests; zero skips
     ./check.sh --render   # + hermetic offscreen UI render
     ./check.sh --native   # compatibility alias; Cocoa is always required
-    ./build_native.sh     # arm64 CoreAudio/Metal dylib only
+    ./build_native.sh     # arm64 deck + fresh process-guard dylibs
     ./build_cdj.sh        # pinned local Rust CDJ renderer; --test adds Rust checks
     ./build_app.sh        # personal → dist/personal/Soundbox.app, then stable signing
 
@@ -819,8 +816,8 @@ fixtures remain protected. Keep future diagnostics lean: reuse existing snapshot
 for inspections, retain full DB pairs only when acceptance/recovery requires them,
 and remove generated packaging/scratch output after verified installation. Do not
 create a new full-library capture for every status/UI check. Preserve small
-comparison/approval/install receipts. The verified delivery baseline is94 imports,1107 titles,490 artist overrides,
-10 custom playlists,519 hidden tracks, ten saved analyses,92 native bindings, nine
+comparison/approval/install receipts. The verified delivery baseline is95 imports,1107 titles,490 artist overrides,
+10 custom playlists,519 hidden tracks, eleven saved analyses,93 native bindings, ten
 independent authorities and515 user disposal receipts. New user actions supersede these
 counts; inspect current state rather than restoring a checkpoint. Conversion
 originals, required references and unresolved recovery remain protected.

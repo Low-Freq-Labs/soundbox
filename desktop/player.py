@@ -2309,6 +2309,8 @@ class PlayerBar(QWidget):
         if not self._src_path:
             return
         target = max(0, min(int(target), self._dur) if self._dur else int(target))
+        if control[0] == 'memory':
+            self._set_session_cue(target)
         self._cue_preview_token += 1
         token = self._cue_preview_token
         self._cue_preview_active = True

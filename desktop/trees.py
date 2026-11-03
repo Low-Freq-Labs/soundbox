@@ -224,13 +224,11 @@ def _sidebar_icon(painter, box, kind, expanded=False):
         path.cubicTo(-4.5,-.5,4.5,-.5,4.5,3.5);path.lineTo(4.5,5)
         path.closeSubpath()
     elif kind=='crate':
-        # A tilted sleeve and a record peek above the slatted crate front.
-        path.moveTo(-4,-1);path.lineTo(-4.7,-4);path.lineTo(-1,-5);path.lineTo(-.7,-4)
-        path.moveTo(-2,-1);path.cubicTo(-2.5,-5.5,4.5,-5.5,4,-1)
-        path.moveTo(.3,-1);path.cubicTo(.1,-2.5,2.8,-2.5,2.5,-1)
-        path.addRect(QRectF(-5,-1,10,6))
-        path.moveTo(-2,1);path.lineTo(-2,3)
-        path.moveTo(2,1);path.lineTo(2,3)
+        # Open rim, straight sides and one handle slot.
+        path.moveTo(-5,-2.2);path.lineTo(-3.2,-5)
+        path.lineTo(3.2,-5);path.lineTo(5,-2.2)
+        path.addRect(QRectF(-5,-2.2,10,7.2))
+        path.addRoundedRect(QRectF(-1.7,-.8,3.4,1.6),.8,.8)
     else:
         path.addEllipse(QRectF(-4.5,1,4.5,3.5))
         path.moveTo(0,2.5);path.lineTo(0,-5)

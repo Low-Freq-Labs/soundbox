@@ -1,5 +1,6 @@
 """Ordinary registration transport is tested only on synthetic encrypted TEMP DBs."""
 from dataclasses import asdict,replace
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -132,6 +133,101 @@ class RegistrationStore(unittest.TestCase):
             with self.assertRaises(RecoveryRequired):self.writer.recover()
             c.assert_not_called()
         self.assertTrue(self.writer.journal.exists())
+
+    def test_recovery_memo_reuses_only_exact_verified_pairs_after_fresh_payload_hashes(self):
+        self.writer.apply(self.request)
+        archive=self.writer.root/('registration-'+self.request['operation_id'])
+        original=(archive/'operation.json').read_bytes();record=json.loads(original)
+        writer=store.RegistrationStore(self.authority,self.writer.root)
+        with (mock.patch.object(writer,'_plan',wraps=writer._plan) as reconstruct,
+              mock.patch.object(store,'_integrity',wraps=store._integrity) as integrity,
+              mock.patch.object(store,'_sha',wraps=store._sha) as hashes):
+            writer._validate_record(record);writer._validate_record(deepcopy(record))
+            self.assertEqual(reconstruct.call_count,1);self.assertEqual(integrity.call_count,2)
+            self.assertEqual(hashes.call_count,8)
+            with (mock.patch.object(cues,'_closed',side_effect=WriteProofError('native open')),
+                  mock.patch.object(writer.lease,'_connect') as source_sql,self.assertRaises(WriteProofError)):
+                writer.apply(self.request)
+            source_sql.assert_not_called()
+            changed=deepcopy(record);changed['changes'][0]['after']['Title']='unplanned title'
+            (archive/'operation.json').write_text(json.dumps(changed))
+            writer.journal.write_text(json.dumps(changed))
+            with mock.patch.object(writer.lease,'_connect') as source_sql,self.assertRaises(RecoveryRequired):writer.recover()
+            source_sql.assert_not_called();writer.journal.unlink()
+            self.assertEqual(reconstruct.call_count,2)
+            (archive/'operation.json').write_bytes(original)
+            payload=archive/'after.db';before=payload.read_bytes();payload.write_bytes(before+b'unknown')
+            with self.assertRaises(RecoveryRequired):writer._validate_record(record)
+            self.assertEqual(reconstruct.call_count,2);payload.write_bytes(before)
+            writer.authority=replace(self.authority,accepted_reference_sha256='1'*64)
+            writer._validate_record(record);self.assertEqual(reconstruct.call_count,3)
+            writer.authority=replace(self.authority,file_types=(1,))
+            with self.assertRaises(WriteProofError):writer._validate_record(record)
+            self.assertEqual(reconstruct.call_count,3)
+            writer.authority=self.authority
+            replacement=self.root/'replaced.db';replacement.write_bytes(writer.database.read_bytes())
+            os.replace(replacement,writer.database)
+            with self.assertRaises(RecoveryRequired):writer._validate_record(record)
+            self.assertEqual(reconstruct.call_count,3)
+
+    def test_non_wave_import_conversion_is_a_noop_without_a_native_snapshot(self):
+        before=_inventory(self.writer.database)
+        tracks=[dict(id='mp3',path=str(self.root/'not-opened.mp3')),
+                dict(id='m4a',path=str(self.root/'not-opened.m4a'))]
+        with (mock.patch.object(self.writer.lease,'_lock',side_effect=AssertionError('no conversion action')),
+              mock.patch.object(store,'encrypted_backup',side_effect=AssertionError('no conversion snapshot'))):
+            self.assertEqual(self.writer.convert_imports(tracks,self.root/'originals',str(uuid4())),[])
+        self.assertEqual(_inventory(self.writer.database),before)
+        self.assertFalse((self.root/'originals').exists())
+
+    def test_integer_wave_conversion_noop_leaves_fresh_registration_capture_responsible_for_bytes(self):
+        from test_wave_conversion import wave as float_wave
+        tracks=[dict(id='new',path=str(self.audio))];before=self.audio.read_bytes()
+        with (mock.patch.object(self.writer.lease,'_lock',side_effect=AssertionError('no conversion action')),
+              mock.patch.object(store,'encrypted_backup',side_effect=AssertionError('no conversion snapshot'))):
+            self.assertEqual(self.writer.convert_imports(tracks,self.root/'originals',str(uuid4())),[])
+        self.assertEqual(self.audio.read_bytes(),before)
+        self.assertFalse((self.root/'originals').exists())
+        # A float replacement after the header-only no-op cannot inherit that
+        # observation as registration permission or bypass fresh byte capture.
+        float_wave(self.audio)
+        with mock.patch.object(self.writer,'_apply_sql',side_effect=AssertionError('no source SQL')):
+            with self.assertRaisesRegex(ValueError,'Only integer PCM WAVE'):
+                self.writer.prepare(tracks)
+
+    def test_integer_wave_with_conversion_receipt_still_reconciles_and_checks_original(self):
+        from test_wave_conversion import wave as float_wave
+        from soundbox import wave_conversion
+        float_wave(self.audio);original=self.audio.read_bytes();operation=str(uuid4())
+        tracks=[dict(id='new',path=str(self.audio))];recovery=self.root/'originals'
+        first=self.writer.convert_imports(tracks,recovery,operation)
+        self.assertEqual(len(first),1)
+        self.assertEqual(self.writer.convert_imports(tracks,recovery,operation),first)
+        saved=recovery/operation/wave_conversion.result_key(self.audio)/'original.wav'
+        self.assertEqual(saved.read_bytes(),original);saved.write_bytes(b'corrupt')
+        with self.assertRaisesRegex(ValueError,'Original WAVE recovery bytes changed'):
+            self.writer.convert_imports(tracks,recovery,operation)
+
+    def test_malformed_conversion_receipt_and_uncertain_header_keep_guarded_pipeline(self):
+        from soundbox import wave_conversion
+        operation=str(uuid4());recovery=self.root/'originals'
+        receipt=recovery/operation/wave_conversion.result_key(self.audio)/'receipt.json'
+        receipt.parent.mkdir(parents=True);receipt.write_text('{}')
+        tracks=[dict(id='new',path=str(self.audio))]
+        with self.assertRaisesRegex(ValueError,'Unknown WAVE conversion receipt'):
+            self.writer.convert_imports(tracks,recovery,operation)
+        receipt.unlink();receipt.symlink_to(self.root/'absent-receipt')
+        with mock.patch.object(self.writer.lease,'_lock',side_effect=WriteProofError('guard reached')):
+            with self.assertRaisesRegex(WriteProofError,'guard reached'):
+                self.writer.convert_imports(tracks,recovery,operation)
+        receipt.unlink();alias=self.root/'alias.wav';alias.symlink_to(self.audio)
+        with mock.patch.object(self.writer.lease,'_lock',side_effect=WriteProofError('guard reached')):
+            with self.assertRaisesRegex(WriteProofError,'guard reached'):
+                self.writer.convert_imports([dict(id='new',path=str(alias))],recovery,operation)
+        self.audio.write_bytes(b'unknown WAVE')
+        with mock.patch.object(self.writer.lease,'_lock',side_effect=WriteProofError('guard reached')):
+            with self.assertRaisesRegex(WriteProofError,'guard reached'):
+                self.writer.convert_imports(tracks,recovery,operation)
 
     def test_bounded_retention_keeps_latest_pair_and_all_operation_receipts(self):
         self.writer.apply(self.request);first=self.writer.root/('registration-'+self.request['operation_id'])

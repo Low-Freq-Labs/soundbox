@@ -1,5 +1,26 @@
 # SoundBox architecture
 
+## Duplicate membership confirmation
+
+`desktop.duplicate_dialog` presents the existing Skip/Add Anyway decision in a
+compact dialog with a literal playlist name, wrapped read-only title list capped
+at six plus the remaining count, and bounded scrolling for long labels. Skip is
+the default and Escape/window close reject. Accepted duplicates still use the
+same caller and existing membership writers; presentation confers no source scope.
+
+## Browser BPM projection
+
+WaveformFillWorker emits disposable BPM snapshots for completed zero-anchor
+fallback caches, including preparation-inventory hits. Bounded header reads and
+stable source stat checks stay on that worker; no audio read/hash or GUI file I/O
+is added. MainWindow keeps snapshots only for the exact Library/track binding,
+overlays them below native, detector, manual and pending-grid values, and updates
+one model row with sorting/filtering/selection preserved. Missing/stale snapshots
+clear the display estimate. The estimate flag supplies a BPM tooltip and is not
+part of the persisted computed base-row cache, so its schema stays unchanged.
+Neither snapshots nor fallback grids provision initial native-analysis authority.
+Playback resolves valid manual drafts even when base detection has no beats.
+
 ## Repo layout
 
 Current debt and staged extraction plan: [September software audit](software-audit-2026-09.md).
@@ -141,12 +162,24 @@ loaded grid/cues, preserving transport, waveform geometry and the current view.
 `soundbox.analysis_jobs` persists bound source/library/track/path/UUID intentions
 before worker admission. Active work remains queued until its merged result and
 retirement save atomically. Restart waits for a matching loaded library and uses
-the captured preferences; errors persist without automatic retry. These pending
+the captured preferences; ordinary detector failures persist for explicit retry. These pending
 intents contain no completed musical data or native write authority. Browser
 Analyze Track uses this same queue and persists a waveform-rebuild intention.
-Successful detection schedules that selected cache replacement after its result
-is durable; failure retains the previous playable cache. With BPM and Key both
-unchecked it runs the existing waveform-only repair path.
+`desktop.analysis_priority` captures and publishes the selected waveform before
+DSP, guarded by its verified source epoch before atomic cache publication.
+Required compatibility conversion checkpoints precede that capture; later drops
+may preflight conversion while DB writes retain their original FIFO. Waveform
+SHA/epoch and BPM/key phase progress save durably. BPM-only processing uses a
+SoundBox projection of the pinned tempo/downbeat math, with exact parity tests;
+key runs next over the same SHA-pinned bytes. The original preferences remain
+captured, manual drafts survive, and native publication cannot consume intermediate
+BPM paired with an older key. Source writes yield to runnable local preparation;
+failed songs retain their intentions while other local jobs continue. Captured
+cue gestures remain immediately usable and durable while source work waits.
+Normal quit still drains accepted cue jobs, including those captured before close.
+Automatic detection off admits waveform-only prerequisites for native imports,
+without invoking either detector or creating fabricated musical results. Explicit
+waveform-only repair continues through its existing cache repair route.
 Its three inset groups align labels and 30-point control rows; the section header
 and preservation note retain the outer edge.
 `soundbox.analysis` captures one hashed local audio snapshot, then the optimized
@@ -285,8 +318,8 @@ closed. Its exact October30 publication subsequently passed Sonny's native
 inspection and normal-save comparison; SQL commit alone never establishes that
 acceptance. That historical receipt grants no further operations. The broader
 ordinary-playlist API subsequently passed its separate October30 native/source
-acceptance. Registration and initial WAV analysis now have independent accepted
-production domains above; broader analysis/metadata remain gated.
+acceptance. Registration and initial WAV/CBR MP3 analysis now have independent accepted
+production domains; broader analysis/metadata remain gated.
 
 ## Engine modules (`soundbox/`)
 
@@ -1515,6 +1548,27 @@ fail closed rather than being overwritten. Native applications remain closed at
 write guards; owner waits back off and unstarted intents survive explicit teardown. Record,
 logical/native identity and prepared plan must match exactly before source SQL.
 
+The separate `native_mp3_analysis_plan` + `rekordbox_cbr_analysis_store` domain
+admits initial full saved grid/key/waveforms only on bare unlocked MPEG-1 CBR/
+no-Info/Xing stereo44.1kHz MP3. Its own accepted authority, plan/journal formats
+and retention anchor share the existing worker/lock/root. Independent frame
+scanning constructs PVBR and verifies renderer sample count; native Length and
+all musical data outside the accepted components remain preserved. Old WAV jobs
+and wire formats keep their original profile. VBR/Info/gapless/mono/48kHz and
+replacement remain separate gates. See [MP3 evidence](mp3-shared-analysis.md).
+
+Prepared WAV/CBR loaders use `immutable_plan_proof` only after fresh raw record,
+path/authority/profile and ALL payload digest checks. Its4entries/30seconds
+retain proof keys, not plans/connections/live observations. The desktop checks
+`store.plan` against the durable job rather than loading a second proof. Complete
+source snapshots, publication guards and readback remain fresh. Registration and
+locator use one exact immutable-pair proof per store after fresh record/source/
+payload checks. Collection completion uses one fresh full library observation
+and strict binding projection, saving bindings and intent completion atomically.
+Durable prep reuses at most8source-inode/native-ID/UUID/path/authority-bound cue
+handles; every actual snapshot/apply retains its guards. See the measured
+[native command audit](performance-audit.md).
+
 The helper's `saved-analysis` command captures no detector decision: it receives
 saved beat rows, decodes only an explicit private local capture and renders the
 accepted native packet profile. The first two real-song accepted packet sets are
@@ -1564,3 +1618,33 @@ hit targets. Hex editing commits validated six-digit RGB through the same settin
 transaction as picker OK. PlaylistFolderTree’s delegate opens plain-name inline
 editors; the configured browser.rename action dispatches sidebar focus before
 table/catalog rename, with existing local/native durable save routes.
+
+### Native command latency and fresh process guards
+
+The second November2 performance pass audits each native domain independently.
+`soundbox.mac_process` loads the separately compiled/bundled
+`libsoundbox_process_guard.dylib`; only that function interface is retained. Every
+source guard takes a fresh bounded kernel process snapshot and validates its
+shape, string termination and own-process identity before accepting absence.
+Unknown results use the existing strict pgrep path. It requires no player/Metal
+initialization, GUI/Accessibility input or process-state cache. Source guards keep
+their exact accepted library/schema/version, media/SQL/recovery checks. C source
+and CMake recipes participate in package provenance; all native code/data sections
+are compared with tested builds, and isolated startup verifies the fast interface.
+
+`encrypted_backup` still copies a stable DB/WAL pair with hot-journal refusal.
+Only self-contained absent/empty-WAL private captures can avoid a second
+SQLCipher re-encryption after full integrity/identity/byte-stability checks and
+fsync. Nonempty WAL keeps SQLite folding. Analysis snapshots may reuse only the
+pure inventory of those exact freshly checked private bytes; every source capture
+remains fresh. Locator preparation seeds proof only after archive DB/XML transfers
+match known hashes bracketed around their complete proofs. Removal cache hits
+freshly verify raw plan/authority/source and all payload/resource bytes.
+
+Prep scheduling distinguishes general ownership deferral from native-owner
+backoff. Genuine lane release promotes a delayed wake to the next event turn;
+a monotonic native-open deadline prevents repeated source probes until the
+existing two-second retry period passes. `desktop.native_timing` logs fixed
+phase labels with per-command dispatch, execution and GUI acknowledgement, without
+paths or musical values. Unknown durable-FIFO wait is explicit rather than being
+reported as zero. See [the per-command measurements](performance-audit.md).

@@ -33,7 +33,7 @@ class ProviderComposition(unittest.TestCase):
         self.assertIsNone(public.artwork)
         self.assertEqual(public.actions, ())
         self.assertEqual(set(composition("public")["excludes"]),
-                         {"yt_dlp", "soundbox_personal"})
+                         {"yt_dlp", "soundbox_personal", "research", "tests"})
 
     def test_missing_or_broken_provider_preserves_core(self):
         manifest = composition("personal")["manifest"]

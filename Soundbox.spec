@@ -16,6 +16,7 @@ datas = [(str(manifest), "."), ("assets/soundbox-wordmark.svg", "assets"),
          ("native/cdj/vendor/rbxport/LICENSE", "licenses/rbxport"),
          ("native/cdj/vendor/rbxport/crates/rbl-deck/vendor/rubberband/COPYING", "licenses/rbxport")]
 binaries = [("build/native/libsoundbox_deck.dylib", "native"),
+            ("build/native/libsoundbox_process_guard.dylib", "native"),
             ("build/cdj/release/soundbox-cdj", "native")]
 hiddenimports = []
 for package in config["submodules"]:

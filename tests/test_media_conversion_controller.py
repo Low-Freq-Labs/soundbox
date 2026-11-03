@@ -60,8 +60,8 @@ class BackgroundConversion(unittest.TestCase):
         self.addCleanup(self.cleanup)
     def cleanup(self):
         self.controller.stop();self.window.tag_controller.owner.drain();self.window.deleteLater();self.app.processEvents()
-    def wait(self,predicate):
-        end=time.monotonic()+30
+    def wait(self,predicate,*,timeout=30):
+        end=time.monotonic()+timeout
         while not predicate() and time.monotonic()<end:QTest.qWait(10)
         self.assertTrue(predicate(),repr(self.controller.pending))
 
@@ -192,7 +192,11 @@ class BackgroundConversion(unittest.TestCase):
         w.imported['1']=dict(path=str(self.audio),size=self.audio.stat().st_size,added='keep')
         config=dict(format=store.AUTHORITY_FORMAT,**asdict(self.writer.authority))
         (self.root/'data/rekordbox-media-conversion-authority.json').write_text(json.dumps(config))
-        prepared=[]
+        prepared=[];saved=[]
+        original_save=w._save_state
+        def save():
+            saved.append(deepcopy(w.settings));return original_save()
+        w._save_state=save
         class Registration:
             def convert_imports(self,*_args,**_kwargs):return []
             def prepare(self,tracks,**_kwargs):
@@ -203,8 +207,13 @@ class BackgroundConversion(unittest.TestCase):
         self.addCleanup(controller.stop)
         w.settings[shared_imports.KEY]=shared_imports.admit([],w.lib,[w.lib.tracks_by_id['1']],dict(kind='collection'),{})
         with mock.patch('desktop.shared_imports.assert_rekordbox_closed',return_value=None):
-            controller.schedule();self.wait(lambda:bool(prepared) and not w.tag_controller.owned)
+            # Real encrypted recovery/identity proofs take ~25s in isolation;
+            # leave room for the other required release workers' CPU demand.
+            controller.schedule();self.wait(lambda:bool(prepared) and not w.tag_controller.owned,timeout=60)
         self.assertEqual(prepared[0][:2],(24,48000))
+        self.assertTrue(any(state.get(shared_imports.KEY) and state[shared_imports.KEY][0].get('media_ready')
+            and state[shared_imports.KEY][0]['request'] is None for state in saved))
+        self.assertFalse(w.settings.get('analysis_results'))
         receipt=w.settings[jobs.DONE][str(self.audio)]
         self.assertEqual(prepared[0][2],receipt['after_sha256'])
         self.assertEqual(w.imported['1']['size'],self.audio.stat().st_size)

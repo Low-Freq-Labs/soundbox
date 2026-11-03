@@ -408,6 +408,18 @@ def _hot_cue_slot(kind_number: int) -> int | None:
 
 def _read_cues(db) -> dict[str, list[dict]]:
     """Read every active cue once and group it by rekordbox ContentID."""
+    # Display needs numeric/string cue fields, not ORM objects or converted
+    # timestamps. This connection belongs to load_live's disposable snapshot.
+    # Raw lexical rows also remain independent of the native edit revisions.
+    try:
+        connection = db.session.connection()
+    except (AttributeError, TypeError):  # source-neutral/older reader fixtures
+        connection = None
+    if connection is not None:
+        result = connection.exec_driver_sql('SELECT * FROM "djmdCue"')
+        names = list(result.keys())
+        return _normalize_cue_rows(SimpleNamespace(**dict(zip(names, row, strict=True)))
+                                   for row in result)
     try:
         rows = db.get_cue()
     except (AttributeError, TypeError):

@@ -15,7 +15,7 @@ import sqlite3
 import tempfile
 import secrets
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID,uuid4
 
 from . import native_registration_plan as planner
 from .native_media import MediaIdentity, capture_media,epoch as media_epoch
@@ -110,6 +110,7 @@ class RegistrationStore:
         self.root.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.xml=self.database.with_name('masterPlaylists6.xml');self.journal=self.root/'transaction.json'
         s=self.database.stat();self.file_id=(s.st_dev,s.st_ino);self.lease=_Lease(self)
+        self._verified_recovery_record_key: tuple[str,RegistrationAuthority]|None=None
 
     def _guard_xml(self):
         _regular(self.xml)
@@ -165,6 +166,8 @@ class RegistrationStore:
             raise RecoveryRequired('Registration cannot change XML')
         _regular(archive/'operation.json')
         if json.loads((archive/'operation.json').read_bytes())!=record:raise RecoveryRequired('Registration archive identity differs')
+        semantic_key=(_digest(record),a)
+        if semantic_key==self._verified_recovery_record_key:return record
         with tempfile.TemporaryDirectory(prefix='soundbox-registration-recovery-') as tmp:
             root=Path(tmp).resolve();shutil.copyfile(archive/'before.db',root/'before.db')
             shutil.copyfile(archive/'after.db',root/'after.db')
@@ -176,6 +179,10 @@ class RegistrationStore:
                 _integrity(before);_integrity(after);first,final=_affected(plan['changes'])
                 if not _matches(before,first) or not _matches(after,final):raise RecoveryRequired('Registration paired targets differ')
             finally:before.close();after.close()
+        # Reuse only this completed immutable-pair reconstruction. Every call
+        # above still verifies current source/authority, request scope, archive
+        # identity and every payload hash before reaching this instance memo.
+        self._verified_recovery_record_key=semantic_key
         return record
 
     def _record(self):
@@ -293,8 +300,31 @@ class RegistrationStore:
         before prepare(); this never broadens the accepted native format profile.
         """
         from . import wave_conversion as conversion
-        from .analysis import identity
+        from .analysis import identity,result_key
+        from .media_probe import read_media_header
         from .rekordbox_write import _rows
+        # This domain only converts WAVE. An all-other-format gesture has no
+        # conversion work and grants no source action; registration retains its
+        # own fresh lock/recovery/apps/authority checks immediately afterward.
+        candidates=[track for track in tracks if Path(track['path']).suffix.lower()=='.wav']
+        # Integer PCM has no conversion action. A bounded header observation
+        # may skip this domain's catalog capture, but never a conversion receipt
+        # or uncertain path/header. Registration still captures and hashes the
+        # actual bytes afterward; this observation grants no registration facts.
+        recovery=Path(recovery_root)
+        if candidates and recovery==recovery.resolve() and str(UUID(operation_id))==operation_id:
+            pending=[]
+            for track in candidates:
+                path=Path(track['path']);receipt=recovery/operation_id/result_key(path)/'receipt.json'
+                try:
+                    if path.is_symlink() or path!=path.resolve(strict=True) or receipt.exists() or receipt.is_symlink():
+                        pending.append(track);continue
+                    header=read_media_header(path)
+                    if header.family=='wav' and header.codec in ('pcm_s16le','pcm_s24le'):continue
+                except (OSError,ValueError,RuntimeError):pass
+                pending.append(track)
+            candidates=pending
+        if not candidates:return []
         expected = expected or {}; receipts = []
         with self.lease._lock():
             self._recover_locked(); self.lease._guard()
@@ -318,7 +348,7 @@ class RegistrationStore:
                         or (identity(wal.stat()) if wal.exists() else None) != wal_before):
                     raise ConflictError('Native catalog changed before WAVE conversion')
                 before_replace(track['id'])
-            for track in tracks:
+            for track in candidates:
                 path = Path(track['path'])
                 if str(path.resolve(strict=True)) in native_paths:continue
                 if track['id'] in acknowledged:continue

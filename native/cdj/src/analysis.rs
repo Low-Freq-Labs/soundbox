@@ -72,8 +72,12 @@ pub fn run(root: &Path, request: &Path) -> Result<serde_json::Value, Box<dyn Err
         options.tempo.placement = rbl_analysis::tempo::Placement::Attack;
         options.tempo.min_bpm = f64::from(input.min_bpm);
         options.tempo.max_bpm = f64::from(input.max_bpm);
-        let result = rbl_analysis::analyse_with(&samples, rate, options);
-        (Some(result.tempo), if input.key { result.key } else { None })
+        if input.key {
+            let result = rbl_analysis::analyse_with(&samples, rate, options);
+            (Some(result.tempo), result.key)
+        } else {
+            (Some(soundbox_cdj::component_tempo::analyse(&samples, rate, options)), None)
+        }
     } else {
         (None, rbl_analysis::key::detect_key(&samples, rate))
     };

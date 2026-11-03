@@ -1447,11 +1447,16 @@ def _fallback_signed_ranges(heights: bytes, encoding: str) -> tuple[bytes, bytes
 
 
 def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
-          data: dict) -> Path | None:
+          data: dict, *, expected_epoch: list[int] | None = None) -> Path | None:
     """Atomically persist one complete, bounded-size V5 analysis record."""
     tmp: Path | None = None
     try:
         source = Path(audio_path)
+        source_stat = source.stat()
+        def source_epoch(info):
+            return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        if expected_epoch is not None and source_epoch(source_stat) != expected_epoch:
+            return None
         prepared = dict(data)
         # Re-analysis upgrades derived payloads in place. If a future editor has
         # already claimed canonical grid/cue ownership, those crown-jewel user
@@ -1537,9 +1542,9 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
             "source": {
                 "path": str(source.resolve()),
                 "fingerprint": fingerprint,
-                "identity": f"{source.stat().st_size}:{source.stat().st_mtime_ns}",
-                "size": source.stat().st_size,
-                "mtime_ns": source.stat().st_mtime_ns,
+                "identity": f"{source_stat.st_size}:{source_stat.st_mtime_ns}",
+                "size": source_stat.st_size,
+                "mtime_ns": source_stat.st_mtime_ns,
             },
             "provenance": dict(prepared.get("provenance") or {
                 "analysis": "soundbox",
@@ -1589,6 +1594,9 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         tmp = target.with_name(
             f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_bytes(_HEADER.pack(_MAGIC, len(manifest)) + manifest + payload)
+        if expected_epoch is not None and source_epoch(source.stat()) != expected_epoch:
+            tmp.unlink()
+            return None
         os.replace(tmp, target)
         return target
     except Exception:  # noqa: BLE001 - derived analysis is always rebuildable

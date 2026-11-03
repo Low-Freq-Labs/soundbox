@@ -1,19 +1,84 @@
 """Real owned source lane and durable analysis handoff with an isolated GUI."""
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import replace
+import hashlib
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import threading
 import unittest
 from unittest import mock
+import json
 
 from PySide6.QtCore import QEventLoop,QTimer
 from PySide6.QtWidgets import QApplication,QFrame
-from desktop.native_analysis import NativeAnalysisController,KEY,DONE,digest
+from desktop.native_analysis import NativeAnalysisController,KEY,DONE,digest,validate
+from desktop import native_analysis as native
 from desktop.tag_controller import TagEditController
 from soundbox.analysis import ENGINE,result_key
 from soundbox.library import Library,Track
+from soundbox import native_media
+
+
+class ScopedMetadataIdentityProof(unittest.TestCase):
+    def setUp(self):
+        self.area=tempfile.TemporaryDirectory();self.addCleanup(self.area.cleanup)
+        self.path=(Path(self.area.name)/'source.wav').resolve();self.path.write_bytes(b'private fixture audio')
+        self.record=dict(path=str(self.path),epoch=list(native_media.epoch(self.path.stat())),
+            size=self.path.stat().st_size,sha256=hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.audio=native_media.MediaIdentity(str(self.path),tuple(self.record['epoch']),self.record['sha256'],
+            32,'wav','pcm_s16le',32,1,1)
+        self.path.chmod(0o600)
+
+    def test_default_is_strict_and_context_cache_requires_fresh_full_epoch(self):
+        with self.assertRaises(native.ConflictError):self.audio.revalidate()
+        with mock.patch.object(native_media,'acquire_source',wraps=native_media.acquire_source) as capture:
+            with native_media.metadata_identity_proof([self.record]):
+                self.audio.revalidate();self.audio.revalidate()
+                self.assertEqual(capture.call_count,1)
+                self.path.chmod(0o644);self.audio.revalidate()
+                self.assertEqual(capture.call_count,2)
+            with self.assertRaises(native.ConflictError):self.audio.revalidate()
+            with native_media.metadata_identity_proof([self.record]):self.audio.revalidate()
+            self.assertEqual(capture.call_count,3)
+        self.assertEqual(self.audio.epoch,tuple(self.record['epoch']))
+
+    def test_context_cannot_authorize_another_digest_or_cross_threads(self):
+        with native_media.metadata_identity_proof([{**self.record,'sha256':'0'*64}]), \
+                mock.patch.object(native_media,'acquire_source',side_effect=AssertionError('Outside exact scope')):
+            with self.assertRaises(native.ConflictError):self.audio.revalidate()
+        errors=[]
+        def other_thread():
+            try:self.audio.revalidate()
+            except native.ConflictError as exc:errors.append(str(exc))
+        with native_media.metadata_identity_proof([self.record]):
+            thread=threading.Thread(target=other_thread);thread.start();thread.join()
+            self.assertEqual(errors,[native.CTIME_CONFLICT])
+
+    def test_inode_and_mtime_changes_reject_before_source_capture(self):
+        for kind in ('mtime','inode'):
+            with self.subTest(kind=kind):
+                stat=self.path.stat()
+                if kind=='mtime':os.utime(self.path,ns=(stat.st_atime_ns,stat.st_mtime_ns+1))
+                else:
+                    replacement=self.path.with_name('replacement.wav');replacement.write_bytes(self.path.read_bytes())
+                    os.utime(replacement,ns=(stat.st_atime_ns,self.record['epoch'][3]));replacement.replace(self.path)
+                with native_media.metadata_identity_proof([self.record]), \
+                        mock.patch.object(native_media,'acquire_source',side_effect=AssertionError('Changed identity')):
+                    with self.assertRaises(native.ConflictError):self.audio.revalidate()
+
+    def test_changing_ctime_proof_is_bounded_and_remains_pending(self):
+        original=native_media.acquire_source;changes=[]
+        @contextmanager
+        def changing(*args,**kwargs):
+            with original(*args,**kwargs) as captured:yield captured
+            changes.append(True);self.path.chmod(0o644 if len(changes)%2 else 0o600)
+        with native_media.metadata_identity_proof([self.record]), \
+                mock.patch.object(native_media,'acquire_source',changing):
+            with self.assertRaisesRegex(native.ConflictError,native.METADATA_PENDING):self.audio.revalidate()
+        self.assertEqual(len(changes),2)
 
 
 class NativeAnalysisQueue(unittest.TestCase):
@@ -67,6 +132,384 @@ class NativeAnalysisQueue(unittest.TestCase):
         record={**deepcopy(self.record),'path':str(track.path)}
         self.window.settings['analysis_results'][result_key(track.path)]=record
         return track
+
+    def add_cbr(self):
+        original=self.window.lib.tracks_by_id['sb-one']
+        track=replace(original,track_id='sb-cbr',name='CBR',location_uri='file:///synthetic/cbr.mp3',
+            source_native_id='125',source_uuid='00000000-0000-4000-8000-000000000125')
+        self.window.lib.tracks_by_id[track.track_id]=track
+        self.window.settings['analysis_results'][result_key(track.path)]={**deepcopy(self.record),'path':str(track.path)}
+        return track
+
+    def ctime_job(self, *, failed=False, prepared=True):
+        path=(Path(self.area.name)/'one.wav').resolve();path.write_bytes(b'captured private fixture')
+        original=self.window.lib.tracks_by_id['sb-one']
+        track=replace(original,location_uri=path.as_uri(),size=path.stat().st_size)
+        self.window.lib.tracks_by_id[track.track_id]=track
+        self.record={**self.record,'path':str(path),'size':track.size,
+            'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'epoch':native.analysis.identity(path.stat())}
+        self.window.settings['analysis_results']={result_key(path):deepcopy(self.record)}
+        self.window.tag_controller.busy=True;self.controller.discover()
+        job=self.controller.pending[0]
+        if failed:job['error']=native.CTIME_CONFLICT
+        self.controller.factory=None
+        self.window._prepare_grid_cache=mock.Mock();self.window._track_analysis_dir=Path(self.area.name)/'cache'
+        folder=self.window.tag_controller.data_root/'native-analysis-plans'/job['id']
+        plan=dict(format=native.WAV_PLAN_FORMAT,operation_id=job['id'],source=job['source'],
+            library_id=job['library_id'],track_id=job['native_id'],track_uuid=job['uuid'],
+            result=native.publication_record(job['record']))
+        if prepared:
+            folder.mkdir(parents=True,mode=0o700);(folder/'plan.json').write_text(json.dumps(plan))
+        path.chmod(0o600)
+        self.assertNotEqual(native.analysis.identity(path.stat())[-1],self.record['epoch'][-1])
+        return path,folder,plan
+
+    @contextmanager
+    def ctime_backend(self, folder, plan, *, recurring=False, recovery=None):
+        events=[];test=self
+        audio=native_media.MediaIdentity(self.record['path'],tuple(self.record['epoch']),self.record['sha256'],
+            32,'wav','pcm_s16le',32,1,1)
+        class Store:
+            def __init__(self,authority,where):
+                test.assertEqual(where,folder);self.plan=json.loads((where/'plan.json').read_bytes())
+            def apply(self):
+                events.append('apply')
+                audio.revalidate()
+                if recurring:Path(audio.path).chmod(0o644)
+                audio.revalidate()
+            def recover(self):
+                events.append('recover');return recovery
+            def discard_unstarted(self):
+                raise AssertionError('Metadata drift must retain the immutable plan and recovery')
+        def prepare(authority,tid,uuid,record,where,**kwargs):
+            events.append('prepare');test.assertEqual(record,plan['result'])
+            where.mkdir(parents=True,mode=0o700)
+            (where/'plan.json').write_text(json.dumps(plan))
+            audio.revalidate()
+        saved=dict(row=dict(BPM=12000,BitRate=1411,Length=32,SampleRate=44100,BitDepth=16),key='8B',
+            analysis_path='/synthetic/share/ANLZ0000.DAT',beats=deepcopy(self.record['beats']),
+            cue_fields=dict(source_cues=[],source_cue_revision='verified-cues',source_cue_refs=[]))
+        with mock.patch.object(native,'load_authority',return_value=object()), \
+                mock.patch.object(native,'prepare',side_effect=prepare), \
+                mock.patch.object(native,'AnalysisStore',Store),mock.patch.object(native,'retire_confirmed'), \
+                mock.patch.object(native,'readback',return_value=saved), \
+                mock.patch.object(native.track_analysis,'confirm_published_grid'):
+            yield events
+
+    def test_failed_ctime_plan_is_reconsidered_once_with_exact_bytes_and_original_result(self):
+        path,folder,plan=self.ctime_job(failed=True)
+        original=deepcopy(self.record);raw=(folder/'plan.json').read_bytes()
+        with self.ctime_backend(folder,plan,recurring=True) as events, \
+                mock.patch.object(native_media,'acquire_source',wraps=native_media.acquire_source) as proof:
+            self.controller.discover()
+            self.assertTrue(self.controller.pending[0]['ctime_rechecked'])
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            self.assertEqual(proof.call_count,2)
+            self.assertTrue(all(call.args[0].sha256==original['sha256'] for call in proof.call_args_list))
+        self.assertEqual(events,['apply']);self.assertEqual((folder/'plan.json').read_bytes(),raw)
+        self.assertEqual(self.window.settings['analysis_results'][result_key(path)],original)
+        self.assertEqual(self.window.settings[DONE]['sb-one'],digest(original))
+        self.assertTrue(any(s[KEY] and s[KEY][0].get('ctime_rechecked') is True for s in self.persisted))
+
+    def test_ctime_proof_covers_preparation_and_apply_without_rerender_or_new_epoch(self):
+        _path,folder,plan=self.ctime_job(prepared=False)
+        with self.ctime_backend(folder,plan) as events, \
+                mock.patch.object(native_media,'acquire_source',wraps=native_media.acquire_source) as proof:
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            self.assertEqual(proof.call_count,1)
+        self.assertEqual(events,['prepare','apply'])
+        self.assertEqual(json.loads((folder/'plan.json').read_bytes())['result'],plan['result'])
+
+    def test_changed_bytes_cannot_discard_or_reprepare_ctime_plan(self):
+        path,folder,plan=self.ctime_job(failed=True)
+        stat=path.stat();path.write_bytes(b'X'*stat.st_size)
+        os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns))
+        with self.ctime_backend(folder,plan) as events:
+            self.controller.discover();self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+            self.assertIn('captured bytes differ',self.controller.pending[0]['error'])
+        self.assertEqual(events,['apply']);self.assertTrue((folder/'plan.json').is_file())
+        self.assertTrue(self.controller.pending[0]['ctime_rechecked'])
+
+    def test_changed_mtime_does_not_read_audio_or_renew_ctime_plan(self):
+        path,folder,plan=self.ctime_job(failed=True)
+        stat=path.stat();os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns+1))
+        with self.ctime_backend(folder,plan) as events, \
+                mock.patch.object(native_media,'acquire_source',side_effect=AssertionError('Not ctime-only')):
+            self.controller.discover();self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertEqual(events,['apply']);self.assertTrue((folder/'plan.json').is_file())
+
+    def test_rechecked_nonmetadata_conflict_is_not_blindly_requeued_after_restart(self):
+        path,folder,plan=self.ctime_job(failed=True)
+        stat=path.stat();os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns+1))
+        with self.ctime_backend(folder,plan) as events:
+            self.controller.discover();self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+            before=deepcopy(self.controller.pending)
+            self.controller.stop();self.controller=NativeAnalysisController(self.window)
+            self.window.native_analysis_controller=self.controller
+            for _ in range(3):self.controller.discover();self.controller.pump();self.app.processEvents()
+            self.assertEqual(self.controller.pending,before)
+        self.assertEqual(events,['apply']);self.assertTrue((folder/'plan.json').is_file())
+
+    def test_old_error_reconsideration_must_be_durable_before_source_worker_admission(self):
+        _path,folder,plan=self.ctime_job(failed=True)
+        with self.ctime_backend(folder,plan) as events:
+            self.save_ok=False;self.controller.discover()
+            self.assertNotIn('ctime_rechecked',self.controller.pending[0])
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.assertEqual(events,[])
+        for marker in (False,'again',None):
+            with self.subTest(marker=marker),self.assertRaises(ValueError):
+                validate([{**self.controller.pending[0],'ctime_rechecked':marker}])
+
+    def test_metadata_still_changing_stays_quietly_pending_with_backoff(self):
+        _path,folder,plan=self.ctime_job()
+        @contextmanager
+        def changing(_records):raise native.ConflictError(native.METADATA_PENDING);yield
+        with self.ctime_backend(folder,plan) as events, \
+                mock.patch.object(native,'metadata_identity_proof',changing):
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:self.controller.not_before>0 and not self.window.tag_controller.owned)
+            self.assertEqual(self.controller.pending[0]['error'],'')
+            self.assertEqual(self.window.tag_controller.analysis_update_status,'Verifying audio…')
+            self.window._flash_status.assert_not_called()
+            self.controller.pump();self.app.processEvents();self.assertEqual(events,[])
+
+    def test_unfinished_detection_blocks_only_matching_native_publication_in_all_states(self):
+        for state in ('queued','failed'):
+            with self.subTest(state=state):
+                track=self.window.lib.tracks_by_id['sb-one']
+                jobs=native.analysis_jobs.admit([],self.window.lib,[track],native.analysis.DEFAULTS)
+                if state=='failed':jobs=native.analysis_jobs.failed(jobs,jobs[0]['id'],'Key needs attention')
+                self.window.settings[native.analysis_jobs.KEY]=jobs
+                self.controller.discover();self.assertEqual(self.controller.pending,[])
+        self.window.settings[native.analysis_jobs.KEY]=[]
+        self.window.tag_controller.busy=True;self.controller.discover()
+        preserved=deepcopy(self.controller.pending[0]);self.add_second()
+        self.window.settings[native.analysis_jobs.KEY]=jobs
+        self.controller.discover();self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:'sb-two' in self.window.settings.get(DONE,{}) and not self.window.tag_controller.owned)
+        self.assertEqual(self.controller.pending,[preserved])
+        self.assertEqual([j['local_id'] for j in self.calls],['sb-two'])
+
+    def test_pending_analysis_priority_defers_publication_until_detector_can_resume(self):
+        self.window._analysis_priority_pending=lambda:True
+        self.controller.discover();self.app.processEvents();self.assertEqual(self.calls,[])
+        self.assertTrue(self.controller.pending)
+        self.window._analysis_priority_pending=lambda:False
+        self.controller.pump();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.calls),1)
+
+    def test_committed_initial_analysis_acknowledges_while_newer_key_job_is_failed(self):
+        path,folder,plan=self.ctime_job()
+        track=self.window.lib.tracks_by_id['sb-one']
+        detected=native.analysis_jobs.admit([],self.window.lib,[track],native.analysis.DEFAULTS)
+        detected=native.analysis_jobs.advance(detected,detected[0]['id'],self.record['sha256'])
+        detected=native.analysis_jobs.failed(detected,detected[0]['id'],'New key detection failed')
+        self.window.settings[native.analysis_jobs.KEY]=deepcopy(detected)
+        newer=deepcopy(self.record)
+        newer['grid_draft']=dict(origin='manual',base_sha256=newer['sha256'],revision=1,bpm=121.0,
+            beats=[[n,ms,121.0] for n,ms,_bpm in newer['beats']])
+        self.window.settings['analysis_results'][result_key(path)]=newer
+        with self.ctime_backend(folder,plan,recovery='committed') as events, \
+                mock.patch.object(native,'prepare',side_effect=AssertionError('Receipt replay must not prepare')):
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(events,['recover'])
+        self.window.tag_controller._recover_pending.assert_called_once_with(self.window.lib)
+        self.assertEqual(self.window.settings[native.analysis_jobs.KEY],detected)
+        self.assertEqual(self.window.settings['analysis_results'][result_key(path)],newer)
+        self.assertEqual(self.window.settings[DONE]['sb-one'],digest(self.record))
+
+    def test_unstarted_prepared_analysis_is_checked_once_without_apply_during_detection(self):
+        _path,folder,plan=self.ctime_job()
+        track=self.window.lib.tracks_by_id['sb-one']
+        detected=native.analysis_jobs.admit([],self.window.lib,[track],native.analysis.DEFAULTS)
+        self.window.settings[native.analysis_jobs.KEY]=detected
+        self.window._analysis_priority_pending=lambda:True
+        with self.ctime_backend(folder,plan) as events, \
+                mock.patch.object(native,'prepare',side_effect=AssertionError('Wait for terminal detection')):
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:bool(self.controller._detection_reconciled) and not self.window.tag_controller.owned)
+            for _ in range(4):self.controller.pump();self.app.processEvents()
+        self.assertEqual(events,['recover'])
+        self.assertTrue(self.controller.pending);self.assertEqual(self.controller.pending[0]['error'],'')
+        self.assertNotIn(DONE,self.window.settings)
+
+    def test_no_prepared_plan_checks_recovery_once_then_healthy_job_waits_for_global_priority(self):
+        self.window.tag_controller.busy=True;self.controller.discover();self.add_second();self.controller.discover()
+        track=self.window.lib.tracks_by_id['sb-one']
+        self.window.settings[native.analysis_jobs.KEY]=native.analysis_jobs.admit(
+            [],self.window.lib,[track],native.analysis.DEFAULTS)
+        self.window._analysis_priority_pending=lambda:True
+        self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:bool(self.controller._detection_reconciled) and not self.window.tag_controller.owned)
+        for _ in range(4):self.controller.pump();self.app.processEvents()
+        self.assertEqual(self.calls,[])
+        self.assertEqual(self.window.tag_controller._recover_pending.call_count,1)
+        self.window._analysis_priority_pending=lambda:False
+        self.controller.pump()
+        self.wait(lambda:'sb-two' in self.window.settings.get(DONE,{}) and not self.window.tag_controller.owned)
+        self.assertEqual([j['local_id'] for j in self.calls],['sb-two'])
+        self.assertEqual(self.controller.pending[0]['local_id'],'sb-one')
+
+    def test_mixed_wav_cbr_fifo_persists_explicit_profile_before_owned_work(self):
+        self.window.tag_controller.busy=True;self.add_cbr();self.controller.discover()
+        queued=deepcopy(self.controller.pending)
+        self.assertNotIn('profile',queued[0]);self.assertEqual(queued[1]['profile'],native.cbr.PROFILE)
+        self.assertEqual(self.persisted[-1][KEY],queued);validate(queued)
+        self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual([job['id'] for job in self.calls],[job['id'] for job in queued])
+        self.assertEqual(self.window._refresh_analysis_row.call_args_list,
+                         [mock.call('sb-one'),mock.call('sb-cbr')])
+
+    def test_cbr_restart_keeps_profile_identity_and_newer_local_draft(self):
+        self.window.tag_controller.busy=True;track=self.add_cbr();self.controller.discover()
+        wav=self.controller.pending.pop(0);job=deepcopy(self.controller.pending[0])
+        self.window.settings['analysis_results'].pop(result_key('/synthetic/one.wav'))
+        factory=self.controller.factory;self.controller.stop()
+        self.controller=NativeAnalysisController(self.window,factory=factory)
+        self.window.native_analysis_controller=self.controller
+        self.block=threading.Event();self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:bool(self.calls))
+        newer=deepcopy(self.window.settings['analysis_results'][result_key(track.path)])
+        newer['grid_draft']=dict(origin='manual',base_sha256=newer['sha256'],revision=1,bpm=121.0,
+            beats=[[n,ms+1,bpm] for n,ms,bpm in newer['beats']])
+        self.window.settings['analysis_results'][result_key(track.path)]=newer
+        self.block.set();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(self.calls,[job]);self.assertEqual(job['profile'],native.cbr.PROFILE)
+        self.assertEqual(self.window.settings['analysis_results'][result_key(track.path)],newer)
+        self.assertEqual(self.window.settings[DONE][track.track_id],digest(job['record']))
+        self.assertNotIn(wav['local_id'],self.window.settings[DONE])
+
+    def test_absent_cbr_authority_keeps_existing_intent_without_wav_fallback(self):
+        self.window.tag_controller.busy=True;self.add_cbr();self.controller.discover()
+        self.window.settings[KEY]=[deepcopy(self.controller.pending[1])];identity=self.controller.pending[0]['id']
+        self.window.settings['analysis_results'].pop(result_key('/synthetic/one.wav'))
+        self.controller.factory=None;self.window.tag_controller.busy=False
+        with mock.patch.object(native,'load_authority',return_value=object()), \
+                mock.patch.object(native.cbr,'load_authority',return_value=None) as cbr, \
+                mock.patch.object(native,'prepare') as wav_prepare:
+            self.controller.pump();self.app.processEvents()
+        wav_prepare.assert_not_called();cbr.assert_called()
+        self.assertEqual(self.controller.pending[0]['id'],identity)
+        self.assertIn('acceptance',self.controller.pending[0]['error']);self.assertEqual(self.calls,[])
+
+    def test_new_cbr_discovery_waits_for_its_own_authority_and_unknown_profiles_fail(self):
+        self.add_cbr();self.controller.factory=None;self.window.tag_controller.busy=True
+        with mock.patch.object(native,'load_authority',return_value=object()), \
+                mock.patch.object(native.cbr,'load_authority',return_value=None):
+            self.controller.discover()
+        self.assertEqual([job['local_id'] for job in self.controller.pending],['sb-one'])
+        original=deepcopy(self.controller.pending[0]);bad=deepcopy(original);bad['profile']='unaccepted-vbr'
+        with self.assertRaises(ValueError):validate([bad])
+        self.assertEqual(self.window.settings['analysis_results'][result_key('/synthetic/cbr.mp3')]['key'],'8B')
+
+    def test_real_routing_uses_concrete_format_and_keeps_legacy_mp3_intent_on_wav(self):
+        self.window.tag_controller.busy=True;self.add_cbr();self.controller.discover()
+        legacy=deepcopy(self.controller.pending[1]);legacy.pop('profile')
+        self.window.settings[KEY]=[legacy];self.controller.factory=None
+        self.window.settings['analysis_results'].pop(result_key('/synthetic/one.wav'))
+        self.window._prepare_grid_cache=mock.Mock();self.window._track_analysis_dir=Path(self.area.name)/'cache'
+        events=[];wav_authority=object();cbr_authority=object()
+        result=dict(row=dict(BPM=12000,BitRate=1411,Length=32,SampleRate=44100,BitDepth=16),key='8B',
+            analysis_path='/synthetic/share/ANLZ0000.DAT',beats=deepcopy(self.record['beats']),
+            cue_fields=dict(source_cues=[],source_cue_revision='verified-cues',source_cue_refs=[]))
+        def prepare(authority,tid,uuid,record,folder,**kwargs):
+            events.append(('prepare-wav',authority));folder.mkdir(parents=True,mode=0o700)
+            (folder/'plan.json').write_text(json.dumps(dict(format=native.WAV_PLAN_FORMAT,operation_id=legacy['id'],
+                source=legacy['source'],library_id=legacy['library_id'],track_id=tid,track_uuid=uuid,result=record)))
+        class Store:
+            def __init__(self,authority,folder):
+                events.append(('store-wav',authority));self.plan=json.loads((folder/'plan.json').read_bytes())
+            def apply(self):events.append(('apply-wav',None))
+        with mock.patch.object(native,'load_authority',return_value=wav_authority), \
+                mock.patch.object(native.cbr,'load_authority',return_value=cbr_authority), \
+                mock.patch.object(native,'prepare',side_effect=prepare), \
+                mock.patch.object(native,'load_plan',side_effect=AssertionError('Store already verified the full plan')), \
+                mock.patch.object(native,'AnalysisStore',Store),mock.patch.object(native,'retire_confirmed'), \
+                mock.patch.object(native,'readback',return_value=result), \
+                mock.patch.object(native.track_analysis,'confirm_published_grid'), \
+                mock.patch.object(native.cbr,'prepare') as forbidden:
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            forbidden.assert_not_called()
+        self.assertEqual(events,[('prepare-wav',wav_authority),('store-wav',wav_authority),('apply-wav',None)])
+        folder=self.window.tag_controller.data_root/'native-analysis-plans'/legacy['id']
+        with self.assertRaisesRegex(native.WriteProofError,'profile differs'):
+            native.prepared_publication(folder,native.cbr.PROFILE)
+
+    def test_externally_analyzed_cbr_retains_failed_intent_and_other_song_can_finish(self):
+        self.window.tag_controller.busy=True;track=self.add_cbr();self.controller.discover()
+        self.window.settings[KEY].reverse();original=self.controller.factory
+        def rejected(job):
+            if job.get('profile')==native.cbr.PROFILE:
+                raise native.ConflictError('CBR components require an unchanged bare unlocked native registration')
+            return original(job)
+        self.controller.factory=rejected;self.window.tag_controller.busy=False;self.controller.pump()
+        self.wait(lambda:'sb-one' in self.window.settings.get(DONE,{}) and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.controller.pending),1)
+        self.assertEqual(self.controller.pending[0]['local_id'],track.track_id)
+        self.assertIn('unchanged bare',self.controller.pending[0]['error'])
+        self.assertNotIn(track.track_id,self.window.settings[DONE])
+
+    def test_concrete_cbr_receipt_replays_without_preparing_and_local_ack_retry_keeps_identity(self):
+        self.window.tag_controller.busy=True;self.add_cbr();self.controller.discover()
+        job=deepcopy(self.controller.pending[1]);self.window.settings[KEY]=[job];self.controller.factory=None
+        folder=self.window.tag_controller.data_root/'native-analysis-plans'/job['id'];folder.mkdir(parents=True,mode=0o700)
+        plan=dict(format=native.cbr.PLAN_FORMAT,operation_id=job['id'],source=job['source'],
+                  library_id=job['library_id'],track_id=job['native_id'],track_uuid=job['uuid'],record='unused',
+                  result=native.publication_record(job['record']))
+        (folder/'plan.json').write_text(json.dumps(plan))
+        self.window._prepare_grid_cache=mock.Mock();self.window._track_analysis_dir=Path(self.area.name)/'cache'
+        saved=dict(row=dict(BPM=12000,BitRate=320,Length=32,SampleRate=44100,BitDepth=16),key='8B',
+            analysis_path='/synthetic/cbr/ANLZ0000.DAT',beats=deepcopy(job['record']['beats']),
+            cue_fields=dict(source_cues=[],source_cue_revision='verified-cues',source_cue_refs=[]))
+        authority=object();store=mock.Mock();store.plan=plan;store.apply.return_value='already-completed'
+        original=self.window._save_state;failed=[False]
+        def save():
+            if KEY in self.window.settings and not self.window.settings[KEY] and not failed[0]:
+                failed[0]=True;return False
+            return original()
+        self.window._save_state=save
+        with mock.patch.object(native.cbr,'load_authority',return_value=authority), \
+                mock.patch.object(native.cbr,'load_plan',side_effect=AssertionError('Store already verified the full plan')), \
+                mock.patch.object(native.cbr,'CBRAnalysisStore',return_value=store) as constructor, \
+                mock.patch.object(native.cbr,'prepare') as prepare, \
+                mock.patch.object(native.cbr,'retire_confirmed'), \
+                mock.patch.object(native,'readback',return_value=saved), \
+                mock.patch.object(native.track_analysis,'confirm_published_grid'), \
+                mock.patch.object(native,'AnalysisStore') as wav:
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:self.controller.pending and bool(self.controller.pending[0]['error'])
+                      and not self.window.tag_controller.owned)
+            self.assertEqual(self.controller.pending[0]['id'],job['id'])
+            self.controller.retry();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            self.assertEqual(constructor.call_args_list,[mock.call(authority,folder)]*2)
+            self.assertEqual(store.apply.call_count,2);prepare.assert_not_called();wav.assert_not_called()
+        self.assertEqual(self.window.settings[DONE]['sb-cbr'],digest(job['record']))
+        self.assertEqual(self.window.lib.tracks_by_id['sb-cbr'].bitrate,'320')
+        self.window._refresh_analysis_row.assert_called_once_with('sb-cbr')
+
+    def test_constructor_verified_plan_must_match_durable_job_before_any_apply(self):
+        self.window.tag_controller.busy=True;self.add_cbr();self.controller.discover()
+        job=deepcopy(self.controller.pending[1]);self.window.settings[KEY]=[job];self.controller.factory=None
+        folder=self.window.tag_controller.data_root/'native-analysis-plans'/job['id'];folder.mkdir(parents=True,mode=0o700)
+        plan=dict(format=native.cbr.PLAN_FORMAT,operation_id=job['id'],source=job['source'],
+            library_id=job['library_id'],track_id=job['native_id'],track_uuid=job['uuid'],
+            result=native.publication_record(job['record']))
+        (folder/'plan.json').write_text(json.dumps(plan));store=mock.Mock();store.plan={**plan,'track_id':'999'}
+        with mock.patch.object(native.cbr,'load_authority',return_value=object()), \
+                mock.patch.object(native.cbr,'CBRAnalysisStore',return_value=store):
+            self.window.tag_controller.busy=False;self.controller.pump()
+            self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        store.apply.assert_not_called();self.assertEqual(self.controller.pending[0]['id'],job['id'])
+        self.assertIn('durable song intent',self.controller.pending[0]['error'])
 
     def test_failed_song_does_not_block_another_import_or_lose_its_intent(self):
         self.window.tag_controller.busy=True;self.controller.discover()

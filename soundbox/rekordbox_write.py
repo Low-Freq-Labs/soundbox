@@ -27,7 +27,7 @@ import tempfile
 from typing import Any, Iterator, Literal
 from uuid import uuid4
 
-from .rekordbox_db import _copy_stable_snapshot
+from .rekordbox_db import _copy_stable_snapshot, _snapshot_identity
 from .state_io import atomic_bytes, sync_dir
 
 _PREFIX = "soundbox-rb-write-"
@@ -204,7 +204,13 @@ def _backup(source: Path, destination: Path) -> None:
 
 
 def assert_rekordbox_closed() -> None:
-    """Fresh macOS process query without a Python walk of every running process."""
+    """Fresh kernel query, retaining the independent pgrep path on uncertainty."""
+    from .mac_process import rekordbox_running
+    running = rekordbox_running()
+    if running is True:
+        raise WriteProofError('Close rekordbox and its background agent before editing')
+    if running is False:
+        return
     try:
         result = subprocess.run(
             ['/usr/bin/pgrep', '-x', '(rekordbox|rekordboxAgent)'],
@@ -215,6 +221,58 @@ def assert_rekordbox_closed() -> None:
         raise WriteProofError('Close rekordbox and its background agent before editing')
     if result.returncode != 1 or result.stdout.strip() or result.stderr.strip():
         raise WriteProofError('Could not verify that rekordbox and its agent are closed')
+
+
+def _empty_captured_wal(path: Path) -> bool:
+    """Only an absent/zero-byte private WAL proves no committed pages to fold."""
+    wal = path.with_name(path.name + '-wal')
+    if not wal.exists() and not wal.is_symlink():
+        return True
+    _regular(wal)
+    return wal.stat().st_size == 0
+
+
+def _captured_sha(path: Path) -> str:
+    with path.open('rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def _standalone_capture(captured: Path, baseline: Path) -> bool:
+    """Verify and durably adopt one self-contained encrypted TEMP capture.
+
+    Stable source DB/WAL copying and hot-journal refusal already happened. Any
+    nonempty WAL (even header-only) keeps the original SQLite folding path. A
+    known DELETE/WAL-mode main file with no WAL pages needs no re-encryption:
+    full integrity/identity and unchanged captured bytes are proved on the
+    private copy before it is exposed. No source SQL or mode changes occur.
+    """
+    if not _empty_captured_wal(captured):
+        return False
+    _regular(captured)
+    before = _snapshot_identity(captured)
+    digest = _captured_sha(captured)
+    conn = _connect(captured, readonly=True)
+    try:
+        if conn.execute('PRAGMA journal_mode').fetchone() not in (('delete',), ('wal',)):
+            return False
+        _integrity(conn)
+        _identity(conn)
+    finally:
+        conn.close()
+    if (_snapshot_identity(captured) != before or _captured_sha(captured) != digest
+            or not _empty_captured_wal(captured)):
+        raise WriteProofError('Private encrypted capture changed during verification')
+    with captured.open('rb') as handle:
+        os.fsync(handle.fileno())
+    # Both names are in one newly created private TEMP directory. Link creation
+    # is exclusive, so even an unexpected baseline occupant is never replaced.
+    # Remove our old name before publishing, retaining one independent main DB
+    # with no dependency on captured.db's empty WAL/SHM companions.
+    os.link(captured, baseline)
+    captured.unlink()
+    _regular(baseline)
+    sync_dir(baseline.parent)
+    return True
 
 
 @contextmanager
@@ -237,6 +295,9 @@ def encrypted_backup(source: Path) -> Iterator[Path]:
         wal = captured.with_name(captured.name + '-wal')
         if wal.exists():
             wal.chmod(0o600)
+        if _standalone_capture(captured, baseline):
+            yield baseline
+            return
         _backup(captured, baseline)  # folds WAL, checks SQLite integrity and fsyncs
         conn = _connect(baseline, readonly=True)
         try:

@@ -1,5 +1,11 @@
 # Project layout and retention
 
+
+November3 full wrap-up retired the four exact obsolete temporary app copies and
+their shared rollback root after verified installation. Only the current app and
+active source remain; small receipts, native recovery, originals and required
+fixtures are retained. Current provenance is in [HANDOFF](HANDOFF.md).
+
 Reviewed November2, 2026. This describes the checkout, not the installed app's
 library or waveform caches.
 

@@ -63,6 +63,18 @@ def _sha(path: Path) -> str:
 
 
 class ClosedRekordboxCheck(unittest.TestCase):
+    def setUp(self):
+        self.native = self.enterContext(mock.patch('soundbox.mac_process.rekordbox_running', return_value=None))
+
+    def test_fresh_native_result_never_caches_process_absence(self):
+        self.native.side_effect = [False, True, False]
+        with mock.patch.object(writer.subprocess, 'run', side_effect=AssertionError('No fallback needed')):
+            writer.assert_rekordbox_closed()
+            with self.assertRaises(writer.WriteProofError):
+                writer.assert_rekordbox_closed()
+            writer.assert_rekordbox_closed()
+        self.assertEqual(self.native.call_count, 3)
+
     def test_fresh_exact_name_query_accepts_only_no_matches(self):
         result = subprocess.CompletedProcess([], 1, '', '')
         with mock.patch.object(writer.subprocess, 'run', return_value=result) as query:

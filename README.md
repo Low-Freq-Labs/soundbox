@@ -27,7 +27,9 @@ BPM entry on native tracks requires its separate acceptance flag; `138`, `138.0`
 Direct imports register/reuse native records and durably route playlist membership.
 Captured imports and native songs admit durable cue/grid intentions during source
 work. Initial shared analysis supports the separately accepted bare stereo
-PCM16/24 WAV44.1/48kHz full BPM/Grid+Key profile; broader profiles remain gated.
+PCM16/24 WAV44.1/48kHz profile and the independent bare MPEG-1 CBR/no-Info/Xing
+stereo44.1kHz MP3 profile, with full BPM/Grid+Key; broader profiles remain gated.
+See [MP3 scope](docs/mp3-shared-analysis.md) and [native save performance](docs/performance-audit.md).
 Smart-list creation remains a subsequent milestone.
 New cues appear and become usable immediately in the playing session while
 guarded database saves run in the background. The existing bottom-left footer
@@ -237,7 +239,22 @@ and starts Analyze Track in the background using Settings → Analysis preferenc
 There is no analysis popup or progress bar. Automatic detection is opt-in (off
 for new settings); when enabled, folder/file imports appear at the top of
 Collection before analysis, and BPM/Key populate one completed song at a time.
-Finished songs can be edited while later songs continue analyzing. Automatic
+Finished songs can be edited while later songs continue analyzing.
+Imports finish required compatibility conversion first, then prepare the waveform,
+then BPM, then key. BPM becomes usable before key finishes. Native registration,
+playlist routing and analysis saves follow the local preparation; unfinished work
+resumes from durable component checkpoints. With automatic detection off, new
+native imports still prepare their waveform before registration. Metadata-only
+ctime changes are checked quietly against the captured bytes; they do not require
+manual retry. A changed audio file keeps the existing identity protections.
+BPM display also picks up a completed background waveform estimate without
+loading the song. Its tooltip says **Estimated BPM from waveform**; saved native,
+detected or manual BPM takes priority. An estimate does not publish native analysis.
+Manual grids remain usable when the original detection was inconclusive.
+Duplicate playlist additions use a compact confirmation with wrapped song titles
+and a safe default of Skip; Add Anyway keeps its existing behavior.
+Selecting an existing Memory Cue also moves the temporary regular CUE return point
+to its exact position; saved cues and hot-cue behavior are preserved. Automatic
 BPM/key detection skips songs longer than15minutes, preserving existing musical
 data; explicit analysis remains available.
 Unfinished detection resumes after restart with the original job settings;
@@ -720,7 +737,7 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
   the narrow BPM metadata/counter delta. Other analysis sections and metadata
   remain protected. Grid previews update immediately while the same shared
   worker saves and verifies in background. Ordinary registration, playlist CRUD,
-  initial supported WAV analysis, confirmed removal and conversion locator updates
+  initial supported WAV/CBR MP3 analysis, confirmed removal and conversion locator updates
   each require their own independently accepted source authority and recovery.
   See [the prep plan](docs/rekordbox-prep.md) and [current handoff](docs/HANDOFF.md).
 - Ordinary playback/export leaves source audio unchanged. Only the explicitly

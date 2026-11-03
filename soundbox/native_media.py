@@ -3,9 +3,13 @@
 No source SQL, source authority, musical analysis or audio tagging lives here.
 The original inode remains authoritative when a local snapshot is inspected.
 """
+from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+import tempfile
+import threading
 
 from .media_probe import read_media_header
 from .rekordbox_write import ConflictError,WriteProofError
@@ -14,6 +18,64 @@ from .source_acquisition import SourceContract,acquire_source
 TYPES={('wav','pcm_s16le'):11,('wav','pcm_s24le'):11,
        ('aiff','pcm_s16be'):12,('aiff','pcm_s24be'):12,
        ('mp3','mp3'):1,('flac','flac'):5,('m4a','aac'):4,('m4a','alac'):6}
+_metadata_context=threading.local()
+METADATA_PENDING='Audio metadata is still changing'
+MAX_METADATA_IDENTITIES=10000
+MAX_METADATA_PROOFS=8
+
+
+@contextmanager
+def metadata_identity_proof(records):
+    """Worker-scoped exact-byte proof for selected identities' ctime drift only.
+
+    Plans and their captured epochs remain immutable. Every guard still observes
+    the canonical path and complete live epoch; only an exact proven epoch may
+    reuse its SHA proof within this context.
+    """
+    allowed=set()
+    for record in records:
+        path=record['path'];captured=tuple(record['epoch']);digest=record['sha256']
+        if (not isinstance(path,str) or not Path(path).is_absolute() or str(Path(path))!=path or '..' in Path(path).parts
+                or '\0' in path or len(captured)!=5 or any(type(n) is not int or n<0 for n in captured)
+                or captured[1]<=0 or captured[2]<=0 or record.get('size',captured[2])!=captured[2]
+                or not isinstance(digest,str) or len(digest)!=64
+                or any(c not in '0123456789abcdef' for c in digest)):
+            raise WriteProofError('Invalid metadata-only media proof scope')
+        allowed.add((path,digest,captured[:4]))
+        if len(allowed)>MAX_METADATA_IDENTITIES:raise WriteProofError('Metadata-only media proof scope exceeds its bound')
+    previous=getattr(_metadata_context,'proof',None)
+    _metadata_context.proof=(allowed,OrderedDict())
+    try:yield
+    finally:_metadata_context.proof=previous
+
+
+def _metadata_revalidate(identity,path,current):
+    proof=getattr(_metadata_context,'proof',None)
+    key=(identity.path,identity.sha256,identity.epoch[:4])
+    if proof is None or key not in proof[0] or current[:4]!=identity.epoch[:4]:
+        raise ConflictError('Captured media identity changed')
+    verified=proof[1]
+    for attempt in range(2):
+        cache_key=(*key,current)
+        if cache_key not in verified:
+            with tempfile.TemporaryDirectory(prefix='soundbox-media-metadata-') as area:
+                with acquire_source(SourceContract(path,identity.epoch[2],identity.sha256),Path(area)) as captured:
+                    observed=epoch(captured.observation)
+            after=epoch(path.stat())
+            if observed!=current or after!=current:
+                if observed[:4]!=identity.epoch[:4] or after[:4]!=identity.epoch[:4]:
+                    raise ConflictError('Captured media identity changed')
+                current=after
+                if attempt==0:continue
+                raise ConflictError(METADATA_PENDING)
+        final=epoch(path.stat())
+        if path!=path.resolve(strict=True) or path.is_symlink() or final[:4]!=identity.epoch[:4]:
+            raise ConflictError('Captured media identity changed')
+        if final!=current:
+            raise ConflictError(METADATA_PENDING)
+        verified[cache_key]=None;verified.move_to_end(cache_key)
+        while len(verified)>MAX_METADATA_PROOFS:verified.popitem(last=False)
+        return
 
 
 def epoch(info):
@@ -62,8 +124,10 @@ class MediaIdentity:
 
     def revalidate(self):
         self.validate();path=Path(self.path)
-        if path!=path.resolve(strict=True) or path.is_symlink() or epoch(path.stat())!=self.epoch:
+        current=epoch(path.stat())
+        if path!=path.resolve(strict=True) or path.is_symlink():
             raise ConflictError('Captured media identity changed')
+        if current!=self.epoch:_metadata_revalidate(self,path,current)
 
 
 def capture_media(path,scratch,*,expected_sha256=None):

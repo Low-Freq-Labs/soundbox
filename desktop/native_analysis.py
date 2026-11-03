@@ -5,12 +5,16 @@ import hashlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, QTimer
 
-from soundbox import analysis, local_grid, track_analysis
+from soundbox import analysis, analysis_jobs, local_grid, track_analysis
+from soundbox.native_media import metadata_identity_proof, METADATA_PENDING
 from soundbox.rekordbox_analysis_store import AnalysisStore, load_authority, prepare, retire_confirmed, load_plan
+from soundbox.rekordbox_analysis_store import INITIAL_WAV_PROFILE, PLAN_FORMAT as WAV_PLAN_FORMAT
+from soundbox import rekordbox_cbr_analysis_store as cbr
 from soundbox.rekordbox_write import (WriteProofError, assert_rekordbox_closed, encrypted_backup,
                                       _connect, _rows, _regular, ConflictError)
 from soundbox.rekordbox_cues import CueSnapshot
@@ -21,6 +25,31 @@ from soundbox.rekordbox_db import cue_snapshot_fields
 KEY='native_analysis_jobs'
 DONE='native_analysis_published'
 RECEIPTS='native_analysis_receipts'
+CTIME_CONFLICT='Captured media identity changed'
+
+
+def publication(profile):
+    """Explicit write profiles; legacy intents always retain the WAV v1 route."""
+    if profile == INITIAL_WAV_PROFILE:
+        return SimpleNamespace(profile=profile,plan_format=WAV_PLAN_FORMAT,
+            authority_file='rekordbox-analysis-authority.json',load_authority=load_authority,
+            prepare=prepare,load_plan=load_plan,store=AnalysisStore,retire=retire_confirmed)
+    if profile == cbr.PROFILE:
+        return SimpleNamespace(profile=profile,plan_format=cbr.PLAN_FORMAT,
+            authority_file='rekordbox-cbr-analysis-authority.json',load_authority=cbr.load_authority,
+            prepare=cbr.prepare,load_plan=cbr.load_plan,store=cbr.CBRAnalysisStore,retire=cbr.retire_confirmed)
+    raise WriteProofError('Unknown native analysis profile')
+
+
+def prepared_publication(folder, profile):
+    """Concrete durable plans route by their format, never the audio suffix."""
+    _regular(folder/'plan.json')
+    record=json.loads((folder/'plan.json').read_bytes())
+    formats={WAV_PLAN_FORMAT:INITIAL_WAV_PROFILE,cbr.PLAN_FORMAT:cbr.PROFILE}
+    actual=formats.get(record.get('format'))
+    if actual is None or actual!=profile:
+        raise WriteProofError('Prepared analysis profile differs from its durable song intent')
+    return publication(actual)
 
 
 def digest(record):
@@ -37,7 +66,10 @@ def validate(queue):
     if not isinstance(queue,list) or len(queue)>256:raise ValueError('Invalid native analysis queue')
     seen=set()
     for job in queue:
-        if (not isinstance(job,dict) or set(job)!={'id','source','library_id','local_id','native_id','uuid','record','error'}
+        fields={'id','source','library_id','local_id','native_id','uuid','record','error'}
+        if (not isinstance(job,dict) or not fields<=set(job)<=fields|{'profile','ctime_rechecked'}
+                or ('profile' in job and job['profile']!=cbr.PROFILE)
+                or ('ctime_rechecked' in job and job['ctime_rechecked'] is not True)
                 or not all(isinstance(job[k],str) and job[k] for k in ('id','source','library_id','local_id','native_id','uuid'))
                 or not isinstance(job['error'],str) or job['local_id'] in seen):
             raise ValueError('Invalid native analysis identity')
@@ -74,6 +106,7 @@ class NativeAnalysisController(QObject):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=factory;self.closing=False;self.active='';self.not_before=0.0
         self._grid_revalidated=set()
+        self._detection_reconciled=set()
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(2000)
         self.timer.timeout.connect(self.pump);self.tags.idle.connect(self.schedule)
         self.tags.changed.connect(self.discover)
@@ -91,37 +124,52 @@ class NativeAnalysisController(QObject):
     def schedule(self):
         if not self.closing:QTimer.singleShot(0,self.pump)
 
+    def _unfinished_detection(self,track):
+        if track is None:return False
+        try:jobs=analysis_jobs.validate(self.window.settings.get(analysis_jobs.KEY,[]))
+        except ValueError:return True
+        return any(analysis_jobs.matches(job,self.window.lib,track) for job in jobs)
+
     def discover(self):
         w=self.window
         if self.closing or not w.lib or not self.tags.verified:return
         try:validate(self.pending)
         except (ValueError,WriteProofError):return
-        authority=load_authority(self.tags.data_root/'rekordbox-analysis-authority.json',w.lib.source,w.lib.source_library_id)
-        if authority is None and self.factory is None:return
+        permissions={profile:publication(profile).load_authority(self.tags.data_root/publication(profile).authority_file,
+                     w.lib.source,w.lib.source_library_id) for profile in (INITIAL_WAV_PROFILE,cbr.PROFILE)}
+        if not any(permission is not None for permission in permissions.values()) and self.factory is None:return
         queued={j['local_id'] for j in self.pending};queue=deepcopy(self.pending);revalidated=[]
         # Older builds rejected valid adaptive grids after exact packet equality
         # had already passed. Revalidate that one obsolete refusal once per
         # controller lifetime; the current planner still checks every row.
         obsolete='Packet grid must equal the complete saved grid, including its exact endpoint'
         for job in queue:
-            if job['error']==obsolete and job['id'] not in self._grid_revalidated:
+            if 'profile' not in job and job['error']==obsolete and job['id'] not in self._grid_revalidated:
                 revalidated.append(job['id']);job['error']=''
+            if job['error']==CTIME_CONFLICT and 'ctime_rechecked' not in job:
+                job['ctime_rechecked']=True;job['error']=''
         done=w.settings.get(DONE,{})
         if not isinstance(done,dict):return
         for tid,track in w.lib.tracks_by_id.items():
             prep=getattr(w,'prep_controller',None)
             if prep and prep.job(tid) and prep.job(tid)['error']:continue
             if (tid in queued or track is None or track.imported or track.source_analysis_path
+                    or self._unfinished_detection(track)
                     or not track.source_uuid
                     or tid in getattr(w.lib,'source_binding_issues',{})):continue
             record=analysis.saved_result(w.settings.get('analysis_results',{}),track)
             if not record:continue
+            suffix=track.path.suffix.lower()
+            profile=cbr.PROFILE if suffix=='.mp3' else INITIAL_WAV_PROFILE
+            if permissions[profile] is None and self.factory is None:continue
             effective=local_grid.effective_result(record)
             if (not effective.get('beats') or effective.get('bpm') is None or effective.get('key') is None
                     or done.get(tid)==digest(record)):continue
             if len(queue)>=256:break
-            queue.append(dict(id=str(uuid4()),source=str(w.lib.source),library_id=w.lib.source_library_id,
-                local_id=tid,native_id=track.native_id,uuid=track.source_uuid,record=deepcopy(record),error=''))
+            job=dict(id=str(uuid4()),source=str(w.lib.source),library_id=w.lib.source_library_id,
+                local_id=tid,native_id=track.native_id,uuid=track.source_uuid,record=deepcopy(record),error='')
+            if profile==cbr.PROFILE:job['profile']=profile
+            queue.append(job)
             queued.add(tid)
         if queue!=self.pending:
             old=w.settings.get(KEY,[]);w.settings[KEY]=queue
@@ -134,11 +182,27 @@ class NativeAnalysisController(QObject):
         if self.closing or w._shutting_down or not self.pending:return
         try:validate(self.pending)
         except (ValueError,WriteProofError) as exc:self.fail(str(exc));return
-        selected=next((j for j in self.pending if not j['error']),None)
+        self._detection_reconciled.intersection_update(j['id'] for j in self.pending)
+        priority=getattr(w,'_analysis_priority_pending',lambda:False)()
+        ready=[];blocked=[]
+        for job in self.pending:
+            if job['error']:continue
+            track=w.lib.tracks_by_id.get(job['local_id']) if w.lib else None
+            if self._unfinished_detection(track):
+                if job['id'] not in self._detection_reconciled:blocked.append(job)
+            else:ready.append(job)
+        selected=next(iter(ready if ready and not priority else blocked),None)
         if selected is None:
+            if any(not j['error'] for j in self.pending):
+                self.status('Analysis pending — finishing detection')
+                if ready and priority:self.timer.start()
+                return
             self.status('Analysis needs attention — '+self.pending[0]['error']);return
         if (self.tags.owned or w._refresh_worker is not None or w._state_maintenance
-                or w._device_operation_owned() or getattr(w,'_analysis_worker',None) is not None):
+                or w._device_operation_owned()):
+            self.timer.start();return
+        reconcile_only=selected in blocked
+        if not reconcile_only and (getattr(w,'_analysis_worker',None) is not None or priority):
             self.timer.start();return
         if time.monotonic()<self.not_before:self.timer.start();return
         lib=w.lib
@@ -152,12 +216,13 @@ class NativeAnalysisController(QObject):
         folder=self.tags.data_root/'native-analysis-plans'/job['id']
         # A newer local draft can replace an unstarted intent. Once a concrete
         # plan exists its own receipt must reconcile before admitting new data.
-        if record and digest(record)!=digest(job['record']) and not folder.exists():
+        if not reconcile_only and record and digest(record)!=digest(job['record']) and not folder.exists():
             old=deepcopy(self.pending);queue=deepcopy(old)
             next(j for j in queue if j['id']==job['id'])['record']=deepcopy(record);w.settings[KEY]=queue
             if not w._save_state():w.settings[KEY]=old
             self.schedule();return
-        authority=load_authority(self.tags.data_root/'rekordbox-analysis-authority.json',w.lib.source,w.lib.source_library_id)
+        profile=job.get('profile',INITIAL_WAV_PROFILE);backend=publication(profile)
+        authority=backend.load_authority(self.tags.data_root/backend.authority_file,w.lib.source,w.lib.source_library_id)
         if authority is None and self.factory is None:self.fail('Native analysis awaits library acceptance',job['id']);return
         confirmed=tuple(w.settings.get(RECEIPTS,[]))
         payload=publication_record(job['record'])
@@ -167,39 +232,59 @@ class NativeAnalysisController(QObject):
                 if str(exc)=='Close rekordbox and its background agent before editing':return dict(waiting=True)
                 raise
             self.tags._recover_pending(lib)
-            if self.factory:return self.factory(job)
-            if not (folder/'plan.json').exists():
+            if self.factory:
+                return dict(detection_pending=True) if reconcile_only else self.factory(job)
+            with metadata_identity_proof([payload]):return publish()
+        def publish():
+            def prepare_store():
+                if (folder/'plan.json').exists():return
                 if folder.exists():
                     _regular(folder/'intent.json');intent=json.loads((folder/'intent.json').read_bytes())
                     if (intent['operation_id']!=job['id'] or intent['result']!=payload
-                            or intent['track_id']!=job['native_id']):raise WriteProofError('Unknown interrupted analysis preparation')
+                            or intent['track_id']!=job['native_id'] or intent.get('track_uuid')!=job['uuid']
+                            or intent.get('format')!=backend.plan_format):raise WriteProofError('Unknown interrupted analysis preparation')
                     allowed={'intent.json','before.db','after.db','before.xml','after.xml','ANLZ0000.DAT','ANLZ0000.EXT','ANLZ0000.2EX'}
                     if folder!=folder.resolve() or folder.stat().st_mode&0o077 or any(p.name not in allowed for p in folder.iterdir()):
                         raise WriteProofError('Unknown analysis preparation files')
                     for p in folder.iterdir():_regular(p);p.unlink()
                     folder.rmdir()
-                prepare(authority,job['native_id'],job['uuid'],payload,folder,
+                backend.prepare(authority,job['native_id'],job['uuid'],payload,folder,
                         data_root=self.tags.data_root,operation_id=job['id'])
-            plan=load_plan(folder)
-            if (plan['operation_id'],plan['source'],plan['library_id'],plan['track_id'],plan['track_uuid'],digest(plan['result']))!=(
-                    job['id'],job['source'],job['library_id'],job['native_id'],job['uuid'],digest(payload)):
-                raise WriteProofError('Prepared analysis differs from its durable song intent')
-            store=AnalysisStore(authority,folder)
-            try:store.apply()
-            except ConflictError as exc:
-                if str(exc)!='Saved-component source changed since review' or not store.discard_unstarted():raise
-                prepare(authority,job['native_id'],job['uuid'],payload,folder,
-                        data_root=self.tags.data_root,operation_id=job['id'])
-                store=AnalysisStore(authority,folder);store.apply()
-            retire_confirmed(store,confirmed)
+            def intended_store():
+                selected_backend=prepared_publication(folder,profile)
+                store=selected_backend.store(authority,folder)
+                plan=store.plan  # The constructor has already verified this exact full plan.
+                if (plan['operation_id'],plan['source'],plan['library_id'],plan['track_id'],plan['track_uuid'],digest(plan['result']))!=(
+                        job['id'],job['source'],job['library_id'],job['native_id'],job['uuid'],digest(payload)):
+                    raise WriteProofError('Prepared analysis differs from its durable song intent')
+                return store
+            if reconcile_only:
+                if not (folder/'plan.json').exists():return dict(detection_pending=True)
+                store=intended_store()
+                if store.recover()!='committed':return dict(detection_pending=True)
+            else:
+                prepare_store();store=intended_store()
+                try:store.apply()
+                except ConflictError as exc:
+                    if str(exc)!='Saved-component source changed since review' or not store.discard_unstarted():raise
+                    backend.prepare(authority,job['native_id'],job['uuid'],payload,folder,
+                            data_root=self.tags.data_root,operation_id=job['id'])
+                    store=intended_store();store.apply()
+            selected_backend=prepared_publication(folder,profile)
+            selected_backend.retire(store,confirmed)
             result=readback(job['source'],job['native_id'],job['uuid'])
             w._prepare_grid_cache(tid)
             track_analysis.confirm_published_grid(w._track_analysis_dir,tid,track.path,
-                result['beats'],job['record']['beats'])
+                result['beats'],local_grid.effective_result(job['record'])['beats'])
             return result
         def completed(worker):
             self.active=''
             if worker.error:
+                if worker.error==METADATA_PENDING:
+                    self.not_before=time.monotonic()+2
+                    self.status('Verifying audio…')
+                    if not self.closing:self.timer.start()
+                    return
                 if worker.error=='Close rekordbox and its background agent before editing':
                     self.not_before=time.monotonic()+2
                     self.status('Analysis pending — quit rekordbox to save')
@@ -207,6 +292,10 @@ class NativeAnalysisController(QObject):
                 else:self.fail(worker.error,job['id'])
                 return
             result=worker.result
+            if result.get('detection_pending'):
+                self._detection_reconciled.add(job['id'])
+                self.status('Analysis pending — finishing detection')
+                self.schedule();return
             if result.get('waiting'):
                 self.not_before=time.monotonic()+2
                 self.status('Analysis pending — quit rekordbox to save')
@@ -244,7 +333,7 @@ class NativeAnalysisController(QObject):
             self.schedule()
         self.active=tid
         if not self.tags.run_analysis_job(work,completed):self.active='';self.timer.start()
-        else:self.status('Updating song…')
+        else:self.status('Verifying audio…' if job.get('ctime_rechecked') else 'Updating song…')
 
     def fail(self,message,job_id=None):
         self.timer.stop();w=self.window;can_continue=False

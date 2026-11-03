@@ -41,6 +41,8 @@ class ImportAnalysisFlow(unittest.TestCase):
         for name in ('_maybe_fill_waveforms', '_maybe_autostart_art_fill', '_maybe_prepare_stock_artwork'):
             patcher = mock.patch.object(self.win, name)
             patcher.start(); self.addCleanup(patcher.stop)
+        gate=mock.patch.object(MainWindow,'_analysis_prerequisite_ready',return_value=True,create=True)
+        gate.start();self.addCleanup(gate.stop)
         self.win._waveform_rechecks_enabled = False
         self.win._waveform_recheck_timer.stop()
         self.addCleanup(self.cleanup_window)
@@ -73,6 +75,128 @@ class ImportAnalysisFlow(unittest.TestCase):
         pb.cue_panel._loaded = True
         pb._analysis_parts = analysis.playback_data({}, record, track.path)
         return pb
+
+    def waveform_projection(self, track, bpm=140):
+        from desktop.workers import WaveformFillWorker
+        worker = WaveformFillWorker(self.win.lib, self.win._track_analysis_dir)
+        self.win._wf_fill_worker = worker
+        self.addCleanup(lambda: setattr(self.win, '_wf_fill_worker', None))
+        self.addCleanup(worker.deleteLater)
+        value = dict(track_id=track.track_id, path=str(track.path), track_size=track.size,
+            source=str(self.win.lib.source), source_kind=self.win.lib.source_kind,
+            library_id=self.win.lib.source_library_id, native_id=track.native_id,
+            uuid=track.source_uuid, bpm=bpm, provenance='soundbox-zero-anchor',
+            size=track.path.stat().st_size, epoch=analysis.identity(track.path.stat()))
+        return worker, value
+
+    def test_background_waveform_estimate_fills_key_only_row_without_loading_or_saving(self):
+        track = self.track('inconclusive')
+        record = {**self.result(track), 'bpm': None, 'beats': [], 'confidence': .18}
+        self.win.settings['analysis_results'] = {analysis.result_key(track.path): record}
+        self.win.model.set_rows([self.win._row_for(track)])
+        before = deepcopy(self.win.settings)
+        worker, value = self.waveform_projection(track)
+        with mock.patch.object(self.win.player_bar, 'play_track') as load, \
+                mock.patch.object(self.win, '_save_state') as save, \
+                mock.patch.object(Path, 'stat', side_effect=AssertionError('GUI must not stat audio')):
+            self.win._on_waveform_bpm_ready(worker, value)
+        self.assertEqual(self.win.model._rows[0]['bpm'], '140.00')
+        self.assertEqual(self.win.model._rows[0]['key'], '8A')
+        self.assertTrue(self.win.model._rows[0]['bpm_estimated'])
+        self.assertEqual(self.win._row_for(track)['bpm'], '140.00')
+        self.assertEqual(self.win.settings, before)
+        load.assert_not_called(); save.assert_not_called()
+        # A later stale/missing cache removes the disposable estimate.
+        self.win._on_waveform_bpm_ready(worker, {**value, 'bpm': None})
+        self.assertFalse(self.win.model._rows[0]['bpm'])
+
+        self.assertFalse(self.win.model._rows[0]['bpm_estimated'])
+
+    def test_waveform_estimate_rejects_old_worker_binding_and_invalid_tempos(self):
+        track = self.track('estimate-identity')
+        self.win.model.set_rows([self.win._row_for(track)])
+        worker, value = self.waveform_projection(track)
+        for field, changed in (('path', '/different.wav'), ('track_size', 999),
+                               ('uuid', 'different'), ('source', 'different'),
+                               ('bpm', float('nan')), ('bpm', -1),
+                               ('size', 999), ('epoch', None),
+                               ('provenance', 'rekordbox')):
+            with self.subTest(field=field, changed=changed):
+                self.win._on_waveform_bpm_ready(worker, {**value, field: changed})
+                self.assertFalse(self.win.model._rows[0]['bpm'])
+        worker.lib = Library({}, [], 'different')
+        self.win._on_waveform_bpm_ready(worker, value)
+        self.assertFalse(self.win.model._rows[0]['bpm'])
+
+    def test_loaded_waveform_fallback_retains_estimate_marker_and_a_miss_clears_it(self):
+        track = self.track('loaded-estimate')
+        record = {**self.result(track), 'bpm': None, 'beats': []}
+        self.win.settings['analysis_results'] = {analysis.result_key(track.path): record}
+        self.win.model.set_rows([self.win._row_for(track)])
+        worker, value = self.waveform_projection(track)
+        self.win._on_waveform_bpm_ready(worker, value)
+        pb = self.load(track, record)
+        pb._analysis_parts = dict(beats=[[1, 0, 140], [2, 429, 140]],
+                                  provenance=dict(grid='soundbox-zero-anchor'))
+        with mock.patch.object(pb, 'refresh_live_grid'), mock.patch.object(pb, 'refresh_live_cues'):
+            self.win.prep_controller.refresh(track.track_id)
+        self.assertTrue(self.win.model._rows[0]['bpm_estimated'])
+        # Repair an old deck-only projection even if the stored value is unchanged.
+        self.win.model.update_bpm(track.track_id, '140.00')
+        self.assertFalse(self.win.model._rows[0]['bpm_estimated'])
+        self.win._on_waveform_bpm_ready(worker, value)
+        self.assertTrue(self.win.model._rows[0]['bpm_estimated'])
+        self.win._on_waveform_bpm_ready(worker, {**value, 'bpm': None})
+        self.assertFalse(self.win.model._rows[0]['bpm'])
+
+        # A native BPM is not labelled an estimate even if its cache has a fallback.
+        track.bpm = '140.00'
+        with mock.patch.object(pb, 'refresh_live_grid'), mock.patch.object(pb, 'refresh_live_cues'):
+            self.win.prep_controller.refresh(track.track_id)
+        self.assertFalse(self.win.model._rows[0]['bpm_estimated'])
+
+    def test_native_detector_and_manual_bpm_take_priority_over_waveform_estimate(self):
+        track = self.track('estimate-priority')
+        worker, value = self.waveform_projection(track)
+        self.win._on_waveform_bpm_ready(worker, value)
+        for native_bpm, record in (('155', None), ('', self.result(track, 120)),
+                ('', {**self.result(track, 120), 'bpm': None, 'beats': [],
+                    'grid_draft': dict(origin='manual', revision=1,
+                        base_sha256=self.result(track)['sha256'],
+                        bpm=130, beats=[[1, 0, 130], [2, 462, 130]])})):
+            with self.subTest(native=native_bpm, record=bool(record)):
+                current = replace(track, bpm=native_bpm)
+                self.win.lib.tracks_by_id[track.track_id] = current
+                self.win.settings['analysis_results'] = {analysis.result_key(track.path): record} if record else {}
+                self.win._invalidate_rows([track.track_id])
+                row = self.win._row_for(current)
+                self.assertEqual(row['bpm'], {'155': '155'}.get(native_bpm,
+                    '130.00' if record and record.get('grid_draft') else '120.00'))
+                self.assertFalse(row['bpm_estimated'])
+        # A refreshed Library must rebuild disposable estimates off-thread.
+        self.win.lib = Library({track.track_id: track}, [], 'synthetic')
+        self.win.settings['analysis_results'] = {}
+        self.win._invalidate_rows()
+        self.assertFalse(self.win._row_for(track)['bpm'])
+
+    def test_waveform_estimate_updates_sorted_filtered_rows_and_preserves_selection(self):
+        from PySide6.QtCore import QItemSelectionModel
+        from desktop.model import COLUMNS
+        first, second = self.track('estimate-first'), self.track('estimate-second')
+        second.bpm = '150'
+        self.win.model.set_rows([self.win._row_for(t) for t in (first, second)])
+        self.win.model.sort(next(i for i, col in enumerate(COLUMNS) if col[0] == 'bpm'), Qt.DescendingOrder)
+        self.win.table.selectionModel().select(self.win.model.index(0, 0),
+            QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        selected = self.win._selected_ids()
+        worker, value = self.waveform_projection(first, 160)
+        self.win._on_waveform_bpm_ready(worker, value)
+        self.assertEqual(self.win.model._rows[0]['id'], first.track_id)
+        self.assertEqual(self.win._selected_ids(), selected)
+        self.win.model.set_filter('140')
+        self.assertEqual(self.win.model.rowCount(), 0)
+        self.win._on_waveform_bpm_ready(worker, {**value, 'bpm': 140})
+        self.assertEqual([row['id'] for row in self.win.model._rows], [first.track_id])
 
     def test_held_grid_shortcut_repeats_durable_edits_and_stops_on_release_or_new_track(self):
         first=self.track('held-grid');record=self.result(first)
@@ -114,7 +238,7 @@ class ImportAnalysisFlow(unittest.TestCase):
         release = threading.Event(); self.addCleanup(release.set)
         self.win.model.set_rows([self.win._row_for(t) for t in (first,second,third)])
         self.win.settings['analysis'] = dict(automatic=True)
-        def detect(_lib, track, _prefs, *, should_cancel,automatic=False):
+        def detect(_lib, track, _prefs, *, should_cancel,automatic=False,**_kwargs):
             if track == second:
                 while not release.wait(.005):
                     if should_cancel(): raise RuntimeError('cancelled')
@@ -124,7 +248,8 @@ class ImportAnalysisFlow(unittest.TestCase):
                 mock.patch.object(self.win, '_flash_status') as status:
             self.win._analyze_tracks([first.track_id, second.track_id], automatic=True)
             key = analysis.result_key(first.path)
-            self.wait(lambda: key in self.win.settings.get('analysis_results', {}))
+            self.wait(lambda: key in self.win.settings.get('analysis_results', {})
+                      and not any(j['track_id']==first.track_id for j in self.win.settings[analysis_jobs.KEY]))
             self.assertNotIn(analysis.result_key(second.path), self.win.settings['analysis_results'])
             self.assertEqual(self.win.model._rows[0]['bpm'], '120.00')
             self.assertEqual(self.win.model._rows[0]['key'], '8A')
@@ -140,6 +265,209 @@ class ImportAnalysisFlow(unittest.TestCase):
             self.wait(lambda: len(self.win.settings['analysis_results']) == 3 and self.win._analysis_owner.pending == 0)
             self.assertEqual(local_grid.effective_result(self.win.settings['analysis_results'][key])['beats'][0][1], 1)
             popup.assert_not_called(); status.assert_not_called()
+
+    def test_bpm_is_durable_before_key_and_key_merge_preserves_newer_manual_grid(self):
+        track=self.track('staged');key=analysis.result_key(track.path)
+        release=threading.Event();self.addCleanup(release.set)
+        calls=[]
+        def detect(_lib,current,prefs,*,should_cancel,**kwargs):
+            calls.append((dict(prefs),kwargs.get('expected_sha256')))
+            record=self.result(current)
+            if prefs['bpm']:
+                record['key']=None
+            else:
+                while not release.wait(.005):
+                    if should_cancel():raise RuntimeError('cancelled')
+                record.update(bpm=None,beats=[],key='9A',first_cue=None)
+            return record
+        self.win.model.set_rows([self.win._row_for(track)])
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=detect), \
+                mock.patch.object(self.win.native_analysis_controller,'discover') as publish:
+            self.win._analyze_tracks([track.track_id])
+            self.wait(lambda:len(calls)==2)
+            disk=StateRepository(self.win._data_file).load()['settings']
+            self.assertEqual(disk['analysis_results'][key]['bpm'],120)
+            self.assertIsNone(disk['analysis_results'][key]['key'])
+            self.assertEqual(disk[analysis_jobs.KEY][0]['phase'],'key')
+            self.assertTrue(disk[analysis_jobs.KEY][0]['preferences']['bpm'])
+            publish.assert_not_called()
+            edited=local_grid.edit(self.win.settings['analysis_results'][key],'shift',1)
+            self.win.settings['analysis_results'][key]=edited
+            self.assertTrue(self.win._save_state())
+            release.set()
+            self.wait(lambda:not self.win.settings[analysis_jobs.KEY])
+            result=self.win.settings['analysis_results'][key]
+            self.assertEqual(result['key'],'9A')
+            self.assertEqual(result['grid_draft'],edited['grid_draft'])
+            self.assertEqual(result['bpm'],120)
+            publish.assert_called_once()
+        self.assertEqual([(p['bpm'],p['key']) for p,_sha in calls],[(True,False),(False,True)])
+        self.assertEqual(calls[1][1],self.result(track)['sha256'])
+
+    def test_key_failure_retains_bpm_advances_other_tracks_and_retry_resumes_only_key(self):
+        first,second=self.track('key-fails'),self.track('key-succeeds')
+        calls=[]
+        def detect(_lib,track,prefs,**_kwargs):
+            calls.append((track.track_id,prefs['bpm'],prefs['key']))
+            if track.track_id==first.track_id and prefs['key']:raise ValueError('Key unavailable')
+            record=self.result(track)
+            if prefs['bpm']:record['key']=None
+            else:record.update(bpm=None,beats=[])
+            return record
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=detect), \
+                mock.patch.object(self.win,'_flash_status'):
+            self.win._analyze_tracks([first.track_id,second.track_id])
+            self.wait(lambda:self.win._analysis_owner.pending==0 and len(calls)==4)
+        self.assertEqual(calls,[(first.track_id,True,False),(first.track_id,False,True),
+                                (second.track_id,True,False),(second.track_id,False,True)])
+        failed=deepcopy(self.win.settings[analysis_jobs.KEY][0])
+        self.assertEqual((failed['state'],failed['phase']),('failed','key'))
+        self.assertEqual(self.win._analysis_result(first)['bpm'],120)
+        resumed=[]
+        def key_only(_lib,track,prefs,**_kwargs):
+            resumed.append(dict(prefs));return {**self.result(track),'bpm':None,'beats':[]}
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=key_only):
+            self.win._analyze_tracks([first.track_id])
+            self.wait(lambda:not self.win.settings[analysis_jobs.KEY])
+        self.assertEqual(len(resumed),1)
+        self.assertFalse(resumed[0]['bpm']);self.assertTrue(resumed[0]['key'])
+        self.assertEqual(self.win._analysis_result(first)['bpm'],120)
+
+    def test_inconclusive_bpm_advances_key_but_changed_audio_cannot_merge_components(self):
+        track=self.track('staged-identity');calls=[]
+        def detect(_lib,current,prefs,**_kwargs):
+            calls.append((prefs['bpm'],prefs['key']))
+            record=self.result(current)
+            record.update(bpm=None,beats=[],confidence=.1,key=None)
+            if prefs['key']:record.update(sha256='a'*64,key='9A')
+            return record
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=detect), \
+                mock.patch.object(self.win,'_flash_status') as status:
+            self.win._analyze_tracks([track.track_id])
+            self.wait(lambda:self.win.settings[analysis_jobs.KEY][0]['state']=='failed')
+        self.assertEqual(calls,[(True,False),(False,True)])
+        record=self.win._analysis_result(track)
+        self.assertIsNone(record['bpm']);self.assertIsNone(record['key'])
+        self.assertEqual(record['sha256'],self.result(track)['sha256'])
+        self.assertIn('identity changed',status.call_args.args[0])
+
+    def test_prerequisite_wait_keeps_the_durable_head_and_does_not_start_detection(self):
+        track=self.track('waiting-wave')
+        with mock.patch.object(self.win,'_analysis_prerequisite_ready',return_value=False,create=True), \
+                mock.patch('desktop.analysis.analysis.analyze') as detect:
+            self.win._analyze_tracks([track.track_id])
+            self.assertEqual(len(self.win._analysis_queue),1)
+            self.assertEqual(len(self.win.settings[analysis_jobs.KEY]),1)
+            self.assertIsNone(self.win._analysis_worker)
+            detect.assert_not_called()
+
+    def test_restart_after_bpm_checkpoint_runs_only_key_with_original_preferences(self):
+        from desktop.app import MainWindow
+        track=self.track('restart-key');record=self.result(track);record['key']=None
+        queued=analysis_jobs.admit([],self.win.lib,[track],dict(bpm=True,key=True,first_cue=True))
+        self.win.settings[analysis_jobs.KEY]=analysis_jobs.advance(queued,queued[0]['id'],record['sha256'])
+        self.win.settings['analysis_results']={analysis.result_key(track.path):record}
+        self.assertTrue(self.win._save_state())
+        self.win.shutdown();self.win.close();self.win.deleteLater();self.app.processEvents()
+        with mock.patch('soundbox.rekordbox_db.db_available',return_value=False), \
+                mock.patch.object(MainWindow,'_refresh_devices'):
+            self.win=MainWindow(isolated_dir=self.root/'state')
+        self.win.lib=Library({track.track_id:deepcopy(track)},[],'synthetic')
+        self.win.settings['analysis']=dict(bpm=True,key=False)
+        calls=[]
+        def key_only(_lib,current,prefs,**kwargs):
+            calls.append((dict(prefs),kwargs['expected_sha256']))
+            return {**self.result(current),'bpm':None,'beats':[],'key':'9A'}
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=key_only):
+            self.win._resume_analysis_jobs()
+            self.wait(lambda:not self.win.settings[analysis_jobs.KEY])
+        self.assertEqual(len(calls),1)
+        self.assertFalse(calls[0][0]['bpm']);self.assertTrue(calls[0][0]['key'])
+        self.assertEqual(calls[0][1],record['sha256'])
+        self.assertEqual((self.win._analysis_result(track)['bpm'],self.win._analysis_result(track)['key']),(120,'9A'))
+
+    def test_changed_queued_identity_is_reported_and_preserves_the_original_intention(self):
+        track=self.track('identity-before-start')
+        with mock.patch.object(self.win,'_analysis_prerequisite_ready',return_value=False), \
+                mock.patch('desktop.analysis.analysis.analyze') as detect, \
+                mock.patch.object(self.win,'_flash_status') as status:
+            self.win._analyze_tracks([track.track_id])
+            original=deepcopy(self.win.settings[analysis_jobs.KEY][0])
+            self.win.lib.tracks_by_id[track.track_id]=replace(track,source_uuid='changed')
+            self.win._start_next_analysis()
+        job=self.win.settings[analysis_jobs.KEY][0]
+        self.assertEqual((job['id'],job['path'],job['source_uuid']),
+                         (original['id'],original['path'],original['source_uuid']))
+        self.assertEqual(job['state'],'failed')
+        self.assertIn('identity changed',job['error'])
+        self.assertIn('identity changed',status.call_args.args[0])
+        self.assertEqual(self.win._analysis_queue,[])
+        detect.assert_not_called()
+
+    def test_checkpointed_waveform_is_not_rebuilt_again_after_key_completion(self):
+        track=self.track('one-waveform');record=self.result(track);record['key']=None
+        queued=analysis_jobs.admit([],self.win.lib,[track],{},rebuild_waveform=True)
+        queued=analysis_jobs.wave_ready(queued,queued[0]['id'],record['sha256'],record['epoch'])
+        self.win.settings[analysis_jobs.KEY]=analysis_jobs.advance(queued,queued[0]['id'],record['sha256'])
+        self.win.settings['analysis_results']={analysis.result_key(track.path):record}
+        with mock.patch('desktop.analysis.analysis.analyze',return_value={**record,'key':'9A'}), \
+                mock.patch.object(self.win,'_maybe_fill_waveforms') as rebuild:
+            self.win._resume_analysis_jobs()
+            self.wait(lambda:not self.win.settings[analysis_jobs.KEY])
+        self.assertNotIn(track.track_id,self.win._waveform_force_pending)
+        rebuild.assert_not_called()
+
+    def test_retargeted_conversion_uses_current_path_library_and_waveform_identity(self):
+        from desktop.task_owner import TaskOwner
+        track=self.track('before-conversion')
+        old_path=self.root/'original.flac';old_path.write_bytes(track.path.read_bytes())
+        track=replace(track,location_uri=old_path.as_uri())
+        self.win.lib.tracks_by_id[track.track_id]=track
+        original_library=self.win.lib
+        queued=analysis_jobs.admit([],original_library,[track],dict(bpm=True,key=False))
+        self.win._analysis_owner=TaskOwner(self.win);self.win._analysis_worker=None
+        self.win._analysis_queue=[(original_library,deepcopy(track),dict(queued[0]['preferences']),queued[0]['id'])]
+        converted=self.root/'compatible.wav';converted.write_bytes(b'captured converted fixture bytes')
+        current=replace(track,location_uri=converted.as_uri(),size=converted.stat().st_size)
+        self.win.lib=Library({current.track_id:current},[],'synthetic')
+        queued[0]['path']=str(converted)
+        record=self.result(current)
+        queued=analysis_jobs.wave_ready(queued,queued[0]['id'],record['sha256'],record['epoch'])
+        self.win.settings[analysis_jobs.KEY]=queued
+        observed=[]
+        def detect(library,captured,prefs,**kwargs):
+            observed.append((library,captured.path,kwargs['expected_sha256']))
+            return self.result(captured)
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=detect), \
+                mock.patch.object(self.win,'_flash_status') as status:
+            self.win._start_next_analysis()
+            self.wait(lambda:not self.win.settings[analysis_jobs.KEY])
+        self.assertEqual(observed,[(self.win.lib,converted,record['sha256'])])
+        self.assertEqual(self.win._analysis_result(current)['path'],str(converted))
+        status.assert_not_called()
+
+    def test_ready_waveform_only_intent_finishes_without_a_detector_or_musical_result(self):
+        track=self.track('ready-wave-only')
+        self.win.settings[analysis_jobs.KEY]=analysis_jobs.admit([],self.win.lib,[track],dict(bpm=False,key=False))
+        with mock.patch('desktop.analysis.analysis.analyze') as detect:
+            self.win._resume_analysis_jobs()
+        self.assertEqual(self.win.settings[analysis_jobs.KEY],[])
+        self.assertEqual(self.win._analysis_queue,[])
+        self.assertNotIn(analysis.result_key(track.path),self.win.settings.get('analysis_results',{}))
+        detect.assert_not_called()
+        self.assertEqual(StateRepository(self.win._data_file).load()['settings'][analysis_jobs.KEY],[])
+
+    def test_ready_waveform_only_intent_retains_durable_and_ram_identity_when_save_fails(self):
+        track=self.track('ready-wave-save-failure')
+        pending=analysis_jobs.admit([],self.win.lib,[track],dict(bpm=False,key=False))
+        self.win.settings[analysis_jobs.KEY]=deepcopy(pending)
+        with mock.patch.object(self.win,'_save_state',return_value=False), \
+                mock.patch('desktop.analysis.analysis.analyze') as detect:
+            self.win._resume_analysis_jobs()
+        self.assertEqual(self.win.settings[analysis_jobs.KEY],pending)
+        self.assertEqual(self.win._analysis_queue[0][3],pending[0]['id'])
+        self.assertIsNone(self.win._analysis_worker)
+        detect.assert_not_called()
 
     def test_one_failure_does_not_discard_finished_song_or_block_next_song(self):
         tracks = [self.track(n) for n in ('first','bad','last')]

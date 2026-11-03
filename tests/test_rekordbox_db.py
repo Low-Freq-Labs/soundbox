@@ -370,6 +370,34 @@ class MyTags(unittest.TestCase):
 
 
 class CueMapping(unittest.TestCase):
+    def test_raw_snapshot_cues_match_orm_display_without_timestamp_conversion(self):
+        from types import SimpleNamespace
+        from sqlalchemy import create_engine
+        rows = [dict(ContentID='x', Kind=kind, InMsec=slot * 100, OutMsec=-1,
+                     Comment=chr(ord('A') + slot), rb_local_deleted=0,
+                     ColorRed=0, ColorGreen=0, ColorBlue=0,
+                     created_at='2026-11-03 01:02:03.004 +00:00')
+                for slot, kind in enumerate((1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17))]
+        rows += [dict(rows[0], Kind=0, InMsec=500, Comment='later memory'),
+                 dict(rows[0], Kind=0, InMsec=100, OutMsec=400, Comment='loop'),
+                 dict(rows[0], Kind=4, InMsec=777, Comment='reserved'),
+                 dict(rows[0], ContentID='deleted', rb_local_deleted=1),
+                 dict(rows[0], ContentID='rgb', ColorRed=1, ColorGreen=2, ColorBlue=3)]
+        expected = _read_cues(FakeDB(cues=[Row(**row) for row in rows]))
+        engine = create_engine('sqlite:///:memory:')
+        self.addCleanup(engine.dispose)
+        with engine.connect() as connection:
+            names = list(rows[0])
+            connection.exec_driver_sql('CREATE TABLE djmdCue (' + ','.join(names) + ')')
+            connection.exec_driver_sql('INSERT INTO djmdCue VALUES (' + ','.join('?' for _ in names) + ')',
+                                       [tuple(row[name] for name in names) for row in rows])
+            original = connection.exec_driver_sql('SELECT * FROM djmdCue').fetchall()
+            orm = mock.Mock(side_effect=AssertionError('Snapshot cues must not construct ORM rows'))
+            db = SimpleNamespace(session=SimpleNamespace(connection=lambda: connection), get_cue=orm)
+            self.assertEqual(_read_cues(db), expected)
+            self.assertEqual(connection.exec_driver_sql('SELECT * FROM djmdCue').fetchall(), original)
+            orm.assert_not_called()
+
     def test_rekordbox_reserved_kind_gap_maps_exact_a_through_p(self):
         expected = {
             1: 0, 2: 1, 3: 2,

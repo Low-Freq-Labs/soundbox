@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtCore import QObject, QThread, Signal, QEventLoop
+from PySide6.QtCore import QObject, QThread, Signal, QEventLoop, QTimer
 
 from soundbox import rekordbox_db
 from soundbox.native_paths import validate_track_path
@@ -20,20 +20,26 @@ from soundbox.rekordbox_tags import (
 )
 from .task_owner import TaskOwner
 from .cue_session import display, intent_for, native_key, overlay
+from .native_timing import CommandTiming, now, phase
 
 
 class _TagTask(QThread):
-    def __init__(self, callback):
+    def __init__(self, callback, *, operation='probe', admitted_at=None, enqueued_at=None):
         super().__init__()
         self.callback = callback
         self.result = None
         self.error = ""
+        self.operation = operation
+        self.timing=CommandTiming(operation,admitted_at=admitted_at,enqueued_at=enqueued_at)
 
     def run(self):
-        try:
-            self.result = self.callback()
-        except Exception as exc:  # noqa: BLE001 - report on the GUI thread
-            self.error = str(exc)
+        def outcome():
+            return 'failed' if self.error else 'waiting' if isinstance(self.result,dict) and self.result.get('waiting') else 'finished'
+        with self.timing.execution(outcome):
+            try:
+                self.result = self.callback()
+            except Exception as exc:  # noqa: BLE001 - report on the GUI thread
+                self.error = str(exc)
 
 
 class TagEditController(QObject):
@@ -145,6 +151,9 @@ class TagEditController(QObject):
         key = hashlib.sha256((str(lib.source) + '\0' + lib.source_library_id).encode()).hexdigest()[:24]
         return self.data_root / 'rekordbox_recovery' / 'tag-writes' / key
 
+    def _adopt_source_task(self,worker,finished):
+        self.owner.adopt(worker,lambda captured:captured.timing.acknowledge(finished,captured))
+
     def _make_store(self, lib):
         authority = load_authority(self.data_root / 'rekordbox-tag-authority.json',
                                    Path(lib.source), lib.source_library_id)
@@ -213,6 +222,12 @@ class TagEditController(QObject):
             authority=analysis_authority(self.data_root/'rekordbox-analysis-authority.json',lib.source,lib.source_library_id)
             if authority is None:raise RuntimeError('Analysis recovery has no accepted library permission')
             AnalysisStore(authority,record['plan_folder']).recover()
+        elif record.get('format') == 'soundbox-native-cbr-analysis-v1':
+            from soundbox.rekordbox_cbr_analysis_store import CBRAnalysisStore, load_authority as cbr_authority
+            authority=cbr_authority(self.data_root/'rekordbox-cbr-analysis-authority.json',lib.source,lib.source_library_id)
+            if authority is None:
+                raise RuntimeError('CBR analysis recovery has no accepted library permission; evidence preserved')
+            CBRAnalysisStore(authority,record['plan_folder']).recover()
         elif record.get('format') == 'soundbox-native-removal-v1':
             from soundbox.rekordbox_removal_store import RemovalStore,load_authority as removal_authority
             authority=removal_authority(self.data_root/'rekordbox-removal-authority.json',lib.source,lib.source_library_id)
@@ -241,13 +256,17 @@ class TagEditController(QObject):
         from soundbox.rekordbox_playlist_store import load_authority as load_playlist_authority
         from soundbox.rekordbox_registration_store import load_authority as load_registration_authority
         from soundbox.rekordbox_removal_store import load_authority as load_removal_authority
+        from soundbox.rekordbox_analysis_store import load_authority as load_analysis_authority
+        from soundbox.rekordbox_cbr_analysis_store import load_authority as load_cbr_authority
         source = Path(source)
         for filename, loader in (('rekordbox-cue-authority.json', load_cue_authority),
                                  ('rekordbox-tag-authority.json', load_authority),
                                  ('rekordbox-grid-authority.json', load_grid_authority),
                                  ('rekordbox-playlist-authority.json', load_playlist_authority),
                                  ('rekordbox-registration-authority.json', load_registration_authority),
-                                 ('rekordbox-removal-authority.json', load_removal_authority)):
+                                 ('rekordbox-removal-authority.json', load_removal_authority),
+                                 ('rekordbox-analysis-authority.json', load_analysis_authority),
+                                 ('rekordbox-cbr-analysis-authority.json', load_cbr_authority)):
             path = self.data_root / filename
             if not path.exists() and not path.is_symlink():
                 continue
@@ -262,6 +281,7 @@ class TagEditController(QObject):
                 return
 
     def reason(self, selected_ids) -> str:
+        if getattr(self, 'analysis_priority', lambda: False)():return 'Analyzing audio before database updates…'
         if self.prep_priority:return 'Confirming cue/grid saves…'
         if self.admission_paused:return 'Confirming a library operation…'
         if self.owner.stopping or self._closing:
@@ -285,6 +305,7 @@ class TagEditController(QObject):
         return ''
 
     def probe(self):
+        if getattr(self, 'analysis_priority', lambda: False)():return
         if (self.owner.stopping or self._closing or self.busy or self.checking or self.admission_paused or self.lib is None
                 or not self.verified or self.lib.source_kind != 'rekordbox-db'
                 or (self._requires_authority and self._authority is None)):
@@ -315,7 +336,7 @@ class TagEditController(QObject):
 
         self.changed.emit()
         worker = _TagTask(check)
-        self.owner.adopt(worker, finished)
+        self._adopt_source_task(worker, finished)
         worker.start()
 
     def selected_tags(self, ids):
@@ -336,6 +357,7 @@ class TagEditController(QObject):
         return result
 
     def request(self, selected_ids, tag_id: str, present: bool) -> bool:
+        enqueued_at=now()
         ids = tuple(selected_ids)
         if self.reason(ids):
             return False
@@ -347,21 +369,26 @@ class TagEditController(QObject):
             SelectedTagTrack(lib.tracks_by_id[tid].native_id, lib.tracks_by_id[tid].source_uuid,
                              tag_id in lib.tracks_by_id[tid].source_tag_ids)
             for tid in ids), tag_id, tag.source_uuid, bool(present), tag.name)
-        self.busy = True
+        admitted_at=now();self.busy = True
         self._busy_kind = 'tags'
         self._pending = request
         self.changed.emit()
 
         def save():
-            self._recover_pending(lib)
-            for tid in ids:validate_track_path(lib.tracks_by_id[tid])
-            if self._store is None:
-                self._store = self._store_factory(lib)
-            self._store.apply(request)
-            return self._loader(Path(lib.source))
+            with phase('recovery'):
+                self._recover_pending(lib)
+            with phase('selected_paths'):
+                for tid in ids:validate_track_path(lib.tracks_by_id[tid])
+            with phase('store'):
+                if self._store is None:
+                    self._store = self._store_factory(lib)
+            with phase('apply_tags'):
+                self._store.apply(request)
+            with phase('refresh_library'):
+                return self._loader(Path(lib.source))
 
-        worker = _TagTask(save)
-        self.owner.adopt(worker, self._finish)
+        worker = _TagTask(save, operation='tags',admitted_at=admitted_at,enqueued_at=enqueued_at)
+        self._adopt_source_task(worker, self._finish)
         worker.start()
         return True
 
@@ -432,15 +459,18 @@ class TagEditController(QObject):
         return self._run_source_job('media',callback,finished)
 
     def run_registration_job(self, callback, finished, *, cancelling=False) -> bool:
-        if self.prep_priority or self._cue_queue or self.grid_waiting:
+        if (not getattr(self, 'analysis_priority', lambda: False)()
+                and (self.prep_priority or self._cue_queue or self.grid_waiting)):
             return False
         return self._run_source_job('registration-cancel' if cancelling else 'registration',callback,finished)
 
     def _run_source_job(self, kind, callback, finished) -> bool:
         """Grid work uses this same worker lane and finished/join ownership."""
+        if (kind not in ('registration', 'registration-cancel', 'analysis')
+                and getattr(self, 'analysis_priority', lambda: False)()):return False
         if self.busy or self.checking or self.admission_paused or self.owner.stopping or self._closing:
             return False
-        self.busy = True
+        admitted_at=now();self.busy = True
         self._busy_kind = kind
         self.changed.emit()
 
@@ -454,12 +484,17 @@ class TagEditController(QObject):
             if not self.busy:
                 self.idle.emit()
 
-        worker = _TagTask(callback)
-        self.owner.adopt(worker, completed)
+        worker = _TagTask(callback, operation=kind,admitted_at=admitted_at)
+        self._adopt_source_task(worker, completed)
         worker.start(QThread.LowPriority if kind in ('playlists','analysis','registration','media') else QThread.InheritPriority)
         return True
 
     def _start_next_cue(self):
+        if self.busy or self.checking or self.owner.stopping:return
+        if getattr(self, 'analysis_priority', lambda: False)():
+            QTimer.singleShot(500, self, self._start_next_cue)
+            return
+        if not self._cue_queue:return
         if self.prep_priority:return
         intent = self._cue_queue[0]
         lib, track_id = self.lib, intent.track_id
@@ -497,8 +532,8 @@ class TagEditController(QObject):
                 raise RuntimeError('Cue source changed during read-back; refresh the library')
             return rekordbox_db.cue_snapshot_fields(snapshot)
 
-        worker = _TagTask(save)
-        self.owner.adopt(worker, self._finish_cue)
+        worker = _TagTask(save, operation='cues')
+        self._adopt_source_task(worker, self._finish_cue)
         worker.start()
 
     def _finish_cue(self, worker):
@@ -559,7 +594,8 @@ class TagEditController(QObject):
                 self._probe_error = worker.error
                 self.failed.emit(worker.error)
             else:
-                self.saved.emit(worker.result)
+                with phase('publish_library'):
+                    self.saved.emit(worker.result)
             self.changed.emit()
         if self._cue_queue and not self.prep_priority and not self.busy:self._start_next_cue()
         self.idle.emit()

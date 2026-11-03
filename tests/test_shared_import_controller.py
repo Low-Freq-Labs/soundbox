@@ -148,6 +148,270 @@ class SharedImports(unittest.TestCase):
         finally:conn.close()
         self.assertEqual((row['BPM'],row['KeyID'],row['Analysed']),(0,'0',0))
 
+    def test_conversion_readiness_is_durable_before_analysis_and_registration_prepare(self):
+        self.admit(('priority',),native=False)
+        before=self.database.read_bytes();self.window._analysis_priority_pending=lambda:True
+        with mock.patch.object(self.registration,'prepare',wraps=self.registration.prepare) as prepare, \
+                mock.patch.object(self.registration,'apply',wraps=self.registration.apply) as apply:
+            self.controller.schedule()
+            self.wait(lambda:self.controller.pending[0].get('media_ready') and not self.window.tag_controller.owned)
+            self.assertIsNone(self.controller.pending[0]['request'])
+            self.assertEqual(self.database.read_bytes(),before)
+            prepare.assert_not_called();apply.assert_not_called()
+            self.assertTrue(any(s[jobs.KEY][0].get('media_ready') for s in self.saves))
+            self.window._analysis_priority_pending=lambda:False
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            prepare.assert_called_once();apply.assert_called_once()
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+
+    def test_queued_cues_and_grid_do_not_deadlock_compatibility_prerequisite(self):
+        self.admit(('queued-source-intents',),native=False)
+        self.window._analysis_priority_pending=lambda:True
+        tags=self.window.tag_controller
+        tags.analysis_priority=self.window._analysis_priority_pending
+        self.window._analysis_source_busy=lambda:bool(tags.busy or tags.checking or tags.admission_paused)
+        tags._cue_queue=[SimpleNamespace(page='hot')];tags.grid_waiting=True
+        before=self.database.read_bytes()
+        try:
+            with mock.patch.object(self.registration,'prepare',side_effect=AssertionError('No DB preparation')), \
+                    mock.patch.object(self.registration,'apply',side_effect=AssertionError('No DB publication')):
+                self.controller.schedule()
+                self.wait(lambda:self.controller.pending[0].get('media_ready') and not tags.busy)
+            self.assertEqual(self.database.read_bytes(),before)
+            self.assertTrue(tags._cue_queue);self.assertTrue(tags.grid_waiting)
+        finally:tags._cue_queue=[];tags.grid_waiting=False
+
+    def test_later_drop_conversion_bypasses_only_head_analysis_wait_and_preserves_db_fifo(self):
+        from soundbox import analysis_jobs
+        for first_failed in (False,True):
+            with self.subTest(first_failed=first_failed):
+                first=self.admit(('head-'+str(first_failed),),native=False)[0]
+                head=deepcopy(self.controller.pending[0]);head['media_ready']=True
+                second=self.admit(('later-'+str(first_failed),),native=False)[0]
+                later=deepcopy(self.controller.pending[0])
+                self.window.settings[jobs.KEY]=[head,later]
+                pending=analysis_jobs.admit([],self.window.lib,[second],dict(bpm=True,key=True))
+                if first_failed:
+                    pending=analysis_jobs.admit(pending,self.window.lib,[first],dict(bpm=True,key=True))
+                    next(value for value in pending if value['track_id']==first.track_id).update(
+                        state='failed',error='Key detection failed')
+                self.window.settings[analysis_jobs.KEY]=pending
+                self.window._analysis_priority_pending=lambda:True
+                before=self.database.read_bytes()
+                with mock.patch.object(self.registration,'prepare',side_effect=AssertionError('No DB preparation')), \
+                        mock.patch.object(self.registration,'apply',side_effect=AssertionError('No DB publication')):
+                    self.controller.schedule()
+                    self.wait(lambda:self.controller.pending[1].get('media_ready') and not self.window.tag_controller.owned)
+                self.assertEqual([value['id'] for value in self.controller.pending],[head['id'],later['id']])
+                self.assertTrue(all(value['request'] is None for value in self.controller.pending))
+                self.assertTrue(all(not value['error'] for value in self.controller.pending))
+                self.assertEqual(self.window.settings[analysis_jobs.KEY],pending)
+                self.assertEqual(self.database.read_bytes(),before)
+
+    def test_later_conversion_failure_marks_only_its_own_intent(self):
+        first=self.admit(('head-conversion-failure',),native=False)[0]
+        head=deepcopy(self.controller.pending[0]);head['media_ready']=True
+        later=self.admit(('later-conversion-failure',),native=False)[0]
+        self.window.settings[jobs.KEY]=[head,deepcopy(self.controller.pending[0])]
+        self.window._analysis_priority_pending=lambda:True
+        with mock.patch.object(self.registration,'convert_imports',side_effect=ValueError('Compatibility failed')):
+            self.controller.schedule()
+            self.wait(lambda:bool(self.controller.pending[1]['error']) and not self.window.tag_controller.owned)
+        self.assertFalse(self.controller.pending[0]['error'])
+        self.assertEqual(self.controller.pending[0]['tracks'][0]['id'],first.track_id)
+        self.assertEqual(self.controller.pending[1]['tracks'][0]['id'],later.track_id)
+        self.assertIn('Compatibility failed',self.controller.pending[1]['error'])
+
+    def test_failed_media_readiness_save_retries_conversion_before_any_registration(self):
+        self.admit(('readiness-save',),native=False);before=self.database.read_bytes();failed=[]
+        self.window._analysis_priority_pending=lambda:True
+        def save(settings):
+            queue=settings.get(jobs.KEY,[])
+            if queue and queue[0].get('media_ready') and not failed:
+                failed.append(True);return False
+            return True
+        self.save_hook=save
+        with mock.patch.object(self.registration,'prepare',wraps=self.registration.prepare) as prepare:
+            self.controller.schedule()
+            self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+            self.assertFalse(self.controller.pending[0].get('media_ready',False))
+            self.assertEqual(self.database.read_bytes(),before);prepare.assert_not_called()
+            self.controller.retry()
+            self.wait(lambda:self.controller.pending[0].get('media_ready') and not self.window.tag_controller.owned)
+            prepare.assert_not_called()
+            self.window._analysis_priority_pending=lambda:False
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+
+    def test_media_receipt_pin_survives_ready_checkpoint_restart_without_detector_results(self):
+        import hashlib
+        from uuid import UUID,uuid5
+        from soundbox import media_conversion_jobs
+        track=self.admit(('converted-byte-pin',),native=False)[0]
+        job=self.controller.pending[0];job['media_ready']=True
+        digest=hashlib.sha256(track.path.read_bytes()).hexdigest()
+        self.window.settings[media_conversion_jobs.DONE]={str(track.path):dict(
+            operation_id=str(uuid5(UUID(job['id']),str(track.path))),target=str(track.path),after_sha256=digest)}
+        self.assertFalse(self.window.settings.get('analysis_results'))
+        self.controller.stop();self.controller=self.controller_for_window()
+        self.window.shared_import_controller=self.controller
+        with mock.patch.object(self.registration,'prepare',wraps=self.registration.prepare) as prepare, \
+                mock.patch.object(self.registration,'convert_imports',side_effect=AssertionError('Already prepared media')):
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(prepare.call_args.args[0],[dict(id=track.track_id,path=str(track.path),sha256=digest)])
+
+    def test_changed_converted_bytes_after_readiness_cannot_register_without_detector_results(self):
+        import hashlib
+        from uuid import UUID,uuid5
+        from soundbox import media_conversion_jobs
+        track=self.admit(('changed-converted-byte-pin',),native=False)[0]
+        job=self.controller.pending[0];job['media_ready']=True
+        digest=hashlib.sha256(track.path.read_bytes()).hexdigest()
+        self.window.settings[media_conversion_jobs.DONE]={str(track.path):dict(
+            operation_id=str(uuid5(UUID(job['id']),str(track.path))),target=str(track.path),after_sha256=digest)}
+        raw=bytearray(track.path.read_bytes());raw[-1]^=1;track.path.write_bytes(raw)
+        before=self.database.read_bytes()
+        self.controller.schedule()
+        self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertEqual(self.database.read_bytes(),before)
+        self.assertIsNone(self.controller.pending[0]['request'])
+        self.assertIn('captured bytes differ',self.controller.pending[0]['error'])
+
+    def test_invalid_converted_receipt_never_drops_the_expected_byte_pin(self):
+        from uuid import UUID,uuid5
+        from soundbox import media_conversion_jobs
+        track=self.admit(('invalid-converted-byte-pin',),native=False)[0]
+        job=self.controller.pending[0];job['media_ready']=True
+        self.window.settings[media_conversion_jobs.DONE]={str(track.path):dict(
+            operation_id=str(uuid5(UUID(job['id']),str(track.path))),target=str(track.path),after_sha256=None)}
+        before=self.database.read_bytes()
+        with mock.patch.object(self.registration,'prepare',side_effect=AssertionError('Unproven byte pin')):
+            self.controller.pump()
+        self.assertIn('receipt is invalid',self.controller.pending[0]['error'])
+        self.assertEqual(self.database.read_bytes(),before)
+        self.assertIsNone(self.controller.pending[0]['request'])
+
+    def test_analysis_priority_defers_an_uncommitted_prepared_registration(self):
+        track=self.admit(('prepared-priority',),native=False)[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.controller.pending[0]['request']=request;before=self.database.read_bytes()
+        self.window._analysis_priority_pending=lambda:True
+        with mock.patch.object(self.registration,'committed_bindings',wraps=self.registration.committed_bindings) as reconcile, \
+                mock.patch.object(self.registration,'apply',wraps=self.registration.apply) as apply:
+            self.controller.schedule()
+            self.wait(lambda:reconcile.called and not self.window.tag_controller.owned)
+            apply.assert_not_called();self.assertEqual(self.database.read_bytes(),before)
+            self.assertEqual(self.controller.pending[0]['request'],request)
+            self.window._analysis_priority_pending=lambda:False
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            apply.assert_called_once()
+
+    def test_analysis_priority_does_not_starve_committed_registration_acknowledgement(self):
+        track=self.admit(('committed-priority',),native=False)[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.registration.apply(request)
+        self.controller.pending[0]['request']=request
+        self.window._analysis_priority_pending=lambda:True
+        with mock.patch.object(self.registration,'apply',side_effect=AssertionError('Must reconcile receipt only')):
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+        self.assertEqual(self.window.settings[jobs.BINDINGS][0]['local_id'],track.track_id)
+
+    def test_media_ready_validation_is_optional_for_legacy_jobs_and_requires_boolean(self):
+        self.admit(('validation',),native=False)
+        queue=deepcopy(self.controller.pending);queue[0].pop('media_ready')
+        self.assertEqual(jobs.validate(queue),queue)
+        for invalid in (None,0,1,'yes'):
+            queue[0]['media_ready']=invalid
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(Exception,'media preparation'):
+                jobs.validate(queue)
+
+    def test_failed_local_analysis_keeps_import_intent_and_still_allows_conversion_prerequisite(self):
+        from soundbox import analysis_jobs
+        track=self.admit(('failed-local-analysis',),native=False)[0]
+        pending=analysis_jobs.admit([],self.window.lib,[track],dict(bpm=True,key=True))
+        pending[0].update(state='failed',error='Key detection failed')
+        self.window.settings[analysis_jobs.KEY]=pending
+        self.window._analysis_priority_pending=lambda:False
+        before=self.database.read_bytes()
+        with mock.patch.object(self.registration,'prepare',wraps=self.registration.prepare) as prepare:
+            self.controller.schedule()
+            self.wait(lambda:self.controller.pending[0].get('media_ready') and not self.window.tag_controller.owned)
+            self.controller.pump()
+            self.assertIn('retry the failed song',self.window.tag_controller.registration_update_status)
+            prepare.assert_not_called();self.assertEqual(self.database.read_bytes(),before)
+            self.assertEqual(self.window.settings[analysis_jobs.KEY],pending)
+            self.assertIsNone(self.controller.pending[0]['request'])
+
+    def test_analysis_priority_defers_uncommitted_membership_but_acknowledges_committed_membership(self):
+        from soundbox.rekordbox_playlist_store import request_for
+        track=self.admit(('membership-priority',))[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        values=self.registration.apply(request)
+        binding=[{k:v for k,v in value.items() if k!='registered'} for value in values]
+        job=self.controller.pending[0];job.update(request=request,bindings=binding)
+        self.window.settings[jobs.BINDINGS]=deepcopy(binding)
+        self.window._on_refresh_done(self.load(self.database))
+        job['membership']=request_for(self.playlist.snapshot(),'append',identity='1000',tracks=[
+            SimpleNamespace(track_id=value['native_id'],source_uuid=value['native_uuid']) for value in binding])
+        self.window._analysis_priority_pending=lambda:True
+        self.assertFalse(self.controller.source_priority)
+        with mock.patch.object(self.playlist,'recover',wraps=self.playlist.recover) as recover, \
+                mock.patch.object(self.playlist,'apply',wraps=self.playlist.apply) as apply:
+            self.controller.schedule();self.wait(lambda:recover.called and not self.window.tag_controller.owned)
+            apply.assert_not_called();self.assertTrue(self.controller.pending)
+            self.assertEqual(self.load(self.database).playlists[0].keys,[])
+            self.playlist.apply(job['membership'])
+            before=self.database.read_bytes()
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+            self.assertEqual(self.database.read_bytes(),before)
+        self.assertEqual(self.window.lib.playlists[0].keys,[track.track_id])
+
+    def test_collection_completes_with_one_fresh_library_read_and_atomic_binding_ack(self):
+        self.admit(('one',),native=False);request_id=self.controller.pending[0]['id']
+        loader=mock.Mock(wraps=self.load);self.controller.loader=loader
+        self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        loader.assert_called_once_with(self.database)
+        self.assertEqual(self.window.settings[jobs.BINDINGS][0]['local_id'],'sb-one')
+        acknowledged=[s for s in self.saves if s.get(jobs.BINDINGS)]
+        self.assertTrue(acknowledged);self.assertEqual(acknowledged[0][jobs.KEY],[])
+        prepared=[s[jobs.KEY][0]['request'] for s in self.saves if s.get(jobs.KEY) and s[jobs.KEY][0]['request']]
+        self.assertTrue(prepared);self.assertEqual(prepared[0]['operation_id'],request_id)
+
+    def test_collection_failed_completion_save_replays_native_receipt_after_restart(self):
+        self.admit(('one',),native=False);failed=[False]
+        def save(settings):
+            if not failed[0] and settings.get(jobs.BINDINGS) and not settings.get(jobs.KEY):
+                failed[0]=True;return False
+            return True
+        self.save_hook=save;self.controller.schedule()
+        self.wait(lambda:bool(self.controller.pending and self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        request=deepcopy(self.controller.pending[0]['request'])
+        self.assertEqual(self.controller.pending[0]['bindings'],[])
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+        self.controller.stop();self.controller=self.controller_for_window();self.window.shared_import_controller=self.controller
+        self.controller.retry();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+        self.assertEqual(self.window.settings[jobs.BINDINGS][0]['native_id'],request['tracks'][0]['native_id'])
+
+    def test_collection_changed_native_identity_during_readback_keeps_intent_and_native_edit(self):
+        self.admit(('one',),native=False)
+        original=self.load;changed=[]
+        def externally_rebound(source):
+            conn=_connect(source)
+            try:
+                row=conn.execute("SELECT ID FROM djmdContent WHERE ID!='1'").fetchone()
+                if row and not changed:
+                    changed.append(row[0]);conn.execute("UPDATE djmdContent SET UUID='externally-rebound' WHERE ID=?",row)
+            finally:conn.close()
+            return original(source)
+        self.controller.loader=externally_rebound;self.controller.schedule()
+        self.wait(lambda:bool(self.controller.pending and self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertTrue(changed);self.assertIn('verified binding',self.controller.pending[0]['error'])
+        self.assertEqual(self.controller.pending[0]['bindings'],[])
+        self.assertFalse(self.window.settings.get(jobs.BINDINGS))
+        self.assertEqual(original(self.database).tracks_by_id[changed[0]].source_uuid,'externally-rebound')
+
     def test_unavailable_prior_binding_blocks_only_that_import_before_any_source_sql(self):
         self.admit(('one',),native=False)
         self.window.lib.source_binding_issues={'sb-one':'Native song was removed'}
@@ -260,16 +524,15 @@ class SharedImports(unittest.TestCase):
         self.assertEqual(self.database.read_bytes(),database)
         self.registration._media_current(request)
 
-    def test_import_refresh_persists_new_pinned_request_before_exactly_one_registration(self):
+    def test_import_ctime_proof_keeps_exact_request_before_one_registration(self):
         track=self.admit(('one',),native=False)[0]
         request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
         self.controller.pending[0]['request']=request
         track.path.chmod(track.path.stat().st_mode ^ 0o100)
-        self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
-        refreshed=[s[jobs.KEY][0] for s in self.saves if s.get(jobs.KEY) and s[jobs.KEY][0].get('media_refreshes')==1]
-        self.assertTrue(refreshed)
-        self.assertNotEqual(refreshed[0]['request']['operation_id'],request['operation_id'])
-        self.assertEqual(refreshed[0]['request']['tracks'][0]['audio']['sha256'],request['tracks'][0]['audio']['sha256'])
+        with mock.patch.object(self.registration,'prepare_retry',side_effect=AssertionError('Do not reprepare for ctime')):
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual([p for p in self.recovery.glob('registration-*') if p.is_dir()],
+                         [self.recovery/('registration-'+request['operation_id'])])
         self.assertEqual(len(self.load(self.database).tracks_by_id),2)
         self.assertEqual(len(self.window.settings[jobs.BINDINGS]),1)
 
@@ -284,17 +547,32 @@ class SharedImports(unittest.TestCase):
         self.assertEqual(self.database.read_bytes(),before)
         self.assertEqual(self.window.settings.get(jobs.BINDINGS,[]),[])
 
-    def test_metadata_refresh_budget_survives_repeated_provider_changes(self):
+    def test_recurring_ctime_is_verified_at_fresh_guards_without_a_permanent_error(self):
         track=self.admit(('one',),native=False)[0]
         request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
-        self.controller.pending[0]['request']=request;before=self.database.read_bytes();apply=self.registration.apply
-        def changing_metadata(request):
+        self.controller.pending[0]['request']=request;check=self.registration._media_current;observations=[]
+        def changing_metadata(current):
             track.path.chmod(track.path.stat().st_mode ^ 0o100)
-            return apply(request)
-        with mock.patch.object(self.registration,'apply',side_effect=changing_metadata):
-            self.controller.schedule();self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
-        self.assertEqual(self.controller.pending[0]['media_refreshes'],1)
-        self.assertEqual(self.database.read_bytes(),before)
+            observations.append(track.path.stat().st_ctime_ns)
+            return check(current)
+        with mock.patch.object(self.registration,'_media_current',side_effect=changing_metadata):
+            self.controller.schedule();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertGreaterEqual(len(set(observations)),3)
+        self.assertEqual(len(self.load(self.database).tracks_by_id),2)
+        self.assertEqual(len(self.window.settings[jobs.BINDINGS]),1)
+
+    def test_unstable_metadata_keeps_import_pending_without_error_or_plan_changes(self):
+        from soundbox.native_media import METADATA_PENDING
+        from soundbox.rekordbox_write import ConflictError
+        track=self.admit(('metadata-pending',),native=False)[0]
+        request=self.registration.prepare([dict(id=track.track_id,path=str(track.path))])
+        self.controller.pending[0]['request']=request;before=deepcopy(self.controller.pending)
+        with mock.patch.object(self.registration,'apply',side_effect=ConflictError(METADATA_PENDING)) as apply:
+            self.controller.schedule()
+            self.wait(lambda:apply.called and not self.window.tag_controller.owned)
+        self.assertEqual(self.controller.pending,before)
+        self.assertEqual(self.window.tag_controller.registration_update_status,'Verifying audio…')
+        self.assertGreater(self.controller.not_before,0)
 
     def test_float_import_converts_before_registration_and_preserves_saved_grid_and_key(self):
         import numpy as np

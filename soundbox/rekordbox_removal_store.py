@@ -198,15 +198,26 @@ class RemovalStore:
                 or str(UUID(folder.name))!=folder.name):raise WriteProofError('Removal plan location changed')
         path=folder/'plan.json';_regular(path)
         versions=tuple((name,tuple(identity((folder/name).stat()))) for name in ('plan.json','before.db','after.db','before.xml','after.xml'))
-        cache_key=(str(folder),versions)
-        if self._plan_cache is not None and self._plan_cache[0]==cache_key:return self._plan_cache[1]
-        plan=json.loads(path.read_bytes())
+        raw=path.read_bytes();plan_sha256=hashlib.sha256(raw).hexdigest();plan=json.loads(raw)
+        cache_key=(str(folder),versions,plan_sha256,_json(asdict(self.authority)),self.file_id)
         if (plan.get('format')!=FORMAT or plan.get('authority')!=asdict(self.authority)
                 or plan.get('operation_id')!=folder.name or plan.get('source_file_id')!=list(self.file_id)):
             raise RecoveryRequired('Removal plan does not match its explicit authority/source')
         for name in ('before.db','after.db','before.xml','after.xml'):
             p=folder/name;_regular(p)
             if _sha(p)!=plan['payloads'][name]:raise RecoveryRequired('Native removal recovery bytes changed')
+        for index,resource in enumerate(plan['resources']):
+            expected=folder/'resources'/str(index)
+            if Path(resource['backup'])!=expected or expected.resolve()!=expected:
+                raise RecoveryRequired('Removal native-resource backup changed')
+            _regular(expected)
+            if _sha(expected)!=resource['sha256']:raise RecoveryRequired('Removal native-resource backup changed')
+        # Reuse only the captured pair's semantic reconstruction. The plan,
+        # authority, paths and every recovery payload are checked freshly even
+        # when filesystem timestamps repeat. Return freshly decoded plan data.
+        if self._plan_cache is not None and self._plan_cache[0]==cache_key:
+            self._plan_cache=(cache_key,plan,plan_sha256)
+            return plan
         if {t['id'] for t in plan['targets']}!={s['native_id'] for s in plan['selections'] if s['native_active']}:
             raise RecoveryRequired('Native removal targets differ from the reviewed selection')
         if ({a['path'] for a in plan['audio']}|set(plan.get('missing',[]))|{r['path'] for r in plan.get('retained',[])})!={s['path'] for s in plan['selections']}:
@@ -241,11 +252,7 @@ class RemovalStore:
             try:
                 if not _matches(conn,_edges(plan['changes'])[1]):raise RecoveryRequired('Prepared after database differs from removal rows')
             finally:conn.close()
-        for index,resource in enumerate(plan['resources']):
-            expected=folder/'resources'/str(index)
-            if Path(resource['backup'])!=expected or expected.resolve()!=expected or _sha(expected)!=resource['sha256']:
-                raise RecoveryRequired('Removal native-resource backup changed')
-        self._plan_cache=(cache_key,plan,_sha(path))
+        self._plan_cache=(cache_key,plan,plan_sha256)
         return plan
 
     def _record(self):

@@ -6,6 +6,7 @@ Encrypted pairs, a SQL column allowlist and the shared source lease protect save
 """
 from dataclasses import asdict,dataclass
 from datetime import datetime,timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ from .native_registration_plan import encoded_row
 from .rekordbox_analysis_store import shared_root
 from .rekordbox_cue_store import CueWriteAuthority,PilotCueStore
 from .rekordbox_tags import NATIVE_VERSION,_schema
-from .rekordbox_write import (ConflictError,RecoveryRequired,WriteProofError,_connect,
+from .rekordbox_write import (ConflictError,RecoveryRequired,WriteProofError,_connect,_digest,
     _identity,_inactive_journal_proof,_integrity,_json,_quote,_regular,_state,encrypted_backup)
 from .state_io import atomic_bytes,copy_state,sync_dir
 from .rekordbox_playlist_store import _sha
@@ -115,6 +116,7 @@ class LocatorStore:
         self.root.mkdir(mode=0o700,parents=True,exist_ok=True)
         self.xml=self.database.with_name('masterPlaylists6.xml');self.journal=self.root/'transaction.json'
         s=self.database.stat();self.file_id=[s.st_dev,s.st_ino];self.lease=_Lease(self)
+        self._verified_recovery_record_key: tuple[str,LocatorAuthority]|None=None
 
     def _media(self,tracks):
         for t in tracks:
@@ -162,31 +164,57 @@ class LocatorStore:
             folder=self.root/('media-locator-'+op);folder.mkdir(mode=0o700)
             xml=self.xml.read_bytes();timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]+' +00:00'
             with encrypted_backup(self.database) as snapshot:
+                before_sha=_sha(snapshot)
                 before=_connect(snapshot,readonly=True)
-                try:changes=self._plan(before,tracks,timestamp);before_state=_state(before)
+                try:
+                    changes=self._plan(before,tracks,timestamp);before_state=_state(before)
+                    if not _matches(before,changes,'before'):raise WriteProofError('Locator original readback differs')
                 finally:before.close()
+                if _sha(snapshot)!=before_sha:raise WriteProofError('Locator original proof bytes changed')
                 copy_state(snapshot,folder/'before.db')
+                if _sha(folder/'before.db')!=before_sha:raise WriteProofError('Locator original archive differs')
                 with tempfile.TemporaryDirectory(prefix='soundbox-locator-') as tmp:
                     stage=Path(tmp).resolve()/'after.db';shutil.copyfile(snapshot,stage);conn=_connect(stage)
                     try:
-                        conn.execute('BEGIN IMMEDIATE');_apply(conn,changes);conn.commit();_integrity(conn);after_state=_state(conn)
+                        conn.execute('BEGIN IMMEDIATE');_apply(conn,changes);conn.commit();_integrity(conn)
+                    finally:conn.close()
+                    # Closing the writer may checkpoint a WAL-mode stage. Bind
+                    # the finalized file bytes to a separate read-only proof.
+                    after_sha=_sha(stage);conn=_connect(stage,readonly=True)
+                    try:
+                        after_state=_state(conn)
                         if not _matches(conn,changes,'after'):raise WriteProofError('Locator staging readback differs')
                     finally:conn.close()
+                    if _sha(stage)!=after_sha:raise WriteProofError('Locator staging proof bytes changed')
                     if (before_state['schema']!=after_state['schema'] or before_state['metadata']!=after_state['metadata']
                             or any(before_state['tables'][k]!=after_state['tables'][k] for k in before_state['tables']
                                    if k not in ('djmdContent','agentRegistry'))):raise WriteProofError('Locator staging changed unrelated data')
                     copy_state(stage,folder/'after.db')
-            atomic_bytes(folder/'before.xml',xml);atomic_bytes(folder/'after.xml',xml)
+                    if _sha(folder/'after.db')!=after_sha:raise WriteProofError('Locator staging archive differs')
+            xml_sha=hashlib.sha256(xml).hexdigest()
+            for name in ('before.xml','after.xml'):
+                atomic_bytes(folder/name,xml)
+                if _sha(folder/name)!=xml_sha:raise WriteProofError('Locator XML archive differs')
             record=dict(format=FORMAT,authority=asdict(self.authority),source=str(self.database),library_id=self.authority.library_id,
                 source_file_id=self.file_id,archive=folder.name,tracks=tracks,timestamp=timestamp,changes=changes,
-                before=before_state,after=after_state,payload_sha256={n:_sha(folder/n) for n in PAYLOADS})
+                before=before_state,after=after_state,payload_sha256={
+                    'before.db':before_sha,'after.db':after_sha,
+                    'before.xml':xml_sha,'after.xml':xml_sha})
             # JSON-normalize tuple fields before comparisons across restart.
-            record=json.loads(_json(record));atomic_bytes(folder/'operation.json',_json(record));return record
+            record=json.loads(_json(record));atomic_bytes(folder/'operation.json',_json(record))
+            # Preparation just proved these exact immutable before/after states,
+            # planned rows and constrained staged SQL. Reuse that successful
+            # semantic proof; _validate still checks the saved record and every
+            # payload hash freshly before admitting publication or recovery.
+            self._verified_recovery_record_key=(_digest(record),self.authority)
+            return record
 
     def _validate(self,record):
+        current=self.database.stat()
         if (record.get('format')!=FORMAT or record.get('authority')!=json.loads(_json(asdict(self.authority)))
                 or record.get('source')!=str(self.database) or record.get('library_id')!=self.authority.library_id
-                or record.get('source_file_id')!=self.file_id):raise RecoveryRequired('Locator recovery identity changed')
+                or record.get('source_file_id')!=self.file_id
+                or [current.st_dev,current.st_ino]!=self.file_id):raise RecoveryRequired('Locator recovery identity changed')
         folder=self.root/record['archive']
         if (folder.parent!=self.root or folder.resolve()!=folder or not folder.name.startswith('media-locator-')
                 or folder.stat().st_mode&0o077):raise RecoveryRequired('Locator archive redirects')
@@ -196,6 +224,8 @@ class LocatorStore:
             _regular(folder/n)
             if _sha(folder/n)!=record['payload_sha256'][n]:raise RecoveryRequired('Locator backup changed')
         if record['payload_sha256']['before.xml']!=record['payload_sha256']['after.xml']:raise RecoveryRequired('Locator cannot change XML')
+        semantic_key=(_digest(record),self.authority)
+        if semantic_key==self._verified_recovery_record_key:return record
         with tempfile.TemporaryDirectory(prefix='soundbox-locator-verify-') as tmp:
             for name,side in (('before.db','before'),('after.db','after')):
                 path=Path(tmp).resolve()/name;shutil.copyfile(folder/name,path);conn=_connect(path,readonly=True)
@@ -204,6 +234,10 @@ class LocatorStore:
                     if side=='before' and self._plan(conn,record['tracks'],record['timestamp'])!=record['changes']:
                         raise RecoveryRequired('Locator recovery exceeds its original intent')
                 finally:conn.close()
+        # Source/authority/path/archive equality and ALL payload hashes remain
+        # fresh above. Only exact successful immutable-pair semantics are reused
+        # within this store; live media and publication guards stay independent.
+        self._verified_recovery_record_key=semantic_key
         return record
 
     def _record(self):

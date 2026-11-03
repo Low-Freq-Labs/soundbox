@@ -21,7 +21,7 @@ _PARSE_SESSION: ContextVar[OrderedDict|None]=ContextVar('soundbox_playlist_xml_p
 
 @contextmanager
 def parsing_session():
-    """Reuse four exact immutable XML inputs during one pure plan only."""
+    """Reuse four exact immutable XML inputs during one plan/transaction only."""
     if _PARSE_SESSION.get() is not None:
         yield;return
     token=_PARSE_SESSION.set(OrderedDict())

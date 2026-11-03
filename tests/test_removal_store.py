@@ -1,6 +1,7 @@
 """Confirmed disposal and crash recovery on synthetic TEMP music/libraries only."""
 from dataclasses import asdict,replace
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -237,6 +238,50 @@ class RemovalStore(unittest.TestCase):
         self.assertTrue(self.audio.exists());self.assertTrue(self.resource.exists())
         self.writer.journal.write_text('{"format":"another-domain"}')
         with self.assertRaises(RecoveryRequired):self.prepare()
+
+    def test_warm_plan_proof_hashes_every_payload_despite_repeated_stat_identity(self):
+        review=self.prepare();folder=Path(review['folder']);self.writer._load(folder)
+        payloads=[folder/name for name in ('before.db','after.db','before.xml','after.xml')]
+        payloads.append(folder/'resources/0')
+        original_identity=store.identity
+        epochs={(p.stat().st_dev,p.stat().st_ino):original_identity(p.stat()) for p in payloads}
+        repeated=lambda info:epochs.get((info.st_dev,info.st_ino),original_identity(info))
+        # Repeated metadata is never a byte proof. Every corruption must fail
+        # before native SQL or any original audio/resource mutation.
+        for payload in payloads:
+            with self.subTest(payload=payload.name):
+                raw=payload.read_bytes();epoch=payload.stat()
+                payload.write_bytes(bytes([raw[0]^1])+raw[1:])
+                os.utime(payload,ns=(epoch.st_atime_ns,epoch.st_mtime_ns))
+                try:
+                    with mock.patch.object(store,'identity',side_effect=repeated),mock.patch.object(self.writer.lease,'_connect',side_effect=AssertionError('No source SQL')):
+                        with self.assertRaises(RecoveryRequired):self.apply(review)
+                finally:payload.write_bytes(raw)
+                self.assertTrue(self.audio.exists());self.assertTrue(self.resource.exists())
+                self.assertEqual(list(self.trash.iterdir()),[]);self.assertFalse(self.writer.journal.exists())
+
+    def test_warm_plan_proof_rechecks_raw_plan_authority_and_source_binding(self):
+        review=self.prepare();folder=Path(review['folder']);self.writer._load(folder)
+        path=folder/'plan.json';raw=path.read_bytes();epoch=store.identity(path.stat())
+        plan=json.loads(raw);plan['authority']['accepted_reference_sha256']='b'*64
+        path.write_text(json.dumps(plan));original_identity=store.identity
+        repeated=lambda info:epoch if info.st_ino==path.stat().st_ino else original_identity(info)
+        with mock.patch.object(store,'identity',side_effect=repeated),self.assertRaises(RecoveryRequired):self.writer._load(folder)
+        path.write_bytes(raw);self.writer._load(folder)
+        self.writer.authority=replace(self.authority,accepted_reference_sha256='c'*64)
+        with self.assertRaises(RecoveryRequired):self.writer._load(folder)
+        self.writer.authority=self.authority;self.writer.file_id=(self.writer.file_id[0],self.writer.file_id[1]+1)
+        with self.assertRaises(RecoveryRequired):self.writer._load(folder)
+        self.assertTrue(self.audio.exists());self.assertTrue(self.resource.exists());self.assertFalse(self.writer.journal.exists())
+
+    def test_warm_plan_reuses_only_semantics_and_returns_fresh_plan_data(self):
+        review=self.prepare();folder=Path(review['folder']);plan=self.writer._load(folder)
+        plan['changes'].clear()
+        with mock.patch.object(store.planner,'build',side_effect=AssertionError('Reuse exact semantic proof')),mock.patch.object(store,'_sha',wraps=store._sha) as hashes:
+            again=self.writer._load(folder)
+        self.assertEqual(again['changes'],review['plan']['changes'])
+        self.assertEqual({Path(call.args[0]) for call in hashes.call_args_list},
+            {folder/name for name in ('before.db','after.db','before.xml','after.xml','resources/0')})
 
     def test_missing_audio_can_remove_collection_but_a_new_occupant_invalidates_review(self):
         self.audio.unlink();review=self.prepare();self.assertEqual(review['plan']['missing'],[str(self.audio)])

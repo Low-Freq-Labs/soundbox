@@ -81,6 +81,10 @@ class CueEditingInterface(unittest.TestCase):
             self.assertFalse(controller.request(['1'], 'tag', True))
             self.assertTrue(controller.request_cue('1', 'hot', 0, 'add', 1))
             self.assertEqual(len(controller.session_cues('1')), 2)
+            # A deferred analysis-priority timer must not overlap the active save.
+            controller._start_next_cue()
+            self.app.processEvents()
+            self.assertEqual(len(received), 1)
             release.set()
             self.wait_for(lambda: not controller.busy)
             self.assertEqual(controller.last_operation, 'cues')
@@ -360,6 +364,54 @@ class CueEditingInterface(unittest.TestCase):
             factory.reset_mock()
             controller.recover_before_read(Path('/unaccepted/master.db'))
             factory.assert_not_called()
+            controller.shutdown()
+
+    def test_cbr_analysis_startup_recovery_requires_its_own_source_bound_authority(self):
+        import json
+        from types import SimpleNamespace
+        from soundbox import rekordbox_cbr_analysis_store as cbr
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);lib=library();controller=TagEditController(root)
+            authority=SimpleNamespace(library_id=lib.source_library_id)
+            (root/'rekordbox-cbr-analysis-authority.json').write_text(json.dumps(dict(library_id=lib.source_library_id)))
+            journal=controller._write_root(lib)/'transaction.json';journal.parent.mkdir(parents=True)
+            journal.write_text(json.dumps(dict(format=cbr.FORMAT,plan_folder=str(root/'cbr-plan'))))
+            original=journal.read_bytes()
+            def permission(path,source,library_id):
+                return authority if str(source)==str(lib.source) and library_id==lib.source_library_id else None
+            with mock.patch.object(cbr,'load_authority',side_effect=permission), \
+                    mock.patch.object(cbr,'CBRAnalysisStore') as store:
+                controller.recover_before_read(Path(lib.source))
+                store.assert_called_once_with(authority,str(root/'cbr-plan'))
+                store.return_value.recover.assert_called_once_with()
+                store.reset_mock();controller.recover_before_read(Path('/foreign/master.db'));store.assert_not_called()
+            with mock.patch.object(cbr,'load_authority',return_value=None), \
+                    mock.patch.object(cbr,'CBRAnalysisStore') as store, \
+                    self.assertRaisesRegex(RuntimeError,'no accepted library permission'):
+                controller._recover_pending(lib)
+            store.assert_not_called();self.assertEqual(journal.read_bytes(),original);controller.shutdown()
+
+    def test_analysis_startup_recovery_preserves_legacy_wav_dispatch_and_unknown_journal(self):
+        import json
+        from types import SimpleNamespace
+        from soundbox import rekordbox_analysis_store as wav,rekordbox_cbr_analysis_store as cbr
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);lib=library();controller=TagEditController(root)
+            authority=SimpleNamespace(library_id=lib.source_library_id)
+            (root/'rekordbox-analysis-authority.json').write_text(json.dumps(dict(library_id=lib.source_library_id)))
+            journal=controller._write_root(lib)/'transaction.json';journal.parent.mkdir(parents=True)
+            journal.write_text(json.dumps(dict(format=wav.FORMAT,plan_folder=str(root/'legacy-plan'))))
+            with mock.patch.object(wav,'load_authority',return_value=authority), \
+                    mock.patch.object(wav,'AnalysisStore') as store, \
+                    mock.patch.object(cbr,'CBRAnalysisStore') as cbr_store:
+                controller.recover_before_read(Path(lib.source))
+                store.assert_called_once_with(authority,str(root/'legacy-plan'))
+                store.return_value.recover.assert_called_once_with();cbr_store.assert_not_called()
+                journal.write_text(json.dumps(dict(format='unaccepted-analysis-profile')))
+                original=journal.read_bytes();store.reset_mock()
+                with self.assertRaisesRegex(RuntimeError,'Unrecognized rekordbox recovery'):
+                    controller.recover_before_read(Path(lib.source))
+                store.assert_not_called();self.assertEqual(journal.read_bytes(),original)
             controller.shutdown()
 
     def test_refresh_recovers_before_read_and_stops_when_recovery_is_unknown(self):

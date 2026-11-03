@@ -1,5 +1,6 @@
 """Accepted analysis transport against synthetic encrypted TEMP sources only."""
 from pathlib import Path
+from dataclasses import asdict
 import json
 import os
 import subprocess
@@ -13,7 +14,7 @@ import test_analysis_workspace as fixtures
 from test_registration_proof import wave
 from soundbox import rekordbox_analysis_store as store, rekordbox_cue_store as cues, rekordbox_tags as tags
 from soundbox.analysis import ENGINE
-from soundbox.native_media import capture_media
+from soundbox.native_media import MediaIdentity,capture_media
 from soundbox.rekordbox_write import _connect,_json,_state,_LINK_COLUMNS,ConflictError,RecoveryRequired,WriteProofError
 from soundbox.state_io import atomic_bytes
 
@@ -86,6 +87,94 @@ class AnalysisPublication(unittest.TestCase):
         self.assertEqual({p.name for p in obj._locations()[1].iterdir()},set(store.NAMES))
         self.assertNotIn('djmdMixerParam',[c['table'] for c in obj.plan['candidate']['changes']])
 
+    def test_exact_plan_reuse_still_hashes_every_payload_and_checks_profile(self):
+        expected=store.load_plan(self.folder)
+        with mock.patch.object(store,'_verify_plan_reconstruction',side_effect=AssertionError('Duplicate pure proof')), \
+                mock.patch.object(store,'_sha',wraps=store._sha) as hashes, \
+                mock.patch.object(store,'_require_profile',wraps=store._require_profile) as profile:
+            self.assertEqual(store.load_plan(self.folder),expected)
+            self.assertEqual(self.instance().plan,expected)
+        for name in store.PAYLOADS:
+            self.assertGreaterEqual(sum(call.args[0]==self.folder/name for call in hashes.call_args_list),2)
+        self.assertGreaterEqual(profile.call_count,2)
+        packet=self.folder/'ANLZ0000.DAT';raw=packet.read_bytes();info=packet.stat()
+        packet.write_bytes(raw[:-1]+bytes([raw[-1]^1]));os.utime(packet,ns=(info.st_atime_ns,info.st_mtime_ns))
+        with mock.patch.object(store,'_connect',side_effect=AssertionError('Hash check must precede SQL')), \
+                self.assertRaises(RecoveryRequired):
+            store.load_plan(self.folder)
+        packet.write_bytes(raw)
+
+    def test_changed_raw_plan_reconstructs_and_one_paired_proof_inventories_each_side_once(self):
+        raw=(self.folder/'plan.json').read_bytes();atomic_bytes(self.folder/'plan.json',raw+b'\n')
+        with mock.patch.object(store,'_state',wraps=store._state) as states:
+            expected=store.load_plan(self.folder)
+        self.assertEqual(states.call_count,2)
+        altered=json.loads(raw);altered['candidate']['scope']='tampered copied proposal'
+        atomic_bytes(self.folder/'plan.json',_json(altered))
+        with self.assertRaises(WriteProofError):store.load_plan(self.folder)
+        atomic_bytes(self.folder/'plan.json',raw)
+        self.assertEqual(store.load_plan(self.folder),expected)
+
+    def test_preparation_inventories_each_private_side_once_without_an_extra_before_scan(self):
+        with mock.patch.object(store,'_state',wraps=store._state) as states:
+            source,authority,folder=self.prepare(self.root/'single-before-scan')
+        self.assertEqual(states.call_count,4)  # One staged pair and one retained-payload proof.
+        obj=store.AnalysisStore(authority,folder)
+        self.assertEqual(obj.apply(),'123')
+
+    def test_narrow_base_keeps_other_song_history_collisions_and_exact_target_cues(self):
+        from soundbox import native_analysis_plan as planner
+        from soundbox.rekordbox_write import _quote
+        import shutil
+        copied=self.root/'narrow-base.db';shutil.copyfile(self.folder/'before.db',copied)
+        obj=self.instance();conn=_connect(copied)
+        try:
+            historical=dict(obj.plan['candidate']['changes'][1]['after'],ID='other-history',ContentID='unrelated',
+                            UUID=obj.plan['seeds']['file_uuids']['.DAT'])
+            conn.execute('INSERT INTO contentFile ('+','.join(_quote(key) for key in historical)+') VALUES ('+
+                         ','.join('?' for _ in historical)+')',list(historical.values()))
+            images={Path(name).suffix:(self.folder/name).read_bytes() for name in store.NAMES}
+            def proposal():
+                return planner.plan(store._base(conn,'123'),MediaIdentity.from_dict(obj.plan['audio']),images,
+                    share_root=obj.plan['share'],seeds=obj.plan['seeds'],result=obj.plan['result'],
+                    technical=obj.plan['technical'],native_length=True)
+            with self.assertRaisesRegex(ConflictError,'history'):proposal()
+            conn.execute("DELETE FROM contentFile WHERE ID='other-history'")
+            conn.execute("INSERT INTO djmdCue VALUES ('other-cue','unrelated')")
+            self.assertEqual(store._base(conn,'123')['cues'],[])
+            conn.execute("INSERT INTO djmdCue VALUES ('target-cue','123')")
+            self.assertEqual([cue['ID'] for cue in store._base(conn,'123')['cues']],['target-cue'])
+            with self.assertRaises(ConflictError):proposal()
+        finally:conn.close()
+
+    def test_snapshot_reuses_only_inventory_of_fresh_exact_captures_and_detaches_results(self):
+        obj=self.instance()
+        with (mock.patch.object(store,'encrypted_backup',wraps=store.encrypted_backup) as captures,
+              mock.patch.object(store,'_state',wraps=store._state) as inventories):
+            first=obj._snapshot();expected=json.loads(json.dumps(first));first['tables']['djmdContent']='caller mutation'
+            self.assertEqual(obj._snapshot(),expected);self.assertEqual(inventories.call_count,1)
+            stamp=obj.database.stat();conn=_connect(obj.database)
+            try:conn.execute("UPDATE unknown_table SET opaque=X'778899'")
+            finally:conn.close()
+            os.utime(obj.database,ns=(stamp.st_atime_ns,stamp.st_mtime_ns))
+            changed=obj._snapshot();self.assertNotEqual(changed,expected)
+            self.assertEqual(obj._snapshot(),changed);self.assertEqual(inventories.call_count,2)
+            self.assertEqual(captures.call_count,4)
+            with self.assertRaises(ConflictError):obj.apply()
+
+    def test_snapshot_inventory_failure_or_corrupt_source_never_uses_a_cached_proof(self):
+        from sqlcipher3 import dbapi2 as cipher
+        obj=self.instance()
+        with mock.patch.object(store,'_state',side_effect=WriteProofError('inventory failed')):
+            with self.assertRaisesRegex(WriteProofError,'inventory failed'):obj._snapshot()
+        self.assertIsNone(getattr(obj,'_verified_snapshot_state',None))
+        before=obj._snapshot();raw=obj.database.read_bytes();stamp=obj.database.stat()
+        changed=bytearray(raw);changed[0]^=1;obj.database.write_bytes(changed)
+        os.utime(obj.database,ns=(stamp.st_atime_ns,stamp.st_mtime_ns))
+        with self.assertRaises((WriteProofError,cipher.DatabaseError)):obj._snapshot()
+        obj.database.write_bytes(raw)
+        self.assertEqual(obj._snapshot(),before)
+
     def test_converted_float_pcm24_publishes_saved_grid_key_and_waveforms_without_redetection(self):
         self.source,self.authority,self.folder=self.prepare(self.root/'converted',converted=True)
         obj=self.instance();path=Path(obj.plan['audio']['path']);before=path.read_bytes()
@@ -156,6 +245,48 @@ class AnalysisPublication(unittest.TestCase):
             with self.assertRaises(WriteProofError):obj.apply()
             sql.assert_not_called()
         self.assertEqual(self.state(),obj.plan['before'])
+
+    def test_legacy_authority_wire_shape_and_existing_plan_replay_stay_exact(self):
+        authority_path=self.root/'authority.json'
+        fields=asdict(self.authority)
+        self.assertEqual(set(fields),{'database','library_id','schema_sha256','accepted_reference_sha256',
+                                      'accepted','application_version'})
+        self.assertEqual(self.authority.profile,store.INITIAL_WAV_PROFILE)
+        atomic_bytes(authority_path,_json(dict(format=store.AUTHORITY_FORMAT,**fields)))
+        loaded=store.load_authority(authority_path,self.authority.database,self.authority.library_id)
+        self.assertEqual(loaded,self.authority)
+        obj=store.AnalysisStore(loaded,self.folder)
+        original=(self.folder/'plan.json').read_bytes()
+        self.assertEqual(obj.apply(),'123');self.assertEqual(obj.apply(),'already-completed')
+        self.assertEqual((self.folder/'plan.json').read_bytes(),original)
+        for profile in ('mp3','unknown',store.INITIAL_WAV_PROFILE):
+            atomic_bytes(authority_path,_json(dict(format=store.AUTHORITY_FORMAT,profile=profile,**fields)))
+            self.assertIsNone(store.load_authority(authority_path,self.authority.database,self.authority.library_id))
+
+    def test_legacy_authority_refuses_mp3_before_renderer_and_plan_reconstruction(self):
+        from copy import deepcopy
+        from fractions import Fraction
+        from soundbox.media_probe import MediaHeader
+        original=store.load_plan(self.folder);result=deepcopy(original['result'])
+        audio_path=self.root/'Unaccepted.mp3';audio_path.write_bytes(Path(result['path']).read_bytes())
+        stat=audio_path.stat();result.update(path=str(audio_path),epoch=[stat.st_dev,stat.st_ino,stat.st_size,
+                                                                      stat.st_mtime_ns,stat.st_ctime_ns])
+        op=str(uuid4());folder=self.root/'case/appdata/native-analysis-plans'/op
+        renderer=mock.Mock()
+        with mock.patch.object(store,'read_media_header',return_value=MediaHeader('mp3','mp3',Fraction(32),44100,2,0)), \
+                mock.patch.object(store.planner,'plan') as planner:
+            with self.assertRaisesRegex(WriteProofError,'authority accepts only'):
+                store.prepare(self.authority,'123',original['track_uuid'],result,folder,
+                              data_root=self.root/'case/appdata',operation_id=op,renderer=renderer)
+            renderer.assert_not_called();planner.assert_not_called()
+        changed=deepcopy(original)
+        changed['audio'].update(path=str(audio_path),family='mp3',codec='mp3',wave_format_tag=None)
+        changed['technical']['bits']=0
+        atomic_bytes(self.folder/'plan.json',_json(changed))
+        with mock.patch.object(store.planner,'plan') as planner:
+            with self.assertRaisesRegex(WriteProofError,'authority accepts only'):store.load_plan(self.folder)
+            planner.assert_not_called()
+        self.assertEqual(self.state(),original['before'])
 
     def test_changed_audio_source_occupied_target_and_unknown_recovery_fail_closed(self):
         obj=self.instance();stage,target=obj._locations();target.parent.mkdir(parents=True,mode=0o700);target.mkdir()

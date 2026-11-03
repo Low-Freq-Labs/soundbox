@@ -6,6 +6,7 @@ support restart recovery; the fixed research pilots keep their original limits.
 """
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -30,10 +31,14 @@ from .native_media import MediaIdentity, epoch
 from .source_acquisition import SourceContract, acquire_source
 from .media_probe import read_media_header
 from .cdj_usb import run_renderer
+from .immutable_plan_proof import verify_once
 
 FORMAT = 'soundbox-native-analysis-v1'
 PLAN_FORMAT = 'soundbox-native-analysis-plan-v1'
 AUTHORITY_FORMAT='soundbox-analysis-authority-v1'
+# The v1 authority was accepted for this profile only. Keep its serialized fields
+# unchanged so existing plans and recovery receipts remain exactly replayable.
+INITIAL_WAV_PROFILE='initial-stereo-pcm16-24-wav-44100-48000-v1'
 NAMES=('ANLZ0000.DAT','ANLZ0000.EXT','ANLZ0000.2EX')
 PAYLOADS=('before.db','after.db','before.xml','after.xml',*NAMES)
 TABLES=('djmdContent','agentRegistry','contentFile','djmdMixerParam')
@@ -46,6 +51,10 @@ class AnalysisAuthority:
     accepted_reference_sha256: str
     accepted: bool
     application_version: str = NATIVE_VERSION
+
+    @property
+    def profile(self):
+        return INITIAL_WAV_PROFILE
 
     def __post_init__(self):
         if self.accepted is not True:raise WriteProofError('Native analysis requires separate accepted authority')
@@ -62,6 +71,16 @@ def load_authority(path,source,library_id):
         a=AnalysisAuthority(**body)
         return a if (a.database,a.library_id)==(str(source),library_id) else None
     except (OSError,ValueError,TypeError,KeyError,WriteProofError):return None
+
+
+def _require_profile(authority,audio,technical):
+    """Bind legacy authority independently of renderer/planner capabilities."""
+    if (not isinstance(authority,AnalysisAuthority) or authority.profile!=INITIAL_WAV_PROFILE
+            or audio.family!='wav' or audio.codec not in ('pcm_s16le','pcm_s24le')
+            or audio.wave_format_tag!=1 or set(technical)!={'sample_rate','channels','bits'}
+            or technical['channels']!=2 or technical['sample_rate'] not in (44100,48000)
+            or technical['bits']!={'pcm_s16le':16,'pcm_s24le':24}.get(audio.codec)):
+        raise WriteProofError('Native analysis authority accepts only stereo PCM16/24 WAV at44.1/48kHz')
 
 
 def shared_root(data_root,source,library_id):
@@ -85,13 +104,28 @@ def _fault(_phase):
 def _encoded(row):return {k:_cell(v) for k,v in row.items()}
 
 
+def _select_rows(conn,table,*,columns=(),field=None,value=None):
+    selected=','.join(_quote(name) for name in columns) if columns else '*'
+    sql='SELECT '+selected+' FROM '+_quote(table)
+    if field is not None:sql+=' WHERE '+_quote(field)+'=?'
+    cursor=conn.execute(sql,() if field is None else (value,))
+    names=[item[0] for item in cursor.description]
+    return [dict(zip(names,row,strict=True)) for row in cursor]
+
+
 def _base(conn,tid):
-    tracks=[_encoded(r) for r in _rows(conn,'djmdContent') if r['ID']==tid]
-    counters=[_encoded(r) for r in _rows(conn,'agentRegistry') if r['registry_id']=='localUpdateCount']
+    tracks=[_encoded(row) for row in _select_rows(conn,'djmdContent',field='ID',value=tid)]
+    counters=[_encoded(row) for row in _select_rows(conn,'agentRegistry',field='registry_id',value='localUpdateCount')]
     if len(tracks)!=1 or len(counters)!=1:raise ConflictError('Analysis track/counter is ambiguous')
-    return dict(track=tracks[0],counter=counters[0],keys=_rows(conn,'djmdKey'),files=_rows(conn,'contentFile'),
-        mixers=_rows(conn,'djmdMixerParam'),cues=[r for r in _rows(conn,'djmdCue') if r['ContentID']==tid],
-        aggregates=[r for r in _rows(conn,'contentCue') if r['ContentID']==tid])
+    # Keep every historical identity for collision checks, including other songs,
+    # while avoiding materializing their unrelated file/mixer metadata. Complete
+    # paired inventories still prove every row and field during verification.
+    identities=('ID','UUID','ContentID')
+    return dict(track=tracks[0],counter=counters[0],keys=_rows(conn,'djmdKey'),
+        files=_select_rows(conn,'contentFile',columns=identities),
+        mixers=_select_rows(conn,'djmdMixerParam',columns=identities),
+        cues=_select_rows(conn,'djmdCue',field='ContentID',value=tid),
+        aggregates=_select_rows(conn,'contentCue',field='ContentID',value=tid))
 
 
 def _scope(audio,track,result):
@@ -100,8 +134,10 @@ def _scope(audio,track,result):
         raise WriteProofError('Analysis must retain its exact captured audio identity')
 
 
-def _verify(before,after,changes):
+def _verify_pair(before,after,changes,*,expected_before=None):
     left,right=_state(before),_state(after)
+    if expected_before is not None and left!=expected_before:
+        raise WriteProofError('Analysis before-state differs from its exact paired proof')
     if left['schema']!=right['schema'] or left['metadata']!=right['metadata']:
         raise WriteProofError('Analysis changed schema/metadata')
     for table in left['tables'].keys()|right['tables'].keys():
@@ -118,7 +154,11 @@ def _verify(before,after,changes):
             expected[c['id']]=c['after']
         if len(current)!=len(expected) or {r[key]:r for r in current}!=expected:
             raise WriteProofError('Analysis changed unplanned rows')
-    return right
+    return left,right
+
+
+def _verify(before,after,changes,*,expected_before=None):
+    return _verify_pair(before,after,changes,expected_before=expected_before)[1]
 
 
 def _copy_backup(source,destination):
@@ -188,7 +228,7 @@ def prepare(authority, track_id, track_uuid, result, output, *, data_root, opera
         try:
             if _identity(conn)!=(authority.library_id,'6000') or _schema(conn)!=authority.schema_sha256:
                 raise ConflictError('Analysis library/schema changed')
-            base=_base(conn,track_id);before_state=_state(conn)
+            base=_base(conn,track_id)
             if base['track']['UUID']!=track_uuid or conn.execute('SELECT COUNT(*) FROM djmdContent WHERE UUID=?',(track_uuid,)).fetchone()!=(1,):
                 raise ConflictError('Analysis native identity changed')
         finally:conn.close()
@@ -197,9 +237,7 @@ def prepare(authority, track_id, track_uuid, result, output, *, data_root, opera
             audio=MediaIdentity(result['path'],epoch(captured.observation),captured.sha256,int(duration),header.family,
                 header.codec,duration.numerator,duration.denominator,header.wave_format_tag)
             technical=dict(sample_rate=header.sample_rate,channels=header.channels,bits=header.bits)
-            if (header.family!='wav' or header.codec not in ('pcm_s16le','pcm_s24le') or header.wave_format_tag!=1
-                    or header.channels!=2 or header.sample_rate not in (44100,48000)):
-                raise WriteProofError('Native analysis publication currently supports stereo PCM16/24 WAV at44.1/48kHz')
+            _require_profile(authority,audio,technical)
             effective=effective_result(result)
             request=scratch/'request.json';atomic_bytes(request,_json(dict(audio=str(captured.path),original_name=Path(audio.path).name,
                 beats=[dict(number=b[0],time_ms=b[1],tempo=round(b[2]*100)) for b in effective['beats']])))
@@ -212,7 +250,7 @@ def prepare(authority, track_id, track_uuid, result, output, *, data_root, opera
         try:
             conn.execute('BEGIN IMMEDIATE');_execute(conn,candidate['changes']);conn.commit()
             left=_connect(before,readonly=True)
-            try:after_state=_verify(left,conn,candidate['changes'])
+            try:before_state,after_state=_verify_pair(left,conn,candidate['changes'])
             finally:left.close()
         finally:conn.close()
         for src,name in ((before,'before.db'),(after,'after.db')):shutil.copyfile(src,output/name)
@@ -234,7 +272,8 @@ def load_plan(folder):
     if folder != folder.resolve() or folder.stat().st_mode & 0o077:
         raise WriteProofError('Private original saved-components plan required')
     for name in (*PAYLOADS,'plan.json'): _regular(folder/name)
-    record = json.loads((folder/'plan.json').read_bytes())
+    raw_plan = (folder/'plan.json').read_bytes()
+    record = json.loads(raw_plan)
     if (record['format'] != PLAN_FORMAT or record['application_version'] != NATIVE_VERSION
             or record.get('source_write_authority') is not False):
         raise WriteProofError('Unknown saved-components plan/version')
@@ -251,23 +290,31 @@ def load_plan(folder):
         if _sha(folder/name) != record['payload_sha256'][name]: raise RecoveryRequired('Saved-component payload changed')
     if (folder/'before.xml').read_bytes() != (folder/'after.xml').read_bytes():
         raise WriteProofError('Saved component cannot change playlist XML')
+    audio = MediaIdentity.from_dict(record['audio'])
+    _require_profile(authority,audio,record['technical'])
+    verify_once(folder,raw_plan,authority=_json(asdict(authority)),profile=INITIAL_WAV_PROFILE,
+                verify=lambda:_verify_plan_reconstruction(folder,record,audio))
+    return record
+
+
+def _verify_plan_reconstruction(folder,record,audio):
+    """Pure proof on freshly hash-verified immutable inputs; never a live guard."""
     with tempfile.TemporaryDirectory(prefix='soundbox-analysis-plan-check-') as area:
         scratch = Path(area).resolve()
         for name in ('before.db','after.db'): shutil.copyfile(folder/name,scratch/name)
         before = _connect(scratch/'before.db',readonly=True); after = _connect(scratch/'after.db',readonly=True)
         try:
-            audio = MediaIdentity.from_dict(record['audio']); base = _base(before,record['track_id']); _scope(audio,base['track'],record['result'])
+            base = _base(before,record['track_id']); _scope(audio,base['track'],record['result'])
             if (base['track']['UUID'] != record['track_uuid'] or before.execute(
                     'SELECT COUNT(*) FROM djmdContent WHERE UUID=?',(record['track_uuid'],)).fetchone() != (1,)):
                 raise WriteProofError('Saved component UUID changed or is ambiguous')
             expected = planner.plan(base,audio,{Path(n).suffix:(folder/n).read_bytes() for n in NAMES},
                                     share_root=record['share'],seeds=record['seeds'],result=record['result'],technical=record['technical'],native_length=True)
             if (_schema(before) != record['schema_sha256'] or _identity(before)[0] != record['library_id']
-                    or _state(before) != record['before'] or expected != record['candidate']
-                    or _verify(before,after,expected['changes']) != record['after']):
+                    or expected != record['candidate']
+                    or _verify(before,after,expected['changes'],expected_before=record['before']) != record['after']):
                 raise WriteProofError('Saved-component plan no longer proves its exact full delta')
         finally: before.close(); after.close()
-    return record
 
 
 
@@ -313,15 +360,24 @@ class AnalysisStore:
                 or (self.authority.database,self.authority.library_id,self.authority.schema_sha256)!=(
                     self.plan['source'],self.plan['library_id'],self.plan['schema_sha256'])):
             raise WriteProofError('Analysis plan/authority changed')
+        _require_profile(self.authority,MediaIdentity.from_dict(self.plan['audio']),self.plan['technical'])
 
     def recover(self):
         with self.lease._lock():return self._recover()
 
     def _snapshot(self):
         with encrypted_backup(self.database) as captured:
+            # Capture, integrity/identity and source/process guards remain fresh.
+            # Only the pure inventory of an identical just-captured private image
+            # may be reused, with one entry per store and detached return values.
+            digest=_sha(captured)
+            prior=getattr(self,'_verified_snapshot_state',None)
+            if prior is not None and prior[0]==digest:return deepcopy(prior[1])
             conn=_connect(captured,readonly=True)
-            try:return _state(conn)
+            try:state=_state(conn)
             finally:conn.close()
+            self._verified_snapshot_state=(digest,deepcopy(state))
+            return state
 
     def discard_unstarted(self):
         """Renew only a verified copy plan that has never published anything."""

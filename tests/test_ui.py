@@ -5159,6 +5159,60 @@ class PlayerHardening(unittest.TestCase):
         finally:
             pb.shutdown_waveforms()
 
+    def test_memory_recall_sets_exact_regular_cue_without_changing_saved_cues_or_hot_behavior(self):
+        from copy import deepcopy
+        from desktop.player import PlayerBar
+
+        for initially_playing in (False, True):
+            with self.subTest(initially_playing=initially_playing):
+                pb = PlayerBar()
+                state = {'playing': initially_playing}
+                try:
+                    pb._src_path, pb._dur = '/tmp/loaded.wav', 60_000
+                    pb._ordinary_playback_requested = initially_playing
+                    pb._transport_play_active = initially_playing
+                    pb.is_playing = lambda: state['playing']
+                    pb._set_position = lambda target: setattr(pb, '_pos', target)
+                    pb._play_clean = lambda **_options: state.update(playing=True)
+                    def pause(after=None, **_options):
+                        state['playing'] = False
+                        if after is not None:after()
+                    pb._pause_clean = pause
+                    pb.quantize_enabled = True
+                    pb._beat_grid = [23_000, 23_500, 24_000]
+                    saved = [dict(kind='memory',slot=0,position_ms=23_456),
+                             dict(kind='hot',slot=0,position_ms=34_567)]
+                    pb._analysis_parts = {'cues': deepcopy(saved)}
+                    pb.cue_panel.set_cues(saved);pb.cue_panel.set_loaded(True)
+                    before = deepcopy(pb.cue_panel._cues)
+                    creation = mock.Mock();pb.cue_panel.empty_pressed.connect(creation)
+                    pb._set_session_cue(1_000)
+                    with mock.patch.object(pb, 'quantize_cue_position',
+                                           side_effect=AssertionError('Existing cue timing stays exact')):
+                        pb.cue_panel.memory_slots[0].pressed.emit()
+                        self.assertEqual((pb._cue_ms, pb.wave._session_cue_ms), (23_456, 23_456))
+                        self.assertTrue(state['playing'])
+                        pb._pos = 25_000
+                        pb.cue_panel.memory_slots[0].released.emit()
+                        self.assertFalse(state['playing'])
+                        pb.cue_btn.pressed.emit()
+                        self.assertEqual(pb._pos, 23_456)
+                        pb._pos = 26_000
+                        pb.cue_btn.released.emit()
+                        self.assertEqual(pb._pos, 23_456)
+                        self.assertFalse(state['playing'])
+                        state['playing'] = initially_playing
+                        pb._ordinary_playback_requested = initially_playing
+                        pb.cue_panel.hot_slots[0].pressed.emit()
+                        pb.cue_panel.hot_slots[0].released.emit()
+                        self.assertEqual(state['playing'], initially_playing)
+                    self.assertEqual(pb._cue_ms, 23_456)
+                    self.assertEqual(pb.cue_panel._cues, before)
+                    self.assertEqual(pb._analysis_parts['cues'], saved)
+                    creation.assert_not_called()
+                finally:
+                    pb.shutdown_waveforms()
+
     def test_hot_cue_during_latched_playback_keeps_transport_running(self):
         from desktop.player import PlayerBar
 
@@ -7911,7 +7965,7 @@ class WaveformFill(unittest.TestCase):
         canonical = Path(self.cache) / 'complete-receipt'
         source = Path(self.paths[0])
         record = ta.store(canonical, '0', source, ta.analyze_soundfile(source))
-        track = Track('0', 'Test', 'Artist', source.as_uri())
+        track = Track('0', 'Test', 'Artist', source.as_uri(), bpm='140.00')
         lib = Library({'0': track}, [], source='synthetic')
         with mock.patch('desktop.workers.time.time', return_value=1800):
             WaveformFillWorker(lib, canonical).run()

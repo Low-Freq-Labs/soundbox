@@ -125,6 +125,49 @@ class DisplayRoles(unittest.TestCase):
         self.assertIsNone(m.headerData(0, Qt.Vertical))
 
 
+class AnalysisUpdates(unittest.TestCase):
+    def test_estimated_bpm_tooltip_requires_both_flag_and_value(self):
+        m = TrackModel(_rows())
+        index = m.index(0, _col('bpm'))
+        self.assertIsNone(m.data(index, Qt.ToolTipRole))
+        self.assertFalse(m.update_analysis('1', bpm_estimated=True))
+        self.assertEqual(m.data(index), '140.00')
+        self.assertEqual(m.data(index, Qt.ToolTipRole), 'Estimated BPM from waveform')
+        m.update_analysis('3', bpm_estimated=True)
+        self.assertIsNone(m.data(m.index(2, _col('bpm')), Qt.ToolTipRole))
+        for invalid in (None, 1, 'yes'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                m.update_analysis('1', bpm_estimated=invalid)
+
+    def test_estimate_metadata_refreshes_bpm_without_resetting_filtered_sorted_view(self):
+        m = TrackModel(_rows())
+        m.set_filter('140')
+        m.sort(_col('bpm'))
+        resets, changes = [], []
+        m.modelReset.connect(lambda: resets.append(True))
+        m.dataChanged.connect(lambda first, last, roles:
+                              changes.append((first.column(), last.column(), roles)))
+        hay = m._all_rows[0]['_hay']
+        self.assertFalse(m.update_analysis('1', bpm='140.00', bpm_estimated=True))
+        self.assertEqual(resets, [])
+        self.assertEqual(m._all_rows[0]['_hay'], hay)
+        self.assertEqual([(first, last) for first, last, _roles in changes],
+                         [(_col('bpm'), _col('bpm'))])
+        self.assertEqual(changes[0][2], [Qt.DisplayRole, Qt.ToolTipRole])
+        self.assertTrue(m.update_analysis('1', bpm='150.00', bpm_estimated=True))
+        self.assertEqual(m.rowCount(), 0)
+        self.assertEqual(resets, [True])
+
+    def test_accepted_bpm_update_clears_estimate_even_when_value_is_unchanged(self):
+        m = TrackModel([{**_rows()[0], 'bpm_estimated': True}])
+        self.assertFalse(m.update_bpm('1', '140.00'))
+        self.assertFalse(m._rows[0]['bpm_estimated'])
+        self.assertIsNone(m.data(m.index(0, _col('bpm')), Qt.ToolTipRole))
+        m.update_bpm('1', '141.00', estimated=True)
+        self.assertEqual(m.data(m.index(0, _col('bpm')), Qt.ToolTipRole),
+                         'Estimated BPM from waveform')
+
+
 class SortValueEdges(unittest.TestCase):
     def test_non_camelot_key_after_wheel(self):
         self.assertLess(_sort_value("key", {"key": "12B"}),

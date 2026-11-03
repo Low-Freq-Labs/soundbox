@@ -15,6 +15,12 @@ from soundbox.state_repository import StateRepository, InvalidState
 
 
 class CapturedAnalysis(unittest.TestCase):
+    def test_changed_waveform_capture_is_rejected_before_detector_runs(self):
+        with mock.patch('soundbox.cdj_usb.run_renderer') as renderer:
+            with self.assertRaisesRegex(RuntimeError, 'captured bytes differ'):
+                analysis.analyze(self.lib, self.track, dict(bpm=True, key=False), expected_sha256='f'*64)
+        renderer.assert_not_called()
+
     def setUp(self):
         self.area = tempfile.TemporaryDirectory()
         self.addCleanup(self.area.cleanup)
@@ -85,6 +91,32 @@ class CapturedAnalysis(unittest.TestCase):
         self.assertEqual(analysis.playback_data(legacy_manual,record,self.audio),legacy_manual)
         self.audio.write_bytes(b'changed')
         self.assertEqual(analysis.playback_data({},record,self.audio),{})
+
+    def test_manual_grid_over_inconclusive_detection_reloads_with_identity_and_provenance_guards(self):
+        record = {**self.record(), 'bpm': None, 'beats': [], 'first_cue': None,
+                  'confidence': .2}
+        fallback = dict(beats=[[1,0,100]], cues=[dict(kind='memory',position_ms=750)],
+                        provenance={'grid':'soundbox-zero-anchor'})
+        self.assertIs(analysis.playback_data(fallback,record,self.audio),fallback)
+        rows = [[1,0,140],[2,429,140]]
+        record['grid_draft'] = dict(origin='manual',base_sha256=record['sha256'],
+                                    revision=1,beats=rows,bpm=140)
+        before = deepcopy(record)
+        result = analysis.playback_data(fallback,record,self.audio)
+        self.assertEqual(result['beats'],rows)
+        self.assertIsNot(result['beats'],rows)
+        self.assertEqual(result['_detected_bpm'],140)
+        self.assertEqual(result['provenance']['grid'],'soundbox-manual')
+        self.assertEqual(result['cues'],fallback['cues'])
+        self.assertEqual(record,before)
+        for provenance in ({'grid':'rekordbox'}, {'grid':'soundbox-manual'},
+                           {'user_data':'soundbox'}):
+            with self.subTest(provenance=provenance):
+                protected = {**fallback,'provenance':provenance}
+                self.assertIs(analysis.playback_data(protected,record,self.audio),protected)
+        changed_epoch = deepcopy(record)
+        changed_epoch['epoch'][-1] += 1
+        self.assertIs(analysis.playback_data(fallback,changed_epoch,self.audio),fallback)
 
     def test_durable_result_and_key_only_merge_survive_state_round_trip(self):
         old = self.record()

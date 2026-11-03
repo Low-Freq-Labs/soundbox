@@ -25,7 +25,7 @@ from copy import deepcopy
 
 import logging
 import json
-from math import cos, pi, sin
+from math import cos, isfinite, pi, sin
 import os
 import random
 import sys
@@ -343,12 +343,13 @@ def _provider_action(action):
 
 
 from .analysis import AnalysisMixin
+from .analysis_priority import AnalysisPriorityMixin
 from .playlist_folders import PlaylistFoldersMixin
 from .cdj import CdjDeviceMixin
 from .track_menu import TrackMenuButton, TrackMenuMixin
 
 
-class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -479,6 +480,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         # Warmed in the background on open; invalidated (with a gen counter to
         # discard stale warms) whenever overrides/aliases/registry/junk change.
         self._row_cache: dict[str, dict] = {}
+        # Disposable display estimates, never detector results or source-save
+        # requests. Workers validate cache/source identity off the GUI thread.
+        self._waveform_bpm_library = None
+        self._waveform_bpms: dict[str, dict] = {}
         self._cache_gen = 0
         self._warm_worker = None
         self._exporting = False
@@ -488,6 +493,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         self._prep_update_message = ''
         self.tag_controller = TagEditController(data_dir,self,loader=lambda source:
             rekordbox_db.load_live(source,retain_tracks=self.settings.get('rekordbox_collection_tracks',{})))
+        self.tag_controller.analysis_priority = self._analysis_priority_pending
         self.grid_controller = GridEditController(self.tag_controller, self,
                                                   cache_dir=self._track_analysis_dir,
                                                   prepare_cache=self._prepare_grid_cache,
@@ -765,6 +771,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                                  junk=self._title_junk())
             self._row_cache[t.track_id] = r
         result = dict(r)
+        result['bpm_estimated'] = False
         from soundbox.local_grid import effective_result
         detected = effective_result(self._analysis_result(t))
         if detected:
@@ -785,9 +792,62 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
         if prep and prep.job(t.track_id):
             view=prep.grid_view(t.track_id)
             if view:result['bpm']=f'{view[1]:.2f}'
+        if not result.get('bpm'):
+            estimate = self._waveform_bpm(t)
+            if estimate is not None:
+                result['bpm'] = f'{estimate:.2f}'
+                result['bpm_estimated'] = True
         if self.lib and t.source_tag_ids:
             result['myTags'] = ', '.join(tag.name for tag in self.lib.source_tags if tag.tag_id in t.source_tag_ids)
         return result
+
+    def _waveform_bpm_binding(self, track):
+        lib = self.lib
+        return (str(lib.source), lib.source_kind, lib.source_library_id,
+                str(track.path), track.size, track.native_id, track.source_uuid)
+
+    def _waveform_bpm(self, track):
+        if self._waveform_bpm_library is not self.lib:
+            self._waveform_bpms.clear()
+            self._waveform_bpm_library = self.lib
+        value = self._waveform_bpms.get(track.track_id)
+        if (value and not track.source_analysis_path and not track.bpm
+                and value['binding'] == self._waveform_bpm_binding(track)):
+            return value['bpm']
+        return None
+
+    def _on_waveform_bpm_ready(self, worker, value):
+        """Project a worker-validated estimate without touching musical state."""
+        if (self._shutting_down or worker not in (self._wf_fill_worker, getattr(self, '_analysis_worker', None))
+                or self.lib is None or worker.lib is not self.lib):
+            return
+        track = self.lib.tracks_by_id.get(value.get('track_id'))
+        if track is None or track.track_id in getattr(self.lib, 'hidden_ids', ()):
+            return
+        binding = (value.get('source'), value.get('source_kind'), value.get('library_id'),
+                   value.get('path'), value.get('track_size'), value.get('native_id'), value.get('uuid'))
+        if binding != self._waveform_bpm_binding(track):
+            return
+        self._waveform_bpm(track)  # discard estimates from a previous Library
+        bpm = value.get('bpm')
+        epoch = value.get('epoch')
+        if (bpm is not None and (not isinstance(bpm, (int, float))
+                or isinstance(bpm, bool) or not isfinite(bpm) or not 0 < bpm <= 1000
+                or value.get('provenance') != 'soundbox-zero-anchor'
+                or not isinstance(epoch, list) or len(epoch) != 5
+                or any(type(part) is not int for part in epoch)
+                or epoch[2] != value.get('size') or epoch[2] <= 0
+                or track.size and track.size != epoch[2])):
+            return
+        if bpm is None:
+            self._waveform_bpms.pop(track.track_id, None)
+        else:
+            self._waveform_bpms[track.track_id] = dict(binding=binding, bpm=float(bpm))
+        after = self._row_for(track)
+        displayed = next((row for row in self.model._all_rows if row.get('id') == track.track_id), None)
+        if displayed is not None and (displayed.get('bpm'), bool(displayed.get('bpm_estimated'))) != (
+                after.get('bpm'), after['bpm_estimated']):
+            self._refresh_analysis_row(track.track_id)
 
     def _rows_for(self, tracks) -> list[dict]:
         return [self._row_for(t) for t in sorted(tracks,
@@ -1881,9 +1941,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             self._finish_tag_refresh()
         self._finish_edit_status()
 
-    def _update_browser_bpm(self, track_id, bpm):
+    def _update_browser_bpm(self, track_id, bpm, *, estimated=False):
         selected = set(self._selected_ids())
-        reset = self.model.update_bpm(track_id, bpm)
+        reset = self.model.update_bpm(track_id, bpm, estimated=estimated)
         if reset and selected:
             selection = self.table.selectionModel()
             for row, data in enumerate(self.model._rows):
@@ -2090,6 +2150,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 self._wf_fill_worker, self._art_worker, self._stock_art_worker):
             if worker is not None:
                 worker.set_playback_active(active)
+        analysis_worker = getattr(self, '_analysis_worker', None)
+        if hasattr(analysis_worker, 'set_playback_active'):
+            analysis_worker.set_playback_active(active)
         # Cue gates can cross this edge several times a second. Library-wide
         # artwork reads and device scans do not belong on a transport edge.
         # Artwork completion/progress owns its presentation; mount notices and
@@ -3195,21 +3258,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
     def _confirm_duplicate_add(self, name: str, dupes: list[str]) -> bool:
         """Ok/Skip prompt when a drop contains tracks already in the playlist.
         Default is Skip — Enter must never sneak a duplicate in."""
-        titles = [self._track_label(i) for i in dupes[:6]]
-        if len(dupes) > 6:
-            titles.append(f"…and {len(dupes) - 6} more")
-        listing = "\n".join(f"  •  {t}" for t in titles)
-        one = len(dupes) == 1
-        box = QMessageBox(self)
-        box.setWindowTitle("Already in playlist")
-        box.setText(f"{'This track is' if one else 'These tracks are'} "
-                    f"already in “{name}”:\n\n{listing}\n\n"
-                    f"Add {'it' if one else 'them'} again anyway?")
-        add = box.addButton("Add Anyway", QMessageBox.AcceptRole)
-        skip = box.addButton("Skip", QMessageBox.RejectRole)
-        box.setDefaultButton(skip)
-        box.exec()
-        return box.clickedButton() is add
+        from .duplicate_dialog import DuplicateAddDialog
+        box=DuplicateAddDialog(name,[self._track_label(i) for i in dupes[:6]],len(dupes),self)
+        return box.exec()==box.Accepted
 
     def _sb_menu(self, pos):
         self._soundbox_context_menu(pos)
@@ -3389,9 +3440,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 except (ValueError,TypeError,RuntimeError) as exc:
                     self.imported=before_imported;self.custom=before_custom
                     self._flash_status(str(exc),15);return
-            if fresh_ids and preferences['automatic'] and (preferences['bpm'] or preferences['key']):
+            musical_analysis = preferences['automatic'] and (preferences['bpm'] or preferences['key'])
+            if fresh_ids and (musical_analysis or self.lib.source_kind=='rekordbox-db' and self.lib.source_library_id):
+                local_preferences = preferences if musical_analysis else {**preferences,'bpm':False,'key':False}
                 try:self.settings[analysis_jobs.KEY]=analysis_jobs.admit(before_analysis_jobs,self.lib,
-                    [imports.make_track(tid,self.imported[tid]) for tid in fresh_ids],preferences,automatic=True)
+                    [imports.make_track(tid,self.imported[tid]) for tid in fresh_ids],local_preferences,
+                    automatic=bool(musical_analysis))
                 except ValueError as exc:
                     self.imported=before_imported;self.custom=before_custom;self.settings[shared_imports.KEY]=before_jobs
                     self._flash_status(str(exc),15);return
@@ -3423,7 +3477,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
                 self._show_collection()
                 self._view_key = 'sb:Collection'
                 self.table.scrollToTop()
-            if fresh_ids and preferences['automatic']:
+            if fresh_ids:
                 QTimer.singleShot(0,self,self._resume_analysis_jobs)
             if fresh_ids:
                 self._probe_import_metadata(fresh_ids)
@@ -7170,6 +7224,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             return
         if self.lib is None:
             return
+        if self._analysis_priority_pending():
+            self._schedule_waveform_recheck()
+            return
         if self.tag_controller.owned:
             self._waveform_rescan_pending = True
             return
@@ -7189,6 +7246,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Trac
             force_track_ids=forced,
         )
         self._wf_fill_worker = w
+        w.bpm_ready.connect(lambda value, ww=w: self._on_waveform_bpm_ready(ww, value))
         w.set_playback_active(self.player_bar.is_playing())
         w.prioritize(self.player_bar._src_path or "")
         w.detail_ready.connect(lambda path: self.player_bar.refresh_audio_detail(path)
@@ -8073,11 +8131,14 @@ def main():
             app.aboutToQuit.connect(win.shutdown)
             win.show()
             def finish_check():
+                from soundbox import mac_process
                 win.grab().save(str(report_dir / "window.png"))
                 report = {"profile": win.providers.profile,
                           "modules": list(win.providers.modules),
                           "actions": list(win.providers.actions),
                           "native": bool(win.player_bar.player.is_native),
+                          "native_process_guard": mac_process._native_function() is not None,
+                          "native_process_query": type(mac_process.rekordbox_running()) is bool,
                           "devices": win.device_tree.topLevelItemCount(),
                           "library_loaded": win.lib is not None,
                           "art_worker": win._art_worker is not None}

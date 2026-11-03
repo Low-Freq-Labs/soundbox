@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+import os
 import shutil
 import tempfile
 from types import SimpleNamespace
@@ -142,3 +143,67 @@ class PlaylistBatches(unittest.TestCase):
                 xml._parse(payload);self.assertEqual(parse.call_count,7)
             with xml.parsing_session():xml._parse(payload)
             self.assertEqual(parse.call_count,8)
+
+    def test_transaction_parse_reuse_reads_changed_xml_despite_restored_mtime(self):
+        from soundbox import rekordbox_playlist_xml as xml
+        for operation in ('create','reorder','batch'):
+            with self.subTest(operation=operation):
+                self.writer.authority=replace(self.authority,reorder_accepted=True)
+                catalog=self.writer.snapshot()
+                if operation=='reorder':
+                    anchor=store.request_for(catalog,'create',name='Anchor')
+                    catalog=self.writer.apply(anchor)
+                    request=store.request_for(catalog,'reorder',identity='1000',
+                                              anchor_id=anchor['playlist_id'],after=True)
+                elif operation=='batch':request=self.batch()
+                else:request=store.request_for(catalog,'create',name='Fresh bytes')
+                before=self.state();payload=self.writer.xml.read_bytes();info=self.writer.xml.stat()
+                changed=payload.replace(b'unknown note',b'changed note')
+                source_connect=self.writer.lease._connect
+                def change_after_staging():
+                    connection=source_connect()
+                    self.writer.xml.write_bytes(changed)
+                    os.utime(self.writer.xml,ns=(info.st_atime_ns,info.st_mtime_ns))
+                    return connection
+                with mock.patch.object(self.writer.lease,'_connect',side_effect=change_after_staging), \
+                        mock.patch.object(xml,'_parse_uncached',wraps=xml._parse_uncached) as parse:
+                    with self.assertRaisesRegex(ConflictError,'XML changed before publication'):
+                        self.writer.apply(request)
+                    self.assertIn(mock.call(changed),parse.call_args_list)
+                self.assertEqual(self.state(),before)
+                self.assertFalse(self.writer.journal.exists())
+                self.assertIsNone(xml._PARSE_SESSION.get())
+                self.writer.xml.write_bytes(payload)
+
+    def test_standalone_recovery_rechecks_changed_xml_after_cached_apply(self):
+        from soundbox import rekordbox_playlist_xml as xml
+        request=self.batch();payload=self.writer.xml.read_bytes();info=self.writer.xml.stat()
+        def fault(phase):
+            if phase=='journal-ready':raise RuntimeError('interrupt')
+        with mock.patch.object(store,'_fault',side_effect=fault),self.assertRaises(RuntimeError):
+            self.writer.apply(request)
+        self.assertIsNone(xml._PARSE_SESSION.get())
+        self.writer.xml.write_bytes(payload.replace(b'unknown note',b'changed note'))
+        os.utime(self.writer.xml,ns=(info.st_atime_ns,info.st_mtime_ns))
+        with self.assertRaisesRegex(RecoveryRequired,'XML changed after interrupted save'):
+            self.writer.recover()
+        self.assertTrue(self.writer.journal.exists())
+        self.assertIsNone(xml._PARSE_SESSION.get())
+        self.writer.xml.write_bytes(payload)
+        self.assertEqual(self.writer.recover(),'rolled-back')
+
+    def test_nested_parse_scope_shares_immutable_bytes_and_cleans_up_on_failure(self):
+        from soundbox import rekordbox_playlist_xml as xml
+        payload=self.writer.xml.read_bytes()
+        with mock.patch.object(xml,'_parse_uncached',wraps=xml._parse_uncached) as parse:
+            with xml.parsing_session():
+                outer=xml._PARSE_SESSION.get();xml._parse(payload)
+                with self.assertRaisesRegex(RuntimeError,'nested'):
+                    with xml.parsing_session():
+                        self.assertIs(xml._PARSE_SESSION.get(),outer)
+                        xml._parse(payload);raise RuntimeError('nested')
+                self.assertIs(xml._PARSE_SESSION.get(),outer)
+                xml._parse(payload);self.assertEqual(parse.call_count,1)
+            self.assertIsNone(xml._PARSE_SESSION.get())
+            with xml.parsing_session():xml._parse(payload)
+            self.assertEqual(parse.call_count,2)

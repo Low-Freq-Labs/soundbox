@@ -104,6 +104,7 @@ class AnalysisWorker(QThread):
         self.automatic=automatic
         self.stop = threading.Event()
         self.result = None
+        self.expected_sha256 = None
 
     def cancel(self):
         self.stop.set()
@@ -116,8 +117,11 @@ class AnalysisWorker(QThread):
                 self.progress.emit(index, len(self.tracks), track.name)
                 arguments=dict(should_cancel=self.stop.is_set)
                 if self.automatic:arguments['automatic']=True
+                if self.expected_sha256:arguments['expected_sha256']=self.expected_sha256
                 result = analysis.analyze(self.library, track, self.preferences, **arguments)
                 if result is None:continue
+                if self.expected_sha256 and result.get('sha256')!=self.expected_sha256:
+                    raise ValueError('Audio identity changed between preparation phases; saved results are preserved')
                 key = analysis.result_key(result['path'])
                 results[key] = analysis.merge_result(self.previous.get(key), result, self.preferences)
             self.result = results
@@ -247,22 +251,49 @@ class AnalysisMixin:
         if (self._shutting_down or self._analysis_owner.stopping
                 or self._analysis_worker is not None):
             return
-        if (self.tag_controller.owned or self._refresh_worker is not None
+        source_busy=getattr(self,'_analysis_source_busy',lambda:self.tag_controller.owned)
+        if (source_busy() or self._refresh_worker is not None
                 or self._device_operation_owned()):
             QTimer.singleShot(500, self, self._start_next_analysis)
             return
         while self._analysis_queue:
-            original, track, prefs, identity = self._analysis_queue.pop(0)
+            original, track, prefs, identity = self._analysis_queue[0]
             deletion=self.settings.get('graveyard_delete_intent')
-            if deletion and not deletion.get('error') and track.track_id in deletion['ids']:continue
+            if deletion and not deletion.get('error') and track.track_id in deletion['ids']:
+                self._analysis_queue.pop(0);continue
             current = self.lib.tracks_by_id.get(track.track_id) if self.lib else None
             job=next((j for j in self.settings.get(analysis_jobs.KEY,[]) if j['id']==identity),None)
-            if current is None or job is None or not analysis_jobs.matches(job,self.lib,current):
+            if (current is None or job is None or job['state']!='queued'
+                    or not analysis_jobs.matches(job,self.lib,current)):
+                self._analysis_queue.pop(0)
+                if (job is not None and job['state']=='queued' and self.lib is not None
+                        and (job['source'],job['library_id'])==
+                            (str(self.lib.source or ''),str(self.lib.source_library_id or ''))):
+                    message='Audio or library identity changed; the original intention and saved results are preserved'
+                    before=self.settings.get(analysis_jobs.KEY,[])
+                    self.settings[analysis_jobs.KEY]=analysis_jobs.failed(before,identity,message)
+                    if not self._save_state():self.settings[analysis_jobs.KEY]=before
+                    self._flash_status(message,15)
                 continue
-            worker = AnalysisWorker(original, [track], prefs,
+            ready=getattr(self,'_analysis_prerequisite_ready',None)
+            if ready is not None and not ready(current,job):
+                QTimer.singleShot(500,self,self._start_next_analysis)
+                return
+            if not (job['preferences']['bpm'] or job['preferences']['key']):
+                before=self.settings.get(analysis_jobs.KEY,[])
+                self.settings[analysis_jobs.KEY]=analysis_jobs.finish(before,identity)
+                if not self._save_state():
+                    self.settings[analysis_jobs.KEY]=before
+                    QTimer.singleShot(500,self,self._start_next_analysis)
+                    return
+                self._analysis_queue.pop(0)
+                continue
+            self._analysis_queue.pop(0)
+            worker = AnalysisWorker(self.lib, [deepcopy(current)], analysis_jobs.component_preferences(job),
                                     deepcopy(self.settings.get('analysis_results', {})),automatic=job.get('automatic',False))
             self._analysis_worker = worker
             worker.job_id=identity
+            worker.expected_sha256=job.get('component_sha256') or job.get('waveform_sha256')
             self._analysis_owner.adopt(worker, self._analysis_retired)
             worker.start()
             return
@@ -288,14 +319,22 @@ class AnalysisMixin:
                 raise ValueError('Track changed during analysis; analyze it again')
             before = self.settings.get('analysis_results', {})
             pending=self.settings.get(analysis_jobs.KEY,[])
-            rebuild=next((j.get('waveform',False) for j in pending if j['id']==worker.job_id),False)
+            job=next((j for j in pending if j['id']==worker.job_id),None)
+            if job is None:raise ValueError('Analysis intention was replaced before completion')
+            rebuild=job.get('waveform',False)
             results = {key: analysis.merge_result(before.get(key), result, worker.preferences)
                        for key, result in worker.result.items()}
             prep=getattr(self,'prep_controller',None)
             prep_before=deepcopy(self.settings.get('pending_prep_edits',[]))
             if prep:
                 results={key:prep.attach_result(current,result) for key,result in results.items()}
-            retirement=analysis_jobs.finish(pending,worker.job_id)
+            if results:
+                digest=next(iter(results.values()))['sha256']
+                retirement=analysis_jobs.advance(pending,worker.job_id,digest)
+            else:
+                # Automatic duration exclusion is terminal, not a key retry.
+                retirement=analysis_jobs.finish(pending,worker.job_id)
+            terminal=not any(j['id']==worker.job_id for j in retirement)
             self.settings['analysis_results'] = {**before, **results}
             self.settings[analysis_jobs.KEY]=retirement
             if not self._save_state():
@@ -305,11 +344,14 @@ class AnalysisMixin:
                 raise OSError('Analysis was not saved')
             self._invalidate_rows([track.track_id])
             self._refresh_analysis_row(track.track_id)
-            if rebuild and track.track_id not in getattr(self,'hidden',set()):
+            if not terminal:
+                self._analysis_queue.insert(0,(self.lib,deepcopy(current),dict(job['preferences']),worker.job_id))
+            if (terminal and rebuild and not job.get('waveform_sha256')
+                    and track.track_id not in getattr(self,'hidden',set())):
                 self._waveform_force_pending.add(track.track_id)
                 self._maybe_fill_waveforms()
             publisher=getattr(self,'native_analysis_controller',None)
-            if publisher:publisher.discover()
+            if terminal and publisher:publisher.discover()
             if self.player_bar.current_track() == track.track_id:
                 record = self._analysis_result(current)
                 self.player_bar.detected_analysis = record
@@ -346,7 +388,8 @@ class AnalysisMixin:
         from PySide6.QtCore import QItemSelectionModel
         row = self._row_for(track)
         selected = set(self._selected_ids())
-        reset = model.update_analysis(track_id, bpm=row['bpm'], key=row['key'])
+        reset = model.update_analysis(track_id, bpm=row['bpm'], key=row['key'],
+                                      bpm_estimated=bool(row.get('bpm_estimated')))
         if reset:
             selection = self.table.selectionModel()
             for index, value in enumerate(model._rows):

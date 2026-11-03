@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import plistlib
 import sys
+from types import CodeType
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -17,15 +18,25 @@ from soundbox.providers import profile_path, read_manifest
 COMMON_COLLECTIONS = ("pyrekordbox", "sqlcipher3", "PIL", "soundfile", "zstandard")
 COMMON_SUBMODULES = ("sqlalchemy", "clickwheel.ipod", "PySide6.QtMultimedia")
 PERSONAL_PACKAGES = ("soundbox_personal", "yt_dlp")
+DEVELOPER_PACKAGES = ("tests", "research")
+REQUIRED_RUNTIME_MODULES = (
+    "soundbox.providers", "soundbox.artwork", "soundbox.mp3_scan",
+    "soundbox.native_mp3_analysis_plan", "soundbox.rekordbox_cbr_analysis_store",
+    "soundbox.immutable_plan_proof",
+    "desktop.native_timing",
+    "soundbox.mac_process",
+    "desktop.native_analysis", "desktop.tag_controller",
+)
 
 
 def source_fingerprint(root: Path = ROOT) -> str:
     files = []
     for directory in ("soundbox", "desktop", "soundbox_personal", "native", "profiles", "assets"):
         files.extend(p for p in (root / directory).rglob("*")
-                     if p.is_file() and p.suffix in (".py", ".cpp", ".mm", ".h", ".metal", ".json", ".svg", ".rs", ".toml", ".lock", ".sql"))
+                     if p.is_file() and p.suffix in (".py", ".c", ".cpp", ".mm", ".h", ".metal", ".json", ".svg", ".rs", ".toml", ".lock", ".sql"))
     files.extend(root / name for name in (
         "soundbox_app.py", "Soundbox.spec", "build_app.sh", "build_native.sh", "build_cdj.sh",
+        "native/CMakeLists.txt",
         "requirements-core.txt", "requirements-personal.txt", "pyproject.toml",
         "scripts/build_composition.py", "scripts/app_provenance.py", "scripts/check_cdj_vendor.py"))
     digest = hashlib.sha256()
@@ -42,7 +53,7 @@ def composition(profile: str) -> dict:
         "manifest": manifest,
         "collections": (*COMMON_COLLECTIONS, *(("yt_dlp",) if personal else ())),
         "submodules": (*COMMON_SUBMODULES, *(("soundbox_personal",) if personal else ())),
-        "excludes": [] if personal else list(PERSONAL_PACKAGES),
+        "excludes": [*DEVELOPER_PACKAGES, *(() if personal else PERSONAL_PACKAGES)],
     }
 
 
@@ -55,6 +66,53 @@ def write_manifest(profile: str, directory: Path) -> Path:
     return path
 
 
+def _same_code(actual: CodeType, expected: CodeType) -> bool:
+    """Compare executable content and positions, independent of bundle paths."""
+    fields = ("co_argcount", "co_posonlyargcount", "co_kwonlyargcount", "co_nlocals",
+              "co_stacksize", "co_flags", "co_code", "co_names", "co_varnames",
+              "co_freevars", "co_cellvars", "co_name", "co_qualname", "co_firstlineno",
+              "co_linetable", "co_exceptiontable")
+    if (any(getattr(actual, field) != getattr(expected, field) for field in fields)
+            or len(actual.co_consts) != len(expected.co_consts)):
+        return False
+    for left, right in zip(actual.co_consts, expected.co_consts):
+        if isinstance(left, CodeType) or isinstance(right, CodeType):
+            if not isinstance(left, CodeType) or not isinstance(right, CodeType) or not _same_code(left, right):
+                return False
+        elif type(left) is not type(right) or left != right:
+            return False
+    return True
+
+
+def verify_runtime_code(pyz, *, root: Path = ROOT) -> list[str]:
+    """Require core capabilities and compare all bundled first-party Python code."""
+    names = set(pyz.toc)
+    leaked = sorted(name for name in names if any(
+        name == package or name.startswith(package + ".") for package in DEVELOPER_PACKAGES))
+    if leaked:
+        raise ValueError("Developer Python modules leaked into PYZ: " + ", ".join(leaked))
+    missing = sorted(set(REQUIRED_RUNTIME_MODULES) - names)
+    if missing:
+        raise ValueError("Shared runtime modules missing: " + ", ".join(missing))
+    verified = []
+    for name in sorted(names):
+        if not any(name == prefix or name.startswith(prefix + ".")
+                   for prefix in ("soundbox", "desktop", "soundbox_personal")):
+            continue
+        path = root / name.replace(".", "/")
+        source = path.with_suffix(".py")
+        if not source.is_file():
+            source = path / "__init__.py"
+        if not source.is_file():
+            raise ValueError("Bundled first-party module has no source: " + name)
+        actual = pyz.extract(name)
+        expected = compile(source.read_bytes(), str(source), "exec", dont_inherit=True, optimize=0)
+        if not isinstance(actual, CodeType) or not _same_code(actual, expected):
+            raise ValueError("Bundled runtime code differs from tested source: " + name)
+        verified.append(name)
+    return verified
+
+
 def inspect_artifact(app: Path, profile: str) -> dict:
     """Inspect actual PYZ modules/files, rather than trusting hidden menus."""
     from PyInstaller.archive.readers import CArchiveReader
@@ -64,12 +122,15 @@ def inspect_artifact(app: Path, profile: str) -> dict:
     manifest = read_manifest(manifest_path)
     if not (resources / 'assets/soundbox-wordmark.svg').is_file():
         raise ValueError('Vector wordmark is missing from the bundle')
+    if not (app / 'Contents/Frameworks/native/libsoundbox_process_guard.dylib').is_file():
+        raise ValueError('Fresh native process guard is missing from the bundle')
     expected = composition(profile)["manifest"]
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("Artifact build manifest differs from selected profile")
     archive = CArchiveReader(str(app / "Contents" / "MacOS" / "Soundbox"))
     pyz = archive.open_embedded_archive("PYZ.pyz")
     modules = sorted(pyz.toc)
+    verified_runtime = verify_runtime_code(pyz)
     present = {package: any(m == package or m.startswith(package + ".")
                             for m in modules) for package in PERSONAL_PACKAGES}
     if any(value != (profile == "personal") for value in present.values()):
@@ -95,6 +156,7 @@ def inspect_artifact(app: Path, profile: str) -> dict:
     if info.get("SoundboxModules") != ids:
         raise ValueError("Module provenance mismatch")
     return {"profile": profile, "modules": ids, "python_module_count": len(modules),
+            "verified_runtime_modules": verified_runtime,
             "personal_packages": present, "source_sha256": manifest["source_sha256"]}
 
 

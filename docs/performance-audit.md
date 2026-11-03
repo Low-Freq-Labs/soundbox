@@ -18,6 +18,149 @@ cloud acquisition, and the source/device worker boundaries. It is an inventory
 of concrete costs and contracts, not a claim that every possible workload has
 been measured or that another feature can bypass those boundaries.
 
+## Native command audit, November2 evening
+
+Sonny reported slow adding/updating and slow native commands generally. During
+the first pass he kept SoundBox closed; he later confirmed improvement and
+requested the dedicated second pass below. Private timings use
+existing frozen66,248,704-byte native database copies, with6017content rows,
+12386cues and20166contentFile rows. Generated media and disposable source paths
+isolate writes and avoid cloud hydration. Frozen originals are hash-verified
+unchanged. No real app inputs or source writes are used for performance tests.
+
+The common source lane makes a slow registration/analysis/locator transaction
+visible as latency for other queued commands. Repeated full reconstruction of
+unchanged encrypted recovery copies is the largest measured avoidable cost.
+Full source snapshots and fresh process/version/authority/path/payload checks
+remain required. A full encrypted backup costs about0.924s; complete logical
+inventory about0.753s including connection; SHA-256 of the DB about0.032s;
+fresh closed-app query about0.025s. These are private-copy measurements, not
+native UI or cloud-download timings.
+
+The implementation removes a duplicate desktop analysis-plan load and a second
+Collection-import full-library refresh. The latter now strictly verifies native
+bindings against the same fresh full library observation and atomically saves
+bindings plus intent completion. Failed local persistence still replays the
+committed receipt on restart. Tag saves retain their fresh full library reload
+because intelligent-playlist membership depends on the complete observation.
+
+WAV/CBR plan loaders reuse only a completed immutable reconstruction, keyed by
+exact raw plan, authority, profile and folder, bounded to4entries/30seconds.
+Every call still validates paths/profile/authority and hashes ALL payloads.
+No source/process/transaction/readback check is memoized. Paired proofs inventory
+each database once rather than scanning the before-copy twice. Registration and
+locator use the existing playlist pattern: one exact completed immutable-pair
+proof per store, after fresh source identity, operation record and payload hashes.
+Non-WAV imports skip the inapplicable float-WAVE conversion snapshot. Durable
+cue preparation retains at most8source-inode/native-identity/authority-bound
+store handles so its existing counter-bound verified backup can be reused;
+source/app/recovery checks still run on every snapshot/apply. Logs record native
+command kind, execution time and completion/error without track paths or contents.
+These log durations exclude queued wait and GUI acknowledgement.
+
+Plain private-copy measurements on the M1 Pro (no profiler overhead):
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| Registration workflow, median of2 alternating runs per variant | 10.387s | 4.780s |
+| Locator prepare/apply, median of2 alternating runs per variant | 11.838s | 5.459s |
+| Repeated exact CBR prepared-plan proof, median of3 | 2.480s full proof | 0.067s reuse |
+
+Registration and locator each improve about54%. Payload-hash calls remain
+31→31 and35→35 respectively; locator integrity checks remain2→2. Avoided
+checks reconstruct the same exact immutable pair, rather than proving new source
+state. The132,497,408-byte paired plan still gets fully hashed on every reuse.
+One complete private CBR workflow measured19.104s:8.606s preparation,0.070s
+constructor,9.185s apply,0.124s retention and1.118s independent readback. It uses
+accepted packets through a fixture renderer and excludes detection/GUI work.
+
+These figures exclude UI/decoder/cloud time and do not claim an end-to-end
+47-second import now completes in any particular time. Native reopen/UI latency
+of the new package remains unobserved while Sonny keeps the app closed.
+
+Existing tag/cue/grid source writes measured about0.30–0.35s warm and1.3–1.4s
+cold in the initial profiled audit. Playlist create/rename were about3s; private
+file conversion about2.4s and removal preparation about2.36s without a profiler.
+Those samples identify remaining proof/refresh costs, not after-change promises.
+Removal tests prepare only generated selections; no user music is deleted.
+
+Small receipts remain under native-command-performance-2026-11-02 and
+mp3-analysis-2026-11-02/registration-locator-costs-20261102-202917.json in the
+private Logs root. Frozen inputs are unchanged and temporary DB copies are
+removed. Existing acceptance/backup/crash tests remain required; unchanged
+domains are retained when their fresh proof is the measured cost.
+
+## Dedicated command reviews — second pass
+
+Sonny requested a dedicated subagent for each native command. Ten domain reviews
+covered every operation below in batches of three workers, with a separate shared
+backup audit and independent cross-reviews. Real SoundBox remained open; reviews
+used private native-sized TEMP sources and generated audio only. No real app
+input/source/AppData/music/Trash/device writes were used for profiling. Frozen
+DB/XML/packet hashes remain exact, and temporary database copies are removed.
+
+| Command review | Wasted work and disposition |
+| --- | --- |
+| Tags: add/remove/no-op | Warm source mutation about0.3s, full intelligent-membership refresh about1.3s. Preserve the full fresh read; raw cue display avoids redundant ORM timestamp conversion. Logs separate execution/dispatch/phases/GUI acknowledgement. |
+| Hot/Memory cue add/delete | Repeated process-query subprocesses dominate warm writes. Header equality skips rewriting unchanged derived waveforms; externally changed grids still refresh. Retrigger remains transport-only. |
+| Grid: nudge/unshift/bar-start/BPM/double/half | Fresh process probes dominate; pure planning is about10ms. Preserve distinct durable prepare/apply/readback and Analysis Lock. A2ms temporary packet staging cost does not justify recovery changes. |
+| Playlist/folder create/rename/delete, append/remove, reorder, accepted batch | Identical XML was parsed13–17times within one operation. Existing bounded exact-byte parser session reduces this to1–3while all38payload hashes and fresh reads remain. |
+| Registration/import/reuse | Ordinary PCM16/24 WAV imports took a conversion-only DB snapshot before discovering no conversion. Known canonical integer header/no receipt now returns no action; every real conversion/recovery/symlink/unknown state keeps the old guards and registration captures freshly. |
+| Locator prepare/apply/replay | First apply re-proved exactly the pair already proved by preparation. Seed only after complete before/after proof AND archive DB/XML transfers match known verified input hashes. Fresh hashes/media/source/SQL guards remain; fresh stores reconstruct. |
+| WAV/lossless conversion | Same source paths were resolved twice within a fresh codec-binding check. Reuse only that invocation's normalization map. Original/output byte and independent sample proofs, alias checks and fresh snapshots remain. Cloud-provider captures stay unchanged. |
+| Confirmed Collection/disk Delete | Independent native plan/proof, shared-file protection and user confirmation remain. Every semantic-cache hit now freshly hashes raw plan/DB/XML/resource backups; no Delete speedup is claimed. No actual user music or Trash is tested. |
+| WAV/CBR initial analysis | Full tables were materialized for one target, and before inventories repeated. Narrow target SQL keeps all historical file/mixer identity collisions; paired proof returns both inventories. Each source snapshot still captures/checks integrity/identity/hashes freshly; only its exact-byte inventory may be reused. |
+| Refresh/queue/GUI acknowledgement | A delayed prep retry suppressed genuine lane-release wakeups for nearly2seconds. Promote wakeups to the next event turn; a separate monotonic native-open deadline preserves the2-second backoff and prevents worker spin. Warm isolated GUI acknowledgement remains about0.20s. |
+
+Shared process guards use a small separate C dylib and fresh
+`sysctl(KERN_PROC_ALL)` snapshots. Bounds/size/string/own-PID+name checks must pass
+before absence is accepted; uncertainty uses the unchanged strict pgrep path.
+Only the loaded function interface is cached, never process presence/absence.
+Direct prototype queries measured about0.28ms versus24.5ms for subprocess pgrep.
+An in-process libproc-name walk was rejected because other-process permission
+failures could not prove absence. No real-app-named test processes are spawned.
+Native tests use a uniquely named disposable child and injected kernel responses.
+
+Shared encrypted-backup optimization retains stable DB/WAL capture, hot-journal
+refusal, full integrity+identity, unchanged raw bytes and fsync. Only absent/zero
+WAL can adopt its self-contained private image without re-encryption; any nonempty
+WAL (even header-only) keeps SQLite folding. Preliminary alternating66MB backups
+measured0.965→0.577s. No source connection or journal-mode normalization is added.
+
+Final serialized **plain** checks on native-sized TEMP copies compare only the
+process-query backend, with the other current optimizations active in both:
+
+| Source operation | pgrep | Fresh native query |
+| --- | ---: | ---: |
+| Hot cue delete, warm apply | 0.344s | 0.144s |
+| Memory cue add, warm apply | 0.350s | 0.145s |
+| Memory cue delete, warm apply | 0.348s | 0.141s |
+| Grid unshift, full durable observation/apply/readback model | 1.186s | 0.522s |
+| Set bar start, same model | 1.198s | 0.525s |
+| Manual BPM, same model | 1.213s | 0.522s |
+
+Cue complete observation/apply/readback (no GUI) fell about0.63→0.28s; the first
+cold cue apply1.025→0.794s. Grid workflows needing a backup fell about1.87–1.88→
+1.18–1.22s. Every source boundary still performs its fresh check.
+
+Other isolated findings, whose scopes differ and must not be summed: prep
+lane-release confirmation1.932→0.0133s (two alternating runs per variant);
+complete fixture-rendered CBR workflow19.104→12.030s (no detector/GUI);
+PCM-WAV import conversion no-op0.916→0.001s; locator prepare/apply4.771→3.345s
+(two alternating runs, native process helper active in both). Playlist parsing
+alone saved8–12% across eight operations; all hashes unchanged. Codec conversion
+path reuse reduced33,280→16,669resolutions in its profiled fixture; profiler
+wall times are not plain latency claims. Header cache check avoids a synthetic
+32MiB rewrite25.9ms→0.073ms. Complete reader output remains field-exact across
+3295tracks/85playlists and all cues/tags/native revisions.
+
+Individual receipts and repeatable fixture scripts are in private
+`native-command-performance-2026-11-02/pass2/`; `final-serialized/` distinguishes
+plain final measurements. `command-review-matrix.json` identifies the reviewer
+for every domain. Shared source guards, exact encrypted recovery and all acceptance
+boundaries remain. Direct timed user-interface actions on the new package are
+still unobserved; current release-gate/install status belongs in HANDOFF.
+
 ## Measurement scope
 
 Private offscreen fixtures contain 3,200 or 10,000 generated track records,
@@ -272,3 +415,31 @@ Their row map follows catalog-object/library identity, and setting an icon only
 repaints the viewport after a local state save. It does not rebuild the sidebar,
 reload a playlist, enqueue a native save or inspect source audio. Installed
 provenance and current gate status remain in [HANDOFF](HANDOFF.md).
+
+## First performance delivery verification,20:45
+
+The follow-up is installed at20:45in personal155, runtime fingerprint8882e36f…;
+HANDOFF retains exact provenance. All2219tests passed (2155offscreen/64Cocoa),
+zero skips/expected failures; lint/types104core files, Rust/native/fixtures/render
+passed. All152packaged Python modules and25deck/17CDJ-helper code/data sections
+match tested builds. Fresh strict signature and installed normal deep signature
+plus exact signed Contents pass. Installed isolated CoreAudio/Metal startup has
+zero devices/no loaded library or artwork worker. Curation remains byte-exact,
+all10authorities unchanged and queues empty. Sonny explicitly requested keeping
+SoundBox closed; no normal real-library launch or UI latency result is claimed.
+
+## Second-pass installed verification
+
+The second package was safely installed at22:56on November2 after Sonny quit
+normally. Runtime33689af7…/executablecf86e80f…/personal155 is exact in HANDOFF.
+All2266tests passed (2202offscreen450.033s,64Cocoa67.534s), zero skips or expected
+failures; lint/types105core files/Rust/native/fixtures/render pass. All154Python
+modules and25deck/5process-guard/17CDJ code/data sections match tested builds.
+Fresh strict and installed normal deep signatures plus exact signed Contents
+pass. Installed isolated startup verifies native player AND fast process query
+with zero discovery/no loaded library. Curation is byte-exact to fresh preinstall,
+all10authorities and saved icon exact, queues empty; only legitimate window/column
+UI settings differ from the earlier first-pass baseline. The real app is left
+closed; normal real-library launch and new actual gesture timing remain unmeasured.
+One prior first-pass app is retained; obsolete CBR app and duplicate packaging
+outputs were retired by exact scoped receipts, with source/recovery/audio intact.

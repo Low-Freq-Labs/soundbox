@@ -63,3 +63,49 @@ class AnalysisJobs(unittest.TestCase):
             original=deepcopy(case)
             with self.assertRaises(ValueError):jobs.validate(case)
             self.assertEqual(case,original)
+
+    def test_components_checkpoint_without_changing_preferences_and_resume_key_after_retry(self):
+        queued=jobs.admit([],self.lib,[self.track],dict(first_cue=True))
+        identity=queued[0]['id'];prefs=deepcopy(queued[0]['preferences'])
+        self.assertEqual(jobs.component_preferences(queued[0]),{**prefs,'key':False})
+        wave=jobs.wave_ready(queued,identity,'a'*64,[1,2,100,3,4])
+        key=jobs.advance(wave,identity,'a'*64)
+        self.assertEqual(key[0]['preferences'],prefs)
+        self.assertEqual(jobs.component_preferences(key[0]),{**prefs,'bpm':False,'first_cue':False})
+        saved=json.loads(json.dumps(key));jobs.validate(saved)
+        failed=jobs.failed(saved,identity,'Key failed')
+        retry=jobs.admit(failed,self.lib,[self.track],prefs,retry_failed=True)
+        self.assertNotEqual(retry[0]['id'],identity)
+        self.assertEqual((retry[0]['phase'],retry[0]['component_sha256'],retry[0]['waveform_epoch']),
+                         ('key','a'*64,[1,2,100,3,4]))
+        self.assertEqual(jobs.advance(retry,retry[0]['id'],'a'*64),[])
+        self.assertEqual(queued[0]['phase'],'bpm')
+        self.assertNotIn('waveform_sha256',queued[0])
+
+    def test_legacy_wire_stays_valid_and_component_identity_never_rebases(self):
+        queued=jobs.admit([],self.lib,[self.track],{})
+        queued[0].pop('phase');original=deepcopy(queued)
+        jobs.validate(queued)
+        self.assertEqual(queued,original)
+        self.assertEqual(jobs.phase(queued[0]),'bpm')
+        disabled={**queued[0],'preferences':{**queued[0]['preferences'],'bpm':False,'key':False}}
+        jobs.validate([disabled])
+        self.assertFalse(jobs.component_preferences(disabled)['key'])
+        ready=jobs.wave_ready(queued,queued[0]['id'],'b'*64,[1,2,100,3,4])
+        for operation in (lambda:jobs.advance(ready,ready[0]['id'],'a'*64),
+                          lambda:jobs.wave_ready(ready,ready[0]['id'],'a'*64,[1,2,100,3,4])):
+            with self.assertRaisesRegex(ValueError,'identity changed'):operation()
+        invalid=[{**original[0],'phase':'key'},
+                 {**original[0],'waveform_sha256':'b'*64},
+                 {**original[0],'waveform_sha256':'b'*64,'waveform_epoch':[1,2,True,3,4]}]
+        for job in invalid:
+            with self.assertRaises(ValueError):jobs.validate([job])
+
+    def test_waveform_only_intent_never_enables_a_detector_component(self):
+        queued=jobs.admit([],self.lib,[self.track],dict(bpm=False,key=False))
+        self.assertNotIn('phase',queued[0])
+        self.assertIsNone(jobs.phase(queued[0]))
+        self.assertFalse(jobs.component_preferences(queued[0])['bpm'])
+        self.assertFalse(jobs.component_preferences(queued[0])['key'])
+        ready=jobs.wave_ready(queued,queued[0]['id'],'c'*64,[1,2,100,3,4])
+        self.assertEqual(jobs.finish(ready,queued[0]['id']),[])

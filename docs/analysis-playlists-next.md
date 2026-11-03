@@ -43,7 +43,11 @@ pinned rbxport adaptive/high-precision tempo/key pipeline in the optimized local
 is a disabled placeholder; no Normal/Dynamic mode or cloud controls. Automatic
 analysis of newly imported SoundBox files is opt-in and initially off. The
 current manual/automatic paths run silently in the background without an analysis
-window or progress bar, saving/publishing each completed song before the next.
+window or progress bar. Required conversion precedes waveform preparation;
+BPM is saved next, then key, with full-SHA component checkpoints and restart
+resumption. New native DB saves follow local preparation; they never publish an
+intermediate BPM paired with an older key. This is local staging, not permission
+for partial native-component publication.
 Folder imports enter Collection before header/bookmark probing. Captured imports
 admit BPM/grid and Hot/Memory Cue drafts after detection, including already-added
 songs whose unchanged audio acquired a newer cloud metadata timestamp. The
@@ -52,7 +56,8 @@ Normal and Power saving select child-process scheduling priority, preserving the
 same DSP and quality. BPM ranges are 70–180 default, 48–95, 58–115, 68–135,
 78–155, 88–175, 98–195, 108–215, 118–235 and 128–255.
 
-One source snapshot is captured while hashing. The helper retains up to thirty
+Each local stage captures a source snapshot while hashing, pinned to the waveform's
+full audio SHA after the initial waveform capture. The helper retains up to thirty
 minutes /96million mono samples, checks rate/channel budgets before allocation,
 and bounds every append. It streams the remaining tail through EOF, checking
 finite samples, stable format and declared duration even after the head fills.

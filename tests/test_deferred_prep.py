@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 import math
+from pathlib import Path
 import os
 import threading
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame
 
 from desktop.prep_controller import PrepEditController
-from soundbox import analysis, prep_edits, rekordbox_db
+from soundbox import analysis, prep_edits, rekordbox_db, track_analysis
 from soundbox.rekordbox_grid import Beat, read_grid, replace_grid
 import test_rekordbox_grid as grid_fixture
 from soundbox.rekordbox_write import WriteProofError
@@ -107,7 +108,8 @@ class DurablePrep(unittest.TestCase):
         self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
         self.assertTrue(self.controller.request_cue(self.tid,'memory',0,'add',1234))
         self.assertEqual(self.writes,[])
-        with mock.patch('desktop.prep_controller.assert_rekordbox_closed',side_effect=WriteProofError('Close rekordbox and its background agent before editing')):
+        with mock.patch('desktop.prep_controller.assert_rekordbox_closed',side_effect=WriteProofError('Close rekordbox and its background agent before editing')), \
+                mock.patch('desktop.prep_controller.time.monotonic',return_value=0):
             self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
             self.wait(lambda:not self.controller.busy and self.controller.timer.isActive())
             self.assertEqual(self.writes,[]);self.assertEqual(len(self.controller.pending[0]['operations']),3)
@@ -117,6 +119,51 @@ class DurablePrep(unittest.TestCase):
         self.assertEqual(read_grid(self.native.dat)[0].time_ms,40)
         fields=rekordbox_db.cue_snapshot_fields(self.native.state)
         self.assertEqual(sorted(c['position_ms'] for c in fields['source_cues']),[777,1234])
+
+    def test_lane_release_promotes_delayed_retry_but_rechecks_all_ownership_gates(self):
+        shared=self.native.shared;w=self.window;shared.busy=True
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.controller.timer.stop();self.controller.pump()
+        self.assertGreater(self.controller.timer.remainingTime(),1000)
+        device=mock.Mock(return_value=False);w._device_operation_owned=device
+        gates=[(shared,'busy',True),(shared,'checking',True),(shared,'grid_waiting',True),
+               (w,'_refresh_worker',object()),(w,'_state_maintenance',True),(device,'return_value',True)]
+        for index,(owner,name,value) in enumerate(gates):
+            if index:
+                previous,attribute,_=gates[index-1]
+                setattr(previous,attribute,None if attribute=='_refresh_worker' else False)
+            setattr(owner,name,value)
+            shared.changed.emit()
+            self.assertEqual(self.controller.timer.remainingTime(),0)
+            QTest.qWait(15)
+            self.assertEqual(self.writes,[])
+            self.assertFalse(self.controller.busy)
+            self.assertGreater(self.controller.timer.remainingTime(),1000)
+        device.return_value=False;shared.idle.emit()
+        self.assertEqual(self.controller.timer.remainingTime(),0)
+        self.wait(lambda:not self.controller.pending and not shared.busy)
+        self.assertEqual([kind for kind,_ in self.writes],['cue'])
+
+    def test_native_open_backoff_survives_repeated_lane_signals_without_worker_spin(self):
+        shared=self.native.shared;shared.busy=True
+        with mock.patch('desktop.prep_controller.time.monotonic',return_value=1000) as clock, \
+                mock.patch('desktop.prep_controller.assert_rekordbox_closed',
+                           side_effect=WriteProofError('Close rekordbox and its background agent before editing')) as closed:
+            self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+            original=deepcopy(self.controller.pending)
+            shared.busy=False;shared.idle.emit()
+            self.wait(lambda:closed.call_count==1 and not shared.busy)
+            for _ in range(8):
+                shared.idle.emit();shared.changed.emit();QTest.qWait(10)
+                self.assertEqual(closed.call_count,1)
+                self.assertGreater(self.controller.timer.remainingTime(),1000)
+            self.assertEqual(self.controller.pending,original);self.assertEqual(self.writes,[])
+            clock.return_value=1002;shared.idle.emit()
+            self.wait(lambda:closed.call_count==2 and not shared.busy)
+            QTest.qWait(25);self.assertEqual(closed.call_count,2)
+            clock.return_value=1004;closed.side_effect=None;shared.idle.emit()
+            self.wait(lambda:not self.controller.pending and not shared.busy)
+        self.assertEqual([kind for kind,_ in self.writes],['cue'])
 
     def test_committed_save_with_failed_local_ack_replays_receipt_without_duplicate(self):
         self.fail_after_commit=True
@@ -231,6 +278,127 @@ class DurablePrep(unittest.TestCase):
         self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
         self.assertEqual([[b.number,b.time_ms,b.tempo/100] for b in read_grid(self.native.dat)],original)
         self.assertEqual([kind for kind,_ in self.writes],['grid','grid','cue'])
+
+    def test_consecutive_durable_cues_reuse_one_identity_bound_store_across_both_phases(self):
+        factory=mock.Mock(wraps=self.native.shared._cue_store_factory)
+        self.native.shared._cue_store_factory=factory;self.native.shared.busy=True
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',1,'add',888))
+        self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
+        self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
+        factory.assert_called_once();self.assertEqual([kind for kind,_ in self.writes],['cue','cue'])
+        self.assertEqual([cue['InMsec'] for cue in self.native.state.cues],[777,888])
+
+    def _grid_cache(self, beats):
+        track=self.window.lib.tracks_by_id[self.tid];info=track.path.stat()
+        manifest=dict(schema=track_analysis.SCHEMA,track_id=self.tid,
+            source=dict(identity=f'{info.st_size}:{info.st_mtime_ns}',size=info.st_size),
+            provenance=dict(grid='rekordbox'),beats=beats,
+            grid_import=dict(source='rekordbox-anlz',fingerprint=track_analysis.grid_fingerprint(beats)))
+        payload=b'private opaque compressed waveform payload'*100
+        manifest['payload_sha256']=hashlib.sha256(payload).hexdigest()
+        encoded=json.dumps(manifest).encode();folder=self.window._track_analysis_dir
+        folder.mkdir(parents=True,exist_ok=True);target=track_analysis.cache_path(folder,self.tid)
+        target.write_bytes(track_analysis._HEADER.pack(track_analysis._MAGIC,len(encoded))+encoded+payload)
+        return target
+
+    def test_cue_commands_leave_matching_waveform_cache_byte_exact_and_unwritten(self):
+        target=self._grid_cache(self.window.player_bar._analysis_parts['beats'])
+        original=target.read_bytes();identity=target.stat()
+        for page,operation,position in [('hot','add',777),('memory','add',888),
+                                        ('hot','delete',None),('memory','delete',None)]:
+            with self.subTest(page=page,operation=operation):
+                self.assertTrue(self.controller.request_cue(self.tid,page,0,operation,position))
+                self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
+                self.assertEqual(target.read_bytes(),original)
+                self.assertEqual((target.stat().st_ino,target.stat().st_mtime_ns),(identity.st_ino,identity.st_mtime_ns))
+        self.window._prepare_grid_cache.assert_not_called()
+
+    def test_cue_save_still_refreshes_an_outdated_native_grid_cache(self):
+        beats=deepcopy(self.window.player_bar._analysis_parts['beats'])
+        stale=deepcopy(beats);stale[-1][1]-=1;self._grid_cache(stale)
+        payload=track_analysis._read_container_manifest(self.window._track_analysis_dir,self.tid,
+            self.window.lib.tracks_by_id[self.tid].path)[2]
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
+        _target,manifest,after_payload=track_analysis._read_container_manifest(self.window._track_analysis_dir,
+            self.tid,self.window.lib.tracks_by_id[self.tid].path)
+        self.assertEqual(manifest['beats'],beats);self.assertEqual(after_payload,payload)
+        self.window._prepare_grid_cache.assert_called_once_with(self.tid)
+
+    def test_corrupt_disposable_grid_cache_does_not_stall_native_cue_save(self):
+        target=self._grid_cache(self.window.player_bar._analysis_parts['beats'])
+        target.write_bytes(b'invalid disposable cache header')
+        self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
+        self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
+        self.assertEqual(self.native.state.cues[0]['InMsec'],777)
+        self.assertEqual(target.read_bytes(),b'invalid disposable cache header')
+        self.window._prepare_grid_cache.assert_not_called()
+
+    def test_cue_store_cache_rechecks_authority_source_inode_native_identity_and_budget(self):
+        from soundbox.rekordbox_cue_store import CueLibraryAuthority
+        track=self.window.lib.tracks_by_id[self.tid];lib=self.window.lib
+        factory=mock.Mock(wraps=self.native.shared._cue_store_factory)
+        self.native.shared._cue_store_factory=factory;self.native.shared._requires_cue_authority=True
+        permission=CueLibraryAuthority(str(lib.source),lib.source_library_id,'a'*64,True)
+        with mock.patch('desktop.prep_controller.load_cue_authority',return_value=permission) as loader:
+            factory.side_effect=lambda _lib,tid:SimpleNamespace(authority=loader.return_value.bind(tid))
+            first=self.controller._stores(lib,track)[1]
+            self.assertIs(self.controller._stores(lib,track)[1],first);factory.assert_called_once()
+            loader.return_value=replace(permission,schema_sha256='b'*64)
+            second=self.controller._stores(lib,track)[1];self.assertIsNot(second,first)
+            replacement=Path(lib.source).with_name('replacement.db');replacement.write_bytes(Path(lib.source).read_bytes())
+            replacement.replace(lib.source)
+            third=self.controller._stores(lib,track)[1];self.assertIsNot(third,second)
+            for index in range(10):
+                self.controller._stores(lib,replace(track,source_native_id=str(100+index),source_uuid=str(index)))
+            self.assertEqual(len(self.controller._cue_stores),8)
+            self.assertIsNot(self.controller._stores(lib,track)[1],third)
+            loader.return_value=None
+            with self.assertRaisesRegex(WriteProofError,'Cue editing is not enabled'):
+                self.controller._stores(lib,track)
+            self.assertFalse(self.controller._cue_stores)
+            self.assertEqual(loader.call_count,16)
+
+    def test_cue_store_permission_change_during_creation_is_never_cached(self):
+        from soundbox.rekordbox_cue_store import CueLibraryAuthority
+        track=self.window.lib.tracks_by_id[self.tid];lib=self.window.lib
+        self.native.shared._requires_cue_authority=True
+        permission=CueLibraryAuthority(str(lib.source),lib.source_library_id,'a'*64,True)
+        self.native.shared._cue_store_factory=mock.Mock(
+            return_value=SimpleNamespace(authority=replace(permission,schema_sha256='b'*64).bind(track.native_id)))
+        with mock.patch('desktop.prep_controller.load_cue_authority',return_value=permission), \
+                self.assertRaisesRegex(WriteProofError,'authority changed'):
+            self.controller._stores(lib,track)
+        self.assertFalse(self.controller._cue_stores)
+
+    def test_real_cached_cue_store_retains_fresh_guards_and_counter_bound_backup_reuse(self):
+        from test_rekordbox_cue_store import PilotCueTransactions
+        from soundbox import rekordbox_cue_store as cues
+        from soundbox.rekordbox_cues import CueEdit
+        fixture=PilotCueTransactions();fixture.setUp()
+        try:
+            lib=replace(self.window.lib,source=fixture.source,source_library_id=fixture.authority.library_id)
+            track=replace(self.window.lib.tracks_by_id[self.tid],source_native_id='2',source_uuid='track-two',
+                          location_uri='file:///synthetic/audio')
+            self.native.shared._cue_store_factory=mock.Mock(
+                side_effect=lambda *_:cues.PilotCueStore(fixture.authority,fixture.root/'cached-recovery'))
+            with mock.patch.object(cues,'encrypted_backup',wraps=cues.encrypted_backup) as backup:
+                first=None
+                for slot in range(2):
+                    store=self.controller._stores(lib,track)[1]
+                    if first is None:first=store
+                    self.assertIs(store,first)
+                    snapshot=store.snapshot()
+                    store.apply(CueEdit('2','track-two',snapshot.revision,'hot',slot,'add',5000+slot*5000))
+                self.assertEqual(backup.call_count,1)
+                self.assertEqual(len(first.snapshot().cues),2)
+            with mock.patch.object(cues,'_closed',side_effect=WriteProofError('native owner opened')), \
+                    mock.patch.object(first,'_connect') as connection, \
+                    self.assertRaisesRegex(WriteProofError,'native owner opened'):
+                self.controller._stores(lib,track)[1].snapshot()
+            connection.assert_not_called()
+        finally:fixture.doCleanups()
 
     def test_legacy_committed_eof_mismatch_reconciles_its_exact_receipt_without_reapplying(self):
         self.native.shared.busy=True

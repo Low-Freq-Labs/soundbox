@@ -1,9 +1,12 @@
 """Immediate, durable import prep with serialized native confirmation."""
 from copy import deepcopy
+from collections import OrderedDict
 from dataclasses import asdict, replace
 import json
+import math
 from pathlib import Path
 import tempfile
+import time
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, QTimer
@@ -11,6 +14,7 @@ from PySide6.QtCore import QObject, QTimer
 from soundbox import analysis, local_grid, local_cues, prep_edits as edits, rekordbox_db, track_analysis
 from soundbox.native_paths import validate_track_path
 from soundbox.rekordbox_cues import CueEdit
+from soundbox.rekordbox_cue_store import load_cue_authority
 from soundbox.rekordbox_grid import GridEdit, read_grid
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed, _regular, _digest
 
@@ -20,6 +24,8 @@ class PrepEditController(QObject):
         super().__init__(window)
         self.window=window; self.tags=window.tag_controller
         self.busy=False; self.closing=False; self.errors={}
+        self._native_owner_not_before=0.0
+        self._cue_stores=OrderedDict()
         try:
             edits.validate(self.pending)
             self.tags.prep_priority=any(j['prepared'] is not None for j in self.pending)
@@ -184,8 +190,14 @@ class PrepEditController(QObject):
         job=self.job(tid)
         if job and not self._job_matches(job,w.lib,track):return
         w._invalidate_rows([tid]); view=self.grid_view(tid) if self.handles(tid) else None
-        if view:w._update_browser_bpm(tid,f'{view[1]:.2f}')
         pb=w.player_bar
+        if view:
+            effective=local_grid.effective_result(w._analysis_result(track))
+            estimated=bool(not track.bpm and not track.source_analysis_path and not (job and job.get('grid'))
+                and not (effective and effective.get('beats')) and pb.current_track()==tid
+                and pb._analysis_parts.get('provenance',{}).get('grid')=='soundbox-zero-anchor')
+            if estimated:w._update_browser_bpm(tid,f'{view[1]:.2f}',estimated=True)
+            else:w._update_browser_bpm(tid,f'{view[1]:.2f}')
         if pb.current_track()==tid:
             pb.detected_analysis=w._analysis_result(track)
             if result and not self.job(tid):
@@ -198,7 +210,11 @@ class PrepEditController(QObject):
         w._sync_grid();w._sync_cue_editing()
 
     def schedule(self):
-        if not self.closing and not self.timer.isActive():self.timer.start(0)
+        # Lane release should wake a queued gesture on the next event turn,
+        # even when an ownership retry is already scheduled for two seconds.
+        # Native-owner backoff is a separate pump gate, not a wakeup veto.
+        if not self.closing and (not self.timer.isActive() or self.timer.remainingTime()>0):
+            self.timer.start(0)
 
     def _status(self, message):
         if self.tags.prep_update_status!=message:
@@ -216,7 +232,36 @@ class PrepEditController(QObject):
 
     def _stores(self, lib, track):
         validate_track_path(track)
-        return self.window.grid_controller._store_for(lib,track),self.tags._cue_store_factory(lib,track.native_id)
+        factory=self.tags._cue_store_factory;authority=None
+        if self.tags._requires_cue_authority:
+            authority=load_cue_authority(self.tags.data_root/'rekordbox-cue-authority.json',
+                                         Path(lib.source),lib.source_library_id)
+            if authority is None:
+                self._cue_stores.clear()
+                raise WriteProofError('Cue editing is not enabled for this rekordbox library')
+        try:
+            source=Path(lib.source);_regular(source);info=source.stat()
+        except OSError:
+            self._cue_stores.clear()
+            cue=factory(lib,track.native_id)  # No stale reuse; the store checks its source afresh.
+        else:
+            key=(str(lib.source),lib.source_library_id,track.track_id,track.native_id,track.source_uuid,
+                 str(track.native_path),info.st_dev,info.st_ino,
+                 _digest(asdict(authority)) if authority is not None else None,id(factory))
+            if key not in self._cue_stores:
+                cue=factory(lib,track.native_id)
+                if authority is not None and cue.authority!=authority.bind(track.native_id):
+                    raise WriteProofError('Cue authority changed while preparing its store')
+                self._cue_stores[key]=(factory,cue)
+            self._cue_stores.move_to_end(key)
+            while len(self._cue_stores)>8:self._cue_stores.popitem(last=False)
+            cue=self._cue_stores[key][1]
+            if authority is not None and cue.authority!=authority.bind(track.native_id):
+                self._cue_stores.pop(key)
+                raise WriteProofError('Cached cue authority changed')
+        # Reusing a handle only retains its existing counter-bound backup proof.
+        # Every snapshot/apply still executes the complete fresh store guards.
+        return self.window.grid_controller._store_for(lib,track),cue
 
     @staticmethod
     def _identity(snapshot, track):
@@ -320,6 +365,9 @@ class PrepEditController(QObject):
         repair=(job['version']==1 and job['prepared'] is not None
                 and job['error']=='Saved prep readback differs from the intended component')
         if job['error'] and not repair:return
+        remaining=self._native_owner_not_before-time.monotonic()
+        if remaining>0:
+            self.timer.start(max(1,math.ceil(remaining*1000)));return
         if (self.tags.busy or self.tags.checking or self.tags.grid_waiting and not self.tags.prep_priority
                 or w._refresh_worker is not None or w._state_maintenance or w._device_operation_owned()):
             self.timer.start(2000);return
@@ -378,14 +426,17 @@ class PrepEditController(QObject):
             _g,_c,result=self._read(grid,cue_store,track)
             values=result['beats'] if op['kind']=='grid' else edits.cues(result['cue_fields']['source_cues'])
             if edits.digest(values)!=op['after']:raise WriteProofError('Saved prep readback differs from the intended component')
-            w._prepare_grid_cache(tid)
-            track_analysis.update_grid_source(w._track_analysis_dir,tid,track.path,result['beats'])
+            if op['kind']=='grid' or track_analysis.grid_needs_sync(w._track_analysis_dir,tid,track.path,result['beats']):
+                w._prepare_grid_cache(tid)
+                track_analysis.update_grid_source(w._track_analysis_dir,tid,track.path,result['beats'])
             return result
         def completed(worker):
             self.busy=False
             if worker.error:self._fail(tid,worker.error);return
             result=worker.result
-            if result.get('waiting'):self.timer.start(2000);return
+            if result.get('waiting'):
+                self._native_owner_not_before=time.monotonic()+2.0
+                self.timer.start(2000);return
             current=self.job(tid)
             if not current or not current['operations'] or current['operations'][0]['id']!=op['id']:
                 self._fail(tid,'Prep queue changed while saving; intentions preserved');return

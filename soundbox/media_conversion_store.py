@@ -116,12 +116,15 @@ class ConversionStore:
         if authority is None or authority.track_ids and any(r['id'] not in authority.track_ids for r in expected):
             raise WriteProofError('Codec replacement has no matching locator authority')
         rows=self._bindings(path,expected,wave_only=False)
-        matched={r['ID'] for r in rows if Path(r['FolderPath']).resolve(strict=False)==path}
+        # Resolve each freshly captured path once for both alias and destination
+        # checks. This observation never outlives this binding check.
+        paths={r['ID']:Path(r['FolderPath']).resolve(strict=False) for r in rows}
+        matched={identity for identity,canonical in paths.items() if canonical==path}
         if matched!={r['id'] for r in expected}:raise ConflictError('All native references to this audio must move together')
         for row in rows:
             if row['ID'] in matched and (row.get('usn') is not None or row.get('rb_local_synced') not in (0,1)):
                 raise WriteProofError('This native sync state cannot be relocated; original audio retained')
-            if row['ID'] not in matched and Path(row['FolderPath']).resolve(strict=False)==path.with_suffix('.wav'):
+            if row['ID'] not in matched and paths[row['ID']]==path.with_suffix('.wav'):
                 raise ConflictError('The WAVE destination belongs to another native track; original audio retained')
 
     def _unregistered(self,path):
