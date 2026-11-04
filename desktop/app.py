@@ -31,8 +31,9 @@ import random
 import sys
 import time
 from dataclasses import replace
-from functools import wraps
+from functools import cached_property, wraps
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from soundbox.state_repository import StateRepository
 from soundbox.artwork import ArtCache, ArtResult
@@ -120,26 +121,13 @@ from soundbox import (
     rockbox_config, track_analysis,
 )
 from soundbox.device_profile import plan_stock_ipod_export
-from soundbox.dual_ipod import (
-    DualIpodSyncPlan,
-    commit_dual_ipod_sync,
-    plan_dual_ipod_sync,
-)
+
+if TYPE_CHECKING:
+    from soundbox.dual_ipod import DualIpodSyncPlan
+    from soundbox.stock_ipod import StockIpodSyncPlan, StockIpodDeletePlan
+    from soundbox.stock_ipod_info import StockIpodSnapshot
+
 from soundbox.library import Playlist
-from soundbox.stock_artwork import StockArtworkCache
-from soundbox.stock_ipod import (
-    StockIpodDeletePlan, StockIpodSyncPlan,
-    commit_stock_ipod_playlist_delete, commit_stock_ipod_sync,
-    inspect_stock_ipod_sync_status,
-    normalize_model_number, plan_stock_ipod_playlist_delete,
-    plan_stock_ipod_sync, supports_stock_write,
-)
-from soundbox.stock_ipod_info import (
-    StockIpodSnapshot, confirmed_model_from_recovery,
-    read_stock_ipod_snapshot, stock_ipod_device_key,
-)
-from soundbox.stock_ipod_shadow import StockIpodShadowStore
-from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 from . import theme
 from .mount_watch import mounted_volume_snapshot
 from .artpicker import ArtPickerDialog
@@ -365,12 +353,6 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._state_publication = False
         self._libcache_path = data_dir / "libcache.json"  # last lib snapshot (instant paint)
         self.art_cache = ArtCache(data_dir / "art")  # cover-art cache
-        self.stock_art_cache = StockArtworkCache(data_dir / "stock_artwork")
-        self.rockbox_media_cache = RockboxMediaCache(data_dir / "rockbox_media")
-        self.rockbox_art_cache = RockboxArtworkCache(
-            data_dir / "rockbox_artwork")
-        self.stock_ipod_shadow_store = StockIpodShadowStore(
-            data_dir / "stock_ipod_state")
         # One-time Rockbox-safety sweep: any cached art that isn't baseline JPEG
         # (progressive/PNG shows BLANK on the iPod) is re-encoded. Flag-filed —
         # a no-op on every launch after the first, so it's fine on the main thread
@@ -381,6 +363,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._art_worker: ArtFillWorker | None = None
         self._art_restart = False  # set by re-scan to restart the fill after it stops
         self._stock_art_worker: StockArtworkPrepWorker | None = None
+        self._stock_art_connected = False
         self._stock_art_rescan = False
         self._stock_art_pending: set[Path] = set()
         self._wf_fill_worker: WaveformFillWorker | None = None
@@ -561,6 +544,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._waveform_recheck_timer.setSingleShot(True)
         self._waveform_recheck_timer.setInterval(_WAVEFORM_RECHECK_MS)
         self._waveform_recheck_timer.timeout.connect(self._maybe_fill_waveforms)
+        self._stock_art_timer = QTimer(self)
+        self._stock_art_timer.setSingleShot(True)
+        self._stock_art_timer.setInterval(3250)
+        self._stock_art_timer.timeout.connect(self._maybe_prepare_stock_artwork)
         # Devices are recognized on launch and as they're plugged in — no XML needed.
         try:
             self._volume_directory_stamp = os.stat('/Volumes').st_mtime_ns
@@ -599,6 +586,27 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # Input routing begins once construction is complete; the native host's
         # own geometry filter remains active throughout initialization.
         QApplication.instance().installEventFilter(self)
+
+    # Export caches read their indexes only when a detected target needs them.
+    @cached_property
+    def stock_art_cache(self):
+        from soundbox.stock_artwork import StockArtworkCache
+        return StockArtworkCache(self._data_file.parent / "stock_artwork")
+
+    @cached_property
+    def rockbox_media_cache(self):
+        from soundbox.rockbox_media import RockboxMediaCache
+        return RockboxMediaCache(self._data_file.parent / "rockbox_media")
+
+    @cached_property
+    def rockbox_art_cache(self):
+        from soundbox.rockbox_media import RockboxArtworkCache
+        return RockboxArtworkCache(self._data_file.parent / "rockbox_artwork")
+
+    @cached_property
+    def stock_ipod_shadow_store(self):
+        from soundbox.stock_ipod_shadow import StockIpodShadowStore
+        return StockIpodShadowStore(self._data_file.parent / "stock_ipod_state")
 
     # ---------- persistence ----------
     def _load_state(self):
@@ -2528,7 +2536,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.unification_controller.schedule()
         if self.providers.allows("artwork.search"):
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-        QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
+        self._schedule_stock_artwork()
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _apply_loaded_library(self):
@@ -2901,7 +2909,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.unification_controller.schedule()
         if self.providers.allows("artwork.search"):
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-        QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
+        self._schedule_stock_artwork()
         QTimer.singleShot(500, self._maybe_fill_waveforms)
 
     def _on_refresh_fail(self, err):
@@ -2955,18 +2963,22 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._flash_status("No Unknowns ✓", 6)
             return
         dlg = SuggestDialog(items, self, provider=self.providers.artists)
-        dlg.exec()
-        dlg.shutdown()  # stop/wait the scan thread BEFORE the dialog is GC'd
-        if self._shutting_down or not dlg.accepts:
+        try:
+            dlg.exec()
+        finally:
+            dlg.shutdown()
+            accepts = tuple(dlg.accepts)
+            dlg.deleteLater()
+        if self._shutting_down or not accepts:
             return
-        for tid, artist in dlg.accepts:
+        for tid, artist in accepts:
             self.overrides[tid] = artist
         self._save_state()
         self._build_artist_registry()
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
-        self._flash_status(f"Accepted {len(dlg.accepts)} ✓", 8)
+        self._flash_status(f"Accepted {len(accepts)} ✓", 8)
 
     def _suggest_merges(self):
         """Scan the library for likely duplicate artist spellings (local, fuzzy)
@@ -3484,7 +3496,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._arm_waveform_rechecks()
             if self.providers.allows("artwork.search"):
                 QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
-            QTimer.singleShot(3250, self._maybe_prepare_stock_artwork)
+            self._schedule_stock_artwork()
             QTimer.singleShot(500, self._maybe_fill_waveforms)
         elif skipped:
             QMessageBox.warning(
@@ -3876,11 +3888,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 self._usb_view_requests.add(self._current_device_path)
         usb_requests = frozenset(self._usb_view_requests)
         w = DeviceScanWorker(
-            self.lib,
-            self._sync_playlists(),
-            artist_overrides=self.overrides,
-            title_overrides=self.titles,
-            stock_shadow_store=self.stock_ipod_shadow_store,
+            None,
+            defer_playlists=True,
             stock_models=(raw_models if isinstance(raw_models, dict) else {}),
             known_paths=known_paths,
             known_mount_tokens=dict(self._device_mount_tokens),
@@ -3890,8 +3899,25 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._device_mount_refresh_pending = False
         self._dev_scan_worker = w
         w.discovered.connect(self._on_devices_discovered)
+        w.playlists_requested.connect(self._supply_device_scan_playlists, Qt.QueuedConnection)
         w.finished.connect(lambda ww=w: self._finish_device_scan_worker(ww))
         self._start_device_worker(w, "", "discover")
+
+    def _supply_device_scan_playlists(self, worker):
+        """Capture export inputs on the GUI thread after a target is detected."""
+        if (self._dev_scan_worker is not worker or self._shutting_down
+                or worker.cancellation.is_set()):
+            worker.cancel()
+            return
+        try:
+            worker.provide_playlists(
+                self._sync_playlists(), lib=self.lib,
+                artist_overrides=self.overrides, title_overrides=self.titles,
+                stock_shadow_store=(self.stock_ipod_shadow_store if worker.stock_detected else None))
+        except Exception as exc:  # noqa: BLE001 — status remains unknown on failure
+            LOG.warning("Device playlist capture failed: %s", exc)
+            worker.provide_playlists((), lib=None, artist_overrides={},
+                                     title_overrides={}, error=exc)
 
     def _poll_devices(self):
         # Stat only the local /Volumes directory, not its mounted children. This
@@ -4039,11 +4065,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         results = getattr(worker, "results", None)
         usb_snapshots = dict(getattr(worker, 'usb_snapshots', {}))
         mount_tokens = dict(getattr(worker, "mount_tokens", {}))
+        cancellation = getattr(worker, "cancellation", None)
+        cancelled = cancellation is not None and cancellation.is_set()
         # Clear ownership before publishing any clickable row. A result emitted
         # from run() is not enough: QThread.finished is the actual boundary that
         # Eject and every other device operation use.
         self._finish_worker("_dev_scan_worker", worker)
-        if self._shutting_down or self._device_coordinator.eject_pending:
+        if cancelled or self._shutting_down or self._device_coordinator.eject_pending:
             return
         if results is not None:
             self._usb_view_cache.update(usb_snapshots)
@@ -4112,6 +4140,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             path: drift for _n, path, _f, drift, _profile in devs}
         self._device_profiles = {
             path: profile for _n, path, _f, _d, profile in devs}
+        self._update_export_preparation()
         all_paths = [p for _n, p, _f, _d, _profile in devs]
         self._usb_device_rows = {path: (name, free, drift, profile)
                                  for name, path, free, drift, profile in devs}
@@ -4186,6 +4215,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._finish_ipod_loading_status()
 
     def _stock_device_key(self, dev: str, profile=None) -> str:
+        from soundbox.stock_ipod_info import stock_ipod_device_key
         profile = profile or self._device_profiles.get(dev)
         library_id = int(
             getattr(profile, "library_persistent_id", 0) or 0)
@@ -4193,6 +4223,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             device_facts(dev).volume_uuid, library_id)
 
     def _stored_stock_model(self, dev: str, profile=None) -> str:
+        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
         profile_model = normalize_model_number(
             str(getattr(profile, "model", "") or ""))
         if supports_stock_write(profile_model):
@@ -4215,6 +4246,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         return replace(profile, model=model, stock_write=True)
 
     def _remember_stock_model(self, identity_key: str, model: str):
+        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
         model = normalize_model_number(model)
         if not identity_key or not supports_stock_write(model):
             return
@@ -4330,6 +4362,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _read_stock_device_view(
             self, dev: str, profile=None, *, after_finished=None):
+        from soundbox.stock_ipod import inspect_stock_ipod_sync_status
+        from soundbox.stock_ipod_info import read_stock_ipod_snapshot
         if getattr(self, "_state_maintenance", False):
             return
         if after_finished is not None:
@@ -4682,6 +4716,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         finalize_at(0)
 
     def _on_stock_device_view(self, dev: str, result):
+        from soundbox.stock_ipod_info import StockIpodSnapshot
         if isinstance(result, Exception):
             self._fail_initial_ipod_preload(dev)
             if dev != self._current_device_path:
@@ -4766,6 +4801,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             or getattr(profile, "kind", "") == "dual_boot")
 
     def _confirm_current_stock_model(self):
+        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
         dev = self._current_device_path
         profile = self._device_profiles.get(dev)
         if not dev or profile is None:
@@ -4883,6 +4919,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _stock_write_model(self, dev: str, profile=None) -> str:
         """Resolve the same fail-closed MA446 authority for every stock write."""
+        from soundbox.stock_ipod_info import confirmed_model_from_recovery
+        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
         model = self._stored_stock_model(dev, profile)
         if not supports_stock_write(model):
             recovered = confirmed_model_from_recovery(dev)
@@ -4915,6 +4953,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _begin_stock_ipod_sync(
             self, dev: str, playlists: list[Playlist], *, reconcile: bool = False):
         """Run the expensive, read-only database/media plan off the UI thread."""
+        from soundbox.stock_ipod import plan_stock_ipod_sync
         if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
@@ -4954,6 +4993,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             for row in ((shadow.sources if shadow else {}) or {}).values()
             if isinstance(row, dict) and int(row.get("dbid") or 0) > 0
         }))
+        # First construction stays on the GUI owner, shared with the artwork
+        # warmer; cached_property does not serialize concurrent first access.
+        stock_art_cache = self.stock_art_cache
         worker = OneShotTask(lambda: plan_stock_ipod_sync(
             library,
             playlists,
@@ -4964,7 +5006,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             artist_overrides=self.overrides,
             title_overrides=self.titles,
             art_cache=self.art_cache,
-            stock_art_cache=self.stock_art_cache,
+            stock_art_cache=stock_art_cache,
             identity_key=identity_key,
             serial_number=getattr(facts, "hardware_serial", ""),
             shadow_store=self.stock_ipod_shadow_store,
@@ -4984,6 +5026,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._start_device_worker(worker, dev, "plan")
 
     def _on_stock_ipod_plan(self, dev: str, result):
+        from soundbox.stock_ipod import StockIpodSyncPlan
         self._exporting = False
         self._stop_pulse()
         if isinstance(result, Exception):
@@ -5059,6 +5102,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._commit_stock_ipod_plan(dev, result)
 
     def _commit_stock_ipod_plan(self, dev: str, plan: StockIpodSyncPlan):
+        from soundbox.stock_ipod import commit_stock_ipod_sync
         from .workers import OneShotTask
         worker = OneShotTask(lambda: commit_stock_ipod_sync(plan))
         self._stock_commit_worker = worker
@@ -5129,6 +5173,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             audit_existing: bool = False,
     ):
         """Build the composite stock/Rockbox plan without target writes."""
+        from soundbox.dual_ipod import plan_dual_ipod_sync
         if self._device_operation_owned():
             QMessageBox.warning(
                 self, "Device busy", "Wait for the current device operation.")
@@ -5167,6 +5212,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         state=self.unification_controller.state()
         if state and state['customs_done']:
             adoptable_playlist_keys-={'cust:'+key[7:] for key in state['nodes'] if key.startswith('custom:')}
+        stock_art_cache = self.stock_art_cache
         worker = ProgressTask(
             lambda callback: plan_dual_ipod_sync(
                 library,
@@ -5180,7 +5226,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 artist_overrides=self.overrides,
                 title_overrides=self.titles,
                 art_cache=self.art_cache,
-                stock_art_cache=self.stock_art_cache,
+                stock_art_cache=stock_art_cache,
                 stock_shadow_store=self.stock_ipod_shadow_store,
                 identity_key=identity_key,
                 serial_number=getattr(facts, "hardware_serial", ""),
@@ -5241,6 +5287,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._set_status_count()
 
     def _on_dual_ipod_plan(self, dev: str, result):
+        from soundbox.dual_ipod import DualIpodSyncPlan
         self._stop_pulse()
         if isinstance(result, Exception):
             was_preconfirmed = self._dual_active_preconfirmed
@@ -5415,6 +5462,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._commit_dual_ipod_plan(dev, result)
 
     def _commit_dual_ipod_plan(self, dev: str, plan: DualIpodSyncPlan):
+        from soundbox.dual_ipod import commit_dual_ipod_sync
         from .workers import ProgressTask
         try:
             self._persist_rockbox_playlist_additions(plan)
@@ -5778,6 +5826,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _begin_stock_playlist_delete(self, selections):
         """Plan deletion of the checked user playlists from the stock iPod."""
+        from soundbox.stock_ipod import plan_stock_ipod_playlist_delete
         dev = self._current_device_path
         if not dev or self._stock_snapshot is None:
             return
@@ -5833,12 +5882,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return
         self._release_eject_ready()
         from .workers import OneShotTask
+        stock_art_cache = self.stock_art_cache
         worker = OneShotTask(lambda: plan_stock_ipod_playlist_delete(
             dev,
             [playlist_id for playlist_id, _title in identities],
             model_number=model,
             filesystem=device_fs(dev),
-            stock_art_cache=self.stock_art_cache,
+            stock_art_cache=stock_art_cache,
             allow_dual_boot=pre_composite_dual,
         ))
         self._stock_delete_plan_worker = worker
@@ -6012,6 +6062,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _on_stock_playlist_delete_plan(
             self, dev: str, expected: tuple[tuple[int, str], ...], result):
+        from soundbox.stock_ipod import StockIpodDeletePlan
         self._exporting = False
         self._stop_pulse()
         if isinstance(result, Exception):
@@ -6079,6 +6130,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._commit_stock_playlist_delete(dev, result)
 
     def _commit_stock_playlist_delete(self, dev: str, plan: StockIpodDeletePlan):
+        from soundbox.stock_ipod import commit_stock_ipod_playlist_delete
         from .workers import OneShotTask
         worker = OneShotTask(lambda: commit_stock_ipod_playlist_delete(plan))
         self._stock_delete_commit_worker = worker
@@ -6743,7 +6795,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         dlg = ArtistCatalogDialog(groups, on_action=self._on_catalog_action,
                                   parent=self, allow_url=self.providers.allows("artwork.url"),
                                   rename_bindings=self._keyboard_router.keymap.bindings("browser.rename"))
-        dlg.exec()  # persistent: user fixes any number of artists, then closes
+        try:
+            dlg.exec()  # persistent: user fixes any number of artists, then closes
+        finally:
+            dlg.deleteLater()
 
     def _configure_art_sources(self):
         configure = getattr(self.providers.artwork, "configure_source_exclusions", None)
@@ -6789,6 +6844,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         finally:
             dlg.shutdown()
             self._review_audition_active = False
+            dlg.deleteLater()
 
     def _review_art_changed(self, tid):
         self._refresh_model_art()
@@ -6802,7 +6858,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             on_action=self._on_default_photo_action,
             parent=self,
         )
-        dlg.exec()
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def _on_default_photo_action(self, choice: dict, done):
         """Import/delete SoundBox-owned pool copies, then refresh every art
@@ -6858,7 +6917,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if self.lib is not None:
             self._reload_current_view()
         self._refresh_devices()
-        for row in self.art_cache.default_photos():
+        for row in self.art_cache.default_photos() if self._stock_art_connected else ():
             try:
                 self._stock_art_pending.add(row["path"].resolve(strict=True))
             except OSError:
@@ -6888,8 +6947,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if c["kind"] == "delete":
             # Block, not forget: these avatars are unwanted AND unfindable —
             # they must never crawl back on a relaunch or re-scan.
-            for tid in tids:
-                self.art_cache.block(tid)
+            self.art_cache.block_many(tids, avatar_only=True)
             self._refresh_model_art()
             done(True, None)
             return
@@ -6901,10 +6959,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 done(False, None)
                 return
             mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
-            self._apply_artist_picture(tids, ArtResult(
+            affected = self._apply_artist_picture(tids, ArtResult(
                 data=data, mime=mime, confidence=1.0,
-                source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]))
-            done(True, self.art_cache.image_path(tids[0]))
+                source_url=Path(c["path"]).as_uri(), matched_title=c["artist"]), avatar_only=True)
+            done(True, self.art_cache.image_path((affected or tids)[0]))
             return
         if (c["kind"] != "url" or not self.providers.allows("artwork.url")
                 or self._shutting_down or self._state_maintenance):
@@ -6915,7 +6973,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if getattr(self, "_scan_worker", None) is not None:
             done(False, None)
             return
-        w = OneShotTask(lambda u=c["url"]: self.providers.artwork.fetch_by_url(u))
+        from soundbox.providers import provider_operation
+        def fetch(url=c['url'],provider=self.providers.artwork):
+            with provider_operation(provider,
+                    lambda:w.cancellation.is_set() or self._shutting_down or self._state_maintenance):
+                return provider.fetch_by_url(url)
+        w = OneShotTask(fetch)
         self._scan_worker = w
 
         def landed(res, tids=tids, done=done):
@@ -6925,25 +6988,25 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 done(False, None)
                 return
             try:
-                self._apply_artist_picture(tids, res)
+                affected = self._apply_artist_picture(tids, res, avatar_only=True)
             except (OSError, ValueError) as exc:
                 QMessageBox.warning(self, "Artwork wasn't saved", str(exc))
                 done(False, None)
                 return
-            done(True, self.art_cache.image_path(tids[0]))
+            done(True, self.art_cache.image_path((affected or tids)[0]))
 
         w.done.connect(landed)
         w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
         w.start()
 
-    def _apply_artist_picture(self, tids, res):
-        """One picture → every avatar track of that artist (store_ok normalizes
-        to Rockbox-safe baseline JPEG per track)."""
-        for tid in tids:
-            self.art_cache.store_ok(tid, res)
-        self._refresh_model_art()
-        self._queue_stock_artwork(tids)
-        self._flash_status(f"Art set on {len(tids)} ✓", 8)
+    def _apply_artist_picture(self, tids, res, *, avatar_only=False):
+        """Publish one artist action atomically, preserving newer real covers."""
+        affected = self.art_cache.store_many(tids, res, avatar_only=avatar_only)
+        if affected:
+            self._refresh_model_art()
+            self._queue_stock_artwork(affected)
+        self._flash_status(f"Art set on {len(affected)} ✓", 8)
+        return affected
 
     @_art_ui_action
     def _art_remove(self, tid):
@@ -6964,9 +7027,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         artist = metadata.effective_artist(tid, title, t.artist, self.overrides, True,
                                            self.lib.artist_registry, stem=t.path.stem)
         dlg = ArtPickerDialog(artist, title, self, provider=self.providers.artwork)
-        dlg.exec()
-        dlg.shutdown()  # stop/wait the search thread BEFORE the dialog is GC'd
-        choice = dlg.choice
+        try:
+            dlg.exec()
+        finally:
+            dlg.shutdown()
+            choice = deepcopy(dlg.choice)
+            dlg.deleteLater()
         if self._shutting_down or not choice:
             return
         if choice["kind"] == "thumb" and self.providers.allows("artwork.search"):
@@ -6995,7 +7061,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return
         if self._background_status_available():
             self._set_status_text("Fetching…")
-        w = _OneShotArt(tid, fn)
+        w = _OneShotArt(tid, fn, provider=self.providers.artwork)
         w.result_guard=guard
         self._oneshots = getattr(self, "_oneshots", [])
         self._oneshots.append(w)
@@ -7148,7 +7214,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._start_art_fill()
 
     def _queue_stock_artwork(self, track_ids):
-        if self.lib is None:
+        if self.lib is None or not self._stock_art_connected:
             return
         for track_id in track_ids:
             image = self.art_cache.image_path(str(track_id))
@@ -7164,12 +7230,32 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _start_pending_stock_artwork(self):
         if getattr(self, "_state_maintenance", False):
             return
-        if (self._shutting_down or not self._stock_art_pending
+        if (self._shutting_down or not self._stock_art_connected or not self._stock_art_pending
                 or self._stock_art_worker is not None):
             return
         images = tuple(sorted(self._stock_art_pending, key=str))
         self._stock_art_pending.clear()
         self._maybe_prepare_stock_artwork(images=images)
+
+    def _update_export_preparation(self):
+        """Start stock preparation on attachment and retire it on disconnect."""
+        connected = any(getattr(profile, 'has_stock_ipod', False)
+                        for profile in self._device_profiles.values())
+        previous = self._stock_art_connected
+        self._stock_art_connected = connected
+        if connected and not previous:
+            self._schedule_stock_artwork()
+        elif not connected:
+            self._stock_art_timer.stop()
+            self._stock_art_pending.clear()
+            self._stock_art_rescan = False
+            if self._stock_art_worker is not None:
+                self._stock_art_worker.stop()
+
+    def _schedule_stock_artwork(self):
+        if (self._stock_art_connected and not self._shutting_down
+                and not self._stock_art_timer.isActive()):
+            self._stock_art_timer.start()
 
     def _maybe_prepare_stock_artwork(
         self,
@@ -7182,8 +7268,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return
         if self.lib is None or self._shutting_down:
             return
+        if not self._stock_art_connected:
+            return
         if self._stock_art_worker is not None:
-            if rescan_if_running:
+            if rescan_if_running or self._stock_art_worker._stop:
                 self._stock_art_rescan = True
             return
         worker = StockArtworkPrepWorker(
@@ -7825,6 +7913,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                   getattr(self, "_art_status_timer", None),
                   getattr(self, "_volume_refresh_timer", None),
                   getattr(self, "_mount_table_timer", None),
+                  getattr(self, "_stock_art_timer", None),
                   getattr(self, "_waveform_recheck_timer", None)):
             if t is not None:
                 t.stop()
@@ -8132,6 +8221,7 @@ def main():
             win.show()
             def finish_check():
                 from soundbox import mac_process
+                from .startup_check import runtime_sql_check
                 win.grab().save(str(report_dir / "window.png"))
                 report = {"profile": win.providers.profile,
                           "modules": list(win.providers.modules),
@@ -8139,6 +8229,7 @@ def main():
                           "native": bool(win.player_bar.player.is_native),
                           "native_process_guard": mac_process._native_function() is not None,
                           "native_process_query": type(mac_process.rekordbox_running()) is bool,
+                          "private_sql_orm": runtime_sql_check(),
                           "devices": win.device_tree.topLevelItemCount(),
                           "library_loaded": win.lib is not None,
                           "art_worker": win._art_worker is not None}

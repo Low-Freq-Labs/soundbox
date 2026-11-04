@@ -87,6 +87,13 @@ fn inspect(root: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
         "background_plus":settings.background_color_type,"background_classic":classic_background}))
 }
 
+fn group_playlist_entries(entries:&[rbl_pdb::PlaylistEntry]) -> std::collections::HashMap<u32,Vec<&rbl_pdb::PlaylistEntry>> {
+    let mut grouped:std::collections::HashMap<u32,Vec<&rbl_pdb::PlaylistEntry>>=std::collections::HashMap::new();
+    for entry in entries {grouped.entry(entry.playlist_id).or_default().push(entry);}
+    for rows in grouped.values_mut() {rows.sort_by_key(|e|e.entry_index);}
+    grouped
+}
+
 fn inspect_classic(root: &Path) -> Result<serde_json::Value,Box<dyn Error>> {
     use rbl_pdb::PageType;
     let raw=std::fs::read(local(root,&root.join("PIONEER/rekordbox/export.pdb"))?)?;
@@ -97,10 +104,10 @@ fn inspect_classic(root: &Path) -> Result<serde_json::Value,Box<dyn Error>> {
     let entries=pdb.playlist_entries(pdb.table(PageType::PlaylistEntries).ok_or("missing classic entries")?);
     if tracks.len()>100_000 || nodes.len()>10_000 || entries.len()>200_000 {return Err("classic library exceeds display limits".into());}
     let tracks_by_id=tracks.iter().map(|t|(t.id,t)).collect::<std::collections::HashMap<_,_>>();
+    let by_playlist=group_playlist_entries(&entries);
     let mut playlists=Vec::new();
     for node in &nodes {
-        let mut ordered=entries.iter().filter(|e|e.playlist_id==node.id).collect::<Vec<_>>();
-        ordered.sort_by_key(|e|e.entry_index);
+        let ordered=by_playlist.get(&node.id).map(Vec::as_slice).unwrap_or_default();
         let members=ordered.iter().map(|e| {
             let t=tracks_by_id.get(&e.track_id).ok_or("classic entry references missing track")?;
             Ok(json!([t.title,t.file_path]))
@@ -288,4 +295,21 @@ fn main() -> Result<(),Box<dyn Error>> {
     };
     println!("{}",result);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn grouping_retains_duplicate_members_and_stable_equal_positions() {
+        let entries=[rbl_pdb::PlaylistEntry{playlist_id:7,track_id:20,entry_index:2},
+                     rbl_pdb::PlaylistEntry{playlist_id:9,track_id:30,entry_index:1},
+                     rbl_pdb::PlaylistEntry{playlist_id:7,track_id:10,entry_index:1},
+                     rbl_pdb::PlaylistEntry{playlist_id:7,track_id:21,entry_index:2},
+                     rbl_pdb::PlaylistEntry{playlist_id:7,track_id:20,entry_index:2}];
+        let grouped=group_playlist_entries(&entries);
+        assert_eq!(grouped[&7].iter().map(|e|e.track_id).collect::<Vec<_>>(),vec![10,20,21,20]);
+        assert_eq!(grouped[&9].iter().map(|e|e.track_id).collect::<Vec<_>>(),vec![30]);
+        assert!(!grouped.contains_key(&8));
+    }
 }

@@ -351,6 +351,18 @@ theme-sized art) · `rockbox_config` (read-only Rockbox theme/database observati
 
 ## Device lifecycle and source acquisition (September 2026)
 
+November3 efficiency pass: desktop imports keep full stock/dual/CDJ/filesystem
+export backends out of startup. Export caches initialize on first use. The
+lightweight mount watcher and read-only discovery remain active. Empty discovery
+does not build Collection/Artists export playlists; a detected target requests
+one GUI-thread capture of Library, extra playlists and title/artist overrides
+before drift inspection. The worker waits cancellably for queued delivery;
+capture failure retains unknown status, and stale/shutdown requests cancel.
+Only stock-capable detection supplies the stock shadow. Stock artwork warming
+starts after attachment, coalesces library-load requests and stops on disconnect,
+retaining the worker through finished delivery. First ready rows still carry
+actual drift; deferred inputs never grant device-write authority.
+
 `device_operations` is the Qt-independent serialized I/O authority, with mount
 identity, command, phase, cancellation and typed result records. The desktop
 worker adapter acquires the lane before starting and releases it only at
@@ -811,8 +823,9 @@ temporary tree; SoundBox validates the output, writes recovery bytes,
 atomically copies new media/artwork, and commits `iTunesDB` last. Curated
 baseline JPEGs remain the shared Rockbox/stock source of truth. A low-priority,
 playback-aware worker prepares content-addressed MA446 RGB565 100×100 and
-200×200 payloads under AppData ahead of sync. A locator index skips unchanged
-JPEGs, and manual art changes queue only affected tracks. Successful commits
+200×200 payloads under AppData ahead of sync only while a stock-capable iPod is
+attached. A locator index skips unchanged JPEGs, and manual art changes queue
+only affected tracks while connected. Successful commits
 atomically publish a Mac-side `stock_ipod_state/` shadow keyed by library
 persistent ID plus volume UUID. Exact database/artwork fingerprints activate
 the fast path; mismatch performs full reconciliation. Because a valid shadow can
@@ -1648,3 +1661,57 @@ existing two-second retry period passes. `desktop.native_timing` logs fixed
 phase labels with per-command dispatch, execution and GUI acknowledgement, without
 paths or musical values. Unknown durable-FIFO wait is explicit rather than being
 reported as zero. See [the per-command measurements](performance-audit.md).
+
+## November3 broader efficiency boundaries
+
+USB view state separates immediate scalar scroll capture from120ms-coalesced
+preference notification. Full tree capture still occurs on structural/view changes,
+snapshot switches and shutdown; maintenance flushes before its backup/restore
+save barrier. Deferred restoration suppresses recording while both positions are
+applied. Scroll accent uses120ms idle after ScrollEnd (or phase-less ticks).
+
+State backups may reuse validation only when freshly read bytes exactly equal
+the repository's previously validated saved payload. Queue/import/playlist indexes
+and artwork observations are scoped to one operation/batch. Prep rollback retains
+the exact old references for only the two replaced namespaces. Immutable Python
+waveform input bytes are borrowed only for the synchronous native copy; native
+ownership completes before the setter returns. Provider LRUs cache only pure text
+helpers,8192 builtin strings each. Every source/authority/process/hash/recovery
+boundary remains fresh. See performance-audit.md for scopes and remaining costs.
+
+## November3 correctness and remaining-cost pass
+
+Captured audio SHA and returned filesystem epoch must describe one stable
+before/opened/closed/after observation even when the expected digest is known.
+Canonical redirects reject; one bounded metadata-instability retry remains.
+Independent native/USB source captures stay independent. Rendered global MyTag
+definitions participate in USB source_revision alongside selected DTO/playlist
+proofs. Small USB manifest models and their expected raw bytes share one bounded
+capture; settings patches also bind original profile hashes through commit.
+
+Native playlist completion uses separate proof strengths: exact reconstructed
+committed catalog edge plus current equality for causal FIFO rebasing; historical
+retained pair plus fresh ContentID/UUIDs for Collection retention. Worker-side
+folder-delete preflight persists exact descendant pins before writer admission.
+Captured UUID intentions survive receipt-backed retirement; legacy absent UUID
+proof remains guarded. The existing source lane/authority/lock/journal and SQL
+scope remain unchanged. Receipt reconstruction executes mutation SQL only on
+TEMP copies and grants no source publication.
+
+Acknowledgement COW shares untouched published records read-only and detaches
+every affected object. General analysis-queue APIs retain full detached return
+graphs; terminal transition avoids duplicate copying/validation. GUI analysis
+capture copies only the top map; selected canonical-record detachment happens in
+the worker and completion still merges newest drafts. SQL filtering retains table
+traversal to preserve exact cue references/ties. Fuzzy matching retains original
+asymmetric pair/rank order while reusing matcher indexes and bounded best rows.
+
+Catalog thumbnails retain only64 or the visible row count at display DPR, loading
+one visible image per event turn. Closed callbacks avoid widget access; modal
+owners drain before deleteLater. Artist bulk artwork actions normalize and
+publish once, preserving sequential default assignments and newer real covers.
+State publication overlap checks use proper-ancestor set lookup; path/tree/fsync/
+recovery checks remain. Optional provider scopes check actual receives on supported
+owned SocketIO adapters without bypassing top-level decoding/error methods. Their
+cooperative budgets do not forcibly interrupt DNS/pre-response opaque work.
+See performance-audit.md for measurements, exact limits and retained tradeoffs.

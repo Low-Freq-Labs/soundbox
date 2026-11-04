@@ -257,6 +257,10 @@ class UsbDevicePages(QWidget):
         self._states = {}
         self._view_key = ''
         self._restoring = False
+        self._view_save_timer = QTimer(self)
+        self._view_save_timer.setSingleShot(True)
+        self._view_save_timer.setInterval(120)
+        self._view_save_timer.timeout.connect(self.view_changed.emit)
         self._songs = {}
         self._display_rows = {}
         self.row_enricher = None
@@ -281,8 +285,8 @@ class UsbDevicePages(QWidget):
         self.playlist_tree.itemExpanded.connect(self._remember_view)
         self.playlist_tree.itemCollapsed.connect(self._remember_view)
         self.playlist_tree.currentItemChanged.connect(self._remember_view)
-        self.playlist_tree.verticalScrollBar().valueChanged.connect(self._remember_view)
-        self.overview_scroll.verticalScrollBar().valueChanged.connect(self._remember_view)
+        self.playlist_tree.verticalScrollBar().valueChanged.connect(self._remember_scroll)
+        self.overview_scroll.verticalScrollBar().valueChanged.connect(self._remember_scroll)
         self.stack.currentChanged.connect(self._remember_view)
 
     def set_page(self, index):
@@ -396,6 +400,7 @@ class UsbDevicePages(QWidget):
     def _remember_view(self, *_):
         if self._restoring or not self._view_key:
             return
+        self._view_save_timer.stop()
         expanded = []
         iterator = QTreeWidgetItemIterator(self.playlist_tree)
         while iterator.value():
@@ -408,6 +413,20 @@ class UsbDevicePages(QWidget):
             scroll=self.playlist_tree.verticalScrollBar().value(),
             overview_scroll=self.overview_scroll.verticalScrollBar().value())
         self.view_changed.emit()
+
+    def _remember_scroll(self, *_):
+        """Capture positions cheaply; coalesce persistence across wheel ticks."""
+        if self._restoring or not self._view_key:
+            return
+        state = self._states.get(self._view_key)
+        if not isinstance(state, dict) or not {'page','expanded','selected'} <= state.keys():
+            self._remember_view()
+            return
+        # Scrolling changes neither expansion nor selection. Full captures on
+        # those signals, snapshot switches and shutdown retain their old path.
+        state['scroll'] = self.playlist_tree.verticalScrollBar().value()
+        state['overview_scroll'] = self.overview_scroll.verticalScrollBar().value()
+        self._view_save_timer.start()
 
     def _restore_view(self):
         state = self._states.get(self._view_key,{})
@@ -425,8 +444,13 @@ class UsbDevicePages(QWidget):
         self.stack.setCurrentIndex(max(0,min(len(USB_TABS)-1,int(state.get('page',0)))))
         def scroll():
             if self._view_key==key:
-                self.playlist_tree.verticalScrollBar().setValue(int(state.get('scroll',0)))
-                self.overview_scroll.verticalScrollBar().setValue(int(state.get('overview_scroll',0)))
+                restoring = self._restoring
+                self._restoring = True
+                try:
+                    self.playlist_tree.verticalScrollBar().setValue(int(state.get('scroll',0)))
+                    self.overview_scroll.verticalScrollBar().setValue(int(state.get('overview_scroll',0)))
+                finally:
+                    self._restoring = restoring
         QTimer.singleShot(0,scroll)
 
     def _expand_playlist(self, item):

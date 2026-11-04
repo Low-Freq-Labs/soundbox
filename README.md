@@ -15,6 +15,17 @@ recoverable compatibility conversion and confirmed Graveyard Delete are separate
 audio-changing workflows. It
 provides a CoreAudio/Metal player for previewing tracks before export.
 
+Rapid trackpad reversals retain the scrollbar accent through a short idle
+interval. Export backends and stock-art preparation activate when needed after
+device detection. The broader source efficiency pass reduces repeated scroll,
+queue, persistence, artwork and catalog work; [measurements and remaining work](docs/performance-audit.md)
+and [current installed provenance](docs/HANDOFF.md) are recorded separately.
+
+The installed correctness/efficiency follow-up adds guarded source capture and retry
+recovery, protects newer USB settings and artwork, and loads catalog thumbnails
+only as rows become visible. [The audit](docs/performance-audit.md) separates
+measured changes, failure tests and remaining design/hardware limits.
+
 ### Requirements
 
 Rekordbox prep editing is being developed in reviewed stages. [My Tag, cue and grid editing](docs/rekordbox-prep.md)
@@ -114,7 +125,13 @@ review remain open. Physical iPod acceptance is still pending. See the
 Background upkeep reuses unchanged analysis and prepared artwork, title edits
 refresh only their display row, and idle device watching waits for mount changes.
 Ordinary player preferences save in a short batch; library edits still save
-immediately. Generic USB export optimization remains a separate upcoming task.
+immediately. Export backends and artwork indexes load when needed for a detected
+target; stock-iPod artwork preparation waits for an attached iPod and stops on
+disconnect. Empty discovery skips export-playlist construction. USB playlist
+matching, iPod drift checks and filesystem path planning reuse repeated work
+within each operation. [Performance results](docs/performance-audit.md) describe
+synthetic workloads; [HANDOFF](docs/HANDOFF.md) distinguishes source from the
+installed runtime.
 
 See [`docs/DEVICES.md`](docs/DEVICES.md) for exact format, ownership, recovery,
 and model constraints. The desktop app is the product: `python -m soundbox`
@@ -516,8 +533,9 @@ dimensionless 160×160 fallback. Exact sizes are retained as themes change. All
 are siblings of the audio file. The exporter also
 removes embedded pictures only from its verified device-side audio copy, so a
 huge source APIC cannot outrank the curated cover or exhaust a classic iPod.
-Source audio and canonical curated JPEGs remain byte-identical. In parallel, a low-priority
-worker pre-generates content-addressed MA446 RGB565 derivatives for stock iPods.
+Source audio and canonical curated JPEGs remain byte-identical. With a stock-capable
+iPod attached, a low-priority worker pre-generates content-addressed MA446 RGB565
+derivatives and stops cooperatively on disconnect.
 Stock sync assembles those prepared pixels into `F1028_1.ithmb` (100×100),
 `F1029_1.ithmb` (200×200), and a validated `ArtworkDB`; identical curated
 images share one pixel payload while every track retains its own database link.

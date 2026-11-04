@@ -1,5 +1,7 @@
 """Hermetic analysis controls and queued worker retirement; no live source/devices."""
 from pathlib import Path
+from copy import deepcopy
+from types import SimpleNamespace
 import time
 import unittest
 from unittest import mock
@@ -8,9 +10,10 @@ from PySide6.QtCore import QStandardPaths
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from desktop.analysis import AnalysisControls, AnalysisWorker
+from desktop.analysis import AnalysisControls, AnalysisWorker, AnalysisMixin
 from desktop.task_owner import TaskOwner
 from soundbox.library import Library, Track
+from soundbox import analysis, analysis_jobs, local_grid
 
 
 class AnalysisUi(unittest.TestCase):
@@ -32,6 +35,57 @@ class AnalysisUi(unittest.TestCase):
     def worker(self):
         track = Track('sb-fixture','Fixture','Test',Path('/nonexistent-fixture.wav').as_uri(),imported=True)
         return AnalysisWorker(Library({track.track_id:track},[],'synthetic'),[track],None,{})
+
+    def record(self, path='/canonical/song.wav'):
+        return dict(engine=analysis.ENGINE,path=path,size=100,epoch=[1,2,100,3,4],sha256='a'*64,
+                    duration=10,bpm=120,key='8A',first_cue=None,
+                    beats=[[i%4+1,i*500,120] for i in range(20)])
+
+    def test_dispatch_snapshots_map_without_copying_unrelated_saved_songs(self):
+        class Untouched(dict):
+            def __deepcopy__(self,memo):raise AssertionError('Unrelated analysis copied')
+        worker=self.worker();track=worker.tracks[0];lib=worker.library
+        jobs=analysis_jobs.admit([],lib,[track],{})
+        records={analysis.result_key(track.path):self.record(str(track.path)),
+                 'unrelated':Untouched(self.record('/unrelated.wav'))}
+        host=SimpleNamespace(_shutting_down=False,_analysis_worker=None,
+            _analysis_owner=SimpleNamespace(stopping=False,adopt=mock.Mock()),
+            tag_controller=SimpleNamespace(owned=False),_refresh_worker=None,
+            _device_operation_owned=lambda:False,lib=lib,
+            settings={analysis_jobs.KEY:jobs,'analysis_results':records},
+            _analysis_queue=[(lib,track,{},jobs[0]['id'])],_analysis_retired=mock.Mock())
+        with mock.patch('desktop.analysis.AnalysisWorker') as factory:
+            AnalysisMixin._start_next_analysis(host)
+        captured=factory.call_args.args[3]
+        self.assertIsNot(captured,records)
+        self.assertIs(captured['unrelated'],records['unrelated'])
+        key=analysis.result_key(track.path);prior=records[key]
+        records[key]=local_grid.edit(prior,'shift',1)
+        records.pop('unrelated')
+        self.assertIs(captured[key],prior)
+        self.assertIn('unrelated',captured)
+        self.assertNotIn('grid_draft',prior)
+
+    def test_worker_selects_canonical_alias_record_and_retirement_keeps_newest_draft(self):
+        class Untouched(dict):
+            def __deepcopy__(self,memo):raise AssertionError('Unrelated analysis copied')
+        worker=self.worker();worker.preferences=analysis.options(dict(bpm=False,key=True))
+        record=local_grid.edit(self.record(),'shift',1)
+        original=deepcopy(record);key=analysis.result_key(record['path'])
+        live={key:record,'unrelated':Untouched(self.record('/unrelated.wav'))}
+        worker.previous=dict(live)
+        current={**self.record(),'bpm':None,'beats':[],'key':'9A'}
+        def detected(*args,**kwargs):
+            live[key]=local_grid.edit(live[key],'shift',1)
+            return current
+        with mock.patch('desktop.analysis.analysis.analyze',side_effect=detected):worker.run()
+        self.assertEqual(record,original)
+        self.assertEqual(worker.result[key]['grid_draft'],original['grid_draft'])
+        result=analysis.merge_result(live[key],worker.result[key],worker.preferences)
+        self.assertEqual(result['grid_draft'],live[key]['grid_draft'])
+        self.assertEqual(result['key'],'9A')
+        worker.result[key]['grid_draft']['beats'][0][1]=42
+        self.assertEqual(record,original)
 
     def wait(self, condition):
         deadline = time.monotonic()+3

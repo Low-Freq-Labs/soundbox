@@ -17,8 +17,8 @@ import unicodedata
 import uuid
 
 from . import cdj_source, manifest
-from .cdj_transaction import CdjPlan, MANIFEST, _hash_file, make_plan
-from .cdj_usb import DATABASE_FILES, digest, read_library, run_renderer
+from .cdj_transaction import CdjPlan, _hash_file, load_manifest, make_plan
+from .cdj_usb import CATALOG_RENDER_POLICY, DATABASE_FILES, digest, read_library, run_renderer
 from .source_acquisition import SourceContract, acquire_source
 
 LOG = logging.getLogger('soundbox')
@@ -84,10 +84,31 @@ def referenced_files(view):
     return result
 
 
+def _catalog_unchanged(catalog, view):
+    """Exact pure catalog equality, including native order and duplicates."""
+    by_audio = {row['audio']:int(row['id']) for row in view['track_rows']}
+    if len(by_audio) != len(view['track_rows']) or len(set(by_audio.values())) != len(by_audio):
+        return False
+    original = [dict(id=int(row['id']),parent=int(row['parent']),name=row['title'],
+                     folder=row['folder'],tracks=[by_audio[path] for _title,path in row['entries']])
+                for row in view['playlists']]
+    return catalog['nodes'] == original and catalog['track_ids'] == set(by_audio.values())
+
+
+def _catalog_bytes_unchanged(native, committed):
+    """Bind every captured database/profile byte to the committed generation."""
+    if (not committed or committed.get('render_policy') != CATALOG_RENDER_POLICY
+            or not set(DATABASE_FILES) <= dict(native.files).keys()):
+        return False
+    return all(committed['files'].get(path,{}).get('sha256') == digest(raw)
+               and committed['files'][path]['size'] == len(raw) for path,raw in native.files)
+
+
 def _catalog(library, playlists, previous, all_playlists, additive, standalone=()):
     from .cdj_export import _selected, _stable_id
     old = previous['view']
-    keep={int(p['id']) for p in old['playlists'] if additive or int(p['id']) in previous.get('foreign_playlists',[])}
+    foreign_playlists = set(previous.get('foreign_playlists', []))
+    keep={int(p['id']) for p in old['playlists'] if additive or int(p['id']) in foreign_playlists}
     for _ in range(64):
         parents={int(p['parent']) for p in old['playlists'] if int(p['id']) in keep and p['parent']!='0'}
         if parents<=keep:break
@@ -104,6 +125,11 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         library,playlists,[*library.playlists,*all_playlists],previous)
     selection = {p['key']:deepcopy(p) for p in previous['selection']} if additive else {}
     by_source = {int(t['source_id']):int(t['id']) for t in old['track_rows'] if int(t['master_db_id'])==int(library.source_library_id)}
+    source_tracks = set(by_source.values())
+    candidates_by_name: dict[tuple, set[int]] = {}
+    for identity, existing in nodes.items():
+        if identity in foreign_playlists:
+            candidates_by_name.setdefault((existing['name'], existing['parent'], existing['folder']), set()).add(identity)
     next_track = int(previous['next_track_id'])
     tracks = {}
     used_sources = set()
@@ -111,14 +137,18 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
     def node(source_id, name, parent, folder):
         nonlocal next_playlist
         if source_id not in bindings:
-            candidates=[n for n in nodes.values() if n['name']==name and n['parent']==parent and n['folder']==folder
-                and n['id'] in previous.get('foreign_playlists',[]) and (folder or all(t in set(by_source.values()) for t in n['tracks']))]
-            if len(candidates)==1:bindings[source_id]=candidates[0]['id']
+            candidates=[identity for identity in candidates_by_name.get((name,parent,folder),())
+                if folder or all(t in source_tracks for t in nodes[identity]['tracks'])]
+            if len(candidates)==1:bindings[source_id]=candidates[0]
             else:bindings[source_id] = next_playlist;next_playlist += 1
         identity = bindings[source_id]
         existing = nodes.get(identity)
         if existing and existing['folder'] != folder:
             raise ValueError('CDJ playlist identity collision')
+        if identity in foreign_playlists:
+            if existing:
+                candidates_by_name[(existing['name'],existing['parent'],existing['folder'])].discard(identity)
+            candidates_by_name.setdefault((name,parent,folder),set()).add(identity)
         nodes[identity] = dict(id=identity,parent=parent,name=name,folder=folder,
                               tracks=existing['tracks'] if existing and folder else [])
         return identity
@@ -148,6 +178,7 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
             tracks[tid] = track;used_sources.add(tid)
             if tid not in by_source:
                 by_source[tid] = next_track;next_track += 1
+                source_tracks.add(by_source[tid])
             members.append(by_source[tid])
         nodes[identity]['tracks'] = members
         selection[key] = dict(key=key,pid=playlist.pid,name=playlist.name,folder=playlist.folder_path)
@@ -156,6 +187,7 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         tracks[tid]=track;used_sources.add(tid)
         if tid not in by_source:
             by_source[tid]=next_track;next_track+=1
+            source_tracks.add(by_source[tid])
     # Updating playlists does not empty the USB collection or garbage-collect
     # songs. Both exporters may keep records outside their current playlists.
     final_tracks = set(by_audio.values())
@@ -252,7 +284,7 @@ def _placements(changed, catalog, previous, reuse=None):
 def plan_incremental(library, playlists, session, previous, *, all_playlists=(), titles=None,
                      artists=None, art_cache=None, should_cancel=lambda:False,
                      on_progress=lambda *_:None, recovery_root=None, additive=False,native=None,
-                     standalone=()):
+                     standalone=(),baseline_manifest=None):
     started = time.monotonic()
     catalog = _catalog(library,playlists,previous,all_playlists,additive,standalone)
     tracks = catalog['tracks']
@@ -393,8 +425,23 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
             my_tags=mapped_tags,additive=additive or bool(previous.get('foreign_tracks')),
             tag_assignments={str(catalog['by_source'][int(t['id'])]):[tag_ids[int(tag)] for tag in t['my_tags']] for t in captured['tracks']},
             preserve_playlists=[i for i in previous.get('foreign_playlists',[]) if i not in catalog['reverse']])
-        path = root/'merge.json';path.write_text(json.dumps(spec))
-        view = run_renderer('merge',root,path,should_cancel=should_cancel)
+        tag_signature = digest(json.dumps(captured['my_tags'],sort_keys=True,separators=(',',':')).encode())
+        if (not changed and not adopted and DATABASE_FILES[2] in dict(native.files)
+                and previous.get('render_policy') == CATALOG_RENDER_POLICY
+                and previous.get('tag_signature') == tag_signature
+                and _catalog_unchanged(catalog,previous['view'])
+                and _catalog_bytes_unchanged(native,load_manifest(session))):
+            # Only pure reconstruction is skipped. The second source capture
+            # above and ordinary make_plan's fresh target/recovery proofs below
+            # still run, using the exact captured native catalog bytes.
+            view = deepcopy(previous['view'])
+            for relative in DATABASE_FILES:
+                destination = root/'candidate'/relative
+                destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(root/'baseline'/relative,destination)
+        else:
+            path = root/'merge.json';path.write_text(json.dumps(spec))
+            view = run_renderer('merge',root,path,should_cancel=should_cancel)
         for p in view['playlists']:
             if int(p['id']) in catalog['reverse']:p['source_id'] = catalog['reverse'][int(p['id'])]
         if partial:
@@ -420,16 +467,25 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         plan = make_plan(session,root/'candidate',selection=catalog['selection'],db_id=captured['db_id'],
             view=view,workspace=workspace,should_cancel=should_cancel,recovery_root=recovery_root,retained_files=retained,
             source_contracts={placements[tid][0].lstrip('/'):contract for tid,contract in contracts.items() if tid not in reuse},catalog_baseline=previous,
-            allowed_asset_changes={str(PurePosixPath(path.lstrip('/'))/('ANLZ0000.'+ext)) for _audio,path in reuse.values() for ext in ('DAT','EXT','2EX')})
-        # A metadata-only no-op must not rewrite either database or the manifest.
+            allowed_asset_changes={str(PurePosixPath(path.lstrip('/'))/('ANLZ0000.'+ext)) for _audio,path in reuse.values() for ext in ('DAT','EXT','2EX')},
+            expected_manifest=baseline_manifest)
+        # An unchanged song/playlist catalog never rewrites native databases.
         old_nodes = [(p['id'],p['parent'],p['title'],p['folder'],p['entries']) for p in previous['view']['playlists']]
         new_nodes = [(p['id'],p['parent'],p['title'],p['folder'],p['entries']) for p in view['playlists']]
-        tag_signature = digest(json.dumps(captured['my_tags'],sort_keys=True,separators=(',',':')).encode())
-        if not changed and not adopted and old_nodes==new_nodes and len(view['track_rows'])==len(previous['view']['track_rows']) and previous.get('tag_signature')==tag_signature:
+        if (not changed and not adopted and old_nodes==new_nodes and len(view['track_rows'])==len(previous['view']['track_rows'])
+                and previous.get('tag_signature')==tag_signature and previous.get('render_policy')==CATALOG_RENDER_POLICY):
+            # Player preferences are retained byte-for-byte. After a fresh
+            # profile-only change, record make_plan's verified live profile
+            # inventory once so the next operation can reuse reconstruction.
+            # Keep current native DB hashes, never randomized rendered bytes.
+            profiles = {path:dict(plan.manifest['files'][path]) for path,_raw in native.files
+                        if path not in DATABASE_FILES}
+            noop_manifest = dict(previous,files={**previous['files'],**profiles})
+            old_manifest = plan.old_manifest
             plan.close()
-            noop=CdjPlan(session.target,session.mount_identity,session.volume_uuid,root,previous,(),
-                session.read_optional(MANIFEST,limit=8*1024*1024),False,len(view['track_rows']),len(catalog['selection']),None,recovery_root)
-            if noop.requires_commit:noop.manifest=dict(previous,generation=uuid.uuid4().hex)
+            noop=CdjPlan(session.target,session.mount_identity,session.volume_uuid,root,noop_manifest,(),
+                old_manifest,False,len(view['track_rows']),len(catalog['selection']),None,recovery_root)
+            if noop.requires_commit:noop.manifest=dict(noop_manifest,generation=uuid.uuid4().hex)
             return noop
         from .cdj_export import remember_standalone
         remember_standalone(plan.manifest, previous, library, standalone)
@@ -446,6 +502,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         plan.manifest['next_track_id'] = catalog['next_track']
         plan.manifest['next_playlist_id'] = catalog['next_playlist']
         plan.manifest['tag_signature'] = tag_signature
+        plan.manifest['render_policy'] = CATALOG_RENDER_POLICY
         from .cdj_export import selection_hint
         available = {manifest.playlist_key(p):p for p in [*library.playlists,*all_playlists]}
         tracked = [available[p['key']] for p in catalog['selection'] if p['key'] in available]

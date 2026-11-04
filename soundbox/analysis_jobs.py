@@ -80,18 +80,22 @@ def component_preferences(job):
 
 def advance(jobs,identity,sha256):
     """Atomically checkpoint BPM, keeping the original preference/intent wire."""
-    validate(jobs);result=deepcopy(jobs)
-    job=next((j for j in result if j['id']==identity),None)
-    if job is None:raise ValueError('Analysis intention was replaced before completion')
+    validate(jobs)
+    index=next((i for i,j in enumerate(jobs) if j['id']==identity),None)
+    if index is None:raise ValueError('Analysis intention was replaced before completion')
+    job=jobs[index]
     if job['state']!='queued':raise ValueError('Analysis intention no longer permits component completion')
     if (not isinstance(sha256,str) or len(sha256)!=64 or any(c not in '0123456789abcdef' for c in sha256)
             or (job.get('component_sha256') or job.get('waveform_sha256')) not in (None,sha256)):
         raise ValueError('Audio identity changed between preparation phases; saved results are preserved')
     if phase(job)=='bpm' and job['preferences']['key']:
+        result=deepcopy(jobs);job=result[index]
         job.update(phase='key',component_sha256=sha256)
         validate(result)
         return result
-    return finish(result,identity)
+    # The unchanged queue has already passed validation in this synchronous
+    # operation. Detach survivors once without re-copying the retiring record.
+    return _finish_validated(jobs,identity)
 
 
 def wave_ready(jobs,identity,sha256,epoch):
@@ -108,33 +112,43 @@ def wave_ready(jobs,identity,sha256,epoch):
 
 
 def admit(jobs,library,tracks,preferences,*,retry_failed=True,rebuild_waveform=False,automatic=False):
-    validate(jobs);result=deepcopy(jobs);prefs=options(preferences)
+    validate(jobs);copied=deepcopy(jobs);prefs=options(preferences)
+    by_track={(j['source'],j['library_id'],j['track_id']):j for j in copied}
+    del copied
     for track in tracks:
         if automatic:
             from .analysis import automatic_music_allowed
             if not automatic_music_allowed(track.total_time):continue
         source=str(library.source or '');library_id=str(library.source_library_id or '')
-        prior=next((j for j in result if (j['source'],j['library_id'],j['track_id'])==(source,library_id,track.track_id)),None)
+        key=(source,library_id,track.track_id);prior=by_track.get(key)
         if prior and matches(prior,library,track) and (prior['state']=='queued' or not retry_failed):
             if rebuild_waveform:prior['waveform']=True
             continue
         resume=(prior and matches(prior,library,track) and prior.get('phase')=='key'
                 and prior.get('component_sha256') and prior['preferences']==prefs)
-        if prior:result.remove(prior)
-        result.append(dict(format=FORMAT,id=str(uuid4()),source=source,library_id=library_id,
+        # Removing/reinserting keeps the original queue's retry append order
+        # without a list scan or retaining replaced records through the batch.
+        if prior:by_track.pop(key)
+        created=dict(format=FORMAT,id=str(uuid4()),source=source,library_id=library_id,
             track_id=track.track_id,path=str(track.path),source_uuid=track.source_uuid,preferences=dict(prefs),state='queued',error='',
-            waveform=bool(rebuild_waveform)))
-        if prefs['bpm'] or prefs['key']:result[-1]['phase']='bpm' if prefs['bpm'] else 'key'
+            waveform=bool(rebuild_waveform))
+        by_track[key]=created
+        if prefs['bpm'] or prefs['key']:created['phase']='bpm' if prefs['bpm'] else 'key'
         if resume and prior is not None:
-            result[-1].update(phase='key',component_sha256=prior['component_sha256'])
+            created.update(phase='key',component_sha256=prior['component_sha256'])
             for field in ('waveform_sha256','waveform_epoch'):
-                if field in prior:result[-1][field]=deepcopy(prior[field])
-        if automatic:result[-1]['automatic']=True
+                if field in prior:created[field]=deepcopy(prior[field])
+        if automatic:created['automatic']=True
+    result=list(by_track.values())
     validate(result);return result
 
 
 def finish(jobs,identity):
     validate(jobs)
+    return _finish_validated(jobs,identity)
+
+
+def _finish_validated(jobs,identity):
     if not any(j['id']==identity for j in jobs):raise ValueError('Analysis intention was replaced before completion')
     return [deepcopy(j) for j in jobs if j['id']!=identity]
 

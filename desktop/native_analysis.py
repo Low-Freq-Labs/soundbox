@@ -16,7 +16,7 @@ from soundbox.rekordbox_analysis_store import AnalysisStore, load_authority, pre
 from soundbox.rekordbox_analysis_store import INITIAL_WAV_PROFILE, PLAN_FORMAT as WAV_PLAN_FORMAT
 from soundbox import rekordbox_cbr_analysis_store as cbr
 from soundbox.rekordbox_write import (WriteProofError, assert_rekordbox_closed, encrypted_backup,
-                                      _connect, _rows, _regular, ConflictError)
+                                      _connect, _regular, ConflictError)
 from soundbox.rekordbox_cues import CueSnapshot
 from soundbox.rekordbox_grid import read_grid
 from soundbox.rekordbox_analysis import resolve_dat_path
@@ -86,8 +86,16 @@ def readback(source,tid,uuid):
             rows=[dict(zip(cols,r,strict=True)) for r in cursor]
             if len(rows)!=1 or rows[0]['UUID']!=uuid:raise WriteProofError('Saved analysis identity changed')
             row=rows[0]
-            cues=[r for r in _rows(conn,'djmdCue') if r['ContentID']==tid]
-            aggregates=[r for r in _rows(conn,'contentCue') if r['ContentID']==tid]
+            def selected(table):
+                # Keep the native table traversal used by the original full
+                # reader: a ContentID index may reorder hot refs and equal-time
+                # Memory cues. Filter in SQLite, without changing that scan.
+                cursor=conn.execute(f'SELECT * FROM "{table}" NOT INDEXED WHERE ContentID=?',(tid,))
+                names=[item[0] for item in cursor.description]
+                # Retain exact lexical matching even with a permissive source
+                # collation; the SQL predicate only bounds candidate reads.
+                return [r for values in cursor if (r:=dict(zip(names,values,strict=True)))['ContentID']==tid]
+            cues=selected('djmdCue');aggregates=selected('contentCue')
             if len(aggregates)>1:raise WriteProofError('Saved cue identity is ambiguous')
             key=conn.execute('SELECT ScaleName FROM djmdKey WHERE ID=?',(row['KeyID'],)).fetchone()
             snapshot=CueSnapshot(row,tuple(cues),aggregates[0] if aggregates else None)
@@ -124,11 +132,18 @@ class NativeAnalysisController(QObject):
     def schedule(self):
         if not self.closing:QTimer.singleShot(0,self.pump)
 
-    def _unfinished_detection(self,track):
-        if track is None:return False
+    def _detection_index(self):
+        # A synchronous discover/pump owns this observation only until it returns.
         try:jobs=analysis_jobs.validate(self.window.settings.get(analysis_jobs.KEY,[]))
-        except ValueError:return True
-        return any(analysis_jobs.matches(job,self.window.lib,track) for job in jobs)
+        except ValueError:return None
+        return {(j['source'],j['library_id'],j['track_id']):j for j in jobs}
+
+    def _unfinished_detection(self,track,index):
+        if track is None:return False
+        if index is None:return True
+        lib=self.window.lib
+        job=index.get((str(lib.source or ''),str(lib.source_library_id or ''),track.track_id))
+        return job is not None and analysis_jobs.matches(job,lib,track)
 
     def discover(self):
         w=self.window
@@ -138,23 +153,24 @@ class NativeAnalysisController(QObject):
         permissions={profile:publication(profile).load_authority(self.tags.data_root/publication(profile).authority_file,
                      w.lib.source,w.lib.source_library_id) for profile in (INITIAL_WAV_PROFILE,cbr.PROFILE)}
         if not any(permission is not None for permission in permissions.values()) and self.factory is None:return
-        queued={j['local_id'] for j in self.pending};queue=deepcopy(self.pending);revalidated=[]
+        queued={j['local_id'] for j in self.pending};queue=list(self.pending);revalidated=[]
         # Older builds rejected valid adaptive grids after exact packet equality
         # had already passed. Revalidate that one obsolete refusal once per
         # controller lifetime; the current planner still checks every row.
         obsolete='Packet grid must equal the complete saved grid, including its exact endpoint'
-        for job in queue:
+        for index,job in enumerate(queue):
             if 'profile' not in job and job['error']==obsolete and job['id'] not in self._grid_revalidated:
-                revalidated.append(job['id']);job['error']=''
+                revalidated.append(job['id']);job={**job,'error':''};queue[index]=job
             if job['error']==CTIME_CONFLICT and 'ctime_rechecked' not in job:
-                job['ctime_rechecked']=True;job['error']=''
+                job={**job,'ctime_rechecked':True,'error':''};queue[index]=job
         done=w.settings.get(DONE,{})
         if not isinstance(done,dict):return
+        detection=self._detection_index()
         for tid,track in w.lib.tracks_by_id.items():
             prep=getattr(w,'prep_controller',None)
             if prep and prep.job(tid) and prep.job(tid)['error']:continue
             if (tid in queued or track is None or track.imported or track.source_analysis_path
-                    or self._unfinished_detection(track)
+                    or self._unfinished_detection(track,detection)
                     or not track.source_uuid
                     or tid in getattr(w.lib,'source_binding_issues',{})):continue
             record=analysis.saved_result(w.settings.get('analysis_results',{}),track)
@@ -185,10 +201,11 @@ class NativeAnalysisController(QObject):
         self._detection_reconciled.intersection_update(j['id'] for j in self.pending)
         priority=getattr(w,'_analysis_priority_pending',lambda:False)()
         ready=[];blocked=[]
+        detection=self._detection_index()
         for job in self.pending:
             if job['error']:continue
             track=w.lib.tracks_by_id.get(job['local_id']) if w.lib else None
-            if self._unfinished_detection(track):
+            if self._unfinished_detection(track,detection):
                 if job['id'] not in self._detection_reconciled:blocked.append(job)
             else:ready.append(job)
         selected=next(iter(ready if ready and not priority else blocked),None)
@@ -217,8 +234,8 @@ class NativeAnalysisController(QObject):
         # A newer local draft can replace an unstarted intent. Once a concrete
         # plan exists its own receipt must reconcile before admitting new data.
         if not reconcile_only and record and digest(record)!=digest(job['record']) and not folder.exists():
-            old=deepcopy(self.pending);queue=deepcopy(old)
-            next(j for j in queue if j['id']==job['id'])['record']=deepcopy(record);w.settings[KEY]=queue
+            old=self.pending;queue=[{**j,'record':deepcopy(record)} if j['id']==job['id'] else j for j in old]
+            w.settings[KEY]=queue
             if not w._save_state():w.settings[KEY]=old
             self.schedule();return
         profile=job.get('profile',INITIAL_WAV_PROFILE);backend=publication(profile)
@@ -303,12 +320,16 @@ class NativeAnalysisController(QObject):
                 return
             if not w.lib or str(w.lib.source)!=job['source'] or w.lib.source_library_id!=job['library_id']:
                 self.fail('Analysis saved in the original library; switch back to finish',job['id']);return
-            old=deepcopy(w.settings);w.settings[KEY]=deepcopy([j for j in self.pending if j['id']!=job['id']])
-            w.settings[DONE]={**w.settings.get(DONE,{}),tid:digest(job['record'])}
-            w.settings[RECEIPTS]=list(dict.fromkeys([*w.settings.get(RECEIPTS,[]),job['id']]))
+            old=dict(w.settings)
             prep=getattr(w,'prep_controller',None)
-            if prep:prep.ack_initial(tid,job['record'])
-            if not w._save_state():w.settings.clear();w.settings.update(old);self.fail('Analysis saved; local receipt could not be saved',job['id']);return
+            try:
+                w.settings[KEY]=[j for j in self.pending if j['id']!=job['id']]
+                w.settings[DONE]={**w.settings.get(DONE,{}),tid:digest(job['record'])}
+                w.settings[RECEIPTS]=list(dict.fromkeys([*w.settings.get(RECEIPTS,[]),job['id']]))
+                if prep:prep.ack_initial(tid,job['record'])
+                if not w._save_state():raise OSError('Analysis saved; local receipt could not be saved')
+            except (OSError,ValueError) as exc:
+                w.settings.clear();w.settings.update(old);self.fail(str(exc),job['id']);return
             current=w.lib.tracks_by_id.get(tid)
             if current and (current.native_id,current.source_uuid)==(job['native_id'],job['uuid']):
                 row=result['row']
@@ -338,10 +359,11 @@ class NativeAnalysisController(QObject):
     def fail(self,message,job_id=None):
         self.timer.stop();w=self.window;can_continue=False
         try:
-            validate(self.pending);queue=deepcopy(self.pending)
-            target=next((j for j in queue if j['id']==job_id),None) if job_id else next(iter(queue),None)
+            validate(self.pending);queue=list(self.pending)
+            index=next((i for i,j in enumerate(queue) if j['id']==job_id),None) if job_id else (0 if queue else None)
+            target=queue[index] if index is not None else None
             if target is not None:
-                target['error']=str(message)[:4096];w.settings[KEY]=queue;w._save_state()
+                queue[index]={**target,'error':str(message)[:4096]};w.settings[KEY]=queue;w._save_state()
             can_continue=any(not j['error'] for j in queue)
         except (ValueError,WriteProofError):pass
         self.status('Analysis needs attention — '+str(message))
@@ -351,8 +373,7 @@ class NativeAnalysisController(QObject):
     def retry(self):
         try:validate(self.pending)
         except (ValueError,WriteProofError) as exc:self.fail(str(exc));return
-        old=deepcopy(self.pending);queue=deepcopy(old)
-        for job in queue:job['error']=''
+        old=self.pending;queue=[{**job,'error':''} for job in old]
         self.window.settings[KEY]=queue
         if not self.window._save_state():self.window.settings[KEY]=old;return
         self.not_before=0.0;self.schedule()

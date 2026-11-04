@@ -1519,9 +1519,7 @@ def plan_stock_ipod_sync(
             ))
             content_to_dbid[payload_key] = planned_dbid
         elif matched_original and original_key != payload_key:
-            raw = next(
-                (item for item in parsed_tracks
-                 if int(item.get("dbid") or 0) == planned_dbid), None)
+            raw = parsed_by_dbid.get(planned_dbid)
             live = _location_path(root, str((raw or {}).get("location") or ""))
             if raw is None or live is None or not live.is_file():
                 raise StockIpodError(
@@ -1559,6 +1557,11 @@ def plan_stock_ipod_sync(
         item for item in (parsed.get("mhlp") or [])
         if not item.get("isMaster")
     ]
+    # Native duplicate names retain the first row's identity/opaque metadata,
+    # matching the historical ordered lookup without scanning for every name.
+    regular_by_name: dict[str, dict] = {}
+    for raw in raw_regular:
+        regular_by_name.setdefault(str(raw.get("Title") or ""), raw)
     regular: list[PlaylistInfo] = []
     managed_before = set(managed_playlist_names_before)
     managed_rows: dict[int, tuple[str, str]] = {}
@@ -1588,10 +1591,7 @@ def plan_stock_ipod_sync(
         else:
             regular.append(_playlist_info(raw, track_id_to_dbid))
     for name in names:
-        prior = next(
-            (raw for raw in raw_regular if str(raw.get("Title") or "") == name),
-            None,
-        )
+        prior = regular_by_name.get(name)
         regular.append(PlaylistInfo(
             name=name,
             track_ids=playlist_sequences[name],
@@ -1863,11 +1863,11 @@ def plan_stock_ipod_sync(
         name in current_playlist_sequences and name not in playlist_sequences
         for name in managed_before
     )
+    managed_names = set(playlist_sequences) | managed_before
     current_managed_order = [
         str(raw.get("Title") or "")
         for raw in raw_regular
-        if str(raw.get("Title") or "") in (
-            set(playlist_sequences) | managed_before)
+        if str(raw.get("Title") or "") in managed_names
     ]
     playlist_changed = bool(
         playlist_changed or current_managed_order != names)
@@ -1938,9 +1938,10 @@ def plan_stock_ipod_sync(
             "device_path": location.lstrip(":").replace(":", "/"),
             "track_id": first_track_for_source[source].track_id,
         }
+    previous_managed_keys = set(managed_playlist_keys_before)
     shadow_playlists = {
         key: dict(value) for key, value in (shadow.playlists if shadow else {}).items()
-        if key not in set(managed_playlist_keys_before)
+        if key not in previous_managed_keys
     }
     for playlist in selected:
         checkpoint()

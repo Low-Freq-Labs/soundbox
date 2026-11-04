@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from . import manifest as manifest_mod, metadata, rekordbox_xml, sync as sync_mod
+from . import manifest as manifest_mod, metadata, rekordbox_xml
 from .library import Library, Playlist, Track
 
 
@@ -130,6 +130,7 @@ def export_playlists(
     clean=False to skip the AppleDouble scrub (do it once after a batch instead
     of per playlist). Writes only under target (sync.run enforces the guard).
     """
+    from . import sync as sync_mod
     target = Path(target)
     report = sync_mod.run(
         lib, playlists, target,
@@ -149,6 +150,7 @@ def export_playlists(
 def clean_device(target: str | Path, dirs=None) -> int:
     """Scrub macOS AppleDouble clutter from a target's Music/ + Playlists/. Pass
     `dirs` (the folders written this run) to scrub only those (fast); None = full scan."""
+    from . import sync as sync_mod
     return sync_mod.clean_applefiles(Path(target), dirs)
 
 
@@ -177,6 +179,7 @@ def verify_export(target: str | Path, *, deep: bool = False) -> dict:
     file actually exists on the device. READ-ONLY — the post-export
     "did everything land?" check (run it off the UI thread; it walks the USB).
     Returns {"playlists": n, "entries": n, "missing": [(playlist, entry), ...]}."""
+    from . import sync as sync_mod
     target = Path(target)
     res: dict = {
         "playlists": 0, "entries": 0, "missing": [], "advisories": [],
@@ -271,6 +274,7 @@ def resync_device(
     """Bring a device in line with rekordbox (see sync.resync). Writes only under target.
 
     `extra` = custom SoundBox playlists so they're kept/updated, not deleted as 'removed'."""
+    from . import sync as sync_mod
     return sync_mod.resync(
         lib, Path(target), on_progress=on_progress, should_cancel=should_cancel,
         artist_overrides=artist_overrides, title_overrides=title_overrides,

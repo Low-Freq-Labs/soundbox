@@ -162,28 +162,37 @@ def suggest_merges(artist_counts: dict, min_ratio: float = 0.85) -> list:
     def norm(n):
         return re.sub(r"[^a-z0-9]", "", n.casefold())
 
-    names = [(n, norm(n)) for n in artist_counts
-             if n and n != UNKNOWN_ARTIST and len(norm(n)) >= 4]
-    out = []
-    for i, (a, na) in enumerate(names):
-        for b, nb in names[i + 1:]:
-            if abs(len(na) - len(nb)) > 3:
-                continue
-            sm = difflib.SequenceMatcher(None, na, nb)
-            if sm.real_quick_ratio() < min_ratio or sm.quick_ratio() < min_ratio:
-                continue
-            r = sm.ratio()
-            if r < min_ratio:
-                continue
-            v, t = (a, b) if artist_counts[a] <= artist_counts[b] else (b, a)
-            out.append((v, t, round(r, 2)))
-    out.sort(key=lambda x: (-x[2], -artist_counts[x[1]]))
-    seen, deduped = set(), []
-    for v, t, r in out:  # ONE suggestion per variant — conflicting targets confuse
-        if v not in seen:
-            seen.add(v)
-            deduped.append((v, t, r))
-    return deduped
+    names = []
+    for name in artist_counts:
+        if name and name != UNKNOWN_ARTIST:
+            normalized = norm(name)
+            if len(normalized) >= 4:names.append((name, normalized))
+    # Keep the second sequence fixed so SequenceMatcher reuses its character
+    # positions/counts. Its ratio is asymmetric: never swap the original pair.
+    by_length: dict[int, list[tuple[int, str, str]]] = {}
+    best: dict[str, tuple[tuple[float, int, int, int], tuple[str, str, float]]] = {}
+    for j, (b, nb) in enumerate(names):
+        sm = difflib.SequenceMatcher(None, '', nb)
+        for length in range(len(nb)-3, len(nb)+4):
+            for i, a, na in by_length.get(length, ()):
+                sm.set_seq1(na)
+                if sm.real_quick_ratio() < min_ratio:continue
+                ceiling = sm.quick_ratio()
+                if ceiling < min_ratio:continue
+                v, t = (a, b) if artist_counts[a] <= artist_counts[b] else (b, a)
+                ceiling_rank = (-round(ceiling, 2), -artist_counts[t], i, j)
+                if v in best and ceiling_rank >= best[v][0]:
+                    continue  # Even this proven upper bound cannot replace it.
+                r = sm.ratio()
+                if r < min_ratio:continue
+                ratio = round(r, 2)
+                # The old confidence sort was stable in original (i,j) order.
+                # Keeping just its first row per variant bounds retained output
+                # without changing ties, target choice or final suggestion order.
+                rank = (-ratio, -artist_counts[t], i, j)
+                if v not in best or rank < best[v][0]:best[v] = (rank, (v, t, ratio))
+        by_length.setdefault(len(nb), []).append((j, b, nb))
+    return [row for _rank, row in sorted(best.values())]
 
 
 # DJ-style hyphen separators seen in real untagged files (no ' - '): "CALCIUM- GUTTER",

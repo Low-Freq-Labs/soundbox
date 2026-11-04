@@ -165,6 +165,42 @@ def _matches(conn, expected):
     return all(row(conn,table,key)==value for (table,key),value in expected.items())
 
 
+def validate_collection_pins(pins):
+    if (not isinstance(pins,dict)
+            or any(not isinstance(key,str) or not key or len(key)>8192
+                   or not isinstance(value,str) or not value or len(value)>8192
+                   or '\0' in key or '\0' in value for key,value in pins.items())):
+        raise WriteProofError('Invalid captured native Collection identities')
+
+
+def _require_collection_pins(conn,pins):
+    validate_collection_pins(pins)
+    for identity,uuid in pins.items():
+        track=row(conn,'djmdContent',identity)
+        if not track or track['UUID']!=uuid or track['rb_local_deleted']!=0:
+            raise ConflictError('Captured native Collection identity changed before playlist deletion')
+
+
+def _deleted_collection_ids(changes):
+    first,final=_affected(changes);identities: set[str]=set()
+    for key,before in first.items():
+        after=final[key]
+        if (key[0]=='djmdSongPlaylist' and before and before['rb_local_deleted']==0
+                and (after is None or after['rb_local_deleted']!=0)):
+            identities.add(before['ContentID'])
+    return identities
+
+
+def _deleted_collection_pins(conn,changes):
+    pins={}
+    for identity in _deleted_collection_ids(changes):
+        track=row(conn,'djmdContent',identity)
+        if not track or not track['UUID'] or track['rb_local_deleted']!=0:
+            raise ConflictError('Deleted playlist membership has no exact active Collection identity')
+        pins[identity]=track['UUID']
+    validate_collection_pins(pins);return pins
+
+
 class _Lease(PilotCueStore):
     def __init__(self, store):
         self.store=store;a=store.authority
@@ -276,9 +312,149 @@ class PlaylistStore:
     def recover(self):
         with xml.parsing_session(), self.lease._lock():return self._recover_locked()
 
-    def apply(self, request):
+    def committed_transition(self,request):
+        """Prove one exact committed catalog edge for app-intent reconciliation.
+
+        This grants no publication permission. A replay may rebase later app
+        intents only while the current catalog/XML still equal this operation's
+        independently reconstructed final state. Older retired pairs cannot
+        supply that full proof and retain the ordinary stale-conflict behavior.
+        """
+        validate_request(request)
+        with xml.parsing_session(),self.lease._lock():
+            if self.journal.exists() or self.journal.is_symlink():
+                raise RecoveryRequired('Finish native playlist recovery before proving a committed transition')
+            self._guard_xml();self._check_scope(request)
+            archive=self.root/('playlist-'+request['operation_id'])
+            if not archive.exists() and not archive.is_symlink():return None
+            operation=archive/'operation.json'
+            archive,record=self._receipt(dict(archive=archive.name,operation_sha256=_sha(operation)))
+            info=self.database.stat()
+            if (archive.stat().st_mode&0o077 or record.get('request')!=request
+                    or record.get('archive')!=archive.name
+                    or record.get('source_file_id')!=[info.st_dev,info.st_ino]
+                    or set(record.get('payload_sha256',{}))!=set(PAYLOADS)):
+                raise RecoveryRequired('Playlist transition receipt identity changed')
+            self._check_changes(record['changes'])
+            marker=archive/'retired.json'
+            retired=marker.exists() or marker.is_symlink()
+            if retired:
+                _regular(marker)
+                expected=dict(format='soundbox-retired-playlist-payloads-v1',operation_sha256=_sha(operation),
+                    payload_sha256={name:record['payload_sha256'][name] for name in ('before.db','after.db')})
+                if record.get('retain_full_backups') is not False or json.loads(marker.read_bytes())!=expected:
+                    raise RecoveryRequired('Playlist transition retirement proof changed')
+            for name in PAYLOADS:
+                payload=archive/name
+                if retired and name.endswith('.db') and not payload.exists() and not payload.is_symlink():continue
+                if _sha(payload)!=record['payload_sha256'][name]:
+                    raise RecoveryRequired('Playlist transition payload changed')
+            if retired:return None
+            from .rekordbox_db import _copy_stable_snapshot
+            with tempfile.TemporaryDirectory(prefix='soundbox-playlist-transition-') as area:
+                before=Path(area).resolve()/'before.db';shutil.copyfile(archive/'before.db',before)
+                if _sha(before)!=record['payload_sha256']['before.db']:
+                    raise RecoveryRequired('Playlist transition baseline changed during capture')
+                before_xml=(archive/'before.xml').read_bytes();after_xml=(archive/'after.xml').read_bytes()
+                if any(hashlib.sha256(raw).hexdigest()!=record['payload_sha256'][name]
+                       for name,raw in (('before.xml',before_xml),('after.xml',after_xml))):
+                    raise RecoveryRequired('Playlist transition XML changed during capture')
+                conn=_connect(before)
+                try:
+                    if _identity(conn)!=(self.authority.library_id,'6000') or _schema(conn)!=self.authority.schema_sha256:
+                        raise RecoveryRequired('Playlist transition backup authority changed')
+                    expected_plan=build_plan(conn,request,before_xml)
+                    if (expected_plan['changes']!=record['changes']
+                            or expected_plan['xml']!=after_xml):
+                        raise RecoveryRequired('Playlist transition exceeds its exact committed intent')
+                    conn.execute('BEGIN IMMEDIATE');conn.set_authorizer(authorizer)
+                    try:apply_changes(conn,expected_plan['changes'])
+                    finally:conn.set_authorizer(None)
+                    conn.commit();expected_revision=catalog(conn)['revision']
+                finally:conn.close()
+                current=Path(area).resolve()/'current.db';_copy_stable_snapshot(self.database,current)
+                conn=_connect(current,readonly=True)
+                try:
+                    if _identity(conn)!=(self.authority.library_id,'6000') or _schema(conn)!=self.authority.schema_sha256:
+                        raise ConflictError('Playlist transition current authority changed')
+                    observed=catalog(conn)
+                    for selected in (track for command in command_requests(request) for track in command['tracks']):
+                        track=row(conn,'djmdContent',selected['track_id'])
+                        if not track or track['UUID']!=selected['uuid'] or track['rb_local_deleted']!=0:return None
+                finally:conn.close()
+            self.lease._guard()
+            if (observed['revision']!=expected_revision
+                    or _sha(self.xml)!=record['payload_sha256']['after.xml']):return None
+            return request['revision'],observed['revision']
+
+    def prepare_collection_pins(self,request):
+        """Capture a delete's exact Collection retention before writer admission."""
+        validate_request(request)
+        if request['operation']!='delete':raise WriteProofError('Collection retention capture requires an exact playlist deletion')
+        archive=self.root/('playlist-'+request['operation_id'])
+        committed=archive.exists() or archive.is_symlink()
+        from .rekordbox_db import _copy_stable_snapshot
+        with xml.parsing_session(),self.lease._lock():
+            if self.journal.exists() or self.journal.is_symlink():
+                raise RecoveryRequired('Finish native playlist recovery before capturing Collection identities')
+            self._guard_xml();self._check_scope(request)
+            with tempfile.TemporaryDirectory(prefix='soundbox-playlist-pins-') as area:
+                current=Path(area).resolve()/'current.db';_copy_stable_snapshot(self.database,current)
+                before=current;before_xml=self.xml.read_bytes();record=None
+                if committed:
+                    archive,record=self._receipt(dict(archive=archive.name,operation_sha256=_sha(archive/'operation.json')))
+                    info=self.database.stat()
+                    if (record['request']!=request or record.get('archive')!=archive.name
+                            or record.get('source_file_id')!=[info.st_dev,info.st_ino]
+                            or archive.stat().st_mode&0o077
+                            or set(record.get('payload_sha256',{}))!=set(PAYLOADS)):
+                        raise RecoveryRequired('Playlist Collection retention request identity changed')
+                    if (archive/'retired.json').exists() or (archive/'retired.json').is_symlink():
+                        raise RecoveryRequired('Legacy deleted playlist identities need their exact retained before-pair')
+                    for name in PAYLOADS:
+                        if _sha(archive/name)!=record['payload_sha256'][name]:
+                            raise RecoveryRequired('Playlist Collection retention payload changed')
+                    before=Path(area).resolve()/'before.db';shutil.copyfile(archive/'before.db',before)
+                    if _sha(before)!=record['payload_sha256']['before.db']:
+                        raise RecoveryRequired('Playlist Collection retention baseline changed during capture')
+                    before_xml=(archive/'before.xml').read_bytes()
+                    if hashlib.sha256(before_xml).hexdigest()!=record['payload_sha256']['before.xml']:
+                        raise RecoveryRequired('Playlist Collection retention XML changed during capture')
+                conn=_connect(before,readonly=True)
+                try:
+                    if _identity(conn)!=(self.authority.library_id,'6000') or _schema(conn)!=self.authority.schema_sha256:
+                        raise ConflictError('Playlist Collection retention authority changed')
+                    plan=build_plan(conn,request,before_xml)
+                    if record is not None:
+                        after_xml=(archive/'after.xml').read_bytes()
+                        if (plan['changes']!=record['changes'] or plan['xml']!=after_xml
+                                or hashlib.sha256(after_xml).hexdigest()!=record['payload_sha256']['after.xml']):
+                            raise RecoveryRequired('Playlist Collection retention exceeds its committed intent')
+                    pins=_deleted_collection_pins(conn,plan['changes'])
+                finally:conn.close()
+                conn=_connect(current,readonly=True)
+                try:
+                    if _identity(conn)!=(self.authority.library_id,'6000') or _schema(conn)!=self.authority.schema_sha256:
+                        raise ConflictError('Playlist Collection retention current authority changed')
+                    _require_collection_pins(conn,pins)
+                finally:conn.close()
+            self.lease._guard();return pins
+
+    def apply(self, request, *, collection_pins=None):
         """Publish one exact durable user intent; replay is operation-ID idempotent."""
         validate_request(request)
+        replay_pins_verified=False;replay_receipt_sha=None
+        if collection_pins is not None:
+            validate_collection_pins(collection_pins)
+            if request['operation']!='delete':raise WriteProofError('Captured Collection retention belongs only to playlist deletion')
+            archive=self.root/('playlist-'+request['operation_id'])
+            if archive.exists() or archive.is_symlink():
+                replay_receipt_sha=self._retired_collection_pins(request,collection_pins)
+                if replay_receipt_sha is None:
+                    replay_receipt_sha=_sha(archive/'operation.json')
+                    if self.prepare_collection_pins(request)!=collection_pins:
+                        raise ConflictError('Committed playlist deletion Collection identities changed')
+                replay_pins_verified=True
         # Guards still reread the current XML every time. Reuse only the bounded
         # immutable parse of identical bytes across this one transaction.
         with xml.parsing_session(), self.lease._lock():
@@ -291,8 +467,11 @@ class PlaylistStore:
                     raise RecoveryRequired('Playlist operation identity was reused')
                 _regular(archive/'result.json');result=json.loads((archive/'result.json').read_bytes())
                 if result=={**prior,'outcome':'committed'}:
+                    if collection_pins is not None and (not replay_pins_verified
+                            or _sha(archive/'operation.json')!=replay_receipt_sha):
+                        raise ConflictError('Playlist deletion receipt changed during Collection identity verification; retry')
                     self._rotate_backups(archive)
-                    return self.snapshot()
+                    return self.snapshot(collection_pins=collection_pins)
                 raise ConflictError('This playlist attempt rolled back; refresh and retry explicitly')
             self._check_scope(request)
             before_xml=self.xml.read_bytes()
@@ -303,6 +482,8 @@ class PlaylistStore:
                         raise ConflictError('Native playlist library/schema changed')
                     plan=build_plan(conn,request,before_xml)
                     self._check_changes(plan['changes'])
+                    if collection_pins is not None and _deleted_collection_pins(conn,plan['changes'])!=collection_pins:
+                        raise ConflictError('Captured playlist deletion Collection identities changed')
                 finally:conn.close()
                 if not plan['changes']:return plan['catalog']
                 archive.mkdir(mode=0o700);copy_state(before,archive/'before.db')
@@ -334,6 +515,7 @@ class PlaylistStore:
                 # plan to the live source. SQL cannot mutate unrelated domains.
                 first,final=_affected(plan['changes'])
                 if not _matches(conn,first):raise ConflictError('Native playlist selection changed before save')
+                if collection_pins is not None:_require_collection_pins(conn,collection_pins)
                 for selected in (track for command in command_requests(request) for track in command['tracks']):
                     track=row(conn,'djmdContent',selected['track_id'])
                     if not track or track['UUID']!=selected['uuid'] or track['rb_local_deleted']!=0:
@@ -346,6 +528,7 @@ class PlaylistStore:
                     atomic_bytes(self.xml,plan['xml'])
                 _fault('xml-published')
                 self.lease._guard()
+                if collection_pins is not None:_require_collection_pins(conn,collection_pins)
                 if _sha(self.xml)!=record['payload_sha256']['after.xml']:
                     raise ConflictError('Native playlist XML changed before commit')
                 conn.commit();_fault('sql-committed')
@@ -355,6 +538,39 @@ class PlaylistStore:
             if self._recover_locked()!='committed':raise RecoveryRequired('Native playlist save did not verify')
             self._rotate_backups(archive)
             return self.snapshot()
+
+    def _retired_collection_pins(self,request,pins):
+        """A captured UUID intent survives verified retirement of old DB bytes.
+
+        The permanent row receipt proves the complete deleted ContentID set;
+        GUI-durable UUID intentions and a fresh source snapshot bind those IDs.
+        Legacy jobs without captured intentions still need the retained pair.
+        """
+        archive=self.root/('playlist-'+request['operation_id'])
+        if not (archive/'retired.json').exists() and not (archive/'retired.json').is_symlink():return None
+        with self.lease._lock():
+            if self.journal.exists() or self.journal.is_symlink():raise RecoveryRequired('Finish playlist recovery before verifying retained Collection intentions')
+            self._guard_xml();self._check_scope(request)
+            digest=_sha(archive/'operation.json')
+            archive,record=self._receipt(dict(archive=archive.name,operation_sha256=digest))
+            info=self.database.stat()
+            if (archive.stat().st_mode&0o077 or record.get('request')!=request
+                    or record.get('archive')!=archive.name or record.get('retain_full_backups') is not False
+                    or record.get('source_file_id')!=[info.st_dev,info.st_ino]
+                    or set(record.get('payload_sha256',{}))!=set(PAYLOADS)):
+                raise RecoveryRequired('Retired playlist Collection identity receipt changed')
+            marker=archive/'retired.json';_regular(marker)
+            expected=dict(format='soundbox-retired-playlist-payloads-v1',operation_sha256=digest,
+                payload_sha256={name:record['payload_sha256'][name] for name in ('before.db','after.db')})
+            if json.loads(marker.read_bytes())!=expected:raise RecoveryRequired('Retired playlist Collection identity proof changed')
+            for name in PAYLOADS:
+                path=archive/name
+                if name.endswith('.db') and not path.exists() and not path.is_symlink():continue
+                if _sha(path)!=record['payload_sha256'][name]:raise RecoveryRequired('Retired playlist Collection identity payload changed')
+            self._check_changes(record['changes'])
+            if set(pins)!=_deleted_collection_ids(record['changes']):
+                raise ConflictError('Captured Collection retention differs from the exact deleted membership receipt')
+            self.snapshot(collection_pins=pins);self.lease._guard();return digest
 
     def _retention_record(self):
         path=self.root/'playlist-latest.json'
@@ -482,7 +698,7 @@ class PlaylistStore:
                 if any(r['PlaylistID'] not in bound for r in (old,new) if r is not None):
                     raise WriteProofError('Pilot cannot change another playlist membership')
 
-    def snapshot(self):
+    def snapshot(self, *, collection_pins=None):
         # A catalog observation is a read-only DB/WAL snapshot. Publication's
         # before/after pairs keep their full encrypted backup/integrity checks;
         # do not repeat that whole renderer just to return committed rows.
@@ -495,6 +711,7 @@ class PlaylistStore:
                 if (_identity(conn)!=(self.authority.library_id,'6000')
                         or _schema(conn)!=self.authority.schema_sha256):
                     raise ConflictError('Native playlist read library/schema changed')
+                if collection_pins is not None:_require_collection_pins(conn,collection_pins)
                 return catalog(conn)
             finally:conn.close()
 
@@ -519,6 +736,14 @@ def _build_plan(conn, request, before_xml):
     if original['revision']!=request['revision']:
         raise ConflictError('Native playlist batch baseline changed; refresh and retry')
     current=deepcopy(original);counter=row(conn,'agentRegistry','localUpdateCount')
+    # Reconstruct this private batch by exact row identity. Dict insertion order
+    # matches append/replacement/deletion order in the catalog lists. Retain the
+    # original first-row behavior for a malformed duplicate-ID catalog rather
+    # than silently collapsing rows through an index.
+    indexed={}
+    for field in ('nodes','members'):
+        values={r['ID']:r for r in current[field]}
+        indexed[field]=values if len(values)==len(current[field]) else None
     changes=[];payload=before_xml
     for child in request['requests']:
         # Every child binds the envelope's one external catalog revision.
@@ -531,6 +756,13 @@ def _build_plan(conn, request, before_xml):
                 if counter!=change['before']:raise ConflictError('Native batch counter chain changed')
                 counter=change['after'];continue
             field='nodes' if change['table']=='djmdPlaylist' else 'members'
+            by_id=indexed[field]
+            if by_id is not None:
+                if by_id.get(change['id'])!=change['before']:
+                    raise ConflictError('Native batch row chain changed')
+                if change['after'] is None:by_id.pop(change['id'],None)
+                else:by_id[change['id']]=deepcopy(change['after'])
+                continue
             rows=current[field];index=next((i for i,r in enumerate(rows) if r['ID']==change['id']),None)
             prior=rows[index] if index is not None else None
             if prior!=change['before']:raise ConflictError('Native batch row chain changed')
@@ -538,6 +770,8 @@ def _build_plan(conn, request, before_xml):
                 if index is not None:rows.pop(index)
             elif index is None:rows.append(deepcopy(change['after']))
             else:rows[index]=deepcopy(change['after'])
+        for field,by_id in indexed.items():
+            if by_id is not None:current[field]=list(by_id.values())
     current['revision']=planner.revision(current['nodes'],current['members'])
     return dict(changes=changes,xml=payload,catalog=current)
 

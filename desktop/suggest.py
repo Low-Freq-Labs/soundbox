@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from soundbox.providers import ArtistProvider
+from soundbox.providers import ArtistProvider, provider_operation
 from .task_owner import TaskOwner
 
 _ROLE = Qt.UserRole + 21  # (track_id, suggested_artist)
@@ -53,7 +53,8 @@ class SuggestWorker(QThread):
             if self._stop:
                 break
             try:
-                r = self.provider.suggest_artist(title)
+                with provider_operation(self.provider,lambda:self._stop):
+                    r = self.provider.suggest_artist(title)
             except Exception:  # noqa: BLE001 — offline/blocked: keep scanning
                 r = None
             if self._stop:

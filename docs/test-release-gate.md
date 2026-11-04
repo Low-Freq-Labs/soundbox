@@ -196,3 +196,31 @@ fixed-row exclusions. Existing native all-zoom palette/motion tests still run.
 Package/native smoke and actual installed curation verification subsequently
 passed. Exact binary fingerprint, source revision and remaining acceptance limits
 belong in [HANDOFF](HANDOFF.md).
+
+November3 broader efficiency coverage adds rapid phased/phase-less scroll
+reversals, two-position deferred USB view restoration, coalesced persistence and
+maintenance flush, exact-byte state/corruption checks, import/queue identity and
+retry parity, playlist duplicate/order/sequential-SQL parity, prep reference
+rollback, artwork observation bounds, immutable native input lifetimes and pure
+provider-cache fallback. CDJ builds pin RUSTDOC and run library AND binary tests,
+doctests and adapter checks; --lib alone would omit required binary regressions.
+
+November3 night adds exact-byte/epoch source-race faults; immutable-record/COW
+rollback and full queue detachment tests; committed-edge and historical pin
+proofs; failed-ack/restart/retirement/later-source-change cases; cue-reference
+ordering under competing indexes; fake-socket provider decoding/EOF/pool/standard
+stream/cancellation contracts; manifest counter/profile stale-plan faults; full
+global tag revision tests; visible thumbnail bounds and modal-owner lifetime;
+sequential bulk-art/default assignment and real publication rollback; randomized
+state overlap guard parity and prefix work bounds. No network/source/device
+inputs are made live by these tests. Both packaged profiles reject development
+integrations and run native ORM/SQLCipher queries over disposable RAM in the
+explicit isolated check. Clang static audit receipts are additional evidence,
+not a replacement for the mandatory Cocoa/native gate.
+
+Final night delivery for source `fc696312…` passes2531cases:2467offscreen in
+618.725s and64Cocoa in67.664s, zero skips/expected failures. The full gate was
+rerun after the catalog alternating-row contrast correction. Both signed public/
+personal packages and isolated native ORM/SQLCipher probes pass; installed normal
+startup and exact current library/authority/icon preservation pass. Dated hashes,
+review scope and remaining hardware/network limits are in [HANDOFF](HANDOFF.md).

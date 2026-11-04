@@ -29,6 +29,14 @@ shared subset enters Apple's database.
 Non-FAT volumes remain browseable but do not accept the Rockbox-style drop.
 Unknown or failed probes never grant extra capability.
 
+Device-specific export work waits for detection. Launch keeps the mount watcher
+and read-only discovery active, while full export backends and artwork cache
+indexes load on demand. Empty scans do not construct export playlists. After
+detection, the worker obtains GUI-captured inputs before checking drift; capture
+failure remains `Sync status pending`. Canceled/stale captures cannot start
+dashboard preload. Already loaded modules and reusable local caches may remain
+in memory after disconnect; export artwork preparation stops cooperatively.
+
 ### Native CDJ USB pilot
 
 October29: the dedicated generic-USB exporter maintains classic Device Library
@@ -520,8 +528,10 @@ firmware-omission list.
 
 Curated SoundBox JPEGs are also the stock-art source of truth. A background
 worker pre-renders MA446's RGB565 formats 1028 (100×100) and 1029 (200×200)
-into a content-addressed AppData cache, pausing during playback. A source
-locator plus completion inventory skips unchanged startup entries without
+into a content-addressed AppData cache only with a stock-capable iPod attached,
+pausing during playback and stopping on disconnect. Artwork changes without
+an iPod do not queue derivative work; attachment checks current curated images.
+A source locator plus completion inventory skips unchanged preparation entries without
 opening derivative manifests or sleeping. Source/profile/derivative identity
 changes invalidate the receipt; deleted derivatives rebuild. Selected sync still
 verifies pixel hashes. One manual cover change queues only that JPEG. Initial reconciliation deduplicates identical images into one segment in
@@ -921,3 +931,35 @@ payload before verification and atomic publication. Flush failure leaves the fin
 path absent and cleans only the transaction temporary under valid authority.
 Normal macOS eject remains required; this fixture-tested correction is not new
 physical disconnect/power-loss acceptance.
+
+## November3 efficiency follow-up
+
+USB overview/playlist scrolling stores both positions immediately and coalesces
+preference notification over120ms. Tree selection/expansion capture is reserved
+for structural/view changes and lifecycle barriers. Restoring both scrollbars
+suppresses intermediate recording, preserving the other saved position.
+
+Stock planning indexes database/playlist identities while retaining first-duplicate
+and opaque metadata behavior. CDJ cue sections parse once per captured extension;
+Rust row boundaries and playlist entries are indexed without changing original
+row ordering or bytes. No live device/source proof is cached by these changes.
+Generated component measurements and physical acceptance limits are in
+performance-audit.md; HANDOFF records the current installed provenance.
+
+## November3 source/manifest correctness follow-up
+
+USB planning binds global MyTag definitions as well as selected song/playlist
+inputs across its independent source captures. Small manifest model/raw bytes
+share one bounded read and propagate as the exact commit precondition. Explicit
+My Settings patches verify original profile hashes even for allowed changed paths;
+concurrent changes reject without overwriting new opaque bytes.
+
+A profile-only change during explicit export refreshes only verified manifest
+inventory after full preflight; it never rewrites DB/media/profile files or causes
+poll writes. The next unchanged plan can reuse the exact current-policy native
+catalog reconstruction. External exporter changes still use fresh current small
+catalogs; SoundBox has no exclusive ownership. Incremental stock-art indexing
+preserves first matching/first free slots and transient-read retry behavior.
+Manifest model/digest pairing for composite planning/polling is likewise one fresh
+captured payload. Measurements are in performance-audit.md; physical acceptance
+remains separate from generated/offline fixtures.

@@ -122,10 +122,23 @@ def load(device_root) -> dict:
 
 def load_composite(device_root) -> dict:
     """Read and strictly validate a schema-3 composite ownership manifest."""
+    return read_composite(device_root)[0]
+
+
+def read_composite(device_root) -> tuple[dict, bytes]:
+    """Return one fresh captured payload and its strictly validated model."""
     try:
-        data = json.loads(
-            manifest_path(device_root).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError) as exc:
+        payload = manifest_path(device_root).read_bytes()
+    except OSError as exc:
+        raise ValueError("Composite SoundBox manifest is unreadable") from exc
+    return parse_composite(payload),payload
+
+
+def parse_composite(payload: bytes) -> dict:
+    """Pure parsing only; captured bytes confer no publication authority."""
+    try:
+        data = json.loads(payload.decode('utf-8'))
+    except (UnicodeError,ValueError) as exc:
         raise ValueError("Composite SoundBox manifest is unreadable") from exc
     if (
         not isinstance(data, dict)

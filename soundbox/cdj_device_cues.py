@@ -5,10 +5,15 @@ from pathlib import Path
 def read(path):
     from pyrekordbox.anlz import AnlzFile
     cues={}
+    captured={}
     for extension,tag_name in (('DAT','PCOB'),('EXT','PCOB'),('DAT','PCO2'),('EXT','PCO2')):
-        file=Path(path).with_suffix('.'+extension)
-        if not file.is_file():continue
-        parsed=AnlzFile.parse_file(file)
+        # These are already captured local packets. Parse each once while
+        # retaining the native classic/extended cue-layer precedence below.
+        if extension not in captured:
+            file=Path(path).with_suffix('.'+extension)
+            captured[extension]=AnlzFile.parse_file(file) if file.is_file() else None
+        parsed=captured[extension]
+        if parsed is None:continue
         for tag in parsed.getall_tags(tag_name):
             for entry in tag.content.entries:
                 slot=int(entry.hot_cue)

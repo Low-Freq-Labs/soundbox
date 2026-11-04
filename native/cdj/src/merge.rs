@@ -42,13 +42,16 @@ fn remap(v:&mut Value, map:&BTreeMap<u32,u32>) -> Result<()> {
     Ok(())
 }
 fn native_rows(bytes:&[u8], kind:PageType) -> Result<Vec<Vec<u8>>> {
-    let pdb=Pdb::parse(bytes)?;
-    let rows=pdb.rows(pdb.table(kind).ok_or("missing native table")?);
-    rows.iter().map(|r| {
-        let end=rows.iter().filter(|n|n.page_offset==r.page_offset && n.offset>r.offset)
-            .map(|n|n.offset).min().unwrap_or(r.page_offset+40+usize::from(u16::from_le_bytes(bytes[r.page_offset+30..r.page_offset+32].try_into()?)));
-        Ok(bytes.get(r.offset..end).ok_or("invalid native row boundary")?.to_vec())
-    }).collect()
+    soundbox_cdj::table_rows(bytes,kind)
+}
+
+fn entries_by_playlist(rows:Vec<Vec<u8>>) -> BTreeMap<u32,Vec<Vec<u8>>> {
+    let mut grouped:BTreeMap<u32,Vec<Vec<u8>>>=BTreeMap::new();
+    for row in rows {
+        // Historical preservation ignored rows too short to name a playlist.
+        if let Ok(id)=word(&row,8) {grouped.entry(id).or_default().push(row);}
+    }
+    grouped
 }
 fn replace(bytes:&mut Vec<u8>, kind:u32, mut rows:Vec<Vec<u8>>, typed:bool) -> Result<()> {
     if typed {soundbox_cdj::number_track_slots(&mut rows)?;}
@@ -109,13 +112,13 @@ fn classic(request:&Request, partial:Option<&[u8]>, output:&Path) -> Result<()> 
     }
     let mut positions=BTreeMap::new();
     let old_nodes=native_rows(&bytes,PageType::PlaylistTree)?.into_iter().map(|row|Ok((word(&row,12)?,row))).collect::<Result<BTreeMap<_,_>>>()?;
-    let old_entries=native_rows(&bytes,PageType::PlaylistEntries)?;
+    let old_entries=entries_by_playlist(native_rows(&bytes,PageType::PlaylistEntries)?);
     let mut nodes=Vec::new();let mut entries=Vec::new();
     for node in &request.playlists {
         let seq=positions.entry(node.parent).or_insert(0u32);
         if request.preserve_playlists.contains(&node.id) {
             nodes.push(old_nodes.get(&node.id).ok_or("missing external playlist")?.clone());
-            entries.extend(old_entries.iter().filter(|r|word(r,8).is_ok_and(|id|id==node.id)).cloned());
+            if let Some(prior)=old_entries.get(&node.id) {entries.extend(prior.iter().cloned());}
             *seq+=1;continue;
         }
         nodes.push(playlist_row(node.id,node.parent,*seq,node.folder,&node.name));*seq+=1;
@@ -248,4 +251,20 @@ pub fn merge(request:&Request) -> Result<()> {
     std::fs::write(dir.join("exportExt.pdb"),file.finish())?;
     if !rbl_export::verify_databases(&request.output)?.is_ok(){return Err("merged native databases disagree".into());}
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn preserved_entry_grouping_keeps_opaque_bytes_and_ignores_short_rows() {
+        let first=rbl_pdb::rows::playlist_entry_row(3,11,7);
+        let second=rbl_pdb::rows::playlist_entry_row(2,12,9);
+        let mut duplicate=rbl_pdb::rows::playlist_entry_row(3,11,7);
+        duplicate.extend_from_slice(b"opaque-native-tail");
+        let grouped=entries_by_playlist(vec![first.clone(),vec![0;8],second.clone(),duplicate.clone()]);
+        assert_eq!(grouped[&7],vec![first,duplicate]);
+        assert_eq!(grouped[&9],vec![second]);
+        assert_eq!(grouped.len(),2);
+    }
 }

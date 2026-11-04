@@ -1890,6 +1890,21 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
 
 ## Sync performance and cloud source proofs
 
+- Export modules and disposable artwork indexes are lazy. Do not restore eager
+  stock/dual/CDJ/filesystem imports in desktop presentation or annotation imports.
+  Keep mount detection active. Empty DeviceScanWorker scans must not construct
+  export playlists; detected targets request one GUI-thread input capture through
+  queued delivery. Cancellation/interruption must release its wait without GUI
+  delivery; capture errors mean unknown drift. Canceled scans cannot preload
+  dashboards. Stock warming requires an attached iPod, stops cooperatively on
+  disconnect and retains its slot through finished delivery. Reconnect schedules
+  a current-library pass after any retiring worker.
+- iPod drift availability/display reuse lasts one poll only, keyed by path and
+  track identity respectively. It is presentation, never a source proof. USB
+  playlist indexes must preserve duplicate-name ambiguity, folder type, foreign
+  library membership and evolving bindings. Filesystem destination indexes retain
+  FAT Unicode/case collision rules and exact deterministic suffixes.
+
 - A waking SeaDrive File Provider can return ENEEDAUTH (errno 81) before its
   account registration completes, even when the account/server works. macOS
   CloudStorage reads get two cancellable three-second waits, reopening and
@@ -2317,3 +2332,60 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   small header with fresh native grid readback; grid edits or external grid
   changes keep normal fencing/refresh, and malformed disposable cache cannot
   stall the independently verified cue save.
+
+## November3 broader efficiency follow-up
+
+- ScrollEnd can occur between rapid trackpad gestures; immediate accent removal
+  creates gray flashes. Keep120ms idle feedback, including phase-less wheels;
+  an inactive axis receiving only End must not acquire a highlight/timer.
+- Cheap USB scroll capture mutates the stored state dictionary. Suppress recording
+  while deferred restoration applies both scrollbars, or the first valueChanged
+  can overwrite the second saved target. Flush coalesced preferences before
+  backup/restore and explicit shutdown/snapshot captures.
+- Exact-byte validation reuse is valid only after a fresh locked read equals the
+  previous validated payload. Corrupt/changed bytes require full validation.
+- Playlist row maps require ordered replacement/delete/re-add behavior and the
+  original duplicate-ID fallback. Queue indexes retain per-job path/UUID checks.
+- Borrowed immutable waveform buffers require synchronous native copying. Do not
+  retain their pointers in C++ or replace them with mutable borrowed storage.
+- Pure bounded provider text caches must not expand to credentials, candidates,
+  account/network results or ranking. Review depth and component timings do not
+  constitute physical export or exhaustive dependency acceptance.
+
+## November3 correctness and remaining-cost pass
+
+- A matching SHA cannot justify pairing captured bytes with a replacement file's
+  after-stat. Require stable descriptor/path identity; metadata drift before the
+  read can still pass. Keep bounded retry and all downstream freshness guards.
+- Shared untouched records require replacement-only ownership. Conversion/prep
+  callbacks clone touched nested state and restore exact prior owners on failure;
+  general queue helpers still return fully detached preferences/epochs.
+- A committed receipt alone does not authorize rebasing arbitrary later intents.
+  Reconstruct the exact accepted transition from fresh verified retained bytes
+  and require current catalog/XML equality. Historical Collection-pin proof is
+  separate, allowing unrelated later edits while binding original/current UUIDs.
+- Capture folder descendants from guarded native memberships, not visible sidebar
+  tracks. Persist exact retention before deleting; restart/failed acknowledgement
+  cannot rediscover missing memberships from the post-delete browser. Legacy
+  retired receipts without original UUID proof must not guess a replacement.
+- SQL WHERE can choose a different cue index. Final selected readback retains
+  table traversal (NOT INDEXED) plus exact Python identity filtering; hot refs and
+  equal-time Memory colors/order must match, not only sorted display rows.
+- USB source_revision binds all exported tag definitions, including unassigned
+  categories. Keep original manifest model/raw bytes paired through make_plan
+  and late no-op construction. Never reread a newer manifest as authority for an
+  older model. Explicit settings patches still verify their captured base bytes.
+- Profile-only USB inventory refresh during explicit export writes only the
+  manifest; unchanged DB/profile/media bytes and poll-only behavior remain exact.
+  An unrelated renderer source change is not a policy version bump. Deliberate
+  catalog semantic changes must bump the explicit reusable-render policy.
+- Provider stream wrappers must preserve decoding, short reads, typed writable
+  buffers, invalid-argument no-consumption behavior, primary exceptions and pool
+  ownership. Guard actual receives on supported adapters; never bypass a custom
+  response.read transform through fp.read1. No worker force-kill is permitted.
+- Dialog selection signals must not clear busy state. Late callbacks check closed
+  Python state before touching deleted widgets. Drain tasks before deleteLater;
+  parent ownership otherwise retains closed image/widget trees for the session.
+- Bulk artwork default rebalance is path-dependent. Preserve intermediate pure
+  assignments even when serialization is deferred, and recheck current avatars
+  under the art lock so a newer real cover/manual block wins.

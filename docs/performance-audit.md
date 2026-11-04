@@ -1,4 +1,354 @@
-# Performance audit — November 2, 2026
+# Performance audit — November 2–3, 2026
+
+## Correctness and remaining-cost pass, November3 night
+
+Sonny requested working from the remaining simple improvements upward, with
+correctness review throughout. This pass inventories178 first-party Python/native
+app-tree source files,39 changed since the preceding d5cb4451… installation, plus
+the existing eight build/harness paths. Review depth varies and is recorded per
+file; this is not an assertion that every dependency/research script or hardware
+failure has been exhaustively proved. Three subagents implemented separate
+areas, then reviewed each other's work. Root reviewed publication/replay guards,
+UI ownership, source acquisition and output semantics. Clang static analysis of
+the native deck and process guard reports zero diagnostics; the normal native
+runtime gate remains required. The final2531-test source is installed as runtime
+fc696312… after both signed profiles and isolated RAM-only native ORM/SQLCipher
+checks passed. Actual normal startup reused3280analysis records, scheduled zero
+preparation tasks, and preserved exact library/authority/icon state. Personal
+regular-file bytes shrink by11,666,423 (~11.7MB). Exact dated provenance, retention
+and validation are in [HANDOFF](HANDOFF.md).
+
+### Correctness findings and closure
+
+- Expected-SHA acquisition previously could associate old captured bytes with a
+  replacement file's after-stat. Known and unknown digests now both require a
+  stable before/opened/closed/after identity; canonical redirects are rechecked.
+  One bounded instability retry remains. Metadata drift before capture can still
+  succeed with exact bytes. Inode replacement, same-size rewrite/restored mtime,
+  ctime drift, leaf/parent redirects, cancellation and cleanup have fault tests.
+- A committed import membership followed by failed local acknowledgement could
+  leave later playlist intentions on a stale base after restart. The accepted
+  writer now exposes a source-read-only committed-edge proof: freshly verify the
+  exact receipt/request/authority and all retained payload hashes, reconstruct
+  the allowed plan on a TEMP copy, and compare fresh current catalog/XML to its
+  final state. Only that proven edge rebases still-unstarted local intentions.
+  Source/process/recovery checks remain fresh; no new publisher was introduced.
+- Folder-delete Collection retention now captures exact descendant ContentIDs/
+  UUIDs in the common worker and persists them before deleting. Actual writer
+  guards recheck the complete set and active UUIDs. Failed local acknowledgement
+  and restart preserve those intentions even with an empty browser. Retained
+  legacy before-pairs can reconstruct pins despite later unrelated native edits;
+  this historical proof is separate from strict causal rebasing. Captured UUID
+  intentions survive verified payload retirement with permanent membership
+  receipts and fresh current UUID checks. Legacy retired evidence missing the
+  original UUID remains guarded rather than guessed. Relocation with the same
+  ID/UUID remains valid. No arbitrary100000-song deletion cap was introduced.
+- Completion rollback now restores original namespace references, including an
+  existing empty queue. Shared-import rebasing clones its nested namespace before
+  publication, so failed persistence cannot mutate the original later request.
+  Touched analysis/import/conversion records remain detached; newer drafts win.
+- Selected SQL readback initially exposed an ordering regression during review:
+  an index could reverse native cue-reference/tie order. Final queries retain
+  table traversal with NOT INDEXED, then exact Python identity filtering. Actual
+  cue-reference output is equal under descending composite indexes, reverse scan
+  mode and equal-time Memory cues with distinct colors. No cue policy changed.
+- USB source_revision now includes the complete rendered global MyTag tree.
+  Unassigned category/name/parent/sequence/order changes between independent
+  captures can no longer escape the selected-song proof. Unrelated native
+  counters do not invalidate an otherwise identical rendered observation.
+- USB manifest model and baseline bytes come from one bounded capture. Those
+  original bytes propagate through export/settings/initialization and make_plan;
+  a late no-op carries the validated plan's baseline. Concurrent newer counters
+  now reject before publication instead of being adopted for an older model.
+- Explicit USB settings patches retain the captured original profile hash even
+  though that path is intentionally allowed to change. A concurrent profile
+  change/deletion before preparation, or change before commit, rejects without
+  overwriting newer recognized or opaque bytes. Scope remains the accepted44
+  settings; no automatic global propagation or firmware setting write was added.
+- Catalog/default-photo selection changes no longer reenable actions while an
+  operation is pending. Late callbacks check closed state before widget access.
+  Parented catalogs, review/picker/suggestion dialogs and Track Info release
+  their widget/image trees after owned work is drained. Explicit artist groups
+  use a fresh avatar-only check, preserving newer real covers/manual blocks.
+
+### Measured component changes
+
+| Generated workload | Before | After |
+| --- | ---: | ---: |
+| Conversion acknowledgement,3202 results+3202 imports/2.282MB settings |40.904ms|0.186ms|
+| Existing-media acknowledgement,same fixture |39.573ms|0.171ms|
+| Tag projection,3200songs/256tags/9600links |20.540ms|4.081ms|
+| Ordered native readback,60000cue+60000aggregate rows |111.327ms|4.105ms|
+| Validated native retry,16jobs×3200beats |70.361ms|10.562ms|
+| GUI dispatch snapshot,500saved songs×500beats |161.485ms|0.00175ms|
+| Same GUI snapshot,traced Python peak |44.77MB|13KB|
+| Fuzzy artist matching,1000similar names |1.735s|0.620s|
+| Same fuzzy workload,traced Python peak |8.29MB|0.211MB|
+|10000failed jobs,reversed retry selection |2.125s|0.242s|
+|10000-job terminal transition |269.05ms|141.22ms|
+| Same terminal transition,traced Python peak |15.67MB|7.86MB|
+|1000keymap lookups,300randomized maps compared exactly |166.6ms|92.6ms|
+| Artist catalog constructor,64distinct512px JPEGs |53.26ms|0.709ms|
+| Default-photo constructor,same images |51.87ms|0.713ms|
+| Atomic artist store,64avatars/3200rows/3defaults |456.23ms|58.55ms|
+| Atomic artist block,same fixture |536.04ms|93.73ms|
+| CDJ poll,1000tracks/100playlists/50100memberships |770.6ms|42.5ms|
+| Incremental stock-art renderer,1500changed/5000free slots per format |1622ms|237ms|
+| Complete repeated offline CDJ plan |586.3ms|146.4ms|
+| Selected metadata ORM,10selected/6000tracks |310.5ms|3.73ms|
+
+These are separate CPU/helper/fixture workloads, not additive end-to-end gains.
+Conversion figures exclude source publication/local save; native readback keeps
+its SQL traversal and excludes mandatory encrypted capture/packet work. The
+selected-record copy moves to the worker; it is not eliminated from total work.
+Catalog show-to-visible-thumbnails costs another3.64ms/3.61ms respectively on the
+Qt paint proxy, versus2.68ms/2.48ms after the old expensive constructors. This is
+not a compositor or live-app latency claim. Stock-art uses reduced1×1pixel slots
+to isolate indexing cost; complete rendered fields/ArtworkDB bytes are equal,
+but actual-device throughput is unmeasured.
+
+The necessary new deletion preflight costs119ms on a private two-song encrypted
+fixture; committed-edge proof120ms. Both remain in the existing worker lane.
+Waveform feed removes repeated channel allocations with99 complete output cases
+byte-exact. Stereo feed+finish improves only940.8→929.3ms (near noise);8channel
+1037.9→981.9ms, with unchanged traced peak. No peak-memory gain, palette, timing,
+decoder, musical detector or native publication profile change is claimed.
+
+### Ownership, reuse and remaining design limits
+
+Conversion/prep acknowledgements clone only touched namespaces/records; untouched
+published entries are shared read-only under audited replacement contracts.
+Analysis dispatch snapshots the top mapping and detaches only its actual
+canonical record in the worker, preserving aliases and newest-draft merge.
+Fuzzy candidate scoring remains quadratic in the worst case; retained suggestions
+are bounded by the number of names. General queue helpers still return fully
+detached graphs, because callers may mutate their nested preferences/epochs. Terminal completion reuses its validated
+input and avoids a redundant full copy/validation; nonterminal isolation remains.
+Failed/stale admission uses insertion-ordered identity mapping with pop/reinsert,
+retaining retry order and final duplicate-UUID rejection.
+
+Thumbnails decode only visible rows, one per event-loop turn, at the actual
+display size/DPR. The cache targets64 images, pinning any larger visible
+viewport; oversized visible sets shrink on later cache misses or dialog closure.
+Offscreen eviction clears icons and revisiting reloads. Hidden/deleted dialogs
+stop pending work. Artist batch writes normalize once and publish atomically,
+preserving path-dependent default-photo transitions exactly in RAM before one
+serialization. State publication checks staged ancestor membership instead of
+every path pair; escape/symlink/tree checks, fsync, journal and rollback remain.
+
+CDJ no-op reconstruction requires exact current policy, complete catalog/order/
+membership/track identities, unchanged captured inputs/tags, Plus presence and
+fresh matching committed DB/profile bytes. Independent source captures and
+make_plan's target/recovery checks remain. A player-profile-only change gets
+one full preflight/render and a manifest-only verified inventory refresh during
+explicit export. It never rewrites DB/media/profile bytes or causes a poll to
+write; the next unchanged export becomes a true no-op. Changing renderer
+semantics requires bumping the explicit catalog policy, not borrowing an old
+reconstruction proof. No exclusive ownership of native USB catalogs is implied.
+
+Provider operations now accept optional stop/deadline scopes (60s default per
+lookup), with retryable cancellation/timeouts rather than durable misses. Known
+CPython SocketIO responses check each receive while preserving the adapter's
+decompression/error/close/stream semantics. Timeout/ref restoration occurs before
+pool release, never against a later borrower. Unknown adapters retain a checked
+one-byte fallback. On the pinned urllib adapter,256KiB costs0.049→0.085ms and2MiB
+0.386→0.647ms; the unknown fallback costs169ms/256KiB. Initial DNS/connect/headers
+and opaque decoder/retry waits can exceed cooperative cancellation budgets;
+there is no force-kill or guaranteed hard wall-clock deadline. Tests use fake
+clocks/sockets and actual pinned adapters, with no live network traffic.
+
+Cross-phase decoded-PCM sharing was profiled rather than assumed beneficial.
+For generated180s WAV/MP3, capture costs20/5ms; decode49/129ms; waveform about1s;
+BPM205/396ms; key134/217ms; native packet129/215ms. A shared PCM cache would add
+up to384MB staging plus decoder/version/endpoint/finite/SHA/epoch/cancellation
+provenance. Different waveform/native midpoint policies also matter. Fresh phase
+captures are retained as a measured design tradeoff. Header-only browser BPM
+publication still needs its fresh observation on startup:1000checks120ms, needed
+when browser cache is absent/source BPM zero. Fully detached large queue helpers,
+current durable state serialization, recovery/payload checks, long network waits
+and physical-device acceptance remain explicit costs or proof boundaries.
+
+Runtime packaging excludes SQLAlchemy testing/mypy integrations, mypy and
+ast_serialize while retaining mypy_extensions and core ORM/codec/encryption/
+numerical dependencies. The former installed package held52development namespaces
+and10.62MB of those two frameworks. Actual package contents and isolated RAM-only
+native ORM/SQLCipher queries verify the new composition; this is disk trimming,
+not a claim of10.62MB lower resident memory. Both profiles require artifact checks.
+Private current receipts and the full inventory are retained under
+`~/Library/Logs/Soundbox/correctness-efficiency-2026-11-03/`.
+
+## Broader efficiency review and trackpad feedback, November3 evening
+
+Sonny requested a whole-codebase review by subagents and supplied a trackpad
+recording. The review inventories all176 first-party Python/native source files
+under the app trees, with explicit measured, static-review and deferred-profile
+depths, plus eight build/harness paths. This includes development entrypoints;
+it is not a count of packaged modules or a claim that all possible bottlenecks
+were measured. Pinned dependencies were inspected at selected boundaries rather
+than audited in full. Current package/install status is in [HANDOFF](HANDOFF.md).
+
+The recording contains37 short gray interruptions (8.3–66.7ms, median25ms) while
+the thumb remains visible. ScrollEnd previously removed the accent between
+short gestures. Feedback now stays active through a120ms idle interval, restarted
+by another gesture; phased updates retain activity until the end. An inactive
+axis receiving only ScrollEnd stays inactive. The same idle interval applies to
+phase-less wheels. Mouse dragging, geometry and palette remain unchanged.
+
+USB playlist scrolling also previously walked the expanded tree and emitted a
+full settings update on every tick. Scroll positions now update immediately as
+scalars, with a120ms coalesced notification. Selection/expansion/page changes,
+snapshot switching and shutdown still capture complete state; backup/restore
+flushes pending view preferences before its save barrier.
+
+| Generated component workload | Before | After |
+| --- | ---: | ---: |
+|12 rapid trackpad reversals, accent transitions |24|2|
+| USB scroll bookkeeping,100 ticks/10000 rows |634.7ms|0.67ms|
+| Durable changed state save,1.63MB |33.9ms|17.3ms|
+| Import receipt validation,3200 tracks |882.1ms|145.7ms|
+| Import presentation,3200 tracks |55.6ms|12.9ms|
+| Native playlist pure plan,32 remove commands/6400 memberships |1267.5ms|200.5ms|
+| Prep request CPU,1.366MB unrelated settings, save/paint stubbed |9.07ms|0.106ms|
+| Artwork status batch,3200 fallback rows |488.5ms|19.0ms|
+| Waveform Python bridge,one-hour/12-mip generated ranges |2.227ms|0.895ms|
+| Same bridge, traced transient Python bytes |75.75MB|37.88MB|
+| Fresh analysis admission,10000 tracks |5799ms|133ms|
+| Detection queue helper pass,3200 tracks/100 pending jobs |2189.6ms|1.81ms|
+| Stock no-op plan,3000 empty playlists |1218ms|755ms|
+| Captured CDJ cue projection,DAT+EXT/8 rows |47.7ms|24.0ms|
+| Classic CDJ inspect,1000 tracks/1000 playlists/20000 members |30.2ms|23.4ms|
+| Same generated catalog,complete preserve-all merge |1029ms|909ms|
+| Offline provider scoring,3000 candidates/first query |226.3ms|195.5ms|
+| Same candidates/subsequent distinct queries |227.1ms|174.3ms|
+
+These are independent component measurements and cannot be summed or presented
+as end-to-end latency. Scroll bookkeeping excludes painting/device I/O; native
+queue timings exclude acquisition/publication; waveform figures exclude native
+copies and total load. No real source audio, live native database, device writes,
+network requests or input into Sonny's apps were used for these measurements.
+Receipts, scripts, the supplied reference and per-file review inventory are in
+`~/Library/Logs/Soundbox/runtime-efficiency-2026-11-03/`.
+
+### What changed and what remains fresh
+
+- State backup still reads current bytes under its lock. Only exact equality to
+  previously validated saved bytes avoids decoding/validating/copying again;
+  changed or corrupt bytes take the full validation path. Durability and size
+  limits remain. Import receipt/projection sets are local to one operation.
+- Native playlist planning indexes rows while preserving order and exact before
+  checks; duplicate IDs use the original first-row/list behavior. Prep rollback
+  retains only the two namespaces actually replaced rather than deep-copying
+  unrelated settings; failed saves restore the exact previous references.
+- Artwork observations expire at the end of each locked batch. Standalone image
+  and export reads remain fresh. Stock cache initialization is captured on the
+  GUI thread before plan-worker creation, avoiding competing first construction.
+- Borrowed immutable Python waveform buffers live through the synchronous native
+  call, which copies them into owned storage before returning. A future retaining
+  or asynchronous native API must revise this ownership contract.
+- Analysis queues are validated and indexed per invocation, with source/library/
+  track/path/UUID checks, FIFO, retry and durable checkpoints retained. Failed-job
+  replacement still removes from a list; admission is not universally linear.
+- Stock database/playlist lookup preserves first duplicate identities and opaque
+  metadata. CDJ DAT/EXT sections parse once per extension while retaining layer
+  order. Rust indexes IDs, physical row boundaries and playlist entries while
+  preserving original output order, duplicate behavior and opaque bytes.
+- Provider caches contain only pure normalization/title-cleaning results, capped
+  at8192 builtin strings per helper. Current candidates, exclusions, ranking,
+  credentials, account state and network responses are not cached. Non-string
+  and string-subclass behavior follows the original uncached implementation.
+
+Native comparison retained exact decoded JSON and all three classic merge
+database bytes. A complete12-file render matched11 files byte-for-byte. The
+encrypted exportLibrary.db uses randomized salt: two runs of the unchanged
+baseline also differ. Independent decoded schema/tables/views/integrity/protocol
+comparisons match baseline and changed renders; no ciphertext normalization is
+claimed as a raw-byte match. Required fixtures remain exact. The Rust gate now
+runs library and binary regressions, doctests and adapter checks with pinned
+RUSTDOC, rather than omitting binary tests through --lib.
+
+### Remaining work, ranked by measured cost and required design
+
+1. Repeated waveform→BPM→key→native-render source capture/decode needs a shared
+   captured-context design preserving exact SHA identity, durable phase receipts,
+   cancellation and source authority. It is a static high-cost candidate; total
+   end-to-end savings are not yet measured.
+2. Completion/acknowledgement handlers still copy entire settings or saved
+   analysis dictionaries. A generated500-record/500-beat dispatch copy costs
+   about163ms. Narrow transactions must preserve rollback, newer edits and
+   committed-receipt replay before replacing those copies.
+3. Fuzzy artist matching costs1.734s on1000 deliberately similar generated names;
+   it already runs in a worker. Candidate indexing must preserve exact match,
+   exclusion and tie semantics. Full dialog image decoding is another bounded
+   UI candidate:64 distinct512px JPEGs cost59.4ms versus2.08ms without images.
+4. CDJ status hints repeat overlapping membership work; separate source freshness
+   boundaries reread cue/content/tag tables, and unchanged merges still render.
+   Stock free-art-slot lookup and native single-plan copies merit profiling.
+5. Provider requests remain serial and cancellation waits for the current
+   blocking call. Network lifetime deadlines require separate design from rate
+   pacing. Keymap normalization is measured but lower priority at0.169ms/lookup.
+6. Graveyard snapshot/shared-file protection, cloud acquisition, exact changed
+   media hashes, one-track commit rematerialization, recovery checks and classic
+   USB pacing remain deliberate guards. Optimizing their safe implementation
+   requires proof; removing the checks is not an efficiency improvement.
+
+The corrected final gate passes2406tests with zero skips/expected failures; signed
+package/native parity and isolated/normal startup pass. The update is installed
+as runtime d5cb4451…; exact provenance/state checks are in HANDOFF.
+Physical reconnect/power-cycle/export throughput, real compositor gesture
+latency and the full failure matrix across hardware remain unmeasured here.
+
+## Export efficiency pass, November3
+
+Sonny requested separate USB/iPod reviews and export work enabled only when a
+target is detected. Three subagents reviewed USB catalogs, iPod/Rockbox planning
+and desktop startup; the running build155, source music and live devices were
+left untouched. Installed versus source status and validation are in HANDOFF.
+
+Startup now imports the desktop without loading full CDJ, stock/dual iPod or
+filesystem export backends. Cache indexes load on demand. Empty discovery does
+not construct Collection/Artists export playlists or initialize the stock shadow;
+detected targets request a cancellable queued GUI-thread capture before their
+first drift check. Stock-art warming waits for an attached stock-capable iPod,
+stops on disconnect and retains its worker until finished delivery. The mount
+watcher remains active, so a device already attached at launch or connected later
+can still be recognized. Existing lightweight dashboard widgets remain composed;
+lazy widget creation offered much smaller gains and would complicate input/view
+state handling.
+
+| Synthetic component | Before | After |
+| --- | ---: | ---: |
+| Import desktop.app, median of7 alternating fresh processes, both bytecode caches precompiled | 272ms | 217ms |
+| USB adopt200 playlists ×100 memberships across3200 tracks, median of3 | 572ms | 6.05ms |
+| USB reconcile2000 previous native playlist bindings, median of3 | 488ms | 8.29ms |
+| iPod drift:800 unique paths,40 playlists,40000 memberships, median of5 | 1280ms | 78.9ms |
+| Filesystem path plan:3200 unique sources, median of3 | 3282ms | 76.8ms |
+
+These are separate local CPU/metadata workloads, not total startup or physical
+export throughput, and their gains must not be summed. Import baseline code was
+read from repository HEAD `d19f3eb` into a disposable directory; both source
+trees had their bytecode caches explicitly precompiled before timing. Catalog outputs
+were compared exactly. iPod/path fixtures use empty generated source placeholders;
+no real audio or mounted devices are read. Raw small receipts and repeatable
+fixture scripts are retained privately in
+`~/Library/Logs/Soundbox/export-efficiency-2026-11-03/`.
+
+USB adoption maintains name/parent/folder candidate indexes and a current
+source-track membership set. Native bindings use full-path/type and exact-ID
+indexes, preserving ambiguity and foreign-library tracks. iPod drift shares
+availability by path and encoded display metadata by track ID only within one
+poll: source existence/metadata derivations drop40000→800, and the next poll sees
+new edits/deletions. Filesystem planning maintains one FAT-normalized destination
+set; a100-source fixture drops5050→200 normalizations while preserving exact case/
+Unicode collision behavior. Writer defaults retain their independent fresh checks.
+
+Remaining costs are explicit: CDJ source captures still scan complete cue/tag/
+contentFile tables at independent freshness boundaries, and unchanged incremental
+generations still invoke the merge renderer. New/changed media is acquired and
+verified during planning and rematerialized/reverified at commit to preserve
+bounded one-track staging. Generic/schema2 verifies existing destination bytes;
+stock render/parse validation and150ms classic USB pacing remain. This pass does
+not weaken payload hashes, source/mount/ownership checks or transaction recovery,
+and it does not claim physical reconnect, throughput or end-to-end acceptance.
 
 Artists is a SoundBox-only derived browser view. It creates no rekordbox folders,
 per-artist playlist records or recurring source-write jobs. The native pipeline
@@ -243,7 +593,7 @@ roughly constant cost reflects visible-row work rather than rebuilding every
 track. This is not a physical scrolling/FPS guarantee. A separate regression
 requires native commits to preserve current track/column, multiple selected
 tracks, top-row anchor, expanded folders and scroll position. Trackpad feedback
-clears on `ScrollEnd`; phase-less mouse wheels use a short fallback.
+uses120ms idle after `ScrollEnd`; phase-less wheels use the same interval.
 
 ## Persistence, artwork and source I/O
 
@@ -320,13 +670,16 @@ original figures are a dated baseline, not the final delivery's retained totals.
 Packed minimum/maximum ranges use four bytes per mip sample in Python. Native
 `AudioEnvelopeSample` retains upper/lower plus signed minimum/maximum, eight
 bytes per sample. Each mode's `WaveSample` uses four floats, 16 bytes, across its
-roughly double-base-sized pyramid. The upload path additionally joins the Python
-range buffers, copies them into ctypes arrays, builds a C++ staging vector and
-copies that vector into shared Metal storage. The table's transient row counts
+roughly double-base-sized pyramid. At that morning checkpoint the upload path
+additionally joined the Python range buffers, copied them into ctypes arrays,
+built a C++ staging vector and copied that vector into shared Metal storage.
+The table's transient row counts
 the joined buffers, ctypes inputs and C++ range staging in addition to the final
 native buffer already counted above. It excludes vector spare capacity, mode
 construction workspaces, compressed read/decompression buffers, decoder-owned
 allocations and old GPU commands still in flight; it is not an exact peak.
+The November3 broader source pass above removes the ctypes duplication while
+retaining the joined immutable inputs and synchronous native-owned copies.
 
 The CoreAudio PCM ring is bounded independently of track duration: two channels
 of 1,048,576 floats total **8 MiB**, plus bounded decoder chunks and platform

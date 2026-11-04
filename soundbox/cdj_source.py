@@ -41,6 +41,25 @@ def _actual_technical(track,observed,path):
     except (OSError,ValueError,KeyError,TypeError):return
 
 
+def _selected_content_files(db, track_ids):
+    """Bound ORM materialization to selected IDs within this fresh snapshot."""
+    if not track_ids:
+        return
+    from sqlalchemy.orm import Query
+    from pyrekordbox.db6.tables import ContentFile
+    query = db.get_content_file()
+    if isinstance(query,Query):
+        identities = sorted(track_ids)
+        queries = [query.filter(ContentFile.ContentID.in_(identities[at:at+500]))
+                   for at in range(0,len(identities),500)]
+    else:
+        queries = [query]
+    for rows in queries:
+        for row in rows:
+            if str(row.ContentID) in track_ids:
+                yield row
+
+
 def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=None):
     """Return an explicit renderer DTO, bound to selected native IDs and UUIDs."""
     if library.source_kind != 'rekordbox-db':
@@ -103,15 +122,16 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                         comment=str(row.Comment or ''), active_loop=bool(row.ActiveLoop),
                         loop_numerator=beats >> 16, loop_denominator=beats & 0xffff))
             tags = []
-            for tag in db.get_my_tag():
+            definitions = list(db.get_my_tag())
+            for tag in definitions:
                 if rekordbox_db._deleted(tag):
                     continue
                 tags.append(dict(id=_number(tag.ID), seq=max(0, int(tag.Seq or 1)-1),
                                  name=tag.Name or '', attribute=_number(tag.Attribute, maximum=1),
                                  parent=0 if tag.ParentID in ('root', '', None) else _number(tag.ParentID)))
-            _, memberships = rekordbox_db._read_tags(db)
+            _, memberships = rekordbox_db._read_tags(db,track_ids=set(expected),definitions=definitions)
             dates = {}
-            for file in db.get_content_file():
+            for file in _selected_content_files(db,set(expected)):
                 tid = str(file.ContentID)
                 if tid not in expected or rekordbox_db._deleted(file):
                     continue
@@ -161,7 +181,10 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                 result.append(track)
                 extras.append(extra)
                 proofs.append(dict(uuid=str(row.UUID), track=track, extra=extra))
-            digest = hashlib.sha256(json.dumps([proofs,playlist_proofs], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            # The renderer receives the complete tag tree, including unassigned
+            # definitions. Bind those globals as well as selected song/playlist
+            # data so a second fresh capture detects every rendered input.
+            digest = hashlib.sha256(json.dumps([proofs,playlist_proofs,tags], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             return dict(db_id=db_id, tracks=result, track_extras=extras, my_tags=tags, source_revision=digest)
         finally:
             db.close()

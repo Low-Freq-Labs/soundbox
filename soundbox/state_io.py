@@ -158,9 +158,8 @@ class StateArea:
             if self.journal.exists():
                 raise OSError('State recovery is pending; restart before more writes')
             paths = [self.path(name) for name in changes]
-            for i, p in enumerate(paths):
-                if any(p in other.parents or other in p.parents for other in paths[i + 1:]):
-                    raise ValueError('Overlapping state publication paths')
+            _reject_overlapping_paths(paths)
+            for p in paths:
                 if p.exists():
                     plain_tree(p)
             self.journal.mkdir()
@@ -217,6 +216,14 @@ class StateArea:
                 self.recover()
             except OSError:
                 pass
+
+
+def _reject_overlapping_paths(paths: list[Path]) -> None:
+    # Any ancestor/descendant pair has one endpoint among the other's proper
+    # parents. Check those prefixes once instead of comparing every pair.
+    staged = set(paths)
+    if any(parent in staged for path in paths for parent in path.parents):
+        raise ValueError('Overlapping state publication paths')
 
 
 _areas: dict[Path, StateArea] = {}

@@ -179,9 +179,14 @@ class CdjSession(DeviceSession):
 
 
 def load_manifest(session):
+    return read_manifest(session)[0]
+
+
+def read_manifest(session):
+    """Pair the validated model with the same bounded captured payload."""
     raw = session.read_optional(MANIFEST, limit=8*1024*1024)
     if raw is None:
-        return None
+        return None,None
     value = json.loads(raw)
     if (value.get('schema') != 1 or value.get('volume_uuid') != session.volume_uuid
             or not isinstance(value.get('files'), dict) or not isinstance(value.get('selection'), list)):
@@ -193,7 +198,7 @@ def load_manifest(session):
         if key in seen or not isinstance(contract.get('owned'), bool) or not isinstance(contract.get('size'), int) or len(contract.get('sha256', '')) != 64:
             raise ValueError('Invalid CDJ ownership inventory')
         seen.add(key)
-    return value
+    return value,raw
 
 
 @dataclass(frozen=True)
@@ -247,17 +252,21 @@ def _hash_file(path, cancel=lambda: False):
     return digest_value.hexdigest()
 
 
-def make_plan(session, candidate, *, selection, db_id, view, workspace=None, should_cancel=lambda:False, settings_only=False, recovery_root=None, allowed_profile_changes=(), retained_files=(), source_contracts=None, catalog_baseline=None, allowed_asset_changes=()):
+_UNCAPTURED_MANIFEST = object()
+
+
+def make_plan(session, candidate, *, selection, db_id, view, workspace=None, should_cancel=lambda:False, settings_only=False, recovery_root=None, allowed_profile_changes=(), retained_files=(), source_contracts=None, catalog_baseline=None, allowed_asset_changes=(), expected_manifest=_UNCAPTURED_MANIFEST, expected_profile_hashes=None):
     if session.read_optional(JOURNAL, limit=8*1024*1024) is not None:
         raise ValueError('Interrupted CDJ transaction requires recovery before another export')
-    previous = load_manifest(session)
+    previous,old_manifest = read_manifest(session)
+    if expected_manifest is not _UNCAPTURED_MANIFEST and old_manifest != expected_manifest:
+        raise ValueError('USB manifest changed during preparation; retry the export')
     if catalog_baseline is not None:
         original = previous['files'] if previous else {}
         if any(contract != original.get(path) for path,contract in catalog_baseline['files'].items() if path not in DATABASE_FILES):
             raise ValueError('Catalog refresh cannot change media ownership')
         previous = catalog_baseline
     previous_files = previous['files'] if previous else {}
-    old_manifest = session.read_optional(MANIFEST, limit=8*1024*1024)
     candidate = Path(candidate)
     retained_files = set(retained_files)
     if any(path not in previous_files or path in DATABASE_FILES for path in retained_files):
@@ -268,6 +277,9 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
     changes, seen = [], {_key(path) for path in retained_files}
     replaces = False
     source_contracts = source_contracts or {}
+    expected_profile_hashes = expected_profile_hashes or {}
+    if not set(expected_profile_hashes) <= set(allowed_profile_changes):
+        raise ValueError('Profile baseline requires an explicitly allowed settings change')
     if any(not p.startswith('PIONEER/USBANLZ/') or PurePosixPath(p).suffix not in ('.DAT','.EXT','.2EX') for p in allowed_asset_changes):
         raise ValueError('Only selected native analysis may change through catalog adoption')
     reuse_proof = reusable_proof(session,recovery_root)
@@ -308,6 +320,8 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
             else:
                 old = _hash_file(destination, should_cancel)
         profile_path = path in ('PIONEER/' + n for n in PROFILE_FILES)
+        if path in expected_profile_hashes and old != expected_profile_hashes[path]:
+            raise ValueError('USB settings changed during preparation; retry to preserve the current profile')
         if profile_path and old is not None and old != new_hash and path not in allowed_profile_changes:
             raise ValueError('USB settings changed during preparation; retry to preserve the current profile')
         if owner and old != owner['sha256'] and not profile_path and not settings_only and path not in allowed_asset_changes:

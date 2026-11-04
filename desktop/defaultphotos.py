@@ -10,11 +10,11 @@ as dependencies or modified.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
+from .thumbnails import CatalogThumbnails
 
 _ROLE = Qt.UserRole + 37
 
@@ -25,6 +25,8 @@ class DefaultPhotosDialog(QDialog):
         self.setWindowTitle("Default photos")
         self.resize(680, 620)
         self._on_action = on_action
+        self._closed = False
+        self._busy = False
 
         layout = QVBoxLayout(self)
         self.head = QLabel()
@@ -39,6 +41,7 @@ class DefaultPhotosDialog(QDialog):
         self.list.setRootIsDecorated(False)
         self.list.setAlternatingRowColors(True)
         self.list.setIconSize(QSize(96, 96))
+        self._thumbnails = CatalogThumbnails(self.list)
         self.list.header().resizeSection(0, 500)
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.itemSelectionChanged.connect(self._sync_buttons)
@@ -61,15 +64,14 @@ class DefaultPhotosDialog(QDialog):
         self._populate(rows)
 
     def _populate(self, rows) -> None:
+        self._thumbnails.clear()
         self.list.clear()
         for row in rows:
             item = QTreeWidgetItem([row["name"], str(row["tracks"])])
             item.setData(0, _ROLE, row["id"])
             item.setSizeHint(0, QSize(0, 104))
-            pixmap = QPixmap(str(row["path"]))
-            if not pixmap.isNull():
-                item.setIcon(0, QIcon(pixmap))
             self.list.addTopLevelItem(item)
+            self._thumbnails.set_image(item, row["path"])
         count = len(rows)
         self.head.setText(
             f"{count} managed default photo{'s' if count != 1 else ''}. "
@@ -78,18 +80,22 @@ class DefaultPhotosDialog(QDialog):
             "pictures always win. Imported originals can be moved afterward.")
         self._sync_buttons()
 
-    def _sync_buttons(self, busy: bool = False) -> None:
-        self.add_btn.setEnabled(not busy)
-        self.delete_btn.setEnabled(bool(self.list.selectedItems()) and not busy)
-        self.close_btn.setEnabled(not busy)
+    def _sync_buttons(self, busy=None) -> None:
+        if busy is not None:
+            self._busy = busy
+        self.add_btn.setEnabled(not self._busy)
+        self.delete_btn.setEnabled(bool(self.list.selectedItems()) and not self._busy)
+        self.close_btn.setEnabled(not self._busy)
 
     def _dispatch(self, choice: dict) -> None:
-        if self._on_action is None:
+        if self._on_action is None or self._closed or self._busy:
             return
         self._sync_buttons(busy=True)
         self.status.setText("Updating managed photos…")
 
         def done(ok: bool, rows=None, message: str = "") -> None:
+            if self._closed:
+                return
             self._sync_buttons(busy=False)
             if not ok:
                 self.status.setText(message or "Couldn't update default photos.")
@@ -98,6 +104,11 @@ class DefaultPhotosDialog(QDialog):
             self.status.setText(message)
 
         self._on_action(choice, done)
+
+    def done(self, result):
+        self._closed = True
+        self._thumbnails.clear()
+        super().done(result)
 
     def _add(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(

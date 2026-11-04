@@ -286,6 +286,64 @@ class ArtworkPublication(unittest.TestCase):
 
 
 class LibraryRepository(unittest.TestCase):
+    def test_backup_reuses_only_exact_previously_validated_bytes(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            repo.save({'custom': {'Set': ['1', '2']},
+                       'extensions': {'opaque': {'preserved': [1, 2]}}})
+            expected = path.read_bytes()
+            reads = []
+            original_read = Path.read_bytes
+
+            def read(current):
+                if current == path:
+                    reads.append(current)
+                return original_read(current)
+
+            with mock.patch.object(Path, 'read_bytes', read), mock.patch(
+                    'soundbox.state_repository.validate_state',
+                    side_effect=AssertionError('Exact saved bytes were revalidated')):
+                repo.backup()
+            self.assertEqual(len(reads), 1)
+            self.assertEqual(path.read_bytes(), expected)
+            copies = list((path.parent / 'backups').glob('library-*.json'))
+            self.assertEqual(len(copies), 1)
+            self.assertEqual(copies[0].read_bytes(), expected)
+
+    def test_recent_backup_never_hides_same_size_corruption(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            repo.save({'custom': {'Set': ['1', '2']}})
+            repo.backup()
+            old = path.stat()
+            corrupt = path.read_bytes().replace(b'"custom"', b'"custo!"').replace(
+                b'"Set": [', b'"Set": {', 1)
+            self.assertEqual(len(corrupt), old.st_size)
+            path.write_bytes(corrupt)
+            os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns))
+            with self.assertRaises(ValueError):
+                repo.backup()
+            self.assertEqual(path.read_bytes(), corrupt)
+            self.assertEqual(len(list((path.parent / 'backups').glob('library-*.json'))), 1)
+
+    def test_changed_valid_backup_bytes_still_receive_full_validation(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            repo.save({'custom': {'Set': ['1']}})
+            changed = path.read_bytes().replace(b'"1"', b'"2"')
+            path.write_bytes(changed)
+            with mock.patch('soundbox.state_repository.validate_state',
+                            wraps=validate_state) as validate:
+                repo.backup()
+            validate.assert_called_once()
+            self.assertEqual(path.read_bytes(), changed)
+            copies = list((path.parent / 'backups').glob('library-*.json'))
+            self.assertEqual(len(copies), 1)
+            self.assertEqual(copies[0].read_bytes(), changed)
+
     def test_schema_and_extension_roundtrip(self):
         for data in ([], None, {'custom': []}, {'custom': {'bad': 2}},
                      {'hidden_tracks': 42}, {'imported': {'1': False}},

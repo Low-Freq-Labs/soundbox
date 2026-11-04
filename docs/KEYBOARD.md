@@ -112,3 +112,8 @@ active track table, preserving Shift selection; they never choose another playli
 Session CUE (its button and mapped keys) cannot take over while a Hot or Memory
 Cue is physically held. Grid-manifest arrival refreshes the bar-start controls
 independently of audio readiness, preserving the user’s Command-A mapping.
+
+November3 lookup refinement shares canonical string parsing only inside one
+current-map lookup. It retains mutable overrides, default-delete conflict rules,
+ambiguous-map refusal, press/release ownership and fresh Qt parser behavior;
+it does not persist a compiled map or change any binding/default.

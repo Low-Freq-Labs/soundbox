@@ -11,9 +11,15 @@ import logging
 import re
 import unicodedata
 import urllib.request
+from functools import lru_cache
+from typing import cast
 
 from soundbox.art_sources import excluded_source
 from soundbox.metadata import editor_credits
+from . import operations
+from .operations import ScopedResponse, bounded_operation, checkpoint, read_response, request_timeout
+
+operation_scope = operations.operation_scope
 
 
 # Compatibility re-exports; local storage has no discovery dependency.
@@ -108,6 +114,13 @@ _JUNK_YEAR = re.compile(r"\b(?:19|20)\d{2}\s*$")    # trailing year: "... 2021"
 
 
 def _clean_search_title(title: str) -> str:
+    # Cache immutable text only; retain the original fallback/error behavior
+    # for non-string inputs, including falsy unhashable values.
+    return _clean_search_text(title) if type(title) is str else _clean_search_text.__wrapped__(title)
+
+
+@lru_cache(maxsize=8192)
+def _clean_search_text(title: str) -> str:
     """Strip DJ version/format/promo junk so the fuzzy match sees the real track name,
     landing the real cover instead of an artist-avatar fallback.
 
@@ -133,6 +146,11 @@ def _clean_search_title(title: str) -> str:
 
 
 def _norm(s: str) -> str:
+    return _normalized_text(s) if type(s) is str else _normalized_text.__wrapped__(s)
+
+
+@lru_cache(maxsize=8192)
+def _normalized_text(s: str) -> str:
     # SoundCloud can return decomposed accents (Ade\u0301la) while local tags
     # use precomposed ADÉLA. Normalize identities before accountability checks.
     return "".join(ch for ch in unicodedata.normalize("NFKD", s or "").casefold()
@@ -378,8 +396,8 @@ def _best_thumb(info: dict) -> str | None:
 
 def _download(url: str) -> tuple[bytes, str] | None:
     req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        data = r.read(_MAX_IMG + 1)
+    with urllib.request.urlopen(req, timeout=request_timeout(20)) as r:
+        data = read_response(r,_MAX_IMG + 1,timeout=20)
         if len(data) > _MAX_IMG:
             return None
         mime = r.headers.get_content_type() or "image/jpeg"
@@ -394,10 +412,10 @@ def _page_og_image(url: str) -> str | None:
         return None
     req = urllib.request.Request(url, headers=_HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=request_timeout(15)) as r:
             if _excluded({"url": getattr(r, "geturl", lambda: url)()}):
                 return None
-            html = r.read(400_000).decode("utf-8", "replace")
+            html = read_response(r,400_000,timeout=15).decode("utf-8", "replace")
     except OSError as exc:
         LOG.warning("art: page fetch failed (%s): %s", exc, url)
         return None
@@ -407,24 +425,48 @@ def _page_og_image(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _flat_search(query: str, n: int = 5) -> list[dict]:
+@bounded_operation
+def _extract(url, *, flat=False) -> dict:
     import yt_dlp
+    from yt_dlp.networking.common import Request
+
+    class ScopedYoutubeDL(yt_dlp.YoutubeDL):
+        def urlopen(self, request):
+            checkpoint()
+            if isinstance(request,str):
+                request = Request(request)
+            if isinstance(request,Request):
+                request = request.copy()
+                original_timeout = request.extensions.get('timeout')
+                request.extensions['timeout'] = min(request_timeout(15),original_timeout) if isinstance(original_timeout,(int,float)) else request_timeout(15)
+            result = super().urlopen(request)
+            try:
+                checkpoint()
+            except BaseException:
+                result.close()
+                raise
+            return ScopedResponse(result)
+
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
-            "extract_flat": True, "socket_timeout": 15,
-            "retries": 1, "extractor_retries": 1}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"scsearch{n}:{query}", download=False) or {}
+            "socket_timeout": request_timeout(15), "retries": 1, "extractor_retries": 1}
+    if flat:
+        opts['extract_flat'] = True
+    with ScopedYoutubeDL(opts) as ydl:
+        result = ydl.extract_info(url,download=False) or {}
+    checkpoint()
+    return cast(dict,result)
+
+
+def _flat_search(query: str, n: int = 5) -> list[dict]:
+    info = _extract(f"scsearch{n}:{query}",flat=True)
     return [entry for entry in (info.get("entries") or []) if not _excluded(entry)]
 
 
 def _full(url: str) -> dict:
-    import yt_dlp
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True,
-            "socket_timeout": 15, "retries": 1, "extractor_retries": 1}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        return ydl.extract_info(url, download=False) or {}
+    return _extract(url)
 
 
+@bounded_operation
 def fetch_by_search(artist: str, title: str, min_conf: float = MIN_CONFIDENCE) -> ArtResult | None:
     """Search SoundCloud for the track; return its cover only on a CONFIDENT, artist-
     accountable match (see _match_score). Artwork comes straight from the flat search
@@ -471,6 +513,7 @@ def fetch_by_search(artist: str, title: str, min_conf: float = MIN_CONFIDENCE) -
                      matched_title=best.get("title") or "")
 
 
+@bounded_operation
 def fetch_artist_avatar(artist: str, min_conf: float = _UPLOADER_MATCH) -> ArtResult | None:
     """Fallback when the exact track cover isn't found: the artist's SoundCloud
     profile picture. Finds the artist's page via a track search (whose flat result
@@ -497,6 +540,7 @@ def fetch_artist_avatar(artist: str, min_conf: float = _UPLOADER_MATCH) -> ArtRe
     return None
 
 
+@bounded_operation
 def fetch_profile_art(artist: str) -> ArtResult | None:
     """Strict artist-profile fallback for excluded sources, never another track."""
     from soundbox.metadata import UNKNOWN_ARTIST
@@ -509,6 +553,7 @@ def fetch_profile_art(artist: str) -> ArtResult | None:
     return None
 
 
+@bounded_operation
 def fetch_best(artist: str, title: str) -> ArtResult | None:
     """Best available art, accuracy-first:
       1. confident track cover for the artist,
@@ -570,6 +615,7 @@ def fetch_best(artist: str, title: str) -> ArtResult | None:
     return None
 
 
+@bounded_operation
 def search_candidates(artist: str, title: str, n: int = 12) -> list[dict]:
     """Ranked SoundCloud results for the MANUAL picker — a human judges, so no
     confidence gate (the auto-matcher's floor is exactly what makes vague-title
@@ -653,6 +699,7 @@ def _liked_candidates(artist: str, title: str, *, allow_excerpt: bool = False) -
     return out
 
 
+@bounded_operation
 def suggest_artist(title: str, min_ratio: float = 0.62,
                    min_hits: int = 2) -> tuple[str, float] | None:
     """Uploader-consensus artist suggestion for an Unknown-Artist track: search
@@ -694,6 +741,7 @@ def suggest_artist(title: str, min_ratio: float = 0.62,
     return None
 
 
+@bounded_operation
 def fetch_thumb(thumb_url: str, source_url: str = "", matched_title: str = "") -> ArtResult | None:
     """Download a specific thumbnail (a picker selection) as an ArtResult."""
     if _excluded({"url": source_url or thumb_url}):
@@ -705,6 +753,7 @@ def fetch_thumb(thumb_url: str, source_url: str = "", matched_title: str = "") -
                      source_url=source_url or thumb_url, matched_title=matched_title)
 
 
+@bounded_operation
 def fetch_by_url(url: str) -> ArtResult | None:
     """Grab art from a pasted SoundCloud URL. A TRACK page's og:image is its
     cover; an ARTIST PROFILE page's og:image is the avatar — so pasting a
@@ -742,6 +791,7 @@ def _fetch_from_entry(url: str | None, conf: float) -> ArtResult | None:
                      matched_title=info.get("title") or "")
 
 
+@bounded_operation
 def preview_image(candidate: dict) -> bytes | None:
     """Small preview bytes; provider-specific CDN sizing stays outside core."""
     if _excluded(candidate):

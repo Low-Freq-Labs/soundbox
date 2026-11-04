@@ -21,6 +21,9 @@ PROFILE_FILES = ('DEVSETTING.DAT', 'MYSETTING.DAT', 'MYSETTING2.DAT',
                  'DJMMYSETTING.DAT', 'djprofile.nxs')
 DATABASE_FILES = tuple('PIONEER/rekordbox/' + name for name in
                        ('export.pdb', 'exportExt.pdb', 'exportLibrary.db'))
+# Bump when catalog rendering, metadata completion or merge policy changes its
+# output contract. This versions pure reconstruction reuse, never source proof.
+CATALOG_RENDER_POLICY = 'rekordbox-6.8.7.0303/soundbox-cdj-catalog-v1'
 DISPLAY_FIELDS = {
     'waveform_color': (114, (('BLUE', 1), ('RGB', 3), ('3Band', 4))),
     'waveform_position': (117, (('LEFT', 2), ('CENTER', 1))),

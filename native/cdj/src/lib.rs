@@ -1,6 +1,7 @@
 pub mod component_tempo;
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use rbl_export::{SourceMyTag, SourceTrack};
 
@@ -42,6 +43,12 @@ pub struct TrackExtra {
     pub legacy_kuvo_public: bool,
 }
 
+fn first_by_id<T>(rows: &[T], id: impl Fn(&T) -> u64) -> HashMap<u64, &T> {
+    let mut result = HashMap::with_capacity(rows.len());
+    for row in rows { result.entry(id(row)).or_insert(row); }
+    result
+}
+
 /// Complete fields the upstream pipeline omits. Values come from explicit
 /// input metadata, never from copying a reference output database into place.
 pub fn complete_metadata(output: &Path, request: &Request) -> Result<(), Box<dyn Error>> {
@@ -61,12 +68,14 @@ pub fn complete_metadata(output: &Path, request: &Request) -> Result<(), Box<dyn
     };
     let mut tagged = Vec::new();
     let mut completed_rows = Vec::new();
+    let extras_by_id = first_by_id(&request.track_extras, |row| row.source_id);
+    let tracks_by_id = first_by_id(&request.tracks, |row| row.id);
     for (offset, mut strings) in track_rows {
         let source_id = u32::from_le_bytes(bytes[offset+20..offset+24].try_into()?) as u64;
         let device_id = u32::from_le_bytes(bytes[offset+72..offset+76].try_into()?);
-        let extra = request.track_extras.iter().find(|row| row.source_id == source_id).ok_or("missing track extra metadata")?;
+        let extra = extras_by_id.get(&source_id).ok_or("missing track extra metadata")?;
         bytes[offset+4..offset+8].copy_from_slice(&extra.content_link.to_le_bytes());
-        let track = request.tracks.iter().find(|row| row.id == source_id).ok_or("missing track input")?;
+        let track = tracks_by_id.get(&source_id).ok_or("missing track input")?;
         tagged.push((device_id, track.my_tags.as_slice()));
         let counter = |value: i64| if value == 0 { String::new() } else { value.to_string() };
         strings[2] = counter(extra.information_update_count);
@@ -177,11 +186,26 @@ pub fn number_track_slots(rows: &mut [Vec<u8>]) -> Result<(), Box<dyn Error>> {
 
 /// Preserve native browse definitions and their unknown bytes during playlist sync.
 pub fn browse_rows(bytes: &[u8], kind: u32) -> Result<Vec<Vec<u8>>,Box<dyn Error>> {
-    let pdb=rbl_pdb::Pdb::parse(bytes)?;
     let page_type=match kind {6=>rbl_pdb::PageType::Colors,16=>rbl_pdb::PageType::Columns,17=>rbl_pdb::PageType::HistoryPlaylists,18=>rbl_pdb::PageType::HistoryEntries,_=>return Err("unsupported browse table".into())};
-    let rows=pdb.rows(pdb.table(page_type).ok_or("missing native browse table")?);
+    table_rows(bytes, page_type)
+}
+
+/// Preserve row order and opaque bytes without rescanning the whole table for
+/// every row's next physical offset. Duplicate offsets still share one boundary.
+pub fn table_rows(bytes: &[u8], kind: rbl_pdb::PageType) -> Result<Vec<Vec<u8>>,Box<dyn Error>> {
+    let pdb=rbl_pdb::Pdb::parse(bytes)?;
+    let rows=pdb.rows(pdb.table(kind).ok_or("missing native table")?);
+    row_bytes(bytes, &rows)
+}
+
+fn row_bytes(bytes: &[u8], rows: &[rbl_pdb::RowRef]) -> Result<Vec<Vec<u8>>,Box<dyn Error>> {
+    let mut locations=rows.iter().map(|r|(r.page_offset,r.offset)).collect::<Vec<_>>();
+    locations.sort_unstable();locations.dedup();
+    let next=locations.windows(2).filter(|pair|pair[0].0==pair[1].0)
+        .map(|pair|(pair[0],pair[1].1)).collect::<HashMap<_,_>>();
     rows.iter().map(|r| {
-        let end=rows.iter().filter(|n|n.page_offset==r.page_offset && n.offset>r.offset).map(|n|n.offset).min().unwrap_or(r.page_offset+40+usize::from(u16::from_le_bytes(bytes.get(r.page_offset+30..r.page_offset+32).ok_or("truncated browse page")?.try_into()?)));
+        let page_end=r.page_offset+40+usize::from(u16::from_le_bytes(bytes.get(r.page_offset+30..r.page_offset+32).ok_or("truncated native page")?.try_into()?));
+        let end=next.get(&(r.page_offset,r.offset)).copied().unwrap_or(page_end);
         Ok(bytes.get(r.offset..end).ok_or("invalid browse row bounds")?.to_vec())
     }).collect()
 }
@@ -189,6 +213,29 @@ pub fn browse_rows(bytes: &[u8], kind: u32) -> Result<Vec<Vec<u8>>,Box<dyn Error
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_index_keeps_first_duplicate_and_missing_ids() {
+        let rows=[(7,"first"),(3,"other"),(7,"later")];
+        let indexed=first_by_id(&rows, |r|r.0);
+        assert_eq!(indexed.get(&7),Some(&&rows[0]));
+        assert_eq!(indexed.get(&3),Some(&&rows[1]));
+        assert!(indexed.get(&8).is_none());
+    }
+    #[test]
+    fn physical_boundaries_keep_native_order_duplicates_gaps_and_page_tails() {
+        let mut bytes=(0..128).map(|v|v as u8).collect::<Vec<_>>();
+        bytes[30..32].copy_from_slice(&12u16.to_le_bytes());
+        bytes[94..96].copy_from_slice(&10u16.to_le_bytes());
+        let rows=[rbl_pdb::RowRef{page_offset:64,offset:108},
+                  rbl_pdb::RowRef{page_offset:0,offset:46},
+                  rbl_pdb::RowRef{page_offset:0,offset:40},
+                  rbl_pdb::RowRef{page_offset:0,offset:46}];
+        assert_eq!(row_bytes(&bytes,&rows).unwrap(),
+                   vec![bytes[108..114].to_vec(),bytes[46..52].to_vec(),
+                        bytes[40..46].to_vec(),bytes[46..52].to_vec()]);
+        assert!(row_bytes(&bytes[..95],&rows).is_err());
+        assert!(row_bytes(&bytes,&[rbl_pdb::RowRef{page_offset:0,offset:60}]).is_err());
+    }
     #[test]
     fn grown_rows_are_numbered_per_page_after_pagination() {
         let mut rows=(0..500).map(|i| {

@@ -79,6 +79,72 @@ class StockPlaylistCapacity(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<I", payload, 0x10)[0], 10_000)
         self.assertEqual(struct.unpack_from("<I", payload, 0x08)[0], len(payload))
 
+    def test_large_unchanged_playlist_selection_keeps_identity_with_linear_lookups(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area) / "synthetic-ipod"
+            itunes = root / "iPod_Control/iTunes"
+            itunes.mkdir(parents=True)
+            count = 80
+            playlists = [PlaylistInfo(f"Playlist {i}", [], playlist_id=1000+i)
+                         for i in range(count)]
+            self.assertTrue(write_itunesdb(
+                root, [], backup=False, force_checksum=ChecksumType.NONE,
+                playlists=playlists,
+                capabilities=capabilities_for_family_gen("iPod Video", "5.5th Gen")))
+            database = itunes / "iTunesDB"
+            before = database.read_bytes()
+            selected = [Playlist(p.name, [], [], pid=str(i))
+                        for i, p in enumerate(playlists)]
+            library = Library({}, selected, Path(area) / "synthetic-source")
+            real_parse = stock_ipod.parse_itunesdb
+            lookups = []
+
+            class ObservedPlaylist(dict):
+                def get(self, key, default=None):
+                    if key == "Title":
+                        lookups.append(key)
+                    return super().get(key, default)
+
+            def parse(path):
+                result = real_parse(path)
+                if Path(path) == database:
+                    result["mhlp"] = [ObservedPlaylist(row) for row in result["mhlp"]]
+                return result
+
+            with mock.patch.object(stock_ipod, "parse_itunesdb", side_effect=parse):
+                plan = plan_stock_ipod_sync(
+                    library, selected, root, model_number="MA446", filesystem="msdos")
+            self.assertFalse(plan.requires_commit)
+            self.assertEqual(plan.rendered_database, before)
+            self.assertEqual(database.read_bytes(), before)
+            self.assertLessEqual(len(lookups), 8 * count + 8)
+
+    def test_duplicate_native_names_keep_first_identity_and_requested_order(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area) / "synthetic-ipod"
+            itunes = root / "iPod_Control/iTunes"
+            itunes.mkdir(parents=True)
+            self.assertTrue(write_itunesdb(
+                root, [], backup=False, force_checksum=ChecksumType.NONE,
+                playlists=[PlaylistInfo("Repeated", [], playlist_id=101),
+                           PlaylistInfo("Repeated", [], playlist_id=102),
+                           PlaylistInfo("Keep", [], playlist_id=103),
+                           PlaylistInfo("Another", [], playlist_id=104)],
+                capabilities=capabilities_for_family_gen("iPod Video", "5.5th Gen")))
+            before = (itunes / "iTunesDB").read_bytes()
+            selected = [Playlist("Another", [], [], pid="a"),
+                        Playlist("Repeated", [], [], pid="b")]
+            plan = plan_stock_ipod_sync(
+                Library({}, selected, Path(area) / "synthetic-source"), selected,
+                root, model_number="MA446", filesystem="msdos")
+            candidate = Path(area) / "candidate"
+            candidate.write_bytes(plan.rendered_database)
+            result = stock_ipod.parse_itunesdb(str(candidate))
+            rows = [(row["Title"], row["playlistID"])
+                    for row in result["mhlp"] if not row.get("isMaster")]
+            self.assertEqual(rows, [("Keep", 103), ("Another", 104), ("Repeated", 101)])
+            self.assertEqual((itunes / "iTunesDB").read_bytes(), before)
+
 
 class _FixtureArtCache:
     def __init__(self, paths: dict[str, Path]):

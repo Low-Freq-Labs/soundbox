@@ -62,8 +62,9 @@ and selected track IDs plus the top visible song, column and scroll offset.
 Sidebar reconciliation retains item objects/expansion and avoids selection
 signals. Artists is virtual-only and enqueues no native organization work; the
 source worker runs background playlist work at low priority. Edit Tags keeps stable
-geometry across save-status changes. Scroll feedback clears on ScrollEnd itself;
-phase-less wheels use a32ms inactivity fallback.
+geometry across save-status changes. Scroll feedback clears after120ms of
+inactivity following ScrollEnd, bridging
+rapid trackpad reversals; phase-less wheels use the same interval.
 
 Graveyard auditions use the same loaded deck and playback keys (Space, held C,
 existing cue triggers and zoom), with no supplying autoplay queue. Its selected
@@ -1335,7 +1336,8 @@ captures the first empty slot of the active page using the normal edit/Quantize
 guards. A full page reports that no slot is available; existing cues are preserved.
 Global Search includes Graveyard metadata and Restore keeps its visible anchor.
 Trackpad/momentum briefly colors the actual scrollbar thumb in the current theme;
-feedback ends on ScrollEnd itself, with a32ms fallback for phase-less wheels.
+feedback ends after120ms of inactivity following ScrollEnd; phase-less wheels
+use the same interval. An inactive axis receiving only ScrollEnd stays inactive.
 See HANDOFF for tested versus installed state.
 
 Native prep intentions use v2 exact native grid arithmetic, retaining terminal
@@ -1363,3 +1365,12 @@ The BLUE/3BAND height changes remain installed; the per-zoom RGB color policy is
 historical and must not be reinstated.
 A separate grid-ready signal refreshes edit admission when the manifest arrives
 after audio readiness. Session CUE is disabled during physical Hot/Memory holds.
+
+November3 correctness/efficiency follow-up keeps rendered waveform bytes and
+musical policy unchanged while reducing channel temporary allocations. Source
+capture now pairs exact bytes with a stable descriptor/path epoch even when SHA
+is already known. A single-song dispatch snapshots saved-record identities on
+the GUI and detaches only its canonical record in the worker; newest cue/grid
+drafts still merge at completion. Track Info drains owned artwork decode before
+its modal widget/image tree is deleted. No playback/transport inputs into the
+user's app were used for this validation; current delivery is in HANDOFF.

@@ -10,8 +10,8 @@ import tempfile
 
 from . import cdj_source, manifest
 from .library import Track
-from .cdj_transaction import CdjPlan, CdjSession, MANIFEST, load_manifest, make_plan
-from .cdj_usb import (DATABASE_FILES, DISPLAY_FIELDS, digest, default_display, patch_display,
+from .cdj_transaction import CdjPlan, CdjSession, load_manifest, read_manifest, make_plan
+from .cdj_usb import (CATALOG_RENDER_POLICY, DATABASE_FILES, DISPLAY_FIELDS, digest, default_display, patch_display,
                       read_library, read_profiles, run_renderer)
 from .source_acquisition import SourceContract, acquire_source
 
@@ -81,7 +81,7 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
     session = CdjSession(target, selected_sources, token=token, volume_uuid=volume_uuid)
     from .cdj_transaction import recover
     recover(session,recovery_root,retain_new=True)
-    previous = load_manifest(session)
+    previous,baseline_manifest = read_manifest(session)
     if not playlists and not standalone:
         from .cdj_transaction import reusable_proof
         pending=reusable_proof(session,recovery_root)
@@ -106,7 +106,7 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
         return plan_incremental(library, playlists, session, previous, all_playlists=all_playlists,
             titles=titles, artists=artists, art_cache=art_cache, should_cancel=should_cancel,
             on_progress=on_progress, recovery_root=recovery_root, additive=additive,native=native,
-            standalone=standalone)
+            standalone=standalone,baseline_manifest=baseline_manifest)
     jobs = _selected(library, playlists, [*library.playlists, *all_playlists], previous, allow_empty=bool(standalone))
     by_id: dict[str, Track] = {}
     for track in standalone:
@@ -228,7 +228,7 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
                 if path in DATABASE_FILES and digest(raw) != previous['files'][path]['sha256']:
                     raise ValueError('Native USB database changed outside SoundBox')
             return CdjPlan(session.target, session.mount_identity, session.volume_uuid, root,
-                previous, (), session.read_optional(MANIFEST, limit=8*1024*1024), False,
+                previous, (), baseline_manifest, False,
                 len(tracks), len(jobs), workspace, recovery_root)
         path = root/'request.json'
         path.write_text(json.dumps(request))
@@ -247,13 +247,14 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
         shutil.rmtree(inputs)
         plan = make_plan(session, root/'candidate', selection=selection,
                          db_id=request['db_id'], view=result['view'], workspace=workspace,
-                         should_cancel=should_cancel, recovery_root=recovery_root)
+                         should_cancel=should_cancel, recovery_root=recovery_root,expected_manifest=baseline_manifest)
         candidate_native = read_library(root/'candidate', (root/'candidate').stat().st_dev)
         plan.manifest['export_signature'] = signature(candidate_native.settings_signature,
             [(Path(path).name,raw) for path,raw in candidate_native.files if path not in DATABASE_FILES])
         plan.manifest['selection_hint'] = selection_hint(library,list(jobs.values()),titles=titles,artists=artists)
         plan.manifest['playlist_hints'] = {key:selection_hint(library,[p],titles=titles,artists=artists) for key,p in jobs.items()}
         plan.manifest['tag_signature'] = digest(json.dumps(captured['my_tags'],sort_keys=True,separators=(',',':')).encode())
+        plan.manifest['render_policy'] = CATALOG_RENDER_POLICY
         plan.manifest['next_track_id'] = next_track_id
         plan.manifest['next_playlist_id'] = max([int(previous.get('next_playlist_id', 1)) if previous else 1,
             *[p['device_id']+1 for p in request['playlists']]])
@@ -287,7 +288,7 @@ def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_can
     native = read_library(target, token)
     if native is None:
         raise ValueError('Export a playlist before editing native USB settings')
-    previous = load_manifest(session)
+    previous,baseline_manifest = read_manifest(session)
     from .cdj_catalog import current_baseline
     previous = current_baseline(native,previous,previous['db_id'] if previous else 0)
     workspace = tempfile.TemporaryDirectory(prefix='soundbox-cdj-settings-')
@@ -321,9 +322,10 @@ def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_can
         plan = make_plan(session, root, selection=previous['selection'] if previous else [],
                          db_id=previous['db_id'] if previous else 0, view=view, workspace=workspace,
                          should_cancel=should_cancel, settings_only=True, recovery_root=recovery_root,
-                         allowed_profile_changes=allowed,catalog_baseline=previous)
+                         allowed_profile_changes=allowed,catalog_baseline=previous,expected_manifest=baseline_manifest,
+                         expected_profile_hashes={path:digest(raw) for path,raw in native.files if path in allowed})
         if previous:
-            for key in ('selection_hint','next_track_id','next_playlist_id','track_inputs','playlist_hints','tag_signature','foreign_tracks','foreign_playlists'):
+            for key in ('selection_hint','next_track_id','next_playlist_id','track_inputs','playlist_hints','tag_signature','foreign_tracks','foreign_playlists','render_policy'):
                 if key in previous:
                     plan.manifest[key] = previous[key]
             # Inspector IDs are device IDs; source bindings stay in the ownership record.
@@ -342,6 +344,7 @@ def plan_initialize(target, *, token, volume_uuid, sources=(), profile=None, nam
     from . import my_settings
     session=CdjSession(target,sources,token=token,volume_uuid=volume_uuid)
     if read_library(target,token) is not None:raise ValueError('The USB already has a native library')
+    _previous,baseline_manifest=read_manifest(session)
     workspace=tempfile.TemporaryDirectory(prefix='soundbox-cdj-initialize-')
     try:
         root=Path(workspace.name).resolve();request=root/'initialize.json'
@@ -351,23 +354,29 @@ def plan_initialize(target, *, token, volume_uuid, sources=(), profile=None, nam
         for filename,raw in my_settings.new_files(profile or {}).items():(folder/filename).write_bytes(raw)
         (folder/'DEVSETTING.DAT').write_bytes(default_display())
         return make_plan(session,root/'candidate',selection=[],db_id=0,view=view,workspace=workspace,
-                         recovery_root=recovery_root,settings_only=True)
+                         recovery_root=recovery_root,settings_only=True,expected_manifest=baseline_manifest)
     except Exception:
         workspace.cleanup();raise
 
 
 def selection_hint(library, playlists, *, titles=None, artists=None):
     """Presentation-only drift hint. Fresh source capture remains export authority."""
+    return _selection_hint(library,playlists,{},titles=titles,artists=artists)
+
+
+def _selection_hint(library, playlists, track_rows, *, titles=None, artists=None):
     from .metadata import effective_title, effective_artist
     rows = []
     for playlist in playlists:
         tracks = []
         for t in library.resolve(playlist):
-            tracks.append([t.track_id, t.source_uuid, str(t.path), t.bpm, t.key,
-                t.source_cue_revision,
-                effective_title(t.track_id,t.name,t.artist,titles,library.title_junk),
-                effective_artist(t.track_id,t.name,t.artist,artists,True,library.artist_registry,t.path.stem),
-                getattr(library,'info_overrides',{}).get(t.track_id,{})])
+            if t.track_id not in track_rows:
+                track_rows[t.track_id]=[t.track_id, t.source_uuid, str(t.path), t.bpm, t.key,
+                    t.source_cue_revision,
+                    effective_title(t.track_id,t.name,t.artist,titles,library.title_junk),
+                    effective_artist(t.track_id,t.name,t.artist,artists,True,library.artist_registry,t.path.stem),
+                    getattr(library,'info_overrides',{}).get(t.track_id,{})]
+            tracks.append(track_rows[t.track_id])
         rows.append([manifest.playlist_key(playlist),playlist.name,playlist.folder_path,tracks])
     return digest(json.dumps(rows,sort_keys=True,separators=(',', ':')).encode())
 
@@ -379,7 +388,10 @@ def status_hint(library, target, *, token, volume_uuid, all_playlists=(), titles
         return None
     jobs = _selected(library, [], [*library.playlists,*all_playlists], previous)
     if 'playlist_hints' in previous:
-        current = {key:selection_hint(library,[p],titles=titles,artists=artists) for key,p in jobs.items()}
+        # One poll observes one immutable captured library/preferences input.
+        # Reuse pure track presentation only within this call, across overlaps.
+        track_rows: dict[str, list] = {}
+        current = {key:_selection_hint(library,[p],track_rows,titles=titles,artists=artists) for key,p in jobs.items()}
         return int(len(current)!=len(previous['selection']) or current!=previous['playlist_hints'])
     return int(previous.get('selection_hint') != selection_hint(library,list(jobs.values()),titles=titles,artists=artists))
 

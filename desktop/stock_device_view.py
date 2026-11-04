@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
 )
 from .choices import Menu as QMenu
 
-from soundbox.stock_ipod import supports_stock_write
-from soundbox.stock_ipod_info import StockIpodSnapshot
+if TYPE_CHECKING:
+    from soundbox.stock_ipod_info import StockIpodSnapshot
 from soundbox.manifest import composite_library_counts
 
 from .devices import human
@@ -495,6 +495,8 @@ class StockIpodPages(QWidget):
             composite: CompositeDeviceData | None = None,
     ):
         self._has_snapshot = True
+        from soundbox.stock_ipod import supports_stock_write
+
         self._clear_details()
         model_label = snapshot.model or "Not confirmed"
         firmware_label = snapshot.firmware_version or "Not reported"

@@ -13,7 +13,10 @@ JPEGs during a device sync.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
+from collections.abc import Callable
 import hashlib
+import heapq
 import json
 import os
 from pathlib import Path
@@ -129,6 +132,65 @@ class StockArtworkSlot:
                 return value
         raise StockArtworkError(
             f"Artwork image {self.image_id} lacks format {format_id}")
+
+
+class _FreeArtworkSlots:
+    """Consume ascending free offsets while indexing only pixels already read."""
+
+    def __init__(self, offsets: list[int]):
+        self.available = set(offsets)
+        self.order = deque(offsets)
+        self.unread = iter(offsets)
+        self.matches: dict[str, list[int]] = {}
+        self.failed: list[int] = []
+
+    def pop_matching(self, digest: str, read_digest: Callable[[int], str | None]) -> int | None:
+        matches = self.matches.setdefault(digest, [])
+        while matches and matches[0] not in self.available:
+            heapq.heappop(matches)
+        candidate = matches[0] if matches else None
+        failed = []
+        for offset in self.failed:
+            if offset not in self.available:
+                continue
+            # A prior transient failure before a cached match still needs a
+            # fresh attempt, just as the original ascending search did.
+            if candidate is not None and offset > candidate:
+                failed.append(offset)
+                continue
+            value = read_digest(offset)
+            if value is None:
+                failed.append(offset)
+            else:
+                heapq.heappush(self.matches.setdefault(value, []), offset)
+                if value == digest:
+                    candidate = offset
+        self.failed = failed
+        if candidate is None:
+            for offset in self.unread:
+                if offset not in self.available:
+                    continue
+                value = read_digest(offset)
+                if value is None:
+                    self.failed.append(offset)
+                else:
+                    heapq.heappush(self.matches.setdefault(value, []), offset)
+                    if value == digest:
+                        candidate = offset
+                        break
+        if candidate is not None:
+            self.available.remove(candidate)
+            heapq.heappop(matches)
+        return candidate
+
+    def pop_first(self) -> int | None:
+        while self.order and self.order[0] not in self.available:
+            self.order.popleft()
+        if not self.order:
+            return None
+        offset = self.order.popleft()
+        self.available.remove(offset)
+        return offset
 
 
 @dataclass(frozen=True)
@@ -902,14 +964,14 @@ def render_incremental_stock_artwork(
     for slot in existing.values():
         for format_id, offset in slot.offsets:
             referenced[format_id].add(offset)
-    free: dict[int, list[int]] = {}
+    free: dict[int, _FreeArtworkSlots] = {}
     final_sizes = {format_id: file_state[format_id][0] for format_id in FORMATS}
     for format_id, (width, height) in FORMATS.items():
         slot_size = width * height * 2
-        free[format_id] = [
+        free[format_id] = _FreeArtworkSlots([
             offset for offset in range(0, final_sizes[format_id], slot_size)
             if offset not in referenced[format_id]
-        ]
+        ])
 
     pixel_hashes: dict[tuple[int, int], str] = {}
 
@@ -951,10 +1013,8 @@ def render_incremental_stock_artwork(
         payload: StockArtworkPayload,
     ) -> int | None:
         """Consume a free slot whose existing pixels already match payload."""
-        for index, offset in enumerate(free[format_id]):
-            if pixel_hash(format_id, offset, payload.size) == payload.sha256:
-                return free[format_id].pop(index)
-        return None
+        return free[format_id].pop_matching(payload.sha256,
+            lambda offset: pixel_hash(format_id, offset, payload.size))
 
     offsets_by_cache: dict[str, dict[int, int]] = {}
     for dbid_text, row in known.items():
@@ -1037,11 +1097,13 @@ def render_incremental_stock_artwork(
                     matched_offset = matching_free_offset(format_id, payload)
                     if matched_offset is not None:
                         offset = matched_offset
-                    elif free[format_id]:
-                        offset = free[format_id].pop(0)
                     else:
-                        offset = final_sizes[format_id]
-                        final_sizes[format_id] += payload.size
+                        available = free[format_id].pop_first()
+                        if available is not None:
+                            offset = available
+                        else:
+                            offset = final_sizes[format_id]
+                            final_sizes[format_id] += payload.size
                     offsets[format_id] = offset
                     if matched_offset is None:
                         writes.append(StockArtworkRangeWrite(

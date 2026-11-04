@@ -15,19 +15,17 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QThread, Signal
 
-from soundbox import engine, metadata, rekordbox_db, sync as sync_mod
+from soundbox import engine, metadata, rekordbox_db
 from soundbox.library import Playlist
-from soundbox.providers import ArtworkProvider
+from soundbox.providers import ArtworkProvider, provider_operation
 from soundbox.operation_control import checkpoint, operation_scope
-from soundbox.stock_artwork import StockArtworkCache
-from soundbox.stock_ipod import (
-    inspect_stock_ipod_sync_status, normalize_model_number,
-    supports_stock_write,
-)
-from soundbox.stock_ipod_info import stock_ipod_device_key
+if TYPE_CHECKING:
+    from soundbox import sync as sync_mod
+    from soundbox.stock_artwork import StockArtworkCache
 
 from .devices import (
     DeviceFacts, device_facts, device_profile, list_devices, refresh_device_mount,
@@ -259,12 +257,14 @@ class DeviceScanWorker(QThread):
     # `discovered` publishes named, disabled rows after bounded mount probes.
     # Rows become selectable at `finished`; dashboard preload follows separately.
     discovered = Signal(list)  # list[tuple[name, path, free, profile]]
+    playlists_requested = Signal(object)  # worker awaiting a GUI-captured snapshot
     done = Signal(list)  # list[tuple[name, path, free, drift, profile]]
 
     def __init__(self, lib, extra=None, *, artist_overrides=None,
                  title_overrides=None, stock_shadow_store=None,
                  stock_models=None, known_paths=None,
-                 known_mount_tokens=None, usb_views=None, usb_requests=None):
+                 known_mount_tokens=None, usb_views=None, usb_requests=None,
+                 defer_playlists=False):
         super().__init__()
         self.lib = lib
         self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
@@ -282,13 +282,45 @@ class DeviceScanWorker(QThread):
         self.usb_snapshots = {}
         self.mount_tokens: dict[str, int] = {}
         self.new_paths: tuple[str, ...] = ()
-        self.results: list = []
+        self.results: list | None = []
         self.retry_discovery = True
+        self.stock_detected = False
+        self.cancellation = threading.Event()
+        self._defer_playlists = defer_playlists
+        self._playlists_ready = threading.Event()
+        self._playlist_capture_error = None
+
+    def provide_playlists(self, extra, *, lib, artist_overrides,
+                          title_overrides, error=None, stock_shadow_store=None):
+        """Publish one GUI-captured snapshot before the worker reads drift."""
+        if not self.cancellation.is_set():
+            self.extra = list(extra or ())
+            self.lib = lib
+            self.artist_overrides = dict(artist_overrides or {})
+            self.title_overrides = dict(title_overrides or {})
+            self.stock_shadow_store = stock_shadow_store
+            self._playlist_capture_error = error
+        self._playlists_ready.set()
+
+    def cancel(self):
+        self.cancellation.set()
+        self._playlists_ready.set()
+
+    def _capture_playlists(self):
+        """Wait only after detection; cancellation never needs GUI delivery."""
+        self.playlists_requested.emit(self)
+        while not self._playlists_ready.wait(0.05):
+            if self.cancellation.is_set() or self.isInterruptionRequested():
+                return False
+        return not (self.cancellation.is_set() or self.isInterruptionRequested())
 
     def _effective_profile(self, path: str, profile):
         """Apply a remembered stock model off the UI thread."""
         if not getattr(profile, "has_stock_ipod", False):
             return profile
+        from soundbox.stock_ipod import normalize_model_number, supports_stock_write
+        from soundbox.stock_ipod_info import stock_ipod_device_key
+
         model = normalize_model_number(getattr(profile, "model", ""))
         if supports_stock_write(model):
             return profile
@@ -325,6 +357,9 @@ class DeviceScanWorker(QThread):
             (name, path, free, device_profile(path))
             for name, path, free in devices
         ]
+        self.stock_detected = any(
+            getattr(profile, 'has_stock_ipod', False)
+            for _name, _path, _free, profile in raw_profiles)
         self.new_paths = tuple(
             path for _name, path, _free, _profile in raw_profiles
             if (
@@ -340,6 +375,9 @@ class DeviceScanWorker(QThread):
             LOG.info(
                 "Device discovery detected %d new mount(s) in %.2fs",
                 len(self.new_paths), time.monotonic() - started)
+        if raw_profiles and self._defer_playlists and not self._capture_playlists():
+            self.results = None
+            return
         out = []
         for name, path, free, raw_profile in raw_profiles:
             drift = None
@@ -347,7 +385,7 @@ class DeviceScanWorker(QThread):
             # Publish the first usable row with its actual sync status. The
             # disabled discovery row is already visible; dashboard preload must
             # not delay the first status check by another full read/pass.
-            if self.lib is not None:
+            if self.lib is not None and self._playlist_capture_error is None:
                 try:
                     if profile.kind == 'generic_usb':
                         from soundbox.cdj_export import status_hint
@@ -372,6 +410,12 @@ class DeviceScanWorker(QThread):
                     and self.stock_shadow_store is not None
                 ):
                     try:
+                        from soundbox.stock_ipod import (
+                            inspect_stock_ipod_sync_status, normalize_model_number,
+                            supports_stock_write,
+                        )
+                        from soundbox.stock_ipod_info import stock_ipod_device_key
+
                         facts = device_facts(path)
                         identity_key = stock_ipod_device_key(
                             facts.volume_uuid,
@@ -444,6 +488,8 @@ class DeleteWorker(QThread):
         self._stop = True
 
     def run(self):
+        from soundbox import sync as sync_mod
+
         try:
             self.result = sync_mod.delete_device_paths(
                 self.session,
@@ -477,10 +523,12 @@ class ArtFillWorker(QThread):
         self.provider = provider
         self.changed_track_ids: set[str] = set()
         self._stop = False
+        self._cancelled = threading.Event()
         self._playback_active = threading.Event()
 
     def stop(self):
         self._stop = True
+        self._cancelled.set()
 
     def set_playback_active(self, active: bool):
         if active:
@@ -503,7 +551,6 @@ class ArtFillWorker(QThread):
     def _fill(self):
         if self.provider is None:
             return
-        import time
         profile_fetch = getattr(self.provider, "fetch_profile_art", None)
         profiles = {}
         hidden = getattr(self.lib, "hidden_ids", set())
@@ -529,7 +576,8 @@ class ArtFillWorker(QThread):
                 attempted += 1
                 try:
                     if artist not in profiles:
-                        profiles[artist] = profile_fetch(artist)
+                        with provider_operation(self.provider,lambda:self._stop):
+                            profiles[artist] = profile_fetch(artist)
                     result = profiles[artist]
                 except Exception as exc:
                     LOG.warning("Artist profile lookup unavailable for %r: %s", artist, exc)
@@ -540,7 +588,7 @@ class ArtFillWorker(QThread):
                     replaced += 1
                     self.changed_track_ids.add(tid)
                     self.profile_changed.emit(tid)
-                time.sleep(self.DELAY)
+                self._cancelled.wait(self.DELAY)
             if attempted:
                 LOG.info("Excluded artwork profiles: %d replaced / %d checked; unavailable profiles stay hidden", replaced, attempted)
         todo = []
@@ -567,7 +615,8 @@ class ArtFillWorker(QThread):
                 t.track_id, title, t.artist, self.artist_overrides, True,
                 self.lib.artist_registry, stem=t.path.stem)
             try:
-                res = self.provider.fetch_best(artist, title)
+                with provider_operation(self.provider,lambda:self._stop):
+                    res = self.provider.fetch_best(artist, title)
             except Exception as exc:  # noqa: BLE001
                 res = None
                 err += 1
@@ -576,7 +625,7 @@ class ArtFillWorker(QThread):
                 # Dependency initialization/network errors are retryable failures,
                 # never a durable claim that this track has no artwork.
                 self.progress.emit(i, total)
-                time.sleep(self.DELAY)
+                self._cancelled.wait(self.DELAY)
                 continue
             if self._stop:
                 break
@@ -585,7 +634,7 @@ class ArtFillWorker(QThread):
                 ok += 1
                 self.changed_track_ids.add(t.track_id)
             self.progress.emit(i, total)
-            time.sleep(self.DELAY)
+            self._cancelled.wait(self.DELAY)
         self.cache.rebalance_default_photos()
         LOG.info("Art fill ended: %d fetched, %d failed", ok, err)
 
@@ -595,7 +644,7 @@ class StockArtworkPrepWorker(QThread):
 
     The curated JPEG cache remains canonical. Identical JPEG bytes converge on
     one content-addressed RGB565 entry, so this pass is resumable and cheap on
-    every launch after the first.
+    later connected-device preparation passes after the first.
     """
     progress = Signal(int, int)
 
@@ -1414,14 +1463,21 @@ class _OneShotArt(QThread):
     """A single art fetch (manual 'fetch now' / paste-URL), off the UI thread."""
     done = Signal(str, object)  # track_id, ArtResult | None | Exception
 
-    def __init__(self, tid, fn):
+    def __init__(self, tid, fn, *, provider=None):
         super().__init__()
         self.tid = tid
         self.fn = fn
+        self.provider = provider
+        self._cancelled = threading.Event()
+
+    def stop(self):
+        self._cancelled.set()
 
     def run(self):
         try:
-            res = self.fn()
+            with provider_operation(self.provider,
+                    lambda:self._cancelled.is_set() or self.isInterruptionRequested()):
+                res = self.fn()
         except Exception as exc:  # noqa: BLE001 — surfaced to the UI + log
             # NEVER collapse a failure into "no art found": a network error and
             # a genuinely artless page are different answers (a swallowed

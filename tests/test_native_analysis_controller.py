@@ -296,6 +296,60 @@ class NativeAnalysisQueue(unittest.TestCase):
         self.assertEqual(self.controller.pending,[preserved])
         self.assertEqual([j['local_id'] for j in self.calls],['sb-two'])
 
+    def test_large_discovery_and_pump_validate_detection_queue_once_per_pass(self):
+        w=self.window;first=w.lib.tracks_by_id['sb-one']
+        tracks=[first]+[replace(first,track_id=f'fixture-{i}',location_uri=f'file:///synthetic/{i}.wav')
+                        for i in range(3199)]
+        w.lib.tracks_by_id={t.track_id:t for t in tracks}
+        detection=native.analysis_jobs.admit([],w.lib,tracks[:100],{})
+        w.settings[native.analysis_jobs.KEY]=detection;w.tag_controller.busy=True
+        with mock.patch.object(native.analysis_jobs,'validate',wraps=native.analysis_jobs.validate) as checked:
+            self.controller.discover();self.assertEqual(checked.call_count,1)
+        self.assertEqual(self.controller.pending,[])
+        w.settings[native.analysis_jobs.KEY]=[];self.controller.discover()
+        self.assertEqual(len(self.controller.pending),1)
+        w.settings[native.analysis_jobs.KEY]=detection
+        with mock.patch.object(native.analysis_jobs,'validate',wraps=native.analysis_jobs.validate) as checked:
+            self.controller.pump();self.assertEqual(checked.call_count,1)
+        self.assertEqual(self.calls,[])
+
+    def test_discovery_failure_and_retry_reuse_unmodified_pending_analysis_record(self):
+        class ImmutableRecord(dict):
+            def __deepcopy__(self,_memo):raise AssertionError('Unrelated analysis payload was copied')
+        self.window.tag_controller.busy=True;self.controller.discover()
+        job=self.controller.pending[0];record=ImmutableRecord(job['record']);job['record']=record
+        self.window._save_state=mock.Mock(return_value=True)
+        self.controller.discover()
+        self.assertIs(self.controller.pending[0]['record'],record)
+        self.controller.fail('Synthetic refusal',job['id'])
+        self.assertIs(self.controller.pending[0]['record'],record)
+        self.controller.retry()
+        self.assertIs(self.controller.pending[0]['record'],record)
+
+    def test_detection_index_is_fresh_and_keeps_exact_source_path_uuid_matching(self):
+        w=self.window;track=w.lib.tracks_by_id['sb-one'];w.tag_controller.busy=True
+        job=native.analysis_jobs.admit([],w.lib,[track],{})[0]
+        for change in ({'source':'other'},{'library_id':'other'},{'track_id':'other'},
+                       {'path':'/synthetic/other.wav'},{'source_uuid':'other'}):
+            with self.subTest(change=change):
+                w.settings[KEY]=[];w.settings[native.analysis_jobs.KEY]=[deepcopy(job)]
+                self.controller.discover();self.assertEqual(self.controller.pending,[])
+                w.settings[native.analysis_jobs.KEY]=[{**job,**change}]
+                self.controller.discover();self.assertEqual(len(self.controller.pending),1)
+        legacy={**job,'source_uuid':''}
+        w.settings[KEY]=[];w.settings[native.analysis_jobs.KEY]=[legacy]
+        self.controller.discover();self.assertEqual(self.controller.pending,[])
+
+    def test_corrupt_detection_queue_keeps_publication_blocked_without_rewriting(self):
+        w=self.window;track=w.lib.tracks_by_id['sb-one'];w.tag_controller.busy=True
+        job=native.analysis_jobs.admit([],w.lib,[track],{})[0]
+        for queue in ([job,deepcopy(job)],[{**job,'state':'completed'}],{'broken':True}):
+            with self.subTest(queue=queue):
+                before=deepcopy(queue);w.settings[native.analysis_jobs.KEY]=queue
+                self.controller.discover();self.assertEqual(self.controller.pending,[])
+                self.assertEqual(w.settings[native.analysis_jobs.KEY],before)
+        self.assertEqual(self.calls,[])
+
     def test_pending_analysis_priority_defers_publication_until_detector_can_resume(self):
         self.window._analysis_priority_pending=lambda:True
         self.controller.discover();self.app.processEvents();self.assertEqual(self.calls,[])
@@ -616,6 +670,9 @@ class NativeAnalysisQueue(unittest.TestCase):
         self.assertEqual(self.calls,[])
 
     def test_saved_native_result_with_failed_local_receipt_replays_the_same_intent(self):
+        opaque={'nested':['preserve alias']}
+        self.window.settings.update(future=opaque,alias=opaque)
+        originals=self.window.settings['analysis_results']
         original=self.window._save_state;failed=[False]
         def save():
             if KEY in self.window.settings and not self.window.settings[KEY] and not failed[0]:
@@ -623,10 +680,14 @@ class NativeAnalysisQueue(unittest.TestCase):
             return original()
         self.window._save_state=save
         self.controller.discover();self.wait(lambda:self.controller.pending and self.controller.pending[0]['error'] and not self.window.tag_controller.owned)
+        self.assertIs(self.window.settings['future'],opaque)
+        self.assertIs(self.window.settings['alias'],opaque)
+        self.assertIs(self.window.settings['analysis_results'],originals)
         operation=self.controller.pending[0]['id'];self.assertEqual(self.calls[0]['id'],operation)
         self.controller.retry();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
         self.assertEqual([j['id'] for j in self.calls],[operation,operation])
         self.assertEqual(self.window.settings[DONE]['sb-one'],digest(self.record))
+        self.assertIs(self.window.settings['future'],opaque)
 
     def test_completed_source_worker_persists_receipt_while_quitting(self):
         self.block=threading.Event();self.controller.discover();self.wait(lambda:bool(self.calls))
@@ -634,3 +695,20 @@ class NativeAnalysisQueue(unittest.TestCase):
         self.wait(lambda:not self.window.tag_controller.owned)
         self.assertFalse(self.controller.pending);self.assertIn('sb-one',self.window.settings[DONE])
         self.window._refresh_analysis_row.assert_not_called()
+
+    def test_local_receipt_exception_restores_namespaces_and_keeps_committed_intent(self):
+        original=self.window._save_state;raised=False
+        opaque={'nested':['exact']};self.window.settings.update(future=opaque,alias=opaque)
+        originals=self.window.settings['analysis_results']
+        def save():
+            nonlocal raised
+            if KEY in self.window.settings and not self.window.settings[KEY] and not raised:
+                raised=True;raise OSError('Synthetic receipt storage failure')
+            return original()
+        self.window._save_state=save
+        self.controller.discover()
+        self.wait(lambda:bool(self.controller.pending and self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertTrue(raised);self.assertNotIn('sb-one',self.window.settings.get(DONE,{}))
+        self.assertIs(self.window.settings['analysis_results'],originals)
+        self.assertIs(self.window.settings['future'],opaque);self.assertIs(self.window.settings['alias'],opaque)
+        self.assertEqual(len(self.calls),1)

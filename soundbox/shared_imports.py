@@ -32,12 +32,13 @@ def validate(jobs):
         identities.add(job['id'])
         if not isinstance(job['tracks'],list) or not 1<=len(job['tracks'])<=10000:
             raise WriteProofError('Invalid import tracks')
-        ids=set();paths=set()
+        ids=set();paths=set();captured=set()
         for track in job['tracks']:
             if (not isinstance(track,dict) or set(track)!={'id','path'} or not isinstance(track['id'],str)
                     or not track['id'] or '\0' in track['id'] or track['id'] in ids or track['path'] in paths):
                 raise WriteProofError('Ambiguous shared import tracks')
             _canonical(track['path']);ids.add(track['id']);paths.add(track['path'])
+            captured.add((track['id'],track['path']))
         dest=job['destination']
         if not isinstance(dest,dict) or dest.get('kind') not in ('collection','native','custom'):
             raise WriteProofError('Unknown import destination')
@@ -64,8 +65,8 @@ def validate(jobs):
         if not isinstance(job['bindings'],list):raise WriteProofError('Unknown import receipts')
         for value in job['bindings']:
             b=Binding(**value);b.validate()
-            if (b.source,b.library_id)!=(job['source'],job['library_id']) or (b.local_id,b.canonical) not in {
-                    (t['id'],t['path']) for t in job['tracks']}:
+            if ((b.source,b.library_id)!=(job['source'],job['library_id'])
+                    or (b.local_id,b.canonical) not in captured):
                 raise WriteProofError('Registration receipt belongs to another import')
         if job['bindings'] and (request is None or len(job['bindings'])!=len(ids)
                 or {b['local_id'] for b in job['bindings']}!=ids):
@@ -144,7 +145,9 @@ def present(library, pending):
         for index,playlist in enumerate(playlists):
             if playlist.pid!=dest['id']:continue
             keys=list(playlist.keys)
+            known=set(keys)
             for track in job['tracks']:
-                if track['id'] in library.tracks_by_id and track['id'] not in keys:keys.append(track['id'])
+                if track['id'] in library.tracks_by_id and track['id'] not in known:
+                    keys.append(track['id']);known.add(track['id'])
             playlists[index]=replace(playlist,keys=keys)
     return replace(library,playlists=playlists)

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
-from soundbox.providers import ArtworkProvider
+from soundbox.providers import ArtworkProvider, provider_operation
 from .task_owner import TaskOwner
 
 _COLS = 4
@@ -48,7 +48,8 @@ class _CandidateSearch(QThread):
         if self._stop:
             return
         try:
-            cands = self.provider.search_candidates(self.artist, self.title)
+            with provider_operation(self.provider,lambda:self._stop):
+                cands = self.provider.search_candidates(self.artist, self.title)
         except Exception:  # noqa: BLE001 — offline/blocked: URL + file still work
             cands = []
         n = 0
@@ -56,7 +57,8 @@ class _CandidateSearch(QThread):
             if self._stop:
                 break
             try:
-                got = self.provider.preview_image(c)
+                with provider_operation(self.provider,lambda:self._stop):
+                    got = self.provider.preview_image(c)
             except Exception:  # provider failures leave the local picker usable
                 got = None
             if self._stop:

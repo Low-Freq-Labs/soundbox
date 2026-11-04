@@ -16,7 +16,6 @@ from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 from .choices import Menu as QMenu
 
-from soundbox import imports as import_mod, sync as sync_mod
 from soundbox.paths import sanitize_component
 from soundbox.device_operations import DeviceCommand, DeviceSessionIdentity, Phase
 
@@ -58,6 +57,7 @@ class DeviceBrowserMixin:
 
     def _erase_device(self, dev: str):
         """Explicitly erase every child of one selected writable volume."""
+        from soundbox import sync as sync_mod
         volume = _external_volume_of(dev)
         if volume is None or volume != Path(dev).resolve():
             QMessageBox.critical(
@@ -238,6 +238,7 @@ class DeviceBrowserMixin:
 
     # ---------- device browser management ----------
     def _browser_menu(self, pos):
+        from soundbox import imports as import_mod
         idx = self.fs_view.indexAt(pos)
         sel = self.fs_view.selectionModel().selectedRows()
         if not sel and idx.isValid():  # nothing selected → act on row under cursor
@@ -279,6 +280,7 @@ class DeviceBrowserMixin:
             menu.exec(self.fs_view.mapToGlobal(pos))
 
     def _import_device_paths(self, paths: list[Path]):
+        from soundbox import imports as import_mod
         if (not paths
                 or any(_external_volume_of(path) is None for path in paths)
                 or any(_in_external_product_tree(path) for path in paths)):
@@ -338,6 +340,7 @@ class DeviceBrowserMixin:
         self._start_device_worker(worker, str(session.target), "browser-mutation")
 
     def _edit_name(self, index):
+        from soundbox import sync as sync_mod
         path = Path(self.fs_model.filePath(index))
         if (
             not _on_external_device(path)
@@ -388,6 +391,7 @@ class DeviceBrowserMixin:
 
     def _assign_artist(self, path: Path):
         # Move an audio file out of Unknown Artist into /Music/<Artist>/ on the device.
+        from soundbox import sync as sync_mod
         if (
             not _on_external_device(path)
             or _in_external_product_tree(path)
@@ -434,6 +438,7 @@ class DeviceBrowserMixin:
             self._start_browser_mutation(session, assign, "Assign artist")
 
     def _new_folder(self, parent: Path):
+        from soundbox import sync as sync_mod
         if (
             _external_volume_of(parent) is None
             or _in_external_product_tree(parent)
@@ -477,6 +482,7 @@ class DeviceBrowserMixin:
         # Safety: only ever delete items strictly INSIDE an external/ejectable volume
         # (never a mount root, never a system volume, never anything reachable by a
         # symlink out of the device). See _on_external_device.
+        from soundbox import sync as sync_mod
         if (
             not paths
             or any(not _on_external_device(p) for p in paths)

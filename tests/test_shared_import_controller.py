@@ -138,6 +138,33 @@ class SharedImports(unittest.TestCase):
         self.playlist.apply(later)
         self.assertEqual(self.playlist.snapshot()['nodes'][0]['Name'],'Later rename')
 
+    def test_membership_ack_failure_restores_original_later_playlist_request_and_clock(self):
+        from soundbox.rekordbox_playlist_store import request_for
+        self.admit(('rebase-fault',));captured={};failed=False
+        def save(settings):
+            nonlocal failed
+            pending=settings.get(jobs.KEY,[])
+            if pending and pending[0]['membership'] and not captured:
+                request=request_for(self.window.lib.source_playlist_catalog,'rename',identity='1000',name='Later rename')
+                request['xml_timestamp']=pending[0]['membership']['xml_timestamp']
+                queue=[dict(source=str(self.database),library_id='123',request=request,error='',retry=False)]
+                captured.update(queue=queue,request=request,before=deepcopy(request))
+                settings['rekordbox_playlist_edits']=queue
+            if captured and not pending and not failed:
+                failed=True;return False
+            return True
+        self.save_hook=save;self.controller.schedule()
+        self.wait(lambda:bool(self.controller.pending and self.controller.pending[0]['error']) and not self.window.tag_controller.owned)
+        self.assertTrue(failed)
+        self.assertIs(self.window.settings['rekordbox_playlist_edits'],captured['queue'])
+        self.assertIs(self.window.settings['rekordbox_playlist_edits'][0]['request'],captured['request'])
+        self.assertEqual(captured['request'],captured['before'])
+        self.controller.retry();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
+        self.assertEqual(captured['request'],captured['before'])
+        # The verified retained committed pair supplies its exact causal edge
+        # on retry; a current native catalog alone never grants this rebase.
+        self.assertNotEqual(self.window.settings['rekordbox_playlist_edits'][0]['request']['revision'],captured['before']['revision'])
+
     def test_collection_import_is_native_without_analysis_or_playlist_membership(self):
         self.admit(('one',),native=False);self.controller.schedule()
         self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
@@ -613,6 +640,8 @@ class SharedImports(unittest.TestCase):
         track=self.admit(('floating',))[0]
         sf.write(track.path,np.zeros((44100*8,2)),44100,subtype='FLOAT')
         self.window.imported[track.track_id]['size']=track.path.stat().st_size
+        originals=self.window.imported;opaque={'nested':['preserve alias']}
+        self.window.settings.update(future=opaque,alias=opaque)
         before=deepcopy(self.controller.pending);failed=False
         def fail_once(settings):
             nonlocal failed
@@ -623,6 +652,9 @@ class SharedImports(unittest.TestCase):
         self.assertEqual(len(self.load(self.database).tracks_by_id),1)
         self.assertEqual(self.controller.pending[0]['id'],before[0]['id'])
         self.assertFalse(self.window.settings.get(wave_conversion.KEY));inode=track.path.stat().st_ino
+        self.assertIs(self.window.imported,originals)
+        self.assertIs(self.window.settings['future'],opaque)
+        self.assertIs(self.window.settings['alias'],opaque)
         self.controller.stop();self.controller=self.controller_for_window();self.window.shared_import_controller=self.controller
         self.controller.retry();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
         self.assertEqual(track.path.stat().st_ino,inode)

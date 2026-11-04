@@ -143,12 +143,16 @@ class PrepEditController(QObject):
     def _request(self, tid, kind, operation, value=0, **cue):
         reason=self.reason(tid,grid=kind=='grid')
         if reason:self.window._flash_status(reason,10);return False
-        w=self.window; previous=deepcopy(w.settings)
+        w=self.window; missing=object()
+        # Request preparation copies the selected job/record and replaces only
+        # these namespaces. Retain their original references for exact rollback
+        # without cloning unrelated saved analysis/settings on every gesture.
+        previous={key:w.settings.get(key,missing) for key in (edits.KEY,'analysis_results')}
         try:
             track=w.lib.tracks_by_id[tid]; old=self.job(tid)
             if old and not self._job_matches(old,w.lib,track):
                 raise ValueError('Prep edits belong to a different source; intentions preserved')
-            job=deepcopy(old or self._new(track))
+            job=old or self._new(track)
             after=edits.operation(job,kind,operation,value,**cue)
             if after==job:return True
             record=w._analysis_result(track); updated=self._record(record,after)
@@ -156,7 +160,9 @@ class PrepEditController(QObject):
             if updated is not None:w.settings['analysis_results']={**w.settings.get('analysis_results',{}),analysis.result_key(track.path):updated}
             if not w._save_state():raise OSError('The edit could not be saved; check available space and retry')
         except (OSError,ValueError,RuntimeError) as exc:
-            w.settings.clear();w.settings.update(previous)
+            for key,before in previous.items():
+                if before is missing:w.settings.pop(key,None)
+                else:w.settings[key]=before
             w._flash_status(str(exc),15);w._sync_grid();w._sync_cue_editing();return False
         self.refresh(tid);self.schedule();return True
 
@@ -223,8 +229,7 @@ class PrepEditController(QObject):
     def _fail(self, tid, error, *, refresh=True):
         job=self.job(tid)
         if job:
-            queue=deepcopy(self.pending)
-            next(j for j in queue if j['track_id']==tid)['error']=str(error)[:4096]
+            queue=[{**j,'error':str(error)[:4096]} if j['track_id']==tid else j for j in self.pending]
             self.window.settings[edits.KEY]=queue;self.window._save_state()
         self.errors[tid]=str(error);self._status('Prep edits need attention: '+str(error))
         self.window._flash_status('Couldn’t save prep edits: '+str(error),15)
@@ -332,13 +337,14 @@ class PrepEditController(QObject):
                         any(current[key]!=job[key] for key in ('id','path','sha256','epoch','source','library_id'))
                         or analysis.identity(Path(job['path']).stat())!=proof['epoch']):
                     raise ValueError('Audio changed while prep edits were checked; intentions preserved')
-                previous=deepcopy(w.settings);queue=deepcopy(self.pending)
+                previous=self.pending;queue=[dict(j) if j['track_id']==tid else j for j in previous]
                 renewed=next(j for j in queue if j['track_id']==tid)
                 renewed['epoch']=proof['epoch'];renewed.pop('identity_pending')
                 w.settings[edits.KEY]=queue
-                if not w._save_state():
-                    w.settings.clear();w.settings.update(previous)
-                    raise OSError('Audio proof could not be saved; prep intentions preserved')
+                try:
+                    if not w._save_state():raise OSError('Audio proof could not be saved; prep intentions preserved')
+                except (OSError,ValueError):
+                    w.settings[edits.KEY]=previous;raise
             except (OSError,ValueError) as exc:self._fail(tid,exc);return
             pb=w.player_bar
             if not self.closing and not w._shutting_down and pb.current_track()==tid:
@@ -443,17 +449,21 @@ class PrepEditController(QObject):
             latest=w.lib.tracks_by_id.get(tid) if w.lib else None
             if not latest or (str(w.lib.source),w.lib.source_library_id,latest.native_id,latest.source_uuid,str(latest.path))!=(str(lib.source),lib.source_library_id,track.native_id,track.source_uuid,str(track.path)):
                 self._fail(tid,'Prep saved in the original library; intentions preserved for reconciliation');return
-            previous=deepcopy(w.settings);queue=deepcopy(self.pending);current=next(j for j in queue if j['track_id']==tid)
+            previous=self.pending;queue=list(previous)
+            index=next(i for i,j in enumerate(queue) if j['track_id']==tid)
+            current=dict(queue[index]);queue[index]=current
             if 'upgrade' in result:
                 try:
                     upgraded=edits.upgrade_native(current,**result['upgrade'])
                 except ValueError as exc:self._fail(tid,str(exc));return
                 queue=[upgraded if j['track_id']==tid else j for j in queue]
             elif 'prepared' in result:current['prepared']=result['prepared']
-            else:current['operations'].pop(0);current['prepared']=None
+            else:current['operations']=current['operations'][1:];current['prepared']=None
             queue=[j for j in queue if j['operations']];w.settings[edits.KEY]=queue
-            if not w._save_state():
-                w.settings.clear();w.settings.update(previous);self._fail(tid,'Prep saved state could not be confirmed locally');return
+            try:
+                if not w._save_state():raise OSError('Prep saved state could not be confirmed locally')
+            except (OSError,ValueError) as exc:
+                w.settings[edits.KEY]=previous;self._fail(tid,str(exc));return
             self.tags.prep_priority=any(j['prepared'] is not None for j in queue)
             if 'upgrade' in result:
                 self.errors.pop(tid,None);self.refresh(tid)
@@ -468,8 +478,7 @@ class PrepEditController(QObject):
         else:self._status('Updating beatgrid…' if op['kind']=='grid' else 'Updating cue…')
 
     def retry(self):
-        self.errors.clear();queue=deepcopy(self.pending)
-        for job in queue:job['error']=''
+        self.errors.clear();queue=[{**job,'error':''} for job in self.pending]
         old=self.window.settings.get(edits.KEY,[]);self.window.settings[edits.KEY]=queue
         if not self.window._save_state():self.window.settings[edits.KEY]=old;return
         self.schedule()

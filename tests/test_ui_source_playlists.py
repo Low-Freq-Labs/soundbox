@@ -102,6 +102,14 @@ class NativePlaylistGestures(unittest.TestCase):
             worker.assert_not_called()
         self.assertEqual(self.window.settings,before);self.assertEqual(self.window.removals,{})
 
+    def test_failed_admission_restores_existing_empty_queue_owner(self):
+        queue=[];self.window.settings[QUEUE]=queue
+        request=self.rename('Denied');before=copy.deepcopy(request)
+        self.window._save_state.return_value=False
+        self.assertFalse(self.controller.enqueue(request))
+        self.assertIs(self.window.settings[QUEUE],queue)
+        self.assertEqual(request,before);self.assertEqual(self.calls,[])
+
     def test_source_failure_stays_visible_pending_without_soundbox_veto(self):
         self.error='Native selection changed';self.controller.enqueue(self.rename('Denied'))
         self.wait(lambda:bool(self.controller.pending[0]['error']) and not self.window.tag_controller.owned)

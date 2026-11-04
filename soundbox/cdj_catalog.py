@@ -57,13 +57,17 @@ def current_baseline(native, previous, db_id):
             result[str(p['id'])]=tuple(names)
         return result
     old_paths=full_paths(old['playlists']);current_paths=full_paths(view['playlists'])
+    by_path: dict[tuple, list[dict]]={}
+    by_identity: dict[str, list[dict]]={}
+    for playlist in view['playlists']:
+        by_path.setdefault((playlist['folder'],current_paths[str(playlist['id'])]),[]).append(playlist)
+        by_identity.setdefault(str(playlist['id']),[]).append(playlist)
     bindings={}
     for before in old['playlists']:
         if 'source_id' not in before:continue
-        candidates=[p for p in view['playlists'] if p['folder']==before['folder'] and
-                    current_paths[str(p['id'])]==old_paths[str(before['id'])]]
+        candidates=by_path.get((before['folder'],old_paths[str(before['id'])]),[])
         if not candidates and before['entries']:
-            candidates=[p for p in view['playlists'] if str(p['id'])==str(before['id']) and p['entries']==before['entries']]
+            candidates=[p for p in by_identity.get(str(before['id']),[]) if p['entries']==before['entries']]
         if len(candidates)==1:bindings[str(candidates[0]['id'])]=before['source_id']
     old_tracks={(int(t['master_db_id']),int(t['source_id']),t['audio']):t for t in old['track_rows']}
     from .cdj_incremental import referenced_files

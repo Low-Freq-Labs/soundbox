@@ -10,6 +10,30 @@ import time
 from PySide6.QtCore import QStandardPaths, QTimer
 
 
+def runtime_sql_check() -> bool:
+    """Exercise bundled native ORM/SQLCipher entirely in disposable RAM."""
+    from pyrekordbox.db6 import tables
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+    from sqlcipher3 import dbapi2 as sqlcipher
+
+    connection = sqlcipher.connect(':memory:')
+    engine = None
+    try:
+        if not connection.execute('PRAGMA cipher_version').fetchone():
+            raise RuntimeError('SQLCipher runtime is unavailable')
+        connection.execute('CREATE TABLE djmdPlaylist (ID TEXT PRIMARY KEY)')
+        connection.execute("INSERT INTO djmdPlaylist VALUES ('isolated')")
+        connection.commit()
+        engine = create_engine('sqlite://', module=sqlcipher, creator=lambda: connection)
+        with Session(engine) as session:
+            return session.execute(select(tables.DjmdPlaylist.ID)).scalars().all() == ['isolated']
+    finally:
+        if engine is not None:
+            engine.dispose()
+        connection.close()
+
+
 def run(state: Path, report: Path) -> None:
     from .app import MainWindow, make_app
 

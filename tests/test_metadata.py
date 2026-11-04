@@ -517,6 +517,75 @@ class ArtistAliases(unittest.TestCase):
 
 
 class SuggestMerges(unittest.TestCase):
+    @staticmethod
+    def exhaustive(counts, threshold):
+        """Small all-pairs oracle, independent of candidate indexing/reuse."""
+        from difflib import SequenceMatcher
+        from itertools import combinations
+        from soundbox.metadata import UNKNOWN_ARTIST
+        import re
+        names=[]
+        for name in counts:
+            normalized=re.sub('[^a-z0-9]','',name.casefold())
+            if name and name != UNKNOWN_ARTIST and len(normalized)>=4:names.append((name,normalized))
+        pairs=[]
+        for (a,na),(b,nb) in combinations(names,2):
+            if abs(len(na)-len(nb))>3:continue
+            ratio=SequenceMatcher(None,na,nb).ratio()
+            if ratio<threshold:continue
+            variant,target=(a,b) if counts[a]<=counts[b] else (b,a)
+            pairs.append((variant,target,round(ratio,2)))
+        pairs.sort(key=lambda row:(-row[2],-counts[row[1]]))
+        seen=set();result=[]
+        for row in pairs:
+            if row[0] not in seen:seen.add(row[0]);result.append(row)
+        return result
+
+    def test_candidate_reuse_matches_exhaustive_ordered_results(self):
+        import random
+        from soundbox.metadata import suggest_merges
+        rng=random.Random(157)
+        for _ in range(100):
+            roots=[''.join(rng.choices('abcdef0123',k=rng.randrange(4,16))) for _ in range(12)]
+            names=[]
+            for root in roots:
+                names.extend((root,root.upper()+'!',root[:-1]+rng.choice('abcdef')))
+            rng.shuffle(names)
+            counts={name:rng.randrange(1,5) for name in names}
+            for threshold in (0,.5,.85,1,1.01):
+                self.assertEqual(suggest_merges(counts,threshold),self.exhaustive(counts,threshold))
+
+    def test_original_pair_direction_and_autojunk_are_preserved(self):
+        from soundbox.metadata import suggest_merges
+        counts={'ab'*105+'c':3,'ba'*105+'c':3,'ab'*105+'d':10,
+                'YÉS- CHEF':1,'YES_CHEF':1,'yes chef!':1,'yeschef2':4}
+        for threshold in (.1,.85,1):
+            self.assertEqual(suggest_merges(counts,threshold),self.exhaustive(counts,threshold))
+
+    def test_matcher_index_is_constructed_once_per_name(self):
+        import difflib
+        from unittest import mock
+        from soundbox.metadata import suggest_merges
+        counts={f'artist{i:04}':i%5+1 for i in range(300)}
+        with mock.patch('difflib.SequenceMatcher',wraps=difflib.SequenceMatcher) as matcher:
+            result=suggest_merges(counts)
+        self.assertTrue(result)
+        self.assertEqual(matcher.call_count,len(counts))
+
+    def test_upper_bound_avoids_scoring_pairs_that_cannot_change_the_suggestion(self):
+        import difflib
+        from unittest import mock
+        from soundbox.metadata import suggest_merges
+        class Counted(difflib.SequenceMatcher):
+            scored=0
+            def ratio(self):
+                type(self).scored+=1
+                return super().ratio()
+        counts={'artist'+'!'*i:1 for i in range(300)}
+        with mock.patch('difflib.SequenceMatcher',Counted):result=suggest_merges(counts)
+        self.assertEqual(result,self.exhaustive(counts,.85))
+        self.assertLessEqual(Counted.scored,len(counts))
+
     def test_typo_variant_merges_toward_more_tracks(self):
         from soundbox.metadata import suggest_merges
         out = suggest_merges({"UNOWN": 41, "unownn": 3, "DENNETT": 20})

@@ -516,7 +516,7 @@ def _read_existing_manifest(
         raise DualIpodError("SoundBox manifest path is not a regular file")
     try:
         payload = path.read_bytes()
-        data = legacy_manifest.load_composite(root)
+        data = legacy_manifest.parse_composite(payload)
     except (OSError, ValueError) as exc:
         raise DualIpodError("Existing SoundBox manifest is unreadable") from exc
     return data, payload, hashlib.sha256(payload).hexdigest()
@@ -533,10 +533,8 @@ def composite_device_drift(
 ) -> legacy_manifest.Drift | None:
     """Diff schema-3 ownership against the currently exportable Rockbox view."""
     root = Path(target)
-    manifest = legacy_manifest.load_composite(root)
-    manifest_path = legacy_manifest.manifest_path(root)
-    manifest_sha256 = (
-        _sha256(manifest_path) if manifest_path.is_file() else None)
+    manifest,payload = legacy_manifest.read_composite(root)
+    manifest_sha256 = hashlib.sha256(payload).hexdigest()
     interrupted_recovery = _matching_interrupted_recovery(
         root, manifest, manifest_sha256, {})
     if not manifest.get("playlists"):
@@ -550,7 +548,11 @@ def composite_device_drift(
             return drift
         return None
     current = list(library.playlists) + list(extra or [])
-    effective, _missing, _unsupported = _filtered_playlists(library, current)
+    # Polling is presentation-only. Share observations across overlapping
+    # playlists within this invocation, never between polls or with a writer.
+    effective, _missing, _unsupported = _filtered_playlists(
+        library, current, source_presence={})
+    metadata_cache: dict[str, bytes] = {}
     library_count = len(library.playlists)
     filtered_library = Library(
         library.tracks_by_id,
@@ -578,6 +580,7 @@ def composite_device_drift(
             playlist,
             artist_overrides=artist_overrides,
             title_overrides=title_overrides,
+            metadata_cache=metadata_cache,
         )
         if current_entry.get("metadata_sig") != raw.get("metadata_sig"):
             drift.changed.append((str(key), playlist.name))
@@ -1254,6 +1257,8 @@ def _manifest_file_baseline(
 def _filtered_playlists(
     library: Library,
     selected: list[Playlist],
+    *,
+    source_presence: dict[Path, bool] | None = None,
 ) -> tuple[list[Playlist], list[DualOmission], list[DualOmission]]:
     output: list[Playlist] = []
     missing: dict[str, DualOmission] = {}
@@ -1263,10 +1268,15 @@ def _filtered_playlists(
         keys: list[str] = []
         for track in library.resolve(playlist):
             source = track.path
-            try:
-                exists = source.is_file()
-            except OSError:
-                exists = False
+            if source_presence is not None and source in source_presence:
+                exists = source_presence[source]
+            else:
+                try:
+                    exists = source.is_file()
+                except OSError:
+                    exists = False
+                if source_presence is not None:
+                    source_presence[source] = exists
             if not exists:
                 missing.setdefault(track.track_id, DualOmission(
                     track.track_id, track.name, source, "source file is missing"))
@@ -1323,22 +1333,28 @@ def _playlist_metadata_sig(
     *,
     artist_overrides: dict | None,
     title_overrides: dict | None,
+    metadata_cache: dict[str, bytes] | None = None,
 ) -> str:
     """Hash effective Rockbox-visible title/artist in exact playlist order."""
     digest = hashlib.sha1()
     for track in library.resolve(playlist):
-        source = track.path.resolve(strict=True)
-        title, artist = _effective_display_metadata(
-            library,
-            track,
-            source,
-            derive_artists=True,
-            artist_overrides=artist_overrides,
-            title_overrides=title_overrides,
-        )
-        for value in (track.track_id, title, artist):
-            digest.update(str(value).encode("utf-8"))
-            digest.update(b"\0")
+        encoded = metadata_cache.get(track.track_id) if metadata_cache is not None else None
+        if encoded is None:
+            source = track.path.resolve(strict=True)
+            title, artist = _effective_display_metadata(
+                library,
+                track,
+                source,
+                derive_artists=True,
+                artist_overrides=artist_overrides,
+                title_overrides=title_overrides,
+            )
+            encoded = b"".join(
+                str(value).encode("utf-8") + b"\0"
+                for value in (track.track_id, title, artist))
+            if metadata_cache is not None:
+                metadata_cache[track.track_id] = encoded
+        digest.update(encoded)
     return digest.hexdigest()[:16]
 
 
@@ -1348,6 +1364,7 @@ def _composite_entry_for_effective_playlist(
     *,
     artist_overrides: dict | None,
     title_overrides: dict | None,
+    metadata_cache: dict[str, bytes] | None = None,
 ) -> dict[str, Any]:
     row = legacy_manifest.entry_for(
         playlist,
@@ -1360,6 +1377,7 @@ def _composite_entry_for_effective_playlist(
         playlist,
         artist_overrides=artist_overrides,
         title_overrides=title_overrides,
+        metadata_cache=metadata_cache,
     )
     return row
 

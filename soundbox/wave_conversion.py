@@ -298,9 +298,13 @@ def rebind(record, receipt):
 def acknowledge(settings, imported, receipts):
     """Rebase the latest GUI edits, never a stale worker copy of musical data."""
     from . import prep_edits
-    updated, records = deepcopy(settings), deepcopy(imported)
-    saved = updated.setdefault(KEY, [])
+    updated, records = dict(settings), dict(imported)
+    saved = updated.get(KEY, [])
     if not isinstance(saved, list):raise ValueError('Invalid saved WAVE conversion receipts')
+    saved = list(saved);updated[KEY] = saved
+    results = updated.get('analysis_results', {})
+    pending = updated.get(prep_edits.KEY, [])
+    copied_results = False;copied_intents: set[int] = set()
     for receipt in receipts:
         validate_receipt(receipt)
         tid, path = receipt['track_id'], receipt['path']
@@ -308,18 +312,24 @@ def acknowledge(settings, imported, receipts):
         if not rec or rec.get('path') != path:raise ValueError('Imported WAVE identity changed before acknowledgement')
         if rec.get('size') not in (0,receipt['before_epoch'][2],receipt['size']):
             raise ValueError('Imported WAVE size changed before acknowledgement')
+        rec = deepcopy(rec);records[tid] = rec
         rec['size'] = receipt['size']
-        results = updated.get('analysis_results', {})
         key = result_key(path)
-        if key in results:results[key] = rebind(results[key],receipt)
-        pending = updated.get(prep_edits.KEY, [])
+        if key in results:
+            if not copied_results:
+                results = dict(results);updated['analysis_results'] = results;copied_results = True
+            results[key] = rebind(results[key],receipt)
         prep_edits.validate(pending)
-        for intent in pending:
+        for index,intent in enumerate(pending):
             if intent['track_id'] != tid:continue
             if (intent['path'] != path or intent['native_ready'] or intent['prepared'] is not None
                     or intent['sha256'] and intent['sha256'] not in (receipt['before_sha256'],receipt['after_sha256'])
                     or not intent['sha256'] and intent['epoch'] != receipt['before_epoch']):
                 raise ValueError('Pending prep identity differs from WAVE conversion')
+            if index not in copied_intents:
+                if not copied_intents:
+                    pending = list(pending);updated[prep_edits.KEY] = pending
+                intent = deepcopy(intent);pending[index] = intent;copied_intents.add(index)
             intent.update(sha256=receipt['after_sha256'],epoch=receipt['epoch'])
         prep_edits.validate(pending)
         prior = next((r for r in saved if (r.get('operation_id'),r.get('track_id')) == (receipt['operation_id'],tid)),None)
@@ -333,11 +343,11 @@ def acknowledge(settings, imported, receipts):
 def acknowledged(settings, job):
     saved=settings.get(KEY,[])
     if not isinstance(saved,list):raise ValueError('Invalid saved WAVE conversion receipts')
-    result={}
+    result={};captured={(t['id'],t['path']) for t in job['tracks']}
     for receipt in saved:
         validate_receipt(receipt)
         if receipt['operation_id']!=job['id']:continue
-        if (receipt['track_id'],receipt['path']) not in {(t['id'],t['path']) for t in job['tracks']}:
+        if (receipt['track_id'],receipt['path']) not in captured:
             raise ValueError('Saved WAVE conversion changed its import identity')
         if 'epoch' not in receipt:raise ValueError('WAVE conversion acknowledgement is incomplete')
         result[receipt['track_id']]=receipt['after_sha256']

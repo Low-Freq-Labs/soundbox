@@ -69,6 +69,79 @@ class _ArtCache:
         return self.values.get(track_id)
 
 
+class CompositeDriftEfficiencyTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.source = self.base / "source.wav"
+        self.source.write_bytes(b"read-only status fixture")
+        self.target = self.base / "synthetic-device"
+        self.target.mkdir()
+        # Distinct native identities sharing a file must retain distinct
+        # metadata; repeated memberships must retain their exact order.
+        self.library = Library({
+            "a": Track("a", "First identity", "Fixture", self.source.as_uri()),
+            "b": Track("b", "Second identity", "Fixture", self.source.as_uri()),
+        }, [Playlist(f"Playlist {index}", [], ["a", "b", "a"], pid=str(index))
+            for index in range(12)], self.base / "source.xml")
+        device_manifest.save(self.target, {
+            "schema": 3,
+            "profile": dual_ipod.DUAL_EXPORT_PROFILE,
+            "playlists": {
+                device_manifest.playlist_key(playlist):
+                    dual_ipod.composite_playlist_entry(self.library, playlist)
+                for playlist in self.library.playlists},
+            "files": {},
+            "rockbox_artwork_sides": [116, 160],
+        })
+
+    def test_overlap_reuses_observations_only_within_each_poll(self):
+        real_is_file = Path.is_file
+        source_checks = []
+
+        def is_file(path):
+            if path == self.source:
+                source_checks.append(path)
+            return real_is_file(path)
+
+        with mock.patch.object(Path, "is_file", is_file), mock.patch.object(
+                dual_ipod, "_effective_display_metadata",
+                wraps=dual_ipod._effective_display_metadata) as display:
+            drift = dual_ipod.composite_device_drift(self.library, self.target)
+            self.assertFalse(drift.any())
+            self.assertEqual(len(source_checks), 1)
+            self.assertEqual(display.call_count, 2)
+
+            source_checks.clear()
+            display.reset_mock()
+            changed = dual_ipod.composite_device_drift(
+                self.library, self.target,
+                title_overrides={"b": "Updated second identity"})
+            self.assertEqual(len(changed.changed), 12)
+            self.assertEqual(len(source_checks), 1)
+            self.assertEqual(display.call_count, 2)
+
+        # Cache reuse must not suppress a membership order change.
+        self.library.playlists[0].keys = ["a", "a", "b"]
+        drift = dual_ipod.composite_device_drift(self.library, self.target)
+        self.assertEqual([row[0] for row in drift.changed], ["0"])
+
+    def test_next_poll_rechecks_missing_recreated_and_relocated_sources(self):
+        self.assertFalse(dual_ipod.composite_device_drift(
+            self.library, self.target).any())
+        self.source.unlink()
+        self.assertEqual(len(dual_ipod.composite_device_drift(
+            self.library, self.target).changed), 12)
+        self.source.write_bytes(b"read-only status fixture")
+        self.assertFalse(dual_ipod.composite_device_drift(
+            self.library, self.target).any())
+        self.library.tracks_by_id["b"].location_uri = (
+            self.base / "new-missing-location.wav").as_uri()
+        self.assertEqual(len(dual_ipod.composite_device_drift(
+            self.library, self.target).changed), 12)
+
+
 class DualIpodSyncTests(unittest.TestCase):
     def test_native_adopted_custom_retains_device_identity_through_planning_and_rename(self):
         self.playlist.pid='1000';self.playlist.export_key='cust:Original'

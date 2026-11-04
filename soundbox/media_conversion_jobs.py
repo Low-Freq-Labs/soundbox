@@ -27,18 +27,23 @@ def validate(queue):
 
 def acknowledge(settings,imported,job,receipt):
     """Read GUI-current state, preserving edits made during conversion."""
-    updated,records=deepcopy(settings),deepcopy(imported)
+    # Only replacement namespaces and records belong to this acknowledgement.
+    # Unknown settings and unrelated saved songs retain their original owners.
+    updated,records=dict(settings),dict(imported)
     if receipt.get('unchanged'):return updated,records
     if (receipt['path']!=job['path'] or receipt['operation_id']!=job['id']):raise ValueError('Media acknowledgement identity changed')
     path=receipt['path'];target=receipt.get('target',path);before,after=receipt['before_sha256'],receipt['after_sha256']
+    ids=set(job['ids'])
     for tid in job['ids']:
         record=records.get(tid)
         if record:
             if str(Path(record['path']).resolve(strict=False))!=path:continue
+            record=deepcopy(record);records[tid]=record
             record['size']=receipt['size'];record['path']=target
             if target!=path:record.pop('file_bookmark',None)
     saved=updated.get('analysis_results',{});key=analysis.result_key(path)
     if key in saved:
+        saved=dict(saved);updated['analysis_results']=saved
         record=saved[key];analysis.validate_result(record)
         if record['sha256'] not in (before,after):raise ValueError('Saved analysis belongs to different audio')
         duration=receipt['facts']['duration']
@@ -57,25 +62,36 @@ def acknowledge(settings,imported,job,receipt):
             saved.pop(key)
         saved[new_key]=result
     pending=updated.get(prep_edits.KEY,[]);prep_edits.validate(pending)
-    for intent in pending:
-        if intent['track_id'] not in job['ids']:continue
+    pending=list(pending)
+    for index,intent in enumerate(pending):
+        if intent['track_id'] not in ids:continue
         if intent['path']!=path:continue
         if (intent['prepared'] is not None
                 or intent['sha256'] and intent['sha256'] not in (before,after)):
             raise ValueError('Pending musical save cannot be rebound to this conversion')
+        intent=deepcopy(intent);pending[index]=intent
         intent.update(path=target,epoch=receipt['epoch'],sha256=after if intent['sha256'] else '')
     prep_edits.validate(pending)
-    done=updated.setdefault(DONE,{})
+    if prep_edits.KEY in settings:updated[prep_edits.KEY]=pending
+    done=updated.get(DONE,{})
+    if not isinstance(done,dict):raise ValueError('Invalid media conversion receipts')
+    done=dict(done);updated[DONE]=done
     done[job['path']]=dict(operation_id=job['id'],target=target,before_sha256=before,after_sha256=after,
                          original=receipt['original'],epoch=receipt['epoch'],facts=receipt['facts'])
     if target!=path:
         from . import analysis_jobs,shared_imports
-        for pending_job in updated.get(analysis_jobs.KEY,[]):
-            if pending_job['track_id'] in job['ids'] and pending_job['path']==path:pending_job['path']=target
-        for pending_import in updated.get(shared_imports.KEY,[]):
-            if any(t['id'] in job['ids'] and t['path']==path for t in pending_import['tracks']):
+        detection=list(updated.get(analysis_jobs.KEY,[]))
+        for index,pending_job in enumerate(detection):
+            if pending_job['track_id'] in ids and pending_job['path']==path:
+                pending_job=deepcopy(pending_job);detection[index]=pending_job;pending_job['path']=target
+        if analysis_jobs.KEY in settings:updated[analysis_jobs.KEY]=detection
+        imports=list(updated.get(shared_imports.KEY,[]))
+        for index,pending_import in enumerate(imports):
+            if any(t['id'] in ids and t['path']==path for t in pending_import['tracks']):
                 if pending_import['request'] is not None or pending_import['bindings']:
                     raise ValueError('A prepared native import cannot change its audio path')
+                pending_import=deepcopy(pending_import);imports[index]=pending_import
                 for track in pending_import['tracks']:
-                    if track['id'] in job['ids'] and track['path']==path:track['path']=target
+                    if track['id'] in ids and track['path']==path:track['path']=target
+        if shared_imports.KEY in settings:updated[shared_imports.KEY]=imports
     return updated,records

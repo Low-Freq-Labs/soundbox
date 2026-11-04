@@ -7,14 +7,14 @@ Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
 
 ## Current delivery — November3,2026
 
-Personal build155 is installed and normally reopened at `/Applications/Soundbox.app`.
-Signed base revision27a7bcf2a9505207419b88f7af2659bd33781785, dirty=true; runtime
-`3f380662c25e7de3026a2ede901b2eef77efbb4c7ba3a16bdf395df93ade717d`, executable
-`5cdea66fd9141e972444fd15f918e540c6d9bd1f009a89216381f8ae681c6f43`.
-Application source release `9a023536ac01b94665f32d0c22db7d5c020fdebc` is committed/pushed;
-the documentation closure follows it. This does not restamp or reinstall the
-running app. HANDOFF distinguishes source-release Git history
-from signed installed provenance.
+Personal build157 is installed and normally reopened at `/Applications/Soundbox.app`.
+Signed base revisiond19f3eb40b4e18a5e474e8ef26a2887a76de9b7c, dirty=true; runtime
+`fc6963120d44821d3ddb2c873560dc38c0e76cb9d628604001e6bd53213783b4`, executable
+`9601842d829165d405652b641eb3a5253f53a596488a70fd385a7be8bcf885e8`.
+Sonny requested wrap-up and publication of the tested export/broader/correctness
+efficiency changes; the source release is recorded in HANDOFF.
+HANDOFF distinguishes the signed installed dirty-source base from the new
+source-release history and prior `9a023536`/`d19f3eb` checkpoints.
 
 - Initial full grid/key/native waveforms are accepted on bare stereo PCM16/24
   WAV44.1/48kHz and, independently, bare unlocked MPEG-1 CBR stereo44.1kHz MP3
@@ -31,8 +31,8 @@ from signed installed provenance.
   confirmation is compact with safe default Skip; crate has the reference's
   clean rim/handle, straight sides and flat bottom. Saved playlist choices and
   white Dock icon survive. Palette/geometry/transport improvements remain intact.
-- All2341tests,156packaged first-party modules, native code/data parity, signing,
-  isolated startup and actual normal curated startup passed. At final check,
+- All2531tests,158personal/154public packaged first-party module parity, signing,
+  both profiles' isolated startup and installed normal curated startup passed. At final check,
   complete library bytes and10authorities were exact;100imports/16analyses/
   98bindings/524hidden curation and five empty save queues are dated evidence.
   The formerly blocked Mocha save now verifies145 BPM/9A/425beats in native source.
@@ -41,16 +41,79 @@ from signed installed provenance.
   binding/unresolved path and the old32kHz MP3 conversion error remain explicit.
   Artists is virtual-only; its removed1527native hierarchy entries must never recur.
 
-Sonny requested full wrap-up and is playing with the installed app. Leave it
-running; no mouse/keyboard/Accessibility inputs into his real SoundBox/rekordbox,
+Sonny authorized installation; SoundBox was already closed for this pass.
+The updated build157 is reopened for his use. Leave it running; no mouse/keyboard/Accessibility inputs into his real SoundBox/rekordbox,
 no playback interruption and no documentation-only reinstall. Earlier one-off
 permission to stop the quit-blocked process does not grant general termination.
 Private fixtures/read-only snapshots and ordinary local development remain
-permitted. All four obsolete temporary prior apps/rollback root and redundant
-packaging outputs were retired; current app/source, required fixtures, native
+permitted. Obsolete temporary apps/rollback roots and redundant
+packaging outputs were retired; one previous d5cb4451… rollback is retained.
+Current app/source, required fixtures, native
 build/check outputs, originals and recovery stay protected. Current facts and
 unfinished profile gates live in HANDOFF; archived checkpoints never authorize
 rollback, source publication or restoring disposed files.
+
+## Delivered export efficiency — November3
+
+Sonny requested USB/iPod startup gating and subagent efficiency reviews. The
+source now defers full exporter imports/cache indexes and export-playlist capture
+until detection, gates stock-art warming on an attached iPod, and reduces repeated
+USB catalog, iPod drift and FAT destination work. The current2531-test delivery
+includes this work at /Applications/Soundbox.app. Current library bytes, all10authorities, playlist
+icon choices and the white Finder/Dock icon are exact across this install/launch.
+No stock-art preparation starts in the observed normal boot. One temporary
+previous d5cb4451… build157 rollback remains until Sonny accepts this update; its path and the exact
+validation/provenance are in HANDOFF. Synthetic component scopes and remaining
+physical-performance limits live in docs/performance-audit.md.
+The wrap-up request authorizes this source release; later publication still
+requires the normal explicit request.
+
+## Installed broader efficiency review — November3
+
+Sonny requested subagents review the whole codebase and supplied a trackpad
+recording. The broader source pass fixes gray/accent flicker with120ms idle
+feedback, coalesces USB scroll preference notifications while updating positions
+immediately, and reduces repeated state/import/analysis/playlist/artwork/native
+catalog/provider work. All176 first-party app-tree source files have an explicit
+review depth; many paths remain unprofiled. Measurements and ranked remaining
+work are in docs/performance-audit.md, with private per-file receipts retained.
+The broader pass was verified at2406tests and is retained in the current
+2531-test runtime below, with package/native parity and startup verified. Leave it running.
+Wrap-up authorizes publishing the tested changes, with no general app termination. Preserve
+all source/authority/process/mount/hash/recovery guards and native phase ordering.
+
+## Installed correctness/efficiency follow-up — November3 night
+
+Sonny requested tackling every remaining finding from simple improvements upward,
+with correctness review as well as efficiency. The tested frozen source matches
+installed fc696312…; HANDOFF records exact provenance. The pass inventories178 first-party source files and changes39 since d5cb4451…; three
+subagents plus root reviewed source-state/receipt proofs, musical analysis/
+acquisition, exporters/providers, UI lifetime/thumbnails, state publication and
+packaging. Source capture, retry/recovery, folder-delete retention and USB stale
+baseline bugs are fixed. A light-palette catalog contrast correction is included
+in the final complete gate. Both signed profiles and isolated ORM/SQLCipher
+probes pass; the personal app was installed22:18 and normal startup verified22:21.
+Exact evidence and measured remaining limits are in HANDOFF/performance-audit.
+Preserve the existing dirty tree,
+all accepted authority/guard/recovery boundaries and newer user edits. Do not
+interrupt the running app or send it inputs. Sonny is using the app while the
+source release is wrapped; no documentation-only reinstall or restamping.
+At22:29 his subsequent relaunch was healthy; only columns_state changed since
+installation and all curation/authorities/icon remain preserved. Full detached
+queue serialization, cooperative pre-response network
+waits and physical-device acceptance remain explicit costs/proof boundaries.
+
+## Capture/reuse boundaries after correctness review
+
+Actual audio acquisition pairs expected SHA/size with a stable canonical path and
+before/opened/closed/after epoch, with one bounded instability retry. A known hash
+never blesses an unverified replacement epoch. This does not require reacquiring
+unchanged retained export inventory. USB source revision binds rendered global
+MyTag definitions. Manifest models and original bytes share one bounded capture;
+explicit settings changes retain the captured profile-byte precondition too.
+Artifact profiles exclude development integrations and their isolated native
+ORM/SQLCipher probe uses only disposable RAM. These checks grant no new source
+publisher, codec/profile acceptance, app input or general process termination.
 
 ## Runtime instruction parity
 
@@ -128,6 +191,13 @@ repository can answer the question.
   CDJ capture waits for these edits and rebinds native selections by stable ID;
   deleted selections or changed sources cancel before export. Exact UUID pins
   retain affected tracks in SoundBox Collection without registering new files.
+  Folder deletion captures exact descendant ContentIDs/UUIDs on the same worker
+  and durably saves retention before writer admission; fresh guards recheck it.
+  Failed acknowledgement/restart uses captured intentions or exact retained
+  historical receipt pairs, never the now-deleted browser membership. Causal
+  rebasing additionally requires the independently reconstructed committed edge
+  to equal the current catalog/XML. Legacy retired evidence missing original
+  UUIDs remains guarded. These proofs add no publisher/SQL scope.
   Bounded envelopes compose at most64 already accepted create/append/remove
   commands and16384 memberships through this SAME writer/lock/journal/paired
   backup. Exact child identities/clocks persist before admission; pure row/counter

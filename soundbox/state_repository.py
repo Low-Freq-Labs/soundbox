@@ -168,10 +168,18 @@ class StateRepository:
         with self.area.lock:
             if not self.path.exists():
                 return
-            read_state(self.path)
+            if self.path.stat().st_size > _MAX_STATE_BYTES:
+                raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
+            current = self.path.read_bytes()
+            if len(current) > _MAX_STATE_BYTES:
+                raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
+            # The last published payload was fully validated. Reuse that pure
+            # result only after reading and comparing every current byte; a
+            # changed/corrupt file still takes the complete validation path.
+            if current != self._saved_payload:
+                validate_state(json.loads(current.decode('utf-8')))
             directory = self.path.parent / 'backups'
             directory.mkdir(parents=True, exist_ok=True)
-            current = self.path.read_bytes()
             old = sorted(directory.glob('library-*.json'))
             if old and (time.time() - old[-1].stat().st_mtime < 3600
                         or old[-1].read_bytes() == current):

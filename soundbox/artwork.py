@@ -18,6 +18,14 @@ from typing import Any, Callable, Concatenate
 from .state_io import StateChangedError, state_area
 
 
+def _file_exists(path: Path, presence: dict[Path, bool] | None = None) -> bool:
+    if presence is None:
+        return path.is_file()
+    if path not in presence:
+        presence[path] = path.is_file()
+    return presence[path]
+
+
 @dataclass
 class ArtResult:
     data: bytes
@@ -123,11 +131,11 @@ class ArtCache:
         self._area.path(relative)
         self._changes[relative] = data
 
-    def _present(self, path: Path) -> bool:
+    def _present(self, path: Path, presence: dict[Path, bool] | None = None) -> bool:
         relative = str(path.relative_to(self._area.root))
         if relative in self._changes:
             return self._changes[relative] is not None
-        return path.is_file()
+        return _file_exists(path, presence)
 
     def _load_defaults(self) -> dict:
         try:
@@ -163,10 +171,10 @@ class ArtCache:
     def _default_photo_path(self, photo_id: str) -> Path:
         return self._defaults_root / f"{photo_id}.jpg"
 
-    def _valid_default_ids(self) -> list[str]:
+    def _valid_default_ids(self, presence: dict[Path, bool] | None = None) -> list[str]:
         return [
             pid for pid in self._defaults["photos"]
-            if self._present(self._default_photo_path(pid))
+            if self._present(self._default_photo_path(pid), presence)
         ]
 
     def _is_default_eligible(self, track_id: str) -> bool:
@@ -334,14 +342,23 @@ class ArtCache:
     @_art_read
     def default_image_path(self, track_id: str) -> Path | None:
         """Assigned generic fallback, never a real per-track image."""
+        return self._default_image_path(track_id)
+
+    def _default_image_path(
+            self, track_id: str, *, presence: dict[Path, bool] | None = None,
+            pool: dict[str, tuple[str, ...]] | None = None) -> Path | None:
         if not self._is_default_eligible(track_id):
             return None
         photo_id = self._default_assignments.get(track_id)
         if photo_id is not None:
             path = self._default_photo_path(photo_id)
-            if path.is_file():
+            if _file_exists(path, presence):
                 return path
-        photos = self._valid_default_ids()
+        photos = pool.get('ids') if pool is not None else None
+        if photos is None:
+            photos = tuple(sorted(self._valid_default_ids(presence)))
+            if pool is not None:
+                pool['ids'] = photos
         if not photos:
             return None
         # Safe edge fallback for a caller outside the configured live library
@@ -350,9 +367,9 @@ class ArtCache:
         seed = self._defaults["seed"]
         digest = hashlib.sha256(
             f"{seed}\0edge\0{track_id}".encode("utf-8")).digest()
-        photo_id = sorted(photos)[int.from_bytes(digest[:8], "big") % len(photos)]
+        photo_id = photos[int.from_bytes(digest[:8], "big") % len(photos)]
         path = self._default_photo_path(photo_id)
-        return path if path.is_file() else None
+        return path if _file_exists(path, presence) else None
 
     @_art_read
     def status(self, track_id: str) -> str | None:
@@ -371,9 +388,18 @@ class ArtCache:
         track_ids = tuple(track_ids)
         exclusions = (self.source_exclusions() if any(
             (self.index.get(tid) or {}).get('status') == 'ok' for tid in track_ids) else ())
-        return {tid: self._status_kind(tid, exclusions) for tid in track_ids}
+        # Thousands of rows can share the same few fallback photos. Observe
+        # their availability once per presentation batch, never across batches
+        # or in the standalone image/export readers.
+        presence: dict[Path, bool] = {}
+        pool: dict[str, tuple[str, ...]] = {}
+        return {tid: self._status_kind(tid, exclusions, presence=presence, pool=pool)
+                for tid in track_ids}
 
-    def _status_kind(self, track_id: str, exclusions: tuple[str, ...]) -> str:
+    def _status_kind(
+            self, track_id: str, exclusions: tuple[str, ...], *,
+            presence: dict[Path, bool] | None = None,
+            pool: dict[str, tuple[str, ...]] | None = None) -> str:
         from .art_sources import excluded_source
         e = self.index.get(track_id) or {}
         if (e or {}).get('status') == 'ok' and excluded_source(
@@ -381,7 +407,7 @@ class ArtCache:
             return "blocked"  # quarantined, without rewriting the historical row
         if (e or {}).get("status") == "ok":
             return "avatar" if self._is_avatar(e) else "cover"
-        if self.default_image_path(track_id) is not None:
+        if self._default_image_path(track_id, presence=presence, pool=pool) is not None:
             return "default"
         if not e:
             return ""
@@ -428,6 +454,52 @@ class ArtCache:
         self._save()
         if rebalance_defaults:
             self._rebuild_default_assignments()
+
+    def _rebalance_unpublished(self) -> bool:
+        before = self._defaults["assignments"]
+        self._rebuild_default_assignments(persist=False)
+        after = self._defaults["assignments"]
+        # Match the ordinary rebuilder's decision to create/update its manifest,
+        # including an externally absent manifest and an empty final pool.
+        return after != before and (bool(after) or self._defaults_index_path.exists())
+
+    @_art_mutation
+    def store_many(self, track_ids, res: ArtResult, *, origin: str = "manual",
+                   avatar_only: bool = False) -> list[str]:
+        """Normalize one picture and publish the affected group atomically."""
+        from .art_sources import excluded_source
+        identities = tuple(dict.fromkeys(track_ids))
+        if not identities:
+            return []
+        exclusions = self.source_exclusions()
+        affected = [tid for tid in identities if not avatar_only or
+                    (self._is_avatar(self.index.get(tid) or {}) and
+                     self._status_kind(tid, exclusions) == "avatar")]
+        if not affected:
+            return []
+        if excluded_source(url=res.source_url, excluded_accounts=exclusions):
+            raise ValueError("This artwork uploader is excluded")
+        from . import artencode
+        # Every staged path shares this one immutable normalized owner; staging
+        # does not retain one decoded image or independent payload per song.
+        data = bytes(artencode.ensure_device_safe(res.data))
+        ext = "jpg" if artencode.is_device_safe(data) else ("png" if "png" in res.mime else "jpg")
+        defaults_changed = False
+        for index, tid in enumerate(affected):
+            was_eligible = self._is_default_eligible(tid)
+            self._write(self.root / f"{tid}.{ext}", data)
+            self.index[tid] = {"status": "ok", "ext": ext,
+                               "src": res.source_url, "conf": round(res.confidence, 2),
+                               "origin": "auto" if origin == "auto" else "manual"}
+            # Stable balancing is path-dependent when eligibility changes.
+            # Preserve those in-memory steps; unchanged avatar replacements
+            # need only the first idempotent balance, never repeated JSON saves.
+            if index == 0 or was_eligible:
+                defaults_changed = self._rebalance_unpublished() or defaults_changed
+        self._save()
+        if defaults_changed:
+            self._save_defaults()
+        return affected
 
     @_art_mutation
     def rebalance_default_photos(self) -> None:
@@ -766,6 +838,29 @@ class ArtCache:
         self.index[track_id] = {"status": "blocked"}
         self._save()
         self._rebuild_default_assignments()
+
+    @_art_mutation
+    def block_many(self, track_ids, *, avatar_only: bool = False) -> list[str]:
+        """Block a group in one recovery-backed transaction, keeping newer covers."""
+        identities = tuple(dict.fromkeys(track_ids))
+        exclusions = self.source_exclusions() if avatar_only and identities else ()
+        affected = [tid for tid in identities if not avatar_only or
+                    (self._is_avatar(self.index.get(tid) or {}) and
+                     self._status_kind(tid, exclusions) == "avatar")]
+        defaults_changed = False
+        for index, tid in enumerate(affected):
+            entry = self.index.get(tid) or {}
+            was_eligible = self._is_default_eligible(tid)
+            if entry.get("ext"):
+                self._write(self.root / f"{tid}.{entry['ext']}", None)
+            self.index[tid] = {"status": "blocked"}
+            if index == 0 or not was_eligible:
+                defaults_changed = self._rebalance_unpublished() or defaults_changed
+        if affected:
+            self._save()
+            if defaults_changed:
+                self._save_defaults()
+        return affected
 
     @_art_mutation
     def _save(self):

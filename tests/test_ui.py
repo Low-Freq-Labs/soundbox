@@ -1669,7 +1669,7 @@ class StockIpodUI(unittest.TestCase):
             _win._finalize_ipod_operation = (
                 lambda device, callback: callbacks.append((device, callback)))
             with (
-                mock.patch("desktop.app.StockIpodSyncPlan", CleanPlan),
+                mock.patch("soundbox.stock_ipod.StockIpodSyncPlan", CleanPlan),
                 mock.patch("desktop.app.QMessageBox.information") as information,
             ):
                 _win._on_stock_ipod_plan(dev, CleanPlan())
@@ -1713,7 +1713,7 @@ class StockIpodUI(unittest.TestCase):
             _win._dual_active_action = "sync"
             _win._dual_sync_queue.pop(dev, None)
             with (
-                mock.patch("desktop.app.DualIpodSyncPlan", CleanPlan),
+                mock.patch("soundbox.dual_ipod.DualIpodSyncPlan", CleanPlan),
                 mock.patch("desktop.app.QMessageBox.information") as information,
             ):
                 _win._on_dual_ipod_plan(dev, CleanPlan())
@@ -1772,6 +1772,7 @@ class StockIpodUI(unittest.TestCase):
             _stock_view_cache={}, _device_mount_tokens={}, lib=None,
             _current_device_path='', _usb_view_cache={}, _usb_view_requests=set(),
             _sync_playlists=lambda: [], overrides={}, titles={}, stock_ipod_shadow_store=None,
+            _supply_device_scan_playlists=lambda worker: None,
             _on_devices_discovered=lambda rows: None,
             _start_device_worker=lambda *args: started.append(args))
         stub._release_eject_ready = lambda: setattr(stub, "_eject_ready_device", "")
@@ -2095,7 +2096,7 @@ class StockIpodUI(unittest.TestCase):
             _win._current_device_path = ""
             _win._stock_view_warming.add(dev)
             _win._start_ipod_loading_status()
-            with mock.patch("desktop.app.StockIpodSnapshot", Snapshot), \
+            with mock.patch("soundbox.stock_ipod_info.StockIpodSnapshot", Snapshot), \
                     mock.patch.object(_win, "_refresh_devices") as scan:
                 _win._on_stock_device_view(dev, (snapshot, None))
                 scan.assert_not_called()
@@ -3445,7 +3446,7 @@ class StockIpodUI(unittest.TestCase):
                 return_value=None,
             ) as engine_drift,
             mock.patch(
-                "desktop.workers.inspect_stock_ipod_sync_status",
+                "soundbox.stock_ipod.inspect_stock_ipod_sync_status",
                 return_value=StockIpodSyncStatus(
                     "local_changes", "playlist changed", 2)),
         ):
@@ -6707,6 +6708,16 @@ class ArtistCatalog(unittest.TestCase):
     def tearDown(self):
         _win.art_cache.index.clear()
 
+    def test_closed_catalog_is_retired_from_parent_widget_tree(self):
+        from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+        from PySide6.QtWidgets import QApplication
+        from desktop.artistcatalog import ArtistCatalogDialog
+        with mock.patch.object(_win, '_artist_avatar_groups', return_value=[('A', ['1'], None)]):
+            QTimer.singleShot(0, lambda: QApplication.activeModalWidget().reject())
+            _win._open_artist_catalog()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.assertEqual(_win.findChildren(ArtistCatalogDialog), [])
+
     def test_groups_only_avatar_tracks_by_artist(self):
         # track 1+3 wear avatars, 2 has a real cover → catalog shows avatars only
         _win.art_cache.index.update({
@@ -6744,12 +6755,26 @@ class ArtistCatalog(unittest.TestCase):
         self.assertIn("blocked", dlg.status.text())
 
     def test_delete_blocks_all_artist_tracks(self):
+        _win.art_cache.index.update({tid: {'status': 'ok', 'ext': 'jpg',
+                                          'src': 'https://soundcloud.com/zed'} for tid in ('1', '3')})
         _win._on_catalog_action(
             {"kind": "delete", "artist": "Zed", "tids": ["1", "3"]},
             lambda ok, img: None)
         self.assertEqual(_win.art_cache.status_kind("1"), "blocked")
         self.assertEqual(_win.art_cache.status_kind("3"), "blocked")
         _win.art_cache.index.clear()
+
+    def test_catalog_group_action_preserves_a_newer_real_cover(self):
+        from soundbox.artfetch import ArtResult
+        _win.art_cache.store_ok('1', ArtResult(b'\xff\xd8avatar', 'image/jpeg', 1,
+                                              'https://soundcloud.com/zed', 'Avatar'))
+        _win.art_cache.store_ok('3', ArtResult(b'\xff\xd8cover', 'image/jpeg', 1,
+                                              'https://soundcloud.com/zed/track', 'Cover'))
+        before = _win.art_cache.cover_snapshot('3')
+        _win._on_catalog_action({'kind': 'delete', 'artist': 'Zed', 'tids': ['1', '3']},
+                                lambda *_args: None)
+        self.assertEqual(_win.art_cache.status_kind('1'), 'blocked')
+        self.assertEqual(_win.art_cache.cover_snapshot('3'), before)
 
     def test_rename_flows_through_alias_plane(self):
         from PySide6.QtWidgets import QInputDialog
@@ -9627,6 +9652,22 @@ class StateMaintenance(unittest.TestCase):
         )
         host._end_state_maintenance = lambda: SettingsPageMixin._end_state_maintenance(host)
         return host, events
+
+    def test_pending_usb_view_preferences_flush_before_the_backup_restore_barrier(self):
+        from types import SimpleNamespace
+        from desktop.settings_page import SettingsPageMixin
+        host, events = self._host()
+        def flush():
+            events.append(('view-preferences', None))
+            host._settings_save_timer.start(120)
+        host.usb_device_pages = SimpleNamespace(_remember_view=flush)
+        try:
+            self.assertTrue(SettingsPageMixin._begin_state_maintenance(host))
+            self.assertEqual(events, [('view-preferences', None), ('enabled', False), ('save', None)])
+            self.assertFalse(host._settings_save_timer.isActive())
+            self.assertTrue(host._state_publication)
+        finally:
+            host._end_state_maintenance()
 
     def test_maintenance_drains_late_artwork_before_final_save_with_events_alive(self):
         import threading

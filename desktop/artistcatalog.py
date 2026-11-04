@@ -13,11 +13,12 @@ thread so the row updates in place.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
+from .thumbnails import CatalogThumbnails
 
 _ROLE = Qt.UserRole + 31  # (artist, [tids])
 
@@ -32,6 +33,8 @@ class ArtistCatalogDialog(QDialog):
         self.resize(680, 620)
         self._allow_url = allow_url
         self._on_action = on_action
+        self._closed = False
+        self._busy = False
 
         v = QVBoxLayout(self)
         head = QLabel(f"{len(groups)} artist(s) are using an auto-selected "
@@ -49,16 +52,15 @@ class ArtistCatalogDialog(QDialog):
         self.list.setRootIsDecorated(False)
         self.list.setAlternatingRowColors(True)
         self.list.setIconSize(QSize(96, 96))  # big enough to actually judge
+        self._thumbnails = CatalogThumbnails(self.list)
         self.list.header().resizeSection(0, 440)
         for artist, tids, img in groups:
             it = QTreeWidgetItem([artist, str(len(tids))])
             it.setData(0, _ROLE, (artist, tids))
             it.setSizeHint(0, QSize(0, 104))  # tall rows for the 96px art
-            if img is not None:
-                pm = QPixmap(str(img))
-                if not pm.isNull():
-                    it.setIcon(0, QIcon(pm))
             self.list.addTopLevelItem(it)
+            if img is not None:
+                self._thumbnails.set_image(it, img)
         self.list.itemSelectionChanged.connect(self._sync_buttons)
         v.addWidget(self.list, 1)
 
@@ -90,24 +92,30 @@ class ArtistCatalogDialog(QDialog):
 
     # ---- selection / plumbing ----
     def _current(self):
+        if self._closed or self._busy:
+            return None
         it = self.list.currentItem()
         return it.data(0, _ROLE) if it else None
 
-    def _sync_buttons(self, busy: bool = False):
-        on = self._current() is not None and not busy
+    def _sync_buttons(self, busy=None):
+        if busy is not None:
+            self._busy = busy
+        on = self._current() is not None
         for b in (self.url_btn, self.file_btn, self.delete_btn, self.rename_btn):
             b.setEnabled(on)
 
     def _dispatch(self, choice: dict):
         """Hand one change to the app; update the row in place when it lands.
         The dialog stays open — fix the whole catalog in one sitting."""
-        if self._on_action is None:
+        if self._on_action is None or self._closed or self._busy:
             return
         item = self.list.currentItem()
         self.status.setText(f"Applying to {choice['artist']}…")
         self._sync_buttons(busy=True)
 
         def done(ok: bool, img=None):
+            if self._closed:
+                return
             self._sync_buttons(busy=False)
             if not ok:
                 self.status.setText(f"No picture found for {choice['artist']}.")
@@ -118,6 +126,7 @@ class ArtistCatalogDialog(QDialog):
                 self.status.setText(f"{choice['artist']} avatar deleted "
                                     "(blocked — won't come back) ✓")
                 if item is not None:
+                    self._thumbnails.remove(item)
                     self.list.takeTopLevelItem(
                         self.list.indexOfTopLevelItem(item))
                 return
@@ -127,11 +136,14 @@ class ArtistCatalogDialog(QDialog):
                     item.setText(0, choice["new"])
                     item.setData(0, _ROLE, (choice["new"], choice["tids"]))
                 elif img is not None:
-                    pm = QPixmap(str(img))
-                    if not pm.isNull():
-                        item.setIcon(0, QIcon(pm))
+                    self._thumbnails.set_image(item, img)
 
         self._on_action(choice, done)
+
+    def done(self, result):
+        self._closed = True
+        self._thumbnails.clear()
+        super().done(result)
 
     # ---- actions ----
     def _rename(self):

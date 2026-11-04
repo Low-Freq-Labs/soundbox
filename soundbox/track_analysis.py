@@ -1890,8 +1890,8 @@ class StreamingAnalyzer:
             # the display shoulder makes that real signal visible later.
             midpoint_upper = np.maximum(values, 0.0)
             midpoint_lower = np.maximum(-values, 0.0)
-            channel_upper = np.max(np.maximum(channels, 0.0), axis=1)
-            channel_lower = np.max(np.maximum(-channels, 0.0), axis=1)
+            channel_upper = np.maximum(np.max(channels, axis=1), 0.0)
+            channel_lower = np.maximum(-np.min(channels, axis=1), 0.0)
             geometry_upper = np.maximum(
                 midpoint_upper, channel_upper * CHANNEL_SAFETY_FLOOR)
             geometry_lower = np.maximum(
@@ -1902,8 +1902,11 @@ class StreamingAnalyzer:
             else:
                 left = channels[:, 0]
                 right = channels[:, 1]
-                close = np.abs(np.abs(left) - np.abs(right)) < 0.001
-                louder = np.where(np.abs(left) >= np.abs(right), left, right)
+                left_magnitude = np.abs(left)
+                right_magnitude = np.abs(right)
+                close = np.abs(left_magnitude - right_magnitude) < 0.001
+                louder = np.where(left_magnitude >= right_magnitude, left, right)
+                del left_magnitude, right_magnitude
                 color_values = np.where(
                     close, louder, (left + right) * 0.5).astype(np.float32)
 

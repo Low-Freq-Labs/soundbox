@@ -13,7 +13,8 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from soundbox import engine
 from soundbox.library import Playlist
-from soundbox.rekordbox_playlist_store import PlaylistStore, load_authority, request_for, validate_request, command_requests
+from soundbox.rekordbox_playlist_store import (PlaylistStore, load_authority, request_for, validate_request,
+    command_requests, validate_collection_pins)
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed
 from .choices import Menu
 from .trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, NATIVE_TREE_ROLE,
@@ -21,6 +22,17 @@ from .trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, NATIVE_TREE_ROLE
 
 QUEUE='rekordbox_playlist_edits'
 LOG=logging.getLogger('soundbox')
+
+
+def _remember_collection_pins(settings,library_id,pins):
+    validate_collection_pins(pins)
+    groups=settings.get('rekordbox_collection_tracks',{})
+    if not isinstance(groups,dict) or not isinstance(groups.get(library_id,{}),dict):
+        raise WriteProofError('Saved native Collection identities are invalid')
+    current=groups.get(library_id,{})
+    if any(identity in current and current[identity]!=uuid for identity,uuid in pins.items()):
+        raise WriteProofError('Captured native Collection identity conflicts with a saved retention identity')
+    settings['rekordbox_collection_tracks']={**groups,library_id:{**current,**pins}}
 
 
 
@@ -47,6 +59,9 @@ class PlaylistEditController(QObject):
                         or type(job.get('library_id')) is not str or not job['library_id']
                         or type(job.get('error')) is not str):raise ValueError('Unknown intent')
                 validate_request(job['request'])
+                if 'collection_pins' in job:
+                    if job['request']['operation']!='delete':raise ValueError('Unknown Collection retention intent')
+                    validate_collection_pins(job['collection_pins'])
         except (KeyError,TypeError,ValueError,WriteProofError):
             return 'Saved native playlist edit queue is invalid; evidence preserved'
         return ''
@@ -101,12 +116,12 @@ class PlaylistEditController(QObject):
         try:validate_request(request)
         except WriteProofError as exc:
             self.window._flash_status(str(exc),10);return False
-        w=self.window;old=deepcopy(w.settings.get(QUEUE,[]))
-        job=dict(source=str(w.lib.source),library_id=w.lib.source_library_id,request=deepcopy(request),error='',retry=False)
-        w.settings[QUEUE]=[*old,job]
+        w=self.window;missing=object();old=w.settings.get(QUEUE,missing)
+        job=dict(source=str(w.lib.source),library_id=w.lib.source_library_id,request=request,error='',retry=False)
+        w.settings[QUEUE]=[*(old if old is not missing else []),job]
         if not w._save_state():
-            if old:w.settings[QUEUE]=old
-            else:w.settings.pop(QUEUE,None)
+            if old is missing:w.settings.pop(QUEUE,None)
+            else:w.settings[QUEUE]=old
             return False
         admitted=time.monotonic()
         w._native_pending_changed(rebuild=True)
@@ -151,6 +166,12 @@ class PlaylistEditController(QObject):
                    PlaylistStore(load_authority(self.tags.data_root/'rekordbox-playlist-authority.json',
                                                lib.source,lib.source_library_id),self.tags._write_root(lib)))
             if job.get('retry'):return dict(retry_request=store.prepare_retry(job['request']))
+            if job['request']['operation']=='delete':
+                if not hasattr(store,'prepare_collection_pins'):
+                    raise WriteProofError('Native playlist deletion needs exact Collection retention capture')
+                if 'collection_pins' not in job:
+                    return dict(collection_pins=store.prepare_collection_pins(job['request']))
+                return dict(catalog=store.apply(job['request'],collection_pins=job['collection_pins']))
             return dict(catalog=store.apply(job['request']))
         def completed(worker):
             if worker.error:self.fail(worker.error);return
@@ -159,22 +180,37 @@ class PlaylistEditController(QObject):
                 self.status('Playlist edit pending — quit rekordbox to save')
                 if not self.closing:self.timer.start()
                 return
+            if (not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(job['source'],job['library_id'])
+                    or not self.pending or self.pending[0]['request']!=job['request']):
+                self.fail('Saved in the original rekordbox library; switch back to finish this edit');return
+            if 'collection_pins' in worker.result:
+                previous=dict(w.settings)
+                try:
+                    pins=worker.result['collection_pins']
+                    _remember_collection_pins(w.settings,job['library_id'],pins)
+                    queue=list(self.pending);queue[0]={**queue[0],'collection_pins':pins};w.settings[QUEUE]=queue
+                    if not w._save_state():raise OSError('Could not persist native Collection retention; playlist deletion was not started')
+                except (OSError,ValueError,WriteProofError) as exc:
+                    w.settings.clear();w.settings.update(previous);self.fail(str(exc));return
+                self.not_before=0;self.schedule();return
             if 'retry_request' in worker.result:
-                previous=deepcopy(w.settings.get(QUEUE,[]));jobs=deepcopy(previous)
-                jobs[0].update(request=worker.result['retry_request'],error='',retry=False)
+                previous=w.settings.get(QUEUE,[]);jobs=list(previous)
+                jobs[0]={**jobs[0],'request':worker.result['retry_request'],'error':'','retry':False}
+                if worker.result['retry_request']!=job['request']:jobs[0].pop('collection_pins',None)
                 w.settings[QUEUE]=jobs
                 if not w._save_state():
                     w.settings[QUEUE]=previous;self.fail('Could not save the renewed playlist intent');return
                 self.not_before=0;self.schedule();return
-            before=deepcopy(w.settings.get(QUEUE,[]));tail=deepcopy(before[1:])
+            before=w.settings.get(QUEUE,[]);tail=list(before[1:])
             new_catalog=worker.result['catalog']
             if not w.lib or str(w.lib.source)!=job['source'] or w.lib.source_library_id!=job['library_id']:
                 self.fail('Saved in the original rekordbox library; switch back to finish this edit');return
             # Rebase only this FIFO's own still-unstarted edits. External source
             # changes remain conflicts; a worker never silently retargets them.
-            for later in tail:
+            for index,later in enumerate(tail):
                 if (later['source']==job['source'] and later['library_id']==job['library_id']
                         and later['request']['revision']==job['request']['revision']):
+                    later=deepcopy(later);tail[index]=later
                     later['request']['revision']=new_catalog['revision']
                     for command in command_requests(later['request']):command['revision']=new_catalog['revision']
             w.settings[QUEUE]=tail
@@ -192,9 +228,9 @@ class PlaylistEditController(QObject):
 
     def fail(self, message):
         self.timer.stop();w=self.window
-        jobs=deepcopy(self.pending)
+        jobs=list(self.pending)
         if jobs:
-            jobs[0]['error']=message;w.settings[QUEUE]=jobs;w._save_state()
+            jobs[0]={**jobs[0],'error':message};w.settings[QUEUE]=jobs;w._save_state()
         w._native_pending_changed(rebuild=True)
         w._native_reconcile_source()
         self.status('Rekordbox playlist edit needs attention — '+message)
@@ -202,8 +238,8 @@ class PlaylistEditController(QObject):
     def retry(self):
         if not self.pending:return
         if self.queue_error():self.window._flash_status(self.queue_error(),15);return
-        w=self.window;previous=deepcopy(self.pending);jobs=deepcopy(previous)
-        jobs[0].update(error='',retry=True);w.settings[QUEUE]=jobs
+        w=self.window;previous=self.pending;jobs=list(previous)
+        jobs[0]={**jobs[0],'error':'','retry':True};w.settings[QUEUE]=jobs
         if w._save_state():
             w._native_pending_changed(rebuild=True)
             self.status('Updating playlist…');self.not_before=0;self.schedule()
@@ -215,7 +251,7 @@ class PlaylistEditController(QObject):
         if QMessageBox.question(w,'Discard pending playlist edits',
                 f'Discard {len(self.pending)} pending playlist edit(s)?\nEdits already saved in rekordbox remain saved.',
                 QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
-        previous=deepcopy(self.pending);w.settings[QUEUE]=[]
+        previous=self.pending;w.settings[QUEUE]=[]
         if not w._save_state():w.settings[QUEUE]=previous
         else:
             self.timer.stop();self.status('');w._native_pending_changed(rebuild=True)

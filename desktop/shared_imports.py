@@ -110,7 +110,7 @@ class SharedImportController(QObject):
                 and not job['bindings'] and not job['membership']):
             # The old unsupported-float failure is now a recoverable import
             # stage. Keep the same job/order/destination and durable identity.
-            previous=deepcopy(self.pending); queue=deepcopy(previous);queue[job_index].update(error='',retry=False)
+            previous=self.pending;queue=list(previous);queue[job_index]={**queue[job_index],'error':'','retry':False}
             w.settings[jobs.KEY]=queue
             if not w._save_state():w.settings[jobs.KEY]=previous;return
             job=deepcopy(queue[job_index])
@@ -282,6 +282,10 @@ class SharedImportController(QObject):
                 rebase=((before['revision'],after['revision'])
                         if before['revision']==job['membership']['revision']
                         and refreshed.source_playlist_catalog.get('revision')==after['revision'] else None)
+                if rebase is None:
+                    transition=getattr(playlist,'committed_transition',None)
+                    proof=transition(job['membership']) if transition else None
+                    if proof and proof[1]==refreshed.source_playlist_catalog.get('revision'):rebase=proof
                 return dict(done=True,library=refreshed,catalog_rebase=rebase)
             # Readback is part of completion. A crash/save failure replays the
             # exact stored requests, never a fresh append or new content ID.
@@ -317,14 +321,15 @@ class SharedImportController(QObject):
                 self.status('Import pending — quit rekordbox to save');self.timer.start();return
             if not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(job['source'],job['library_id']):
                 self.fail('Saved in the original library; switch back to finish the import',job['id']);return
-            previous=deepcopy(w.settings);previous_imported=deepcopy(w.imported);queue=deepcopy(self.pending)
+            previous=dict(w.settings);previous_imported=w.imported;queue=list(self.pending)
             if len(queue)<=job_index or queue[job_index]['id']!=job['id']:
                 self.fail('Import intention changed during save; receipts preserved',job['id']);return
+            queue[job_index]=dict(queue[job_index])
             try:
                 if 'media_conversion' in value:
                     updated,imported=media_conversion_jobs.acknowledge(w.settings,w.imported,value['media_intent'],value['media_conversion'])
                     w.settings.clear();w.settings.update(updated);w.imported=imported
-                    queue=deepcopy(w.settings[jobs.KEY])
+                    queue=list(w.settings[jobs.KEY]);queue[job_index]=dict(queue[job_index])
                 if 'conversions' in value:
                     updated,imported=wave_conversion.acknowledge(w.settings,w.imported,value['conversions'])
                     w.settings.clear();w.settings.update(updated);w.imported=imported
@@ -335,6 +340,8 @@ class SharedImportController(QObject):
                 if value.get('catalog_rebase'):
                     old_revision,new_revision=value['catalog_rebase']
                     clocks={job['membership']['playlist_id']:job['membership']['xml_timestamp']}
+                    if 'rekordbox_playlist_edits' in w.settings:
+                        w.settings['rekordbox_playlist_edits']=deepcopy(w.settings['rekordbox_playlist_edits'])
                     for later in w.settings.get('rekordbox_playlist_edits',[]):
                         if (isinstance(later,dict) and later.get('source')==job['source']
                                 and later.get('library_id')==job['library_id']
@@ -402,11 +409,12 @@ class SharedImportController(QObject):
 
     def fail(self, error, job_id=None):
         self.timer.stop();w=self.window
-        queue=deepcopy(self.pending)
+        queue=list(self.pending)
         if queue and not self.queue_error():
-            target=next((value for value in queue if value['id']==job_id),None) if job_id else queue[0]
-            if target is not None:
-                target['error']=str(error).replace('\0','')[:4096];w.settings[jobs.KEY]=queue;w._save_state()
+            index=next((i for i,value in enumerate(queue) if value['id']==job_id),None) if job_id else 0
+            if index is not None:
+                queue[index]={**queue[index],'error':str(error).replace('\0','')[:4096]}
+                w.settings[jobs.KEY]=queue;w._save_state()
         self.status('Import needs attention — '+str(error))
         self.window._native_pending_changed(rebuild=True)
         self.window._native_reconcile_source()
@@ -415,7 +423,7 @@ class SharedImportController(QObject):
         if self.queue_error() or not self.pending or self.tags.owned:return
         # Already prepared operations retain their identities. Stale/rolled-back
         # requests require reconciliation, never a blind regenerated append.
-        before=deepcopy(self.pending);queue=deepcopy(before);queue[0].update(error='',retry=True)
+        before=self.pending;queue=list(before);queue[0]={**queue[0],'error':'','retry':True}
         if queue[0]['request'] is None:queue[0]['media_ready']=False
         self.window.settings[jobs.KEY]=queue
         if self.window._save_state():self.schedule()
@@ -444,7 +452,7 @@ class SharedImportController(QObject):
         lib=w.lib
         def finish(bindings,library=None):
             self.tags.admission_paused=False;self.cancelling=False
-            before=deepcopy(w.settings)
+            before=dict(w.settings)
             try:
                 if self.pending[:len(pending)]!=pending:raise WriteProofError('Import queue changed during cancellation; intentions retained')
                 jobs.guard_curation(bindings,keyed=[getattr(w,'titles',{}),getattr(w,'overrides',{}),

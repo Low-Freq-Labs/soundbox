@@ -18,7 +18,10 @@ from soundbox.providers import profile_path, read_manifest
 COMMON_COLLECTIONS = ("pyrekordbox", "sqlcipher3", "PIL", "soundfile", "zstandard")
 COMMON_SUBMODULES = ("sqlalchemy", "clickwheel.ipod", "PySide6.QtMultimedia")
 PERSONAL_PACKAGES = ("soundbox_personal", "yt_dlp")
-DEVELOPER_PACKAGES = ("tests", "research")
+DEVELOPER_PACKAGES = (
+    "tests", "research", "sqlalchemy.testing", "sqlalchemy.ext.mypy",
+    "mypy", "ast_serialize",
+)
 REQUIRED_RUNTIME_MODULES = (
     "soundbox.providers", "soundbox.artwork", "soundbox.mp3_scan",
     "soundbox.native_mp3_analysis_plan", "soundbox.rekordbox_cbr_analysis_store",
@@ -55,6 +58,12 @@ def composition(profile: str) -> dict:
         "submodules": (*COMMON_SUBMODULES, *(("soundbox_personal",) if personal else ())),
         "excludes": [*DEVELOPER_PACKAGES, *(() if personal else PERSONAL_PACKAGES)],
     }
+
+
+def runtime_submodule(name: str) -> bool:
+    """Keep dependency development/test integrations out of runtime bundles."""
+    return not any(name == package or name.startswith(package + ".")
+                   for package in DEVELOPER_PACKAGES)
 
 
 def write_manifest(profile: str, directory: Path) -> Path:
@@ -137,7 +146,7 @@ def inspect_artifact(app: Path, profile: str) -> dict:
         raise ValueError(f"Incorrect provider package contents: {present}")
     if "soundbox.providers" not in modules or "soundbox.artwork" not in modules:
         raise ValueError("Shared provider/storage core missing")
-    forbidden = {"tests", "research", "soundbox-ipod-ref", "soundbox-cdj-ref",
+    forbidden = {"tests", "research", "mypy", "ast_serialize", "soundbox-ipod-ref", "soundbox-cdj-ref",
                  "library.json", ".sc_creds.json"}
     for path in app.rglob("*"):
         if forbidden.intersection(path.relative_to(app).parts):

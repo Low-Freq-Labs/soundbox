@@ -176,7 +176,7 @@ class MediaConversionController(QObject):
             self.schedule();return
         hidden=set(w.hidden)|{tid for bag in w.removals.values() for tid in bag}
         if not any(tid in lib.tracks_by_id and tid not in hidden for tid in job['ids']):
-            previous=deepcopy(self.pending);w.settings[jobs.KEY]=[j for j in self.pending if j['id']!=job['id']]
+            previous=self.pending;w.settings[jobs.KEY]=[j for j in self.pending if j['id']!=job['id']]
             if not w._save_state():w.settings[jobs.KEY]=previous
             self.schedule();return
         # Do not race completed detection/prep publication. New clicks still
@@ -208,7 +208,7 @@ class MediaConversionController(QObject):
                 self.fail(job,task.error);return
             result=task.result
             if result.get('waiting'):self.schedule();return
-            previous=deepcopy(w.settings);old_imported=deepcopy(w.imported)
+            previous=dict(w.settings);old_imported=w.imported
             try:
                 updated,imported=jobs.acknowledge(w.settings,w.imported,job,result)
                 updated[jobs.KEY]=[j for j in updated.get(jobs.KEY,[]) if j['id']!=job['id']]
@@ -219,9 +219,10 @@ class MediaConversionController(QObject):
             same_source=bool(w.lib and (str(w.lib.source),w.lib.source_library_id)==(job['source'],job['library_id']))
             if not self.closing and not w._shutting_down and same_source:
                 target=result.get('target',job['path'])
+                ids=set(job['ids']);native={(r['id'],r['uuid']) for r in result.get('native',[])}
                 if target!=job['path']:
                     for track in w.lib.tracks_by_id.values():
-                        if track.track_id in job['ids'] and any(track.native_id==r['id'] and track.source_uuid==r['uuid'] for r in result.get('native',[])):
+                        if track.track_id in ids and (track.native_id,track.source_uuid) in native:
                             track.location_uri=Path(target).as_uri();track.source_native_path=target;track.size=result['size'];track.kind='WAV'
                 if job['path'] in self.cache:
                     entry=self.cache.pop(job['path']);entry.update(epoch=result['epoch'],facts=result['facts'])
@@ -231,22 +232,24 @@ class MediaConversionController(QObject):
                 if target!=job['path']:imports.inject(w.lib,w.imported,repair_missing=False)
                 pb=w.player_bar
                 current=w.lib.tracks_by_id.get(pb.current_track())
-                bound=(not job['native'] or current and any(current.native_id==ref['id'] and current.source_uuid==ref['uuid'] for ref in job['native']))
-                if pb.current_track() in job['ids'] and getattr(pb,'_src_path','') in (job['path'],target) and bound:
+                bound=(not job['native'] or current and (current.native_id,current.source_uuid) in {(ref['id'],ref['uuid']) for ref in job['native']})
+                if pb.current_track() in ids and getattr(pb,'_src_path','') in (job['path'],target) and bound:
                     if target!=job['path']:pb._src_path=target
                     record=w.settings.get('analysis_results',{}).get(analysis.result_key(target))
                     if record:pb.detected_analysis=record;pb._analysis_parts.update(_detected_sha256=record['sha256'],_detected_epoch=record['epoch'])
                     pb.refresh_audio_detail(target)
                 if target!=job['path']:
-                    w._analysis_queue=[entry for entry in w._analysis_queue if entry[1].track_id not in job['ids']]
+                    w._analysis_queue=[entry for entry in w._analysis_queue if entry[1].track_id not in ids]
                     w._resume_analysis_jobs()
                 self.schedule()
         self.active=set(job['ids'])
         if not self.tags.run_media_job(work,finished):self.active.clear();self.schedule()
 
     def fail(self,job,message):
-        for current in self.pending:
-            if current['id']==job['id']:current['error']=message
+        queue=list(self.pending)
+        for index,current in enumerate(queue):
+            if current['id']==job['id']:queue[index]={**current,'error':message}
+        self.window.settings[jobs.KEY]=queue
         self.window._save_state()
         if not self.closing:self.window._flash_status('Audio conversion needs attention — '+message,12)
         self.schedule()

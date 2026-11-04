@@ -5,7 +5,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 sys.path.insert(0, str(Path(SPECPATH)))
-from scripts.build_composition import composition, write_manifest
+from scripts.build_composition import composition, runtime_submodule, write_manifest
 
 profile = os.environ.get("SOUNDBOX_BUILD_PROFILE", "personal")
 config = composition(profile)
@@ -20,7 +20,7 @@ binaries = [("build/native/libsoundbox_deck.dylib", "native"),
             ("build/cdj/release/soundbox-cdj", "native")]
 hiddenimports = []
 for package in config["submodules"]:
-    hiddenimports += collect_submodules(package)
+    hiddenimports += collect_submodules(package, filter=runtime_submodule)
 for package in config["collections"]:
     data, binary, imports = collect_all(package)
     datas += data

@@ -123,7 +123,8 @@ class AnalysisWorker(QThread):
                 if self.expected_sha256 and result.get('sha256')!=self.expected_sha256:
                     raise ValueError('Audio identity changed between preparation phases; saved results are preserved')
                 key = analysis.result_key(result['path'])
-                results[key] = analysis.merge_result(self.previous.get(key), result, self.preferences)
+                previous = deepcopy(self.previous.get(key))
+                results[key] = analysis.merge_result(previous, result, self.preferences)
             self.result = results
         except Exception as exc:
             self.result = exc
@@ -289,8 +290,12 @@ class AnalysisMixin:
                 self._analysis_queue.pop(0)
                 continue
             self._analysis_queue.pop(0)
+            # Published analysis records are replaced by local cue/grid edits,
+            # prep and conversion acknowledgements, never mutated in place.
+            # Snapshot their identities now; the worker detaches only its actual
+            # canonical result key, retaining alias support without GUI I/O.
             worker = AnalysisWorker(self.lib, [deepcopy(current)], analysis_jobs.component_preferences(job),
-                                    deepcopy(self.settings.get('analysis_results', {})),automatic=job.get('automatic',False))
+                                    dict(self.settings.get('analysis_results', {})),automatic=job.get('automatic',False))
             self._analysis_worker = worker
             worker.job_id=identity
             worker.expected_sha256=job.get('component_sha256') or job.get('waveform_sha256')

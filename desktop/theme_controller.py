@@ -14,6 +14,11 @@ from . import theme
 from .choices import ComboBox, Menu
 
 
+# Keep adjacent wheel/trackpad gestures visually continuous across short
+# direction-change gaps. This also avoids a style repolish for each ScrollEnd.
+_SCROLL_FEEDBACK_IDLE_MS = 120
+
+
 def _accent_rules():
     source = re.sub(r'/\*.*?\*/', '', theme._BASE_QSS, flags=re.S)
     tokens = ('#7b2fbe', '#a855f7', '#5b21b6', '#28173a', '@on_accent@')
@@ -118,19 +123,21 @@ class ThemeController(QObject):
     @staticmethod
     def _scroll_feedback(bar,*,phase=Qt.NoScrollPhase):
         if bar.maximum()<=bar.minimum():return
+        # An end event alone must not light an unused axis or create a timer.
+        if phase==Qt.ScrollEnd and not bar.property('wheelScrolling'):return
         def active(value):
             if bool(bar.property('wheelScrolling'))==value:return
             bar.setProperty('wheelScrolling',value)
             bar.style().unpolish(bar);bar.style().polish(bar);bar.update()
         timer=getattr(bar,'_soundbox_scroll_feedback',None)
         if timer is None:
-            # Phase-less mouse wheels have no end event. One missed display
-            # frame clears their feedback; trackpads clear on ScrollEnd itself.
-            timer=QTimer(bar);timer.setSingleShot(True);timer.setInterval(32)
+            # Trackpads can end/restart while reversing direction. Delay only
+            # the return to idle; phased updates keep a held gesture active.
+            timer=QTimer(bar);timer.setSingleShot(True);timer.setInterval(_SCROLL_FEEDBACK_IDLE_MS)
             timer.timeout.connect(lambda:active(False));bar._soundbox_scroll_feedback=timer
         timer.stop()
-        active(phase!=Qt.ScrollEnd)
-        if phase==Qt.NoScrollPhase:timer.start()
+        if phase!=Qt.ScrollEnd:active(True)
+        if phase in (Qt.NoScrollPhase,Qt.ScrollEnd):timer.start()
 
 
 def install(app):

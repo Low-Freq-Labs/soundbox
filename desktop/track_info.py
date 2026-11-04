@@ -165,6 +165,16 @@ class TrackInfoDialog(QDialog):
         self.accept()
 
 
+def _exec_info(dialog):
+    try:
+        return dialog.exec()
+    finally:
+        # A parented dialog otherwise retains its controls/images until app
+        # exit. Finish every owned decode before releasing the widget tree.
+        dialog._owner.drain()
+        dialog.deleteLater()
+
+
 class TrackInfoMixin:
     def _open_track_info(self):
         from .usb_device_view import CdjSong
@@ -173,7 +183,7 @@ class TrackInfoMixin:
             song=item.data(0,Qt.UserRole) if item else None
             if isinstance(song,CdjSong):
                 row=self.usb_device_pages._display_rows.get(song.path,{})
-                TrackInfoDialog(dict(row,location=str(self.usb_device_pages._snapshot.target)+song.path),parent=self).exec()
+                _exec_info(TrackInfoDialog(dict(row,location=str(self.usb_device_pages._snapshot.target)+song.path),parent=self))
                 return
         grave=getattr(self,'_grave',None)
         if grave is not None and grave.isVisible():
@@ -188,7 +198,7 @@ class TrackInfoMixin:
                 row=controller.info(data[1]) if controller and data else None
                 if row:
                     tid=data[1]
-                    TrackInfoDialog(row,artwork=lambda:self.art_cache.image_path(tid),parent=self).exec();return
+                    _exec_info(TrackInfoDialog(row,artwork=lambda:self.art_cache.image_path(tid),parent=self));return
                 if controller:controller.schedule()
                 self._flash_status('Track is no longer in the library' if data else
                                    'Select a Graveyard track to view its information');return
@@ -201,7 +211,7 @@ class TrackInfoMixin:
         tid=track.track_id
         dialog=TrackInfoDialog(self._row_for(track),artwork=lambda:self.art_cache.image_path(tid),
             pick_art=lambda:self._art_pick(tid),save=lambda changes:self._save_track_info(tid,changes),parent=self)
-        dialog.exec()
+        _exec_info(dialog)
 
     def _save_track_info(self,tid,changes):
         from copy import deepcopy

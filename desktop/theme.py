@@ -268,7 +268,7 @@ QCheckBox::indicator:checked {{ background: {PURPLE_LIGHT}; border: 1px solid {P
 QCheckBox::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px solid {PURPLE}; }}
 
 /* sidebar tree */
-QTreeView {{ background: {PANEL}; border: none; }}
+QTreeView {{ background: {PANEL}; alternate-background-color: {ROW_ALT}; border: none; }}
 QTreeView::item {{ padding: 0px 2px; height: 24px; color: {TEXT}; }}  /* 24px = table row height: sidebar + table share one grid */
 QTreeView::item:selected {{ background: {PURPLE}; color: @ON_ACCENT@; }}
 QTreeView::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER};

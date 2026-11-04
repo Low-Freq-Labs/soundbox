@@ -6,6 +6,7 @@ from unittest import mock
 from urllib.parse import quote
 
 from soundbox import manifest, rekordbox_xml, sync as sync_mod
+from soundbox.library import Library, Playlist, Track
 from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
 
 
@@ -431,6 +432,41 @@ class TestSyncEndToEnd(unittest.TestCase):
         self.assertNotEqual(
             sync_mod._destination_key(first),
             sync_mod._destination_key(second))
+
+    def test_plan_destination_index_scales_with_unique_sources_and_keeps_collisions(self):
+        tracks = {}
+        for index in range(100):
+            source = self.src / f"collision-{index}.flac"
+            source.write_bytes(str(index).encode())
+            track_id = str(index)
+            tracks[track_id] = Track(
+                track_id, "Café" if index % 2 else "CAFE\u0301",
+                "Artist" if index % 2 else "artist", source.as_uri())
+        keys = list(tracks)
+        playlists = [Playlist("First", [], keys), Playlist("Repeated", [], keys[::-1])]
+        library = Library(tracks, playlists, self.xml)
+
+        with mock.patch.object(sync_mod, "_destination_key",
+                               wraps=sync_mod._destination_key) as normalize:
+            files, entries = sync_mod.plan(
+                library, playlists, self.target, derive_artists=False)
+            self.assertLessEqual(normalize.call_count, 5 * len(tracks))
+
+        self.assertEqual(len(files), len(tracks))
+        self.assertEqual(len({sync_mod._destination_key(path) for path in files}), len(tracks))
+        self.assertEqual([entry.device_path for entry in entries[0]],
+                         [entry.device_path for entry in entries[1]][::-1])
+        # Compare with the standalone allocator's existing complete-baseline
+        # behavior, including deterministic suffixes for equivalent FAT names.
+        expected = {}
+        for planned in files.values():
+            track = tracks[planned.track_id]
+            title = sync_mod.metadata.effective_title(
+                track.track_id, track.name, track.artist, None, library.title_junk)
+            path = sync_mod._assign_device_path(
+                track.path, track.artist, expected, self.target / "Music", title)
+            expected[path] = planned
+        self.assertEqual(list(files), list(expected))
 
 
 if __name__ == "__main__":

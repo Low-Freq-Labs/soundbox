@@ -23,7 +23,7 @@ class CdjDropIntent(unittest.TestCase):
         host,started=self.host()
         plan=SimpleNamespace(changes=[object()],close=mock.Mock(),replaces_native_library=True)
         with mock.patch('desktop.cdj.QMessageBox',side_effect=AssertionError('Unexpected approval')), \
-             mock.patch('desktop.cdj.cdj_transaction.commit',return_value={'generation':'new'}) as commit:
+             mock.patch('soundbox.cdj_transaction.commit',return_value={'generation':'new'}) as commit:
             CdjDeviceMixin._review_cdj_plan(host,'/not-a-device',plan,from_drop=True)
             worker,dev,intent=started[0]
             self.assertEqual((dev,intent),('/not-a-device','commit-cdj'))
@@ -37,7 +37,7 @@ class CdjDropIntent(unittest.TestCase):
     def test_cancelled_drop_closes_preparation_without_publishing(self):
         host,started=self.host()
         plan=SimpleNamespace(changes=[object()],close=mock.Mock())
-        with mock.patch('desktop.cdj.cdj_transaction.commit') as commit:
+        with mock.patch('soundbox.cdj_transaction.commit') as commit:
             CdjDeviceMixin._review_cdj_plan(host,'/not-a-device',plan,cancelled=True,from_drop=True)
         self.assertEqual(started,[]);commit.assert_not_called();plan.close.assert_called_once()
         self.assertIsInstance(host._finish_cdj.call_args.args[1],RuntimeError)

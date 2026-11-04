@@ -166,10 +166,14 @@ class DurablePrep(unittest.TestCase):
         self.assertEqual([kind for kind,_ in self.writes],['cue'])
 
     def test_committed_save_with_failed_local_ack_replays_receipt_without_duplicate(self):
+        opaque={'nested':['preserve alias']}
+        self.window.settings.update(future=opaque,alias=opaque)
         self.fail_after_commit=True
         self.assertTrue(self.controller.request_cue(self.tid,'hot',0,'add',777))
         self.wait(lambda:bool(self.controller.pending and self.controller.pending[0]['error']))
         self.assertEqual(len(self.writes),1);self.assertIsNotNone(self.controller.pending[0]['prepared'])
+        self.assertIs(self.window.settings['future'],opaque)
+        self.assertIs(self.window.settings['alias'],opaque)
         self.assertFalse(self.controller.request_cue(self.tid,'hot',1,'add',888))
         self.controller.stop();self.native.shared.prep_priority=False
         self.window.settings=json.loads((self.native.shared.data_root/'state.json').read_bytes())

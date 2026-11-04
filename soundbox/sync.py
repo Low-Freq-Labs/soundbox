@@ -545,6 +545,7 @@ def plan(
     """
     music_root = target / "Music"
     files: dict[str, PlannedFile] = {}          # device_path -> PlannedFile
+    occupied_keys: set[str] = set()            # normalized FAT destination identities
     src_to_device: dict[str, str] = {}          # source str -> device_path
     entries_by_pl: dict[int, list[pl_mod.M3UEntry]] = {}
 
@@ -579,7 +580,10 @@ def plan(
                 title = metadata.effective_title(
                     track.track_id, track.name, artist, title_overrides,
                     getattr(lib, "title_junk", None))
-                device_path = _assign_device_path(src, artist, files, music_root, title)
+                device_path = _assign_device_path(
+                    src, artist, files, music_root, title,
+                    occupied_keys=occupied_keys)
+                occupied_keys.add(_destination_key(device_path))
                 src_to_device[src_key] = device_path
                 files[device_path] = PlannedFile(
                     source=src,
@@ -597,11 +601,15 @@ def plan(
 def _assign_device_path(
     src: Path, artist: str, files: dict[str, PlannedFile], music_root: Path,
     name_override: str | None = None,
+    *, occupied_keys: set[str] | None = None,
 ) -> str:
     """Pick a unique device path, disambiguating collisions from *different*
     source files by appending a short source hash before the extension."""
     base = device_music_path(src, artist, name_override=name_override)
-    occupied = {_destination_key(path) for path in files}
+    # One plan-local index avoids renormalizing every prior destination for
+    # every new source. Standalone callers retain the complete files baseline.
+    occupied = (occupied_keys if occupied_keys is not None
+                else {_destination_key(path) for path in files})
     if _destination_key(base) not in occupied:
         return base
     # FAT32 is case-insensitive and macOS/device firmware can disagree about

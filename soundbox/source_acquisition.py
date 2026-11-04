@@ -1,7 +1,8 @@
 """Bounded, read-only acquisition of canonical audio into disposable local state.
 
-A digest binds captured bytes, not cloud placeholder timestamps. With no digest,
-a capture must have a stable filesystem identity; one hydration retry is allowed.
+A digest binds captured bytes, not cloud placeholder timestamps. Every capture
+must also bind its returned observation to a stable canonical file identity;
+one hydration retry is allowed.
 No caller should reopen the canonical path after this boundary.
 """
 from __future__ import annotations
@@ -69,6 +70,8 @@ def acquire_source(
         while True:
             attempts += 1
             record_metric("acquisitions")
+            if canonical.resolve(strict=True) != canonical:
+                raise SourceAcquisitionError(f"Source identity changed: {canonical}")
             before = canonical.stat()
             expected_size = contract.size if contract.size is not None else before.st_size
             # Leave room for the snapshot and one working derivative. Container
@@ -105,6 +108,8 @@ def acquire_source(
                             reported = now
                     closed = os.fstat(source.fileno())
                 after = canonical.stat()
+                if canonical.resolve(strict=True) != canonical:
+                    raise SourceAcquisitionError(f"Source identity changed: {canonical}")
             except OSError as exc:
                 local.unlink(missing_ok=True)
                 if readiness.wait_after(exc, canonical, should_cancel=should_cancel):
@@ -115,8 +120,10 @@ def acquire_source(
             if contract.sha256 is not None:
                 if size != expected_size or value != contract.sha256:
                     raise SourceAcquisitionError(f"Source audio changed (captured bytes differ from the expected audio): {canonical}")
-                # Exact bytes are authoritative even across eviction/rehydration.
-                break
+                # The digest proves the local bytes. It cannot associate those
+                # bytes with an after-stat from a replacement or concurrent edit.
+                # Metadata drift before acquisition is fine; drift during it
+                # needs the same bounded stable reread as an unknown digest.
             stable = (_identity(before) == _identity(opened)
                       == _identity(closed) == _identity(after)
                       and size == expected_size)

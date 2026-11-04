@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from functools import lru_cache
+from contextlib import nullcontext
 import importlib
 import importlib.util
 import json
@@ -25,6 +26,12 @@ LOG = logging.getLogger("soundbox.providers")
 API_VERSION = 1
 MODULE_ID = "lowfreqlabs.soundcloud"
 ACTIONS = ("artwork.search", "artwork.url", "artists.suggest", "connections.soundcloud")
+
+
+def provider_operation(provider, should_cancel=lambda:False, *, timeout=60.0):
+    """Optional worker scope; public/local providers need no online imports."""
+    scope = getattr(provider,'operation_scope',None)
+    return scope(should_cancel,timeout=timeout) if callable(scope) else nullcontext()
 
 
 class ConnectionFailure(Exception):

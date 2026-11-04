@@ -14,6 +14,69 @@ from tests.test_rockbox_media import _tagged_mp3
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_expected_digest_never_pairs_old_bytes_with_a_replacement_or_rewrite_epoch(self):
+        for replacement in (False,True):
+            with self.subTest(replacement=replacement),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve();source=root/'song.wav';source.write_bytes(b'audio')
+                original=source.stat();changed=[]
+                def change(_count):
+                    if changed:return
+                    changed.append(True)
+                    if replacement:
+                        other=root/'replacement.wav';other.write_bytes(b'other');other.replace(source)
+                    else:source.write_bytes(b'other')
+                    os.utime(source,ns=(original.st_atime_ns,original.st_mtime_ns))
+                contract=SourceContract(source,5,hashlib.sha256(b'audio').hexdigest())
+                with self.assertRaisesRegex(SourceAcquisitionError,'captured bytes differ'):
+                    with acquire_source(contract,root/'stage',on_bytes=change):self.fail('Stale bytes accepted')
+                self.assertFalse(list((root/'stage').iterdir()))
+
+    def test_expected_digest_retries_one_ctime_only_change_but_rejects_continued_drift(self):
+        for repeated in (False,True):
+            with self.subTest(repeated=repeated),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve();source=root/'song.wav';source.write_bytes(b'audio')
+                changes=[]
+                def change(_count):
+                    changes.append(True)
+                    if repeated or len(changes)==1:source.chmod(0o600 if len(changes)%2 else 0o644)
+                contract=SourceContract(source,5,hashlib.sha256(b'audio').hexdigest())
+                if repeated:
+                    with self.assertRaisesRegex(SourceAcquisitionError,'unstable'):
+                        with acquire_source(contract,root/'stage',on_bytes=change):self.fail('Unstable epoch accepted')
+                else:
+                    with acquire_source(contract,root/'stage',on_bytes=change) as snapshot:
+                        self.assertEqual(snapshot.path.read_bytes(),b'audio')
+                        self.assertEqual(snapshot.observation,source.stat())
+                self.assertEqual(len(changes),2)
+                self.assertFalse(list((root/'stage').iterdir()))
+
+    def test_capture_rejects_leaf_and_parent_redirects_even_to_the_captured_inode(self):
+        for parent in (False,True):
+            with self.subTest(parent=parent),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve();folder=root/'audio';folder.mkdir()
+                source=folder/'song.wav';source.write_bytes(b'audio')
+                def redirect(_count):
+                    if parent:
+                        moved=root/'moved';folder.rename(moved);folder.symlink_to(moved,target_is_directory=True)
+                    else:
+                        moved=folder/'moved.wav';source.rename(moved);source.symlink_to(moved)
+                contract=SourceContract(source,5,hashlib.sha256(b'audio').hexdigest())
+                with self.assertRaisesRegex(SourceAcquisitionError,'identity changed'):
+                    with acquire_source(contract,root/'stage',on_bytes=redirect):self.fail('Redirect accepted')
+                self.assertFalse(list((root/'stage').iterdir()))
+
+    def test_cancellation_discards_expected_digest_capture_and_does_not_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve();source=root/'song.wav';source.write_bytes(b'audio')
+            stopped=[]
+            def cancel(_count):stopped.append(True);source.chmod(0o600)
+            contract=SourceContract(source,5,hashlib.sha256(b'audio').hexdigest())
+            with self.assertRaisesRegex(SourceAcquisitionError,'cancelled'):
+                with acquire_source(contract,root/'stage',on_bytes=cancel,should_cancel=lambda:bool(stopped)):
+                    self.fail('Cancelled capture accepted')
+            self.assertEqual(len(stopped),1)
+            self.assertFalse(list((root/'stage').iterdir()))
+
     def test_exact_digest_accepts_eviction_metadata_drift(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

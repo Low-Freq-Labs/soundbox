@@ -8,7 +8,6 @@ import threading
 from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
-from soundbox import cdj_export, cdj_transaction
 from .devices import device_facts
 
 
@@ -46,6 +45,7 @@ class CdjWorker(QThread):
 class CdjDeviceMixin:
     def _begin_cdj_export(self, dev, playlists=(), *, settings=None, from_drop=False, drop_target=None,
                           standalone=()):
+        from soundbox import cdj_export
         if self._shutting_down or self.lib is None:
             return
         if from_drop and drop_target is None:
@@ -131,6 +131,7 @@ class CdjDeviceMixin:
         self._sync_cue_editing()
 
     def _review_cdj_plan(self, dev, result, cancelled=False, *, from_drop=False):
+        from soundbox import cdj_transaction
         if isinstance(result, Exception):
             self._finish_cdj(dev, result)
             return
@@ -243,6 +244,7 @@ class CdjDeviceMixin:
         self._start_pulse('Importing My Settings');self._start_device_worker(worker,dev,'inspect')
 
     def _reformat_usb(self, dev):
+        from soundbox import cdj_export, cdj_transaction
         if self._defer_device_operation_until_scan_finishes(lambda:self._reformat_usb(dev)):return
         if self._device_operation_owned():return
         from soundbox import usb_format
@@ -283,6 +285,7 @@ class CdjDeviceMixin:
         self._start_pulse('Reading USB');self._start_device_worker(worker,dev,'inspect')
 
     def _recover_cdj(self, dev):
+        from soundbox import cdj_transaction
         if self._device_operation_owned():
             return
         if self._defer_device_operation_until_scan_finishes(lambda:self._recover_cdj(dev)):

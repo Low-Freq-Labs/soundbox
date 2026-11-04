@@ -7,9 +7,11 @@ are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11
 
 ## Delivered personal runtime
 
-The November3 personal build155 delivery passed all2341 offscreen/Cocoa tests, signed
-package/native smoke, safe-install and curated-state checks. Exact binary/source
-provenance belongs in HANDOFF. It includes:
+Installed personal build157 retains the November3 build155 features below and
+includes the export, broader efficiency and correctness passes. The current
+delivery passes2531offscreen/Cocoa tests, both signed package profiles and
+installed isolated/normal startup with exact curated-state checks.
+Exact binary/source provenance belongs in HANDOFF. It includes:
 
 - Reference-based clean crate outline with an open rim/handle, straight sides and
   flat bottom; saved playlist choices, theme and row geometry are preserved.
@@ -62,6 +64,43 @@ These are completed features, not new native-reference requests. User interactio
 with the latest controls remains Sonny's own live testing; the agent must not
 send input events into his app or substitute synthetic proof for native acceptance.
 
+## Installed broader efficiency pass, November3 evening
+
+The trackpad recording identified gray/accent flicker between short gestures;
+120ms idle feedback bridges those gaps. USB scroll positions update immediately
+without traversing the tree per tick, with coalesced preference notifications and
+full capture at view/lifecycle barriers. Operation-local indexes, exact-byte state
+validation reuse, narrow prep rollback, artwork batch observations and immutable
+waveform inputs reduce repeated work across imports, analysis and exporters.
+Pure provider text caches remain bounded and do not cache account/network state.
+The176-file first-party source inventory records measured/static/deferred depth;
+this is not a claim that every workload or dependency has been profiled.
+
+This broader pass first passed2406tests as runtime d5cb4451… and remains included
+in the current night delivery below. Current provenance is in HANDOFF. The next
+pass addresses completion copies, fuzzy matching, thumbnails, USB status and
+provider lifetime work; [measurements and limits](performance-audit.md) distinguish
+implemented findings from retained tradeoffs. Fresh guards and recovery remain.
+
+## Correctness and remaining-cost follow-up, November3 night
+
+The installed source pass closes source-SHA/epoch pairing, committed acknowledgement/
+rebase and folder-delete pin recovery, cue-reference ordering, USB manifest and
+settings stale baselines, global tag revision, provider cancellation/stream
+contracts and modal lifetime/busy state. It reduces large GUI snapshots, conversion
+acknowledgement copies, fuzzy scoring, retry queues, art publication and native
+catalog work. Visible thumbnails and exact ancestor lookup bound repeated work;
+packaging removes development-only integrations. Source/authority/closed-native/
+hash/recovery guards and accepted profiles remain intact.
+
+The final2531-test source is installed as runtime fc696312…; both signed profiles,
+isolated SQL/ORM probes and actual normal startup pass. HANDOFF records exact
+provenance. Remaining measured
+tradeoffs are cross-phase PCM reuse, full detached queue isolation, durable
+state serialization, pre-response network cancellation and physical-device
+acceptance. The item-by-item report in performance-audit.md distinguishes those
+from implemented findings; no claim of universally perfect code is made.
+
 ## Shared-library follow-up
 
 The November2 dedicated per-command review covered every native writer plus shared
@@ -71,8 +110,10 @@ copies, not actual gesture latency. The November3 local preparation order and
 metadata recovery are installed; exact current validation/provenance is in
 [HANDOFF](HANDOFF.md), with the detailed workload limits in
 [performance](performance-audit.md). Source/authority/payload/recovery guards stay
-fresh. Sonny is now testing the running app; no new automatic job or rollout is
-pending for the agent.
+fresh. Sonny approved installation of the export efficiency pass below and manually
+closed build155. Build157 is installed and normally reopened; source changes
+are published under Sonny's wrap-up request. The signed installed base remains
+unchanged; this publication does not restamp or reinstall the running app.
 
 The native database/sidecars are the shared musical authority; intentions and
 captured detector records are provenance, not a competing final musical store.
@@ -107,9 +148,17 @@ remain open. See [the CDJ contract](cdj-usb-export.md).
 Stock/dual/Rockbox follow-up still requires real reconnect/power-cycle, playing
 music during discovery, no-op/changed Sync, overlapping drops, cancel/retry and
 normal eject checks. Preserve generation-58 recovery until separately reviewed
-acceptance. Normal idle eject does not require Sync/Verify. Generic USB/Rockbox
-optimization remains deferred; measure actual source/device reads, staging peak
-and latency before claiming further performance gains. See
+acceptance. Normal idle eject does not require Sync/Verify. The November3 source
+efficiency pass defers export startup/cache work until
+detection, indexes USB playlist matching and filesystem destinations, and shares
+repeated iPod availability/display work within each drift poll. Synthetic component
+benchmarks improved; these changes remain in the final2531-test signed delivery.
+Sonny-approved build157 is installed and normal curated startup/state checks pass.
+Exact validation/provenance and installed status belong in HANDOFF.
+Selected source capture and guarded no-op merge reconstruction are now implemented.
+Repeated new-media verification and physical throughput remain measured follow-ups;
+observe actual source/device reads, staging peak and latency before claiming
+end-to-end gains. See
 [device guidance](DEVICES.md), [lifecycle evidence](ipod-lifecycle-audit-2026-09.md)
 and [sync measurements](sync-performance-audit-2026-09.md).
 

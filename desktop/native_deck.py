@@ -1214,11 +1214,13 @@ class NativeDeckBackend(QObject):
                 return
             flat_minimum = b"".join(minimum_levels)
             flat_maximum = b"".join(maximum_levels)
-            total = len(flat_minimum) // 2
-            packed_minimum = (
-                ctypes.c_int16 * total).from_buffer_copy(flat_minimum)
-            packed_maximum = (
-                ctypes.c_int16 * total).from_buffer_copy(flat_maximum)
+            # This native entrypoint consumes/copies the complete arrays
+            # synchronously. Borrow the immutable byte owners through the call
+            # instead of duplicating both flattened hour-scale mip buffers.
+            packed_minimum = ctypes.cast(
+                ctypes.c_char_p(flat_minimum), ctypes.POINTER(ctypes.c_int16))
+            packed_maximum = ctypes.cast(
+                ctypes.c_char_p(flat_maximum), ctypes.POINTER(ctypes.c_int16))
             packed_counts = (ctypes.c_uint32 * level_count)(
                 *(int(value) for value in counts))
             packed_divisors = (ctypes.c_uint32 * level_count)(

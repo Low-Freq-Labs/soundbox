@@ -84,21 +84,33 @@ class Keymap:
         self.overrides = raw if isinstance(raw, dict) else {}
 
     def bindings(self, action: str) -> list[str]:
+        return self._bindings(action, canonical)
+
+    def _bindings(self, action, normalize):
         raw = self.overrides.get(action, BY_ID[action].defaults)
         if not isinstance(raw, (list, tuple)):
             raw = BY_ID[action].defaults
         if action.startswith('cues.delete.') and action not in self.overrides:
             # New defaults cannot displace a user's preexisting explicit map.
-            assigned = {canonical(value) for other, values in self.overrides.items()
+            assigned = {normalize(value) for other, values in self.overrides.items()
                         if other in BY_ID and other != action and isinstance(values, (list, tuple))
                         for value in values if isinstance(value, str)}
-            raw = [value for value in raw if canonical(value) not in assigned]
-        return list(dict.fromkeys(canonical(value) for value in raw
-                                  if isinstance(value, str) and canonical(value)))
+            raw = [value for value in raw if normalize(value) not in assigned]
+        return list(dict.fromkeys(key for value in raw
+                                  if isinstance(value, str) and (key := normalize(value))))
 
     def conflicts(self, binding: str, action: str = "") -> list[str]:
+        # One lookup sees the current map and Qt parser behavior. Share only
+        # pure normalization within that call, never across mutable keymaps.
+        parsed = {}
+        def normalize(value):
+            if type(value) is not str:
+                return canonical(value)
+            if value not in parsed:
+                parsed[value] = canonical(value)
+            return parsed[value]
         return [command.id for command in COMMANDS
-                if command.id != action and binding in self.bindings(command.id)]
+                if command.id != action and binding in self._bindings(command.id, normalize)]
 
     def action(self, binding: str) -> str | None:
         found = self.conflicts(binding)

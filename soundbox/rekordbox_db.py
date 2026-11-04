@@ -240,9 +240,9 @@ def _deleted(row) -> bool:
     return bool(getattr(row, "rb_local_deleted", 0))
 
 
-def _read_tags(db) -> tuple[list[LibraryTag], dict[str, list[str]]]:
+def _read_tags(db, *, track_ids: set[str] | None = None, definitions=None) -> tuple[list[LibraryTag], dict[str, list[str]]]:
     """Flatten existing active My Tags; retain stable IDs and source order."""
-    definitions = [row for row in db.get_my_tag() if not _deleted(row)]
+    definitions = [row for row in (db.get_my_tag() if definitions is None else definitions) if not _deleted(row)]
     categories = {str(row.ID): row for row in definitions if row.Attribute == 1}
     leaves = [row for row in definitions if row.Attribute == 0]
     leaves.sort(key=lambda row: (
@@ -253,12 +253,32 @@ def _read_tags(db) -> tuple[list[LibraryTag], dict[str, list[str]]]:
                        str(getattr(row, "UUID", "") or ""))
             for row in leaves]
     active = {tag.tag_id for tag in tags}
+    if track_ids is not None and not track_ids:return tags, {}
     memberships: dict[str, set[str]] = {}
-    for link in db.get_my_tag_songs():
+    by_tag: dict[str, list[str]] = {}
+    links = db.get_my_tag_songs()
+    def selected_links():
+        if track_ids is not None and hasattr(links,'filter'):
+            from pyrekordbox.db6.tables import DjmdSongMyTag
+            identities=sorted(track_ids)
+            for start in range(0,len(identities),500):
+                yield from links.filter(DjmdSongMyTag.ContentID.in_(identities[start:start+500]))
+        else:yield from links
+    for link in selected_links():
+        if track_ids is not None and str(link.ContentID) not in track_ids:continue
         if not _deleted(link) and str(link.MyTagID) in active:
-            memberships.setdefault(str(link.ContentID), set()).add(str(link.MyTagID))
-    return tags, {tid: [tag.tag_id for tag in tags if tag.tag_id in assigned]
-                  for tid, assigned in memberships.items()}
+            tid, tag_id = str(link.ContentID), str(link.MyTagID)
+            assigned = memberships.setdefault(tid, set())
+            if tag_id not in assigned:
+                assigned.add(tag_id)
+                by_tag.setdefault(tag_id, []).append(tid)
+    # Traverse definitions once, preserving source order and even duplicate
+    # definitions, rather than scanning the full tag pool for every song.
+    ordered: dict[str, list[str]] = {tid: [] for tid in memberships}
+    for tag in tags:
+        for tid in by_tag.get(tag.tag_id, ()):
+            ordered[tid].append(tag.tag_id)
+    return tags, ordered
 
 
 def _active_track_ids(db) -> set[str]:

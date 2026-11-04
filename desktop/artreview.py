@@ -19,6 +19,7 @@ from .choices import ComboBox as QComboBox, Menu as QMenu
 from soundbox.art_sources import account_name, excluded_source, same_art_source, profile_source
 from soundbox.artwork import ArtResult
 from soundbox.art_review_scan import ReviewScanStore, context_stamp
+from soundbox.providers import provider_operation
 from .artpicker import ArtPickerDialog, _CandidateSearch
 from .task_owner import TaskOwner
 
@@ -162,7 +163,8 @@ class _ReviewScan(QThread):
                 result, snapshot, exclusions, stamp = self._saved_check(row, store, self.cache.kept_covers())
                 if result is None:
                     online = True
-                    result = self._check_track(snapshot, exclusions, artist, title)
+                    with provider_operation(self.provider,lambda:self._stop):
+                        result = self._check_track(snapshot, exclusions, artist, title)
                     if self._stop:
                         break
                     store.put(tid, stamp, dict(candidates=[c for c, _ in result["choices"]]))
@@ -220,7 +222,8 @@ class _ReviewPreview(QThread):
                 try:
                     data = store.preview_get(candidate) if store else None
                     if not data:
-                        data = self.provider.preview_image(candidate)
+                        with provider_operation(self.provider,lambda:self._stop):
+                            data = self.provider.preview_image(candidate)
                         if data and store and not self._stop:
                             store.preview_put(candidate, data)
                 except Exception:
@@ -290,13 +293,16 @@ class _ReviewFetch(QThread):
                                    1, path.as_uri(), path.name)
             elif c.get("kind") == "artist-profile":
                 fetch = getattr(self.provider, "fetch_profile_art", None)
-                result = fetch(c["artist"]) if callable(fetch) else None
+                with provider_operation(self.provider,lambda:self._stop):
+                    result = fetch(c["artist"]) if callable(fetch) else None
                 if result is not None and (not profile_source(result.source_url) or result.confidence < .9):
                     raise ValueError("A matching artist profile could not be verified")
             elif c.get("kind") == "page":
-                result = self.provider.fetch_by_url(c["url"])
+                with provider_operation(self.provider,lambda:self._stop):
+                    result = self.provider.fetch_by_url(c["url"])
             else:
-                result = self.provider.fetch_thumb(c["thumb"], c["url"], c["title"])
+                with provider_operation(self.provider,lambda:self._stop):
+                    result = self.provider.fetch_thumb(c["thumb"], c["url"], c["title"])
             if not self._stop:
                 self.result = result
         except Exception as exc:

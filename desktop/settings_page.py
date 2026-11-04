@@ -633,6 +633,11 @@ class SettingsPageMixin:
             self._flash_status("Wait for the current operation before backup/restore", 8)
             return False
         self._state_maintenance = True
+        # Complete pending USB view preferences before the final save. Their
+        # idle notification must not cross a backup/restore publication barrier.
+        usb_pages = getattr(self, 'usb_device_pages', None)
+        if usb_pages is not None:
+            usb_pages._remember_view()
         self._settings_save_timer.stop()
         self._maintenance_resume_art = getattr(self, "_art_worker", None) is not None
         self._maintenance_resume_waveforms = getattr(self, "_waveform_rechecks_enabled", False)
