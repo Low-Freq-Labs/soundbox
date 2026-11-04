@@ -13,7 +13,7 @@ class ColorButton(QPushButton):
         super().__init__(text, parent)
         self.editor = QLineEdit(self)
         self.editor.setFrame(False)
-        self.editor.setStyleSheet('QLineEdit {background:transparent; border:none; padding:0;}')
+        self.editor.setObjectName('HexColorEditor')
         self.editor.setAccessibleName('Hex color')
         self.editor.hide()
         self.editor.installEventFilter(self)

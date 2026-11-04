@@ -574,7 +574,8 @@ def _smart_playlist_contents(db, playlist):
 
 
 def _read_playlists(
-        db, active_track_ids: set[str] | None = None) -> list[Playlist]:
+        db, active_track_ids: set[str] | None = None, *,
+        selected_ids: set[str] | None = None) -> list[Playlist]:
     from pyrekordbox.db6.tables import DjmdSongPlaylist
 
     # Group nodes by parent and sort by Seq so we match rekordbox's exact order.
@@ -612,9 +613,21 @@ def _read_playlists(
     # let invisible history break an otherwise valid refresh.
     normal_ids = {
         node_id for node_id, node in active_nodes.items() if node.Attribute == 0
+        and (selected_ids is None or node_id in selected_ids)
     }
     tracks_by_pl: dict[str, list] = {}
-    for sp in db.query(DjmdSongPlaylist).all():
+    if selected_ids is None:
+        membership_queries = [db.query(DjmdSongPlaylist)]
+    elif normal_ids:
+        from sqlalchemy.orm import Query
+        query = db.query(DjmdSongPlaylist)
+        identities = sorted(normal_ids)
+        membership_queries = ([query.filter(DjmdSongPlaylist.PlaylistID.in_(identities[at:at+500]))
+                               for at in range(0, len(identities), 500)]
+                              if isinstance(query, Query) else [query])
+    else:
+        membership_queries = []
+    for sp in (row for query in membership_queries for row in query.all()):
         playlist_id = str(sp.PlaylistID)
         if _deleted(sp) or playlist_id not in normal_ids:
             continue
@@ -637,6 +650,8 @@ def _read_playlists(
         for p in children.get(parent_id, []):
             if p.Attribute == 1:  # folder → recurse, extending the path
                 walk(str(p.ID), path + [p.Name])
+            elif selected_ids is not None and str(p.ID) not in selected_ids:
+                continue
             elif p.Attribute == 0:  # normal playlist → sacred manual order (TrackNo)
                 keys = [str(sp.ContentID) for sp in tracks_by_pl.get(str(p.ID), [])]
                 playlists.append(Playlist(
@@ -659,7 +674,7 @@ def _read_playlists(
     walk("root", [])
     expected = {
         node_id for node_id, node in active_nodes.items()
-        if node.Attribute in (0, 4)
+        if node.Attribute in (0, 4) and (selected_ids is None or node_id in selected_ids)
     }
     if visited != expected:
         missing = sorted(expected - visited)

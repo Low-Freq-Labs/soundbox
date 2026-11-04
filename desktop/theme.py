@@ -106,6 +106,11 @@ QLineEdit, QComboBox {{
     selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@;
 }}
 QLineEdit:focus, QComboBox:focus {{ border: 1px solid {PURPLE_LIGHT}; }}
+QLineEdit#HexColorEditor {{ background: transparent; border: none; padding: 0; }}
+QTextEdit, QPlainTextEdit {{ selection-background-color: {PURPLE}; selection-color: @ON_ACCENT@; }}
+QLabel#DuplicateHeading {{ font-size: 16px; font-weight: 600; }}
+QTextEdit#DuplicatePlaylist, QTextEdit#DuplicateTracks {{ font-size: 13px; border: none; padding: 0; }}
+QTextEdit#DuplicatePlaylist {{ font-weight: 600; }}
 
 /* custom -/+ stepper (fully QSS-drawn — no flaky native QSpinBox arrows) */
 QPushButton#Stepper {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 5px;
@@ -275,6 +280,11 @@ QTreeView::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER};
                           border-radius: 3px; background: {BG}; }}
 QTreeView::indicator:checked {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
 QTreeView::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px solid {PURPLE}; }}
+QTreeWidget#ExportPlaylists, QTreeWidget#ExportDevices {{ border: none; background: transparent; }}
+QTreeWidget#ExportPlaylists::item {{ min-height: 28px; }}
+QTreeWidget#ExportDevices {{ font-size: 20px; font-weight: 600; }}
+QTreeWidget#ExportDevices::item {{ padding: 0 8px; }}
+QTreeWidget#ExportDevices::indicator {{ width: 20px; height: 20px; }}
 
 /* device file browser — styled like the track table */
 #DeviceBrowser {{ background: {ROW}; alternate-background-color: {ROW_ALT};

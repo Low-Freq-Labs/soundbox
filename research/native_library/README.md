@@ -5,8 +5,9 @@ workspaces have no source discovery or publish-to-source API. Separate
 one-plan source pilots are described below. Ordinary core registration and initial
 full WAV/narrow CBR MP3 analysis now have separate accepted authorities and desktop
 integration; these research workspaces never provision or load those permissions.
-Current production provenance is build160/source release `4a3d29a`, with installed
-runtime `7bbe8577…` and its earlier signed base distinguished in HANDOFF. Existing
+The accepted domains remain installed in build163; current binary/source
+provenance is in HANDOFF. Build160/source release `4a3d29a`/runtime `7bbe8577…`
+are prior delivery evidence. Existing
 Tag/Cue/Grid/Playlist permissions do not authorize registration or analysis writes.
 The [shared-workflow plan](../../docs/shared-library-workflow-plan.md) defines the
 requested product behavior; [HANDOFF](../../docs/HANDOFF.md) records live status.

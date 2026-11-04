@@ -22,6 +22,7 @@ from soundbox.art_review_scan import ReviewScanStore, context_stamp
 from soundbox.providers import provider_operation
 from .artpicker import ArtPickerDialog, _CandidateSearch
 from .task_owner import TaskOwner
+from . import theme
 
 
 def _same_art(original, preview):
@@ -262,7 +263,7 @@ class _Spinner(QWidget):
         dot = self.width() * .055
         painter.setPen(Qt.NoPen)
         for i in range(12):
-            color = QColor("#ad50f4")
+            color = QColor(theme.PURPLE_LIGHT)
             color.setAlpha(40 + ((i - self._step) % 12) * 19)
             painter.setBrush(color)
             painter.drawEllipse(int(radius), int(-dot), max(2,int(dot*2)), max(2,int(dot*2)))

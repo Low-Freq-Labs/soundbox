@@ -99,6 +99,54 @@ class CdjIntegrationTests(unittest.TestCase):
         db.execute("PRAGMA key='"+key.replace("'","''")+"'")
         return db
 
+    def test_exporting_one_playlist_does_not_capture_or_refresh_other_exported_playlists(self):
+        retained_track = self.extra_track('18')
+        self.playlist.keys = ['18']
+        cdj_transaction.commit(self.selected([self.playlist]))
+        second = Playlist('Selected only', [], keys=['17'], pid='selected-only')
+        self.lib.playlists.append(second)
+        cdj_transaction.commit(self.selected([second]))
+        before = read_library(self.target, self.token)
+        retained_playlist = next(p for p in before.playlists if p.title == self.playlist.name)
+        retained_song = next(s for s in before.songs if s.source_id == '18')
+        # The earlier source playlist has changed and its source is unavailable.
+        # Exporting a different selected playlist must still be independent.
+        self.playlist.name = 'Changed on desktop'
+        self.playlist.keys = []
+        retained_track.path.unlink()
+        forbidden = {retained_track.path, self.target / retained_song.path.lstrip('/')}
+        original = Path.open
+        def guarded(path, *args, **kwargs):
+            if path in forbidden:
+                raise AssertionError('Unselected source or retained USB audio opened')
+            return original(path, *args, **kwargs)
+        with mock.patch.object(Path, 'open', guarded):
+            plan = self.selected([second])
+            self.assertFalse(plan.requires_commit)
+            cdj_transaction.commit(plan)
+        after = read_library(self.target, self.token)
+        self.assertEqual(next(p for p in after.playlists if p.id == retained_playlist.id), retained_playlist)
+        self.assertEqual(next(s for s in after.songs if s.source_id == '18'), retained_song)
+
+    def test_freshly_formatted_initialization_publishes_only_native_assets(self):
+        from soundbox import my_settings
+        profile = {'MYSETTING.DAT': {'tempo_range': 'ten'}}
+        with mock.patch('soundbox.cdj_source.capture_metadata', side_effect=AssertionError('Initialization read source')):
+            plan = cdj_export.plan_initialize(self.target, token=self.token, volume_uuid=self.volume,
+                name='TEST USB', profile=profile, recovery_root=self.recovery)
+        self.plans.append(plan)
+        self.assertEqual(set(plan.manifest['files']), set(DATABASE_FILES) | {'PIONEER/DEVSETTING.DAT'}
+                         | {'PIONEER/' + name for name in my_settings.new_files(profile)})
+        self.assertFalse((plan.candidate / '.rbxport-write.lock').exists())
+        cdj_transaction.commit(plan)
+        result = read_library(self.target, self.token)
+        self.assertEqual(result.name, 'TEST USB')
+        self.assertEqual(result.songs, ())
+        self.assertEqual(result.playlists, ())
+        self.assertFalse((self.target / '.rbxport-write.lock').exists())
+        for name, raw in my_settings.new_files(profile).items():
+            self.assertEqual((self.target / 'PIONEER' / name).read_bytes(), raw)
+
     def test_cleanup_preserves_different_collection_only_record_with_same_numeric_id(self):
         cdj_transaction.commit(self.selected([self.playlist]))
         before=read_library(self.target,self.token)

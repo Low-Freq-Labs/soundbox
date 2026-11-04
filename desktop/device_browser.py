@@ -161,6 +161,10 @@ class DeviceBrowserMixin:
             if self._device_coordinator.eject_pending:
                 return
             self._device_coordinator.eject_pending = dev
+            # Stop background discovery at its next safe boundary. Eject
+            # starts no verification, catalog refresh or source comparison.
+            if scan is getattr(self, '_dev_scan_worker', None) and hasattr(scan, 'cancel'):
+                scan.cancel()
             self._stock_view_pending.clear()
             self._exporting = True
             self._start_pulse("Waiting to eject")
@@ -198,11 +202,7 @@ class DeviceBrowserMixin:
         def succeeded():
             self._stop_pulse()
             self._finish_eject_attempt(dev)
-            self._device_coordinator.disconnect(dev)
-            self._current_device_path = ""
-            self._stock_snapshot = None
-            self.stack.setCurrentIndex(0)
-            self._refresh_devices()
+            self._retire_ejected_device(dev)
             self._flash_status("Ejected ✓")
 
         def run(args, on_fail):
@@ -228,6 +228,28 @@ class DeviceBrowserMixin:
             self._set_status_text("Ready")
 
         run(["eject", dev], gave_up)
+
+    def _retire_ejected_device(self, dev: str):
+        """Remove the ejected row and cached facts in memory; start no scan."""
+        from .devices import forget_device_mount
+        from .trees import DEVPATH_ROLE
+        self._device_coordinator.disconnect(dev)
+        forget_device_mount(dev)
+        for index in range(self.device_tree.topLevelItemCount() - 1, -1, -1):
+            if self.device_tree.topLevelItem(index).data(0, DEVPATH_ROLE) == dev:
+                self.device_tree.takeTopLevelItem(index)
+        for name in ('_device_profiles', '_device_mount_tokens', '_drift_cache',
+                     '_usb_device_rows', '_usb_view_cache', '_stock_view_cache',
+                     '_stock_view_failures', '_stock_view_pending', '_dual_sync_queue'):
+            getattr(self, name).pop(dev, None)
+        self._usb_view_requests.discard(dev)
+        self._stock_view_warming.discard(dev)
+        if self._current_device_path == dev:
+            self._current_device_path = ''
+            self._stock_snapshot = None
+            self.stack.setCurrentIndex(0)
+        self._set_device_poll_interval(bool(self._device_profiles))
+        self._update_device_action_state()
 
     def _finish_eject_attempt(self, dev: str):
         self._device_coordinator.eject_pending = ""

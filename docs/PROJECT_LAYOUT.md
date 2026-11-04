@@ -13,13 +13,16 @@ documentation-only closure below; HANDOFF records the current state.
 
 ## Current retention — November4
 
-Updated build160 (runtime7bbe8577…) is installed. One b0ccb1ab… build160 rollback
-is retained pending acceptance of this update; its exact path is in HANDOFF.
+Build163 (runtime42aefd35…) is installed and normally reopened. Its immediate
+7bbe8577… rollback and the previously protected b0ccb1ab… base share one existing
+private directory pending acceptance; exact paths are in HANDOFF. Current2595-test/
+690-input package/install/state proofs and packaging-retirement.json are under
+`~/Library/Logs/Soundbox/usb-simplification-2026-11-04/`.
 The older generated fc696312…/d5cb4451… build157 apps were retired under standing
 cleanup after Sonny used/positively accepted the prior build160 Info behavior.
 Exact paths, hashes and retention resolution are in `older-rollbacks-retired.json`
-under `~/Library/Logs/Soundbox/export-polish-2026-11-04/`. This directory also
-retains final2564-test reports,675-input freeze, subagent format review, native
+under `~/Library/Logs/Soundbox/export-polish-2026-11-04/`. That earlier directory
+retains its final2564-test reports,675-input freeze, subagent format review, native
 battery/AC evidence, both package proofs and installation/state checks.
 Redundant dist/COLLECT/PyInstaller output is retired only after verified install;
 its exact record is `post-install-retirement.json`. Older November3 retirements

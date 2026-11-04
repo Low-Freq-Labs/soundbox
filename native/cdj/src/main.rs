@@ -280,6 +280,9 @@ fn main() -> Result<(),Box<dyn Error>> {
             let mut profile=rbl_onelibrary::settings::StickSettings::default();
             profile.device_name=request["name"].as_str().ok_or("device name required")?.to_owned();
             rbl_export::create_library(output,Some(&profile),&[],None)?;
+            // The upstream writer's local advisory lock is not a player asset.
+            // It must never enter the strictly enumerated USB publication plan.
+            std::fs::remove_file(output.join(".rbxport-write.lock"))?;
             inspect(output)?
         },
         "settings" if args.len()==4=>settings(&root,Path::new(&args[3]))?,

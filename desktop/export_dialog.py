@@ -1,12 +1,42 @@
 """Playlist/device selection and one queue over the existing guarded exporters."""
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox,
     QHBoxLayout, QLabel, QMessageBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from soundbox.manifest import playlist_key
 from .devices import device_facts, human
+from . import theme
+
+
+def _device_icon(ipod):
+    """Neutral, scalable device outlines; no system icons or device reads."""
+    pixmap=QPixmap(96,96);pixmap.setDevicePixelRatio(2);pixmap.fill(Qt.transparent)
+    painter=QPainter(pixmap);painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor(theme.TEXT),2,Qt.SolidLine,Qt.RoundCap,Qt.RoundJoin))
+    painter.setBrush(Qt.NoBrush)
+    if ipod:
+        painter.drawRoundedRect(QRectF(9,2,30,44),4,4)
+        painter.drawRoundedRect(QRectF(13,7,22,15),1,1)
+        painter.drawEllipse(QRectF(16,27,16,16));painter.drawEllipse(QRectF(21,32,6,6))
+    else:
+        painter.drawRoundedRect(QRectF(12,17,24,29),4,4)
+        painter.drawRect(QRectF(16,3,16,14))
+        painter.drawLine(21,7,21,11);painter.drawLine(27,7,27,11)
+    painter.end()
+    return QIcon(pixmap)
+
+
+class _DeviceChoices(QTreeWidget):
+    """Fill the panel evenly with up to five generous device choices."""
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        slots=max(1,min(5,self.topLevelItemCount()))
+        height=max(68,self.viewport().height()//slots)
+        for at in range(self.topLevelItemCount()):
+            self.topLevelItem(at).setSizeHint(0,QSize(0,height))
 
 
 class ExportDialog(QDialog):
@@ -20,7 +50,7 @@ class ExportDialog(QDialog):
         intro.setObjectName('SettingsSub');layout.addWidget(intro)
         columns=QHBoxLayout();columns.setSpacing(16);layout.addLayout(columns,1)
         self.playlists=self._column(columns,'Playlists',3)
-        self.devices=self._column(columns,'Connected devices',2)
+        self.devices=self._column(columns,'Connected devices',2,devices=True)
         folders={}
         for playlist in playlists:
             key=playlist_key(playlist)
@@ -39,11 +69,11 @@ class ExportDialog(QDialog):
             item.setCheckState(0,Qt.Unchecked)
             item.setToolTip(0,playlist.display_path)
             self._playlists[key]=item
-        self.playlists.expandAll()
         for target in devices:
             path=target['path']
             item=QTreeWidgetItem(self.devices,[target['name']])
             item.setFlags(item.flags()|Qt.ItemIsUserCheckable)
+            item.setIcon(0,_device_icon(target.get('kind') in ('stock_ipod','dual_boot','rockbox')))
             item.setCheckState(0,Qt.Checked if len(devices)==1 or path==preferred else Qt.Unchecked)
             item.setToolTip(0,f"{target['label']} · {human(target['free'])} free\n{path}")
             self._targets[path]=(item,target)
@@ -62,14 +92,18 @@ class ExportDialog(QDialog):
         self._changed()
 
     @staticmethod
-    def _column(layout,title,stretch):
+    def _column(layout,title,stretch,*,devices=False):
         card=QWidget();card.setObjectName('TrackDetails');box=QVBoxLayout(card)
         box.setContentsMargins(12,12,12,12)
         caption=QLabel(title);box.addWidget(caption)
-        tree=QTreeWidget();tree.setHeaderHidden(True)
+        tree=_DeviceChoices() if devices else QTreeWidget()
+        tree.setObjectName('ExportDevices' if devices else 'ExportPlaylists')
+        tree.setHeaderHidden(True)
         tree.setSelectionMode(QAbstractItemView.NoSelection)
         tree.setUniformRowHeights(True);tree.setIndentation(18)
-        tree.setStyleSheet('QTreeWidget { border: none; background: transparent; } QTreeWidget::item { min-height: 28px; }')
+        if devices:
+            tree.setRootIsDecorated(False);tree.setIndentation(0)
+            tree.setIconSize(QSize(44,44))
         box.addWidget(tree,1);layout.addWidget(card,stretch)
         return tree
 
@@ -120,7 +154,6 @@ class ExportSelectionMixin:
             lines=[f"{name}: {note}" for name,note in batch['results']]
             if batch['cancelled']:lines.append('Remaining exports cancelled.')
             QMessageBox.information(self,'Export finished','\n'.join(lines))
-            self._refresh_devices(force=True)
             return
         if self._device_operation_owned():
             QTimer.singleShot(100,self._start_next_export_target)

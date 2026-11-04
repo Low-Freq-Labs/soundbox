@@ -1,7 +1,8 @@
 # MP3 shared-analysis follow-up
 
 Started November 2, 2026 at Sonny's request. **The accepted CBR profile remains
-installed and enabled in personal build160/source release `4a3d29a`.**
+installed and enabled in personal build163.** Earlier source release `4a3d29a`
+and build160 are prior delivery evidence; this USB/UI update changes no MP3 authority.
 Its original production delivery was build155; the dated checkpoints below retain
 that history. It covers initial full BPM/Grid+Key/waveforms
 on bare unlocked MPEG-1/no-Info/Xing CBR, stereo44.1kHz. VBR, Info/gapless, mono
@@ -220,7 +221,7 @@ production-delivery/installed-import-check-readback.json.
 
 The then-active follow-up measured native command latency using existing private
 DB copies while Sonny kept SoundBox closed. That work and closed-app instruction
-are historical; the updated build160 is running for his use. The performance work
+are historical; leave the current runtime recorded in HANDOFF running. The performance work
 did not broaden the accepted MP3 publication scope.
 
 The subsequent native-command performance package was installed in personal155

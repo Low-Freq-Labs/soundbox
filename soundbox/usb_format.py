@@ -1,17 +1,22 @@
 """Explicit whole-USB formatting. Never used by discovery or normal export."""
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import plistlib
 import re
 import subprocess
+import time
 from .sync import assert_target_safe
 
 FORMATS = (('FAT32','FAT32 · widest player compatibility'),
            ('ExFAT','exFAT · newer players'))
+_LOG = logging.getLogger('soundbox')
 
 
 def _plist(*args):
+    started=time.monotonic()
     result=subprocess.run(['/usr/sbin/diskutil',*args],capture_output=True,check=True,timeout=15)
+    _LOG.info('USB format diskutil %s seconds=%.3f',' '.join(args),time.monotonic()-started)
     if len(result.stdout)>4*1024*1024:raise ValueError('Unexpected disk information')
     return plistlib.loads(result.stdout)
 
@@ -25,6 +30,8 @@ class FormatTarget:
     disk_identity: tuple
     capacity: int
     volumes: tuple[str,...]
+    reusable_partition: str = ''
+    filesystem: str = ''
 
 
 def capture(target, *, token, volume_uuid, sources=()):
@@ -60,8 +67,24 @@ def capture(target, *, token, volume_uuid, sources=()):
         volumes.append(str(root))
     if str(path) not in volumes:raise ValueError('USB volume is missing from its physical disk')
     identity=tuple(whole.get(k) for k in ('DeviceIdentifier','TotalSize','IORegistryEntryName','MediaName','DiskUUID'))
+    capacity=int(whole.get('TotalSize') or 0)
+    partitions=disks[0].get('Partitions',[])
+    filesystem=info.get('FilesystemType','').lower()
+    partition_type={'msdos':'DOS_FAT_32','exfat':'Windows_NTFS'}.get(filesystem)
+    # Recreating an already-correct map makes diskutil tear down and rediscover
+    # the whole disk. A same-filesystem quick erase needs only the existing
+    # partition. Require the normal full-capacity, first-partition MBR layout;
+    # every other layout still goes through whole-disk repartitioning.
+    reusable=''
+    if (disks[0].get('Content')=='FDisk_partition_scheme' and len(partitions)==1
+            and partitions[0].get('DeviceIdentifier')==disk+'s1'
+            and partitions[0].get('MountPoint')==str(path)
+            and partition_type and partitions[0].get('Content')==partition_type
+            and capacity>2*1024*1024
+            and capacity-2*1024*1024<=int(partitions[0].get('Size') or 0)<=capacity):
+        reusable=disk+'s1'
     return FormatTarget(str(path),(current.st_dev,current.st_ino),volume_uuid,disk,identity,
-                        int(whole.get('TotalSize') or 0),tuple(volumes))
+                        capacity,tuple(volumes),reusable,filesystem)
 
 
 def name_for(name, filesystem):
@@ -77,13 +100,20 @@ def name_for(name, filesystem):
 
 
 def format_usb(plan, name, filesystem, *, sources=()):
+    started=time.monotonic()
     name=name_for(name,filesystem)
     fresh=capture(plan.target,token=plan.mount[0],volume_uuid=plan.volume_uuid,sources=sources)
     if fresh!=plan:raise ValueError('The USB changed since the format dialog opened')
     # This is the only destructive command. The UI has already presented this
     # exact disk, all its volumes, chosen format and final name for confirmation.
-    result=subprocess.run(['/usr/sbin/diskutil','eraseDisk',filesystem,name,'MBRFormat',plan.disk],
-                          capture_output=True,text=True)
+    expected_fs='msdos' if filesystem=='FAT32' else 'exfat'
+    if plan.reusable_partition and plan.filesystem==expected_fs:
+        command=['/usr/sbin/diskutil','eraseVolume',filesystem,name,plan.reusable_partition]
+    else:
+        command=['/usr/sbin/diskutil','eraseDisk',filesystem,name,'MBRFormat',plan.disk]
+    erase_started=time.monotonic()
+    result=subprocess.run(command,capture_output=True,text=True)
+    _LOG.info('USB format %s disk=%s seconds=%.3f',command[1],plan.disk,time.monotonic()-erase_started)
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip()[-2000:])
     listing=_plist('list','-plist',plan.disk)
@@ -106,7 +136,6 @@ def format_usb(plan, name, filesystem, *, sources=()):
                 volumes.append(_plist('info','-plist',partition['DeviceIdentifier']))
     if len(volumes)!=1:raise RuntimeError('USB formatted; reconnect it to finish initializing settings')
     info=volumes[0]
-    expected_fs='msdos' if filesystem=='FAT32' else 'exfat'
     if (not info.get('VolumeUUID') or info.get('Internal') is not False
             or info.get('ParentWholeDisk',info.get('PartOfWhole'))!=plan.disk
             or info.get('DeviceIdentifier')!=partitions[0]['DeviceIdentifier']
@@ -114,4 +143,5 @@ def format_usb(plan, name, filesystem, *, sources=()):
             or info.get('FilesystemType','').lower()!=expected_fs
             or info.get('VolumeName')!=name):
         raise RuntimeError('USB formatted; reconnect it to finish initializing settings')
+    _LOG.info('USB format complete disk=%s seconds=%.3f',plan.disk,time.monotonic()-started)
     return info

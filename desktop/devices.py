@@ -17,7 +17,7 @@ from pathlib import Path
 from soundbox.device_profile import DeviceProfile, inspect_device
 from soundbox.paths import is_external_device_path
 
-MAX_DEVICES = 3
+MAX_DEVICES = 5
 
 
 def human(n) -> str:
@@ -225,6 +225,16 @@ def device_facts(path, *, cached_only: bool = False) -> DeviceFacts:
     )
 
 
+def forget_device_mount(path) -> None:
+    """Retire disconnected mount facts without opening any device path."""
+    key = str(path)
+    _EXTERNAL_CACHE.pop(key, None)
+    _FS_CACHE.pop(key, None)
+    _PROFILE_CACHE.pop(key, None)
+    _INFO_CACHE.pop(key, None)
+    _IPOD_FACTS_CACHE.pop(key, None)
+
+
 def refresh_device_mount(path) -> bool:
     """Forget path-keyed facts after a proven same-name remount and reprobe.
 
@@ -233,13 +243,8 @@ def refresh_device_mount(path) -> bool:
     mount; retaining the former profile/UUID/model cache would attach the old
     device's identity to it.
     """
-    key = str(path)
-    _EXTERNAL_CACHE.pop(key, None)
-    _FS_CACHE.pop(key, None)
-    _PROFILE_CACHE.pop(key, None)
-    _INFO_CACHE.pop(key, None)
-    _IPOD_FACTS_CACHE.pop(key, None)
-    return _is_external(Path(key))
+    forget_device_mount(path)
+    return _is_external(Path(path))
 
 
 def _external_volume_of(p):

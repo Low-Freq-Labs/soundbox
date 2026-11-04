@@ -244,8 +244,9 @@ class RefreshWorker(QThread):
 
 
 class DeviceScanWorker(QThread):
-    """Enumerate external devices + read each one's free space and sync drift OFF
-    the UI thread.
+    """Enumerate connection facts and iPod drift off the UI thread.
+
+    CDJ USBs have no drift state; their catalogs load only on browser requests.
 
     Touching a removable volume (os.statvfs, reading the manifest) can BLOCK for
     seconds on macOS fskit whenever the stick is busy — during our own export, or
@@ -375,33 +376,32 @@ class DeviceScanWorker(QThread):
             LOG.info(
                 "Device discovery detected %d new mount(s) in %.2fs",
                 len(self.new_paths), time.monotonic() - started)
-        if raw_profiles and self._defer_playlists and not self._capture_playlists():
+        # CDJ USBs are destinations for explicit playlist exports. Connection
+        # never compares the source library against their existing contents.
+        needs_playlists = any(profile.kind != 'generic_usb' for _, _, _, profile in raw_profiles)
+        if needs_playlists and self._defer_playlists and not self._capture_playlists():
             self.results = None
             return
         out = []
         for name, path, free, raw_profile in raw_profiles:
+            if self.cancellation.is_set() or self.isInterruptionRequested():
+                self.results = None
+                return
             drift = None
             profile = self._effective_profile(path, raw_profile)
             # Publish the first usable row with its actual sync status. The
             # disabled discovery row is already visible; dashboard preload must
             # not delay the first status check by another full read/pass.
-            if self.lib is not None and self._playlist_capture_error is None:
+            if profile.kind != 'generic_usb' and self.lib is not None and self._playlist_capture_error is None:
                 try:
-                    if profile.kind == 'generic_usb':
-                        from soundbox.cdj_export import status_hint
-                        facts = device_facts(path,cached_only=True)
-                        drift = status_hint(self.lib,path,token=self.mount_tokens.get(path,0),
-                            volume_uuid=facts.volume_uuid,all_playlists=self.extra,
-                            titles=self.title_overrides,artists=self.artist_overrides)
-                    else:
-                        dr = engine.device_drift(
-                            self.lib,
-                            path,
-                            self.extra,
-                            artist_overrides=self.artist_overrides,
-                            title_overrides=self.title_overrides,
-                        )
-                        drift = dr.count() if dr else 0
+                    dr = engine.device_drift(
+                        self.lib,
+                        path,
+                        self.extra,
+                        artist_overrides=self.artist_overrides,
+                        title_overrides=self.title_overrides,
+                    )
+                    drift = dr.count() if dr else 0
                 except Exception:  # noqa: BLE001 - a bad manifest never breaks the poll
                     drift = None
                 if (
@@ -442,19 +442,20 @@ class DeviceScanWorker(QThread):
                 from .usb_device_view import UsbSnapshot, read_usb_snapshot, read_native_usb_snapshot
                 cached = self.usb_views.get(path)
                 token = self.mount_tokens.get(path, 0)
-                changed=False
-                if profile.kind=='generic_usb' and cached is not None:
-                    from soundbox.cdj_usb import metadata_stamp
-                    try:changed=cached.error or cached.native_stamp!=metadata_stamp(path,token)
-                    except (OSError,ValueError):changed=True
-                if (cached is None or cached.mount_token != token
-                        or path in self.new_paths or path in self.usb_requests or changed):
+                invalid = cached is None or cached.mount_token != token or path in self.new_paths
+                # Native catalogs are read only when the user opens the USB
+                # browser or explicitly refreshes it, never for idle status.
+                requested = path in self.usb_requests
+                if requested or (profile.kind != 'generic_usb' and invalid):
                     try:
                         reader = read_native_usb_snapshot if profile.kind == 'generic_usb' else read_usb_snapshot
                         cached = reader(path, token, device_facts(path, cached_only=True))
                     except Exception as exc:
                         cached = UsbSnapshot(Path(path), token, DeviceFacts(), error=str(exc))
-                self.usb_snapshots[path] = cached
+                elif invalid:
+                    cached = None
+                if cached is not None:
+                    self.usb_snapshots[path] = cached
             out.append((name, path, free, drift, profile))
         log = LOG.info if out else LOG.debug
         log(

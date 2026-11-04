@@ -1,7 +1,7 @@
 # Native CDJ USB export
 
-Updated November4, 2026 for the selected-export worktree; installed provenance
-and pending release checks are in HANDOFF.
+Updated November4, 2026 for installed build163 and selected-only USB exports;
+completed release/installation checks and exact provenance are in HANDOFF.
 The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
 and waveforms from his export. Exact firmware, the wider performance/control
@@ -16,6 +16,11 @@ records, other playlists, media and settings, and applies the requested playlist
 changes. Its manifest binds its own files and playlist selections; it does not
 confer exclusive authority over the native library. A changed native catalog is
 not an ownership error or a reason to clear the collection or hash old songs.
+Generic USBs have no Sync-needed, pending-change or database-status badge.
+Connection and idle polling do not compare the desktop library with USB contents
+or read native catalogs. Opening the USB browser requests its bounded metadata
+snapshot; explicit export reads only the catalogs and affected paths needed to
+publish the selected playlists while preserving the existing native library.
 Native track identities include the desktop library ID. Tag IDs are mapped into
 the current USB namespace so different source libraries cannot replace each
 other's definitions or memberships.
@@ -49,12 +54,14 @@ native analysis fail explicitly; there is no silent omission/transcoding.
 
 A playlist drop authorizes its pinned USB and continues straight through to
 publication. Export opens a two-column selector: playlists/folders on the left,
-connected USBs/iPods on the right. A sole target is preselected; multiple devices
+connected USBs/iPods on the right. Folders start collapsed and open on demand.
+A sole target is preselected; multiple devices
 can be checked. One action queues each checked target through the existing
 serialized device lane, with source identity/playlist rebinding and target
 mount/UUID guards before each target. Cancellation clears remaining targets;
-iPod-specific first-generation review remains in place. Only selected playlists
-are reconciled;
+iPod-specific first-generation review remains in place. USB Export and drops
+are additive to the existing library: only the selected playlists are reconciled,
+without applying later source edits to unrelated previously exported playlists;
 Save to USB applies explicit preference edits. None adds a second prepared-plan
 confirmation. Drops prepare selected new/changed inputs only. Unchanged native
 records may be adopted by source identity, counters and metadata, without reading
@@ -70,7 +77,7 @@ reused only under the current render policy, exact captured input signatures and
 fresh matching committed catalog/profile bytes; source, target and recovery
 guards still run. An external player-profile edit can require one manifest-only
 inventory refresh during explicit export, preserving all live catalog, media
-and profile bytes. Profile-only changes do not signal song/playlist drift.
+and profile bytes. These are explicit-export optimizations, never idle sync checks.
 The track menu immediately right of Q, introduced in the October29 stage,
 also exports the loaded native song directly to the collection, including on
 an empty USB, with no synthetic playlist. Its mount token/UUID survives discovery
@@ -101,7 +108,17 @@ retired from same-volume recovery only after durable manifest/journal commit;
 interrupted retirement resumes, reclaiming USB space. New copies still require
 peak transaction free space before commit. Worker ownership
 lasts through QThread.finished; shutdown drains active work with Qt events alive.
-An idle device can always request normal macOS eject.
+Completion invalidates the browser cache without starting a final USB read.
+After a successful write, stale visible song rows are cleared with a browse
+notice while settings drafts and view state survive. A deliberate USB/tab click
+loads current metadata once; internal tab restoration does not. Failed, cancelled
+and unchanged operations retain their previous view. An idle device can always
+request normal macOS eject. Successful eject removes its row/caches in memory,
+without starting another scan. Eject submits only the
+normal macOS request; it never reads catalogs, verifies files or computes sync
+state. An already-running device worker retains ownership until it finishes,
+and no new inspection is started for eject. macOS refusal is reported without
+force-unmount.
 
 ## USB controls and track information
 
@@ -112,6 +129,8 @@ panels. Native name differs from the real macOS volume name. Shared headers use
 Actual USB-song activation validates selected device audio/analysis in the shared
 read lane and loads a separate device ID without substituting Mac audio or source
 cue overlays. Views retain per-volume tab, hierarchy, selection and scroll.
+In the playlist browser, clicking a folder or playlist expands/collapses it;
+only song rows receive selection highlighting. Checkbox actions remain separate.
 
 Category and Sort support enabling, disabling and reordering their lists while
 retaining mandatory native entries. Column sets the default native right-hand
@@ -162,11 +181,16 @@ The generic USB menu is Export, Import “My Settings”, Reformat
 USB…, Eject. Import promotes recognized USB settings into SoundBox Global settings.
 Reformat presents the real volume name, capacity/affected mounted partitions and
 FAT32/exFAT choice, then requires its destructive confirmation. It revalidates the
-physical external USB and source separation (including native analysis paths),
-formats MBR, verifies the resulting physical identity/map/filesystem, and initializes both
+physical external USB and source separation (including native analysis paths).
+A same-filesystem quick erase reuses an existing full-capacity, single first MBR
+partition only when its partition type matches FAT32 or exFAT. Other layouts and
+filesystem changes rebuild the MBR map. It verifies the resulting physical
+identity/map/filesystem and initializes both
 native catalogs with Global My Settings. HFS+ is not offered: its hidden native
-layout remains outside the current writer boundary. The format command has mock
-coverage but has not been exercised by the agent on hardware.
+layout remains outside the current writer boundary. Probe/erase timings are logged
+separately. Fresh native initialization excludes the renderer's workspace lock
+from the candidate file set. Current hardware timing and acceptance are recorded
+in HANDOFF; older mock-only format validation describes the prior release.
 
 `native/cdj` contains the pinned upstream runtime/dev closure; vendor verification
 checks243 original crate files. Runtime changes live in SoundBox's wrapper modules.

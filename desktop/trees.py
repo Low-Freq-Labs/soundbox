@@ -158,6 +158,47 @@ class BrowserDetailTree(NoTypeAhead, QTreeWidget):
             row += 1
 
 
+class TrackBrowserTree(BrowserDetailTree):
+    """Container rows toggle on one click; only track rows can be selected.
+
+    Callers remove ItemIsSelectable from folders/playlists. Keeping the current
+    item independent of selection preserves keyboard navigation and playlist
+    actions without painting a selected container.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setExpandsOnDoubleClick(False)
+        self._container_press = None
+
+    def mousePressEvent(self, event):
+        position = event.position().toPoint()
+        index = self.indexAt(position)
+        item = self.itemFromIndex(index)
+        self._container_press = None
+        if (event.button() == Qt.LeftButton and item is not None
+                and not item.flags() & Qt.ItemIsSelectable):
+            option = QStyleOptionViewItem()
+            option.initFrom(self)
+            option.rect = self.visualRect(index)
+            self.itemDelegateForIndex(index).initStyleOption(option, index)
+            check = self.style().subElementRect(QStyle.SE_ItemViewItemCheckIndicator, option, self)
+            if not (item.flags() & Qt.ItemIsUserCheckable and check.contains(position)):
+                self._container_press = (QPersistentModelIndex(index), item.isExpanded())
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        press = self._container_press
+        self._container_press = None
+        super().mouseReleaseEvent(event)
+        if (event.button() == Qt.LeftButton and press is not None and press[0].isValid()
+                and self.indexAt(event.position().toPoint()) == press[0]):
+            item = self.itemFromIndex(QModelIndex(press[0]))
+            # The native branch hit test already toggles on press.
+            if item.isExpanded() == press[1]:
+                item.setExpanded(not press[1])
+
+
 class GraveyardTree(NoTypeAhead, QTreeWidget):
     """Read-only audition selection; native text entry must not claim held C."""
 

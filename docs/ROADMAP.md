@@ -5,13 +5,30 @@ verification and preservation baseline. This roadmap describes current behavior
 and remaining work. Older release hashes, test counts and original pending gates
 are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11-01.md).
 
+## USB simplification follow-up — November4
+
+Personal build163 is installed, normally reopened and verified. The complete
+2595-test gate, both signed/isolated package profiles and fresh curated-state/
+authority/icon preservation checks pass. HANDOFF records exact runtime identity. Generic USBs now
+have selected-playlist export only, no sync/pending display or idle source/catalog
+comparison, browser metadata on request, and no completion/eject verification.
+The export selector starts collapsed, follows the live theme and gives up to five
+devices large icons/names distributed across the panel. USB/iPod playlist-browser
+containers toggle without highlighting; progress text respects the saved accent
+text color. Source capture queries selected cue/playlist rows only. Formatting
+has a guarded same-filesystem quick-erase path, and empty native initialization
+now excludes the renderer's local advisory lock. Both authorized test drives passed
+physical format/fixture-export/update/no-op checks; this is not new player-firmware
+or iPod acceptance. HANDOFF records exact timing, completed installation/validation
+and remaining physical acceptance boundaries.
+
 ## Delivered personal runtime
 
-Installed personal build160 retains the earlier build155 features below and
+Installed personal build163 retains the earlier build155 features below and
 includes the export, broader efficiency, correctness and UI polish passes, plus
 the November4 multi-device Export selector, selected-member cleanup, themed wait
-wheel and format-review safeguards. The current
-delivery passes2564offscreen/Cocoa tests, both signed package profiles and
+wheel and format-review safeguards, plus the USB simplification above. The current
+delivery passes2595offscreen/Cocoa tests, both signed package profiles and
 installed isolated/normal startup with exact curated-state checks.
 Exact binary/source provenance belongs in HANDOFF. It includes:
 
@@ -125,9 +142,10 @@ metadata recovery are installed; exact current validation/provenance is in
 [HANDOFF](HANDOFF.md), with the detailed workload limits in
 [performance](performance-audit.md). Source/authority/payload/recovery guards stay
 fresh. Sonny approved installation of the export efficiency pass below and manually
-closed build155. Build160 is installed and normally reopened; source changes
-are published under Sonny's wrap-up request. The signed installed base remains
-unchanged; this publication does not restamp or reinstall the running app.
+closed build155. Build160 was installed and normally reopened; that earlier
+source was published under Sonny's wrap-up request without restamping/reinstalling
+its running bundle. Build163 above now supersedes that runtime; its new local
+changes are authorized for publication by Sonny's subsequent November4 wrap-up.
 
 The native database/sidecars are the shared musical authority; intentions and
 captured detector records are provenance, not a competing final musical store.
@@ -156,10 +174,10 @@ Rekordbox and SoundBox are equal exporters. Preserve unrelated native USB
 playlists, records and media across either application’s writes. Dedicated CDJ
 publication is implemented for classic Device Library plus Device Library Plus; playlist drops
 start directly. Sonny reports playback, artwork and waveforms working.
-The November4 delivery adds a multi-device Export selector and selected-playlist
+The earlier November4 delivery added a multi-device Export selector and selected-playlist
 reference-counted media cleanup, with per-format unrelated-catalog preservation.
-Source release `4a3d29a` and installed runtime `7bbe8577…` are recorded separately
-in HANDOFF. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
+That source release `4a3d29a` and its prior installed runtime `7bbe8577…`
+are separate historical identities; HANDOFF records the current build163 runtime. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
 physical coverage remain open. See [the CDJ contract](cdj-usb-export.md).
 
 Stock/dual/Rockbox follow-up still requires real reconnect/power-cycle, playing

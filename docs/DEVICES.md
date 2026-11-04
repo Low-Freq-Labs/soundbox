@@ -1,7 +1,7 @@
 # SoundBox device layouts
 
-Status checked November4,2026 against source release `4a3d29a` and installed
-runtime `7bbe8577…`. Older audits and hardware observations below retain their
+November4,2026 USB follow-up source changes are described below; installed
+provenance remains separate in HANDOFF. Older audits and hardware observations retain their
 dated scope; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
@@ -33,8 +33,10 @@ Unknown or failed probes never grant extra capability.
 Device-specific export work waits for detection. Launch keeps the mount watcher
 and read-only discovery active, while full export backends and artwork cache
 indexes load on demand. Empty scans do not construct export playlists. After
-detection, the worker obtains GUI-captured inputs before checking drift; capture
-failure remains `Sync status pending`. Canceled/stale captures cannot start
+detection of an iPod/Rockbox target, the worker obtains GUI-captured inputs before
+checking drift; capture failure remains `Sync status pending` for those profiles.
+Generic USB detection captures no export playlists and reads no native catalog
+for drift. Canceled/stale captures cannot start
 dashboard preload. Already loaded modules and reusable local caches may remain
 in memory after disconnect; export artwork preparation stops cooperatively.
 
@@ -49,6 +51,11 @@ one target is preselected and several targets may be checked. One action queues
 those targets through the existing serialized exporters, with source/playlist and
 mount/UUID checks before each target. Cancellation/shutdown clear pending targets;
 existing iPod first-generation plan review remains intact.
+Folders start collapsed. Large themed device rows show USB/iPod icons. Generic
+USBs have no Sync-needed, pending-change or database-state badges. Explicit
+exports update the selected playlists only; unrelated source changes are not
+propagated into previously exported playlists. Native catalogs are read only as
+needed for the selected update or an explicit browser visit.
 
 Replacing a selected USB playlist removes its old memberships and prunes removed
 songs only when no remaining playlist in either native format uses them. Shared
@@ -70,14 +77,18 @@ The generic USB context menu is Export, Import My Settings, Reformat USB, Eject.
 Reformat confirms the physical external USB, real name and FAT32/exFAT MBR choice.
 Source separation includes native analysis locations; post-erase checks verify the
 physical disk, MBR, one first data partition, filesystem, volume and mount before
-initialization. HFS+ remains excluded. Mock tests do not establish physical
-format acceptance.
+initialization. A same-filesystem quick erase reuses an existing full-capacity
+single first MBR partition only when its partition type also matches. Other
+layouts or filesystem changes repartition. Per-probe/erase timings are logged.
+HFS+ remains excluded. Current physical format evidence is in HANDOFF; the prior
+release's format tests were mock-only.
 
 Headers use26 points; detail/song rows and empty stripes match the regular24-point
 browser. USB columns share browser state. Activation validates the selected actual
 USB audio/analysis in the device lane and uses a separate device track ID without
 Mac audio/source cue overlays or desktop write authority. Views remember per-volume
-tab, hierarchy, selection and scroll. Metadata stamps and app activation refresh
+tab, hierarchy, selection and scroll. Folder/playlist clicks expand or collapse;
+only track rows receive selection highlighting. Explicit browser requests refresh
 native snapshots when switching exporters. Display-only snapshots include stable
 WAL pages copied locally, without live USB SQL or SHM locks. Publication still
 rejects active/unreconciled companions. Worker ownership lasts through finished.
@@ -93,11 +104,13 @@ existing directory cannot strand detection behind probe backoff. These are hints
 never external-device/write authority. A busy lane retains the request and retries
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
-retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
-three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
-Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
+three-second poll. Generic USB polling observes mount/storage facts without source
+comparison or catalog reads. Ordinary unmounted folders retain the 30-second attachment grace.
+Verified external mounts appear disabled as `NAME · Checking…`. The first iPod/Rockbox scan
 computes sync drift before publishing the selectable row at QThread.finished;
-unknown/failed checks say `Sync status pending`, never imply a clean result.
+unknown/failed iPod/Rockbox checks say `Sync status pending`, never imply a clean result.
+Generic USBs become usable after mount/filesystem detection with no sync badge.
 Stock/dual dashboard preload follows in the same serialized device lane, with
 loading only in the bottom status after the row becomes ready. Successful preload
 clears that status directly, without another immediate drift scan. A cached
@@ -108,7 +121,7 @@ Remounts invalidate stale views.
 ## Lifecycle correction under hardware acceptance
 
 An idle mount is ejectable regardless of missing media, drift, or an earlier
-failed Sync. Eject performs no library verification; it releases the browser
+failed Sync. Eject performs no library verification or final catalog read; it releases the browser
 root and asks macOS for normal eject. A background read finishes first, with
 replacement polls suppressed. Active writes remain owned until their safe
 completion/rollback boundary. A macOS refusal is reported without a forced
@@ -643,8 +656,9 @@ catalog. Parsing runs off the UI thread and eject refuses to race it.
 Non-stock USB/Rockbox devices now use **Overview** and **Playlists** tabs in the
 same device header and dashboard styling. Overview reuses the iPod's alternating
 2×2 detail panels: Identity, Storage, Playlists and SoundBox. Identity/storage
-facts come from the verified mount-probe cache; free space and sync status use the
-existing completed device scan. Unknown/error states remain explicit.
+facts come from the verified mount-probe cache; free space uses the existing
+completed device scan. Rockbox sync status remains separate. Generic USBs show
+export readiness without sync or pending-change status. Read errors remain explicit.
 
 Generic USBs prefer the bounded native CDJ snapshot described above. Otherwise,
 Playlists displays M3U/M3U8 files below `/Playlists`, including nested folders.
@@ -655,12 +669,15 @@ The M3U reader never traverses `/PIONEER` and omits references into it or outsid
 the volume. Empty copy explicitly names `/Playlists`. Symlinked playlist files or
 folders and remount/changed-file reads produce an unavailable state.
 
-Reads run only in the existing serialized DeviceScanWorker: initial connection,
-remount, explicit Playlists selection and forced post-operation refresh. Ordinary
-polls reuse the immutable playlist snapshot, updating the existing free/drift
-presentation without rereading M3U8 payloads. Cache publication waits for
-QThread.finished and stale mount tokens retire snapshots. Overview selection and
-expanding rows perform no removable-file I/O. Explicit song loading uses the same
+Reads run only in the existing serialized DeviceScanWorker. Rockbox snapshots
+may load on connection/remount; generic USB catalogs load only for an explicit
+browser request, never for connection or idle polling. Successful generic USB writes replace stale song rows with a browse notice
+while preserving settings drafts/view state, without a post-operation read.
+Rockbox polls reuse immutable snapshots and refresh mount/storage facts; generic
+USBs have no ordinary content poll or source-event scan. Cache publication waits
+for QThread.finished and stale mount tokens retire snapshots. Expanding rows and
+internal page restoration perform no removable-file I/O. Deliberate USB/tab
+clicks request one serialized metadata refresh. Explicit song loading uses the same
 serialized device lane and read-only path validation; it grants no write authority.
 Native Export/internal recovery follow the dedicated CDJ contract.
 Reformat has its own destructive confirmation; stock/dual/Rockbox guards remain separate.

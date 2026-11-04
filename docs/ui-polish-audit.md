@@ -8,7 +8,35 @@ This trades an incomplete window for a complete first frame; a contended artwork
 lock can still delay opening. It adds no artwork prefetch to track loading.
 
 The November3 follow-up was installed as build160, runtime `b0ccb1ab…`. The
-November4 update is runtime `7bbe8577…` and includes the export work below. [HANDOFF](HANDOFF.md) records exact validation and provenance.
+earlier November4 update is runtime `7bbe8577…` and includes the prior Export
+selector/cleanup work recorded here. The latest USB/theme follow-up is installed as build163;
+[HANDOFF](HANDOFF.md) records its exact replacement runtime.
+
+## USB/theme follow-up — November4
+
+The subsequent source fixes the reported export/progress/USB browser presentation:
+export folders start collapsed, current/live theme colors reach their checkboxes,
+and one through five connected devices divide the panel with larger labels and
+USB/iPod outline icons. Progress paints the saved accent-text color only over
+the filled region, with normal light text over the empty region. Playlist/folder
+rows in USB/iPod track browsers expand/collapse without selection highlighting;
+track selection, keyboard navigation, stock reorder and checked deletion remain.
+
+A source-wide theme scan covered all60desktop Python files, with deeper inspection
+of the16modules containing color/style-bearing runtime paths and the theme
+controller. Geometry-only inline styles had bypassed dynamic theme rules in the
+export selector, hex editor and duplicate dialog; those rules now live in the
+central stylesheet. The artwork-review spinner also follows the accent. Remaining
+fixed colors describe transport/cue/waveform data, native rekordbox colors, neutral
+artwork/logo details, defaults or test fixtures; they are not accent overrides.
+This is a theme-focused scan, not another complete algorithm/dependency review.
+
+Isolated white/black progress renders at0/25/48/50/65/100percent, current/live
+white/blue/orange controls, and one/two/five-device panels were inspected. The
+full main-window render also preserves the selected white accent/black lettering.
+Focused offscreen/Cocoa gestures cover label/branch clicks, keyboard expansion,
+checkboxes and track-only highlighting. No input was sent to the running app.
+HANDOFF records final full validation and whether these changes are installed.
 
 ## Fixed presentation problems
 
@@ -134,7 +162,7 @@ Exact removed payloads restore on pre-commit failure; after durable commit their
 recovery copies are retired, with resumable interrupted cleanup. Peak USB space
 for new copies is still required until commit. HANDOFF records release status.
 
-November4 delivery is installed and normally reopened, with2564reconciled
+The earlier November4 delivery passed installation/normal reopen, with2564reconciled
 offscreen/Cocoa tests,39additional focused Cocoa cases,675frozen inputs and
 160personal/156public packaged-module parity. A cadence check failed at4%battery
 and passed focused/full native reruns on AC with unchanged source; exact scope

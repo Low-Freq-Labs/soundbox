@@ -108,13 +108,15 @@ class CdjDeviceMixin:
         library, titles, artists = deepcopy(self.lib), dict(self.titles), dict(self.overrides)
         playlists = deepcopy(tuple(playlists))
         standalone = deepcopy(tuple(standalone))
-        all_playlists = deepcopy(self._sync_playlists())
+        # Additive publication touches only this explicit selection. Building
+        # Collection/Artists export views would sort/copy unrelated library rows.
+        all_playlists = ()
         global_profile = deepcopy(self.settings.get('cdj_my_settings',{}))
         if settings is None:
             operation = lambda cancel, progress: cdj_export.plan_export(
                 library, playlists, dev, token=token, volume_uuid=facts.volume_uuid,
                 all_playlists=all_playlists, titles=titles, artists=artists, art_cache=self.art_cache,
-                should_cancel=cancel, on_progress=progress, recovery_root=recovery, additive=from_drop,
+                should_cancel=cancel, on_progress=progress, recovery_root=recovery, additive=True,
                 global_profile=global_profile,standalone=standalone)
         else:
             changes = dict(settings)
@@ -176,9 +178,23 @@ class CdjDeviceMixin:
             self._flash_status('CDJ USB operation stopped', 15)
         else:
             self._flash_status('CDJ export cancelled — nothing written' if cancelled else
-                               'CDJ USB already up to date' if unchanged else 'CDJ USB updated ✓', 15)
-        self._usb_view_requests.add(dev)
-        self._refresh_devices(force=True)
+                               'Selected playlists already exported' if unchanged else 'Playlist export complete ✓', 15)
+        # The committed export is the result. Invalidate displayed catalog
+        # rows without a final USB read, retaining the user's settings drafts.
+        # Failures/unchanged exports keep their previous presentation intact.
+        if not isinstance(result, Exception) and not cancelled and not unchanged:
+            from dataclasses import replace
+            from .usb_device_view import UsbSnapshot
+            previous = self._usb_view_cache.get(dev)
+            notice = 'USB updated. Select a tab to browse its contents.'
+            snapshot = (replace(previous, playlists=(), error='', notice=notice)
+                        if isinstance(previous, UsbSnapshot) else
+                        UsbSnapshot(Path(dev), self._device_mount_tokens.get(dev, 0),
+                                    device_facts(dev, cached_only=True), notice=notice))
+            self._usb_view_cache[dev] = snapshot
+            self._usb_view_requests.discard(dev)
+            if dev == self._current_device_path:
+                self._present_usb_device(dev)
         self._update_device_action_state()
 
     def _apply_usb_settings(self, changes):
@@ -188,6 +204,8 @@ class CdjDeviceMixin:
 
     def _sync_usb_my_settings(self, snapshot):
         from soundbox import my_settings
+        if getattr(snapshot, 'notice', ''):
+            return
         native = snapshot.native if snapshot else None
         current = my_settings.values(native.files) if native else {}
         if current and not self.settings.get('cdj_my_settings'):
@@ -436,7 +454,7 @@ class CdjDeviceMixin:
 
     def _load_usb_song(self, song):
         snapshot = self.usb_device_pages._snapshot
-        if not hasattr(snapshot,'target') or snapshot.error:
+        if not hasattr(snapshot,'target') or snapshot.error or snapshot.notice:
             return
         dev = str(snapshot.target)
         if self._defer_device_operation_until_scan_finishes(lambda:self._load_usb_song(song)):

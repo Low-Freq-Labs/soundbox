@@ -361,14 +361,16 @@ theme-sized art) · `rockbox_config` (read-only Rockbox theme/database observati
 November3 efficiency pass: desktop imports keep full stock/dual/CDJ/filesystem
 export backends out of startup. Export caches initialize on first use. The
 lightweight mount watcher and read-only discovery remain active. Empty discovery
-does not build Collection/Artists export playlists; a detected target requests
+does not build Collection/Artists export playlists; a detected iPod/Rockbox target requests
 one GUI-thread capture of Library, extra playlists and title/artist overrides
 before drift inspection. The worker waits cancellably for queued delivery;
 capture failure retains unknown status, and stale/shutdown requests cancel.
 Only stock-capable detection supplies the stock shadow. Stock artwork warming
 starts after attachment, coalesces library-load requests and stops on disconnect,
 retaining the worker through finished delivery. First ready rows still carry
-actual drift; deferred inputs never grant device-write authority.
+actual iPod/Rockbox drift; deferred inputs never grant device-write authority.
+Generic USB detection captures no export playlists and performs no source/native
+catalog comparison. Its browser reads a bounded catalog snapshot only on request.
 
 `device_operations` is the Qt-independent serialized I/O authority, with mount
 identity, command, phase, cancellation and typed result records. The desktop
@@ -476,6 +478,11 @@ the existing serialized exporters. Cancellation/shutdown clear pending targets.
 Selected playlist replacement prunes only removed members unused by every other
 USB playlist in both catalogs. Exact removed assets are rollback-backed until
 durable commit, then their transient recovery bytes are retired to free space.
+All generic USB exports are additive to unrelated existing playlists. They never
+reconcile other source playlists simply because those playlists were exported
+earlier. Export starts with collapsed folders and uses themed device rows with
+USB/iPod icons. Playlist-browser containers toggle on click without selection;
+track rows alone are highlighted.
 cdj_incremental freezes only selected changed/new
 inputs and merges copied native catalogs through native/cdj/src/merge.rs. Prior
 payload contracts remain inventory, not a fresh audit. Input signatures/per-playlist
@@ -483,9 +490,12 @@ hints are separate from ownership. Newly captured audio is placed directly in th
 local partial output; the helper accepts only that exact Contents file set before
 building catalogs/analysis, and parent SHA-256 inventory proves unchanged audio.
 The packaged helper comes from build/cdj/release, never the debug profile. Source/candidate preparation and publication remain
-in the serialized device lane through QThread.finished. Connection/remount or an
-explicit request refreshes cached snapshots; ordinary polling uses a small
-manifest/RAM-input drift hint. Backend UUID/mount authority is absent from the
+in the serialized device lane through QThread.finished. Generic USB catalog
+snapshots refresh on explicit browser requests; connection/remount invalidates
+old snapshots without reading catalogs. Generic USBs have no idle drift poll or
+sync/pending-state UI. Completion invalidates the cached snapshot without a final
+read. Eject submits the normal diskutil request after any already-owned worker
+finishes, and starts no verification or final read. Backend UUID/mount authority is absent from the
 Identity rows. No USB tab roots QFileSystemModel at the mount. See the CDJ guide
 for staging space, current-native catalog adoption, profile preservation and recovery limits.
 The shared device header is 26 points; BrowserDetailTree continues the regular
@@ -870,8 +880,9 @@ Planning still audits every MHIT→MHII→MHNI offset/size; source media and tag
 are read-only. The writer
 is restricted to stock-only MA446, scheme-zero iTunesDB, and MP3/WAV.
 `device_profile` derives the export pipeline from the mounted layout. Stock-only
-MA446 routes to the guarded database planner; Rockbox-only/generic FAT32 routes
-to the filesystem planner; and a FAT32 MA446 containing both `.rockbox` and
+MA446 routes to the guarded database planner; Rockbox-only FAT32 routes
+to the filesystem planner; generic FAT32/exFAT USBs use the dedicated CDJ planner;
+and a FAT32 MA446 containing both `.rockbox` and
 `iPod_Control` routes exclusively to `dual_ipod`. The shipped composite planner
 places stock-safe media once under `iPod_Control/Music/Fxx`, indexes it in
 iTunesDB, and references the same file from Rockbox playlists. Stock-unsafe but
@@ -935,11 +946,13 @@ existing directory cannot strand detection behind probe backoff. These are hints
 never external-device/write authority. A busy lane retains the request and retries
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
-retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
-three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
-Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
+three-second poll. Generic USB polling updates mount/storage facts only and never
+reads native catalogs for sync status. Ordinary unmounted folders retain the 30-second attachment grace.
+Verified external mounts appear disabled as `NAME · Checking…`. The first iPod/Rockbox scan
 computes sync drift before publishing the selectable row at QThread.finished;
-unknown/failed checks say `Sync status pending`, never imply a clean result.
+unknown/failed iPod/Rockbox checks say `Sync status pending`, never imply a clean result.
+Generic USB rows become usable after mount/filesystem detection with no sync badge.
 Stock/dual dashboard preload follows in the same serialized device lane, with
 loading only in the bottom status after the row becomes ready. Successful preload
 clears that status directly, without another immediate drift scan. A cached
@@ -951,11 +964,17 @@ Remounts invalidate stale views.
 Device transactions share one UI ownership contract. Custom result signals may
 record a worker result, but only `QThread.finished` clears the owning attribute
 and may advance the UI. Composite planning maps to 0–30%, device
-mutation/verification to 30–80%, and post-operation dashboard, sidebar/drift,
+mutation/verification to 30–80%, and its post-operation iPod dashboard, sidebar/drift,
 and ownership release to
 80–100%. `100%` and a completion dialog describe terminal operation state; device row
 visibility separately describes connection state. A failed required final read
-shows a final-refresh failure instead of running the success callback.
+shows a final-refresh failure instead of running the success callback. Generic USB
+export has no required post-commit dashboard/catalog read; worker retirement is
+its completion boundary. Formatting reuses a correct full-capacity first MBR
+partition for same-filesystem erase only when the partition type also matches;
+otherwise it repartitions. Fresh physical/source guards and postconditions remain,
+with per-probe/erase timing logs. Native initialization removes its local renderer
+lock before exposing the candidate file set.
 Preloads are scoped to path plus the mount root's filesystem device token, so a
 same-name remount invalidates and reprobes path-keyed disk/profile facts. Model
 confirmation persists against the iPod library persistent ID plus macOS volume

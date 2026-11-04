@@ -96,6 +96,49 @@ class UsbFormatTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'changed'):usb_format.format_usb(plan,'USB','FAT32')
             run.assert_not_called()
 
+    def test_full_size_single_mbr_partition_can_be_quick_erased(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+        plan,listing,whole,info=self.format_fixture()
+        target=plan.target
+        whole.update(TotalSize=64*1024*1024,DiskUUID='old-map-id')
+        info.update(MountPoint=target,VolumeUUID=plan.volume_uuid)
+        partition=listing['AllDisksAndPartitions'][0]['Partitions'][0]
+        partition.update(MountPoint=target,Size=whole['TotalSize']-1024*1024,Content='DOS_FAT_32')
+        for layout,expected in (('full','disk99s1'),('small',''),('gpt',''),('second',''),('wrong-type','')):
+            with self.subTest(layout=layout):
+                candidate=deepcopy(listing)
+                row=candidate['AllDisksAndPartitions'][0]
+                if layout=='small':row['Partitions'][0]['Size']=16*1024*1024
+                if layout=='gpt':row['Content']='GUID_partition_scheme'
+                if layout=='second':row['Partitions'][0]['DeviceIdentifier']='disk99s2'
+                if layout=='wrong-type':row['Partitions'][0]['Content']='Windows_NTFS'
+                with mock.patch.object(Path,'is_mount',return_value=True), \
+                     mock.patch.object(Path,'stat',return_value=SimpleNamespace(st_dev=91,st_ino=92)), \
+                     mock.patch.object(Path,'exists',return_value=False), \
+                     mock.patch('soundbox.usb_format.assert_target_safe'), \
+                     mock.patch('soundbox.usb_format._plist',side_effect=[info,whole,candidate]):
+                    captured=usb_format.capture(target,token=91,volume_uuid=plan.volume_uuid)
+                self.assertEqual(captured.reusable_partition,expected)
+                self.assertEqual(captured.filesystem,'msdos')
+
+    def test_same_filesystem_reuses_verified_partition_but_format_changes_repartition(self):
+        from dataclasses import replace
+        for filesystem,command in (('FAT32','eraseVolume'),('ExFAT','eraseDisk')):
+            with self.subTest(filesystem=filesystem):
+                plan,listing,whole,info=self.format_fixture()
+                plan=replace(plan,reusable_partition='disk99s1',filesystem='msdos')
+                if filesystem=='ExFAT':
+                    info.update(VolumeName='My USB',FilesystemType='exfat')
+                    listing['AllDisksAndPartitions'][0]['Partitions'][0]['VolumeName']='My USB'
+                with mock.patch('soundbox.usb_format.capture',return_value=plan), \
+                     mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)) as run, \
+                     mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
+                    usb_format.format_usb(plan,'My USB',filesystem)
+                expected=['/usr/sbin/diskutil',command,filesystem,info['VolumeName']]
+                expected+=['disk99s1'] if command=='eraseVolume' else ['MBRFormat','disk99']
+                self.assertEqual(run.call_args.args[0],expected)
+
     def test_post_format_wrong_disk_map_filesystem_or_parent_prevents_initialization(self):
         from copy import deepcopy
         for area,key,value in (('map','Content','GUID_partition_scheme'),('disk','TotalSize',512),

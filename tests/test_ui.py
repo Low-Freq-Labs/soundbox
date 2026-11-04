@@ -800,6 +800,22 @@ class DeviceLabels(unittest.TestCase):
         pulse.assert_not_called()
         critical.assert_called_once()
 
+    def test_usb_tab_click_refreshes_an_already_checked_button_but_programmatic_check_does_not(self):
+        previous = _win.device_tab_group.checkedButton()
+        button = _win.device_tab_buttons[1]
+        try:
+            _win.device_tab_buttons[0].setChecked(True)
+            with mock.patch.object(_win, '_set_device_tab') as choose:
+                button.setChecked(True)
+                choose.assert_called_once_with(1)
+                choose.reset_mock()
+                button.click()
+                button.click()
+                self.assertEqual(choose.call_args_list, [mock.call(1, refresh=True), mock.call(1, refresh=True)])
+        finally:
+            if previous is not None:
+                previous.setChecked(True)
+
     def test_drift_beats_free_space(self):
         s = _win._device_label("IPOD", 5_000_000_000, 2)
         self.assertIn("⚠ Sync needed", s)
@@ -1236,7 +1252,7 @@ class StockIpodUI(unittest.TestCase):
         finally:
             _win.usb_device_pages._snapshot,_win._cdj_worker = previous
 
-    def test_usb_click_opens_overview_and_playlist_tabs_without_a_filesystem_read(self):
+    def test_usb_click_requests_metadata_and_opens_tabs_without_raw_filesystem_enumeration(self):
         from pathlib import Path
         from types import SimpleNamespace
         from desktop.devices import DeviceFacts
@@ -1263,10 +1279,10 @@ class StockIpodUI(unittest.TestCase):
                 self.assertFalse(_win.device_tab_buttons[2].isHidden())
                 self.assertEqual([b.text() for b in _win.device_tab_buttons],
                     ["Overview","Playlists","Category","Sort","Column","Color","My Settings"])
-                refresh.assert_not_called()
+                refresh.assert_called_once()
                 _win.device_tab_buttons[1].click()
                 self.assertEqual(_win.usb_device_pages.stack.currentIndex(), 1)
-                refresh.assert_called_once()
+                self.assertEqual(refresh.call_count, 2)
                 self.assertIn(dev, _win._usb_view_requests)
                 item = _win.usb_device_pages.playlist_tree.topLevelItem(0)
                 self.assertEqual(item.childCount(), 0)

@@ -69,6 +69,39 @@ class ExportDialogTests(unittest.TestCase):
             self.assertEqual(dialog.export_button.isEnabled(),bool(targets))
             self.assertEqual(len(dialog.selection()[1]),len(targets))
 
+    def test_nested_folders_start_collapsed_and_checking_them_keeps_them_collapsed(self):
+        dialog=ExportDialog([Playlist('A',['Folder','Nested'],pid='a')],[])
+        self.addCleanup(dialog.deleteLater)
+        folder=dialog.playlists.topLevelItem(0);nested=folder.child(0)
+        self.assertFalse(folder.isExpanded());self.assertFalse(nested.isExpanded())
+        folder.setCheckState(0,Qt.Checked)
+        self.assertEqual(dialog.selection()[0],['a'])
+        self.assertFalse(folder.isExpanded());self.assertFalse(nested.isExpanded())
+
+    def test_devices_have_large_distinct_icons_and_five_slots_resize_with_the_panel(self):
+        targets=[dict(path=str(i),name=f'Device {i}',label='USB',free=100,
+                      kind='stock_ipod' if i==1 else 'generic_usb') for i in range(5)]
+        dialog=ExportDialog([],targets);self.addCleanup(dialog.deleteLater);self.addCleanup(dialog.close)
+        dialog.show();self.app.processEvents()
+        self.assertEqual(dialog.devices.iconSize().toTuple(),(44,44))
+        self.assertFalse(dialog.devices.topLevelItem(0).icon(0).isNull())
+        self.assertNotEqual(dialog.devices.topLevelItem(0).icon(0).pixmap(44,44).toImage(),
+                            dialog.devices.topLevelItem(1).icon(0).pixmap(44,44).toImage())
+        before=dialog.devices.visualItemRect(dialog.devices.topLevelItem(0)).height()
+        self.assertGreaterEqual(before,68)
+        self.assertLessEqual(dialog.devices.visualItemRect(dialog.devices.topLevelItem(4)).bottom(),
+                             dialog.devices.viewport().height())
+        dialog.resize(800,800);self.app.processEvents()
+        self.assertGreater(dialog.devices.visualItemRect(dialog.devices.topLevelItem(0)).height(),before)
+
+    def test_one_or_two_devices_fill_the_available_panel(self):
+        for count in (1,2):
+            targets=[dict(path=str(i),name=f'TEST-{i}',label='USB',free=100) for i in range(count)]
+            dialog=ExportDialog([],targets);self.addCleanup(dialog.deleteLater);self.addCleanup(dialog.close)
+            dialog.show();self.app.processEvents()
+            row=dialog.devices.visualItemRect(dialog.devices.topLevelItem(0))
+            self.assertAlmostEqual(row.height()*count,dialog.devices.viewport().height(),delta=count)
+
     def host(self):
         area=tempfile.TemporaryDirectory();self.addCleanup(area.cleanup)
         host=Host(Path(area.name));self.addCleanup(host.deleteLater)
@@ -115,6 +148,14 @@ class ExportDialogTests(unittest.TestCase):
             self.assertEqual(len(host.calls),1);self.assertIsNone(host._export_batch)
         second=self.host();second._shutting_down=True
         second._start_next_export_target();self.assertEqual(second.calls,[])
+
+    def test_finished_batch_does_not_start_another_device_scan(self):
+        host=self.host()
+        host._export_batch['pending'].clear()
+        with mock.patch.object(host,'_refresh_devices',side_effect=AssertionError('Completion scan')), \
+                mock.patch('desktop.export_dialog.QMessageBox.information'):
+            host._start_next_export_target()
+        self.assertIsNone(host._export_batch)
 
     def test_changed_source_or_deleted_selection_cannot_retarget_queued_work(self):
         for change in ('source','playlist'):

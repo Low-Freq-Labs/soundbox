@@ -116,7 +116,6 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
             by_id.setdefault(track.track_id, track)
     tracks = list(by_id.values())
     captured = cdj_source.capture_metadata(library, tracks, titles=titles, artists=artists, playlists=list(jobs.values()))
-    native = read_library(target, token)
     workspace = tempfile.TemporaryDirectory(prefix='soundbox-cdj-export-')
     try:
         root = Path(workspace.name).resolve()

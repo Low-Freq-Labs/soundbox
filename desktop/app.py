@@ -109,10 +109,11 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QLineEdit,
     QFileDialog, QFileSystemModel, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget,
+    QPushButton, QSizePolicy, QSplitter, QStackedWidget,
     QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 from .choices import Menu as QMenu
+from .progress import ThemeProgressBar
 
 
 from soundbox import (
@@ -1052,11 +1053,6 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if ev.type() == QEvent.ApplicationActivate:
             self.player_bar.resynchronize_transport()
             self.grid_controller.set_current(self.player_bar.current_track(), force=True)
-            paths=[path for path,profile in getattr(self,'_device_profiles',{}).items()
-                   if getattr(profile,'kind','')=='generic_usb']
-            if paths:
-                self._usb_view_requests.update(paths)
-                QTimer.singleShot(0,self._refresh_devices)
             return super().eventFilter(obj, ev)
         if ev.type() == QEvent.ApplicationDeactivate:
             self._keyboard_router.release_all()
@@ -2363,6 +2359,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             button.toggled.connect(
                 lambda checked, i=index: (
                     self._set_device_tab(i) if checked else None))
+            button.clicked.connect(
+                lambda checked, i=index: (
+                    self._set_device_tab(i, refresh=True) if checked else None))
             self.device_tab_group.addButton(button, index)
             self.device_tab_buttons.append(button)
             dhh.addWidget(button)
@@ -2495,7 +2494,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.status_count_label.setFixedHeight(20)
         self.status_count_label.setVisible(False)
         h.addWidget(self.status_count_label)
-        self.progress = QProgressBar()
+        self.progress = ThemeProgressBar()
         self.progress.setMinimum(0)
         self.progress.setValue(0)
         self.progress.setFixedWidth(208)
@@ -3854,6 +3853,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # When a device is out of sync, HIDE the "GB free" so the full
         # "⚠ Sync needed" state fits (it was getting truncated). Free space
         # returns once everything is synced again.
+        if getattr(profile, 'kind', '') == 'generic_usb':
+            return f"⛃  {name} · USB    {human(free)} free"
         if drift is None:
             return f"⛃  {name}    Sync status pending"
         if drift:
@@ -3880,7 +3881,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._on_volume_mount_changed()
 
     def _refresh_devices(self, *, force: bool = False):
-        """Kick a background scan of external devices (free space + drift).
+        """Read connection facts, iPod drift and explicitly requested USB views.
 
         The scan touches the removable volume, which can block for seconds while a
         copy/delete hammers it — so it runs OFF the UI thread (DeviceScanWorker) and
@@ -3890,19 +3891,27 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 or getattr(self, "_state_maintenance", False)):
             return
         force = force or getattr(self, "_device_mount_refresh_pending", False)
+        profiles = getattr(self, '_device_profiles', {})
+        if (not force and profiles
+                and all(profile.kind == 'generic_usb' for profile in profiles.values())
+                and not self._usb_view_requests
+                and time.monotonic() < getattr(self, '_device_retry_at', float('inf'))):
+            # Source edits do not concern an idle CDJ USB. Only mount changes,
+            # retryable discovery and explicit browsing need connection reads.
+            return
         if not self._device_coordinator.polling_allowed:
             return
-        # Finalization owns the last dashboard scan before Eject. Once that
-        # verified result is latched, *every* incidental refresh must leave the
-        # device alone; callers starting a genuinely new device operation clear
-        # the latch explicitly before doing any work.
+        # iPod finalization owns its dashboard refresh before success. Its
+        # completed-operation hold suppresses incidental scans until another
+        # explicit operation or mount change releases it.
         if self._eject_ready_device and not force:
             return
         if force:
             self._release_eject_ready()
         # While OUR export/sync/delete is hammering the stick, don't also poll it —
         # the numbers are mid-flight and the extra reads only slow the operation down
-        # (contention). Each op's done-handler calls _refresh_devices() right after.
+        # (contention). iPod finalization and explicit USB browsing request the
+        # connection/dashboard reads they actually need after ownership ends.
         if self._exporting or self._deleting or (getattr(self,'_export_batch',None) and not force):
             return
         if self._dev_scan_worker is not None:
@@ -3917,10 +3926,6 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             str(self.device_tree.topLevelItem(i).data(0, DEVPATH_ROLE))
             for i in range(self.device_tree.topLevelItemCount())
         } | set(self._stock_view_cache)
-        if force and self._current_device_path:
-            profile = self._device_profiles.get(self._current_device_path)
-            if profile is not None and not getattr(profile, 'has_stock_ipod', False):
-                self._usb_view_requests.add(self._current_device_path)
         usb_requests = frozenset(self._usb_view_requests)
         w = DeviceScanWorker(
             None,
@@ -3967,10 +3972,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._device_mount_refresh_pending = True
         if getattr(self, "_device_mount_refresh_pending", False):
             self._refresh_devices(force=True)
-        elif (not self._eject_ready_device
-              and (self.device_tree.topLevelItemCount()
-                   or time.monotonic() >= getattr(self, "_device_retry_at", float("inf")))):
-            self._refresh_devices()
+        elif not self._eject_ready_device:
+            profiles = getattr(self, '_device_profiles', {})
+            # USB connection is handled by mount notifications/kernel hints.
+            # A mounted CDJ USB needs no recurring source or catalog inspection.
+            needs_poll = any(profile.kind != 'generic_usb' for profile in profiles.values())
+            retry = time.monotonic() >= getattr(self, "_device_retry_at", float("inf"))
+            if needs_poll or retry or getattr(self, '_usb_view_requests', ()):
+                self._refresh_devices()
 
     def _set_device_poll_interval(self, devices_present: bool) -> None:
         """Keep live drift responsive without busy-scanning an empty Mac."""
@@ -4368,7 +4377,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             else:
                 self.device_content_stack.setCurrentIndex(2)
                 self._present_usb_device(dev)
-                self._set_device_tab(self.usb_device_pages.stack.currentIndex())
+                self._set_device_tab(self.usb_device_pages.stack.currentIndex(), refresh=True)
             self.stack.setCurrentIndex(1)
             self._update_device_action_state()
 
@@ -4381,7 +4390,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                                           name=name, profile=profile, free=free, drift=drift)
         self._sync_usb_my_settings(self._usb_view_cache.get(dev))
 
-    def _set_device_tab(self, index):
+    def _set_device_tab(self, index, *, refresh=False):
         if self.device_content_stack.currentIndex() != 2:
             self._set_stock_device_tab(index)
             return
@@ -4393,8 +4402,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         finally:
             button.blockSignals(blocked)
         self.usb_device_pages.set_page(index)
-        if index == 1 and self._current_device_path:
-            self._usb_view_requests.add(self._current_device_path)
+        if refresh and self._current_device_path:
+            path = self._current_device_path
+            worker = self._dev_scan_worker
+            if worker is not None and path in getattr(worker, 'usb_requests', ()):
+                return  # One explicit read is already serving this browser.
+            self._usb_view_requests.add(path)
             self._refresh_devices()
 
     def _set_stock_device_tab(self, index: int):
@@ -6338,7 +6351,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return
         profile = self._device_profiles.get(dev)
         if profile is not None and profile.kind == "generic_usb":
-            self._begin_cdj_export(dev)
+            self._show_export_dialog(dev)
             return
         if profile is not None and profile.kind == "stock_ipod":
             identity_key = self._stock_device_key(dev, profile)

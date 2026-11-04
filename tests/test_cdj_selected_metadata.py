@@ -8,9 +8,9 @@ from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine, event, String
 from sqlalchemy.orm import Session
-from pyrekordbox.db6.tables import ContentFile, DjmdSongMyTag
+from pyrekordbox.db6.tables import ContentFile, DjmdCue, DjmdSongMyTag, DjmdSongPlaylist
 
-from soundbox.cdj_source import _selected_content_files, capture_metadata
+from soundbox.cdj_source import _selected_content_files, _selected_cues, capture_metadata
 from soundbox.rekordbox_db import _read_tags
 from soundbox.library import Library
 
@@ -24,13 +24,14 @@ def row(table, **values):
 class SelectedMetadata(unittest.TestCase):
     def setUp(self):
         engine=create_engine('sqlite:///:memory:');self.addCleanup(engine.dispose)
-        for table in (ContentFile,DjmdSongMyTag):table.__table__.create(engine)
+        for table in (ContentFile,DjmdCue,DjmdSongMyTag,DjmdSongPlaylist):table.__table__.create(engine)
         self.session=Session(engine);self.addCleanup(self.session.close)
         self.sql=[]
         event.listen(engine,'before_cursor_execute',lambda _conn,_cursor,statement,parameters,_context,_many:
                      self.sql.append((statement,parameters)))
         self.db=SimpleNamespace(get_content_file=lambda:self.session.query(ContentFile),
-            get_my_tag_songs=lambda:self.session.query(DjmdSongMyTag),get_my_tag=Mock())
+            get_my_tag_songs=lambda:self.session.query(DjmdSongMyTag),get_my_tag=Mock(),
+            get_cue=lambda:self.session.query(DjmdCue))
 
     def test_chunked_queries_equal_full_exact_filter_including_lexical_ids_and_duplicate_links(self):
         identities=[str(i) for i in range(1002)]+['0001']
@@ -59,6 +60,44 @@ class SelectedMetadata(unittest.TestCase):
         self.assertEqual(len(selects),6)
         self.assertTrue(all(len(parameters)<=500 for parameters in selects))
         self.db.get_my_tag.assert_not_called()
+
+    def test_cue_queries_materialize_only_selected_exact_ids_in_bounded_chunks(self):
+        identities = [str(index) for index in range(1002)] + ['0001']
+        for index, identity in enumerate(identities):
+            self.session.add(row(DjmdCue, ID=str(index), ContentID=identity, ContentUUID='fixture', Kind=0))
+        self.session.commit()
+        wanted = set(identities) - {'1'}
+        self.sql.clear()
+        actual = list(_selected_cues(self.db, wanted))
+        self.assertEqual({str(cue.ContentID) for cue in actual}, wanted)
+        self.assertNotIn('1', {str(cue.ContentID) for cue in actual})
+        selects = [parameters for sql, parameters in self.sql if sql.lstrip().startswith('SELECT')]
+        self.assertEqual(len(selects), 3)
+        self.assertTrue(all(len(parameters) <= 500 for parameters in selects))
+        db = SimpleNamespace(get_cue=Mock(side_effect=AssertionError('Empty cue query')))
+        self.assertEqual(list(_selected_cues(db, set())), [])
+
+    def test_selected_playlist_capture_skips_unrelated_smart_evaluation_and_membership_rows(self):
+        from soundbox.rekordbox_db import _read_playlists
+        nodes = [SimpleNamespace(ID='01', ParentID='root', Name='Selected', Attribute=0, Seq=1, rb_local_deleted=0),
+                 SimpleNamespace(ID='2', ParentID='root', Name='Other normal', Attribute=0, Seq=2, rb_local_deleted=0),
+                 SimpleNamespace(ID='3', ParentID='root', Name='Other smart', Attribute=4, Seq=3, rb_local_deleted=0)]
+        links = [('first', '01', '17', 2, 0), ('second', '01', '18', 1, 0),
+                 ('deleted', '01', '19', 3, 1), ('other', '2', '20', 1, 0)]
+        for identity, playlist, content, order, deleted in links:
+            self.session.add(row(DjmdSongPlaylist, ID=identity, PlaylistID=playlist,
+                                 ContentID=content, TrackNo=order, rb_local_deleted=deleted))
+        self.session.commit()
+        db = SimpleNamespace(get_playlist=lambda: nodes, query=self.session.query)
+        self.sql.clear()
+        with patch('soundbox.rekordbox_db._smart_playlist_contents', side_effect=AssertionError('Unselected smart playlist')):
+            playlists = _read_playlists(db, {'17', '18', '19', '20'}, selected_ids={'01'})
+        self.assertEqual([(p.pid, p.name, p.keys) for p in playlists], [('01', 'Selected', ['18', '17'])])
+        selects = [parameters for sql, parameters in self.sql if sql.lstrip().startswith('SELECT')]
+        self.assertEqual(selects, [('01',)])
+        self.sql.clear()
+        self.assertEqual(_read_playlists(db, set(), selected_ids=set()), [])
+        self.assertEqual(self.sql, [])
 
     def test_empty_selection_skips_queries_and_list_fallback_keeps_exact_filter(self):
         files=[SimpleNamespace(ContentID='1'),SimpleNamespace(ContentID='01')]

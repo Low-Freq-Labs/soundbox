@@ -23,7 +23,7 @@ from .model import COLUMNS, row_display_value
 
 from .devices import DeviceFacts, human
 from .stock_device_view import StockIpodPages
-from .trees import BrowserDetailTree
+from .trees import TrackBrowserTree
 from .usb_preferences import MySettingsEditor, OrderedChoices, BrowsePreferences, USB_TABS
 from soundbox import my_settings
 
@@ -51,6 +51,7 @@ class UsbSnapshot:
     error: str = ""
     native: CdjLibrary | None = None
     native_stamp: tuple = ()
+    notice: str = ""
 
 
 def _media_path(folder: str, text: str) -> str:
@@ -232,7 +233,7 @@ class UsbDevicePages(QWidget):
         scroll.setWidget(overview)
         self.overview_scroll = scroll
         self.stack.addWidget(scroll)
-        self.playlist_tree = BrowserDetailTree()
+        self.playlist_tree = TrackBrowserTree()
         self.playlist_tree.setObjectName('StockDevicePlaylists')
         self.playlist_tree.setHeaderLabels([label for _key,label,_hidden in COLUMNS])
         self.playlist_tree.setAlternatingRowColors(True)
@@ -314,48 +315,59 @@ class UsbDevicePages(QWidget):
                    ('Volume access', ('Writable' if facts.writable else 'Read-only')
                     if snapshot is not None and (facts.device_identifier or facts.filesystem_name)
                     else 'Unknown')))
-        available = snapshot is not None and not snapshot.error
+        notice = snapshot.notice if snapshot else ''
+        available = snapshot is not None and not snapshot.error and not notice
         playlists = snapshot.playlists if available else ()
         native = snapshot.native if snapshot else None
+        same_device = self._view_key == (facts.volume_uuid or target)
+        preserve_drafts = bool(notice and same_device)
         self.general.setVisible(getattr(profile, 'kind', '') == 'generic_usb')
-        self._set_general(native)
+        if not preserve_drafts:
+            self._set_general(native)
         count = len([p for p in native.playlists if not p.folder]) if native else len(playlists)
-        self._rows('Playlists', (('Playlists', str(count) if available else 'Unavailable'),
-                   ('Location', '/PIONEER/rekordbox' if native else '/Playlists'), ('Status', snapshot.error if snapshot and snapshot.error
-                    else ('Ready' if available else 'Reading device…'))))
-        self._rows('SoundBox', (('Sync status', 'Ready to export' if native and not native.managed else 'Status pending' if drift is None else
-                    ('Up to date' if drift == 0 else 'Sync needed')),
-                   ('Pending changes', str(drift) if drift is not None else ('—' if native and not native.managed else 'Unknown')),
-                   ('Playlist export', ('Device Library + Device Library Plus' if native else 'CDJ export · FAT32 supported')
-                    if getattr(profile, 'kind', '') == 'generic_usb' and getattr(profile, 'rockbox_export', False)
-                    else ('FAT32 supported' if getattr(profile, 'rockbox_export', False) else 'FAT32 required'))))
+        self._rows('Playlists', (('Playlists', str(count) if available else 'Not loaded' if notice else 'Unavailable'),
+                   ('Location', '/PIONEER/rekordbox' if native or getattr(profile, 'kind', '') == 'generic_usb' else '/Playlists'),
+                   ('Status', notice or (snapshot.error if snapshot and snapshot.error
+                    else ('Ready' if available else 'Reading device…')))))
+        if getattr(profile, 'kind', '') == 'generic_usb':
+            supported = getattr(profile, 'cdj_export', False)
+            self._rows('SoundBox', (('Playlist export', 'Ready' if supported else 'FAT32 or exFAT required'),
+                       ('Library format', 'Device Library + Device Library Plus'),
+                       ('Export', 'Choose playlists and Export')))
+        else:
+            self._rows('SoundBox', (('Sync status', 'Status pending' if drift is None else
+                        ('Up to date' if drift == 0 else 'Sync needed')),
+                       ('Pending changes', str(drift) if drift is not None else 'Unknown'),
+                       ('Playlist export', 'FAT32 supported' if getattr(profile, 'rockbox_export', False) else 'FAT32 required')))
         if snapshot is self._snapshot:
             return
-        self._remember_view()
-        same_device=self._view_key==(facts.volume_uuid or target)
+        if not getattr(self._snapshot, 'notice', ''):
+            self._remember_view()
         self._restoring = True
         self._snapshot = snapshot
         preferences = native.preferences if native else {}
-        self.categories.set_slots(preferences.get('categories',[]))
-        self.sorts.set_slots(preferences.get('sorts',[]))
-        self.categories.setEnabled(bool(preferences.get('categories')))
-        self.sorts.setEnabled(bool(preferences.get('sorts')))
-        self.column.set_preferences(preferences)
-        self.colors.set_preferences(preferences)
-        current=my_settings.values(native.files) if native else {}
-        if self.my_settings.profile!=current or self.my_settings.global_profile!=self.global_profile:
-            self.my_settings.set_profile(current,self.global_profile,preserve_edits=same_device)
+        if not preserve_drafts:
+            self.categories.set_slots(preferences.get('categories',[]))
+            self.sorts.set_slots(preferences.get('sorts',[]))
+            self.categories.setEnabled(bool(preferences.get('categories')))
+            self.sorts.setEnabled(bool(preferences.get('sorts')))
+            self.column.set_preferences(preferences)
+            self.colors.set_preferences(preferences)
+            current=my_settings.values(native.files) if native else {}
+            if self.my_settings.profile!=current or self.my_settings.global_profile!=self.global_profile:
+                self.my_settings.set_profile(current,self.global_profile,preserve_edits=same_device)
         self._view_key = facts.volume_uuid or target
-        self._songs = {s.path:s for s in native.songs} if native else {}
+        self._songs = {s.path:s for s in native.songs} if native and available else {}
         self._display_rows.clear()
         self.playlist_tree.clear()
         if not available:
-            QTreeWidgetItem(self.playlist_tree, ['Playlists unavailable' if snapshot else 'Reading playlists…',
+            QTreeWidgetItem(self.playlist_tree, [notice or ('Playlists unavailable' if snapshot else 'Reading playlists…'),
                            '', snapshot.error if snapshot else ''])
         elif native:
             items = {}
             for playlist in native.playlists:
                 item = QTreeWidgetItem([playlist.title if playlist.folder else f'{playlist.title} ({len(playlist.entries)})'])
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
                 items[playlist.id] = item
                 item.setData(0, Qt.UserRole, playlist)
                 if playlist.entries:
@@ -375,11 +387,17 @@ class UsbDevicePages(QWidget):
             if playlist.skipped:
                 kind += f' · {playlist.skipped} skipped'
             item = QTreeWidgetItem(self.playlist_tree, [f'{playlist.title} ({len(playlist.entries)})'])
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
             item.setToolTip(0, '/' + playlist.location)
             item.setData(0, Qt.UserRole, playlist)
             if playlist.entries:
                 item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
 
+        iterator = QTreeWidgetItemIterator(self.playlist_tree)
+        while iterator.value():
+            item = iterator.value()
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            iterator += 1
         self._restore_view()
         self._restoring = False
 
@@ -401,6 +419,14 @@ class UsbDevicePages(QWidget):
         if self._restoring or not self._view_key:
             return
         self._view_save_timer.stop()
+        if getattr(self._snapshot, 'notice', ''):
+            # The notice has no catalog rows. Retain the last real expansion
+            # and selection while remembering the user's newly chosen tab.
+            state = self._states.get(self._view_key)
+            if isinstance(state, dict):
+                state['page'] = self.stack.currentIndex()
+                self.view_changed.emit()
+            return
         expanded = []
         iterator = QTreeWidgetItemIterator(self.playlist_tree)
         while iterator.value():

@@ -5,6 +5,56 @@ frames, artwork publication, text/DPR/layout and navigation resets. Its fixes
 and remaining GUI-thread costs are separate from the dated measurements below;
 consult HANDOFF for installation status.
 
+## Generic USB follow-up — November4
+
+The subsequent USB source pass removes generic USB drift/status comparisons from
+detection and idle polling, along with their export-playlist capture and native
+catalog freshness reads. USB catalogs load for explicit browser requests or the
+small native-library merge required by selected export. Export is additive to
+unrelated existing playlists, avoids Collection/Artists construction and removes
+one duplicate catalog read in planning. Completion and Eject start no final USB
+read. Existing device worker ownership and normal macOS eject remain intact;
+iPod/Rockbox sync behavior is separate.
+
+Formatting uses a quick same-filesystem erase when the current disk already has
+a matching FAT32/exFAT partition type and one full-capacity first MBR partition.
+Other layouts/filesystem changes still repartition. Physical/source checks and
+postconditions remain; diskutil probe and erase phases now log their durations.
+Fresh native initialization removes the local renderer lock from its candidate
+inventory. Hardware timings and final validation belong in HANDOFF. The older
+synthetic measurements below do not benchmark this newer USB workflow.
+
+### Physical USB fixture timings — November4
+
+Sonny explicitly authorized formatting/export tests on TEST-1 and TEST-2. Both
+were formatted, initialized and exercised through the real acquisition, native
+renderer and transaction lane using frozen fixture metadata rather than a live
+source publisher. These small synthetic payloads do not benchmark full libraries
+or player playback. FAT32 TEST-1 used same-filesystem quick erase; exFAT TEST-2
+used whole-disk erase because its prior partition did not meet the conservative
+full-capacity reuse bound. Existing source/physical/postcondition guards remained.
+
+| Phase | TEST-1 (FAT32) | TEST-2 (exFAT) |
+| --- | ---: | ---: |
+| Format including fresh guards/postconditions | 13.118s | 2.889s |
+| Prepare empty native catalogs/settings | 1.401s | 1.455s |
+| Publish empty native catalogs/settings | 2.141s | 0.098s |
+| First fixture playlist: plan + commit | 2.495s + 6.389s | 2.507s + 0.198s |
+| Selected update preserving second playlist: plan + commit | 1.089s + 3.159s | 1.672s + 0.192s |
+| Unchanged selected repeat: plan + commit | 0.270s + 0.003s | 0.247s + 0.001s |
+
+The macOS erase commands themselves took11.840s and1.812s respectively. There is
+no matched old-code hardware timing, so these numbers establish current cost,
+not a before/after speedup. During selected update and repeat, guards rejected
+opening unselected source audio or retained USB audio. The unchanged repeat had
+no writes, other playlist memberships survived, the final fixture payload hash
+matched and no pending journal remained. The first hardware attempt exposed an
+unpublished renderer lock during initialization; the corrected native helper and
+new real initialization regression passed before these successful results.
+Private exact receipts and commands live under the November4 USB evidence root
+recorded in HANDOFF. There was no desktop-source write, real-app input or iPod
+physical acceptance.
+
 ## Correctness and remaining-cost pass, November3 night
 
 Sonny requested working from the remaining simple improvements upward, with
@@ -318,9 +368,10 @@ left untouched. Installed versus source status and validation are in HANDOFF.
 
 Startup now imports the desktop without loading full CDJ, stock/dual iPod or
 filesystem export backends. Cache indexes load on demand. Empty discovery does
-not construct Collection/Artists export playlists or initialize the stock shadow;
-detected targets request a cancellable queued GUI-thread capture before their
-first drift check. Stock-art warming waits for an attached stock-capable iPod,
+not construct Collection/Artists export playlists or initialize the stock shadow.
+At this historical checkpoint, detected targets requested a cancellable queued
+GUI-thread capture before their first drift check. The November4 generic USB
+workflow above supersedes that part; iPod/Rockbox capture remains. Stock-art warming waits for an attached stock-capable iPod,
 stops on disconnect and retains its worker until finished delivery. The mount
 watcher remains active, so a device already attached at launch or connected later
 can still be recognized. Existing lightweight dashboard widgets remain composed;
@@ -646,7 +697,7 @@ findings and verification limits.
 - Avoid an entire-library computation in paint, wheel, cue or transport handlers.
   A thread is insufficient if one giant C JSON call holds the GIL; use bounded
   serialization for derived snapshots and retain completion ownership.
-- Three-second device polling reuses its synthetic playlist inventory. A save
+- Three-second iPod/Rockbox polling reuses its synthetic playlist inventory. A save
   currently invalidates that inventory; the next rebuild can still prepare the
   Collection and Artists ordering on the main thread. Bind that cache to actual
   inventory/metadata generations rather than every incidental state save in a

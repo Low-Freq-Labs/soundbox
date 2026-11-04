@@ -41,23 +41,32 @@ def _actual_technical(track,observed,path):
     except (OSError,ValueError,KeyError,TypeError):return
 
 
-def _selected_content_files(db, track_ids):
-    """Bound ORM materialization to selected IDs within this fresh snapshot."""
+def _selected_rows(query_factory, table, track_ids):
+    """Materialize selected native records in bounded exact-ID queries."""
     if not track_ids:
         return
     from sqlalchemy.orm import Query
-    from pyrekordbox.db6.tables import ContentFile
-    query = db.get_content_file()
-    if isinstance(query,Query):
+    query = query_factory()
+    if isinstance(query, Query):
         identities = sorted(track_ids)
-        queries = [query.filter(ContentFile.ContentID.in_(identities[at:at+500]))
-                   for at in range(0,len(identities),500)]
+        queries = [query.filter(table.ContentID.in_(identities[at:at+500]))
+                   for at in range(0, len(identities), 500)]
     else:
         queries = [query]
     for rows in queries:
         for row in rows:
             if str(row.ContentID) in track_ids:
                 yield row
+
+
+def _selected_content_files(db, track_ids):
+    from pyrekordbox.db6.tables import ContentFile
+    return _selected_rows(db.get_content_file, ContentFile, track_ids)
+
+
+def _selected_cues(db, track_ids):
+    from pyrekordbox.db6.tables import DjmdCue
+    return _selected_rows(db.get_cue, DjmdCue, track_ids)
 
 
 def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=None):
@@ -85,7 +94,8 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
                 source_ids = {p.pid for p in library.playlists if p.pid}
                 selected = [p for p in playlists if p.pid in source_ids]
                 if selected:
-                    fresh = {p.pid:p for p in rekordbox_db._read_playlists(db,rekordbox_db._active_track_ids(db))}
+                    fresh = {p.pid:p for p in rekordbox_db._read_playlists(
+                        db, rekordbox_db._active_track_ids(db), selected_ids={p.pid for p in selected})}
                     for cached in selected:
                         current = fresh.get(cached.pid)
                         native_keys=[library.tracks_by_id[key].native_id for key in cached.keys]
@@ -96,7 +106,7 @@ def capture_metadata(library, tracks, *, titles=None, artists=None, playlists=No
             if set(rows) != set(expected):
                 raise ValueError('A selected track disappeared from the source library')
             cues: dict[str, list[dict]] = {}
-            for row in db.get_cue():
+            for row in _selected_cues(db, set(expected)):
                 tid = str(row.ContentID)
                 if tid in expected and not rekordbox_db._deleted(row):
                     if row.ContentUUID != expected[tid].source_uuid:

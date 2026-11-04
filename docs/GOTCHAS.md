@@ -890,12 +890,14 @@ test, after unchanged source-identity and native/manual provenance guards.
   reading the manifest, `walk`/`rglob`, `rmtree`, drift diff). macOS fskit
   BLOCKS these for SECONDS when the stick is busy → whole-app beachball + frozen
   animations. Thread it (`DeviceScanWorker`/`DeleteWorker`), show the lower-left
-  progress bar, cache drift in `_drift_cache`. Any new device op must be threaded.
+  progress bar, cache iPod/Rockbox drift in `_drift_cache`. Generic USBs have no
+  drift computation or badge. Any new device op must be threaded.
 - **USB tabs are cached presentation, not a volume browser or write authority.**
   For Rockbox/file playlists, read M3U/M3U8 text only below `/Playlists` using pinned no-follow descriptors in
   DeviceScanWorker. That reader never resolves/opens referenced media or `/PIONEER`.
   Generic USB native metadata/settings use the separate `cdj_*` contract; ordinary
-  exporters keep their exclusion. Reuse the
+  exporters keep their exclusion. Native catalog reads are browser-requested,
+  never an idle source comparison or final eject/completion read. Reuse the
   snapshot on normal polls; explicit tab refreshes stay queued behind the same
   device owner. Publish only at QThread.finished, invalidate remount tokens and
   show failed/oversized/redirected reads as unavailable. A missing folder alone
@@ -936,11 +938,14 @@ test, after unchanged source-identity and native/manual provenance guards.
   never external-device/write authority. A busy lane retains the request and retries
   on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
   unchanged mount/timestamp state starts no idle discovery worker. Failed probes
-  retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
-  three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
-  Verified external mounts appear disabled as `NAME · Checking…`. The first scan
+  retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
+  three-second poll. Generic USB polling keeps only mount/storage observations;
+  it does not capture source playlists, inspect catalogs or compute drift.
+  Ordinary unmounted folders retain the 30-second attachment grace.
+  Verified external mounts appear disabled as `NAME · Checking…`. The first iPod/Rockbox scan
   computes sync drift before publishing the selectable row at QThread.finished;
-  unknown/failed checks say `Sync status pending`, never imply a clean result.
+  unknown/failed iPod/Rockbox checks say `Sync status pending`, never imply a clean result.
+  Generic USB rows have no sync/pending badge and become ready after mount detection.
   Stock/dual dashboard preload follows in the same serialized device lane, with
   loading only in the bottom status after the row becomes ready. Successful preload
   clears that status directly, without another immediate drift scan. A cached
@@ -1631,7 +1636,7 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   read; writers, planners and imports must reach their safe boundary first. Suppress new polling through the normal
   unmount outcome, without starting verification. A no-write/up-to-date plan is
   still a completed Sync or Delete and must pass through the same final scan/latch before its OK.
-- **Device progress is a transaction meter, not a copy meter.** Planning owns
+- **iPod progress is a transaction meter, not a copy meter.** Planning owns
   0–30% for composite sync, guarded device work owns 30–80%, and final
   dashboard/sidebar/drift reads
   plus worker-ownership release own 80–100%. Keep it monotonic across queued
@@ -1645,7 +1650,9 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   must give each job its complete proportional slice. Never publish 100%, `Complete`, a success modal,
   or enabled Eject/Sync while any required worker attribute remains owned. A
   failed required final read is terminal but not successful: retain Eject,
-  report `Final refresh failed`, and suppress the success callback.
+  report `Final refresh failed`, and suppress the success callback. Generic USB
+  exports finish when publication and worker retirement finish; do not append
+  iPod dashboard/drift finalization or a USB catalog read to them.
 - **An explicit managed-playlist Delete is authoritative.** Do not force a
   separate Sync merely because a different schema-3 playlist changed or is no
   longer available from the current source. Reconcile other available managed
@@ -1906,10 +1913,11 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
 - Export modules and disposable artwork indexes are lazy. Do not restore eager
   stock/dual/CDJ/filesystem imports in desktop presentation or annotation imports.
   Keep mount detection active. Empty DeviceScanWorker scans must not construct
-  export playlists; detected targets request one GUI-thread input capture through
+  export playlists; detected iPod/Rockbox targets request one GUI-thread input capture through
   queued delivery. Cancellation/interruption must release its wait without GUI
   delivery; capture errors mean unknown drift. Canceled scans cannot preload
-  dashboards. Stock warming requires an attached iPod, stops cooperatively on
+  dashboards. Generic USBs request no export-playlist capture during detection or
+  idle polling. Stock warming requires an attached iPod, stops cooperatively on
   disconnect and retains its slot through finished delivery. Reconnect schedules
   a current-library pass after any retiring worker.
 - iPod drift availability/display reuse lasts one poll only, keyed by path and
@@ -2122,7 +2130,9 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   existing player/mixer profile files survive unrelated sync byte for byte.
 - A USB playlist drop is the authorization. Preserve mount/UUID through deferrals
   and hand off plan→commit at worker.finished without a second modal question.
-  Export and Save to USB also publish directly. Reformat alone has a
+  Export and Save to USB also publish directly. Every generic USB playlist export
+  is additive to unrelated native playlists; do not rebuild Collection/Artists or
+  propagate other source edits because of an earlier export. Reformat alone has a
   destructive target confirmation. Drop scopes selected
   playlists; it must not reconcile unrelated source edits or audit retained media.
   Existing unrelated classic/Plus differences are separate baselines, not a
@@ -2131,6 +2141,16 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   unrelated collection-only records. Exact removed assets stay recoverable until
   durable commit, then retire their backups to free device space. Resume partial
   committed retirement; never require already retired originals for rollback.
+- Generic USB completion invalidates its cached browser snapshot without reading
+  the device again. Eject only submits normal diskutil eject, after an existing
+  owner retires; it starts no last catalog read, verification or sync comparison.
+  Respect macOS refusal and never force-unmount.
+- A same-filesystem format may reuse only a full-capacity, single first MBR
+  partition with the expected FAT32/exFAT partition type. Other layouts and
+  filesystem switches use whole-disk repartitioning. Keep fresh physical identity,
+  source/audio/analysis separation and post-erase map/filesystem/mount checks.
+  The native initialize renderer's `.rbxport-write.lock` is workspace-only and
+  must be removed before publishing its exact candidate file inventory.
 - Package build/cdj/release/soundbox-cdj. A debug renderer adds substantial CPU
   cost to multi-GB input. Captured new audio may pre-exist only as the exact
   Contents set in a fresh local partial output; no metadata/extra files/links.

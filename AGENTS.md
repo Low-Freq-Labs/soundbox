@@ -5,9 +5,51 @@ Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
 (Low Freq Labs) operates the personal build. Read this file and
 [docs/HANDOFF.md](docs/HANDOFF.md) at the start of every session.
 
-## Current delivery — November4,2026
+## USB simplification follow-up — November4,2026
 
-Updated personal build160 is installed and running at `/Applications/Soundbox.app`.
+Sonny's latest testing request supersedes generic-USB sync-status behavior.
+Generic USBs are explicit playlist-export destinations: never show Sync needed,
+Sync status pending, pending changes or database-drift badges, and never perform
+idle source/catalog comparisons to produce them. Read small native catalogs only
+for a requested browser view or explicit export/settings operation. Export only
+the selected playlists; preserve unrelated native records/media without auditing
+them. Completion and Eject start no verification or final catalog read. Eject
+requests normal macOS eject after any already-owned worker safely retires.
+Stock/Rockbox iPod sync semantics and independent capabilities remain unchanged.
+
+Export opens with all folders collapsed. Device choices use large USB/iPod icons
+and names, with one through five choices filling the panel. Current/live accent
+colors apply to its controls. Progress lettering uses the saved accent-text color
+over the fill and readable normal text elsewhere. USB/iPod playlist-browser
+containers toggle without selection highlighting; tracks remain selectable.
+Formatting reuses an existing correctly typed full-capacity first MBR partition
+only for the same filesystem; other layouts/filesystem changes repartition.
+Source/physical identity and post-format guards remain. Initialization excludes
+the offline renderer's advisory lock from the USB assets.
+
+Sonny explicitly permits reformat/export testing of TEST-1 and TEST-2. Both have
+now been reformatted and passed physical fixture-export/update/repeat checks;
+exact timings and scope are in HANDOFF. This authorizes those device writes, not
+real-app input or termination. Sonny subsequently closed SoundBox himself and
+explicitly requested installation/reopen. Personal build163 is now installed and
+running at `/Applications/Soundbox.app`: installed03:50:00, reopened03:50:56 and
+verified03:53:21. All2595tests and both signed package/isolated native profiles pass.
+Signed base740ad533c4991938f504d792a89020623f063471, dirty=true; runtime
+42aefd3544c3ee60af5635110d3f99a5385b14fcb0f4dde5b3541ed6434e745c, executable
+e8d27b4a6eaa97168da25cc6525b1f81c33f4ff35538fb692f733ae5acfb321a.
+Fresh library bytes/all10authorities/white icon are exact across install/reopen;
+one startup USB scan and no recurring scans were observed. Leave it running.
+The immediate7bbe8577… rollback and protected earlierb0ccb1ab… base share the
+existing private rollback directory pending acceptance; paths and retention are
+in HANDOFF. Redundant dist/PyInstaller copies are retired. Sonny's subsequent
+November4 wrap-up authorizes committing/pushing this tested USB/UI source. Its
+publication leaves the installed signed base/bytes and running session unchanged;
+no documentation-only restamp/reinstall is needed.
+
+## Prior build160 delivery — November4,2026 (superseded above)
+
+The earlier personal build160 was installed at `/Applications/Soundbox.app`.
+Build163 above supersedes this dated delivery record.
 Signed base revisionc2415d5c3e9874919ca07b54b04636a282203ee2, dirty=true; runtime
 `7bbe8577a80ba08fdef36efb4de1b3877820a2974a4b534ce36d6c43884fbfc8`, executable
 `380806ceb13f4ca40432231e8598a788193e894c2a6991a63a65136515138f49`.
@@ -33,8 +75,10 @@ HANDOFF distinguishes publication history, installed bytes and the one rollback.
   collection-only songs survive. Exact rollback remains until durable commit;
   removed-media backups then retire to free space, with resumable cleanup.
 - Both FAT32 and exFAT remain supported. Sonny requested a subagent format review
-  and permitted wiping the two attached USBs. Both already had FAT32/MBR and
-  remain unerased. Formatting now protects source analysis locations and verifies
+  and permitted wiping the two then-attached USBs. That earlier review found
+  FAT32/MBR and did not erase them. The latest follow-up above reformatted the
+  renamed TEST-1/TEST-2; it supersedes that dated device state. Formatting protects
+  source analysis locations and verifies
   physical/map/one-first-partition/filesystem postconditions before initialization.
 - All2564tests pass in reconciled offscreen/Cocoa reports, with675frozen inputs,
   160personal/156public packaged module parity, signing and both isolated profiles.
@@ -66,7 +110,8 @@ Sonny requested USB/iPod startup gating and subagent efficiency reviews. The
 source now defers full exporter imports/cache indexes and export-playlist capture
 until detection, gates stock-art warming on an attached iPod, and reduces repeated
 USB catalog, iPod drift and FAT destination work. This work remains included
-in build160 at /Applications/Soundbox.app. Current library bytes, all10authorities, playlist
+in the prior build160 and current build163 at /Applications/Soundbox.app. Library
+bytes, all10authorities, playlist
 icon choices and the white Finder/Dock icon are exact across this install/launch.
 No stock-art preparation starts in the observed normal boot. The older build157 rollback was subsequently retired; the current b0ccb1ab…
 rollback and exact validation/provenance are in HANDOFF. Synthetic component scopes and remaining
@@ -84,7 +129,7 @@ immediately, and reduces repeated state/import/analysis/playlist/artwork/native
 catalog/provider work. All176 first-party app-tree source files have an explicit
 review depth; many paths remain unprofiled. Measurements and ranked remaining
 work are in docs/performance-audit.md, with private per-file receipts retained.
-The broader pass was verified at2406tests and is retained in build160,
+The broader pass was verified at2406tests and retained in build160/current163,
 with package/native parity and startup verified. Leave it running.
 Its earlier wrap-up publication is complete, with no general app termination. Preserve
 all source/authority/process/mount/hash/recovery guards and native phase ordering.
@@ -159,8 +204,8 @@ fixes text gutters/DPR/status sizing and navigation/refresh resets. Coverage and
 remaining GUI costs are in `docs/ui-polish-audit.md`; HANDOFF distinguishes the
 worktree, validation and installed runtime. This request grants no real-app
 input, general termination or new native authority. Source publication was
-subsequently authorized by Sonny’s November4 wrap-up. Sonny closed SoundBox and explicitly requested installation/reopen; build160 is now
-verified and running. No further restart or documentation-only rebuild is needed.
+subsequently authorized by Sonny’s November4 wrap-up. Sonny closed SoundBox and explicitly requested that build160 installation/reopen.
+The current verified build163 above supersedes that dated runtime. No further restart or documentation-only rebuild is needed.
 Preserve every newer curated edit and the saved white app icon.
 
 `AGENTS.md` and `CLAUDE.md` are runtime equivalents and intentionally contain
@@ -181,8 +226,10 @@ repository can answer the question.
   Start from the current small native catalogs, preserve other playlists and
   media, and apply the requested changes. SoundBox's manifest records only its
   own file ownership and playlist bindings; it is not exclusive library authority.
-  Normal export never scans/hashes retained media just because rekordbox wrote
-  the catalogs. Mount/source separation and supported-format guards still apply.
+  Generic USBs never display or compute automatic sync/pending status. Explicit
+  export updates only selected playlists; normal export never scans/hashes
+  retained media just because rekordbox wrote the catalogs. Mount/source
+  separation and supported-format guards still apply.
 
 - Desktop rekordbox reads use a read-only DB/WAL snapshot; XML is a fallback.
   The October 26 prep plan authorizes narrowly scoped My Tag and Hot/Memory Cue
@@ -650,10 +697,13 @@ existing directory cannot strand detection behind probe backoff. These are hints
 never external-device/write authority. A busy lane retains the request and retries
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
-retain 3–30-second backoff, bypassed by mount changes. Connected drift stays on its
-three-second poll. Ordinary unmounted folders retain the 30-second attachment grace.
-Verified external mounts appear disabled as `NAME · Checking…`. The first scan
-computes sync drift before publishing the selectable row at QThread.finished;
+retain 3–30-second backoff, bypassed by mount changes. Connected stock/Rockbox drift stays on its
+three-second poll; generic USBs have no idle source/catalog comparison. Ordinary unmounted folders retain the 30-second attachment grace.
+Verified external mounts appear disabled as `NAME · Checking…` during physical
+identification. Generic USB rows publish name/free space without sync status or
+source/catalog comparison. Their native browser snapshot loads only on request,
+with no idle metadata-stamp reads. Stock/Rockbox mounts retain their independent
+sync drift before publishing the selectable row at QThread.finished; their
 unknown/failed checks say `Sync status pending`, never imply a clean result.
 Stock/dual dashboard preload follows in the same serialized device lane, with
 loading only in the bottom status after the row becomes ready. Successful preload

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 from soundbox.manifest import composite_library_counts
 
 from .devices import human
-from .trees import BrowserDetailTree
+from .trees import BrowserDetailTree, TrackBrowserTree
 
 
 def _duration(milliseconds: int) -> str:
@@ -356,7 +356,7 @@ class StockIpodPages(QWidget):
         playlist_layout = QVBoxLayout(playlist_page)
         playlist_layout.setContentsMargins(0, 0, 0, 0)
         playlist_layout.setSpacing(8)
-        self.playlist_tree = BrowserDetailTree()
+        self.playlist_tree = TrackBrowserTree()
         self.playlist_tree.setObjectName("StockDevicePlaylists")
         self.playlist_tree.setHeaderLabels(["Playlist / Track", "Tracks", "Type"])
         self.playlist_tree.setAlternatingRowColors(True)
@@ -611,6 +611,7 @@ class StockIpodPages(QWidget):
                  playlist.availability],
             )
             parent.setData(0, Qt.UserRole, playlist.identity)
+            parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
             if playlist.managed:
                 # Keep deletion choice independent from row focus/expansion so
                 # several managed playlists can be selected together.

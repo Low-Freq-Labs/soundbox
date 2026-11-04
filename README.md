@@ -101,9 +101,11 @@ header footprint.
    **C** is momentary CUE. Use the waveform and overview to inspect the track. The
    prep-strip clock shows elapsed/total time, including hours for long sets.
 4. Connect a supported player and inspect its identity under **Devices**. Drag a
-   playlist to the device and follow the displayed planning/confirmation flow.
-5. After later edits, use **Sync** when the device shows **Sync needed**. Review
-   the result, then use **Eject** before disconnecting.
+   playlist to the device. Generic USB drops export directly; iPods retain their
+   displayed planning/confirmation flow.
+5. After later edits, export the desired playlists again to a generic USB. On an
+   iPod/Rockbox player, use **Sync** when it shows **Sync needed**. Use **Eject**
+   before disconnecting; eject starts no verification or final read.
 
 | Destination | Supported path and limits |
 | --- | --- |
@@ -371,14 +373,21 @@ rekordbox and SoundBox can export over each other at any time. Unrelated native
 collection-only records and other playlists are preserved. Drops export directly.
 Export opens playlist checkboxes on the left and connected-device checkboxes on the
 right; select several devices to export to each from one action. Only selected
-playlists update. Removed songs leave the USB when no other USB playlist uses
+playlists update, and folders start collapsed. Large device rows include USB or
+iPod icons and follow your accent color. USBs never show Sync-needed or pending
+changes: choose the playlists to export. Idle USB polling does not inspect native
+catalogs or compare source playlists. Removed songs leave the USB when no other USB playlist uses
 them; shared songs and unrelated collection-only records stay. Retained songs
 are not audited. The USB menu is Export, Import “My
 Settings”, Reformat USB…, Eject. Reformat offers the actual volume name and
-FAT32/exFAT, with a destructive confirmation. HFS+ is not currently offered.
+FAT32/exFAT, with a destructive confirmation. A correct single-partition MBR
+layout uses a quick same-filesystem erase; other layouts are repartitioned.
+Eject simply requests normal macOS eject, with no final catalog or file read.
+An active worker finishes before macOS receives the request. HFS+ is not currently offered.
 Source metadata/cues are captured fresh; unsupported imported/XML analysis fails
 explicitly. Song columns match your regular browser; double-click loads actual
 USB audio/cues. Device views remember your tab, hierarchy, selection and scroll.
+Folder and playlist rows expand/collapse on click; only tracks are highlighted.
 The information button opens Summary and Info. Desktop tracks allow local
 metadata/artwork edits; USB-track information is read-only. Optional browser
 metadata columns remain hidden until selected. The dialog prepares its cover
@@ -598,15 +607,16 @@ Playback/cache preparation preserves source audio and native data; accepted
 cue/grid/initial-analysis saves use the separate guarded source worker. Native-deck failure disables
 playback with a diagnostic while library management remains available.
 
-**Devices & sync.** New connections appear as **Checking…**, then become usable
-with their sync status already shown. Full iPod dashboard loading follows
+**iPods & sync.** New connections appear as **Checking…**, then become usable
+with their iPod sync status already shown. Generic USBs use the explicit playlist
+export workflow above and have no sync comparison or status. Full iPod dashboard loading follows
 separately. Drop starts export: threaded copy with one aggregating
 progress bar, free-space precheck,
 FAT32-safe names (length-budgeted artist/title), catalogue-visible flat
 `/Playlists` names for dual iPods, and UTF-8 no-BOM `.m3u8` in exact order with
 `# MISSING:` comments. Dual-iPod Rockbox filenames receive zero-padded order
 prefixes while SoundBox and stock-firmware titles stay clean. Generic
-Rockbox/USB exports may additionally mirror the playlist tree for file-browser use.
+Rockbox/filesystem exports may additionally mirror the playlist tree for file-browser use.
 A per-device ownership manifest tracks normalized paths, source identity,
 hashes, playlist membership, artwork, and completed generations. Playlist
 edits/reorders/deletes show as **⚠ Sync needed**; **Sync** resolves
@@ -621,9 +631,9 @@ audio again. Unknown device songs are not imported automatically, and
 device-side deletion/reorder edits fail closed. **Cancel is honest** — generic
 filesystem exports retain playable partial M3U8s flagged for retry; stock/composite
 transactions stop at safe boundaries and report rollback or committed state.
-Generic export finalization scrubs AppleDouble files in touched directories;
+Filesystem export finalization scrubs AppleDouble files in touched directories;
 composite normal Sync does not perform a broad clutter sweep. Right-click
-a device: Sync, **Verify export…** (references and sizes),
+an iPod/Rockbox device: Sync, **Verify export…** (references and sizes),
 **Deep Verify managed files…** (also checks file hashes), and Eject. Dual iPods
 also offer **Repair managed library…** to inspect inventory, restore missing
 owned Rockbox files and clean interrupted writes. Existing damaged or unexpected
@@ -638,7 +648,8 @@ recovery archive, atomic media/artwork copies, and `iTunesDB` committed last.
 Its confirmation reports linked tracks, unique images, and artwork bytes. Other
 stock models remain read-only. The connected layout chooses the destination
 rules automatically: stock-only devices use the conservative database path;
-Rockbox-only/generic FAT32 devices use the broader filesystem path; and a FAT32
+Rockbox-only devices use the broader filesystem path; generic USBs use the
+dedicated classic/Plus exporter described above; and a FAT32
 MA446 containing both layouts enters the composite single-copy workflow below.
 Selecting a stock or dual-boot iPod opens Device, Songs, and Playlists tabs backed by a
 read-only database snapshot rather than exposing its internal FAT folders. A
@@ -689,7 +700,7 @@ Re-queueing the playlist verifies and adopts only exact completed leftovers;
 Mac-side proof journaling makes that verification resumable too. Additional
 playlist drops made while a dual-iPod sync is running are queued and deduplicated,
 then planned against the newly committed media instead of recopied.
-Sync, playlist export, and managed-playlist deletion all follow the same visible
+On composite iPods, Sync, playlist export, and managed-playlist deletion follow the same visible
 contract: immediate Yes/No, background Planning, guarded device writes, then one
 completion. Composite planning occupies 0–30% of the same progress bar, guarded device work
 occupies 30–80%, and required dashboard/sidebar/drift finalization owns 80–100%.

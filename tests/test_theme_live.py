@@ -12,6 +12,9 @@ from desktop import theme
 from desktop.settings_page import SettingsPageMixin
 from desktop.theme_controller import install
 from desktop.wordmark import Wordmark
+from desktop.export_dialog import ExportDialog
+from desktop.progress import ThemeProgressBar
+from soundbox.library import Playlist
 
 
 class _Appearance(QFrame, SettingsPageMixin):
@@ -215,3 +218,57 @@ class TransportRingTheme(unittest.TestCase):
                 self.assertEqual(active, self.capture(
                     self.play, hover=True, down=mouse, playing=not mouse))
             self.assertEqual(resting, self.capture(self.play, playing=False))
+
+
+class ExportProgressTheme(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app=QApplication.instance() or QApplication([])
+        cls.controller=install(cls.app)
+
+    def setUp(self):
+        self.original=(theme.PURPLE,theme.ON_ACCENT)
+
+    def tearDown(self):
+        theme.set_accent(*self.original);self.controller.update()
+
+    @staticmethod
+    def pixels(widget):
+        import numpy as np
+        image=widget.grab().toImage().convertToFormat(QImage.Format_RGBA8888)
+        return np.ndarray((image.height(),image.width(),4),dtype=np.uint8,
+                          buffer=image.bits(),strides=(image.bytesPerLine(),4,1)).copy()
+
+    def test_export_indicators_follow_current_accent_on_open_and_live_change(self):
+        import numpy as np
+        theme.set_accent('#ffffff','#000000');self.controller.update()
+        dialog=ExportDialog([Playlist('Playlist',[],pid='p')],
+                            [dict(path='usb',name='TEST-1',label='USB',free=100,kind='generic_usb')])
+        self.addCleanup(dialog.deleteLater);self.addCleanup(dialog.close)
+        dialog.playlists.topLevelItem(0).setCheckState(0,Qt.Checked)
+        dialog.show();self.app.processEvents()
+        self.assertGreater(dialog.devices.font().pixelSize(),16)
+        for accent in ('#ffffff','#168fc0','#e27239'):
+            theme.set_accent(accent,'#000000');self.controller.update();self.app.processEvents()
+            expected=QColor(theme.PURPLE_LIGHT).getRgb()[:3]
+            for tree in (dialog.playlists,dialog.devices):
+                pixels=self.pixels(tree)
+                self.assertGreater(int(np.all(pixels[:,:,:3]==expected,axis=2).sum()),50)
+                self.assertEqual(int(np.all(pixels[:,:,:3]==(168,85,247),axis=2).sum()),0)
+
+    def test_progress_text_uses_saved_lettering_only_on_the_filled_region(self):
+        theme.set_accent('#ffffff','#000000');self.controller.update()
+        bar=ThemeProgressBar();bar.setFixedSize(350,24)
+        self.addCleanup(bar.deleteLater);self.addCleanup(bar.close)
+        bar.show();self.app.processEvents()
+        for value,black,light in ((0,False,True),(25,False,True),(50,True,True),(65,True,False),(100,True,False)):
+            bar.setValue(value);self.app.processEvents();pixels=self.pixels(bar)
+            center=pixels[:,pixels.shape[1]//2-30:pixels.shape[1]//2+30,:3]
+            dark_ink=(center[:,:,0]<80)&(center[:,:,0]==center[:,:,1])&(center[:,:,1]==center[:,:,2])
+            light_ink=(center[:,:,0]>150)&(center[:,:,2].astype(int)>center[:,:,0].astype(int)+2)
+            self.assertEqual(bool(dark_ink.any()),black,value)
+            self.assertEqual(bool(light_ink.any()),light,value)
+        theme.set_accent('#ffffff','#e27239');self.controller.update();self.app.processEvents()
+        pixels=self.pixels(bar)
+        colored=(pixels[:,:,0]>180)&(pixels[:,:,1]<180)&(pixels[:,:,2]<140)
+        self.assertGreater(int(colored.sum()),3)
