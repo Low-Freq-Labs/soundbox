@@ -11,8 +11,9 @@ Personal build157 is installed and normally reopened at `/Applications/Soundbox.
 Signed base revisiond19f3eb40b4e18a5e474e8ef26a2887a76de9b7c, dirty=true; runtime
 `fc6963120d44821d3ddb2c873560dc38c0e76cb9d628604001e6bd53213783b4`, executable
 `9601842d829165d405652b641eb3a5253f53a596488a70fd385a7be8bcf885e8`.
-Sonny requested wrap-up and publication of the tested export/broader/correctness
-efficiency changes; the source release is recorded in HANDOFF.
+Sonny requested wrap-up. The tested export/broader/correctness efficiency source
+release `d08ee91d18fe89e9fa520f7f242d1cd3015ec903` is committed and pushed; this
+documentation closure does not restamp or reinstall the running app.
 HANDOFF distinguishes the signed installed dirty-source base from the new
 source-release history and prior `9a023536`/`d19f3eb` checkpoints.
 
@@ -97,7 +98,7 @@ Exact evidence and measured remaining limits are in HANDOFF/performance-audit.
 Preserve the existing dirty tree,
 all accepted authority/guard/recovery boundaries and newer user edits. Do not
 interrupt the running app or send it inputs. Sonny is using the app while the
-source release is wrapped; no documentation-only reinstall or restamping.
+published source release is closed out; no documentation-only reinstall or restamping.
 At22:29 his subsequent relaunch was healthy; only columns_state changed since
 installation and all curation/authorities/icon remain preserved. Full detached
 queue serialization, cooperative pre-response network

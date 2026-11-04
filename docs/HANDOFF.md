@@ -1,10 +1,12 @@
 # SoundBox current handoff
 
 Updated November3,2026 after the correctness/efficiency pass, final complete gate,
-both signed package profiles, installation, normal curated startup and wrap-up. Branch
-`main`, base `d19f3eb40b4e18a5e474e8ef26a2887a76de9b7c`. Export/broader/correctness
-changes and documentation are being published under Sonny's explicit wrap-up
-request. The release Git identity is separate from the installed signed base.
+both signed package profiles, installation, normal curated startup and wrap-up.
+Branch `main`; application source release `d08ee91d18fe89e9fa520f7f242d1cd3015ec903`
+is committed and pushed. This documentation-only closure follows that release.
+The installed signed base remains `d19f3eb40b4e18a5e474e8ef26a2887a76de9b7c`,
+dirty=true; its recorded runtime bytes are unchanged. Publication did not restamp
+or reinstall the running app.
 **Personal build157 is installed and left running at `/Applications/Soundbox.app`.**
 No further input or termination is granted.
 
@@ -113,7 +115,7 @@ No agent restart, app input, teardown or reinstall occurred during wrap-up.
 
 Leave installed build157 running for Sonny's use and trackpad testing. Existing
 installation approval does not grant general termination or inputs. Sonny's
-wrap-up authorizes this source publication. Physical export/reconnect/power-cycle and public clean-machine/
+wrap-up source publication is complete. Physical export/reconnect/power-cycle and public clean-machine/
 notarization gates remain open. One known absent native binding/unresolved import
 path and the old32kHz MP3 compatibility error remain explicit, unchanged and unguessed.
 
