@@ -144,8 +144,9 @@ metadata recovery are installed; exact current validation/provenance is in
 fresh. Sonny approved installation of the export efficiency pass below and manually
 closed build155. Build160 was installed and normally reopened; that earlier
 source was published under Sonny's wrap-up request without restamping/reinstalling
-its running bundle. Build163 above now supersedes that runtime; its new local
-changes are authorized for publication by Sonny's subsequent November4 wrap-up.
+its running bundle. Build163 above now supersedes that runtime. Its tested USB/UI source release
+`cf2ef5bef366ce126178b0f04cf969840e203592` is published under Sonny's subsequent November4 wrap-up, without
+restamping or reinstalling the running app.
 
 The native database/sidecars are the shared musical authority; intentions and
 captured detector records are provenance, not a competing final musical store.

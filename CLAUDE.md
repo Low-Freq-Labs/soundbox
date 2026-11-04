@@ -42,8 +42,8 @@ one startup USB scan and no recurring scans were observed. Leave it running.
 The immediate7bbe8577… rollback and protected earlierb0ccb1ab… base share the
 existing private rollback directory pending acceptance; paths and retention are
 in HANDOFF. Redundant dist/PyInstaller copies are retired. Sonny's subsequent
-November4 wrap-up authorizes committing/pushing this tested USB/UI source. Its
-publication leaves the installed signed base/bytes and running session unchanged;
+November4 wrap-up publishes tested USB/UI source releasecf2ef5bef366ce126178b0f04cf969840e203592, matching
+all690frozen inputs. Publication leaves the installed signed base/bytes and running session unchanged;
 no documentation-only restamp/reinstall is needed.
 
 ## Prior build160 delivery — November4,2026 (superseded above)

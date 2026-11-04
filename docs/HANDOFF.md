@@ -10,8 +10,9 @@ running; no documentation-only rebuild, restamp, reinstall or restart is needed.
 
 ## Runtime and source provenance
 
-Branch `main`. Sonny's subsequent November4 wrap-up authorizes publication of the
-tested USB/UI source. The installed signed base remains
+Branch `main`. Tested USB/UI source release `cf2ef5bef366ce126178b0f04cf969840e203592` matches all690frozen
+inputs and is published under Sonny's November4 wrap-up. A following documentation
+closure records that source release. The installed signed base remains
 `740ad533c4991938f504d792a89020623f063471`, dirty=true; publication does not restamp,
 reinstall or restart it. The exact tested runtime is:
 
@@ -31,8 +32,7 @@ a running app to hide strict root-metadata rejection.
 
 The prior installed build160 was runtime7bbe8577…/executable380806ce…; its signed
 base was c2415d5…/dirty=true and its published tested source was4a3d29a…. Those
-are historical identities, not the current runtime. Source publication later
-must not restamp/reinstall these already verified bytes merely to change HEAD.
+are historical identities, not the current runtime. Source publication must not restamp/reinstall these already verified bytes merely to change HEAD.
 
 ## Delivered USB/UI behavior
 
@@ -174,7 +174,7 @@ After verified installation, duplicate personal/public dist/COLLECT/PyInstaller
 outputs were retired:1,115,703,444logical regular-file bytes, exact paths in
 packaging-retirement.json. Installed app, active source/venv, build/native,
 build/cdj, build/check, originals and required fixtures/recovery remain protected.
-No requested implementation/install work remains. The November4 wrap-up
-authorizes committing/pushing the tested source and documentation. Leave build163
-and Sonny's session alone while he tests; no further device writes or acceptance
-actions belong to publication.
+The November4 wrap-up publishes the tested source and current documentation.
+No requested implementation/install/publication work remains. Leave build163 and
+Sonny's session alone while he tests. Retained rollback bases await acceptance;
+no further device writes or physical acceptance actions belong to this closure.
