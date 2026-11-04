@@ -368,9 +368,12 @@ with explicit Save to Global / Load Global controls. Existing settings survive
 ordinary playlist exports. Overview uses a compact two-column General layout.
 
 rekordbox and SoundBox can export over each other at any time. Existing native
-collections and other playlists are preserved. Drops export directly; Update
-Playlists updates SoundBox's managed selections without auditing retained songs
-or deleting collection media. The USB menu is Update Playlists, Import “My
+collections and other playlists are preserved. Drops export directly. Export
+opens playlist checkboxes on the left and connected-device checkboxes on the
+right; select several devices to export to each from one action. Only selected
+playlists update. Removed songs leave the USB when no other USB playlist uses
+them; shared songs and unrelated collection-only records stay. Retained songs
+are not audited. The USB menu is Export, Import “My
 Settings”, Reformat USB…, Eject. Reformat offers the actual volume name and
 FAT32/exFAT, with a destructive confirmation. HFS+ is not currently offered.
 Source metadata/cues are captured fresh; unsupported imported/XML analysis fails
@@ -378,15 +381,17 @@ explicitly. Song columns match your regular browser; double-click loads actual
 USB audio/cues. Device views remember your tab, hierarchy, selection and scroll.
 The information button opens Summary and Info. Desktop tracks allow local
 metadata/artwork edits; USB-track information is read-only. Optional browser
-metadata columns remain hidden until selected. The dialog opens before
-artwork resolution; Info uses a compact three-column form that fits at its default
+metadata columns remain hidden until selected. The dialog prepares its cover
+off-thread before appearing, so the first visible frame includes the artwork.
+Info uses a compact three-column form that fits at its default
 size, with larger centered artwork and a full-width Comments row. Summary uses
 a larger cover alongside inline labels and track values. The edit note sits bottom
 left. USB Category/Sort panels have visible borders, Color uses dots beside
 inputs, and Global My Settings/Keyboard scroll at the right window edge.
 Older saved layouts keep
 new fields unchecked; many selected fields can scroll without stranding data.
-The footer keeps its height when Cancel appears. Supported metadata edits stay in SoundBox and
+The footer keeps its height when Cancel appears and shortens long messages to
+fit, retaining the full message on hover. Supported metadata edits stay in SoundBox and
 feed export without changing source audio. See [CDJ limits](docs/cdj-usb-export.md).
 
 **Curation.** Inline Title/Artist edits (double-click or right-click) become

@@ -82,6 +82,7 @@ class ArtPickerDialog(QDialog):
 
         v = QVBoxLayout(self)
         head = QLabel(f"Cover art for:  {title}")
+        head.setTextFormat(Qt.PlainText)
         head.setWordWrap(True)
         v.addWidget(head)
 

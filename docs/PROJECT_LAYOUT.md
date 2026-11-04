@@ -5,19 +5,27 @@ Reviewed November3,2026. This describes the checkout and retained evidence,
 not the installed app's live library or waveform caches. Current app/source
 provenance and exact rollback location are in [HANDOFF](HANDOFF.md).
 
-## Current retention — November3 night
+The subsequent [UI polish review](ui-polish-audit.md) adds a179-file source
+inventory, frozen runtime/test hashes, generated presentation regressions and
+Cocoa renders under `~/Library/Logs/Soundbox/ui-polish-2026-11-03/`.
+Its source/package/install status is separate from the dated retention and
+documentation-only closure below; HANDOFF records the current state.
 
-Personal build157 is installed at `/Applications/Soundbox.app`. One previous
-runtime d5cb4451… rollback remains while Sonny tests the update; it has not been
-accepted for retirement. Redundant public/personal dist app/COLLECT and
-PyInstaller work plus the obsolete73219a59… rollback were retired after installed
-normal startup verification. Exact paths and1,372,048,124logical regular-file
-bytes are recorded in `post-install-retirement.json` under
-`~/Library/Logs/Soundbox/correctness-efficiency-2026-11-03/`.
-Source, active venv, native/CDJ/check outputs, small receipts, recovery, conversion
-originals and required reference fixtures remain. The older retention/cleanup
-sections below are dated history; they do not define today's rollback or output
-inventory. No app-only cleanup permits deleting source audio or recovery.
+## Current retention — November4
+
+Updated build160 (runtime7bbe8577…) is installed. One b0ccb1ab… build160 rollback
+is retained pending acceptance of this update; its exact path is in HANDOFF.
+The older generated fc696312…/d5cb4451… build157 apps were retired under standing
+cleanup after Sonny used/positively accepted the prior build160 Info behavior.
+Exact paths, hashes and retention resolution are in `older-rollbacks-retired.json`
+under `~/Library/Logs/Soundbox/export-polish-2026-11-04/`. This directory also
+retains final2564-test reports,675-input freeze, subagent format review, native
+battery/AC evidence, both package proofs and installation/state checks.
+Redundant dist/COLLECT/PyInstaller output is retired only after verified install;
+its exact record is `post-install-retirement.json`. Older November3 retirements
+remain dated evidence, not current output/rollback inventories. Keep source,
+venv, native/CDJ/check outputs, required fixtures, originals and native recovery.
+No app-output cleanup authorizes removing music, source or acceptance material.
 
 ## Documentation consistency — November3
 

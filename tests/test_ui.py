@@ -91,6 +91,66 @@ class _FakeArt:
         return {tid: self.status_kind(tid) for tid in tids}
 
 
+class PolishNavigation(unittest.TestCase):
+    def test_artist_refresh_retains_expansion_current_cell_and_multiple_selected_tracks(self):
+        from desktop.app import ARTIST_ROLE,ARTIST_TRACK_ROLE
+        from PySide6.QtCore import QItemSelectionModel
+        _win.search.setText('');_win._show_artists()
+        view=_win.artists_view
+        first,second=view.topLevelItem(0),view.topLevelItem(1)
+        first.setExpanded(True);second.setExpanded(True)
+        view.setCurrentItem(first.child(0),1)
+        view.selectionModel().select(view.indexFromItem(second.child(0)),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        expanded={first.data(0,ARTIST_ROLE),second.data(0,ARTIST_ROLE)}
+        current=first.child(0).data(0,ARTIST_TRACK_ROLE)
+        selected={i.data(0,ARTIST_TRACK_ROLE) for i in view.selectedItems()}
+        _win._show_artists(preserve=True);_app.processEvents()
+        self.assertEqual({view.topLevelItem(i).data(0,ARTIST_ROLE) for i in range(view.topLevelItemCount())
+                          if view.topLevelItem(i).isExpanded()},expanded)
+        self.assertEqual(view.currentItem().data(0,ARTIST_TRACK_ROLE),current)
+        self.assertEqual(view.currentColumn(),1)
+        self.assertEqual({i.data(0,ARTIST_TRACK_ROLE) for i in view.selectedItems()},selected)
+        _win._show_collection()
+
+    def test_queued_sort_reseat_does_not_replace_newer_multiselection(self):
+        from PySide6.QtCore import QItemSelectionModel
+        _win.model.set_rows([dict(id=str(i),title=f'Track {i}') for i in range(3)])
+        _win.table.setCurrentIndex(_win.model.index(0,0))
+        _win._schedule_reseat_selection()
+        _win.table.setCurrentIndex(_win.model.index(1,0))
+        _win.table.selectionModel().select(_win.model.index(2,0),QItemSelectionModel.Select|QItemSelectionModel.Rows)
+        before={i.row() for i in _win.table.selectionModel().selectedRows()}
+        _app.processEvents()
+        self.assertEqual({i.row() for i in _win.table.selectionModel().selectedRows()},before)
+        self.assertEqual(_win.table.currentIndex().row(),1)
+        _win._show_collection()
+
+    def test_delayed_scroll_from_previous_view_cannot_move_the_new_view(self):
+        _win.model.set_rows([dict(id=str(i),title=f'Track {i}') for i in range(120)])
+        original_key=getattr(_win,'_view_key',None)
+        original_memory=getattr(_win,'_view_memory',{})
+        try:
+            _win._view_key='before';_win._view_memory={'first':(None,40),'second':(None,0)}
+            _win._restore_view('first');_win._restore_view('second')
+            _win.table.doItemsLayout();_win.table.verticalScrollBar().setValue(0)
+            _app.processEvents()
+            self.assertEqual(_win.table.verticalScrollBar().value(),0)
+        finally:
+            _win._view_key=original_key;_win._view_memory=original_memory;_win._show_collection()
+
+    def test_online_art_publication_refreshes_information_after_success_only(self):
+        from soundbox.artwork import ArtResult
+        result=ArtResult(b'not decoded in this test','image/jpeg',1.0,'fixture','fixture')
+        with mock.patch.object(_win.art_cache,'store_ok') as store, \
+                mock.patch.object(_win,'_refresh_info_artwork') as refresh, \
+                mock.patch.object(_win,'_queue_stock_artwork'), \
+                mock.patch.object(_win,'_refresh_model_art'), \
+                mock.patch.object(_win,'_background_status_available',return_value=False):
+            _win._on_oneshot('1',None);refresh.assert_not_called()
+            _win._on_oneshot('1',result)
+            store.assert_called_once_with('1',result);refresh.assert_called_once_with(('1',))
+
+
 class LocalPlaylistFolders(unittest.TestCase):
     def test_unified_sidebar_keeps_local_rename_until_native_cutover(self):
         item=_win.sb_tree.topLevelItem(2).child(0)
@@ -1224,16 +1284,17 @@ class StockIpodUI(unittest.TestCase):
                 button.setText(label)
                 button.hide()
 
-    def test_device_header_sync_is_always_available(self):
-        old_sync = _win._sync_device
+    def test_device_header_export_opens_selector_for_current_device(self):
+        old_sync = _win._show_export_dialog
         old_current = _win._current_device_path
         calls = []
         try:
             _win._current_device_path = "/Volumes/IPOD"
-            _win._sync_device = calls.append
+            _win._show_export_dialog = calls.append
+            self.assertEqual(_win.device_sync_btn.text(),'Export')
             _win.device_sync_btn.click()
         finally:
-            _win._sync_device = old_sync
+            _win._show_export_dialog = old_sync
             _win._current_device_path = old_current
         self.assertEqual(calls, ["/Volumes/IPOD"])
         try:

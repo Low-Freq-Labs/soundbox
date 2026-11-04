@@ -57,6 +57,18 @@ class MySettingsProductionTests(unittest.TestCase):
 
 
 class UsbFormatTests(unittest.TestCase):
+    @staticmethod
+    def format_fixture():
+        plan=usb_format.FormatTarget('/Volumes/NOT-A-LIVE-USB',(91,92),'fake-volume','disk99',
+            ('disk99',256,'synthetic-usb','Synthetic USB','old-map-id'),256,('/Volumes/NOT-A-LIVE-USB',))
+        listing={'AllDisksAndPartitions':[{'DeviceIdentifier':'disk99','Content':'FDisk_partition_scheme',
+            'Partitions':[{'VolumeName':'MY USB','MountPoint':'/Volumes/MY USB','DeviceIdentifier':'disk99s1'}]}]}
+        whole=dict(DeviceIdentifier='disk99',TotalSize=256,IORegistryEntryName='synthetic-usb',MediaName='Synthetic USB',
+            Internal=False,VirtualOrPhysical='Physical',BusProtocol='USB')
+        info=dict(MountPoint='/Volumes/MY USB',VolumeName='MY USB',VolumeUUID='new-id',Internal=False,
+            DeviceIdentifier='disk99s1',ParentWholeDisk='disk99',FilesystemType='msdos')
+        return plan,listing,whole,info
+
     def test_supported_names_and_formats(self):
         self.assertEqual(usb_format.name_for('My USB','FAT32'),'MY USB')
         self.assertEqual(usb_format.name_for('My USB','ExFAT'),'My USB')
@@ -69,18 +81,46 @@ class UsbFormatTests(unittest.TestCase):
             plist.assert_not_called()
 
     def test_format_rechecks_exact_disk_and_uses_supported_filesystem_and_mbr(self):
-        plan=usb_format.FormatTarget('/Volumes/NOT-A-LIVE-USB',(91,92),'fake-volume','disk99',('disk99',256),256,('/Volumes/NOT-A-LIVE-USB',))
-        listing={'AllDisksAndPartitions':[{'Partitions':[{'VolumeName':'MY USB','MountPoint':'/Volumes/MY USB','DeviceIdentifier':'disk99s1'}]}]}
-        info={'MountPoint':'/Volumes/MY USB','VolumeUUID':'new-id','Internal':False}
-        with mock.patch('soundbox.usb_format.capture',return_value=plan) as capture, \
-             mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)) as run, \
-             mock.patch('soundbox.usb_format._plist',side_effect=[listing,info]):
-            self.assertEqual(usb_format.format_usb(plan,'My USB','FAT32'),info)
-            capture.assert_called_once()
-            self.assertEqual(run.call_args.args[0],['/usr/sbin/diskutil','eraseDisk','FAT32','MY USB','MBRFormat','disk99'])
+        for filesystem,final_name,native_fs in (('FAT32','MY USB','msdos'),('ExFAT','My USB','exfat')):
+            with self.subTest(filesystem=filesystem):
+                plan,listing,whole,info=self.format_fixture()
+                info.update(VolumeName=final_name,FilesystemType=native_fs)
+                listing['AllDisksAndPartitions'][0]['Partitions'][0]['VolumeName']=final_name
+                with mock.patch('soundbox.usb_format.capture',return_value=plan) as capture, \
+                     mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)) as run, \
+                     mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
+                    self.assertEqual(usb_format.format_usb(plan,'My USB',filesystem),info)
+                    capture.assert_called_once()
+                    self.assertEqual(run.call_args.args[0],['/usr/sbin/diskutil','eraseDisk',filesystem,final_name,'MBRFormat','disk99'])
         with mock.patch('soundbox.usb_format.capture',return_value=None),mock.patch('soundbox.usb_format.subprocess.run') as run:
             with self.assertRaisesRegex(ValueError,'changed'):usb_format.format_usb(plan,'USB','FAT32')
             run.assert_not_called()
+
+    def test_post_format_wrong_disk_map_filesystem_or_parent_prevents_initialization(self):
+        from copy import deepcopy
+        for area,key,value in (('map','Content','GUID_partition_scheme'),('disk','TotalSize',512),
+                ('disk','BusProtocol','SATA'),('volume','FilesystemType','apfs'),('volume','ParentWholeDisk','disk98')):
+            with self.subTest(area=area,key=key):
+                plan,listing,whole,info=self.format_fixture()
+                listing=deepcopy(listing)
+                objects={'map':listing['AllDisksAndPartitions'][0],'disk':whole,'volume':info}
+                objects[area][key]=value
+                with mock.patch('soundbox.usb_format.capture',return_value=plan), \
+                     mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)), \
+                     mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
+                    with self.assertRaisesRegex(RuntimeError,'USB formatted'):
+                        usb_format.format_usb(plan,'My USB','FAT32')
+
+    def test_post_format_extra_partition_cannot_place_the_requested_volume_second(self):
+        plan,listing,whole,info=self.format_fixture()
+        requested=listing['AllDisksAndPartitions'][0]['Partitions'][0]
+        requested['DeviceIdentifier']='disk99s2';info['DeviceIdentifier']='disk99s2'
+        listing['AllDisksAndPartitions'][0]['Partitions'].insert(0,{'DeviceIdentifier':'disk99s1','VolumeName':'Unexpected'})
+        with mock.patch('soundbox.usb_format.capture',return_value=plan), \
+             mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)), \
+             mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
+            with self.assertRaisesRegex(RuntimeError,'one data partition'):
+                usb_format.format_usb(plan,'My USB','FAT32')
 
 
 class TrackInfoTests(unittest.TestCase):
@@ -146,9 +186,9 @@ class PreferenceUiTests(unittest.TestCase):
         control=dialog.controls['color'];control.setCurrentIndex(control.findData('8'))
         dialog._save();self.assertEqual(saved,[{'color':'8'}])
 
-    def test_info_opens_before_artwork_resolution_and_drains_its_worker(self):
+    def test_info_prepares_artwork_before_show_and_drains_its_worker(self):
         import threading
-        from PySide6.QtTest import QTest
+        from PySide6.QtCore import QTimer
         from desktop.track_info import TrackInfoDialog
         started=threading.Event();release=threading.Event()
         def resolve():
@@ -157,14 +197,20 @@ class PreferenceUiTests(unittest.TestCase):
         self.addCleanup(dialog.close)
         self.assertFalse(started.is_set())
         self.assertFalse(dialog.controls)
+        observed=[]
+        def release_after_worker_starts():
+            if not started.is_set():
+                QTimer.singleShot(1,release_after_worker_starts);return
+            observed.append((dialog.isVisible(),dialog._owner.pending))
+            release.set()
+        QTimer.singleShot(1,release_after_worker_starts)
         try:
+            dialog.prepare_artwork()
+            self.assertEqual(observed,[(False,1)])
+            self.assertTrue(dialog._art_ready)
+            self.assertEqual(dialog._owner.pending,0)
             dialog.show()
-            for _ in range(50):
-                QTest.qWait(10)
-                if started.is_set():break
-            self.assertTrue(started.is_set())
             self.assertTrue(dialog.isVisible())
-            self.assertEqual(dialog._owner.pending,1)
         finally:release.set()
         dialog.reject()
         self.assertEqual(dialog._owner.pending,0)

@@ -99,8 +99,11 @@ retain their PIONEER exclusion. Full contract and acceptance limits:
 
 Current native catalogs are shared authority across exporters; cdj_catalog adopts
 fresh metadata and maps source-local tag IDs without auditing retained media.
-cdj_incremental changes selected records/memberships and preserves collection
-songs. cdj_transaction checksums while copying, resumes completed payloads, and
+cdj_incremental changes selected records/memberships and preserves unrelated
+collection-only songs. Removed selected members are pruned only after counting
+references in every playlist across both native catalogs; shared assets stay.
+Each format preserves its own unrelated baseline even when the formats already
+differ. cdj_transaction checksums while copying, resumes completed payloads, and
 lets a later coherent native export supersede an older interrupted catalog intent.
 USB/global My Settings use44 logical fields and byte-preserving selected patches;
 no automatic global propagation. usb_format revalidates the reviewed physical USB
@@ -466,7 +469,14 @@ reader when either native library exists; no live SQL is opened on the USB.
 Native preference controls queue an explicit Save generation through the same
 worker lane. The UI does no removable-device I/O in widget callbacks.
 A USB playlist drop carries target-bound authorization through preparation into
-commit without another dialog. cdj_incremental freezes only selected changed/new
+commit without another dialog. The Export dialog selects playlists/folders on
+the left and connected devices on the right. A source-bound queue captures each
+checked target mount/UUID, rebinds selected playlist IDs for each target and uses
+the existing serialized exporters. Cancellation/shutdown clear pending targets.
+Selected playlist replacement prunes only removed members unused by every other
+USB playlist in both catalogs. Exact removed assets are rollback-backed until
+durable commit, then their transient recovery bytes are retired to free space.
+cdj_incremental freezes only selected changed/new
 inputs and merges copied native catalogs through native/cdj/src/merge.rs. Prior
 payload contracts remain inventory, not a fresh audit. Input signatures/per-playlist
 hints are separate from ownership. Newly captured audio is placed directly in the
@@ -512,9 +522,13 @@ to the selector field after Qt lays it out. Info opens Summary/Info for the sele
 metadata edits are SoundBox-local and feed USB export. USB songs and historical
 native-deleted Graveyard rows open read-only information dialogs. TrackInfoDialog constructs
 its Summary without artwork locks/decoding and lazily builds Info on selection.
-After the dialog opens, ArtworkWorker resolves the canonical art path and decodes
-a bounded QImage outside the GUI; TaskOwner retains it through finished/join and
-drains before dialog close or application shutdown. No extra work is added to
+Before modal show, ArtworkWorker resolves the canonical art path and decodes
+a display-sized QImage outside the GUI. Preparation dispatches Qt timers/results
+with user input excluded and a wait cursor, then shows a complete first frame.
+TaskOwner retains the worker through finished/join and drains before dialog close
+or application shutdown. Successful art publication refreshes matching dialogs;
+an in-flight refresh is coalesced without painting its obsolete result. The old
+cover remains until its replacement is ready. No extra work is added to
 track loading. Comments spans the Info row; Lyricist is omitted from that form.
 Global My Settings and Keyboard put their scrollbars at the window's right edge.
 Flexible prep
@@ -539,6 +553,16 @@ record columns_keys: restoring an older ten-column Qt header must explicitly kee
 new metadata fields hidden. Artists mirrors shared widths and visibility.
 ScrollPerItem keeps 24-point rows aligned with the sidebar. TrackModel declines
 unsupported paint roles early without adding a row cache or source reads.
+
+Delayed sort-selection and playlist-scroll restoration bind the current view
+and selection revision, so a newer selection/navigation invalidates older
+callbacks. In-place Artists refresh retains expanded groups, surviving selected
+tracks, current column and scroll; entering Artists normally retains its existing
+navigation behavior. Default-photo repopulation similarly restores stable photo
+IDs and scroll. Shared choice painters elide within the label/shortcut/check
+rectangles. The footer's `ElidedLabel` can shrink within the available layout;
+its full logical text remains available to status state checks and tooltips,
+and pulse reservation keeps neighboring controls still.
 
 Prep edit feedback uses the existing lower-left status label and status helpers.
 `TagEditController.update_status_text` distinguishes accepted tag/cue/grid intents

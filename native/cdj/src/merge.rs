@@ -18,6 +18,38 @@ pub struct Request {
     pub my_tags:Vec<rbl_export::SourceMyTag>,
     #[serde(default)] pub preserve_playlists:BTreeSet<u32>,
     #[serde(default)] pub tag_assignments:BTreeMap<u32,Vec<u64>>,
+    #[serde(default)] pub selected_only:bool,
+    #[serde(default)] pub selected_track_ids:BTreeSet<u32>,
+    #[serde(default)] pub selected_playlist_ids:BTreeSet<u32>,
+    #[serde(skip)] pub retired_classic_ids:BTreeSet<u32>,
+    #[serde(skip)] pub retired_plus_ids:BTreeSet<u32>,
+}
+
+/// Only old members of the playlists being replaced can become cleanup candidates.
+/// Count references in both firmware catalogs, including unrelated playlists.
+fn retired_tracks(request:&Request)->Result<(BTreeSet<u32>,BTreeSet<u32>)> {
+    let before=rbl_export::snapshot::Snapshot::read(&request.baseline)?;
+    let mut used_paths=BTreeSet::new();
+    for library in [&before.legacy,&before.one].into_iter().flatten() {
+        let tracks=library.tracks.iter().map(|t|(t.id,t)).collect::<BTreeMap<_,_>>();
+        for playlist in &library.playlists {
+            if !request.selected_playlist_ids.contains(&playlist.id) {
+                for id in &playlist.tracks {
+                    if let Some(track)=tracks.get(id){used_paths.insert(track.path.clone());}
+                }
+            }
+        }
+    }
+    let mut selected=request.selected_track_ids.clone();
+    for node in request.playlists.iter().filter(|n|request.selected_playlist_ids.contains(&n.id)) {selected.extend(node.tracks.iter().copied());}
+    let retired=|library:&Option<rbl_export::snapshot::Library>| {
+        let Some(library)=library else{return BTreeSet::new();};
+        let candidates=library.playlists.iter().filter(|p|request.selected_playlist_ids.contains(&p.id))
+            .flat_map(|p|p.tracks.iter().copied()).collect::<BTreeSet<_>>();
+        library.tracks.iter().filter(|t|candidates.contains(&t.id) && !selected.contains(&t.id) && !used_paths.contains(&t.path))
+            .map(|t|t.id).collect()
+    };
+    Ok((retired(&before.legacy),retired(&before.one)))
 }
 
 fn read_rows(db:&Connection, table:&str) -> Result<(Vec<String>,Vec<Vec<Value>>)> {
@@ -104,18 +136,27 @@ fn classic(request:&Request, partial:Option<&[u8]>, output:&Path) -> Result<()> 
             if id!=0 {put(&mut row,0x1c,*art_map.get(&id).ok_or("unresolved classic artwork")?);}
             tracks.insert(word(&row,0x48)?,row);
         }
-        tracks.retain(|id,_|request.track_ids.contains(id));
+        tracks.retain(|id,_|!request.retired_classic_ids.contains(id) && (request.selected_only || request.track_ids.contains(id)));
         replace(&mut bytes,0,tracks.into_values().collect(),true)?;
     } else {
-        let tracks=native_rows(&bytes,PageType::Tracks)?.into_iter().filter(|r|word(r,0x48).is_ok_and(|id|request.track_ids.contains(&id))).collect();
+        let tracks=native_rows(&bytes,PageType::Tracks)?.into_iter().filter(|r|word(r,0x48).is_ok_and(|id|!request.retired_classic_ids.contains(&id) && (request.selected_only || request.track_ids.contains(&id)))).collect();
         replace(&mut bytes,0,tracks,true)?;
     }
     let mut positions=BTreeMap::new();
     let old_nodes=native_rows(&bytes,PageType::PlaylistTree)?.into_iter().map(|row|Ok((word(&row,12)?,row))).collect::<Result<BTreeMap<_,_>>>()?;
     let old_entries=entries_by_playlist(native_rows(&bytes,PageType::PlaylistEntries)?);
     let mut nodes=Vec::new();let mut entries=Vec::new();
+    if request.selected_only {
+        for (id,row) in &old_nodes {
+            if !request.selected_playlist_ids.contains(id) {
+                nodes.push(row.clone());
+                if let Some(prior)=old_entries.get(id){entries.extend(prior.iter().cloned());}
+            }
+        }
+    }
     for node in &request.playlists {
         let seq=positions.entry(node.parent).or_insert(0u32);
+        if request.selected_only && !request.selected_playlist_ids.contains(&node.id){*seq+=1;continue;}
         if request.preserve_playlists.contains(&node.id) {
             nodes.push(old_nodes.get(&node.id).ok_or("missing external playlist")?.clone());
             if let Some(prior)=old_entries.get(&node.id) {entries.extend(prior.iter().cloned());}
@@ -129,7 +170,9 @@ fn classic(request:&Request, partial:Option<&[u8]>, output:&Path) -> Result<()> 
     }
     replace(&mut bytes,7,nodes,false)?;replace(&mut bytes,8,entries,false)?;
     let mut property=Pdb::parse(&bytes)?.property().ok_or("missing native property")?;
-    property.contents=u32::try_from(request.track_ids.len())?;
+    property.contents=if request.selected_only {
+        u32::try_from(native_rows(&bytes,PageType::Tracks)?.len())?
+    } else {u32::try_from(request.track_ids.len())?};
     replace(&mut bytes,19,vec![property_row(&property).ok_or("invalid native property")?],true)?;
     std::fs::write(output,bytes)?;
     Ok(())
@@ -185,14 +228,14 @@ fn plus(request:&Request, partial:Option<&Path>, output:&Path) -> Result<()> {
         for tag in tags {transaction.execute("INSERT INTO myTag_content VALUES (?1,?2)",rusqlite::params![i64::try_from(*tag)?,content])?;}
     }
     let ids=read_rows(&transaction,"content")?.1.into_iter().map(|r|integer(&r[0])).collect::<Result<Vec<_>>>()?;
-    for id in ids.into_iter().filter(|id|!request.track_ids.contains(id)) {
+    for id in ids.into_iter().filter(|id|request.retired_plus_ids.contains(id) || (!request.selected_only && !request.track_ids.contains(id))) {
         transaction.execute("DELETE FROM cue WHERE content_id=?1",[id])?;
         transaction.execute("DELETE FROM myTag_content WHERE content_id=?1",[id])?;
         transaction.execute("DELETE FROM content WHERE content_id=?1",[id])?;
     }
     let old_ids=read_rows(&transaction,"playlist")?.1.into_iter().map(|r|integer(&r[0])).collect::<Result<Vec<_>>>()?;
     for id in old_ids {
-        if !request.preserve_playlists.contains(&id) {
+        if !request.preserve_playlists.contains(&id) && (!request.selected_only || request.selected_playlist_ids.contains(&id)) {
             transaction.execute("DELETE FROM playlist_content WHERE playlist_id=?1",[id])?;
             transaction.execute("DELETE FROM playlist WHERE playlist_id=?1",[id])?;
         }
@@ -200,16 +243,18 @@ fn plus(request:&Request, partial:Option<&Path>, output:&Path) -> Result<()> {
     let mut positions=BTreeMap::new();
     for node in &request.playlists {
         let seq=positions.entry(node.parent).or_insert(0i64);*seq+=1;
+        if request.selected_only && !request.selected_playlist_ids.contains(&node.id){continue;}
         if request.preserve_playlists.contains(&node.id){continue;}
         transaction.execute("INSERT INTO playlist VALUES (?1,?2,?3,0,?4,?5)",rusqlite::params![node.id,*seq,node.name,i64::from(node.folder),node.parent])?;
         for (position,id) in node.tracks.iter().enumerate(){transaction.execute("INSERT INTO playlist_content VALUES (?1,?2,?3)",rusqlite::params![node.id,*id,i64::try_from(position+1)?])?;}
     }
-    transaction.execute("UPDATE property SET numberOfContents=?1",[i64::try_from(request.track_ids.len())?])?;
+    transaction.execute("UPDATE property SET numberOfContents=(SELECT count(*) FROM content)",[])?;
     transaction.commit()?;
     Ok(())
 }
 
-pub fn merge(request:&Request) -> Result<()> {
+pub fn merge(request:&mut Request) -> Result<()> {
+    (request.retired_classic_ids,request.retired_plus_ids)=retired_tracks(request)?;
     let dir=request.output.join("PIONEER/rekordbox");std::fs::create_dir_all(&dir)?;
     for name in ["export.pdb","exportExt.pdb","exportLibrary.db"] {std::fs::copy(request.baseline.join("PIONEER/rekordbox").join(name),dir.join(name))?;}
     let partial=request.partial.as_ref().map(|p|p.join("PIONEER/rekordbox"));
@@ -244,12 +289,91 @@ pub fn merge(request:&Request) -> Result<()> {
                 if let Some(original)=raw_members.get(&(word(row,4)?,word(row,8)?)){*row=original.clone();}
             }
         }
+        if request.selected_only && number==3 {
+            let generated_ids=rows.iter().map(|r|word(r,20)).collect::<Result<BTreeSet<_>>>()?;
+            rows.extend(raw_tags.iter().filter(|(id,_)|!generated_ids.contains(id)).map(|(_,r)|r.clone()));
+        }
+        if request.selected_only && number==4 {
+            rows.retain(|r|word(r,4).is_ok_and(|id|request.selected_track_ids.contains(&id)));
+            rows.extend(raw_members.iter().filter(|((id,_),_)|!request.selected_track_ids.contains(id) && !request.retired_classic_ids.contains(id)).map(|(_,r)|r.clone()));
+        }
         if number==7 && old_master==master {rows=native_rows(&ext,kind)?;}
         if number==4 {file.add_table_styled(number as u32,&rows,|_,_|{},rbl_pdb::build::PageStyle::LastRowIndex);}
         else {file.add_table_numbered(number as u32,&rows,|row,index|rbl_pdb::rows::set_index_shift(row,index));}
     }
     std::fs::write(dir.join("exportExt.pdb"),file.finish())?;
-    if !rbl_export::verify_databases(&request.output)?.is_ok(){return Err("merged native databases disagree".into());}
+    if request.selected_only {
+        verify_selected(request)?;
+    } else {
+        let report=rbl_export::verify_databases(&request.output)?;
+        if !report.is_ok(){return Err(rbl_export::verification_failure(&report).into());}
+    }
+    Ok(())
+}
+
+fn verify_selected(request:&Request)->Result<()> {
+    use rbl_export::snapshot::Snapshot;
+    let before=Snapshot::read(&request.baseline)?;
+    let after=Snapshot::read(&request.output)?;
+    let (Some(classic),Some(plus))=(&after.legacy,&after.one) else {
+        return Err("selected export needs both native catalogs".into());
+    };
+    let left=classic.tracks.iter().map(|t|(t.id,t)).collect::<BTreeMap<_,_>>();
+    let right=plus.tracks.iter().map(|t|(t.id,t)).collect::<BTreeMap<_,_>>();
+    let left_playlists=classic.playlists.iter().map(|p|(p.id,p)).collect::<BTreeMap<_,_>>();
+    let right_playlists=plus.playlists.iter().map(|p|(p.id,p)).collect::<BTreeMap<_,_>>();
+    let raw=std::fs::read(request.output.join("PIONEER/rekordbox/export.pdb"))?;
+    let pdb=Pdb::parse(&raw)?;
+    let db=rbl_onelibrary::ExportLibrary::open_read_only(&request.output.join("PIONEER/rekordbox/exportLibrary.db"))?;
+    for row in pdb.rows(pdb.table(PageType::Tracks).ok_or("missing exported tracks")?) {
+        let id=pdb.u4_at(row,0x48);
+        if !request.selected_track_ids.contains(&id){continue;}
+        let filename=pdb.string_ref(row,0x5e+19*2);
+        let format=rbl_pdb::rows::audio_file_type(&filename);
+        let auto_load=pdb.string_ref(row,0x5e+rbl_pdb::rows::slot::HOT_CUE_AUTO_LOAD*2)=="ON";
+        let flag:bool=db.connection().query_row("SELECT COALESCE(isHotCueAutoLoadOn,0) FROM content WHERE content_id=?1",[id],|r|r.get(0))?;
+        if pdb.u2_at(row,0)!=0x24 || pdb.u2_at(row,0x56)==0 || pdb.u2_at(row,0x5c)==0
+            || (format!=0 && pdb.u2_at(row,0x5a)!=format) || auto_load!=flag {
+            return Err(format!("exported track {id} has an invalid native playback record").into());
+        }
+    }
+    for id in &request.selected_track_ids {
+        if !left.contains_key(id) || left.get(id)!=right.get(id) {
+            return Err(format!("exported track {id} did not match in both catalogs").into());
+        }
+    }
+    for node in request.playlists.iter().filter(|n|request.selected_playlist_ids.contains(&n.id)) {
+        for (playlists,tracks) in [(&left_playlists,&left),(&right_playlists,&right)] {
+            let row=playlists.get(&node.id).ok_or("exported playlist is missing")?;
+            if row.parent!=node.parent || row.name!=node.name || row.folder!=node.folder || row.tracks!=node.tracks {
+                return Err(format!("exported playlist '{}' did not match its requested contents",node.name).into());
+            }
+            if node.tracks.iter().any(|id|!tracks.contains_key(id)) {
+                return Err("exported playlist references a missing track".into());
+            }
+        }
+    }
+    // Each firmware's unrelated state is its own baseline. Existing differences
+    // between the two catalogs never authorize repairing or rejecting that state.
+    for (old,new,retired) in [(&before.legacy,&after.legacy,&request.retired_classic_ids),(&before.one,&after.one,&request.retired_plus_ids)] {
+        let (Some(old),Some(new))=(old,new) else {return Err("native baseline disappeared".into());};
+        let tracks=new.tracks.iter().map(|t|(t.id,t)).collect::<BTreeMap<_,_>>();
+        let playlists=new.playlists.iter().map(|p|(p.id,p)).collect::<BTreeMap<_,_>>();
+        for track in old.tracks.iter().filter(|t|!request.selected_track_ids.contains(&t.id) && !retired.contains(&t.id)) {
+            if tracks.get(&track.id).copied()!=Some(track){return Err("unselected native track was changed".into());}
+        }
+        for playlist in old.playlists.iter().filter(|p|!request.selected_playlist_ids.contains(&p.id)) {
+            let current=playlists.get(&playlist.id).ok_or("unselected native playlist disappeared")?;
+            // Absolute sibling sequence values can move when adding a sibling;
+            // all existing names, parents, flags and exact memberships remain.
+            if current.parent!=playlist.parent || current.name!=playlist.name || current.folder!=playlist.folder || current.tracks!=playlist.tracks {
+                return Err("unselected native playlist was changed".into());
+            }
+        }
+        if new.tracks.iter().any(|t|retired.contains(&t.id)) || new.playlists.iter().any(|p|p.tracks.iter().any(|id|retired.contains(id))) {
+            return Err("removed track is still referenced".into());
+        }
+    }
     Ok(())
 }
 

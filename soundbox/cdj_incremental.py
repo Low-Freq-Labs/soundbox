@@ -125,7 +125,14 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         library,playlists,[*library.playlists,*all_playlists],previous)
     selection = {p['key']:deepcopy(p) for p in previous['selection']} if additive else {}
     by_source = {int(t['source_id']):int(t['id']) for t in old['track_rows'] if int(t['master_db_id'])==int(library.source_library_id)}
-    source_tracks = set(by_source.values())
+    classic={int(t['id']):t for t in old.get('classic_track_rows',[])}
+    def track_identity(t):return int(t['master_db_id']),int(t['source_id']),t['audio']
+    for row in old['track_rows']:
+        peer=classic.get(int(row['id']))
+        if int(row['master_db_id'])==int(library.source_library_id) and peer is not None and track_identity(peer)!=track_identity(row):
+            # A numeric ID can already name a different recording in Classic.
+            # Allocate a fresh selected ID rather than overwrite that recording.
+            by_source.pop(int(row['source_id']),None)
     candidates_by_name: dict[tuple, set[int]] = {}
     for identity, existing in nodes.items():
         if identity in foreign_playlists:
@@ -134,14 +141,15 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
     tracks = {}
     used_sources = set()
     # Existing source->device bindings are exact manifest identities, not titles.
+    touched_nodes=set()
     def node(source_id, name, parent, folder):
         nonlocal next_playlist
         if source_id not in bindings:
-            candidates=[identity for identity in candidates_by_name.get((name,parent,folder),())
-                if folder or all(t in source_tracks for t in nodes[identity]['tracks'])]
+            candidates=list(candidates_by_name.get((name,parent,folder),()))
             if len(candidates)==1:bindings[source_id]=candidates[0]
             else:bindings[source_id] = next_playlist;next_playlist += 1
         identity = bindings[source_id]
+        touched_nodes.add(identity)
         existing = nodes.get(identity)
         if existing and existing['folder'] != folder:
             raise ValueError('CDJ playlist identity collision')
@@ -178,7 +186,6 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
             tracks[tid] = track;used_sources.add(tid)
             if tid not in by_source:
                 by_source[tid] = next_track;next_track += 1
-                source_tracks.add(by_source[tid])
             members.append(by_source[tid])
         nodes[identity]['tracks'] = members
         selection[key] = dict(key=key,pid=playlist.pid,name=playlist.name,folder=playlist.folder_path)
@@ -187,9 +194,8 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         tracks[tid]=track;used_sources.add(tid)
         if tid not in by_source:
             by_source[tid]=next_track;next_track+=1
-            source_tracks.add(by_source[tid])
-    # Updating playlists does not empty the USB collection or garbage-collect
-    # songs. Both exporters may keep records outside their current playlists.
+    # The native merge prunes only removed selected members with no remaining
+    # playlist references. Unrelated collection-only records remain intact.
     final_tracks = set(by_audio.values())
     final_tracks.update(by_source[tid] for tid in used_sources)
     final_tracks.update(previous.get('foreign_tracks',[]))
@@ -197,17 +203,19 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
     reverse = {identity:source for source,identity in bindings.items()}
     return dict(nodes=list(nodes.values()),tracks=list(tracks.values()),selection=list(selection.values()),
         by_source=by_source,reverse=reverse,track_ids=final_tracks,next_track=next_track,
-        next_playlist=next_playlist,jobs=list(jobs.values()),db_id=int(library.source_library_id))
+        next_playlist=next_playlist,jobs=list(jobs.values()),db_id=int(library.source_library_id),
+        touched_nodes=touched_nodes)
 
 
 def _image_mapping(previous, native, partial, folder):
     by_digest = {}
     existing_ids = {artwork_id(s.artwork) for s in native.songs if s.artwork}
+    existing_ids.update(artwork_id(t['artwork']) for t in native.catalog.get('classic_track_rows',[]) if t.get('artwork'))
     for identity in existing_ids:
         paths = artwork_paths(identity)
         if all(previous['files'].get(p,{}).get('owned') for p in paths):
             by_digest[tuple(previous['files'][p]['sha256'] for p in paths)] = identity
-    next_id = max(existing_ids,default=0)+1
+    next_id = max(existing_ids|set(native.catalog.get('reserved_image_ids',[])),default=0)+1
     mapping = {}
     transfers: list[tuple[Path,str]] = []
     for identity in sorted({artwork_id(s.artwork) for s in partial.songs if s.artwork}):
@@ -246,14 +254,16 @@ def _placements(changed, catalog, previous, reuse=None):
         value %= 0x30d43
         shard = sum(((value>>bit)&1)<<i for i,bit in enumerate((0,2,6,7,9,13,16)))
         return f'/PIONEER/USBANLZ/P{shard:03X}/{value:08X}'
-    audio_used:dict[str,tuple[int,int]|None] = {key(t['audio']):(int(t['master_db_id']),int(t['source_id'])) for t in previous['view']['track_rows']}
-    analysis_used:dict[str,tuple[int,int]|None] = {key(str(PurePosixPath(t['analysis']).parent)):(int(t['master_db_id']),int(t['source_id'])) for t in previous['view']['track_rows']}
-    for row in previous['view']['track_rows']:
+    inventory_rows=[*previous['view'].get('classic_track_rows',[]),*previous['view']['track_rows']]
+    audio_used:dict[str,tuple[int,int]|None] = {key(t['audio']):(int(t['master_db_id']),int(t['source_id'])) for t in inventory_rows}
+    analysis_used:dict[str,tuple[int,int]|None] = {key(str(PurePosixPath(t['analysis']).parent)):(int(t['master_db_id']),int(t['source_id'])) for t in inventory_rows if t['analysis']}
+    for row in inventory_rows:
         if not previous['files'].get(row['audio'].lstrip('/'),{}).get('owned'):
             audio_used[key(row['audio'])] = None
-        base = PurePosixPath(row['analysis'].lstrip('/'))
-        if any(not previous['files'].get(str(base.with_suffix('.'+ext)),{}).get('owned') for ext in ('DAT','EXT','2EX')):
-            analysis_used[key(str(base.parent))] = None
+        if row['analysis']:
+            base = PurePosixPath(row['analysis'].lstrip('/'))
+            if any(not previous['files'].get(str(base.with_suffix('.'+ext)),{}).get('owned') for ext in ('DAT','EXT','2EX')):
+                analysis_used[key(str(base.parent))] = None
     result = {}
     for dto in changed:
         tid = int(dto['id']);device_id = catalog['by_source'][tid]
@@ -302,7 +312,10 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         tid = int(dto['id'])
         images[tid] = art_cache.export_image_snapshot(track.track_id) if art_cache is not None else None
         signatures[tid] = input_signature(dto,extras[tid],digest(images[tid]) if images[tid] is not None else '')
-        if cached.get(str(tid),{}).get('signature')!=signatures[tid]:
+        native_id=catalog['by_source'][tid]
+        if native_id not in native_rows or native_id in native.catalog.get('divergent_tracks',[]):
+            changed.append(dto)
+        elif cached.get(str(tid),{}).get('signature')!=signatures[tid]:
             row=native_rows.get(catalog['by_source'][tid],{})
             if (str(tid) not in cached and row.get('master_db_id')==captured['db_id']
                     and native_matches(row,dto,extras[tid],images[tid],art_cache)):
@@ -419,14 +432,19 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         art_map,transfers = _image_mapping(previous,native,partial,root/'partial') if partial else ({},[])
         from .cdj_catalog import map_tags
         mapped_tags,tag_ids=map_tags(captured['my_tags'],native.catalog.get('native_tags',[]),
-                                   native.tag_master_id==captured['db_id'])
+                                   native.tag_master_id==captured['db_id'],native.catalog.get('classic_tags',[]))
         spec = dict(baseline=str(root/'baseline'),partial=str(root/'partial') if partial else None,
             output=str(root/'candidate'),playlists=catalog['nodes'],track_ids=sorted(catalog['track_ids']),artwork=art_map,
+            selected_only=additive,
+            selected_track_ids=sorted(catalog['by_source'][int(t['id'])] for t in captured['tracks']),
+            selected_playlist_ids=sorted(catalog['touched_nodes']),
             my_tags=mapped_tags,additive=additive or bool(previous.get('foreign_tracks')),
             tag_assignments={str(catalog['by_source'][int(t['id'])]):[tag_ids[int(tag)] for tag in t['my_tags']] for t in captured['tracks']},
-            preserve_playlists=[i for i in previous.get('foreign_playlists',[]) if i not in catalog['reverse']])
+            preserve_playlists=([n['id'] for n in catalog['nodes'] if n['id'] not in catalog['touched_nodes']]
+                if additive else [i for i in previous.get('foreign_playlists',[]) if i not in catalog['reverse']]))
         tag_signature = digest(json.dumps(captured['my_tags'],sort_keys=True,separators=(',',':')).encode())
-        if (not changed and not adopted and DATABASE_FILES[2] in dict(native.files)
+        selected_repair=bool(catalog['touched_nodes'].intersection(native.catalog.get('divergent_playlists',[])))
+        if (not changed and not adopted and not selected_repair and DATABASE_FILES[2] in dict(native.files)
                 and previous.get('render_policy') == CATALOG_RENDER_POLICY
                 and previous.get('tag_signature') == tag_signature
                 and _catalog_unchanged(catalog,previous['view'])
@@ -458,9 +476,10 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
             source.replace(destination)
         shutil.rmtree(inputs)
         # Profiles stay byte-identical and are carried by committed inventory.
-        needed = referenced_files(view)|{p for p,_ in native.files if p not in DATABASE_FILES}
+        needed = referenced_files(view)|referenced_files({'track_rows':view.get('classic_track_rows',[])})|{p for p,_ in native.files if p not in DATABASE_FILES}
+        removed = referenced_files({'track_rows':view.pop('removed_track_rows',[])})-needed
         present = {p.relative_to(root/'candidate').as_posix() for p in (root/'candidate').rglob('*') if p.is_file()}
-        retained = (needed|previous['files'].keys())-present
+        retained = (needed|previous['files'].keys())-present-removed
         retained &= previous['files'].keys()
         if not retained.issubset(previous['files']):
             raise ValueError('Merged catalog references unowned CDJ assets')
@@ -468,11 +487,11 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
             view=view,workspace=workspace,should_cancel=should_cancel,recovery_root=recovery_root,retained_files=retained,
             source_contracts={placements[tid][0].lstrip('/'):contract for tid,contract in contracts.items() if tid not in reuse},catalog_baseline=previous,
             allowed_asset_changes={str(PurePosixPath(path.lstrip('/'))/('ANLZ0000.'+ext)) for _audio,path in reuse.values() for ext in ('DAT','EXT','2EX')},
-            expected_manifest=baseline_manifest)
+            expected_manifest=baseline_manifest,removed_files=removed)
         # An unchanged song/playlist catalog never rewrites native databases.
         old_nodes = [(p['id'],p['parent'],p['title'],p['folder'],p['entries']) for p in previous['view']['playlists']]
         new_nodes = [(p['id'],p['parent'],p['title'],p['folder'],p['entries']) for p in view['playlists']]
-        if (not changed and not adopted and old_nodes==new_nodes and len(view['track_rows'])==len(previous['view']['track_rows'])
+        if (not changed and not adopted and not selected_repair and not removed and old_nodes==new_nodes and len(view['track_rows'])==len(previous['view']['track_rows'])
                 and previous.get('tag_signature')==tag_signature and previous.get('render_policy')==CATALOG_RENDER_POLICY):
             # Player preferences are retained byte-for-byte. After a fresh
             # profile-only change, record make_plan's verified live profile

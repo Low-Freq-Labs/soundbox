@@ -7,6 +7,21 @@ from desktop.cdj import CdjDeviceMixin
 
 
 class CdjDropIntent(unittest.TestCase):
+    def test_format_source_separation_includes_external_analysis_locations(self):
+        from pathlib import Path
+        track=SimpleNamespace(path=Path('/synthetic/music/song.wav'),source_analysis_path='/synthetic/analysis/ANLZ0000.DAT')
+        host=SimpleNamespace(lib=SimpleNamespace(source='/synthetic/library/master.db',tracks_by_id={'17':track}),
+            _defer_device_operation_until_scan_finishes=lambda _callback:False,_device_operation_owned=lambda:False,
+            _device_profiles={'/not-a-device':SimpleNamespace(kind='generic_usb')},_device_mount_tokens={'/not-a-device':91},
+            _release_eject_ready=mock.Mock(),_start_pulse=mock.Mock(),_finish_device_result_worker=mock.Mock(),
+            _start_device_worker=mock.Mock())
+        with mock.patch('desktop.cdj.device_facts',return_value=SimpleNamespace(volume_uuid='synthetic-volume')), \
+             mock.patch('soundbox.usb_format.capture') as capture:
+            CdjDeviceMixin._reformat_usb(host,'/not-a-device')
+            host._cdj_worker.operation(lambda:False,lambda *_:None)
+        self.assertEqual(capture.call_args.kwargs['sources'],[
+            Path('/synthetic/library/master.db'),track.path,Path(track.source_analysis_path)])
+
     def host(self):
         started = []
         host = SimpleNamespace(_shutting_down=False,_cdj_plan=None,_cdj_worker=None,

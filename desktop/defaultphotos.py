@@ -9,7 +9,7 @@ as dependencies or modified.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QItemSelectionModel, QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
@@ -34,6 +34,7 @@ class DefaultPhotosDialog(QDialog):
         layout.addWidget(self.head)
 
         self.status = QLabel("")
+        self.status.setTextFormat(Qt.PlainText)
         layout.addWidget(self.status)
 
         self.list = QTreeWidget()
@@ -64,6 +65,10 @@ class DefaultPhotosDialog(QDialog):
         self._populate(rows)
 
     def _populate(self, rows) -> None:
+        selected={item.data(0,_ROLE) for item in self.list.selectedItems()}
+        current=self.list.currentItem()
+        current_id=current.data(0,_ROLE) if current is not None else None
+        scroll=self.list.verticalScrollBar().value()
         self._thumbnails.clear()
         self.list.clear()
         for row in rows:
@@ -71,7 +76,10 @@ class DefaultPhotosDialog(QDialog):
             item.setData(0, _ROLE, row["id"])
             item.setSizeHint(0, QSize(0, 104))
             self.list.addTopLevelItem(item)
+            if row['id']==current_id:self.list.setCurrentItem(item,0,QItemSelectionModel.NoUpdate)
+            item.setSelected(row['id'] in selected)
             self._thumbnails.set_image(item, row["path"])
+        self.list.verticalScrollBar().setValue(scroll)
         count = len(rows)
         self.head.setText(
             f"{count} managed default photo{'s' if count != 1 else ''}. "

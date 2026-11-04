@@ -1,9 +1,10 @@
 """Shared choice presentation keeps standard Qt activation and right checks."""
 import unittest
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
 
 from desktop import theme
 from desktop.choices import ComboBox, Menu
@@ -69,3 +70,14 @@ class Choices(unittest.TestCase):
             self.assertEqual(theme.ON_ACCENT, '#ffff00')
         finally:
             theme.set_accent(original, foreground)
+
+    def test_long_popup_label_does_not_paint_inside_the_checkmark_gutter(self):
+        combo=ComboBox();combo.addItems(['Selected','M'*150]);combo.setCurrentIndex(0)
+        image=QImage(150,30,QImage.Format_RGB32)
+        option=QStyleOptionViewItem();option.rect=QRect(0,0,150,30)
+        option.state=QStyle.State_Enabled
+        painter=QPainter(image)
+        combo.itemDelegate().paint(painter,option,combo.model().index(1,0));painter.end()
+        background=QColor(theme.PANEL)
+        self.assertTrue(all(image.pixelColor(x,y)==background for x in range(124,150) for y in range(30)))
+        combo.deleteLater()

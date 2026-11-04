@@ -464,6 +464,7 @@ class ArtReviewDialog(QDialog):
         split.addWidget(right)
         split.setSizes([370, 740])
         self.status = QLabel("Select a track to review. Searching and closing keep all artwork unchanged.")
+        self.status.setTextFormat(Qt.PlainText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         foot = QHBoxLayout()
@@ -566,7 +567,12 @@ class ArtReviewDialog(QDialog):
     def _show_image(label, data):
         pix = QPixmap()
         if pix.loadFromData(data):
-            label.setPixmap(pix.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            ratio=label.devicePixelRatioF()
+            pix=pix.scaled(round(300*ratio),round(300*ratio),Qt.KeepAspectRatio,Qt.SmoothTransformation)
+            pix.setDevicePixelRatio(ratio)
+            label.setPixmap(pix)
+        else:
+            label.setText('Artwork unavailable')
 
     def _browse_filter(self, *_):
         self._advance_after = None
@@ -1029,7 +1035,10 @@ class ArtReviewDialog(QDialog):
         box.setTextFormat(Qt.PlainText)
         box.setText(f"Use this artist picture for {artist}?")
         box.setInformativeText(f"{result.source_url}\nYour original picture is kept for recovery.")
-        box.setIconPixmap(pix.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        ratio=box.devicePixelRatioF()
+        pix=pix.scaled(round(180*ratio),round(180*ratio),Qt.KeepAspectRatio,Qt.SmoothTransformation)
+        pix.setDevicePixelRatio(ratio)
+        box.setIconPixmap(pix)
         approve = box.addButton("Use profile", QMessageBox.AcceptRole)
         box.addButton(QMessageBox.Cancel)
         box.exec()

@@ -1,8 +1,8 @@
 """Recoverable publication of one authorized, dual-format CDJ generation.
 
-Only exact candidate paths and previously owned paths can change. Original
-metadata is retained in the transaction; unowned media is never replaced or
-removed. Manifest publication is last. A mount identity is not portable authority.
+Only exact candidate paths, owned paths and assets of removed selected members
+can change. Shared assets survive. Metadata recovery is retained; removed media
+recovery is retired after durable commit. Manifest publication is last.
 """
 from __future__ import annotations
 
@@ -207,6 +207,7 @@ class Change:
     old_sha256: str | None
     new_sha256: str | None
     size: int = 0
+    retire: bool = False
 
 
 @dataclass
@@ -255,7 +256,7 @@ def _hash_file(path, cancel=lambda: False):
 _UNCAPTURED_MANIFEST = object()
 
 
-def make_plan(session, candidate, *, selection, db_id, view, workspace=None, should_cancel=lambda:False, settings_only=False, recovery_root=None, allowed_profile_changes=(), retained_files=(), source_contracts=None, catalog_baseline=None, allowed_asset_changes=(), expected_manifest=_UNCAPTURED_MANIFEST, expected_profile_hashes=None):
+def make_plan(session, candidate, *, selection, db_id, view, workspace=None, should_cancel=lambda:False, settings_only=False, recovery_root=None, allowed_profile_changes=(), retained_files=(), source_contracts=None, catalog_baseline=None, allowed_asset_changes=(), expected_manifest=_UNCAPTURED_MANIFEST, expected_profile_hashes=None, removed_files=()):
     if session.read_optional(JOURNAL, limit=8*1024*1024) is not None:
         raise ValueError('Interrupted CDJ transaction requires recovery before another export')
     previous,old_manifest = read_manifest(session)
@@ -267,6 +268,13 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
             raise ValueError('Catalog refresh cannot change media ownership')
         previous = catalog_baseline
     previous_files = previous['files'] if previous else {}
+    removed_files=set(removed_files)
+    if settings_only and removed_files:
+        raise ValueError('Settings cannot remove media')
+    for path in removed_files:
+        _relative(path)
+        if path in DATABASE_FILES or path in ('PIONEER/'+n for n in PROFILE_FILES):
+            raise ValueError('Playlist cleanup can remove only retired media assets')
     candidate = Path(candidate)
     retained_files = set(retained_files)
     if any(path not in previous_files or path in DATABASE_FILES for path in retained_files):
@@ -338,6 +346,8 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
     for path, owner in previous_files.items():
         if path in inventory:
             continue
+        if path in removed_files:
+            continue
         if settings_only or not owner['owned']:
             inventory[path] = owner
             continue
@@ -346,6 +356,14 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
         if not destination.is_file() or _hash_file(destination, should_cancel) != owner['sha256']:
             raise ValueError(f'Removed owned CDJ file changed: {path}')
         changes.append(Change(path, owner['sha256'], None))
+    for path in sorted(removed_files):
+        if path in inventory:
+            raise ValueError('Removed media is still in the export inventory')
+        destination=session.guard(session.target/path)
+        if destination.exists():
+            if not stat.S_ISREG(destination.lstat().st_mode):
+                raise ValueError('Removed CDJ asset is not a regular file')
+            changes.append(Change(path,_hash_file(destination,should_cancel),None,retire=True))
     if not source_contracts.keys() <= inventory.keys():
         raise ValueError('Captured CDJ audio is missing from the candidate')
     required = sum(c.size for c in changes if c.new_sha256)
@@ -403,7 +421,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
                    transaction=transaction, state='executing',
                    old_manifest=plan.old_manifest.decode() if plan.old_manifest else None,
                    new_manifest=plan.manifest,
-                   changes=[dict(path=c.path, old=c.old_sha256, new=c.new_sha256) for c in plan.changes])
+                   changes=[dict(path=c.path, old=c.old_sha256, new=c.new_sha256,**({'retire':True} if c.retire else {})) for c in plan.changes])
     if plan.recovery_root is None:
         raise ValueError('A local CDJ recovery receipt directory is required')
     receipt = _receipt_path(plan.recovery_root, session.volume_uuid, plan.manifest['generation'])
@@ -419,6 +437,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
         os.close(directory_fd)
     session.atomic_write(session.target/JOURNAL, _json(journal))
     completed={}
+    total=len(plan.changes)+sum(c.retire for c in plan.changes)
     try:
         # Retire each original immediately before its replacement. The durable
         # intent covers the whole set: original bytes remain live or in recovery
@@ -440,14 +459,17 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
                     from .state_io import atomic_bytes
                     atomic_bytes(receipt.with_suffix('.completed.json'),_json(dict(schema=1,
                         volume_uuid=session.volume_uuid,generation=plan.manifest['generation'],files=completed)))
-            on_progress(index+1, len(plan.changes), change.path)
+            on_progress(index+1, total, change.path)
         session.atomic_write(session.target/MANIFEST, _json(plan.manifest))
         journal['state'] = 'committed'
         session.atomic_write(session.target/JOURNAL, _json(journal))
     except Exception:
         recover(session, plan.recovery_root, retain_new=True)
         raise
-    # Keep exact recovery material; no automatic bulk deletion of old media.
+    try:
+        _retire_removed(session,journal,on_progress=lambda done,path:on_progress(len(plan.changes)+done,total,path))
+    except Exception as exc:
+        raise RuntimeError(f'Export saved, but space cleanup did not finish: {exc}. Choose Export again to finish cleanup.') from exc
     session.unlink(session.target/JOURNAL)
     return plan.manifest
 
@@ -461,6 +483,27 @@ def _receipt_path(root, volume_uuid, generation):
         raise ValueError('Local recovery paths cannot be linked')
     root = requested.resolve(strict=False)
     return root/volume_uuid/(generation+'.json')
+
+
+def _retire_removed(session, journal, *, on_progress=lambda *_:None):
+    """Resume exact selected-member cleanup only after manifest-last commit."""
+    if journal['state']!='committed' or session.read_optional(MANIFEST,limit=8*1024*1024)!=_json(journal['new_manifest']):
+        raise ValueError('Media retirement requires the committed manifest')
+    paths=[]
+    for change in journal['changes']:
+        if not change.get('retire'):continue
+        relative=_relative(change['path'])
+        if change['new'] is not None or relative in DATABASE_FILES or relative in ('PIONEER/'+n for n in PROFILE_FILES):
+            raise ValueError('Invalid media retirement')
+        if (session.target/relative).exists():raise ValueError('Removed media reappeared; preserve recovery')
+        backup=session.guard(session.target/journal['transaction']/relative)
+        if backup.exists():
+            if not backup.is_file() or _hash_file(backup)!=change['old']:
+                raise ValueError('Removed media recovery changed; preserve it')
+            paths.append(backup)
+    for index,backup in enumerate(paths):
+        session.unlink(backup)
+        on_progress(index+1,backup.name)
 
 
 def recover(session, recovery_root, *, dry_run=False, retain_new=False):
@@ -499,7 +542,7 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
             if current is not None and __import__('hashlib').sha256(current).hexdigest() not in (change['old'],change['new']):newer=True
     if newer:
         from .cdj_usb import read_library
-        native=read_library(session.target,session.mount_identity[0],allow_pending=True,check_pair=True)
+        native=read_library(session.target,session.mount_identity[0],allow_pending=True)
         if native is None:raise ValueError('Finish the native export before updating this USB')
         if dry_run:return dict(state='superseded',files=0,journal_sha256=__import__('hashlib').sha256(raw).hexdigest(),mount_identity=session.mount_identity)
         current=session.read_optional(MANIFEST,limit=8*1024*1024)
@@ -524,7 +567,7 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
         saved = _hash_file(backup) if backup.is_file() else None
         if saved not in (None, change['old']) or live not in (None, change['old'], change['new']):
             raise ValueError('Ambiguous CDJ recovery bytes; preserve all evidence')
-        if change['old'] and saved is None and live != change['old']:
+        if change['old'] and saved is None and live != change['old'] and not (value['state']=='committed' and change.get('retire') and change['new'] is None):
             raise ValueError('Original CDJ recovery bytes are missing')
         if value['state'] == 'committed' and live != change['new']:
             raise ValueError('Committed CDJ files do not match their journal')
@@ -536,6 +579,7 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
         current = session.read_optional(MANIFEST, limit=8*1024*1024)
         if current != _json(value['new_manifest']):
             raise ValueError('Committed CDJ manifest does not match its journal')
+        _retire_removed(session,value)
     else:
         reusable={};observations={}
         for change, path, backup, saved, live in reversed(actions):

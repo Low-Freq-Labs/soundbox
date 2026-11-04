@@ -64,6 +64,146 @@ class CdjIntegrationTests(unittest.TestCase):
         self.plans.append(plan)
         return plan
 
+    def selected(self, playlists, *, standalone=(), art_cache=None):
+        def capture(_library, tracks, **_kwargs):
+            value=deepcopy(self.request);ids={int(t.track_id) for t in tracks}
+            value['tracks']=[t for t in value['tracks'] if int(t['id']) in ids]
+            value['track_extras']=[t for t in value['track_extras'] if int(t['source_id']) in ids]
+            return value
+        with mock.patch('soundbox.cdj_source.capture_metadata',side_effect=capture):
+            plan=cdj_export.plan_export(self.lib,playlists,self.target,token=self.token,
+                volume_uuid=self.volume,recovery_root=self.recovery,additive=True,
+                standalone=standalone,art_cache=art_cache)
+        self.plans.append(plan)
+        return plan
+
+    def extra_track(self, tid):
+        source=self.root/'sources'/f'{tid}.wav';source.parent.mkdir(exist_ok=True)
+        shutil.copyfile(self.fixture/'source.wav',source)
+        dto=deepcopy(self.request['tracks'][0]);dto.update(id=int(tid),source_path=str(source),title=f'Track {tid}')
+        extra=deepcopy(self.request['track_extras'][0]);extra['source_id']=int(tid)
+        self.request['tracks'].append(dto);self.request['track_extras'].append(extra)
+        track=Track(tid,dto['title'],'Fixture Artist',source.as_uri(),source_uuid=f'fixture-{tid}',source_analysis_path=dto['analysis_source'])
+        self.lib.tracks_by_id[tid]=track
+        return track
+
+    def plus_connection(self):
+        import base64,re,zlib
+        from sqlcipher3 import dbapi2 as sqlcipher
+        source=KEY_SOURCE.read_text()
+        blob=re.search(r'const BLOB: &str = "([^"]+)";',source).group(1)
+        xor=re.search(r'const XOR_KEY: &\[u8\] = b"([^"]+)";',source).group(1).encode()
+        decoded=base64.b85decode(blob)
+        key=zlib.decompress(bytes(byte^xor[i%len(xor)] for i,byte in enumerate(decoded))).decode()
+        db=sqlcipher.connect(self.target/DATABASE_FILES[2])
+        db.execute("PRAGMA key='"+key.replace("'","''")+"'")
+        return db
+
+    def test_cleanup_preserves_different_collection_only_record_with_same_numeric_id(self):
+        cdj_transaction.commit(self.selected([self.playlist]))
+        before=read_library(self.target,self.token)
+        original=before.songs[0]
+        foreign=self.target/'Contents/Foreign/other.wav';foreign.parent.mkdir()
+        shutil.copyfile(self.fixture/'source.wav',foreign)
+        db=self.plus_connection()
+        try:
+            db.execute("UPDATE content SET masterDbId=77,masterContentId=81,title='Unrelated collection song',path='/Contents/Foreign/other.wav',analysisDataFilePath='' WHERE content_id=?",[int(original.id)])
+            db.execute('DELETE FROM playlist_content WHERE content_id=?',[int(original.id)])
+            db.commit()
+        finally:db.close()
+        self.playlist.keys=[]
+        plan=self.selected([self.playlist])
+        view=plan.manifest['view']
+        self.assertEqual(view['classic_track_rows'],[])
+        self.assertEqual([r['title'] for r in view['track_rows']],['Unrelated collection song'])
+        cdj_transaction.commit(plan)
+        self.assertFalse((self.target/original.path.lstrip('/')).exists())
+        self.assertTrue(foreign.is_file())
+
+    def test_selected_export_removes_only_last_playlist_references_and_reclaims_payloads(self):
+        from PIL import Image
+        image=io.BytesIO();Image.new('RGB',(20,20),'red').save(image,format='JPEG')
+        art=SimpleNamespace(export_image_snapshot=lambda _tid:image.getvalue())
+        cdj_transaction.commit(self.selected([self.playlist],art_cache=art))
+        self.extra_track('18');orphan=self.extra_track('19')
+        shared=Playlist('Shared',[],keys=['17','18'],pid='shared');self.lib.playlists.append(shared)
+        cdj_transaction.commit(self.selected([shared],standalone=(orphan,),art_cache=art))
+        before=read_library(self.target,self.token)
+        removed=next(s for s in before.songs if s.source_id=='17')
+        self.playlist.keys=[]
+        kept=self.selected([self.playlist],art_cache=art)
+        self.assertFalse(any(c.new_sha256 is None for c in kept.changes))
+        cdj_transaction.commit(kept)
+        self.assertTrue((self.target/removed.path.lstrip('/')).is_file())
+        shared.keys=['18']
+        prune=self.selected([shared],art_cache=art)
+        deletions=[c for c in prune.changes if c.retire]
+        self.assertIn(removed.path.lstrip('/'),[c.path for c in deletions])
+        self.assertFalse(any(c.path.startswith('PIONEER/Artwork/') for c in deletions))
+        cdj_transaction.commit(prune)
+        self.assertFalse((self.target/removed.path.lstrip('/')).exists())
+        self.assertEqual({s.source_id for s in read_library(self.target,self.token).songs},{'18','19'})
+        backup=self.target/'.soundbox-cdj/transactions'/prune.manifest['generation']
+        self.assertTrue(all(not (backup/c.path).exists() for c in deletions))
+        self.assertTrue((backup/DATABASE_FILES[0]).is_file())
+        self.assertFalse((self.target/cdj_transaction.JOURNAL).exists())
+
+    def test_removed_member_rollback_and_committed_retirement_resume(self):
+        cdj_transaction.commit(self.selected([self.playlist]))
+        before={p:p.read_bytes() for p in self.target.rglob('*') if p.is_file()}
+        self.playlist.keys=[]
+        prune=self.selected([self.playlist])
+        class Crash(BaseException):pass
+        def crash_on_removal(_done,_total,path):
+            if path.startswith('Contents/'):raise Crash()
+        with self.assertRaises(Crash):cdj_transaction.commit(prune,on_progress=crash_on_removal)
+        session=cdj_transaction.CdjSession(self.target,[],token=self.token,volume_uuid=self.volume)
+        cdj_transaction.recover(session,self.recovery)
+        for path,raw in before.items():self.assertEqual(path.read_bytes(),raw)
+        again=self.selected([self.playlist])
+        with mock.patch('soundbox.cdj_transaction._retire_removed',side_effect=Crash),self.assertRaises(Crash):
+            cdj_transaction.commit(again)
+        deletions=[c for c in again.changes if c.retire]
+        self.assertTrue(deletions)
+        backup=self.target/'.soundbox-cdj/transactions'/again.manifest['generation']
+        # Simulate interruption after retiring one exact original, then resume.
+        (backup/deletions[0].path).unlink()
+        cdj_transaction.recover(session,self.recovery)
+        self.assertTrue(all(not (backup/c.path).exists() and not (self.target/c.path).exists() for c in deletions))
+        self.assertEqual(read_library(self.target,self.token).songs,())
+
+    def test_unrelated_plus_only_song_and_playlist_difference_do_not_block_selected_export(self):
+        import base64,re,zlib
+        from sqlcipher3 import dbapi2 as sqlcipher
+        cdj_transaction.commit(self.selected([self.playlist]))
+        source=KEY_SOURCE.read_text()
+        blob=re.search(r'const BLOB: &str = "([^"]+)";',source).group(1)
+        xor=re.search(r'const XOR_KEY: &\[u8\] = b"([^"]+)";',source).group(1).encode()
+        decoded=base64.b85decode(blob)
+        key=zlib.decompress(bytes(byte^xor[i%len(xor)] for i,byte in enumerate(decoded))).decode()
+        db=sqlcipher.connect(self.target/DATABASE_FILES[2])
+        try:
+            db.execute("PRAGMA key='"+key.replace("'","''")+"'")
+            columns=[r[1] for r in db.execute('PRAGMA table_info(content)')]
+            replacements={'content_id':'5000','masterContentId':'9999','masterDbId':'71', 'title':"'Unrelated native song'"}
+            db.execute('INSERT INTO content SELECT '+','.join(replacements.get(c,'"'+c+'"') for c in columns)+' FROM content LIMIT 1')
+            db.execute("UPDATE playlist SET name='Different Plus title' WHERE attribute=0")
+            db.commit()
+        finally:db.close()
+        second=Playlist('Second',[],keys=['17'],pid='second');self.lib.playlists.append(second)
+        original=Path.open
+        def guarded(path,*args,**kwargs):
+            if path.is_relative_to(self.target/'Contents') or path.is_relative_to(self.target/'PIONEER/USBANLZ'):
+                raise AssertionError('Unrelated/retained media was opened')
+            return original(path,*args,**kwargs)
+        with mock.patch.object(Path,'open',guarded):plan=self.selected([second])
+        view=plan.manifest['view']
+        self.assertIn(5000,[t['id'] for t in view['track_rows']])
+        self.assertNotIn(5000,[t['id'] for t in view['classic_track_rows']])
+        self.assertIn('Different Plus title',[p['title'] for p in view['playlists']])
+        self.assertIn('Ordered Fixture',[p['title'] for p in view['classic_playlists']])
+        with mock.patch.object(Path,'open',guarded):cdj_transaction.commit(plan)
+
     def test_standalone_initial_export_has_no_synthetic_playlist_and_is_a_true_noop(self):
         unsafe = Track('outside-library','Unsafe','Fixture',(self.target/'source.wav').as_uri(),source_uuid='fixture')
         with self.assertRaisesRegex(RuntimeError,'source'), mock.patch('soundbox.cdj_source.capture_metadata') as capture:
@@ -146,6 +286,14 @@ class CdjIntegrationTests(unittest.TestCase):
             self.assertEqual(before,{p:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths})
             with self.assertRaisesRegex(ValueError,'SQLite'):read_library(self.target,self.token)
         finally:db.close()
+
+    def test_plus_only_display_does_not_require_classic_or_ext_catalogs(self):
+        path=self.target/DATABASE_FILES[2];path.parent.mkdir(parents=True)
+        shutil.copyfile(self.fixture/'native'/DATABASE_FILES[2],path)
+        native=read_library(self.target,self.token)
+        self.assertGreater(len(native.songs),0)
+        self.assertEqual(native.catalog['classic_track_rows'],[])
+        self.assertEqual(native.catalog['classic_tags'],[])
 
     def test_unmanaged_rekordbox_catalog_is_preserved_without_reading_its_media(self):
         shutil.copytree(self.fixture/'native/PIONEER',self.target/'PIONEER')

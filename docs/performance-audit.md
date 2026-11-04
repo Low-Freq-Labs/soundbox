@@ -1,5 +1,10 @@
 # Performance audit — November 2–3, 2026
 
+The subsequent [UI polish review](ui-polish-audit.md) covers incomplete first
+frames, artwork publication, text/DPR/layout and navigation resets. Its fixes
+and remaining GUI-thread costs are separate from the dated measurements below;
+consult HANDOFF for installation status.
+
 ## Correctness and remaining-cost pass, November3 night
 
 Sonny requested working from the remaining simple improvements upward, with
@@ -11,7 +16,7 @@ failure has been exhaustively proved. Three subagents implemented separate
 areas, then reviewed each other's work. Root reviewed publication/replay guards,
 UI ownership, source acquisition and output semantics. Clang static analysis of
 the native deck and process guard reports zero diagnostics; the normal native
-runtime gate remains required. The final2531-test source is installed as runtime
+runtime gate remains required. That2531-test source was installed as runtime
 fc696312… after both signed profiles and isolated RAM-only native ORM/SQLCipher
 checks passed. Actual normal startup reused3280analysis records, scheduled zero
 preparation tasks, and preserved exact library/authority/icon state. Personal

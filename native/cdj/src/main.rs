@@ -82,7 +82,43 @@ fn inspect(root: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
     let tags=conn.prepare("SELECT myTag_id, sequenceNo, name, attribute, myTag_id_parent FROM myTag ORDER BY myTag_id")?
         .query_map([],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"seq":r.get::<_,i64>(1)?,"name":r.get::<_,String>(2)?,"attribute":r.get::<_,i64>(3)?,"parent":r.get::<_,Option<i64>>(4)?.unwrap_or(0)})))?
         .collect::<Result<Vec<_>,_>>()?;
-    Ok(json!({"preferences":preferences,"track_rows":tracks,"playlists":playlists,"tracks":count,"name":settings.device_name,"native_tags":tags,
+    let snapshot=rbl_export::snapshot::Snapshot::read(root)?;
+    let divergent_tracks=if let (Some(classic),Some(plus))=(&snapshot.legacy,&snapshot.one) {
+        let left=classic.tracks.iter().map(|t|(t.id,t)).collect::<std::collections::BTreeMap<_,_>>();
+        let right=plus.tracks.iter().map(|t|(t.id,t)).collect::<std::collections::BTreeMap<_,_>>();
+        left.keys().chain(right.keys()).copied().collect::<std::collections::BTreeSet<_>>()
+            .into_iter().filter(|id|left.get(id)!=right.get(id)).collect::<Vec<_>>()
+    } else {Vec::new()};
+    let divergent_playlists=if let (Some(classic),Some(plus))=(&snapshot.legacy,&snapshot.one) {
+        let left=classic.playlists.iter().map(|p|(p.id,p)).collect::<std::collections::BTreeMap<_,_>>();
+        let right=plus.playlists.iter().map(|p|(p.id,p)).collect::<std::collections::BTreeMap<_,_>>();
+        left.keys().chain(right.keys()).copied().collect::<std::collections::BTreeSet<_>>()
+            .into_iter().filter(|id|left.get(id)!=right.get(id)).collect::<Vec<_>>()
+    } else {Vec::new()};
+    let classic_path=root.join("PIONEER/rekordbox/export.pdb");
+    let classic=if classic_path.exists(){inspect_classic(root)?}else{json!({"track_rows":[],"playlists":[]})};
+    let mut classic_tags=Vec::new();
+    let ext_path=root.join("PIONEER/rekordbox/exportExt.pdb");
+    if ext_path.exists() {
+        let bytes=std::fs::read(local(root,&ext_path)?)?;
+        let ext=rbl_pdb::Pdb::parse(&bytes)?;
+        if let Some(table)=ext.table(rbl_pdb::PageType::Albums) {
+            classic_tags=ext.rows(table).iter().map(|row|json!({
+                "id":ext.u4_at(*row,20),"parent":ext.u4_at(*row,12),"seq":ext.u4_at(*row,16),
+                "attribute":ext.u1_at(*row,27),"name":ext.string_at(row.offset+usize::from(ext.u1_at(*row,29)))})).collect();
+        }
+    }
+    let mut reserved_image_ids=conn.prepare("SELECT image_id FROM image")?.query_map([],|r|r.get::<_,u32>(0))?.collect::<Result<std::collections::BTreeSet<_>,_>>()?;
+    if classic_path.exists() {
+        let bytes=std::fs::read(local(root,&classic_path)?)?;
+        let pdb=rbl_pdb::Pdb::parse(&bytes)?;
+        if let Some(table)=pdb.table(rbl_pdb::PageType::Artwork) {reserved_image_ids.extend(pdb.named_rows(table).iter().map(|r|r.id));}
+    }
+    Ok(json!({"preferences":preferences,"track_rows":tracks,"playlists":playlists,"tracks":count,"name":settings.device_name,"native_tags":tags,"divergent_tracks":divergent_tracks,
+        "classic_track_rows":classic["track_rows"],"classic_playlists":classic["playlists"],
+        "divergent_playlists":divergent_playlists,
+        "classic_tags":classic_tags,
+        "reserved_image_ids":reserved_image_ids,
         "tag_master_id":conn.query_row("SELECT myTagMasterDBID FROM property", [], |r| r.get::<_,i64>(0))?,
         "background_plus":settings.background_color_type,"background_classic":classic_background}))
 }
@@ -268,8 +304,15 @@ fn main() -> Result<(),Box<dyn Error>> {
             }
             if request.output.exists(){return Err("merge output must be a new local directory".into());}
             local(&root,request.output.parent().ok_or("missing merge parent")?)?;
-            merge::merge(&request)?;
-            inspect(&request.output)?
+            let before=inspect(&request.baseline)?;
+            merge::merge(&mut request)?;
+            let mut after=inspect(&request.output)?;
+            after["removed_track_rows"]=json!(
+                [("track_rows",&request.retired_plus_ids),("classic_track_rows",&request.retired_classic_ids)].into_iter()
+                .flat_map(|(key,retired)|before[key].as_array().into_iter().flatten()
+                    .filter(|r|r["id"].as_u64().is_some_and(|id|retired.contains(&(id as u32)))))
+                .collect::<Vec<_>>());
+            after
         },
         "defaults" if args.len()==3 || args.len()==4=>{
             let path=root.join("settings.db");

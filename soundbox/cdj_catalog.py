@@ -5,11 +5,15 @@ from pathlib import Path
 from .cdj_usb import DATABASE_FILES,digest,run_renderer
 
 
-def map_tags(source, native, same_master):
+def map_tags(source, native, same_master, classic=()):
     """Resolve library-local tag IDs into the USB tree without replacing peers."""
     existing={int(t['id']):deepcopy(t) for t in native}
+    reserved=set(existing)|{int(t['id']) for t in classic}
+    for tag in classic:
+        tid=int(tag['id'])
+        if tid in existing and existing[tid]!=tag:existing.pop(tid)
     mapping={0:0};pending=deepcopy(source);result=[]
-    next_id=max(existing,default=0)+1
+    next_id=max(reserved,default=0)+1
     while pending:
         ready=[t for t in pending if int(t['parent']) in mapping]
         if not ready:raise ValueError('Invalid source My Tag hierarchy')
@@ -20,11 +24,11 @@ def map_tags(source, native, same_master):
                 matches=[i for i,t in existing.items() if t['name']==tag['name'] and int(t['parent'])==parent and t['attribute']==tag['attribute']]
                 if len(matches)==1:target=matches[0]
             if target is None:
-                target=old if old not in existing else next_id
+                target=old if old not in reserved else next_id
                 next_id=max(next_id,target+1)
             mapped=dict(tag,id=target,parent=parent)
             if target in existing and not same_master:mapped=deepcopy(existing[target])
-            existing[target]=mapped;mapping[old]=target;result.append(mapped);pending.remove(tag)
+            existing[target]=mapped;reserved.add(target);mapping[old]=target;result.append(mapped);pending.remove(tag)
     return result,mapping
 
 
@@ -72,7 +76,7 @@ def current_baseline(native, previous, db_id):
     old_tracks={(int(t['master_db_id']),int(t['source_id']),t['audio']):t for t in old['track_rows']}
     from .cdj_incremental import referenced_files
     from .cdj_usb import PROFILE_FILES
-    live_references=referenced_files(view)
+    live_references=referenced_files(view)|referenced_files({'track_rows':view.get('classic_track_rows',[])})
     metadata=set(DATABASE_FILES)|{'PIONEER/'+name for name in PROFILE_FILES}
     for path in list(result['files']):
         if path not in metadata and path not in live_references:result['files'].pop(path)
@@ -94,8 +98,8 @@ def current_baseline(native, previous, db_id):
     result['view']=view
     result['foreign_tracks']=fresh_foreign
     result['foreign_playlists']=[int(p['id']) for p in view['playlists'] if 'source_id' not in p]
-    result['next_track_id']=max(result.get('next_track_id',1),max([0,*[int(t['id']) for t in view['track_rows']]])+1)
-    result['next_playlist_id']=max(result.get('next_playlist_id',1),max([0,*[int(p['id']) for p in view['playlists']]])+1)
+    result['next_track_id']=max(result.get('next_track_id',1),max([0,*[int(t['id']) for t in [*view['track_rows'],*view.get('classic_track_rows',[])]]])+1)
+    result['next_playlist_id']=max(result.get('next_playlist_id',1),max([0,*[int(p['id']) for p in [*view['playlists'],*view.get('classic_playlists',[])]]])+1)
     for path,raw in native.files:
         if path in DATABASE_FILES:
             result['files'][path]=dict(size=len(raw),sha256=digest(raw),owned=bool(previous))

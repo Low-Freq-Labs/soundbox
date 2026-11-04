@@ -2122,9 +2122,15 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   existing player/mixer profile files survive unrelated sync byte for byte.
 - A USB playlist drop is the authorization. Preserve mount/UUID through deferrals
   and hand off plan→commit at worker.finished without a second modal question.
-  Update Playlists and Save to USB also publish directly. Reformat alone has a
+  Export and Save to USB also publish directly. Reformat alone has a
   destructive target confirmation. Drop scopes selected
   playlists; it must not reconcile unrelated source edits or audit retained media.
+  Existing unrelated classic/Plus differences are separate baselines, not a
+  global equivalence veto. Prune only members removed by this selection, after
+  counting every remaining playlist in both catalogs; preserve shared assets and
+  unrelated collection-only records. Exact removed assets stay recoverable until
+  durable commit, then retire their backups to free device space. Resume partial
+  committed retirement; never require already retired originals for rollback.
 - Package build/cdj/release/soundbox-cdj. A debug renderer adds substantial CPU
   cost to multi-GB input. Captured new audio may pre-exist only as the exact
   Contents set in a fresh local partial output; no metadata/extra files/links.
@@ -2163,11 +2169,15 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   Include WAL/journal in freshness stamps. This is presentation, not publication
   authority; a write still rejects active/unreconciled SQLite companions.
 
-- Track information must open before canonical artwork resolution. The art-state
-  lock and image decode can delay construction even when the track is loaded.
-  Resolve/decode in its TaskOwner worker after show; build Info fields on demand.
-  Do not prefetch more art during track load to hide dialog latency. Closing the
-  dialog retains/drains the worker through finished/join, like other art dialogs.
+- Track information prepares its selected cover before modal show, so “No
+  artwork” cannot flash ahead of an existing cover. Canonical resolution and
+  display-sized decode stay in its TaskOwner worker; preparation dispatches Qt
+  timers/results with user input excluded and a wait cursor. A contended art
+  lock can delay opening. Build Info fields on demand; do not prefetch art during
+  track load. Publication refreshes matching open dialogs after the save, with
+  coalesced replacement reads and the prior cover retained until ready. Closing
+  retains/drains through finished/join and prevents a pending initial show.
+  See [the polish audit](ui-polish-audit.md) for coverage and remaining GUI costs.
 
 - Pinned rbxport source retains upstream whitespace exactly. The narrow vendor
   `.gitattributes` exemption keeps `git diff --check` useful for SoundBox files

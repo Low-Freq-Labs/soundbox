@@ -5,69 +5,74 @@ Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
 (Low Freq Labs) operates the personal build. Read this file and
 [docs/HANDOFF.md](docs/HANDOFF.md) at the start of every session.
 
-## Current delivery — November3,2026
+## Current delivery — November4,2026
 
-Personal build157 is installed and normally reopened at `/Applications/Soundbox.app`.
-Signed base revisiond19f3eb40b4e18a5e474e8ef26a2887a76de9b7c, dirty=true; runtime
-`fc6963120d44821d3ddb2c873560dc38c0e76cb9d628604001e6bd53213783b4`, executable
-`9601842d829165d405652b641eb3a5253f53a596488a70fd385a7be8bcf885e8`.
-Sonny requested wrap-up. The tested export/broader/correctness efficiency source
-release `d08ee91d18fe89e9fa520f7f242d1cd3015ec903` is committed and pushed; this
-documentation closure does not restamp or reinstall the running app.
-HANDOFF distinguishes the signed installed dirty-source base from the new
-source-release history and prior `9a023536`/`d19f3eb` checkpoints.
+Updated personal build160 is installed and running at `/Applications/Soundbox.app`.
+Signed base revisionc2415d5c3e9874919ca07b54b04636a282203ee2, dirty=true; runtime
+`7bbe8577a80ba08fdef36efb4de1b3877820a2974a4b534ce36d6c43884fbfc8`, executable
+`380806ceb13f4ca40432231e8598a788193e894c2a6991a63a65136515138f49`.
+The prior November3 build160 was b0ccb1ab…/410196e9…; Git-count build numbers are
+not unique runtime identity. Sonny’s November4 “wrap up” authorizes committing
+and pushing the tested UI/export source. The signed installed base remains
+c2415d5…/dirty=true; source publication does not restamp or reinstall it.
+HANDOFF distinguishes publication history, installed bytes and the one rollback.
 
-- Initial full grid/key/native waveforms are accepted on bare stereo PCM16/24
-  WAV44.1/48kHz and, independently, bare unlocked MPEG-1 CBR stereo44.1kHz MP3
-  without Info/Xing. Other profiles/replacement/gain/metadata remain separate.
-- Native registration and ordinary playlist CRUD/membership/reorder use their
-  accepted independent authorities on the one worker/root/lock/recovery lane.
-  Two per-command performance passes retain fresh source/authority/apps/payload/
-  SQL proofs; only verified pure immutable reconstruction is reused.
-- Required conversion→waveform→BPM→key precedes new DB work, with durable phase/
-  SHA checkpoints and preserved FIFO. Selected worker-scoped ctime drift gets
-  quiet exact-byte proof without changing plans/recorded epochs. Native/manual
-  musical data wins; browser waveform estimates confer no source authority.
-- Memory Cue recall also sets the regular temporary CUE point exactly. Duplicate
-  confirmation is compact with safe default Skip; crate has the reference's
-  clean rim/handle, straight sides and flat bottom. Saved playlist choices and
-  white Dock icon survive. Palette/geometry/transport improvements remain intact.
-- All2531tests,158personal/154public packaged first-party module parity, signing,
-  both profiles' isolated startup and installed normal curated startup passed. At final check,
-  complete library bytes and10authorities were exact;100imports/16analyses/
-  98bindings/524hidden curation and five empty save queues are dated evidence.
-  The formerly blocked Mocha save now verifies145 BPM/9A/425beats in native source.
-- Preserve515user disposals/four local dismissals,124converted WAV originals,
-  every newer saved edit and all native recovery/acceptance material. One missing
-  binding/unresolved path and the old32kHz MP3 conversion error remain explicit.
-  Artists is virtual-only; its removed1527native hierarchy entries must never recur.
+- Info prepares artwork before modal show. Its wait wheel colors only native
+  white pixels with the selected accent, retaining black/transparent details.
+  Earlier DPR/text/footer/menu and selection/scroll polish remains included.
+- Export replaces the device-header action, with playlists/folders left and
+  connected-device checkboxes right. One target is preselected; multiple checked
+  targets queue through existing exporters. Preserve source/playlist/mount/UUID
+  identities, cancellation and worker ownership; iPod first-generation review
+  and independent firmware capabilities remain intact.
+- Selected USB publication validates selected records/memberships in both native
+  formats while preserving each format's unrelated baseline, including existing
+  differences. Updating a selected playlist prunes removed songs/assets only
+  when no remaining USB playlist uses them; shared assets and unrelated
+  collection-only songs survive. Exact rollback remains until durable commit;
+  removed-media backups then retire to free space, with resumable cleanup.
+- Both FAT32 and exFAT remain supported. Sonny requested a subagent format review
+  and permitted wiping the two attached USBs. Both already had FAT32/MBR and
+  remain unerased. Formatting now protects source analysis locations and verifies
+  physical/map/one-first-partition/filesystem postconditions before initialization.
+- All2564tests pass in reconciled offscreen/Cocoa reports, with675frozen inputs,
+  160personal/156public packaged module parity, signing and both isolated profiles.
+  A native cadence failure at4%battery passed focused/full64-case AC reruns
+  without source changes; do not weaken thresholds or erase that evidence.
+- Fresh library bytes and10authorities are exact across install/normal reopen;
+  100imports/16analyses/98bindings/524hidden and five empty save queues are dated
+  evidence. Preserve515disposals/four dismissals,124converted originals, all newer
+  edits and native recovery/acceptance. Artists is virtual-only; never recreate
+  its removed1527native entries. One missing binding/path and the32kHz MP3 error
+  remain explicit. Prior Mocha145/9A/425beat proof remains accepted.
+- All native writers and accepted codec/profile authorities retain their exact
+  independent source/library/schema/version limits and worker/lock/recovery lane.
+  No exporter, preview or browser data grants a new desktop source publisher.
 
-Sonny authorized installation; SoundBox was already closed for this pass.
-The updated build157 is reopened for his use. Leave it running; no mouse/keyboard/Accessibility inputs into his real SoundBox/rekordbox,
-no playback interruption and no documentation-only reinstall. Earlier one-off
-permission to stop the quit-blocked process does not grant general termination.
-Private fixtures/read-only snapshots and ordinary local development remain
-permitted. Obsolete temporary apps/rollback roots and redundant
-packaging outputs were retired; one previous d5cb4451… rollback is retained.
-Current app/source, required fixtures, native
-build/check outputs, originals and recovery stay protected. Current facts and
-unfinished profile gates live in HANDOFF; archived checkpoints never authorize
-rollback, source publication or restoring disposed files.
+Installed01:59:52, reopened02:01:17 and verified02:02:40 November4. SoundBox was
+already closed; no termination or real-app inputs were used. Leave it running.
+No documentation-only reinstall/restamp, general termination or real-app inputs
+are authorized. The b0ccb1ab… build160 rollback remains pending acceptance of
+this update. Older generated fc696312…/d5cb4451… rollback apps were retired under
+standing cleanup after Sonny used/positively accepted the prior build160 Info
+behavior; exact evidence is in HANDOFF. Current app/source, native builds/checks,
+required fixtures, originals and recovery remain protected. Do not accumulate
+obsolete apps or treat archived checkpoints as restore/publication authority.
 
 ## Delivered export efficiency — November3
 
 Sonny requested USB/iPod startup gating and subagent efficiency reviews. The
 source now defers full exporter imports/cache indexes and export-playlist capture
 until detection, gates stock-art warming on an attached iPod, and reduces repeated
-USB catalog, iPod drift and FAT destination work. The current2531-test delivery
-includes this work at /Applications/Soundbox.app. Current library bytes, all10authorities, playlist
+USB catalog, iPod drift and FAT destination work. This work remains included
+in build160 at /Applications/Soundbox.app. Current library bytes, all10authorities, playlist
 icon choices and the white Finder/Dock icon are exact across this install/launch.
-No stock-art preparation starts in the observed normal boot. One temporary
-previous d5cb4451… build157 rollback remains until Sonny accepts this update; its path and the exact
-validation/provenance are in HANDOFF. Synthetic component scopes and remaining
+No stock-art preparation starts in the observed normal boot. The older build157 rollback was subsequently retired; the current b0ccb1ab…
+rollback and exact validation/provenance are in HANDOFF. Synthetic component scopes and remaining
 physical-performance limits live in docs/performance-audit.md.
-The wrap-up request authorizes this source release; later publication still
-requires the normal explicit request.
+That earlier source release was published under its wrap-up request. Sonny’s
+November4 wrap-up now also authorizes publication of the tested polish/export
+work, with no interruption or documentation-only reinstall of his running app.
 
 ## Installed broader efficiency review — November3
 
@@ -78,16 +83,17 @@ immediately, and reduces repeated state/import/analysis/playlist/artwork/native
 catalog/provider work. All176 first-party app-tree source files have an explicit
 review depth; many paths remain unprofiled. Measurements and ranked remaining
 work are in docs/performance-audit.md, with private per-file receipts retained.
-The broader pass was verified at2406tests and is retained in the current
-2531-test runtime below, with package/native parity and startup verified. Leave it running.
-Wrap-up authorizes publishing the tested changes, with no general app termination. Preserve
+The broader pass was verified at2406tests and is retained in build160,
+with package/native parity and startup verified. Leave it running.
+Its earlier wrap-up publication is complete, with no general app termination. Preserve
 all source/authority/process/mount/hash/recovery guards and native phase ordering.
 
 ## Installed correctness/efficiency follow-up — November3 night
 
 Sonny requested tackling every remaining finding from simple improvements upward,
-with correctness review as well as efficiency. The tested frozen source matches
-installed fc696312…; HANDOFF records exact provenance. The pass inventories178 first-party source files and changes39 since d5cb4451…; three
+with correctness review as well as efficiency. Its frozen fc696312… runtime was
+installed before the later UI polish build160; HANDOFF records current provenance.
+The pass inventories178 first-party source files and changes39 since d5cb4451…; three
 subagents plus root reviewed source-state/receipt proofs, musical analysis/
 acquisition, exporters/providers, UI lifetime/thumbnails, state publication and
 packaging. Source capture, retry/recovery, folder-delete retention and USB stale
@@ -97,8 +103,8 @@ probes pass; the personal app was installed22:18 and normal startup verified22:2
 Exact evidence and measured remaining limits are in HANDOFF/performance-audit.
 Preserve the published application source and any newer local changes,
 all accepted authority/guard/recovery boundaries and newer user edits. Do not
-interrupt the running app or send it inputs. Sonny is using the app while the
-published source release is closed out; no documentation-only reinstall or restamping.
+interrupt the running app or send it inputs. Sonny used that app during its
+publication closure; no documentation-only reinstall or restamping was performed.
 At22:29 his subsequent relaunch was healthy; only columns_state changed since
 installation and all curation/authorities/icon remain preserved. Full detached
 queue serialization, cooperative pre-response network
@@ -128,6 +134,17 @@ ORM/SQLCipher probe uses only disposable RAM. These checks grant no new source
 publisher, codec/profile acceptance, app input or general process termination.
 
 ## Runtime instruction parity
+
+November3 installed UI polish follow-up: Sonny reported Info artwork appearing late and
+requested a broad presentation review. The current source prepares selected art
+off-thread before modal show, updates matching dialogs after publication, and
+fixes text gutters/DPR/status sizing and navigation/refresh resets. Coverage and
+remaining GUI costs are in `docs/ui-polish-audit.md`; HANDOFF distinguishes the
+worktree, validation and installed runtime. This request grants no real-app
+input, general termination or new native authority. Source publication was
+subsequently authorized by Sonny’s November4 wrap-up. Sonny closed SoundBox and explicitly requested installation/reopen; build160 is now
+verified and running. No further restart or documentation-only rebuild is needed.
+Preserve every newer curated edit and the saved white app icon.
 
 `AGENTS.md` and `CLAUDE.md` are runtime equivalents and intentionally contain
 the same shared project guidance. Whenever shared instructions, safety rules,
@@ -489,11 +506,16 @@ repository can answer the question.
   reads, off-device catalog preparation and manifest-last publication. Display
   reads may include stable WAL pages in a local copy, never SHM/live USB SQL;
   this grants no publication authority over active SQLite companions. Playlist
-  drops, Update Playlists and explicit Save to USB authorize publication without
+  drops, Export and explicit Save to USB authorize publication without
   another prepared-plan question. Preserve current native collections/playlists
   across either exporter's writes. Never treat a changed native catalog alone as
-  an ownership conflict or erase it. Retain collection songs when managed
-  playlists are removed; no ordinary orphan-media sweep. Bind drag intent through
+  an ownership conflict or erase it. November4 selected-export policy supersedes
+  the old blanket collection-retention rule: replacing a selected playlist removes
+  its old memberships and prunes those removed tracks only when no remaining USB
+  playlist in either native catalog uses them. Shared songs/assets and unrelated
+  collection-only records stay. Retire exact removed-media rollback bytes after
+  durable commit so cleanup frees USB space; restore them on pre-commit failure.
+  No whole-drive orphan sweep is authorized. Bind drag intent through
   deferrals to mount/UUID. New/changed audio retains exact-byte verification;
   retained native inventory needs no media audit. Internal recovery resumes
   incomplete work; a later coherent native export supersedes older pending
@@ -507,7 +529,12 @@ repository can answer the question.
   My Settings has44 recognized player/mixer controls, a SoundBox-global logical
   profile seeded from the active USB, and explicit Save to Global / Load Global.
   Existing opaque bytes survive edits; global changes do not auto-propagate.
-  The USB menu is Update Playlists, Import My Settings, Reformat USB, Eject.
+  The USB menu is Export, Import My Settings, Reformat USB, Eject. Export selects
+  playlists on the left and connected devices on the right; one action queues
+  checked targets through the existing serialized device lane. Capture source
+  binding and each target mount/UUID, rebind selected playlist IDs before each
+  target, and cancel remaining targets on request/shutdown. Existing iPod first
+  generation review and exporter-specific safety rules remain in force.
   Reformat requires concrete destructive confirmation, real physical USB identity,
   source separation and FAT32/exFAT MBR; stock/dual never expose it. HFS+ remains
   excluded. Ordinary iPod menu/erase rules are unchanged. See the CDJ guide.

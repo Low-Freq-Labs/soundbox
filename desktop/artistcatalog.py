@@ -45,6 +45,7 @@ class ArtistCatalogDialog(QDialog):
         v.addWidget(head)
 
         self.status = QLabel("")
+        self.status.setTextFormat(Qt.PlainText)
         v.addWidget(self.status)
 
         self.list = QTreeWidget()

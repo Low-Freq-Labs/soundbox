@@ -1,6 +1,7 @@
 # Native CDJ USB export
 
-Reviewed November3, 2026 against application source release `d08ee91`.
+Updated November4, 2026 for the selected-export worktree; installed provenance
+and pending release checks are in HANDOFF.
 The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
 and waveforms from his export. Exact firmware, the wider performance/control
@@ -47,12 +48,23 @@ adding a desktop database write domain. Imported/XML tracks or missing required
 native analysis fail explicitly; there is no silent omission/transcoding.
 
 A playlist drop authorizes its pinned USB and continues straight through to
-publication. Update Playlists reconciles SoundBox's managed playlist selections;
+publication. Export opens a two-column selector: playlists/folders on the left,
+connected USBs/iPods on the right. A sole target is preselected; multiple devices
+can be checked. One action queues each checked target through the existing
+serialized device lane, with source identity/playlist rebinding and target
+mount/UUID guards before each target. Cancellation clears remaining targets;
+iPod-specific first-generation review remains in place. Only selected playlists
+are reconciled;
 Save to USB applies explicit preference edits. None adds a second prepared-plan
 confirmation. Drops prepare selected new/changed inputs only. Unchanged native
 records may be adopted by source identity, counters and metadata, without reading
-USB media. Existing audio placement survives display-only changes. Updating or
-removing a playlist retains collection songs and performs no orphan-media sweep.
+USB media. Existing audio placement survives display-only changes. Replacing a selected
+playlist removes its old memberships. A removed song is pruned only when no
+remaining playlist in either native catalog uses it; shared audio/analysis/artwork
+remain. Unrelated collection-only songs and other playlists stay untouched.
+Existing unrelated differences between classic and Plus are preserved separately
+and do not block a selected export. Selected records and exact memberships are
+validated in both formats. There is no whole-drive orphan sweep.
 A repeated unchanged export writes nothing. Pure catalog reconstruction may be
 reused only under the current render policy, exact captured input signatures and
 fresh matching committed catalog/profile bytes; source, target and recovery
@@ -77,14 +89,17 @@ Publication uses a small local receipt and USB journal, retains affected origina
 copies new payloads with a streaming checksum, then publishes the catalogs and
 manifest. There is no second full audio readback. Cancellation/interruption keeps
 completed new payloads available for a retry and restores earlier small metadata
-where needed. Update Playlists resumes the saved selection against fresh source
+where needed. Export resumes the saved selection against fresh source
 state. A later coherent rekordbox export supersedes an interrupted SoundBox
 catalog generation: keep the newer native catalogs and all media, retire the
 older pending intent, and plan from current native records. This exceptional
 check reads only the small catalog copies. Unknown/mismatched journals and actual
 unsupported/corrupt states preserve evidence. Recovery is internal to the normal
-workflow, with no separate user-facing recovery/verification menu. Recovery bytes
-remain during the pilot; no automatic bulk cleanup is implied. Worker ownership
+workflow, with no separate user-facing recovery/verification menu. Original
+metadata recovery remains. Exact assets removed by the selected export are
+retired from same-volume recovery only after durable manifest/journal commit;
+interrupted retirement resumes, reclaiming USB space. New copies still require
+peak transaction free space before commit. Worker ownership
 lasts through QThread.finished; shutdown drains active work with Qt events alive.
 An idle device can always request normal macOS eject.
 
@@ -125,8 +140,10 @@ the earlier ±16 capture is historical. Neither observation states the user's
 current preference. Other choices come from the bounded format catalogue;
 this is not a claim that every choice has been exercised on hardware.
 
-The information button opens Summary immediately, deferring artwork lookup/decode
-to a retained worker and edit-field construction until Info is selected. Artwork
+The information button prepares its cover off-thread before Summary appears;
+its first visible frame contains the settled cover or missing-art state. The
+wait wheel replaces only white pixels with the selected accent and keeps black
+details intact. Edit-field construction waits until Info is selected. Artwork
 editing is centered inside Info; Summary centers its artwork/title group and
 anchors selectable technical details in a bordered panel. Lyricist is omitted
 from Info and Comments spans the full row. The local-edit note sits bottom left,
@@ -141,11 +158,12 @@ fields stay hidden when older header state is restored; deliberate selections
 that exceed the viewport can scroll. Progress/count/Cancel share a fixed-height
 footer and cannot resize the browser.
 
-The generic USB menu is exactly Update Playlists, Import “My Settings”, Reformat
+The generic USB menu is Export, Import “My Settings”, Reformat
 USB…, Eject. Import promotes recognized USB settings into SoundBox Global settings.
 Reformat presents the real volume name, capacity/affected mounted partitions and
 FAT32/exFAT choice, then requires its destructive confirmation. It revalidates the
-physical external USB and source separation, formats MBR and initializes both
+physical external USB and source separation (including native analysis paths),
+formats MBR, verifies the resulting physical identity/map/filesystem, and initializes both
 native catalogs with Global My Settings. HFS+ is not offered: its hidden native
 layout remains outside the current writer boundary. The format command has mock
 coverage but has not been exercised by the agent on hardware.

@@ -1,22 +1,45 @@
-"""Responsive track information; artwork resolves only after the dialog opens."""
-from PySide6.QtCore import Qt, QThread, QTimer
-from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import (QDialog,QDialogButtonBox,QGridLayout,QHBoxLayout,
+"""Track information with complete artwork on its first visible frame."""
+from PySide6.QtCore import Qt, QThread, QEventLoop, QSize
+from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
+from PySide6.QtWidgets import (QApplication,QDialog,QDialogButtonBox,QGridLayout,QHBoxLayout,
     QLabel,QLineEdit,QMessageBox,QPlainTextEdit,QPushButton,QScrollArea,QTabWidget,QVBoxLayout,QWidget)
 from .choices import ComboBox as QComboBox
 from soundbox.track_info import EDITABLE
 from .task_owner import TaskOwner
+from . import theme
+
+
+def _themed_wait_cursor():
+    cursor=QCursor(Qt.WaitCursor)
+    # Use the pinned Cocoa plugin's own wheel so its silhouette and black
+    # details stay exact. Other platforms/Qt resources retain their native wait.
+    image=QImage(':/qt-project.org/mac/cursors/images/spincursor.png')
+    if image.isNull():return cursor
+    accent=QColor(theme.PURPLE)
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel=image.pixelColor(x,y)
+            if pixel.red()==pixel.green()==pixel.blue()==255 and pixel.alpha():
+                image.setPixelColor(x,y,QColor(accent.red(),accent.green(),accent.blue(),pixel.alpha()))
+    hotspot=cursor.hotSpot()
+    return QCursor(QPixmap.fromImage(image),hotspot.x(),hotspot.y())
 
 
 class ArtworkWorker(QThread):
-    def __init__(self, resolve):
-        super().__init__();self.resolve=resolve;self.image=QImage()
+    def __init__(self, resolve, side=640):
+        super().__init__();self.resolve=resolve;self.side=side;self.image=QImage()
 
     def run(self):
         try:
             path=self.resolve()
             if path and not self.isInterruptionRequested():
-                self.image=QImage(str(path)).scaled(640,640,Qt.KeepAspectRatio,Qt.SmoothTransformation)
+                reader=QImageReader(str(path))
+                bounds=QSize(self.side,self.side)
+                size=reader.size()
+                if size.isValid():reader.setScaledSize(size.scaled(bounds,Qt.KeepAspectRatio))
+                image=reader.read()
+                if not image.isNull() and not self.isInterruptionRequested():
+                    self.image=image.scaled(bounds,Qt.KeepAspectRatio,Qt.SmoothTransformation)
         except (OSError,ValueError):
             pass
 
@@ -28,6 +51,7 @@ class TrackInfoDialog(QDialog):
         self.row=dict(row);self.controls={};self.save_callback=save
         self._artwork=artwork;self._pick_art=pick_art;self._image=QImage()
         self._owner=TaskOwner(self);self._art_worker=None;self._info_built=False
+        self._art_ready=False;self._art_dirty=False
         self._covers=[]
         layout=QVBoxLayout(self);layout.setContentsMargins(16,12,16,12)
         self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
@@ -40,7 +64,7 @@ class TrackInfoDialog(QDialog):
         titles.setContentsMargins(0,48,0,0)
         for at,(key,label) in enumerate((('title','Track title'),('artist','Artist'),('album','Album'))):
             caption=QLabel(label);caption.setObjectName('SettingsSub');titles.addWidget(caption,at,0,Qt.AlignTop)
-            value=QLabel(str(row.get(key) or '—'));value.setWordWrap(True)
+            value=QLabel(str(row.get(key) or '—'));value.setTextFormat(Qt.PlainText);value.setWordWrap(True)
             value.setMinimumWidth(0)
             value.setTextInteractionFlags(Qt.TextSelectableByMouse);titles.addWidget(value,at,1,Qt.AlignTop)
         titles.setColumnStretch(1,1);titles.setRowStretch(3,1)
@@ -56,7 +80,7 @@ class TrackInfoDialog(QDialog):
             elif key=='sampleRate' and value!='—':value+=' Hz'
             elif key=='bitrate' and value!='—':value+=' kbps'
             caption=QLabel(label);caption.setObjectName('SettingsSub')
-            text=QLabel(value);text.setWordWrap(True);text.setMinimumWidth(0)
+            text=QLabel(value);text.setTextFormat(Qt.PlainText);text.setWordWrap(True);text.setMinimumWidth(0)
             text.setTextInteractionFlags(Qt.TextSelectableByMouse)
             if key=='location':text.setToolTip(value)
             form.addWidget(caption,at,0,Qt.AlignTop);form.addWidget(text,at,1)
@@ -70,8 +94,28 @@ class TrackInfoDialog(QDialog):
         if save:
             apply=buttons.addButton('Save',QDialogButtonBox.AcceptRole);apply.clicked.connect(self._save)
         actions.addWidget(buttons);layout.addLayout(actions)
-        # No artwork state lock or image decode on the dialog-opening path.
-        QTimer.singleShot(0,self,self._load_artwork)
+
+    def prepare_artwork(self):
+        """Resolve off-thread before showing, while timers/results keep running.
+
+        This waits only for this dialog's selected cover, never library-wide art
+        preparation. No placeholder-to-cover swap reaches the first paint.
+        """
+        if self._art_ready or self._owner.stopping:return
+        loop=QEventLoop()
+        self._owner.drained.connect(loop.quit)
+        QApplication.setOverrideCursor(_themed_wait_cursor())
+        try:
+            self._load_artwork()
+            if self._owner.pending:loop.exec(QEventLoop.ExcludeUserInputEvents)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._owner.drained.disconnect(loop.quit)
+
+    def exec(self):
+        self.prepare_artwork()
+        if self._owner.stopping:return QDialog.Rejected
+        return super().exec()
 
     def _cover(self,size):
         cover=QLabel('No artwork');cover.setFixedSize(size,size);cover.setAlignment(Qt.AlignCenter)
@@ -86,11 +130,20 @@ class TrackInfoDialog(QDialog):
                 image.setDevicePixelRatio(ratio);cover.setPixmap(image)
 
     def _load_artwork(self):
-        if self._owner.stopping or self._art_worker is not None or self._artwork is None:return
-        worker=ArtworkWorker(self._artwork);self._art_worker=worker
+        if self._owner.stopping:return
+        if self._art_worker is not None:
+            self._art_dirty=True;return
+        if self._artwork is None:
+            self._art_ready=True;return
+        self._art_dirty=False
+        worker=ArtworkWorker(self._artwork,max(640,round(320*self.devicePixelRatioF())))
+        self._art_worker=worker
         def retired(w):
             self._art_worker=None
-            if not self._owner.stopping:self._image=w.image;self._paint_artwork()
+            if self._owner.stopping:return
+            if self._art_dirty:
+                self._load_artwork();return
+            self._image=w.image;self._art_ready=True;self._paint_artwork()
         self._owner.adopt(worker,retired);worker.start()
 
     def _tab_changed(self,index):
@@ -101,7 +154,9 @@ class TrackInfoDialog(QDialog):
         art=QHBoxLayout();art.addStretch();art.addWidget(self._cover(208));art.addSpacing(16)
         choose=QPushButton('Change artwork…');choose.setEnabled(self._pick_art is not None)
         def pick():
-            if self._pick_art:self._pick_art();self._load_artwork()
+            # Publication notifies this dialog after a local save or online
+            # fetch actually lands. Returning from the picker is too early.
+            if self._pick_art:self._pick_art()
         choose.clicked.connect(pick);art.addWidget(choose);art.addStretch();iv.addLayout(art)
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QScrollArea.NoFrame)
         host=QWidget();grid=QGridLayout(host);grid.setContentsMargins(0,2,0,2)
@@ -176,6 +231,12 @@ def _exec_info(dialog):
 
 
 class TrackInfoMixin:
+    def _refresh_info_artwork(self,track_ids):
+        ids=set(track_ids)
+        for dialog in self.findChildren(TrackInfoDialog):
+            if dialog.row.get('id') in ids and not dialog._owner.stopping:
+                dialog._load_artwork()
+
     def _open_track_info(self):
         from .usb_device_view import CdjSong
         if self.stack.currentIndex()==1 and self.device_content_stack.currentIndex()==2:

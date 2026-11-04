@@ -1,176 +1,173 @@
 # SoundBox current handoff
 
-Updated November3,2026 after the correctness/efficiency pass, final complete gate,
-both signed package profiles, installation, normal curated startup, wrap-up and
-repository-wide documentation consistency review.
-Branch `main`; application source release `d08ee91d18fe89e9fa520f7f242d1cd3015ec903`
-is committed and pushed. This documentation-only closure follows that release.
-The installed signed base remains `d19f3eb40b4e18a5e474e8ef26a2887a76de9b7c`,
-dirty=true; its recorded runtime bytes are unchanged. Publication did not restamp
-or reinstall the running app.
-**Personal build157 is installed and left running at `/Applications/Soundbox.app`.**
-No further input or termination is granted.
+Updated November4,2026 after installation at01:59:52, normal reopen at02:01:17
+and curated-state verification at02:02:40 (America/Chicago).
 
-## Installed runtime and source provenance
+**The updated personal build160 is installed and running at
+`/Applications/Soundbox.app`.** SoundBox was already closed. No real-app inputs or
+process termination were used. Leave the reopened session alone; do not quit,
+restamp or reinstall it for documentation. Sonny’s subsequent November4
+“wrap up” authorizes committing/pushing the tested source while he uses the app.
 
-Installed `2026-11-03T22:18:00.130599-06:00`; normal curated startup verified
-`2026-11-03T22:21:50.804063-06:00`. Signed base revision `d19f3eb`, dirty=true:
+## Runtime and source provenance
 
-- Runtime fingerprint: `fc6963120d44821d3ddb2c873560dc38c0e76cb9d628604001e6bd53213783b4`.
-- Executable SHA-256: `9601842d829165d405652b641eb3a5253f53a596488a70fd385a7be8bcf885e8`.
+Branch `main`. The installed signed base is
+`c2415d5c3e9874919ca07b54b04636a282203ee2`, dirty=true. The November4 wrap-up
+authorizes publication of the tested UI/export source, following the earlier
+`d08ee91d18fe89e9fa520f7f242d1cd3015ec903` release and documentation closure.
+Source publication does not change the running bundle’s declared base or bytes.
+Both old and new artifacts use Git-count build160; distinguish them exactly:
 
-All158 personal/154 public packaged first-party Python modules and each entrypoint
-match tested source. Native section descriptors/non-zerofill bytes match tested
-builds:26deck,5process-guard and20CDJ sections, including zerofill descriptors.
-The installed runtime fingerprint matches the frozen, now-published application
-source. Build157 derives from Git history at packaging time; later publication
-changes repository HEAD without changing the app. Hashes distinguish it from
-earlier73219a59… and d5cb4451… build157 apps. Its signature retains the
-pre-publication dirty base rather than the later source-release Git revision. Prior build155/source release `9a023536` and documentation closure
-`d19f3eb` remain historical provenance.
+- Current runtime: `7bbe8577a80ba08fdef36efb4de1b3877820a2974a4b534ce36d6c43884fbfc8`.
+- Current executable SHA-256: `380806ceb13f4ca40432231e8598a788193e894c2a6991a63a65136515138f49`.
+- Previous November3 runtime: `b0ccb1aba55b0c005938b97d3e8a8e147670658bca9702ba2c1b04b49226af3a`.
+- Previous executable: `410196e938f75df8d3cf6b5ed0176282b55513d6dce195437558f97592b8019d`.
 
-## Delivered efficiency and correctness work
+All160personal/156public first-party packaged modules, both entrypoints and
+26deck/5process-guard/20CDJ native sections match the tested source/builds.
+Both candidates passed strict signing before first launch and isolated native
+CoreAudio/Metal/process/RAM-only ORM/SQLCipher checks, with zero device, library
+or artwork work. Installed isolated startup passes too. Saved white Finder/Dock
+metadata remains exact; deep signing and exact signed Contents checks pass.
+Never strip that metadata or re-sign a running app to hide strict root-metadata
+rejection. The675-input source/test/build freeze is exact.
 
-Lightweight mount watching stays active; full CDJ/stock/dual/filesystem exporters
-and cache indexes load when needed after detection. Empty scans skip export-playlist
-construction and stock shadow. Stock-art warming waits for an attached stock-capable
-iPod and stops cooperatively on disconnect while retaining worker ownership.
-The supplied trackpad recording identified short gray/accent interruptions;
-120ms idle feedback bridges gestures. USB scroll positions update immediately,
-with coalesced preference notifications and full lifecycle capture barriers.
+## Delivered behavior
 
-Sonny then requested tackling the remaining findings from simple fixes upward,
-with correctness throughout. Three subagents implemented separate domains and
-reviewed each other's work; root reviewed source acquisition/publication/replay,
-UI ownership, output semantics and package composition. The current inventory
-covers178 first-party Python/native app-tree source files with explicit review
-depths,39 changed since d5cb4451…, plus eight build/harness paths. This is not a
-claim that every dependency/research script or hardware failure was proved.
+Info prepares the selected cover off-thread before modal presentation, so its
+first visible frame contains the settled cover or missing-art state. Timers and
+worker results continue during preparation; owned work drains before closing.
+New artwork publication refreshes matching dialogs without a late obsolete image.
+The wait wheel now replaces only native white pixels with the selected accent;
+black, transparent pixels, shape and hotspot remain exact. Five-accent pixel
+proofs and native Cocoa first-frame/lifetime checks pass.
 
-The latest pass fixes expected-SHA/source-epoch pairing, failed-acknowledgement
-retry rebasing, durable folder-delete Collection pins, selected cue-reference
-ordering, concurrent USB manifest/settings baselines and global MyTag revision
-coverage. Historical retention proof is distinct from strict causal retry proof.
-Fresh source/authority/process/mount/hash/recovery guards remain; no new source
-publisher or musical profile was added.
+The device header now says Export. Its dialog has playlist/folder checkboxes on
+the left and connected-device checkboxes on the right. A sole target is selected
+automatically; multiple targets can be checked. One action queues targets through
+the existing serialized device lane. Source binding and stable playlist IDs are
+rechecked/rebound for each target; mount/UUID checks prevent redirection to a
+remounted device. Target errors aggregate and later targets can continue;
+cancellation/shutdown clear pending work. Existing stock/dual planners and their
+first-generation review/capability boundaries remain intact. iPod physical
+acceptance is still separate, as Sonny requested testing it later.
 
-Touched-record completion/rollback, worker-scoped analysis snapshots, queue indexes,
-fuzzy-score pruning, atomic artwork batches, stock-art slot indexing and CDJ
-status/selected metadata/no-op reconstruction reduce repeated work. Dialogs drain
-owned work before disposal, protect busy/closed state, and decode visible thumbnails
-at display size. Artist writes preserve newer covers/manual blocks. State path
-overlap uses ancestor membership while retaining publication guards. Catalog
-alternating rows use the existing dark palette under a light OS palette.
-Provider bodies support optional cooperative cancellation/deadline scopes while
-preserving adapter decompression/close/pool semantics. Packaging removes development
-integrations; personal regular-file bytes shrink by11,666,423 (~11.7MB).
+Selected USB exports no longer require unrelated classic/Plus catalogs to be
+identical. The reported error was reproduced from three small read-only copies
+of RB USB TEST: Plus had112songs, Classic111, while all four playlists agreed.
+A final local merge succeeds while preserving that unrelated difference. Each
+format's unrelated records/memberships remain its own baseline. New IDs/artwork
+reserve both namespaces; different recordings sharing a numeric ID are protected.
+Selected track playback records and exact playlist memberships validate in both
+formats. Plus-only display remains supported without requiring Classic/EXT files.
 
-[The item-by-item audit](performance-audit.md) records differential/fault tests,
-component measurements and remaining tradeoffs. Generated CPU/Qt fixtures do not
-establish live-device throughput, actual compositor latency or user trackpad
-acceptance. Cross-phase PCM sharing was profiled and retained as a memory/provenance
-tradeoff. Full detached queue helpers, durable state serialization and opaque
-DNS/connect/header/decoder/retry waits remain explicit costs. There is no hard
-wall-clock cancellation guarantee or universal bug-free claim.
+Sonny's explicit space policy supersedes blanket USB collection retention:
+replacing a selected playlist removes old memberships, then removes the removed
+song only when no remaining USB playlist uses it. References in both native
+formats protect shared songs/assets. Unrelated collection-only songs survive;
+there is no whole-drive orphan sweep. Affected removed assets get exact-byte
+checks and same-volume rollback. Pre-commit failure restores originals; durable
+committed cleanup retires those media backups so the bytes actually become free.
+Interrupted retirement resumes. Metadata recovery remains. New copies still need
+peak transaction free space before commit. No new desktop source publisher,
+codec/profile authority or source-audio mutation was added.
 
-## Validation and current data
+Earlier text/DPR/footer/menu and selection/scroll fixes remain included. The
+[polish audit](ui-polish-audit.md) distinguishes the dated179-file review from
+the new Export module and deeper selected-export/format checks. Review depths
+and remaining GUI/state/network/geometry costs are explicit; this is not a new
+exhaustive dependency, algorithm or physical-hardware audit.
 
-Final bare `./check.sh --render` passes2531tests:2467offscreen in618.725s plus
-64Cocoa in67.664s, zero skips/expected failures. Lint, mypy106core files, native
-builds, Rust7library+2binary+2adapter checks (zero doctests), required offline
-fixtures and inspected render pass. Clang static analysis reports zero diagnostics
-for the native deck/process guard. An earlier2531-test pass preceded the catalog
-contrast correction; the entire gate was rerun for the installed source above.
+## Format review and devices
 
-Both final public and personal packages pass strict signing, first-party code
-and native parity, composition inspection and isolated startup. Both isolated
-reports enable native deck/process guard/query and RAM-only native ORM/SQLCipher
-checks, with zero devices/library/art workers. Installed isolated verification
-also passes. No real source database was opened by the isolated SQL probe.
-Saved white Finder/Dock Icon\r ResourceFork/Finder metadata survive; ordinary deep
-signing, exact signed Contents and identity checks pass after icon restoration.
-No real-app mouse, keyboard or Accessibility input was used. SoundBox was already
-closed at installation; Sonny's existing install approval required no termination
-or playback interruption.
+Sonny explicitly requested a subagent review and permitted wiping the two then-
+connected USBs. Read-only review found separate physical external writable disks:
 
-Actual normal startup loads3296native songs/85playlist nodes, reuses3280analysis
-records and performs0waveform/grid/cue preparation tasks. Stock-art preparation
-does not start; ordinary cover fill fetches0. Canonical `library.json` is byte-exact
-across installation, isolated startup and normal launch:
-`724b8aa1c7aea64e10acd7a5f3d6619b4848f225cbc21ae0161a634df269df84`.
-Fresh counts:100imports,10custom,524hidden,1109titles,490artists,16saved analyses
-and98bindings. All10authorities, playlist icon choices and saved white app icon
-are exact; five import/analysis/prep/playlist save queues are empty. Since the
-preceding20:22installation, only columns_state/window_rect/window_geometry changed;
-the newer UI state was preserved. Later user edits supersede these dated facts;
-never restore an older checkpoint over them.
+- RB USB TEST: disk4/disk4s1,256060514304bytes,
+  UUID5B29E617-ACFB-32C2-B580-077A6BF02C64, FAT32/MBR,32KiB clusters.
+- TEST-USB: disk5/disk5s1,31042043904bytes,
+  UUID25EB2954-2428-368D-B4C1-AA7D8C14614E, FAT32/MBR,16KiB clusters.
 
-Wrap-up read-only verification at22:29 found a subsequent normal relaunch
-(started22:28:25), native deck active,3296songs/85nodes,3291reused records and
-zero preparation/cover fetches. Only `/settings/columns_state` changed from the
-preinstall file; newer UI state was retained. Current dated library SHA-256:
-`ac8b3da88f1b5575eaaae8f694274c498cead7b2ad457dc4e07a0abdfe64d1f8`.
-All10authorities, saved icons, curation and five empty save queues remain exact.
-No agent restart, app input, teardown or reinstall occurred during wrap-up.
+Both already have one data partition with1MiB alignment. No erase was needed;
+no USB export/erase/media audit was performed by the agent. Disk numbers are
+dated observations, never persistent erase authority. FAT32 retains original
+CDJ-2000 compatibility. SoundBox also supports exFAT; official manuals/support
+confirm it on CDJ-3000 and CDJ-3000X. Sources and exact review findings are retained
+in `drive-format-review.json` in the evidence directory below.
 
-## Documentation consistency follow-up
+The review fixed format source separation to include native analysis locations,
+plus post-erase checks for stable physical identity, MBR, exactly one first data
+partition, filesystem, volume identity and mount before initialization. Changing
+GPT→MBR may legitimately change DiskUUID; stable physical fields still bind the
+operation. Mock-only tests cover both FAT32/exFAT and rejected target/layout
+changes. No formatting command was issued to real hardware.
 
-The earlier wrap-up checked12current guides; Sonny asked for a wider stale-info
-check. The follow-up inventories all74tracked Markdown files:38current first-party
-guides/plans/research notes reviewed in full,11archived records checked for scope,
-retention locators and links, and25unchanged pinned upstream references classified
-separately. Current claims were checked against implementation where needed.
-Superseded write permissions, accepted codec/import/playlist status, native adapter
-limits, cache versions, performance TODOs and retention counts are corrected;
-dated acceptance records remain historical. This does not broaden native authority
-or hardware acceptance. [Project layout](PROJECT_LAYOUT.md) records coverage and
-private per-file evidence. The pass corrects44documents. All project-local
-Markdown path links/anchors pass;58links inside pinned vendor documentation point
-to omitted upstream material. That subset limitation is documented, and all243
-pinned crate files verify unchanged.
+## Validation
 
-This follow-up changes documentation only. Application source, the installed
-signed bytes and its existing2531-test release proof remain unchanged. No app
-inputs, source/device writes, restart, restamping or reinstall are part of it.
+Completed release reports reconcile all2564tests:2500offscreen in574.225s and
+64native Cocoa in67.450s, with zero skips/expected failures. Lint, mypy106core
+files, pinned243-file vendor verification, Rust checks, required fixtures and
+inspected main/Export renders pass. An extra39targeted Cocoa cases pass.
 
-## Boundaries and next action
+The bare full check's first native phase had one cadence failure while the Mac
+was at4%battery:65presentations against a108minimum for a120Hz target. After
+Sonny connected AC, the focused cadence check and the complete64-case native
+phase passed without a source change. `verify_test_reports.py` then accepted
+both complete inventories. Keep the failed run as dated environment evidence;
+do not weaken thresholds or claim it passed on battery. Earlier gates are also
+explicitly superseded: an old selected-name policy expectation, then two added
+edge cases changed the inventory during an otherwise passing run. None is final
+release acceptance. All675frozen inputs match both packages and the installed app.
 
-Leave installed build157 running for Sonny's use and trackpad testing. Existing
-installation approval does not grant general termination or inputs. Sonny's
-wrap-up source publication is complete. Physical export/reconnect/power-cycle and public clean-machine/
-notarization gates remain open. One known absent native binding/unresolved import
-path and the old32kHz MP3 compatibility error remain explicit, unchanged and unguessed.
+Physical multi-USB write acceptance, iPod reconnect/power-cycle, broader player
+controls/newer OneLibrary hardware, public clean-machine/notarization and native
+analysis profiles outside their accepted independent authorities remain separate.
 
-Initial full native WAV44.1/48kHz PCM16/24 and independently accepted bare MPEG-1
-CBR/no-Info/Xing stereo44.1kHz MP3 publication retain their existing authorities.
-VBR/Info/gapless/mono/48kHz MP3, existing-analysis replacement, gain, broader
-metadata and intelligent/cloud mutations remain separate gates. Memory Cue recall,
-duplicate confirmation, crate outline, palette/geometry/transport and required
-conversion→waveform→BPM→key order remain intact. Earlier Mocha145/9A/425-beat source
-recovery stays accepted. Preserve515user disposals/four local dismissals,
-124converted WAV originals and all newer recovery. Artists remains virtual-only;
-never recreate the removed1527native hierarchy entries or disposed/reference songs.
+## Curated state and normal startup
+
+Complete library bytes are exact across fresh preinstall capture, installation,
+installed isolated startup and normal relaunch:
+`227896a9c7cb7af133b5260723f7e63649acc460e7fbf97222552248e64ed9b1`.
+All10authorities, saved playlist choices and white app icon remain exact. Dated
+counts:100imports,10custom playlists,524hidden,1109title overrides,490artist
+overrides,16saved analyses and98native bindings. All five import/analysis/prep/
+playlist queues are empty; no JSON paths changed at02:02:40. Later user edits
+always supersede this capture; never restore an older snapshot over them.
+
+Normal startup activates the installed CoreAudio/Metal deck, loads3296native
+tracks/85playlist nodes, reuses3280unchanged analysis records and schedules0prep
+tasks. Art fill fetches0. Both USBs are detected; steady scans take roughly
+0.11–0.17s in this dated startup, not a universal benchmark. Stock-art preparation
+does not start. The known one missing native binding/unresolved imported path and
+old32kHz MP3 conversion error remain explicit and unguessed. Preserve515user
+disposals/four local dismissals,124converted WAV originals, every newer saved
+edit and all native recovery/acceptance material. Artists is virtual-only; never
+recreate its removed1527native entries. Prior Mocha145/9A/425-beat source proof
+and separate WAV/CBR-MP3 authorities remain accepted; no authority was broadened.
 
 ## Evidence and retention
 
-`~/Library/Logs/Soundbox/correctness-efficiency-2026-11-03/` retains the per-file
-inventory/independent review, compact benchmark/fault scripts and receipts, final
-gate reports/render, public/personal package/native/composition/SQL proofs, fresh
-preinstall state/authorities/icon backups, installation, installed isolated and
-normal startup proofs. `gate-before-catalog-contrast/` is historical proof for
-superseded source, not the installed gate. Wrap-up reconciles all2531gate cases and confirms runtime/test/harness inputs
-are unchanged since the final full gate; only release documentation changes.
-Never replay the completed
-`install_correctness_efficiency_once.py`, earlier installers or native pilots.
-Prior dated evidence remains under `runtime-efficiency-2026-11-03/` and
-`export-efficiency-2026-11-03/`; the former retains the supplied recording.
+`~/Library/Logs/Soundbox/export-polish-2026-11-04/` retains the675-input freeze,
+final reports/renders, native battery failure plus AC rerun, format subagent
+findings, focused regressions, package/native parity, isolated checks, fresh
+curation/authority/icon capture, guarded installer and installed/normal proofs.
+Never replay `install_export_update_once.py` or earlier installers/pilots.
+Previous UI evidence remains under `ui-polish-2026-11-03/`; catalog reproduction
+and cursor pixel proofs remain under `cdj-selected-export-2026-11-03/` and
+`theme-cursor-2026-11-03/` respectively. These are private local evidence paths.
 
-One previous d5cb4451… build157 rollback remains pending Sonny's acceptance:
-`/private/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-correctness-install-ca6mo7qc/Soundbox-previous.app`.
-Redundant public/personal dist app/COLLECT and PyInstaller work plus the obsolete
-73219a59… rollback were retired after installed normal verification, with exact
-paths/bytes in `post-install-retirement.json`. Native/check/required fixture
-outputs, current source/app, audio originals and recovery remain. Do not recreate
-older obsolete apps or retired rollbacks.
-[Older checkpoints](archive/native-analysis-delivery-checkpoints-2026-11-02-03.md)
-confer no current rollback or publication authority.
+Sonny is playing with this update; wrap-up is publication authorization, not
+physical-device acceptance or permission to interrupt his session. One temporary
+rollback stays until he accepts the update:
+`/private/var/folders/rf/fhvnltd519d1jf6kj6jxj8yh0000gn/T/soundbox-export-update-install-zvxfrqm0/Soundbox-previous.app`
+(runtime b0ccb1ab…, executable410196e9…). The two older generated build157
+rollback bundles (fc696312… and d5cb4451…) were retired under the standing cleanup
+rule after Sonny used/positively accepted build160's Info behavior. Exact paths,
+hashes and retention resolution are in `older-rollbacks-retired.json`. Current
+build160 was preserved as the new rollback. Native acceptance/recovery/fixtures
+and source originals were not part of app cleanup. Do not recreate obsolete apps.
+Redundant public/personal dist/COLLECT/PyInstaller outputs were retired after
+verified installation:1115613504logical regular-file bytes, exact paths in
+`post-install-retirement.json`. Source, venv, native/CDJ/check outputs and required fixtures stay.
+[Archived checkpoints](archive/native-analysis-delivery-checkpoints-2026-11-02-03.md)
+never authorize rollback, source publication or restoring disposed files.

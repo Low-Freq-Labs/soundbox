@@ -87,13 +87,31 @@ def format_usb(plan, name, filesystem, *, sources=()):
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip()[-2000:])
     listing=_plist('list','-plist',plan.disk)
+    disks=listing.get('AllDisksAndPartitions',[])
+    if (len(disks)!=1 or disks[0].get('DeviceIdentifier')!=plan.disk
+            or disks[0].get('Content')!='FDisk_partition_scheme'):
+        raise RuntimeError('USB formatted; the partition map did not match the requested MBR layout')
+    partitions=disks[0].get('Partitions',[])
+    if len(partitions)!=1 or partitions[0].get('DeviceIdentifier')!=plan.disk+'s1':
+        raise RuntimeError('USB formatted; expected one data partition before initialization')
+    whole=_plist('info','-plist',plan.disk)
+    identity=tuple(whole.get(k) for k in ('DeviceIdentifier','TotalSize','IORegistryEntryName','MediaName'))
+    if (identity!=plan.disk_identity[:4] or whole.get('Internal') is not False
+            or whole.get('VirtualOrPhysical')!='Physical' or whole.get('BusProtocol')!='USB'):
+        raise RuntimeError('USB formatted; the physical device changed before initialization')
     volumes=[]
-    for disk in listing.get('AllDisksAndPartitions',[]):
+    for disk in disks:
         for partition in disk.get('Partitions',[]):
             if partition.get('VolumeName')==name and partition.get('MountPoint'):
                 volumes.append(_plist('info','-plist',partition['DeviceIdentifier']))
     if len(volumes)!=1:raise RuntimeError('USB formatted; reconnect it to finish initializing settings')
     info=volumes[0]
-    if not info.get('VolumeUUID') or info.get('Internal') is not False:
+    expected_fs='msdos' if filesystem=='FAT32' else 'exfat'
+    if (not info.get('VolumeUUID') or info.get('Internal') is not False
+            or info.get('ParentWholeDisk',info.get('PartOfWhole'))!=plan.disk
+            or info.get('DeviceIdentifier')!=partitions[0]['DeviceIdentifier']
+            or info.get('MountPoint')!=partitions[0].get('MountPoint')
+            or info.get('FilesystemType','').lower()!=expected_fs
+            or info.get('VolumeName')!=name):
         raise RuntimeError('USB formatted; reconnect it to finish initializing settings')
     return info

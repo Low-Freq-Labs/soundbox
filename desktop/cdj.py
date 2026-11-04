@@ -79,10 +79,14 @@ class CdjDeviceMixin:
                         or selected_native-fresh.keys()):
                     self._stop_pulse();self.cancel_btn.setVisible(False)
                     self._flash_status('Library or selected playlist changed; choose the playlist again',15)
+                    if getattr(self,'_export_batch',None):
+                        self._export_target_result(dev,RuntimeError('Library or selected playlist changed'))
+                        self._maybe_finish_export_target()
                     return
                 if selected_native:
                     selected=[fresh[p.pid] if p.pid in selected_native else p for p in playlists]
                 self._begin_cdj_export(dev, selected, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)
+                if getattr(self,'_export_batch',None):self._maybe_finish_export_target()
             QTimer.singleShot(100, ready)
             return
         profile = self._device_profiles.get(dev)
@@ -91,6 +95,7 @@ class CdjDeviceMixin:
         if from_drop and drop_target != (token,facts.volume_uuid):
             self._flash_status('USB changed; choose the connected target again' if standalone else
                                'USB changed after the drop; drop the playlist onto the connected device again',15)
+            if getattr(self,'_export_batch',None):self._export_target_result(dev,RuntimeError('USB changed; select the connected device again'))
             return
         if not profile or profile.kind != 'generic_usb' or not getattr(profile,'cdj_export',profile.rockbox_export) or not facts.writable or not facts.volume_uuid:
             QMessageBox.warning(self, 'CDJ export unavailable', 'Select a writable FAT32 or exFAT USB.')
@@ -165,8 +170,9 @@ class CdjDeviceMixin:
         self.cancel_btn.setVisible(False)
         self.progress.setVisible(False)
         self._sync_cue_editing()
+        if getattr(self,'_export_batch',None):self._export_target_result(dev,result)
         if isinstance(result, Exception):
-            QMessageBox.warning(self, 'CDJ USB operation stopped', str(result))
+            if not getattr(self,'_export_batch',None):QMessageBox.warning(self, 'CDJ USB operation stopped', str(result))
             self._flash_status('CDJ USB operation stopped', 15)
         else:
             self._flash_status('CDJ export cancelled — nothing written' if cancelled else
@@ -252,6 +258,7 @@ class CdjDeviceMixin:
         if profile is None or profile.kind!='generic_usb':return
         facts=device_facts(dev,cached_only=True);token=self._device_mount_tokens.get(dev,0)
         sources=[Path(self.lib.source),*[t.path for t in self.lib.tracks_by_id.values()]] if self.lib else []
+        if self.lib:sources.extend(Path(t.source_analysis_path) for t in self.lib.tracks_by_id.values() if t.source_analysis_path)
         self._exporting=True;self._release_eject_ready()
         worker=CdjWorker(lambda _cancel,_progress:usb_format.capture(dev,token=token,volume_uuid=facts.volume_uuid,sources=sources))
         self._cdj_worker=worker

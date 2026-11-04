@@ -54,9 +54,17 @@ class Menu(BaseMenu):
                 action.icon().paint(painter, int(text_rect.left()), rect.center().y()-8, 16, 16)
                 text_rect.adjust(24, 0, 0, 0)
             label, _, shortcut = option.text.partition('\t')
-            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextShowMnemonic, label)
             if shortcut:
-                painter.drawText(text_rect, Qt.AlignRight | Qt.AlignVCenter, shortcut)
+                shortcut_width=min(text_rect.width(),painter.fontMetrics().horizontalAdvance(shortcut))
+                shortcut_rect=QRectF(text_rect)
+                shortcut_rect.setLeft(shortcut_rect.right()-shortcut_width)
+                painter.drawText(shortcut_rect, Qt.AlignRight | Qt.AlignVCenter, shortcut)
+                text_rect.setRight(shortcut_rect.left()-20)
+            painter.save()
+            painter.setClipRect(text_rect)
+            label=painter.fontMetrics().elidedText(label,Qt.ElideRight,max(0,int(text_rect.width())))
+            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter | Qt.TextShowMnemonic, label)
+            painter.restore()
             x, y = rect.right()-16, rect.center().y()
             if action.isChecked():
                 _mark(painter, x, y, check=True)
@@ -96,7 +104,11 @@ class _ChoiceDelegate(QStyledItemDelegate):
         if not option.icon.isNull():
             option.icon.paint(painter, int(rect.left()), option.rect.center().y()-8, 16, 16)
             rect.adjust(24, 0, 0, 0)
-        painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, option.text)
+        text=painter.fontMetrics().elidedText(option.text,Qt.ElideRight,max(0,int(rect.width())))
+        painter.save()
+        painter.setClipRect(rect)
+        painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+        painter.restore()
         if index.row() == self.combo.currentIndex():
             _mark(painter, option.rect.right()-15, option.rect.center().y(), check=True)
         painter.restore()

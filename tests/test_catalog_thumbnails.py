@@ -123,6 +123,18 @@ class CatalogThumbnailPresentation(unittest.TestCase):
         self.assertFalse(dialog.list.topLevelItem(0).icon(0).isNull())
         self.assertEqual(dialog.list.topLevelItem(0).data(0, Qt.UserRole + 37), '79')
 
+    def test_default_photo_refresh_preserves_surviving_selection_and_scroll(self):
+        rows=[dict(id=str(i),name=str(i),tracks=1,path=p) for i,p in enumerate(self.paths)]
+        dialog=DefaultPhotosDialog(rows);self.dialogs.append(dialog);dialog.show();self.settle(dialog)
+        item=dialog.list.topLevelItem(40);dialog.list.setCurrentItem(item)
+        dialog.list.topLevelItem(10).setSelected(True);dialog.list.topLevelItem(50).setSelected(True)
+        dialog.list.scrollToItem(item);self.app.processEvents()
+        scroll=dialog.list.verticalScrollBar().value()
+        dialog._populate(rows+[dict(id='new',name='New',tracks=0,path=self.paths[0])])
+        self.assertEqual(dialog.list.currentItem().data(0,Qt.UserRole+37),'40')
+        self.assertEqual({i.data(0,Qt.UserRole+37) for i in dialog.list.selectedItems()},{'10','40','50'})
+        self.assertEqual(dialog.list.verticalScrollBar().value(),scroll)
+
     def test_late_action_callbacks_after_close_and_delete_do_not_touch_widgets(self):
         pending = []
         artist = ArtistCatalogDialog([('Artist', ['1'], None)],

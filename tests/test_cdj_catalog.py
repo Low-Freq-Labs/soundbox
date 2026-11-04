@@ -49,7 +49,7 @@ class CdjCatalogTests(unittest.TestCase):
             dict(id=11,parent=10,name='Set',folder=False,tracks=[2,1,2])])
         self.assertEqual(result['next_playlist'],100)
 
-    def test_ambiguous_names_and_other_library_members_get_distinct_new_playlists(self):
+    def test_ambiguous_names_get_new_ids_but_unique_selected_name_replaces_old_members(self):
         jobs=[Playlist('Ambiguous',[],keys=['1'],pid='a'),
               Playlist('Foreign recording',[],keys=['2'],pid='b')]
         previous=baseline([playlist(10,'Ambiguous',[1]),playlist(11,'Ambiguous',[1]),
@@ -58,10 +58,10 @@ class CdjCatalogTests(unittest.TestCase):
         nodes={n['id']:n for n in result['nodes']}
         self.assertEqual(nodes[10]['tracks'],[1])
         self.assertEqual(nodes[11]['tracks'],[1])
-        self.assertEqual(nodes[12]['tracks'],[3])
+        self.assertEqual(nodes[12]['tracks'],[100])
         self.assertEqual(nodes[100]['name'],'Ambiguous')
-        self.assertEqual(nodes[101]['name'],'Foreign recording')
-        self.assertEqual(nodes[101]['tracks'],[100])
+        self.assertNotIn(101,nodes)
+        self.assertEqual(result['touched_nodes'],{100,12})
 
     def test_moved_binding_is_removed_from_old_name_candidates(self):
         renamed=Playlist('Renamed',[],keys=['1'],pid='renamed')
@@ -75,6 +75,21 @@ class CdjCatalogTests(unittest.TestCase):
         nodes={n['id']:n for n in result['nodes']}
         self.assertEqual(nodes[10]['name'],'Renamed')
         self.assertEqual(nodes[100]['name'],'Original')
+
+    def test_selected_id_does_not_replace_a_different_classic_record(self):
+        job=Playlist('Set',[],keys=['1'],pid='selected')
+        previous=baseline([], [song(1,1)])
+        previous['view']['classic_track_rows']=[song(1,2,master=77)]
+        result=self.catalog([job],previous)
+        self.assertEqual(result['by_source'][1],100)
+        self.assertEqual(result['nodes'][0]['tracks'],[100])
+
+    def test_allocation_reserves_classic_only_track_and_playlist_ids(self):
+        native=SimpleNamespace(catalog=dict(track_rows=[song(1,1)],playlists=[],
+            classic_track_rows=[song(7000,2,77)],classic_playlists=[playlist(8000,'Classic only')]),files=())
+        result=current_baseline(native,None,42)
+        self.assertEqual(result['next_track_id'],7001)
+        self.assertEqual(result['next_playlist_id'],8001)
 
     def reconcile(self, old, new):
         previous=baseline(old)

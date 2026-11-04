@@ -1,15 +1,17 @@
 # SoundBox roadmap
 
-Updated November 3, 2026. [HANDOFF](HANDOFF.md) records the installed binary,
+Updated November 4, 2026. [HANDOFF](HANDOFF.md) records the installed binary,
 verification and preservation baseline. This roadmap describes current behavior
 and remaining work. Older release hashes, test counts and original pending gates
 are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11-01.md).
 
 ## Delivered personal runtime
 
-Installed personal build157 retains the November3 build155 features below and
-includes the export, broader efficiency and correctness passes. The current
-delivery passes2531offscreen/Cocoa tests, both signed package profiles and
+Installed personal build160 retains the November3 build155 features below and
+includes the export, broader efficiency, correctness and UI polish passes, plus
+the November4 multi-device Export selector, selected-member cleanup, themed wait
+wheel and format-review safeguards. The current
+delivery passes2564offscreen/Cocoa tests, both signed package profiles and
 installed isolated/normal startup with exact curated-state checks.
 Exact binary/source provenance belongs in HANDOFF. It includes:
 
@@ -64,6 +66,17 @@ These are completed features, not new native-reference requests. User interactio
 with the latest controls remains Sonny's own live testing; the agent must not
 send input events into his app or substitute synthetic proof for native acceptance.
 
+## UI polish follow-up — November3
+
+The installed build160 follow-up prepares Info artwork before modal presentation, refreshes
+the matching dialog after actual cover publication, and retains the old cover
+while its replacement decodes. It fixes popup text gutters, literal metadata,
+Retina review images, oversized footer messages and delayed navigation callbacks.
+In-place Artists/default-photo refreshes preserve surviving selections and place.
+The [polish audit](ui-polish-audit.md) records coverage, generated regressions and
+remaining GUI image/state/filesystem/network costs. HANDOFF distinguishes this
+worktree from the installed runtime and records final delivery status.
+
 ## Installed broader efficiency pass, November3 evening
 
 The trackpad recording identified gray/accent flicker between short gestures;
@@ -93,7 +106,7 @@ catalog work. Visible thumbnails and exact ancestor lookup bound repeated work;
 packaging removes development-only integrations. Source/authority/closed-native/
 hash/recovery guards and accepted profiles remain intact.
 
-The final2531-test source is installed as runtime fc696312…; both signed profiles,
+The earlier2531-test source was installed as runtime fc696312…; both signed profiles,
 isolated SQL/ORM probes and actual normal startup pass. HANDOFF records exact
 provenance. Remaining measured
 tradeoffs are cross-phase PCM reuse, full detached queue isolation, durable
@@ -111,7 +124,7 @@ metadata recovery are installed; exact current validation/provenance is in
 [HANDOFF](HANDOFF.md), with the detailed workload limits in
 [performance](performance-audit.md). Source/authority/payload/recovery guards stay
 fresh. Sonny approved installation of the export efficiency pass below and manually
-closed build155. Build157 is installed and normally reopened; source changes
+closed build155. Build160 is installed and normally reopened; source changes
 are published under Sonny's wrap-up request. The signed installed base remains
 unchanged; this publication does not restamp or reinstall the running app.
 
@@ -142,7 +155,9 @@ Rekordbox and SoundBox are equal exporters. Preserve the current native USB
 catalogs/media across either application's writes. Dedicated CDJ publication is
 implemented for classic Device Library plus Device Library Plus; playlist drops
 start directly. Sonny reports playback, artwork and waveforms working. The full
-CDJ-3000 control matrix, newer OneLibrary hardware and wider physical coverage
+November4 source adds a multi-device Export selector and selected-playlist
+reference-counted media cleanup, with per-format unrelated-catalog preservation;
+release/install status is in HANDOFF. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider physical coverage
 remain open. See [the CDJ contract](cdj-usb-export.md).
 
 Stock/dual/Rockbox follow-up still requires real reconnect/power-cycle, playing
@@ -152,8 +167,8 @@ acceptance. Normal idle eject does not require Sync/Verify. The November3 source
 efficiency pass defers export startup/cache work until
 detection, indexes USB playlist matching and filesystem destinations, and shares
 repeated iPod availability/display work within each drift poll. Synthetic component
-benchmarks improved; these changes remain in the final2531-test signed delivery.
-Sonny-approved build157 is installed and normal curated startup/state checks pass.
+benchmarks improved; these changes first passed the2531-test delivery and remain in build160.
+This work remains in build160; normal curated startup/state checks pass.
 Exact validation/provenance and installed status belong in HANDOFF.
 Selected source capture and guarded no-op merge reconstruction are now implemented.
 Repeated new-media verification and physical throughput remain measured follow-ups;

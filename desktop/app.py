@@ -156,6 +156,7 @@ from .devices import device_facts, device_fs, human
 from .settings_page import SettingsPageMixin
 from .rekordbox_playlists import NativePlaylistsMixin, PlaylistEditController
 from .track_info import TrackInfoMixin
+from .labels import ElidedLabel
 from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
     ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
@@ -334,10 +335,11 @@ from .analysis import AnalysisMixin
 from .analysis_priority import AnalysisPriorityMixin
 from .playlist_folders import PlaylistFoldersMixin
 from .cdj import CdjDeviceMixin
+from .export_dialog import ExportSelectionMixin
 from .track_menu import TrackMenuButton, TrackMenuMixin
 
 
-class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, ExportSelectionMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -447,6 +449,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._cdj_worker = None
         self._cdj_plan = None
         self._cdj_waiting = None
+        self._export_batch = None
         self._stock_snapshot: StockIpodSnapshot | None = None
         self._sync_playlists_cache: list[Playlist] | None = None
         # Autoplay owns a frozen snapshot of the view that supplied the
@@ -949,6 +952,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     horizontal=self.table.horizontalScrollBar().value())
 
     def _restore_browser_seat(self,seat):
+        self._selection_revision=getattr(self,'_selection_revision',0)+1
         by_id={row.get('id'):i for i,row in enumerate(self.model._rows)}
         selection=self.table.selectionModel();blocked=selection.blockSignals(True)
         try:
@@ -985,7 +989,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._show_collection()
             return
         if cur is not None and cur.data(0, ARTISTS_ROLE):
-            self._show_artists()
+            self._show_artists(preserve=True)
             return
         if cur is not None and cur.data(0, CUSTOM_ROLE):
             tracks = [t for i in self.custom.get(cur.data(0, CUSTOM_ROLE), [])
@@ -999,7 +1003,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if key.startswith('rb:'):
             self._set_refreshed_rows(self._annotate_art(self._playlist_rows(key[3:])))
         elif key == 'sb:Collection':self._show_collection()
-        elif key == 'sb:Artists':self._show_artists()
+        elif key == 'sb:Artists':self._show_artists(preserve=True)
         elif key.startswith('sb:') and key[3:] in self.custom:self._show_custom(key[3:])
 
     def showEvent(self, event):
@@ -1236,6 +1240,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             tid = self.model._rows[idx.row()].get("id")
             if tid:
                 self._keep_tid = tid
+                self._selection_revision=getattr(self,'_selection_revision',0)+1
+
+    def _schedule_reseat_selection(self,*_args):
+        revision=getattr(self,'_selection_revision',0)
+        QTimer.singleShot(0,self,lambda:self._reseat_selection()
+            if revision==getattr(self,'_selection_revision',0) else None)
 
     def _reseat_selection(self):
         """Put the remembered track back under the cursor after the model
@@ -1704,6 +1714,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         now_layout.addWidget(autoplay_stack)
 
         self.now_playing = QLabel("SELECT A TRACK")
+        self.now_playing.setTextFormat(Qt.PlainText)
         self.now_playing.setObjectName("NowPlaying")
         self.now_playing.setAlignment(Qt.AlignCenter)
         # Keep the title inside its header lane as metadata grows.
@@ -2325,8 +2336,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.table.selectionModel().currentChanged.connect(self._remember_current)
         self.table.selectionModel().selectionChanged.connect(lambda *_: self._sync_tags())
         self.stack.currentChanged.connect(lambda *_: self._sync_tags())
-        hh.sortIndicatorChanged.connect(
-            lambda *_: QTimer.singleShot(0, self._reseat_selection))
+        hh.sortIndicatorChanged.connect(self._schedule_reseat_selection)
         pl.addWidget(self.table)
         self.stack.addWidget(page)
 
@@ -2337,6 +2347,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         dhead.setAttribute(Qt.WA_StyledBackground, True); dhead.setFixedHeight(26)
         dhh = QHBoxLayout(dhead); dhh.setContentsMargins(10, 0, 8, 0)
         self.dev_header = QLabel("Device"); self.dev_header.setObjectName("DeviceTitle")
+        self.dev_header.setTextFormat(Qt.PlainText)
         self.dev_header.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Preferred)
         dhh.addWidget(self.dev_header, 1)
         self.device_tab_group = QButtonGroup(self)
@@ -2355,11 +2366,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self.device_tab_group.addButton(button, index)
             self.device_tab_buttons.append(button)
             dhh.addWidget(button)
-        self.device_sync_btn = QPushButton("Sync")
+        self.device_sync_btn = QPushButton("Export")
         self.device_sync_btn.setObjectName("DeviceAction")
         self.device_sync_btn.setFixedHeight(22)
         self.device_sync_btn.clicked.connect(
-            lambda: self._sync_device(self._current_device_path))
+            lambda: self._show_export_dialog(self._current_device_path))
         dhh.addWidget(self.device_sync_btn)
         self.eject_btn = QPushButton("⏏ Eject")
         self.eject_btn.setObjectName("DeviceAction")
@@ -2466,12 +2477,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # A touch more left padding so status text (EXPORTING/DELETING/…) isn't jammed
         # against the window edge.
         h = QHBoxLayout(bar); h.setContentsMargins(20, 4, 12, 4); h.setSpacing(8)
-        self.status_label = QLabel("Ready")
+        self.status_label = ElidedLabel("Ready")
         # Reserve only the current operation's animated dots.  A single global
         # width for every possible flash message left a huge dead gap before
         # the iPod count and progress bar.
         fm = self.status_label.fontMetrics()
-        self.status_label.setFixedWidth(fm.horizontalAdvance("Ready") + 8)
         h.addWidget(self.status_label)
         self.status_count_label = QLabel("")
         self.status_count_label.setAlignment(Qt.AlignCenter)
@@ -3082,9 +3092,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         (centered) or at least the old scroll offset."""
         switching = key != getattr(self, "_view_key", None)
         self._view_key = key
+        self._selection_revision=getattr(self,'_selection_revision',0)+1
         if not switching:
             return
         self.table.sortByColumn(-1,Qt.AscendingOrder)
+        self._selection_revision+=1
+        revision=self._selection_revision
         tid, scroll = getattr(self, "_view_memory", {}).get(key, (None, 0))
         if tid:
             for i, r in enumerate(self.model._rows):
@@ -3095,7 +3108,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     return
         if scroll:
             bar = self.table.verticalScrollBar()
-            QTimer.singleShot(0, lambda: bar.setValue(min(scroll, bar.maximum())))
+            QTimer.singleShot(0,self,lambda:bar.setValue(min(scroll,bar.maximum()))
+                if self._view_key==key and self._selection_revision==revision else None)
 
     def _on_rb_select(self, cur, _prev):
         if cur is None:
@@ -3660,9 +3674,17 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                                  r["artist"].casefold(), r["title"].casefold()))
         return rows
 
-    def _show_artists(self):
+    def _show_artists(self, *, preserve=False):
         """The Artists BROWSER page: artist names only, each expandable in place
         to reveal that artist's songs (lazy-filled on first expand)."""
+        view=self.artists_view
+        token=lambda item: (('track',item.data(0,ARTIST_TRACK_ROLE))
+            if item.data(0,ARTIST_TRACK_ROLE) else ('artist',item.data(0,ARTIST_ROLE))) if item else None
+        expanded={view.topLevelItem(i).data(0,ARTIST_ROLE) for i in range(view.topLevelItemCount())
+                  if view.topLevelItem(i).isExpanded()} if preserve else set()
+        selected={token(item) for item in view.selectedItems()} if preserve else set()
+        current=token(view.currentItem()) if preserve else None
+        column=view.currentColumn();scroll=view.verticalScrollBar().value();horizontal=view.horizontalScrollBar().value()
         rows = self._artist_rows(self._collection_tracks())
         by_artist: dict[str, list] = {}
         for r in rows:
@@ -3681,8 +3703,21 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             it.setChildIndicatorPolicy(
                 QTreeWidgetItem.ShowIndicator)  # expandable before children exist
             self.artists_view.addTopLevelItem(it)
+            if preserve and (name in expanded or any(('track',r['id']) in selected or
+                    ('track',r['id'])==current for r in by_artist[name])):
+                self._fill_artist(it);it.setExpanded(True)
         self._filter_artists()  # apply any active search to the fresh list
         self.stack.setCurrentIndex(2)
+        if preserve:
+            items=[]
+            for i in range(view.topLevelItemCount()):
+                item=view.topLevelItem(i);items.append(item)
+                items.extend(item.child(j) for j in range(item.childCount()))
+            for item in items:
+                if token(item)==current:view.setCurrentItem(item,max(0,column),QItemSelectionModel.NoUpdate)
+                item.setSelected(token(item) in selected)
+            view.doItemsLayout()
+            view.verticalScrollBar().setValue(scroll);view.horizontalScrollBar().setValue(horizontal)
 
     def _fill_artist(self, item):
         """Lazy: first expand of an artist row fills in their songs."""
@@ -3868,7 +3903,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # While OUR export/sync/delete is hammering the stick, don't also poll it —
         # the numbers are mid-flight and the extra reads only slow the operation down
         # (contention). Each op's done-handler calls _refresh_devices() right after.
-        if self._exporting or self._deleting:
+        if self._exporting or self._deleting or (getattr(self,'_export_batch',None) and not force):
             return
         if self._dev_scan_worker is not None:
             return
@@ -3971,7 +4006,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _update_device_action_state(self) -> None:
         """Make device action availability match actual transaction ownership."""
-        busy = self._device_operation_owned()
+        busy = self._device_operation_owned() or bool(getattr(self,'_export_batch',None))
         ready = bool(self._current_device_path) and not busy
         for button in (
                 getattr(self, "eject_btn", None),
@@ -4124,8 +4159,17 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._exporting = False
             self._stop_pulse()
             if self._shutting_down or authority != self._device_mount_tokens:
+                batch=getattr(self,'_export_batch',None)
+                if batch:
+                    batch['error']='Connected devices changed while waiting; choose the targets again'
+                    self._maybe_finish_export_target()
                 return
-            callback()
+            try:callback()
+            except Exception as exc:
+                batch=getattr(self,'_export_batch',None)
+                if not batch:raise
+                batch['error']=str(exc)
+                self._maybe_finish_export_target()
 
         worker.finished.connect(resume)
         return True
@@ -4292,7 +4336,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             profile = self._device_profiles.get(dev)
             self.dev_header.setText(Path(dev).name)
             self.dev_header.setToolTip(dev)
-            self.device_sync_btn.setText('Update Playlists' if getattr(profile,'kind','')=='generic_usb' else 'Sync')
+            self.device_sync_btn.setText('Export')
             stock = bool(
                 profile is not None
                 and getattr(profile, "has_stock_ipod", False))
@@ -4592,6 +4636,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._flash_status("iPod load failed — retrying", 3)
         self._update_device_action_state()
 
+    def _device_completion_message(self,title,text):
+        if not getattr(self,'_export_batch',None):QMessageBox.information(self,title,text)
+
     def _finalize_ipod_operation(
             self, dev: str, on_complete, *, terminal_text: str = "Complete ✓") -> None:
         """Finish every post-write read before presenting success to the user."""
@@ -4623,6 +4670,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._update_device_action_state()
             try:
                 if finalization_error is not None:
+                    self._export_target_result(dev,finalization_error)
                     QMessageBox.warning(
                         self,
                         "Device finalization failed",
@@ -4637,6 +4685,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             finally:
                 self.progress.setVisible(False)
                 self._release_eject_ready()
+                self._maybe_finish_export_target()
 
         self._refresh_device_surfaces(dev, after_finished=finish)
 
@@ -4693,6 +4742,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             finally:
                 self.progress.setVisible(False)
                 self._release_eject_ready()
+                self._maybe_finish_export_target()
 
         def finalize_at(index: int):
             if index >= len(ordered):
@@ -4843,7 +4893,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if profile is not None and profile.kind=='generic_usb':
             busy=self._device_operation_owned()
             for title,callback in (
-                    ('Update Playlists',lambda:self._begin_cdj_export(dev)),
+                    ('Export…',lambda:self._show_export_dialog(dev)),
                     ('Import “My Settings”',lambda:self._import_usb_my_settings(dev)),
                     ('Reformat USB…',lambda:self._reformat_usb(dev)),
                     ('Eject',lambda:self._eject(dev))):
@@ -4970,6 +5020,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         from .workers import OneShotTask
         library = self.lib
         facts = device_facts(dev)
+        self._validate_export_target(dev,facts)
         identity_key = self._stock_device_key(dev, profile)
         shadow = (
             self.stock_ipod_shadow_store.load(identity_key)
@@ -5044,8 +5095,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         summary = result.summary()
         if not result.requires_commit:
             def complete():
-                QMessageBox.information(
-                    self,
+                self._device_completion_message(
                     "Stock iPod is up to date",
                     "The read-only comparison found no media, playlist, metadata, "
                     "artwork, or playback changes to publish.",
@@ -5097,6 +5147,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if answer != QMessageBox.Yes:
             self.progress.setVisible(False)
             self._flash_status("iPod sync cancelled — nothing written")
+            self._export_target_result(dev,RuntimeError('Export cancelled'))
             self._refresh_devices()
             return
         self._commit_stock_ipod_plan(dev, result)
@@ -5138,8 +5189,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 "\n\n" + "\n\n".join(warning_parts)
                 if warning_parts else "")
             def complete():
-                QMessageBox.information(
-                    self,
+                self._device_completion_message(
                     "Stock iPod sync complete",
                     f"Copied {result.copied_tracks} new track(s); reused "
                     f"{result.reused_tracks}.\n\n"
@@ -5195,6 +5245,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         model = self._stock_write_model(dev, profile)
         if not model:
             return
+        facts = device_facts(dev)
+        self._validate_export_target(dev,facts)
         self._release_eject_ready()
         self._dual_active_device = dev
         self._dual_active_playlist_keys = {
@@ -5206,7 +5258,6 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             len(self.lib.resolve(playlist)) for playlist in playlists)
         from .workers import ProgressTask
         library = self.lib
-        facts = device_facts(dev)
         identity_key = self._stock_device_key(dev, profile)
         adoptable_playlist_keys = {f"cust:{name}" for name in self.custom}
         state=self.unification_controller.state()
@@ -5366,8 +5417,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 pass
 
             def complete():
-                QMessageBox.information(
-                    self,
+                self._device_completion_message(
                     "Nothing to delete" if action == "delete" else "iPod is up to date",
                     (
                         "The selected playlists are already absent and no managed "
@@ -5457,6 +5507,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             except Exception:
                 pass
             self._flash_status("iPod sync cancelled — nothing written")
+            self._export_target_result(dev,RuntimeError('Export cancelled'))
             self._refresh_devices()
             return
         self._commit_dual_ipod_plan(dev, result)
@@ -5644,8 +5695,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 if adopted_additions else ""
             )
             def complete():
-                QMessageBox.information(
-                    self,
+                self._device_completion_message(
                     "iPod deletion complete"
                     if action == "delete" else "iPod sync complete",
                     f"Stock: copied {result.stock.copied_tracks}, sanitized "
@@ -6848,6 +6898,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _review_art_changed(self, tid):
         self._refresh_model_art()
+        self._refresh_info_artwork((tid,))
         self._queue_stock_artwork((tid,))
 
     def _open_default_photos(self):
@@ -6914,6 +6965,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # Repaint statuses, recompute device drift, and warm each unique
         # canonical pool JPEG through the ordinary stock-iPod derivative cache.
         self._refresh_model_art()
+        self._refresh_info_artwork(self.lib.tracks_by_id if self.lib is not None else ())
         if self.lib is not None:
             self._reload_current_view()
         self._refresh_devices()
@@ -6949,6 +7001,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             # they must never crawl back on a relaunch or re-scan.
             self.art_cache.block_many(tids, avatar_only=True)
             self._refresh_model_art()
+            self._refresh_info_artwork(tids)
             done(True, None)
             return
         if c["kind"] == "file":
@@ -7004,6 +7057,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         affected = self.art_cache.store_many(tids, res, avatar_only=avatar_only)
         if affected:
             self._refresh_model_art()
+            self._refresh_info_artwork(affected)
             self._queue_stock_artwork(affected)
         self._flash_status(f"Art set on {len(affected)} ✓", 8)
         return affected
@@ -7014,6 +7068,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # background fill on the next launch (it was — infuriating).
         self.art_cache.block(tid)
         self._refresh_model_art()
+        self._refresh_info_artwork((tid,))
 
     @_art_ui_action
     def _art_pick(self, tid):
@@ -7054,6 +7109,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 source_url=p.as_uri(), matched_title=p.name))
             self._flash_status("Art set ✓", 5)
             self._refresh_model_art()
+            self._refresh_info_artwork((tid,))
             self._queue_stock_artwork((tid,))
 
     def _run_oneshot(self, tid, fn, *, guard=None):
@@ -7093,6 +7149,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 self._flash_status("Fetch failed ✕", 8)
         elif res:
             self.art_cache.store_ok(tid, res)
+            self._refresh_info_artwork((tid,))
             self._queue_stock_artwork((tid,))
             if self._background_status_available():
                 self._flash_status("Art set ✓", 5)
@@ -7191,6 +7248,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     def _on_profile_art_changed(self, tid):
         self._refresh_model_art()
+        self._refresh_info_artwork((tid,))
         from .artreview import ArtReviewDialog
         for dialog in self.findChildren(ArtReviewDialog):
             dialog.refresh_profile(tid)
@@ -7712,7 +7770,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._begin_dual_ipod_sync(
             dev, jobs, preconfirmed=True)
 
-    def _on_device_drop(self, dev: str, items: list[tuple[str, str]]):
+    def _on_device_drop(self, dev: str, items: list[tuple[str, str]], *, _from_export=False):
+        if getattr(self,'_export_batch',None) and not _from_export:return
         if self.lib is None:
             QMessageBox.information(self, "Open a library first",
                                    "Load your rekordbox library first (↻ on the REKORDBOX header).")
@@ -7823,11 +7882,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.status_label.setToolTip(detail)
 
     def _cancel_export(self):
+        batch=getattr(self,'_export_batch',None)
+        if batch:
+            batch['cancelled']=True
+            batch['pending'].clear()
         if self._cdj_waiting is not None:
             self._cdj_waiting = None
             self._stop_pulse()
             self.cancel_btn.setVisible(False)
             self._flash_status('CDJ request cancelled — nothing written')
+            self._maybe_finish_export_target()
             return
         self._cdj_waiting = None
         self._device_coordinator.cancel()
@@ -7865,12 +7929,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         command = getattr(worker, "device_command", None)
         if command is not None:
             current = current and self._device_coordinator.current(command)
-            self._device_coordinator.publish(worker, adapter_result(command, result))
+            outcome=adapter_result(command,result)
+            self._device_coordinator.publish(worker,outcome)
+            if current and outcome.failure:self._export_target_result(command.target.path,RuntimeError(outcome.failure))
         self._finish_worker(attr, worker)
         if isinstance(result, Exception):
             self._dual_sync_queue.clear()
         if current and not self._shutting_down:
+            if command is not None:self._export_target_result(command.target.path,result)
             callback(result)
+            self._maybe_finish_export_target()
 
     def shutdown(self):
         """Stop background work BEFORE Qt tears down — prevents the crash where
@@ -7883,6 +7951,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if hasattr(self,'_remember_stock_device_view'):
             self._remember_stock_device_view()
         self._shutting_down = True
+        self._export_batch = None
         if getattr(self,'playlist_controller',None) is not None:
             self.playlist_controller.stop()
         if getattr(self,'shared_import_controller',None) is not None:
@@ -8097,8 +8166,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._stop_pulse(force=force)
         self._status_generation = getattr(self, "_status_generation", 0) + 1
         self.status_label.setText(text)
-        self.status_label.setFixedWidth(
-            self.status_label.fontMetrics().horizontalAdvance(text) + 8)
+        self.status_label.reserve(text)
         self.status_label.setToolTip(text)
         self._update_device_action_state()
         return True
@@ -8115,8 +8183,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._pulse_word = word
         self._status_generation = getattr(self, "_status_generation", 0) + 1
         self._pulse_dots = 0
-        self.status_label.setFixedWidth(
-            self.status_label.fontMetrics().horizontalAdvance(word + "...") + 8)
+        self.status_label.reserve(word + "...")
         self.status_label.setText(word)
         self.status_label.setToolTip(word)
         self._pulse_timer.start()

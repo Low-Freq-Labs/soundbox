@@ -570,7 +570,6 @@ def _render() -> None:
         row.update(album='GHOST PROTOCOL',label='SoundBox',comments='A synthetic track for UI review',year='2026',
             releaseDate='2026-10-29',sampleRate='44100',size='13900000',rating='4',playCount='20',hotCueAutoLoad='On')
         from PySide6.QtGui import QImage,QColor,QPainter
-        from PySide6.QtTest import QTest
         art=QImage(320,320,QImage.Format_RGB32);art.fill(QColor('#202634'))
         painter=QPainter(art);painter.setPen(QColor(theme.PURPLE))
         painter.drawText(art.rect(),Qt.AlignCenter,'SOUNDBOX\nGHOST PROTOCOL');painter.end()
@@ -578,8 +577,8 @@ def _render() -> None:
         art.save(str(art_path))
         row['location']='/Music/Example artist/Album name/Long title for the selected track.wav'
         dialog=TrackInfoDialog(row,artwork=lambda:art_path,save=lambda _changes:True,pick_art=lambda:None,parent=win)
+        dialog.prepare_artwork()
         dialog.show();app.processEvents()
-        QTest.qWait(100)
         target=Path(out)
         dialog.grab().save(str(target.with_name(target.stem+'-summary.png')))
         dialog.findChild(QTabWidget).setCurrentIndex(1);app.processEvents()

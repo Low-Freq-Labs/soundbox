@@ -139,6 +139,7 @@ class DeviceBrowserMixin:
             self._eject(path)
 
     def _eject(self, dev: str):
+        if getattr(self,'_export_batch',None):return
         # Never race device work. Finalization owns and finishes its dashboard
         # scan before success; Eject does not cancel or complete that work.
         readers = ("_dev_scan_worker", "_stock_view_worker", "_device_verify_worker")
