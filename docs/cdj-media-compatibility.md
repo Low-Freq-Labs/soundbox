@@ -1,6 +1,8 @@
 # Existing Collection media compatibility
 
-November1,2026. Sonny requests an automatic format check for the entire Collection
+November1,2026 implementation/reference record, reviewed November3 against source
+release `d08ee91`; current installation and outstanding cases are in
+[HANDOFF](HANDOFF.md). Sonny requested an automatic format check for the entire Collection
 and future additions, with recoverable replacement in place so files work on both
 the original CDJ-2000 and CDJ-3000. This is authorized semantic scope. The file-only automatic WAVE/unregistered-lossless controller is installed
 and provisioned after native WAV acceptance.124 WAV conversions completed with
@@ -9,7 +11,8 @@ existing-record DB updates; the two FLAC reference links are repaired under
 Sonny’s explicit instruction. Native locator acceptance and its separate general authority now pass.
 The supported automatic workflow is installed; do not infer universal format
 coverage or physical-CDJ acceptance. One32kHz MP3 remains timing-unproven and
-unchanged;88 cloud-deferred files and unavailable paths remain explicit.
+unchanged. The November1 audit's88 cloud-deferred files and unavailable paths were
+unchecked at that checkpoint; those counts are historical, not a fresh live scan.
 
 ## Common player profile
 
@@ -37,14 +40,14 @@ Native placeholders and Graveyard-only paths are excluded from conversion target
 Initial active Collection results:3071 header-compatible records;53 float WAVs,
 five high-rate PCM WAVs, two FLACs,68 extended PCM-header candidates and eight
 unavailable/missing entries. A second pass accounts for83 additional distinct
-visible SoundBox imports (81 M4A, one WAV, one MP3); all are currently dataless
-cloud files and remain explicitly unchecked. No mass hydration was started.
+visible SoundBox imports (81 M4A, one WAV, one MP3); all were dataless
+cloud files at that capture and remained explicitly unchecked. No mass hydration was started.
 This is a format audit, not an every-sample corruption
 scan or physical-CDJ acceptance. Original imported/cue/grid identities remain.
 
 `soundbox.cdj_compatibility` currently prepares separate verified PCM24 copies,
 normalizes extended PCM headers without touching their samples, and resamples
-88.2→44.1/96→48kHz with CoreAudio's best converter. No normalization or detector
+88.2→44.1/96→48kHz with CoreAudio's best converter. No gain normalization or detector
 rerun occurs. Same-gain over-range peaks clip under Sonny's auditioned policy.
 Unsupported layouts/unknown headers remain explicit; no guessed downmix.
 

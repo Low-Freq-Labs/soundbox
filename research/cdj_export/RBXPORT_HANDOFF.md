@@ -1,29 +1,43 @@
 # CDJ export backend handoff — October 28, 2026
 
-**Integration update, October28:** this document is the retained research handoff.
-The application now integrates its renderer through `native/cdj` and the dedicated
+**Reviewed November3 against application source release `d08ee91`:** this document
+is the retained October28 research handoff. The application integrates its renderer
+through `native/cdj` and the dedicated
 `soundbox.cdj_*`/`desktop.cdj` boundary. The original pending-selection/pagination/
 transaction notes below describe the pickup baseline. Current implementation,
 limits and install evidence are in [the CDJ guide](../../docs/cdj-usb-export.md)
-and [HANDOFF](../../docs/HANDOFF.md). Physical acceptance remains open; do not
+and [HANDOFF](../../docs/HANDOFF.md). The wider physical acceptance matrix remains open; do not
 interpret the fixture parity record as hardware certification.
 
+Current implementation closes the original source-DTO, pagination and coordinated
+transaction tasks. Runtime/fixture Cargo dependencies now use the checked-in
+vendor closure under `native/cdj`, not the archived private kit. Direct USB My
+Settings has44 fields and explicit Save to Global / Load Global; named presets
+and automatic Follow Global/Custom propagation remain deferred. The current
+installed build157 and2531-test release evidence are in HANDOFF, with installed
+dirty-source provenance kept separate from Git release `d08ee91`.
 
-For the agent building SoundBox. Sonny requested this parallel research handoff;
-the other agent's waveform/build work and current `docs/HANDOFF.md` are untouched.
-This is backend preparation, with export UI left to Sonny. No installed behavior,
-live source library, source audio or USB has been changed by this work.
+Everything below records the October28 pickup checkpoint. Its pending tasks,
+uncommitted-source statements, test counts, device UUIDs and preference values
+are historical, never a current target, restore instruction or renewed write
+approval. Use the linked current contract before any new operation.
+
+
+For the agent building SoundBox at the October28 checkpoint. Sonny requested this
+parallel research handoff; it left the concurrent waveform/build work and the
+then-current `docs/HANDOFF.md` untouched. That backend preparation left export UI
+to Sonny and changed no installed behavior, live source library, source audio or USB.
 
 ## Developer pickup — start here
 
-**The next task is application integration, not another research restart.** A
+**At this checkpoint the next task was application integration.** A
 compiled standalone backend already renders a complete five-track export and
 passes the native-reference gate below. Continue with SoundBox's verified source
 DTO, scalable metadata rendering and a dedicated device transaction. Keep the
 settings UX contract ready for that integration; additional manual settings
 experiments must not replace finishing playlist export.
 
-This research is uncommitted work in the shared checkout, prepared against
+This research was uncommitted work in the shared checkout, prepared against
 repository HEAD `2c76172` on October 28. Another agent owns the concurrent
 waveform/player changes and main session handoff. Review the worktree before
 staging; do not include or revert their changes. No app build, installation,
@@ -60,11 +74,13 @@ and outputs are explicit local paths; this command does not discover a device,
 read the installed library or write a USB. The prepared isolated Rust toolchain,
 source kit and captures live under gitignored `soundbox-cdj-ref/`. They are local
 dependencies, **not included by cloning this repository**. Preserve that workspace
-for the next agent; Cargo's relative crate paths currently depend on its location.
-Porting this work to another machine requires the pinned kit, fixture receipts
-and an equivalent toolchain, without publishing Sonny's media or library data.
+as historical evidence. The current adapter's relative crate dependencies resolve
+to the checked-in `native/cdj` vendor tree; the isolated toolchain and explicit
+private fixtures are still needed to reproduce this command. Porting the fixture
+requires its receipts and an equivalent toolchain, without publishing Sonny's
+media or library data.
 
-The current accepted local output is `soundbox-cdj-ref/native-parity-export/`.
+The October28 accepted local output is `soundbox-cdj-ref/native-parity-export/`.
 Its sibling `native-parity-export-comparison.json` records:
 
 ```json
@@ -93,7 +109,7 @@ databases; it does not yet prove SoundBox selection or source-state integration.
 The final report includes request, adapter, comparison source, binary and
 toolchain provenance so changes cannot silently inherit this result.
 
-### Implementation order and completion gates
+### Original implementation order and completion gates (historical)
 
 1. Feed an immutable export DTO from SoundBox's accepted library/source APIs:
    stable identities, effective metadata/artwork, hierarchy and exact order,
@@ -131,7 +147,8 @@ byte-identical, all three decoded databases match, no extra/missing files**.
 Literal whole-export byte identity remains false. Reproduction, corrected writer
 fields, evidence and remaining implementation limits: [EXPORT_PARITY.md](EXPORT_PARITY.md).
 Live SoundBox DTO integration, scalable metadata completion and a production
-device transaction remain unimplemented; this is not shipped export support.
+device transaction were unimplemented at this checkpoint and are now integrated.
+The standalone fixture receipt itself remains separate from shipped-runtime proof.
 
 **One export, one library experience.** Sonny explicitly requires both formats
 to be produced and maintained automatically on every CDJ USB export. Format
@@ -289,7 +306,7 @@ numbers, subtype/trailer words, format codes, fixed tables and property metadata
 against native data. The scaffold experiment in the older plan is still useful
 as an isolation technique, but is not the only next step or a production design.
 
-## Integration shape for the building agent
+## Original integration shape for the building agent (historical)
 
 1. Preserve the completed standalone fixture exporter and its passing reference
    report as the baseline. It emits **both** libraries against shared track IDs
@@ -321,9 +338,9 @@ as an isolation technique, but is not the only next step or a production design.
    support as awaiting physical acceptance. This is not permission to call the
    new format verified on a CDJ-3000X.
 
-## USB settings and player/mixer profiles — required export scope
+## Original USB settings and player/mixer profile proposal (historical)
 
-**Latest UX clarification:** edit My Settings directly on the selected USB.
+**October28 UX clarification, subsequently superseded:** edit My Settings directly on the selected USB.
 Global My Settings supplies defaults and named presets. Sonny explicitly chose
 **Follow Global / Custom**: Global edits automatically reach followers while
 Custom USBs stay unchanged. A differing USB exposes **Save to Global My Settings**
@@ -423,7 +440,7 @@ complete, with pristine source files retained and analysis performed on copies.
 | `20261028-plus-same-playlist-reset-fat32` | Same FAT32 generation after explicit Plus override, version 1000 | 23 files / 1,268,602 bytes; WAL/SHM checkpointed away by native app |
 | `20261028-mysettings-tempo16-reset-fat32` | Native TEMPO RANGE ±16 after the prepared ±10→±16 experiment | 23 files / 1,268,602 bytes; complete target profile matches candidate |
 
-Current explicit target: `/Volumes/RB USB TEST`, FAT32, volume UUID
+October28 captured target (not current write authority): `/Volumes/RB USB TEST`, FAT32, volume UUID
 `5B29E617-ACFB-32C2-B580-077A6BF02C64`. Earlier exFAT identity was
 `EB3EFAF0-D2B7-365F-B498-D79346336E26`. Resolve/revalidate every later mount;
 `disk4s1` is only the observed node, not enduring authority. Keep the filesystem
@@ -478,7 +495,7 @@ Earlier snapshots retain their acquisition, semantic/schema and comparison repor
 Full track/source-ID mappings and field-by-field changes are in these private
 reports; no reconstruction from row ordering is needed.
 
-### Fixture coverage and next implementation steps
+### October28 fixture coverage and original next steps
 
 The playlist has five WAVs: STOP CAPPIN, MOONLIGHT, Bass Go Silly, Yoyo Bop,
 1,2 Step, in that order. Device IDs are 1–5, source library DBID 629922790.
@@ -492,7 +509,7 @@ override. Do not infer missing ANLZ cues from that table alone. No memory cues,
 saved loops or artwork/image rows are covered. These require separate later
 native fixtures; the current exports do not validate them.
 
-**Next:** integrate SoundBox's verified source/selection DTO and scalable legacy
+**Original next step, now implemented:** integrate SoundBox's verified source/selection DTO and scalable legacy
 metadata completion into the standalone backend, then design the dedicated
 guarded CDJ transaction. The generated five-track fixture already passes the
 user-approved native-equivalence gate; its DTO currently comes from captured
@@ -503,7 +520,7 @@ engine and independent native-reference comparison. Further memory/loop/art
 references and physical acceptance are separate later gates, not substitutes
 for implementation. Do not request them in place of finishing the export path.
 
-## Validation and remaining work
+## October28 validation and proposed follow-up checks
 
 - Dated focused validation: 26 Python CDJ regression checks plus four ANLZ bridge
   checks pass, as do the two isolated Rust adapter tests and focused pyflakes.

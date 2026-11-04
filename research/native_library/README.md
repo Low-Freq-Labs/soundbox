@@ -2,9 +2,11 @@
 
 These are **research tools**, excluded from app packages. The core offline
 workspaces have no source discovery or publish-to-source API. Separate
-one-plan source pilots are described below. The separate core registration authority
-loader is not provisioned or connected to the app; these research workspaces never
-load it. Existing
+one-plan source pilots are described below. Ordinary core registration and initial
+full WAV/narrow CBR MP3 analysis now have separate accepted authorities and desktop
+integration; these research workspaces never provision or load those permissions.
+Current production provenance is build157/source release `d08ee91`, recorded in
+HANDOFF. Existing
 Tag/Cue/Grid/Playlist permissions do not authorize registration or analysis writes.
 The [shared-workflow plan](../../docs/shared-library-workflow-plan.md) defines the
 requested product behavior; [HANDOFF](../../docs/HANDOFF.md) records live status.
@@ -180,8 +182,9 @@ Preparation never infers source approval. Sonny separately approved the exact
 generated-track candidate and its publication passed native reopen/load/save/quit:
 target and all three files stayed exact, with only startup bookkeeping changed.
 This accepts only that known WAV; no production authority, general format/gain/
-endpoint policy or app integration follows. See HANDOFF for the subsequent
-generated format matrix and pending native reference action.
+endpoint policy or app integration follows from that pilot. See HANDOFF for the
+subsequent
+format references and separately accepted production profiles.
 
 
 `media_registration.py` is a later copy-only multi-format constructor/inspector,
@@ -270,10 +273,11 @@ bytes for a generated packet, writes SQL, publishes source files or grants autho
 ```
 
 Native PPTH must name that exact source filename; all paths must be canonical
-desktop files. The current renderer still emits an empty seek table, so the
-native MP3 comparisons deliberately report a mismatch. Isolated native MP3 row/
-counter references, general VBR generation and source candidate acceptance remain
-open. See [the MP3 work record](../../docs/mp3-shared-analysis.md).
+desktop files. At the initial November2 audit checkpoint the bare renderer emitted
+an empty seek table and native comparisons deliberately reported a mismatch.
+Isolated MP3 row/counter references and the separately accepted CBR source candidate
+followed below; general VBR publication remains gated. See
+[the MP3 work record](../../docs/mp3-shared-analysis.md).
 
 Sonny subsequently completed three isolated MP3 analyses. `mp3_seek.vbr_pvbr`
 reconstructs both independent Xing-VBR references exactly, with unsupported
@@ -297,5 +301,6 @@ deltas explicit. The pilot is terminal and must never be replayed. Its original
 code and full native recovery remain protected. The core scanner/planner promotion
 retains exact old proposal outputs; research wrappers reexport those APIs.
 Production uses its own accepted CBR authority/store/FIFO and contains no research
-modules. Build155passed2200tests/package/native/curation checks and is installed;
+modules. The original build155 delivery passed2200tests/package/native/curation
+checks; it is historical, superseded by the build157/2531-test delivery in HANDOFF.
 VBR/Info/gapless/mono/48kHz publication remains outside that accepted profile.

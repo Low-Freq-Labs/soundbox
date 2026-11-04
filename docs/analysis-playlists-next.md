@@ -6,7 +6,9 @@ gaps. Analysis must ultimately work in either direction: importing/analyzing in
 SoundBox first or rekordbox first must preserve the same musical data, independent
 of author. Direct native registration and initial shared full BPM/Grid+Key/
 waveforms on bare stereo PCM16/24 WAV44.1/48kHz now have separate accepted
-production authorities and are installed. Broader codecs, partial-component and
+production authorities and are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing
+stereo44.1kHz MP3 initial full analysis has its own independently accepted domain;
+see [the MP3 work record](mp3-shared-analysis.md). Other profiles, partial-component and
 existing-analysis replacement/gain/metadata remain gated. The dated native
 references below retain their original scope; they are not current missing-work
 claims or permission to broaden a writer.
@@ -122,12 +124,15 @@ upstream `Analysed=105`/counter assumptions without native6.8.7 evidence.
 Upstream's writer deliberately omits contentFile/contentCue protocols; the accepted
 SoundBox manual-BPM writer already proves that those details matter here.
 
-Prepare separate frozen before/after native examples for an unanalysed imported
+The October29 reference plan called for separate frozen before/after examples for
+an unanalysed imported
 reference, BPM/Grid+Key analysis, Key-only analysis, and first-beat Memory Cue.
-Bind the existing/new sidecar set, key table/content row, counters, contentFile,
-contentCue, XML and all unrelated table inventories. Then implement a copy-only
-candidate and recovery proof; extend the shared Tag/Cue/Grid source lane only
-after native acceptance with an exact library/schema/version authority. Exercise
+Those captures bound the existing/new sidecar set, key table/content row,
+counters, contentFile,
+contentCue, XML and all unrelated table inventories. Copy-only candidates, recovery
+proofs and separately accepted ordinary registration/WAV/CBR domains followed;
+the captured references never directly provisioned them. The original round-trip
+acceptance matrix called for
 SoundBox-first import → native registration → reload and rekordbox-first import
 → SoundBox reuse, plus later manual edits from either app. Preserve existing manual
 grids, cues, Analysis Lock and opaque metadata. No perpetual author-ownership fork.
@@ -212,7 +217,8 @@ payloads with resumable progress.
 rekordbox is open and updates membership after verified source save. Retry
 renews an explicitly retried stale/rolled-back operation's ID/revision/clock;
 committed receipts replay unchanged. Discard never reverses a saved source edit.
-Normal quit drains active work; unstarted intents survive restart. CDJ capture
+Normal UI Quit drains captured work; explicit teardown preserves any unstarted
+durable intents for restart. CDJ capture
 waits for pending playlist edits and rebinds selected native IDs afterward;
 deleted selections or changed libraries stop before export.
 
@@ -225,8 +231,10 @@ group even when TrackNo is unchanged. Bulk selection composes proven single-entr
 operations rather than assuming an unobserved bulk counter formula. First legacy
 ordinary edits can add a missing XML node at zero; later edits touch its clock.
 
-Cache9 retains raw catalogs/clocks and empty folders. Exact UUID pins keep affected
-native songs in SoundBox Collection after their last playlist reference disappears;
+The original playlist milestone used cache9; current `libcache` schema11 retains
+raw catalogs/clocks and empty folders. Collection now reads all active supported
+native audio independently of membership. Exact UUID pins remain compatible
+retention metadata after a final playlist reference disappears;
 cache data and pins grant no registration/edit authority. Only the user-requested
 October30 local veto3604899226/109556371 was cleared after its verified native
 removal; unrelated older local vetoes remain. The acceptance's own temporary
@@ -234,6 +242,16 @@ folder was removed through the accepted writer afterward, preserving Collection,
 cues/analysis and XML. Intelligent/cloud mutations remain separate. New-file
 registration and initial supported WAV analysis later passed independent acceptance
 and are installed; broader analysis replacement/metadata remain gated.
+
+November3 recovery hardening captures folder-delete descendant ContentIDs/UUIDs
+on the common worker and durably saves retention before writer admission. Failed
+local acknowledgement/restart uses captured intentions or an exact retained
+historical receipt pair with fresh current UUID checks. Historical pin recovery
+may coexist with later native playlist edits; it never restores an old catalog.
+Causal rebasing of later pending app edits instead requires an independently
+reconstructed committed edge matching the current catalog/XML. Retired legacy
+evidence without the original UUIDs fails closed. These are correctness proofs
+inside the existing accepted writer, not additional source permissions.
 
 ## Historical prototype and first exact-plan pilot
 

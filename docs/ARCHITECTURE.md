@@ -23,14 +23,16 @@ Playback resolves valid manual drafts even when base detection has no beats.
 
 ## Repo layout
 
-Current debt and staged extraction plan: [September software audit](software-audit-2026-09.md).
-Measured startup/browser/recurring-work findings and unshipped candidates:
-[October efficiency audit](efficiency-audit-2026-10.md).
+Current work and remaining gates: [ROADMAP](ROADMAP.md) and [HANDOFF](HANDOFF.md).
+The [September software audit](software-audit-2026-09.md) and
+[October efficiency audit](efficiency-audit-2026-10.md) retain dated baseline
+findings and implementation checkpoints; their original candidates are not an
+evergreen outstanding-work list.
 The [November performance audit](performance-audit.md),
 [cloud identity audit](cloud-library-audit.md), and
 [test-runtime audit](testing-runtime-audit.md) record the subsequent measured
 changes and remaining costs.
-Its implementation follow-up batches artwork policy reads and source relationships,
+The October implementation follow-up batches artwork policy reads and source relationships,
 constructs playlist-scoped Track rows, counts visible membership without sorting,
 and preserves unchanged display inputs
 across source refreshes. These caches never replace fresh source/edit authority.
@@ -73,10 +75,10 @@ or reset curation, provider namespaces, images, sticky removals or analysis.
                 playlists (m3u8), metadata
                 derivation, imported-file records + relink, cover-art
                 fetch/encode, backup — mypy-clean, gated by ./check.sh.
-    desktop/    PySide6 app: MainWindow + mixins, workers (all QThreads),
+    desktop/    PySide6 app: MainWindow + mixins, shared worker adapters,
                 trees, player, art picker, suggesters, artist/default catalogs.
-    native/     arm64 macOS deck dylib: CoreAudio render/decode engine +
-                CAMetalDisplayLink waveform/grid renderer, exposed by a C ABI.
+    native/     arm64 macOS deck/process-guard dylibs and CDJ Rust helper;
+                CoreAudio decode/render and CAMetalDisplayLink use the deck C ABI.
     tests/      engine behavior + property-based (hypothesis) + mocked live-DB
                 reader + hermetic UI + native deck/shader contracts. Trust
                 ./check.sh output for the live count.
@@ -103,7 +105,7 @@ lets a later coherent native export supersede an older interrupted catalog inten
 USB/global My Settings use44 logical fields and byte-preserving selected patches;
 no automatic global propagation. usb_format revalidates the reviewed physical USB
 before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_info
-overrides feed display/export; browsercache schema3 and libcache schema10 preserve
+overrides feed display/export; browsercache schema3 and libcache schema11 preserve
 these fields without analysis/art rebuilds. The ordinary desktop playlist API
 shares the accepted Tag/Cue/Grid lane and has separate explicit authority. The
 historical standalone pilot under research has only its exact-plan approval,
@@ -182,8 +184,10 @@ without invoking either detector or creating fabricated musical results. Explici
 waveform-only repair continues through its existing cache repair route.
 Its three inset groups align labels and 30-point control rows; the section header
 and preservation note retain the outer edge.
-`soundbox.analysis` captures one hashed local audio snapshot, then the optimized
-Rust helper reuses pinned rbxport DSP. Decoding checks bounds before collection
+Each `soundbox.analysis` component invocation captures a hashed local audio
+snapshot, then the optimized Rust helper reuses pinned rbxport DSP. Waveform,
+BPM, key and native-packet rendering retain independent captures bound to the
+same SHA; no cross-phase PCM cache is shared. Decoding checks bounds before collection
 and bounds the analysis head to thirty minutes/96million mono samples. Automatic
 BPM/key detection skips songs over900seconds, including imports whose duration
 is learned from the captured header; saved/native/manual musical data and explicit
@@ -384,9 +388,11 @@ active device lane, but desktop adapters still
 retain their own queues rather than using its queue API (audit A5).
 
 `source_acquisition` captures canonical audio into disposable local storage in
-one streaming hash pass. Exact expected bytes take precedence over cloud stat
-drift. Unknown bytes require a stable capture, with one bounded hydration
-retry. Rockbox media inspection, normalization and essence checks use captured
+one streaming hash pass per attempt. Both known- and unknown-digest captures
+require stable before/opened/closed/after filesystem identity and a stable
+canonical path; matching expected bytes cannot bless a replacement file's epoch.
+Metadata drift before capture can pass, and one bounded metadata-instability
+retry remains. Rockbox media inspection, normalization and essence checks use captured
 bytes. Stock planning consumes those technical facts or captures its own source;
 stock execution also captures plain payloads before copying. Generic export
 prepares/copies/discards per file and suppresses destructive cleanup on failure.
@@ -442,7 +448,7 @@ provider imports, and the existing rekordbox modules remain concrete adapters.
 ## Desktop modules (`desktop/`)
 
 `app.py` = `MainWindow` core + orchestration. Mixins/modules: `devices`,
-`trees`, `workers` (every QThread), `settings_page` (`SettingsPageMixin`),
+`trees`, `workers` (shared QThread adapters), `settings_page` (`SettingsPageMixin`),
 `device_browser` (`DeviceBrowserMixin`), `artpicker`, `suggest`,
 `artistcatalog`, `connections` (owned account jobs), `keyboard` (action catalog,
 versioned map and physical-key router), `keyboard_page` (capture/conflict editor),
@@ -503,7 +509,8 @@ immediately before My Tags, using the same BG inner fill as Settings and the oth
 controls, with a matching three-point corner radius. Info and Settings use
 centered vector icons, avoiding font bearings. The player-layout popup is sized
 to the selector field after Qt lays it out. Info opens Summary/Info for the selected row, with artwork inside Info. Supported
-metadata edits are SoundBox-local and feed USB export. TrackInfoDialog constructs
+metadata edits are SoundBox-local and feed USB export. USB songs and historical
+native-deleted Graveyard rows open read-only information dialogs. TrackInfoDialog constructs
 its Summary without artwork locks/decoding and lazily builds Info on selection.
 After the dialog opens, ArtworkWorker resolves the canonical art path and decodes
 a bounded QImage outside the GUI; TaskOwner retains it through finished/join and
@@ -977,7 +984,7 @@ refresh, preserving compressed waveform payloads.
   and join; refresh, source selection, backup/restore and shutdown serialize with
   that owner. A successful save reloads the source snapshot and smart memberships.
   `LibraryTag`, source UUIDs/memberships and library identity travel through
-  instant-paint cache schema 7 (older 4–6 remain readable). A cached source cannot grant write authority.
+  instant-paint cache schema11 (older4–10 remain readable). A cached source cannot grant write authority.
 - **Cue planning is pure; the accepted writer binds one track.** `rekordbox_cues` produces exact
   four-table deltas from raw snapshots, separate from normalized display cues.
   Full revisions and explicit cue IDs/UUIDs guard stale chronological deletion;
@@ -1033,11 +1040,14 @@ refresh, preserving compressed waveform payloads.
   are serialized so an older result can never overwrite a newer result on disk.
   Results and errors publish only after QThread.finished retires the captured
   worker. Failed source reads/selections preserve the active library and curation.
-- **Two planes.** rekordbox is king (the mirror); SoundBox keeps its own plane
-  on top: imported audio (referenced in place, never copied), per-track
-  title/artist overrides, custom playlists, and deletes/removals that act as
-  *vetoes* over the mirror. Both planes drift synced devices. Only explicit My Tag
-  assignment actions cross into the accepted rekordbox writer.
+- **Verified source plus local state.** SoundBox retains its local title/artist
+  overrides, imported records, hidden/disposed curation and legacy custom data
+  alongside the verified native library. Local display/export overlays remain
+  distinct from source authority. Ordinary registration, playlist, Tag/Cue/Grid,
+  initial WAV/CBR analysis, locator and confirmed disposal operations use their
+  independently accepted, narrowly scoped native domains on the common lane.
+  A local membership veto alone is not a native playlist save. Accepted
+  migrations preserve the original custom records and stable device identities.
 - **Imported duration is source-header metadata.** `soundbox.imports` uses
   libsndfile first and Mutagen's container metadata fallback for ALAC/AAC;
   legacy zero-time records are backfilled and persisted on load. Canonical
@@ -1141,7 +1151,9 @@ and fingerprinted. Default PNG/ICNS derive from the same vector; eight modern PN
 ICNS representations round-trip exactly through native iconutil readback.
 One normalized color per application avoids repeated rendering for text-only or
 repeated settings application. Qt's Cocoa application-icon API changes the running
-Dock/Command-Tab image; no bundle/Finder writes or extra preference files occur.
+Dock/Command-Tab image. A normal packaged launch/commit also persists the saved
+icon through NSWorkspace custom-icon metadata at the app root, preserving signed
+Contents bytes; isolated/development runs do not customize the installed app.
 Cancel does not touch the icon. Headless transaction/image checks and native
 NSApplication icon captures cover the commit path; HANDOFF gives installed status.
 
@@ -1335,8 +1347,8 @@ or absent files receive ordinary preparation. Selected sync still verifies hashe
 
 ## Build / install
 
-    ./check.sh                 # + arm64 native build, then Python gates
-    ./build_native.sh          # native dylib only
+    ./check.sh                 # native deck/process/CDJ builds and complete gates
+    ./build_native.sh          # deck + process-guard dylibs
     ./build_app.sh             # PyInstaller → dist/personal/Soundbox.app (self-signed)
 
 `./build_app.sh public` separately writes `dist/public/Soundbox.app`.
@@ -1365,7 +1377,7 @@ fails verification. This is signed build metadata captured at stamping time,
 not independent proof that packaged code was compiled from those sources.
 Both stable and ad-hoc signing happen after all plist edits.
 
-Installation is a state-preserving handoff, not a delete/copy shortcut:
+An explicitly authorized installation is a state-preserving handoff:
 gracefully quit SoundBox, back up/hash `library.json`, move the previous app
 bundle to a temporary rollback directory, `ditto` the tested bundle into
 `/Applications`, verify its signature, relaunch, and inspect the startup log.

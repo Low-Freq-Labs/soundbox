@@ -95,7 +95,7 @@ baseline bugs are fixed. A light-palette catalog contrast correction is included
 in the final complete gate. Both signed profiles and isolated ORM/SQLCipher
 probes pass; the personal app was installed22:18 and normal startup verified22:21.
 Exact evidence and measured remaining limits are in HANDOFF/performance-audit.
-Preserve the existing dirty tree,
+Preserve the published application source and any newer local changes,
 all accepted authority/guard/recovery boundaries and newer user edits. Do not
 interrupt the running app or send it inputs. Sonny is using the app while the
 published source release is closed out; no documentation-only reinstall or restamping.
@@ -103,6 +103,17 @@ At22:29 his subsequent relaunch was healthy; only columns_state changed since
 installation and all curation/authorities/icon remain preserved. Full detached
 queue serialization, cooperative pre-response network
 waits and physical-device acceptance remain explicit costs/proof boundaries.
+
+## Documentation consistency follow-up — November3
+
+Sonny asked whether every document had been checked for stale information. The
+prior wrap-up covered12current guides; the expanded inventory now covers all74
+tracked Markdown files:38current first-party full-content reviews,11archived
+scope/retention/link checks and25unchanged pinned upstream references. Current
+status/permission/codec/cache/retention claims are reconciled without rewriting
+historical acceptance or altering runtime code. Exact per-file scope and remaining
+upstream-link limitations are in docs/PROJECT_LAYOUT.md and HANDOFF. This is a
+documentation-only closure; leave the installed app and user session untouched.
 
 ## Capture/reuse boundaries after correctness review
 
@@ -548,9 +559,10 @@ repository can answer the question.
   a safe boundary. Shutdown must keep Qt events alive until workers stop;
   an expired timed wait never permits destroying a worker.
 - Canonical audio acquisition captures one local snapshot while hashing. An
-  expected digest binds captured bytes, so matching bytes survive cloud
-  eviction/timestamp drift. Without a digest, require a stable capture with at
-  most one hydration retry. macOS CloudStorage reads returning ENEEDAUTH may
+  expected digest binds captured bytes, so exact bytes may survive cloud
+  eviction or timestamp drift before capture. Every capture, with or without a
+  digest, requires stable before/opened/closed/after identity and a canonical path,
+  with at most one instability retry. macOS CloudStorage reads returning ENEEDAUTH may
   restart from byte zero after at most two cancellable three-second waits;
   partial reads never publish proofs or snapshots. Persistent errors still
   fail closed with source context. This readiness budget is separate from
@@ -888,10 +900,11 @@ fixtures remain protected. Keep future diagnostics lean: reuse existing snapshot
 for inspections, retain full DB pairs only when acceptance/recovery requires them,
 and remove generated packaging/scratch output after verified installation. Do not
 create a new full-library capture for every status/UI check. Preserve small
-comparison/approval/install receipts. The verified delivery baseline is95 imports,1107 titles,490 artist overrides,
-10 custom playlists,519 hidden tracks, eleven saved analyses,93 native bindings, ten
-independent authorities and515 user disposal receipts. New user actions supersede these
-counts; inspect current state rather than restoring a checkpoint. Conversion
+comparison/approval/install receipts. An earlier retained delivery checkpoint had95 imports,1107 titles,490 artist
+overrides,10 custom playlists,519 hidden tracks, eleven saved analyses,93 native
+bindings, ten independent authorities and515 user disposal receipts. Current dated
+counts are in HANDOFF; newer user actions supersede every checkpoint. Inspect
+current state rather than restoring a checkpoint. Conversion
 originals, required references and unresolved recovery remain protected.
 
 ## Private / out of scope

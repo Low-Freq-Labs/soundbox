@@ -1,7 +1,8 @@
 # SoundBox current handoff
 
 Updated November3,2026 after the correctness/efficiency pass, final complete gate,
-both signed package profiles, installation, normal curated startup and wrap-up.
+both signed package profiles, installation, normal curated startup, wrap-up and
+repository-wide documentation consistency review.
 Branch `main`; application source release `d08ee91d18fe89e9fa520f7f242d1cd3015ec903`
 is committed and pushed. This documentation-only closure follows that release.
 The installed signed base remains `d19f3eb40b4e18a5e474e8ef26a2887a76de9b7c`,
@@ -21,10 +22,11 @@ Installed `2026-11-03T22:18:00.130599-06:00`; normal curated startup verified
 All158 personal/154 public packaged first-party Python modules and each entrypoint
 match tested source. Native section descriptors/non-zerofill bytes match tested
 builds:26deck,5process-guard and20CDJ sections, including zerofill descriptors.
-The installed runtime fingerprint matches the frozen application source. Build157
-is derived from unchanged Git history; this dirty-source delivery is distinguished
-by hashes from earlier73219a59… and d5cb4451… build157 apps. It is not a published
-Git revision. Prior build155/source release `9a023536` and documentation closure
+The installed runtime fingerprint matches the frozen, now-published application
+source. Build157 derives from Git history at packaging time; later publication
+changes repository HEAD without changing the app. Hashes distinguish it from
+earlier73219a59… and d5cb4451… build157 apps. Its signature retains the
+pre-publication dirty base rather than the later source-release Git revision. Prior build155/source release `9a023536` and documentation closure
 `d19f3eb` remain historical provenance.
 
 ## Delivered efficiency and correctness work
@@ -110,6 +112,26 @@ preinstall file; newer UI state was retained. Current dated library SHA-256:
 `ac8b3da88f1b5575eaaae8f694274c498cead7b2ad457dc4e07a0abdfe64d1f8`.
 All10authorities, saved icons, curation and five empty save queues remain exact.
 No agent restart, app input, teardown or reinstall occurred during wrap-up.
+
+## Documentation consistency follow-up
+
+The earlier wrap-up checked12current guides; Sonny asked for a wider stale-info
+check. The follow-up inventories all74tracked Markdown files:38current first-party
+guides/plans/research notes reviewed in full,11archived records checked for scope,
+retention locators and links, and25unchanged pinned upstream references classified
+separately. Current claims were checked against implementation where needed.
+Superseded write permissions, accepted codec/import/playlist status, native adapter
+limits, cache versions, performance TODOs and retention counts are corrected;
+dated acceptance records remain historical. This does not broaden native authority
+or hardware acceptance. [Project layout](PROJECT_LAYOUT.md) records coverage and
+private per-file evidence. The pass corrects44documents. All project-local
+Markdown path links/anchors pass;58links inside pinned vendor documentation point
+to omitted upstream material. That subset limitation is documented, and all243
+pinned crate files verify unchanged.
+
+This follow-up changes documentation only. Application source, the installed
+signed bytes and its existing2531-test release proof remain unchanged. No app
+inputs, source/device writes, restart, restamping or reinstall are part of it.
 
 ## Boundaries and next action
 

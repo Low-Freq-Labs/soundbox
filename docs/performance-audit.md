@@ -177,7 +177,7 @@ not a claim of10.62MB lower resident memory. Both profiles require artifact chec
 Private current receipts and the full inventory are retained under
 `~/Library/Logs/Soundbox/correctness-efficiency-2026-11-03/`.
 
-## Broader efficiency review and trackpad feedback, November3 evening
+## Historical broader review checkpoint — November3 evening
 
 Sonny requested a whole-codebase review by subagents and supplied a trackpad
 recording. The review inventories all176 first-party Python/native source files
@@ -266,7 +266,13 @@ claimed as a raw-byte match. Required fixtures remain exact. The Rust gate now
 runs library and binary regressions, doctests and adapter checks with pinned
 RUSTDOC, rather than omitting binary tests through --lib.
 
-### Remaining work, ranked by measured cost and required design
+### Remaining work at the evening checkpoint (superseded by the night pass)
+
+The night pass at the top of this document subsequently addressed items2–5:
+acknowledgement/snapshot copies, fuzzy matching/thumbnails, overlapping USB and
+selected metadata/no-op work, keymaps and cooperative provider body budgets.
+Item1 was profiled and retained as a memory/provenance tradeoff; opaque network
+waits and fresh guards remain. The list below preserves the original prioritization.
 
 1. Repeated waveform→BPM→key→native-render source capture/decode needs a shared
    captured-context design preserving exact SHA identity, durable phase receipts,
@@ -291,13 +297,14 @@ RUSTDOC, rather than omitting binary tests through --lib.
    USB pacing remain deliberate guards. Optimizing their safe implementation
    requires proof; removing the checks is not an efficiency improvement.
 
-The corrected final gate passes2406tests with zero skips/expected failures; signed
-package/native parity and isolated/normal startup pass. The update is installed
-as runtime d5cb4451…; exact provenance/state checks are in HANDOFF.
+At that evening checkpoint, the corrected gate passed2406tests with zero skips/
+expected failures, and signed package/native parity and isolated/normal startup
+passed for runtime d5cb4451…. The night2531-test delivery supersedes that install;
+exact current provenance/state checks are in HANDOFF.
 Physical reconnect/power-cycle/export throughput, real compositor gesture
 latency and the full failure matrix across hardware remain unmeasured here.
 
-## Export efficiency pass, November3
+## Historical first export-efficiency checkpoint — November3
 
 Sonny requested separate USB/iPod reviews and export work enabled only when a
 target is detected. Three subagents reviewed USB catalogs, iPod/Rockbox planning
@@ -341,9 +348,10 @@ new edits/deletions. Filesystem planning maintains one FAT-normalized destinatio
 set; a100-source fixture drops5050→200 normalizations while preserving exact case/
 Unicode collision behavior. Writer defaults retain their independent fresh checks.
 
-Remaining costs are explicit: CDJ source captures still scan complete cue/tag/
-contentFile tables at independent freshness boundaries, and unchanged incremental
-generations still invoke the merge renderer. New/changed media is acquired and
+At this first checkpoint, CDJ captures still scanned complete cue/tag/contentFile
+tables and unchanged generations invoked the merge renderer. The later night
+pass narrows selected metadata where ordering permits and skips rendering only
+under its complete reconstruction proof; independent freshness captures remain. New/changed media is acquired and
 verified during planning and rematerialized/reverified at commit to preserve
 bounded one-track staging. Generic/schema2 verifies existing destination bytes;
 stock render/parse validation and150ms classic USB pacing remain. This pass does
@@ -425,8 +433,9 @@ constructor,9.185s apply,0.124s retention and1.118s independent readback. It use
 accepted packets through a fixture renderer and excludes detection/GUI work.
 
 These figures exclude UI/decoder/cloud time and do not claim an end-to-end
-47-second import now completes in any particular time. Native reopen/UI latency
-of the new package remains unobserved while Sonny keeps the app closed.
+47-second import now completes in any particular time. At that November2 checkpoint, native reopen/UI latency
+was unobserved while Sonny kept the app closed. Subsequent startup verification
+is recorded in HANDOFF; actual gesture timing is still not measured here.
 
 Existing tag/cue/grid source writes measured about0.30–0.35s warm and1.3–1.4s
 cold in the initial profiled audit. Playlist create/rename were about3s; private
@@ -537,8 +546,8 @@ validation belongs in [HANDOFF.md](HANDOFF.md).
 | Native commit browser work | Row-cache invalidation, full table reload, sidebar recreation, artwork/device/Graveyard refresh | Preserve cached rows and native tree items; unrelated Collection stays untouched; refresh only affected domains |
 | Long cached waveform delivery | A transient state bypassed valid caches; compact-first preview then visibly resized on full-detail promotion | Reuse valid canonical stages and atomically publish complete geometry once; omit unused spectral payload, preserve immediate manifest readiness and automatic BPM/key skip above15minutes |
 | Snapshot JSON serialization, inspected baseline | A whole-library C encoder call would hold the GIL across one large record set | Existing library/browser cache writers already encode bounded records/chunks in their worker; retained unchanged in this work |
-| Durable crown-state save | About 27 ms for a private copy of the current state | Keep persistence-before-presentation and backup/recovery; duplicate validation/copies are a bounded follow-up |
-| Artwork defaults during browser preparation | Repeated checks of a shared default-photo pool can scale with tracks | Existing batch status API retained; distinct-photo availability snapshot is a follow-up |
+| Durable crown-state save, earlier checkpoint | About27ms for a private copy of then-current state | Durability remains; the later broader pass adds exact-byte backup validation reuse, and night completion work narrows touched copies |
+| Artwork defaults during browser preparation, earlier checkpoint | Repeated checks of a shared default-photo pool can scale with tracks | The later broader pass captures distinct-photo availability within each locked batch; independent export reads remain fresh |
 
 The playlist batch does not add SQL tables, fields or musical-data authority.
 Source guards, accepted per-command identities/counters, encrypted before/after
@@ -600,16 +609,15 @@ uses120ms idle after `ScrollEnd`; phase-less wheels use the same interval.
 At measurement, a read-only copy of the then-current 1,357,507-byte crown state,
 with nine saved analyses, 91 native bindings and its migration map, was saved only in a
 disposable TEMP directory. Five real changed-state saves measured 26.715 ms
-median and 28.162 ms maximum. The profile identifies repeated validation and
-deep copying in `StateRepository.save` and backup validation. Per-edit durability
-and backups remain intact. A future narrow change can reuse proven state or avoid
-an unnecessary copy of freshly parsed backup input, with explicit corruption,
-external-edit and recovery tests; moving an uncommitted intent behind its visible
-effect is not an acceptable speedup.
+median and 28.162 ms maximum. The profile identified repeated validation and
+deep copying in `StateRepository.save` and backup validation. The later broader
+pass implements exact-byte reuse of validated backup input, with corruption,
+external-edit and recovery tests. Per-edit durability and backups remain intact;
+moving a durable intent behind its visible effect is not an acceptable speedup.
 
-`ArtCache.status_kinds` already captures one exclusion-policy snapshot. Default
-photo lookup still checks assigned files per track; availability could instead
-be captured once per distinct photo for that presentation batch. Keep actual
+`ArtCache.status_kinds` already captures one exclusion-policy snapshot. The earlier default-photo
+lookup checked assigned files per track; the later broader pass captures
+availability once per distinct photo within each locked presentation batch. Keep actual
 cover/derivative/export verification on its own path. Native playlist saves now
 skip whole-library default assignment and artwork work when track membership and
 curation are unchanged. The empty/defaultless fixture's default assignment setup
@@ -727,14 +735,14 @@ are installed-bundle disk figures, not amounts all loaded into RAM at startup.
 
 That inspected Python archive contained38 `sqlalchemy.testing` namespaces, seven
 `sqlalchemy.ext.mypy` namespaces, six `mypy` namespaces and `ast_serialize`, alongside
-the legitimate runtime packages. The composition currently collects all SQLAlchemy
-submodules, including its development/testing integrations. mypy and
+the legitimate runtime packages. At that morning checkpoint, composition collected all SQLAlchemy
+submodules, including development/testing integrations. mypy and
 `ast_serialize` framework directories account for about **10.2 MiB** together;
-additional archive code is separate. A focused packaging follow-up can exclude
-those development-only integrations and verify actual archive contents, public/
-personal composition, native source-read/edit paths and bundle smoke. Do not
+additional archive code is separate. The later night pass excludes
+those development integrations and verifies archive contents, both profiles and
+isolated native ORM/SQLCipher behavior; current figures are at the top. Do not
 remove required numerical, artwork, codec, encryption or Qt components on size
-alone. No package dependency was trimmed during this audit. The evening change omits
+alone. No package dependency was trimmed at that morning checkpoint. The evening change omits
 an unused decoded playback field; it does not delete canonical cache sections.
 
 The related [test-runtime audit](testing-runtime-audit.md) measures encrypted test
@@ -769,10 +777,11 @@ repaints the viewport after a local state save. It does not rebuild the sidebar,
 reload a playlist, enqueue a native save or inspect source audio. Installed
 provenance and current gate status remain in [HANDOFF](HANDOFF.md).
 
-## First performance delivery verification,20:45
+## Historical first performance delivery — November2,20:45
 
-The follow-up is installed at20:45in personal155, runtime fingerprint8882e36f…;
-HANDOFF retains exact provenance. All2219tests passed (2155offscreen/64Cocoa),
+At this checkpoint the follow-up was installed at20:45in personal155, runtime
+fingerprint8882e36f…; its dated private release receipts retain provenance.
+HANDOFF records the superseding current app. All2219tests passed (2155offscreen/64Cocoa),
 zero skips/expected failures; lint/types104core files, Rust/native/fixtures/render
 passed. All152packaged Python modules and25deck/17CDJ-helper code/data sections
 match tested builds. Fresh strict signature and installed normal deep signature
@@ -781,10 +790,11 @@ zero devices/no loaded library or artwork worker. Curation remains byte-exact,
 all10authorities unchanged and queues empty. Sonny explicitly requested keeping
 SoundBox closed; no normal real-library launch or UI latency result is claimed.
 
-## Second-pass installed verification
+## Historical second-pass installation — November2
 
 The second package was safely installed at22:56on November2 after Sonny quit
-normally. Runtime33689af7…/executablecf86e80f…/personal155 is exact in HANDOFF.
+normally. Runtime33689af7…/executablecf86e80f…/personal155 belongs to that dated checkpoint;
+HANDOFF records the superseding current app.
 All2266tests passed (2202offscreen450.033s,64Cocoa67.534s), zero skips or expected
 failures; lint/types105core files/Rust/native/fixtures/render pass. All154Python
 modules and25deck/5process-guard/17CDJ code/data sections match tested builds.
@@ -792,7 +802,7 @@ Fresh strict and installed normal deep signatures plus exact signed Contents
 pass. Installed isolated startup verifies native player AND fast process query
 with zero discovery/no loaded library. Curation is byte-exact to fresh preinstall,
 all10authorities and saved icon exact, queues empty; only legitimate window/column
-UI settings differ from the earlier first-pass baseline. The real app is left
-closed; normal real-library launch and new actual gesture timing remain unmeasured.
-One prior first-pass app is retained; obsolete CBR app and duplicate packaging
+UI settings differ from the earlier first-pass baseline. At that checkpoint the real app was left
+closed; normal startup was subsequently verified, while new actual gesture timing
+remains unmeasured. One prior first-pass app was retained then; obsolete CBR app and duplicate packaging
 outputs were retired by exact scoped receipts, with source/recovery/audio intact.

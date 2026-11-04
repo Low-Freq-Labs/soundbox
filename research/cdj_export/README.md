@@ -1,10 +1,13 @@
 # research/cdj_export — CDJ USB export prototype
 
-October28 integration update: the desktop pilot now uses the shared renderer in
+Reviewed November3,2026 against application source release `d08ee91`.
+The desktop uses the shared renderer in
 [`native/cdj`](../../native/cdj/README.md), fresh `soundbox.cdj_source` capture and
 reviewed `cdj_transaction` publication. The standalone export tools below remain explicit
-offline fixtures, not device writers. A separate desktop playlist pilot has an
-explicit one-plan approval gate and no app integration; see the playlist scope. Current contract/limits/install evidence:
+offline fixtures, not device writers. The original desktop playlist pilot remains
+an exact-plan research tool; ordinary desktop playlist editing now uses its
+separately accepted production authority. Research receipts never provision that
+authority. Current contract/limits/install evidence:
 [CDJ guide](../../docs/cdj-usb-export.md), [HANDOFF](../../docs/HANDOFF.md).
 
 
@@ -17,11 +20,11 @@ database a Pioneer CDJ reads off a USB stick.
 Full plan, status, and next steps: [CDJ export research](../../docs/cdj-usb-export.md).
 
 **Developer pickup: [RBXPORT_HANDOFF.md](RBXPORT_HANDOFF.md).** Start there for
-the working export, exact reproduction command, approved settings UX, code map,
-native evidence and sequenced integration tasks. It covers classic Device Library
+the working export, exact reproduction command, historical settings proposal, code map,
+native evidence and the historical integration sequence. It covers classic Device Library
 and OneLibrary, the pinned local source kit, completed native captures and the
-passing offline fixture. Both formats are
-requested; newer-player hardware acceptance remains pending.
+passing offline fixture. Both formats are maintained automatically by the runtime;
+newer-player hardware acceptance remains pending.
 The required product experience is one export that always maintains both
 databases with identical playlist hierarchy/membership/order, shared media and
 coordinated recovery. Users never choose or separately enable the formats.
@@ -32,13 +35,16 @@ coordinated recovery. Users never choose or separately enable the formats.
   and the user-approved native-reference gate. The five-track fixture passes:
   25/28 files byte-identical, all three databases' compared records/schema/indexes
   equal, no extra/missing files. Raw database mismatches remain explicit. This
-  is not installed app/source integration or a production device transaction.
+  is the dated standalone-fixture result, not a new hardware acceptance. The app's
+  source adapter and device transaction are documented separately in the CDJ guide.
 - `fixture_export.py`, `export_compare.py`, `rbxport_adapter/` — reproducible
   locked build → local generation → comparison. Inputs are explicit private
   fixture DTOs; no automatic library/device discovery or live writes.
 - `devicesql.py` — DeviceSQL `.pdb` reader + writer (pages, table directory, the
   backward-growing row index) and a small-file assembler with one data page per
-  table. Scalable pagination and hardware-valid generation remain open.
+  table. This Python research assembler is not the production renderer;
+  `native/cdj` and its shared fixture adapter implement pagination. Hardware
+  acceptance remains bounded to the observations in the CDJ guide.
 - `rows.py` — `device_sql_string` codec (short-ASCII / long-ASCII / UTF-16LE)
   and simple-row codecs (keys, colors, artists, albums, labels, genres,
   playlist_tree, playlist_entries).
@@ -48,18 +54,19 @@ coordinated recovery. Users never choose or separately enable the formats.
   display intermediates and unmodified packed waveform streams. It rejects
   invalid musical values instead of clamping/substituting them; it does not
   encode native tags/containers or authorize a device write. Fresh DB cues are
-  required for future export because source ANLZ cues can lag accepted DB edits.
+  required by the runtime exporter because source ANLZ cues can lag accepted DB edits.
 - `pdb_audit.py` — independent, read-only structural report for copied local
   PDBs. Uses native little-endian counts and bounded chain/index checks. It
   diagnoses the historical prototype's count-field defect without changing it.
 - `mysettings_codec.py` / `mysettings_fields.json` — bytes-only candidate reader
   and patcher for 42 player/mixer fields, retaining unknown bytes and exact
   base/CRC guards. No file/device publication APIs. The
-  [My Settings implementation contract](MY_SETTINGS_PLAN.md) specifies direct
-  USB editing, Global defaults/presets, Follow Global / Custom propagation and
-  the optional Save to Global My Settings action. Production UI, device
-  publication and broader native mapping acceptance remain pending; the complete
-  native ±10→±16 tempo file already matches the staged codec output exactly.
+  [My Settings proposal](MY_SETTINGS_PLAN.md) records the original defaults/presets
+  and Follow Global / Custom design. Current
+  production controls instead use44 fields, direct USB editing and explicit
+  Save to Global / Load Global without automatic propagation; see the CDJ guide.
+  Broader native mapping/hardware acceptance remains separate. The complete
+  native ±10→±16 tempo file matches the staged codec output exactly.
 
 - `playlist_reference.py`, `playlist_membership.py`, `playlist_lifecycle.py` and
   `playlist_replay.py` — explicit frozen-capture comparison, pure unsynced
@@ -69,7 +76,7 @@ coordinated recovery. Users never choose or separately enable the formats.
   notification-timestamp audit reports its residual and never claims a complete
   match. Deletion is limited to the observed last-root single-member case.
   This does not prove XML publication/interruption recovery or grant source-write authority; see
-  [the current playlist protocol work](../../docs/analysis-playlists-next.md).
+  [the separately accepted current playlist protocol](../../docs/analysis-playlists-next.md).
 
 - `playlist_xml.py` / `playlist_transaction.py` — byte-preserving XML codec and
   original-TEMP-only paired publication with complete evidence validation and
@@ -78,9 +85,10 @@ coordinated recovery. Users never choose or separately enable the formats.
 - `playlist_pilot_plan.py` / `playlist_pilot.py` — a separately approved, unintegrated
   desktop-source test for one new named playlist plus two existing unsynced tracks.
   Preparation/show are read-only to the source. Publish/recover require the exact
-  separate approval; no automatic acceptance or production authority exists.
+  separate original approval; the research tool does not inherit production
+  authority from the accepted runtime writer.
   CLI: `scripts/prove_rekordbox_playlist_pilot.py`; read the
-  [scope and actual pending plan](../../docs/analysis-playlists-next.md) first.
+  [research scope and production boundaries](../../docs/analysis-playlists-next.md) first.
 
 ## Checking it
 
@@ -107,7 +115,9 @@ The independent October 28 audit reproduces this on the retained native and
 failed candidate files. That historical candidate was **rejected by the CDJ-3000**;
 audio played through folder-mode fallback. Full library/performance acceptance
 has not passed. The new compiled Rust fixture uses the correct upstream count
-encoding and passes the native-reference gate; app integration, scale and the
-dedicated device transaction remain to implement. Scaffold-and-inject remains an isolation experiment,
-not a proven production design. Parallel research is now requested; app
-integration/release still follows the roadmap and dedicated write-safety gate.
+encoding and passes the native-reference gate. The shared runtime renderer,
+scalable metadata completion, fresh source DTO capture and dedicated device
+transaction are now integrated. Scaffold-and-inject remains an isolation
+experiment, not a production design. Current runtime/release evidence and the
+remaining model/firmware/control matrix belong in the CDJ guide and HANDOFF,
+not this historical prototype result.

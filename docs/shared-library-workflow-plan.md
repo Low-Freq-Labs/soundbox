@@ -1,8 +1,9 @@
 # Shared library, analysis and player corrections
 
-Updated November2,2026. This plan began at build148 on October30. Direct shared
-imports, initial supported WAV analysis, durable prep and the requested player/
-Graveyard controls are now installed. The full shared-primary outcome still has
+Current-status review November3,2026 against source release `d08ee91` and installed
+build157. This plan began at build148 on October30. Direct shared imports, initial
+supported WAV and independently accepted narrow CBR MP3 analysis, durable prep and
+the requested player/Graveyard controls are now installed. The full shared-primary outcome still has
 broader codec/replacement/gain/metadata gates. [HANDOFF](HANDOFF.md) records the
 current binary and newest user state; dated research checkpoints below describe
 their original boundaries, not current production availability.
@@ -13,8 +14,9 @@ waveform now appears once at its finished geometry/palette, including long
 AAC/ALAC sets; actual bytes, manual musical edits and source authority remain
 preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences,
 with fixed person Artists, home Collection and folder icons. All2144cases passed
-for that dated delivery; HANDOFF separates repository HEAD from installed build154
-and records its exact source fingerprint, signature and curated-state proof.
+for that dated build154 delivery. It is historical: HANDOFF records the later
+November3 build157/2531-test delivery, signed dirty-source provenance and published
+source-release identity separately.
 
 Local prep stays usable while analysis saves fail or cloud ctime changes: each
 gesture is durable before a worker proves the original bytes. Adaptive saved
@@ -22,7 +24,8 @@ grids preserve every tempo/endpoint, and failed native-analysis songs no longer
 stall healthy imports. UI Quit stays open while captured import/analysis/source
 saves remain, with input and pumps active; the next Quit proceeds when complete.
 Automatic BPM/key detection skips songs over15minutes; explicit/manual/native
-results remain available. Broader analysis codecs/replacement/gain/metadata still
+results remain available. Other unaccepted analysis profiles and
+existing-analysis replacement/gain/metadata still
 require independent acceptance.
 
 ## October31 live import: ordinary automatic sharing
@@ -34,13 +37,16 @@ full-result intent on the common source lane, renders only from captured bytes
 and saved rows, commits native packets/metadata recoverably, and updates the
 finished song without reloading audio or the library. The initial supported
 profile is bare stereo PCM16/24 WAV44.1/48kHz with full BPM/Grid+Key, preserving
-cues/gain/audio/XML/playlists. Existing native analysis replacement, other codecs
-remain separate profiles; cue drafts now travel independently through the
+cues/gain/audio/XML/playlists. The later narrow CBR MP3 profile has independent
+acceptance, documented in [the MP3 work record](mp3-shared-analysis.md). Existing
+native analysis replacement and other unaccepted codecs remain separate profiles;
+cue drafts now travel independently through the
 accepted durable Cue API. Do not overstate analysis authority.
 
 At that October31 checkpoint BREATHE had281 rows,130/7A with first beat1 at0.
-Newer user edits now produce280 native rows and5 cues; preserve the current
-HANDOFF result, not the old checkpoint. The installed whole-v4 detector repairs the boundary omission with beat2/phase plus measured
+A later recorded checkpoint had280 native rows and5 cues. Both counts are dated;
+preserve newer user work rather than restoring either checkpoint. The installed
+whole-v4 detector repairs the boundary omission with beat2/phase plus measured
 opening evidence and preserves later times. No reanalysis is needed for these
 saved results. The signed8e4 build passed1896 tests; its ordinary worker published
 BREATHE130/7A and his exact281-row grid with first1 at0. Native exact search,
@@ -491,16 +497,18 @@ alone do not establish native acceptance, latency or visual quality.
 | Explicit detector / automatic dispatch | [desktop/analysis.py](../desktop/analysis.py), [soundbox/analysis.py](../soundbox/analysis.py), [Rust caller](../native/cdj/src/analysis.rs); pinned vendor tempo pipeline under native/cdj/vendor/rbxport/crates/rbl-analysis/src/ |
 | Local/native manual controls | [desktop/grid_controller.py](../desktop/grid_controller.py), [pure grid arithmetic](../soundbox/rekordbox_grid.py), [cache metadata](../soundbox/track_analysis.py), [player](../desktop/player.py) |
 | Pending playlist feedback | [desktop/rekordbox_playlists.py](../desktop/rekordbox_playlists.py): enqueue, completed, _native_apply_catalog, _native_refresh_view; existing request/store APIs stay authoritative |
-| Native Collection / identities | [reader](../soundbox/rekordbox_db.py): load_live, referenced and retained-track sets; [library](../soundbox/library.py), [libcache](../soundbox/libcache.py), imports/metadata/state_repository modules |
+| Native Collection / identities | [reader](../soundbox/rekordbox_db.py): load_live and all active supported local audio IDs, independently of playlist membership; [library](../soundbox/library.py), [libcache](../soundbox/libcache.py), imports/metadata/state_repository modules |
 | Accepted shared writer/recovery | [tag controller](../desktop/tag_controller.py), [playlist store](../soundbox/rekordbox_playlist_store.py), rekordbox_cue_store/grid_store/tags, [source primitives](../soundbox/rekordbox_write.py) |
 | Export barrier | [desktop/cdj.py](../desktop/cdj.py): _source_edits_pending and deferred stable-ID rebinding; soundbox/cdj_source.py for the source capture contract |
 | RGB | [native/SoundboxDeck.mm](../native/SoundboxDeck.mm): LOD, interval resolve, RGB coverage/color branches; [desktop/player.py](../desktop/player.py): actual zoom ladder |
 | Regression suites | tests/test_analysis.py, test_ui_source_playlists.py, test_source_playlists.py, test_prep_grid.py, test_rekordbox_grid_store.py, test_native_deck.py, test_waveform_gpu_math.py, test_cdj_desktop.py |
 
-The registration/full-analysis publisher and unified component reconciliation are
-**not existing implementations** hidden behind a switch; their module boundaries
-must be designed and proven. Preserve the accepted narrow writers instead of
-repurposing them outside their scope.
+Ordinary registration and the two accepted initial full-analysis publishers are
+implemented in `rekordbox_registration_store`, `rekordbox_analysis_store` and
+`rekordbox_cbr_analysis_store`, with desktop admission in `shared_imports` and
+`native_analysis`. The broader all-component reconciliation/native metadata
+outcome remains unfinished. Preserve each accepted writer's scope rather than
+repurposing it for existing-analysis replacement or broader metadata.
 
 Read [the earlier native reference inventory](analysis-playlists-next.md),
 [prep contract](rekordbox-prep.md), [PLAYER](PLAYER.md),
@@ -518,8 +526,10 @@ authority/evidence boundaries and shared worker ownership. The original planning
 pass did not authorize runtime work by itself. Sonny has resumed the overhaul
 in the implementation session; retain the separate native publication gates.
 
-Next session should start with the local BPM/whole-tempo reproducer and shared
-pipeline/authority design, while profiling immediate playlist feedback and layout.
+The original local BPM, registration/initial-analysis and immediate playlist
+feedback work below has shipped. Current follow-up starts from the remaining
+unaccepted profile/replacement/metadata and visual/hardware acceptance boundaries
+in HANDOFF/ROADMAP, not by repeating those completed implementation phases.
 Complete autonomous copy-only work before asking Sonny for new native actions.
 Keep user prompts few, specific and supported by a concrete candidate.
 

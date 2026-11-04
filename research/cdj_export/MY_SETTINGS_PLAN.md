@@ -6,16 +6,25 @@ Save to Global / Load Global. Named presets, Follow Global/Custom and automatic
 propagation below remain deferred design, not current behavior. The following
 records the original offline proposal; it must not override current guidance.
 
+Reviewed November3 against release `d08ee91`. The direct USB settings publisher,
+manifest-last recovery and explicit Save/Load Global controls are implemented;
+the original pending-publication checklist below is archival. Current saves pin
+the captured profile digest/presence and manifest bytes before preflight, then
+recheck at commit. A concurrent external edit fails/retries instead of allowing
+an old patch to overwrite newer opaque bytes. Current installed provenance is
+in [HANDOFF](../../docs/HANDOFF.md); broader mapping/hardware gates remain open.
+
 October 28, 2026. Requested behavior and an offline prototype at that time.
 Start with [RBXPORT_HANDOFF](RBXPORT_HANDOFF.md) for export safety, evidence and
 the pinned dual-format source kit. This work adds no live USB write authority.
 
 **Priority:** Sonny subsequently required actual playlist generation/comparison
 before more testing. The [export fixture backend](EXPORT_PARITY.md) now passes
-his approved native-equivalence gate; app integration and the production export
-transaction remain ahead of further My Settings UI/native test work. Keep this
-profile design and tempo proof staged for the developer; do not use additional
-settings experiments as a substitute for completing the export path.
+his approved native-equivalence gate. At that October28 checkpoint, app integration
+and the production transaction preceded further My Settings UI/native work;
+both are now implemented under the current CDJ contract. The historical profile
+design and tempo proof remain reference material; further settings experiments
+require their own scope and cannot substitute for playlist/hardware acceptance.
 
 ## Confirmed user interaction
 
@@ -165,11 +174,12 @@ catalogue records the bounded evidence; it does not authorize any live write.
 The original offline proof receipt remains an honest record from before this
 native comparison.
 
-**Keep Sonny's current ±16 native setting.** It was his deliberate UI change;
-no old preference/profile is restored. The agent has made no USB/global writes
-and has not read native desktop global preferences.
+**Preserve the user's current settings, never restore this checkpoint.** The ±16
+value was his deliberate October28 UI change; a later native reference returned
+to ±10. Neither receipt authorizes restoring either profile today. This offline
+research made no USB/global writes and did not read native desktop global preferences.
 
-Next acceptance steps:
+Original October28 acceptance steps (historical):
 
 1. For other controls, collect one native field change at a time, explicitly
    targeting the disposable test USB. Native automatic application was enabled
@@ -182,7 +192,7 @@ Next acceptance steps:
    `/PIONEER` guard in place. Native UI reopening and CDJ-3000 setting load/behavior
    are later gates; mixer and newer-player behavior require their own coverage.
 
-## Production integration and acceptance checklist
+## Original production integration and acceptance checklist (historical)
 
 The developer can build the logical profile model, field-driven USB editor,
 Global/preset editor, difference summary/button and propagation planner against

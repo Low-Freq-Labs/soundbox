@@ -1,15 +1,17 @@
 # SoundBox player
 
-Current as of 2026-11-02. This is the player reference: shipped behavior,
+Current as of 2026-11-03. This is the player reference: shipped behavior,
 architecture, cache ownership, non-regression rules, validation references, and
 remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck.
 
-Initial shared analysis is installed for bare stereo PCM16/24 WAV44.1/48kHz
-full BPM/Grid+Key and native waveforms. Broader codecs/existing-analysis
-replacement remain gated; [HANDOFF](HANDOFF.md) records exact installed proof.
+Initial shared analysis is installed for full BPM/Grid+Key and native waveforms
+on bare stereo PCM16/24 WAV44.1/48kHz and, through its independent accepted domain,
+bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3. Other profiles and
+existing-analysis replacement remain gated; [HANDOFF](HANDOFF.md) records exact
+installed proof and the published-source versus signed-build provenance.
 
-## November2 installed behavior
+## Current installed behavior — November2–3
 
 The supplied Gorilla Glue RGB screenshot at92pt/s is the fixed color reference.
 Its rendered frame remains pixel-exact. Main-lane RGB evaluates that same
@@ -147,8 +149,9 @@ No next cue or unsupported grid position leaves the countdown blank. This is
 resident render-state work; modes persist without a new timer, seek or recook.
 The selected USB mount/UUID remains bound through deferrals and a song export
 creates no visible playlist. See [the analysis/playlist stage](analysis-playlists-next.md)
-for the bounded detection engine, durable results and outstanding two-way source
-publication acceptance. Existing native/manual grids and source cues are retained.
+for the bounded detection engine, durable results, accepted initial WAV/CBR MP3
+publication and remaining codec/replacement gates. Existing native/manual grids
+and source cues are retained.
 
 The playback clock shows `M:SS/M:SS` (for example `1:23/3:15`). Tracks at least
 one hour long show hours on both sides, such as `0:01:23/1:02:03`. Its monospaced
@@ -302,8 +305,10 @@ Transport controls:
   stem through the audio. It initially follows the first-grid-beat load point.
   After a paused manual playhead move, exactly the next deck-CUE press relocates
   the marker without starting audio; following presses use normal gated preview
-  until the playhead is manually moved again. Hot/memory cue presses never move
-  it. The marker is separate from canonical cue data and is never persisted or
+  until the playhead is manually moved again. Recalling a Memory Cue also moves
+  this temporary anchor to the exact saved position, without quantizing it or
+  creating a cue. Hot Cue recall leaves the anchor unchanged. The marker is
+  separate from canonical cue data and is never persisted or
   exported.
 - Session CUE is an explicit five-state machine: `unset`, `set`,
   `relocation_pending`, `previewing`, and `latched_playback`. Pausing ordinary
@@ -395,7 +400,7 @@ Cue panel:
   admission and drains accepted work before stopping owners. RAM presentation
   alone is not proof of native success; durable intentions survive restart.
 - `source_cue_revision` and `source_cue_refs` retain raw edit identities outside
-  display cues/waveform fingerprints. Snapshot cache schema 7 reads older 4–6
+  display cues/waveform fingerprints. Snapshot cache schema11 reads older4–10
   caches; cached data cannot grant write permission. No whole-library recook is
   required for these fields. Source audio and ANLZ/XML remain untouched.
 - Whole-track and scrolling memory arrows are slightly wider than hot-cue
@@ -453,8 +458,10 @@ This preserves the original painted amount when a wider peak interval contains
 fine gaps, avoiding the brighter unweighted 2-ms trial. Sonny accepted the
 combined comparison for both motion and color. Source/cache samples, palette,
 height curve, overview, BLUE/3BAND and other RGB stops remain unchanged.
-The original wide-zoom color-brightness report is separate and remains open;
-increased wider-view fill is intended. Release/install status is in HANDOFF.
+At that historical checkpoint the wide-zoom color-brightness report remained
+open. The November2 fixed92pt/s reference policy above supersedes those
+zoom-specific color corrections; geometry and increased wider-view fill remain
+separate. Release/install status is in HANDOFF.
 The later RGB overview follow-up matches the main lane's display-space blend and
 bounded faint-only coverage shoulder: below 18%, c′=c×(1+1.5×(1−c/0.18)²);
 stronger coverage receives no lift. The final opaque RGB pixel is decoded once
@@ -570,10 +577,11 @@ Settings exposes three persistent waveform displays:
   one compact height—not three band layers. PWV5 owns color and distant-scale
   amplitude. Its scrolling geometry uses the same signed min/max trace as
   BLUE, with linearly interpolated full-range PWV5 colors on their song clock.
-  At 384 points/s, exact joint pixel area is composited directly and the display
-  offset stays continuous. Other RGB stops apply only a faint-detail shoulder below 18% exact coverage;
+  Every zoom evaluates the fixed92pt/s reference color field and applies the
+  same faint-detail shoulder below18% exact coverage, including384points/s;
   ordinary coverage stays exact. Conditional visible color comes from the
-  joint interval integral. Neither policy smooths or changes source detail.
+  joint interval integral. RGB384 retains continuous display motion. These
+  policies do not smooth or change source detail.
   October 8 color-only correction: a zero PWV5 compact height no longer turns
   its valid RGB code black before blending at wider zooms. Positive color
   weights cancel exactly; a zero weight uses the authored row color. Quiet
@@ -809,7 +817,8 @@ quantization. For tracks up to900seconds without a valid native/manual/saved
 grid, the analyzer may derive a constant-tempo FFT-autocorrelation fallback and
 anchor beat1at exactly`0:00`. Longer sets receive waveform preparation without
 an invented automatic BPM/key or fallback grid; explicit musical analysis remains
-available. The fallback path is NumPy-only and has no runtime JIT.
+available. This beat-grid fallback is NumPy-only and has no runtime JIT; the
+waveform filterbank separately uses SciPy's bounded streaming filters.
 For incomplete imports, Qt/FFmpeg feeds the same analyzer for AAC/ALAC set rips.
 Complete imports use the compact native-rate supplement below. The canonical
 waveform cache's legacy eligibility labels are separate from native CDJ export
@@ -817,7 +826,8 @@ admission. CDJ export captures fresh native identity/analysis and validates actu
 media headers; compatible AAC-in-M4A is supported by that path. ALAC/FLAC need the
 separately accepted compatibility conversion for the conservative original
 CDJ-2000/CDJ-3000 profile. None of this broadens initial source-analysis publication
-beyond its accepted bare-WAV scope. See [the CDJ guide](cdj-usb-export.md).
+beyond the independent accepted bare-WAV and narrow CBR MP3 profiles described
+above. See [the CDJ guide](cdj-usb-export.md).
 
 Fallback/legacy geometry is analyzed at approximately 6144 cells/second from the
 stereo midpoint, which preserves the
@@ -1050,7 +1060,7 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - Derive one footprint-matched LOD and select one peak level. The scrolling
   RGB 576/864 source footprint is one logical pixel; other detail policies are
   described above. High-rate detail never changes authored palette or timing;
-  those two RGB stops additionally use its interval occupancy for encoded contrast.
+  color sampling uses the fixed92pt/s reference independently of geometry LOD.
 - Print height and amplitude-weighted RGB onto a fixed, global song-coordinate
   attribute lattice, then translate those attributes. The lattice stores no
   alpha or vertical coverage, so it is not a pre-rendered waveform texture and
@@ -1060,9 +1070,10 @@ measurements. The compact-cache and source-clock contracts above take precedence
   continuous fractional translation. BLUE rounds only its display offset:
   physical-pixel increments through 384 points/s, logical points at 576–1500.
   Its position error is at most half the chosen increment.
-  RGB 384's exact-area compositor and continuous translation are one accepted
-  combination; neither the earlier brightness boost plus continuous motion nor
-  a detail-replacing envelope is that correction. Earlier one-attribute
+  RGB384's earlier exact-area compositor with continuous translation was one
+  accepted historical combination. The current faint shoulder applies at384
+  too; its continuous motion remains. A detail-replacing envelope is a different
+  policy. Earlier one-attribute
   integer-motion experiments had different source/coverage rules and were
   rejected; their evidence is historical, not acceptance of the current path.
 - **The display-stream LOD is footprint-matched and `kLodBias` must stay 0.** A physical
@@ -1077,9 +1088,10 @@ measurements. The compact-cache and source-clock contracts above take precedence
   fractional LOD stranded the most unresolvable values under each pixel.
   The taps still earn their keep by feeding `profile_coverage` a dense
   profile to integrate; they simply must not buy undisplayable detail.
-- **Select one conservative level for the physical source footprint.** Compact
+- **Select one conservative level for the declared source footprint.** Compact
   signed mips use integer millisecond divisors; legacy V5 uses its persisted
-  ladder. Wide stops use the same physical-pixel footprint as the middle stops;
+  ladder. RGB576/864 use their accepted logical-pixel footprint; other stops
+  use physical pixels. Wide stops use the same footprint as the middle stops;
   the former half-pixel source footprint exposed undisplayable detail.
   Earlier power-of-two PWV alias measurements are historical, not a description
   of the compact signed ladder.
@@ -1089,7 +1101,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
 - **Preserve source cells at close zoom.** BLUE/RGB use held signed extrema;
   3BAND connects the original 150-Hz rows linearly. The former paired-row
   rule, four-pixel close footprint and height compensation are historical.
-- **Close detail uses a physical-pixel source footprint.** One selected signed mip
+- **Close detail uses a physical-pixel source footprint, except RGB576/864's
+  accepted logical-pixel footprint.** One selected signed mip
   feeds the fixed four-attributes-per-pixel song lattice; it does not broaden
   the final spatial integral or apply divisor-dependent height gain.
 - Rebuild the small private attribute buffer only when analysis, zoom, Retina
@@ -1106,8 +1119,8 @@ measurements. The compact-cache and source-clock contracts above take precedence
   frame, or refresh seam. Height and hue move together, while final edge
   antialiasing remains tied to the destination pixel. The scrolling lane uses
   joint signed-interval integration without the overview vividness curve.
-  BLUE and RGB 384 composite their exact area directly. Other RGB stops retain
-  exact area except for the bounded faint-detail shoulder described below. Historically, boosting 20% coverage to nearly 49%
+  BLUE composites exact area directly. Every RGB stop retains exact area except
+  for the bounded faint-detail shoulder described below. Historically, boosting 20% coverage to nearly 49%
   made saturated red/orange edges visibly pulse even at 24 px/s. The small
   BLUE/3BAND overview retains the continuous cubic vividness curve for true
   subpixel peaks; RGB overview uses the main lane's bounded faint-only shoulder. This distinction affects only compositing, never height,
@@ -1131,14 +1144,12 @@ measurements. The compact-cache and source-clock contracts above take precedence
   a horizontally hidden color sample cannot tint a visible RGB edge. RGB blends
   that encoded result with the encoded background and decodes the final opaque
   pixel once for the sRGB attachment. BLUE retains linear-light integration.
-  RGB 576/864 first weight encoded contrast against the background by the
-  represented fine-interval area divided by coarse-interval area. This is
-  attached to the song lattice before premultiplication; no final-pixel blur,
-  per-frame palette gain, new cache format or source read is added. The original
-  physical-footprint level supplies the reference; 1x output is unchanged when
-  both level selections agree.
-  RGB 384 keeps that exact area. Other RGB stops apply a hue-independent
-  visibility shoulder only when exact coverage c is below 0.18:
+  RGB uses the fixed92pt/s reference color field, including its25% fine-area
+  correction, at every zoom. This replaces the historical576/864-specific
+  fine/coarse occupancy correction without changing those stops' geometry or
+  motion. No final-pixel blur, per-frame palette gain, new cache format or source
+  read is added. All RGB stops apply a hue-independent
+  visibility shoulder only when exact coverage c is below0.18, including384:
   c′ = c × (1 + 1.5 × (1−c/0.18)²). It is smooth and monotonic, adds at most
   0.04 coverage, leaves zero empty and joins unmodified exact area at 0.18.
   Premultiplied color scales by c′/c, preserving hue. The prior broad occupied-
@@ -1313,8 +1324,9 @@ scheduling priorities, not genre presets. The head is bounded to30minutes/96M
 mono samples; the tail is streamed and checked before carrying the last measured
 tempo to its duration. `analysis_scope` and sample counts record the measured span.
 Native/manual grids and source cues remain authoritative. Detected analysis is
-captured provenance; the separate accepted initial WAV analysis profile publishes
-native components. Other codecs/replacement profiles remain gated. Legacy
+captured provenance; the separately accepted initial WAV and narrow CBR MP3
+analysis profiles publish native components. Other codec/replacement profiles
+remain gated. Legacy
 constant-v1 results remain usable; partial/inconclusive reanalysis preserves
 previous components for the same bytes and records their actual engine provenance.
 This separate explicit detector does not replace the waveform fallback analyzer

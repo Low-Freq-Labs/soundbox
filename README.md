@@ -236,8 +236,9 @@ exact originals retained. Timing-unproven, cloud-deferred and unavailable files
 remain explicit; see [compatibility limits](docs/cdj-media-compatibility.md).
 Device originals stay untouched.
 Native registration accepts the separately proven MP3, AAC/ALAC M4A, FLAC and
-PCM16/24 WAV/AIFF profiles. Initial native analysis has the narrower accepted
-stereo PCM16/24 WAV44.1/48kHz profile. Unsupported or changed sources retain
+PCM16/24 WAV/AIFF profiles. Initial native analysis has independently accepted bare
+stereo PCM16/24 WAV44.1/48kHz and bare MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3
+profiles. Unsupported or changed sources retain
 their intention and original import destination.
 
 **Library.** Reads the live rekordbox database (`master.db`, via a read-only
@@ -285,9 +286,10 @@ completely, with longer tails streamed and the grid continued
 at the last measured tempo. Inconclusive results preserve prior musical data for
 the same audio. Detected results are saved in SoundBox and
 can follow the same audio into a later native track ID. Existing saved grids/cues
-are preserved. Automatic initial BPM/grid/key/waveform publication is accepted for bare stereo
-16/24-bit integer WAV44.1/48kHz. Other codecs/existing-analysis replacement remain
-separate profiles; see [the exact stage](docs/analysis-playlists-next.md) and the
+are preserved. Automatic initial BPM/grid/key/waveform publication is accepted separately for
+bare stereo16/24-bit integer WAV44.1/48kHz and bare MPEG-1 CBR/no-Info/Xing
+stereo44.1kHz MP3. Other profiles/existing-analysis replacement remain
+separate gates; see [the exact stage](docs/analysis-playlists-next.md) and the
 [upstream comparison](docs/rbxport-reference-audit-2026-10.md). Five grid buttons occupy the left, enabled for a ready accepted
 track with Analysis Lock off; the BPM field after the first-beat button shows
 `000.00` while empty. On an accepted constant grid, type a BPM and press Enter:
@@ -374,8 +376,9 @@ FAT32/exFAT, with a destructive confirmation. HFS+ is not currently offered.
 Source metadata/cues are captured fresh; unsupported imported/XML analysis fails
 explicitly. Song columns match your regular browser; double-click loads actual
 USB audio/cues. Device views remember your tab, hierarchy, selection and scroll.
-The information button opens Summary and Info, with editable artwork inside Info
-and optional metadata columns, hidden until selected. The dialog opens before
+The information button opens Summary and Info. Desktop tracks allow local
+metadata/artwork edits; USB-track information is read-only. Optional browser
+metadata columns remain hidden until selected. The dialog opens before
 artwork resolution; Info uses a compact three-column form that fits at its default
 size, with larger centered artwork and a full-width Comments row. Summary uses
 a larger cover alongside inline labels and track values. The edit note sits bottom
@@ -620,7 +623,9 @@ a device: Sync, **Verify export…** (references and sizes),
 also offer **Repair managed library…** to inspect inventory, restore missing
 owned Rockbox files and clean interrupted writes. Existing damaged or unexpected
 occupants fail closed; Repair does not silently replace arbitrary corruption.
-Generic volumes additionally offer **Erase all files from device…**. Whole-device erase names the exact
+The filesystem-device workflow offers **Erase all files from device…**; native
+CDJ USBs use their separate **Reformat USB…** menu and guarded format workflow.
+Whole-device erase names the exact
 volume in a destructive confirmation, removes the SoundBox manifest last, and
 normally ejects only after a complete result. Stock-only MA446 iPods have a
 separate MP3/WAV two-phase path: read-only database plan, explicit confirmation,
@@ -788,7 +793,7 @@ columns, and sidebar pane proportions reopen exactly from the last clean close.
     ./check.sh            # lint/build/types + all offscreen/Cocoa tests; zero skips
     ./check.sh --render   # + offscreen UI render to /tmp
     ./check.sh --native   # compatibility alias; native tests always run
-    ./build_native.sh     # CoreAudio/Metal dylib only
+    ./build_native.sh     # CoreAudio/Metal deck + process-guard dylibs
     ./build_app.sh        # PyInstaller → dist/personal/Soundbox.app (self-signed)
 
 Python 3.14, deps in `requirements.txt` (venv at `.venv/`). Logs at

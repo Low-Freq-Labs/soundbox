@@ -1,13 +1,13 @@
 # SoundBox exploratory ideas
 
-Reviewed October 25, 2026. These are concepts requiring a UX workshop with Sonny,
+Reviewed November3,2026; October25 ranking findings remain dated evidence. These are concepts requiring a UX workshop with Sonny,
 not active tasks or approved changes. Committed sequencing belongs in
 [ROADMAP](ROADMAP.md); current player behavior belongs in [PLAYER](PLAYER.md).
 The original July 22 proposal is preserved in Git history.
 
 Keep the existing interface focused. Choose small, useful additions rather than
-implementing this list wholesale. Preserve source audio and the read-only
-rekordbox boundary.
+implementing this list wholesale. Preserve source audio and the independently
+accepted rekordbox read/write boundaries; an idea never grants source authority.
 
 ## Artwork decisions as ranking evidence — October 25 findings
 
@@ -53,16 +53,17 @@ replacement or an implemented training system.
 Recovery counts and database digests remain backend diagnostics, not stock-device
 dashboard rows. Embedded-art extraction is not shipped; its precedence needs a
 separate design protecting manual choices and sticky removals. Stock, Rockbox,
-generic USB and future CDJ capabilities remain distinct.
+generic USB and the implemented dedicated CDJ capabilities remain distinct.
 
-## SoundBox playlists in rekordbox — September 26 concept
+## SoundBox playlists in rekordbox — delivered ordinary workflow
 
-The October 26 [approved prep plan](rekordbox-prep.md) now includes creating real
-single-My-Tag intelligent playlists, behind explicit validation/review gates.
-Transferring ordinary SoundBox playlists remains the separate concept below.
+The September26 concept is implemented for ordinary playlist/folder CRUD,
+registered-track membership and independently accepted direct imports. The
+requested existing Collection/custom-playlist upgrade is complete. Artists stays
+virtual-only. See [the workflow](shared-library-workflow-plan.md) and
+[current scope](ROADMAP.md); this is no longer an unimplemented transfer idea.
 
-Sonny wants SoundBox-curated playlists available in rekordbox for DJ use,
-potentially through explicit database writing. Workshop the transfer UX,
-supported integration route, conflicts and recovery before implementation.
-This idea grants no write authority: the current rekordbox database remains
-strictly read-only, and it is separate from iPod playlist reconciliation.
+The October26 intelligent-playlist proposal remains separately gated: creating
+single-My-Tag intelligent playlists has not been accepted. Broader intelligent/
+cloud mutations and new write domains require their own proof and authorization.
+No entry in this ideas page expands any accepted source API.

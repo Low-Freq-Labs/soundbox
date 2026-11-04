@@ -77,8 +77,8 @@ The176-file first-party source inventory records measured/static/deferred depth;
 this is not a claim that every workload or dependency has been profiled.
 
 This broader pass first passed2406tests as runtime d5cb4451… and remains included
-in the current night delivery below. Current provenance is in HANDOFF. The next
-pass addresses completion copies, fuzzy matching, thumbnails, USB status and
+in the current night delivery below. Current provenance is in HANDOFF. That
+completed night pass addresses completion copies, fuzzy matching, thumbnails, USB status and
 provider lifetime work; [measurements and limits](performance-audit.md) distinguish
 implemented findings from retained tradeoffs. Fresh guards and recovery remain.
 

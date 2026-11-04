@@ -1,5 +1,13 @@
 # SoundBox architecture and release audit
 
+Historical audit and dated implementation checkpoints. The original findings,
+test counts and proposed sequence below describe their stated baselines, not
+current unresolved work. Public/personal composition, owned worker retirement,
+recoverable state publication and the strict zero-skip gate subsequently shipped.
+Current behavior/release evidence is in [HANDOFF](HANDOFF.md), current measured
+costs in [performance-audit](performance-audit.md), and remaining work in
+[ROADMAP](ROADMAP.md).
+
 September 27, 2026. Source baseline: `97fc023`, initially clean `main`.
 This is a source audit and implementation plan, not a completed refactor or a
 public-release certification. No application behavior or installed bundle changed during the initial audit.

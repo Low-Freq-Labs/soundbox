@@ -1,6 +1,7 @@
 # SoundBox device layouts
 
-Reviewed October 26, 2026. Dated hardware sections retain their historical
+Reviewed November3, 2026 against application source release `d08ee91`.
+Dated hardware sections retain their historical
 observations; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
@@ -16,7 +17,7 @@ does not make a device writable by itself.
 | Rockbox | `/.rockbox/` | Export `/Music`, `/Playlists`, and `/.soundbox` only when the filesystem is FAT32 |
 | Stock iPod | `/iPod_Control/` with an iTunes database area | Read-only readiness by default; guarded playlist sync only for the explicit MA446/MP3/WAV allowlist |
 | Dual boot | Both layouts | Repeatable reference-counted, single-copy playlist sync on FAT32 MA446 |
-| USB | Neither firmware layout | Native CDJ pilot: one recoverable classic + Plus generation on FAT32/exFAT |
+| USB | Neither firmware layout | Recoverable classic + Plus playlist/collection export on FAT32/exFAT; hardware limits below |
 
 The mounted on-disk layout selects the export contract automatically; SoundBox
 does not guess which firmware the user most recently booted. A `/.rockbox/`
@@ -172,7 +173,7 @@ playlist limit. Those settings and their memory tradeoffs belong to the user.
 Changing them does not signal managed-library drift. The Playlist Catalogue sorts
 alphabetically. Because physical
 Rockbox kept presenting that order despite controlled FAT timestamps, each
-Rockbox-only M3U8 filename receives a zero-padded sequence such as
+composite Rockbox M3U8 filename receives a zero-padded sequence such as
 `01 - HOUSE.m3u8`. Stock iTunesDB titles and SoundBox device rows remain clean
 and unnumbered. The Device Playlists tab can move managed rows and explicitly
 publish that one order to both firmware paths without duplicating media;
@@ -506,8 +507,11 @@ smart-rule header word that Clickwheel normalizes, reparses the final bytes, and
 compares existing playback state, track identities, selected order, and built-in
 smart rules before a commit is even possible.
 
-The format check is destination-specific. Rockbox/generic exports continue to
-receive original FLAC/AIFF/24-bit/float/high-rate media. The MA446 planner alone
+The format check is destination-specific. Rockbox/generic exports retain their
+supported FLAC/AIFF/24-bit/float/high-rate formats under their destination policy.
+Disposable artwork/display-metadata derivatives preserve audio essence and
+technical properties; this does not promise byte-identical exported containers.
+The MA446 planner alone
 omits unsupported extensions and WAV/MP3 encodings from its rendered playlist,
 reports the exact omitted count, and previews affected titles/reasons before a
 Cancel-default confirmation. It never edits the source playlist. This boundary
@@ -703,13 +707,16 @@ separately validated `iTunesDB` implementation.
   above. A differing manifest-owned file is required repair work and is
   atomically replaced.
 - Copies land as `.sbpart` and atomically rename only after completion.
-- Normal Sync cleanup is limited to manifest-owned SoundBox paths. A separate
-  **Erase all files from device…** command is the only exception: it requires
+- Filesystem/stock/composite normal Sync cleanup is limited to manifest-owned
+  SoundBox paths. The separate filesystem-device **Erase all files from device…**
+  command is the explicit whole-volume exception for that workflow: it requires
   explicit confirmation naming the exact mounted volume, removes every child
   beneath that volume (including unknown content and the stale manifest), and
   then requests normal macOS eject. The manifest is removed last, so a
   partial erase remains visibly invalid and cannot masquerade as success.
-  Stock and dual-boot iTunes/iPod volumes never expose this command.
+  Stock and dual-boot iTunes/iPod volumes never expose this command. Generic CDJ
+  USBs instead use the separately confirmed **Reformat USB…** action described in
+  [the CDJ contract](cdj-usb-export.md); they do not expose filesystem-device Erase.
 - Normal Verify checks managed sizes/references; Deep Verify rehashes every
   managed track, cover, and playlist.
 - Idle Eject requests normal macOS eject without library verification. macOS
@@ -830,11 +837,11 @@ Later physical passes linked and displayed the curated stock artwork, enriched
 artist/title records, and proved the format guard on Rekordbox `GENERES / HOUSE`:
 the six included safe tracks played without a reboot while `Loot` and
 `DONTTRUSTME` were omitted. Two checked playlists were then deleted together in
-one successful guarded operation. The iPod is now a clean stock baseline with
-zero indexed tracks and zero regular user playlists; the last verified iTunesDB
-SHA-256 is
+one successful guarded operation. At that historical checkpoint the iPod had a
+clean stock baseline with zero indexed tracks and zero regular user playlists.
+That checkpoint's iTunesDB SHA-256 was
 `c235f57378793d1db96d3f5b059bdb01e1262e04b9b54375a2c78cce6770123c`,
-`Play Counts` is absent, and eleven recovery points remain. A later Favorites
+`Play Counts` was absent, and eleven recovery points remained. A later Favorites
 export added 73 safe tracks. The first Videos deletion attempt removed only
 Apple's ordinary-MHLP smart alias because the real database used a different ID
 for the canonical MHSD-5 record. The corrected snapshot now prefers the

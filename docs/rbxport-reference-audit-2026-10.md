@@ -7,6 +7,12 @@ were downloaded at immutable revisions into private audit evidence; no upstream
 app/test script was run against the live library and no new dependency was added.
 Installed provenance and release validation are in [HANDOFF](HANDOFF.md).
 
+Reviewed November3 against source release `d08ee91`. Algorithm and validation
+statements below describe the October30 audit; later component scheduling,
+bounded saved-analysis reuse and tempo refinements are documented in
+[PLAYER](PLAYER.md) and [the performance audit](performance-audit.md). They do not
+change the pinned upstream source or broaden native source-write acceptance.
+
 ## Sources and useful boundaries
 
 | Repository | Revision examined | Finding / decision |

@@ -1,6 +1,7 @@
 # Shared app and optional personal modules
 
-Updated October 26, 2026. Product direction requested by Sonny: one shared application,
+Allocation requested October26,2026; implementation reviewed November3 against
+source release `d08ee91` and installed build157. Product direction: one shared application,
 nearly identical public/personal UI, optional installed modules adding a small
 number of capabilities. Sonny clarified that the public product remains the
 complete music manager, spanning iPod/MP3 players and USB export. Personal
@@ -53,9 +54,12 @@ they are not a completed legal or dependency clearance.
 |---|---|---|---|
 | App layout, theme, search, tables, sidebar, saved columns/window | Keep | Same | Shared shell |
 | Read-only live rekordbox and XML refresh | Keep | Same | Core Connections card; validated database-location selection; shared snapshot/XML adapters; validate supported versions |
-| My Tag / Hot–Memory cue / beat-grid source edits | Explicit authority gate; no general-library compatibility claim | Accepted exact-library pilot | Shared core APIs; native acceptance binds library/schema/version, closed rekordbox/agent and recovery; manual BPM has a separate gate; smart-list creation remains disabled |
+| My Tag / Hot–Memory cue / beat-grid source edits | Explicit authority gate; no general-library compatibility claim | Accepted exact-library domains | Shared core APIs; native acceptance binds library/schema/version, closed rekordbox/agent and recovery; manual BPM retains its independent capability; smart-list creation remains disabled |
+| Ordinary native playlist/folder CRUD, membership and sibling reorder | Same explicit authority boundaries | Accepted exact-library domains | Shared worker/recovery; reorder has an independent default-false capability; no intelligent/cloud mutations |
+| Bare native registration and initial full BPM/Grid+Key/waveform publication | Same explicit authority boundaries | Accepted registration plus independent WAV/narrow CBR profiles | No existing-analysis replacement, gain, broader metadata or unaccepted codecs; source selection never provisions authority |
 | Collection, artists, custom playlists, ordering, drag/drop | Keep | Same | Shared library/curation controller |
-| Local audio import, bookmarks, bounded missing-link repair | Keep | Same | Shared imports; no source moves/retags |
+| Local audio import, bookmarks, bounded missing-link repair | Keep | Same | Shared imports preserve originals outside the separately accepted recoverable conversion/locator domains; no general retagging or cleanup |
+| Confirmed Collection-and-disk Delete / recoverable compatibility conversion and locator update | Shared core with independent exact-source authorities | Same accepted-domain limits | Explicit targets/recovery, common source lane and fresh native guards; no permanent deletion, Trash emptying or general metadata rewrite |
 | Title/artist overrides, cleanup rules, aliases | Keep | Same | Shared curation; personal values are data |
 | Local fuzzy artist-merge suggestions | Keep | Same | `Suggest artist merges…` does not require online provider |
 | Global hides, per-playlist removals, Graveyard restore | Keep | Same | Shared additive curation |
@@ -64,7 +68,7 @@ they are not a completed legal or dependency clearance.
 | Autoplay up/random/down, now-playing navigation | Keep | Same | Shared navigation |
 | Background analysis, reanalysis, cache reclamation | Keep | Same | Shared task ownership and resource policy |
 | Local cover selection and sticky cover removal | Keep | Same | Local picker works with no provider |
-| Artist catalog, local avatar upload/rename/delete | Keep | Same | Hide only provider-specific URL action |
+| Artist catalog, local avatar upload/rename/delete | Keep | Same | Hide only provider-specific URL action; atomic artist batches preserve newer covers/manual blocks |
 | Default-photo pool and balanced assignments | Keep | Same | Personal photos are user data, never bundled |
 | Existing curated JPEGs and provenance | Keep readable | Same | Removing provider never removes stored art |
 | Embedded artwork import from local audio | Planned | Same when built | Not a shipped feature; read-only extraction, explicit precedence |
@@ -88,8 +92,8 @@ they are not a completed legal or dependency clearance.
 | Backup/restore | Keep | Same | Staged restore/recovery and serialized core state ownership |
 | Diagnostic logging / actionable errors | Keep | Same | No user paths/library data bundled as examples |
 | Exact native traces, developer scripts and legacy XML CLI | Not product UI | Developer tools | Separate tools; do not treat as personal feature unlock |
-| Native CDJ USB pilot | Intended shared capability, release withheld | Personal testing build | Integrated dedicated backend; physical and dependency/distribution review remain open |
-| CDJ research harnesses and hardware fixtures | Exclude | Developer workspace only | Only the compiled dedicated renderer enters the personal pilot; no private fixture is bundled |
+| Packaged native CDJ USB pilot | Backend packaged; public release withheld | Personal testing build | Both frozen profiles include the dedicated renderer; physical and dependency/distribution review remain open |
+| CDJ research harnesses and hardware fixtures | Exclude | Developer workspace only | Only the compiled dedicated renderer enters app profiles; research code and private fixtures are not bundled |
 | Other stock models, schema-2→3 migration, Windows | Not yet supported | Same | Personal profile does not expand firmware authority |
 
 No personal library, photos, absolute source paths, device captures, credentials

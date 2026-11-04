@@ -1,5 +1,12 @@
 # Efficiency audit — October 27, 2026
 
+Historical baseline, candidate experiments and dated implementation checkpoints.
+The build131/133 installation statements, per-zoom color policies and original
+proposed changes below belong to those checkpoints. Current installed/source
+provenance is in [HANDOFF](HANDOFF.md), player policy in [PLAYER](PLAYER.md),
+measured follow-up costs in [performance-audit](performance-audit.md), and active
+work in [ROADMAP](ROADMAP.md). These older candidates are not a current backlog.
+
 Evidence disposition, October28: Sonny accepted the build and closed further
 waveform comparison/tuning for now. After the directory audit, he authorized
 removing the private comparison archive and obsolete experiment/test output.

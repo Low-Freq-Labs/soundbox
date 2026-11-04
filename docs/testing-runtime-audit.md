@@ -1,12 +1,19 @@
 # Test runtime audit — November 2, 2026
 
-The suite's growing encrypted transaction and crash-recovery coverage explains
-most of its roughly 22-minute runtime. Running independent offscreen modules in
+This is the dated November2 runtime investigation and its implementation
+checkpoints. The current discovered gate and installed provenance are in
+[test-release-gate.md](test-release-gate.md) and [HANDOFF.md](HANDOFF.md); the
+November3 final2531-case gate took686.389s across its test phases, not the older
+22-minute baseline below.
+
+At the audited baseline, growing encrypted transaction and crash-recovery
+coverage explained most of the roughly22-minute runtime. Running independent offscreen modules in
 three isolated processes reduces that cost without dropping cases, weakening
 encryption or shortening recovery matrices. Cocoa drawable/playback tests remain
 serial and run after every offscreen worker finishes.
 
-The last documented focused test audit was the October 1 waveform review. The
+At the November2 investigation, the preceding focused test audit was the
+October1 waveform review. The
 complete, zero-skip release gate was introduced October 2 (`72d06f7`); subsequent
 delivery notes recorded complete passes and feature-specific regressions. This
 review additionally measured every offscreen case and inspected suite isolation,

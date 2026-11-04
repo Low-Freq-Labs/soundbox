@@ -6,6 +6,12 @@ restore target; use `HANDOFF.md` for the latest curated baseline, installation
 and acceptance gates. Preserve generation-58 recovery until separately reviewed
 hardware acceptance; automated fixtures are not that acceptance.
 
+Reviewed November3 against release `d08ee91`. This document records the dated
+September implementation and runs, including failures before later fixes. Current
+installed provenance and gates are in [HANDOFF](HANDOFF.md); later source-level
+efficiency/correctness evidence is in [the performance audit](performance-audit.md).
+Historical exact-byte proofs do not waive today's stable captured-epoch checks.
+
 ## Inventory before consolidation
 
 Identity abbreviations: P = mount path, T = root st_dev mount token,
@@ -68,7 +74,7 @@ unchanged Sync, overlapping drops, cancel/retry, idle eject after success and
 failure, reconnect. No live transaction, forced eject, SeaDrive setting change,
 commit or push is authorized implicitly by this audit.
 
-## Implementation and current acceptance
+## September26 implementation and acceptance
 
 The coordinator now gates discovery, dashboard reads, planning/commit, browser
 mutations, verification, and normal eject. Engines retain their firmware guards.
@@ -89,7 +95,8 @@ The supplied 16:07:40 offscreen Python crash exposed an observed artwork lifetim
 bug: an old finished callback could delete a new ArtFillWorker. The source now
 retains the slot through finished delivery, retires the captured instance, and
 suppresses artwork restarts during shutdown. Three deterministic regressions
-cover these boundaries. Reinstallation must wait for the active hardware run.
+cover these boundaries. At that checkpoint reinstallation waited for the active
+hardware run; this is not an instruction to reinstall the current application.
 
 The 16:15 hardware run failed at 16:24:48 during stock compatibility planning,
 after media verification (2577 hits / 164 proof reads / 20.10 GB). A remaining
@@ -97,7 +104,8 @@ stat-only check rejected AD MIX HOSTED BY SKULLION SHADEZ. No commit started.
 The fix removes this redundant compatibility check and the second global
 preflight stat sweep: stable per-source byte proofs remain valid after later
 cache eviction, and execution still requires the exact acquired digest. Added
-regressions cover both windows. Hardware acceptance remains outstanding.
+regressions cover both windows. Hardware acceptance of that fix was outstanding
+at this checkpoint; the later dated results below retain their separate scope.
 
 ## Offline capture findings and regressions
 

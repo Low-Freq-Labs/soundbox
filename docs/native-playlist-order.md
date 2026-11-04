@@ -23,6 +23,16 @@ sidebar feedback. Failed persistence leaves the visible order unchanged. Source
 work uses the existing common worker, source lock, closed-native-app guards,
 encrypted DB/XML pairs, journal, exact receipt replay, and native readback.
 
+November3 retention/retry hardening keeps this same authority and lane. Folder
+deletion captures exact descendant ContentIDs/UUIDs and persists Collection
+retention before writer admission; late callbacks and fresh writer guards reject
+changed bindings. Captured intentions or exact retained historical receipts
+support failed-acknowledgement restart without guessing deleted browser membership.
+Historical pin recovery may coexist with later native playlist edits, while
+rebasing later pending app commands requires a strict proven committed edge
+matching the current catalog/XML. Retired legacy evidence missing original UUIDs
+remains guarded. No reorder, source-write or hardware acceptance is broadened.
+
 Reordering requires the independent `PlaylistAuthority.reorder_accepted` flag.
 It defaults to false, including when loading existing CRUD authorities. Neither
 choosing a source nor replaying a private fixture grants it.

@@ -38,7 +38,9 @@ any held cue's original page/slot until release.
 Cue keys use press/release, including latching through the configured Play action.
 On an accepted library with rekordbox/agent closed, empty slots create without
 starting preview. Q off keeps the exact captured playhead; Q on snaps new cues to
-the nearest current beat. Existing cues always trigger their exact saved positions. Hot cues keep ordinary
+the nearest current beat. Existing cues always trigger their exact saved positions.
+Memory Cue recall also sets the regular temporary CUE anchor to that exact saved
+position; it does not quantize or create a cue. Hot cues keep ordinary
 playback running; while paused they retain hold-preview and Space-latch behavior.
 The Q button is global and persistent. **Beatgrid** provides bindable actions
 for Set bar start, Shift left/right, Double/Halve BPM and Toggle Quantize. These

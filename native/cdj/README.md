@@ -5,11 +5,14 @@ GPL-2.0-or-later. Upstream crate sources/notices are retained under `vendor/rbxp
 The only crate-manifest change explicitly selects their nested workspace; the
 upstream workspace omits its Tauri member. `scripts/check_cdj_vendor.py` verifies
 243 upstream crate files with that manifest adaptation normalized. Upstream
-Markdown is preserved verbatim; its relative links refer to the original project.
+Markdown is preserved verbatim and describes the pinned upstream tree. Links to
+upstream documentation or crates omitted from this vendor subset may not resolve
+locally; do not modify the pinned files to repair those links.
 Full upstream documentation: <https://github.com/chrisle/rbxport>.
 
 `./build_cdj.sh` builds with the existing isolated Rust1.99 toolchain and locked
-dependencies. `--test` also runs pagination and research-adapter tests. The fixture
+dependencies. `--test` runs release-profile library and binary regressions,
+including pagination/merge checks, plus the research-adapter tests. The fixture
 adapter shares `complete_metadata`; it no longer has a separate one-page writer.
 
 The executable accepts only explicit local workspaces. It renders both library
@@ -27,7 +30,12 @@ See [the complete contract](../../docs/cdj-usb-export.md).
 
 The `analyze` command reads one already captured local audio file through pinned
 rbl-audio/rbl-analysis. It checks rate/channel budgets before collecting and caps
-mono PCM at300seconds/32million samples. Constant-tempo rows use SoundBox's
+the retained mono head at thirty minutes/96million samples, then streams and
+checks the remaining decode through EOF. Tempo beyond that head is extrapolated;
+it does not claim to detect later transitions. The complete input duration is
+bounded to24hours. The default adaptive/attack-placement analysis and independent
+key-only path preserve component provenance. Beat rows use SoundBox's
 [beat, milliseconds, BPM] order. It has no desktop source-write API. Result
 persistence, cancellation and worker ownership live in the parent; shared source
-analysis acceptance is tracked in docs/analysis-playlists-next.md.
+analysis acceptance is tracked in [the analysis plan](../../docs/analysis-playlists-next.md).
+Current installed provenance and release validation are in [HANDOFF](../../docs/HANDOFF.md).

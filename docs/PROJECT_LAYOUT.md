@@ -1,13 +1,40 @@
 # Project layout and retention
 
 
-November3 full wrap-up retired the four exact obsolete temporary app copies and
-their shared rollback root after verified installation. Only the current app and
-active source remain; small receipts, native recovery, originals and required
-fixtures are retained. Current provenance is in [HANDOFF](HANDOFF.md).
+Reviewed November3,2026. This describes the checkout and retained evidence,
+not the installed app's live library or waveform caches. Current app/source
+provenance and exact rollback location are in [HANDOFF](HANDOFF.md).
 
-Reviewed November2, 2026. This describes the checkout, not the installed app's
-library or waveform caches.
+## Current retention — November3 night
+
+Personal build157 is installed at `/Applications/Soundbox.app`. One previous
+runtime d5cb4451… rollback remains while Sonny tests the update; it has not been
+accepted for retirement. Redundant public/personal dist app/COLLECT and
+PyInstaller work plus the obsolete73219a59… rollback were retired after installed
+normal startup verification. Exact paths and1,372,048,124logical regular-file
+bytes are recorded in `post-install-retirement.json` under
+`~/Library/Logs/Soundbox/correctness-efficiency-2026-11-03/`.
+Source, active venv, native/CDJ/check outputs, small receipts, recovery, conversion
+originals and required reference fixtures remain. The older retention/cleanup
+sections below are dated history; they do not define today's rollback or output
+inventory. No app-only cleanup permits deleting source audio or recovery.
+
+## Documentation consistency — November3
+
+The repository-wide pass inventories74 tracked Markdown files:38 current
+first-party guides/plans/research notes,11 archived records and25 pinned upstream
+references. Current first-party files receive full-content review with code checks
+for suspect claims. Archives retain dated evidence, with historical-scope, retained-
+path and link checks; their original pending statements are not today's TODOs.
+Vendored references retain upstream bytes and describe the pinned source subset,
+not SoundBox's current feature/acceptance status. Links into unvendored upstream
+material may not resolve locally. No upstream semantic audit is implied.
+Per-file scope, findings, hashes and link results are retained under
+`~/Library/Logs/Soundbox/correctness-efficiency-2026-11-03/documentation-consistency/`.
+The pass corrects44documents. Project-local Markdown path/anchor checks pass;
+58vendor-document links target omitted upstream material, with all243pinned
+crate files verified unchanged. The installed binary is unchanged by this
+documentation-only correction.
 
 ## Active checkout
 
@@ -22,7 +49,7 @@ library or waveform caches.
 | `build/native/`, `build/check/` | Current development native library and latest release reports |
 | `build/rekordbox-write-proof/` | Small private copy-only prep-write evidence; no live-write authority |
 | AppData `rekordbox_recovery/` | Private native-reference evidence, encrypted baselines and shared Tag/Cue/Grid receipts; preserve unresolved recovery |
-| AppData `rekordbox-*-authority.json` | Nine independent accepted domains: tags, cues, grid, playlists, registration, initial analysis, removal, media conversion and media locator. Manual BPM/reordering have additional gates; source selection never grants permission |
+| AppData `rekordbox-*-authority.json` | Ten independent accepted domains: tags, cues, grid, playlists, registration, initial WAV analysis, separate CBR MP3 analysis, removal, media conversion and media locator. Manual BPM/reordering have additional gates; source selection never grants permission |
 | `soundbox-ipod-ref/`, `soundbox-waveform-ref/` | Private read-only regression fixtures and recovery/research captures |
 | `soundbox-cdj-ref/` | Private read-only CDJ research fixtures |
 
@@ -44,7 +71,7 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## Current accepted retention — November2
+## Historical accepted retention — November2
 
 The full wrap-up verified the final personal build154, exact signed Contents,
 native startup and current curation before retiring seven known obsolete
@@ -72,7 +99,7 @@ Sonny explicitly requested reducing accumulated diagnostics, backup copies and
 extra app/packaging storage. Removed22,117 generated files, all five obsolete app
 bundles, duplicate dist/packaging, compiler/Python caches and loose scratch files.
 At that October31 checkpoint the installed verified app remained and no rollback
-bundle remained. Current retention is recorded in the November2 section and HANDOFF. Build retains
+bundle remained. Current retention is recorded in the November3 section and HANDOFF. Build retains
 about18MiB of checked native/CDJ/analysis binaries, release reports and small proof
 records. Source, unfinished research and regression tests are retained.
 
@@ -170,7 +197,7 @@ provenance, validation and cleanup receipts are in [HANDOFF](HANDOFF.md).
 ## Final directory audit — October 28
 
 At the earlier October28 directory audit, application source was unchanged.
-The later CDJ/browser pilot is current work described in HANDOFF. Git integrity,
+The then-later CDJ/browser pilot has since been installed; HANDOFF records current status. Git integrity,
 tracked/untracked inventory, branch synchronization, dependency health, required fixture manifests,
 and the existing release-test report inventories were rechecked. No stray app
 bundles, nested repositories, broken links or conflict markers were found outside
@@ -206,8 +233,8 @@ folders were part of the archive and counted once. Filesystem available-space
 changes may differ because of APFS sharing/snapshots. The temporary
 `soundbox-source-staging` receipts were left alone.
 
-Only `build/native/`, `build/check/` and `build/rekordbox-write-proof/` remain in
-active build output (about 3 MiB allocated). Generated caches and duplicate app/
+At that October28 checkpoint, only `build/native/`, `build/check/` and
+`build/rekordbox-write-proof/` remained in active build output (about3MiB allocated). Generated caches and duplicate app/
 packaging copies previously moved to Trash are now absent; Trash was already
 empty when this deletion pass began. Maintained developer harnesses remain in
 `scripts/`, `tests/` and `research/`. No whole-Trash cleanup was performed.

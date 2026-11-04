@@ -1,6 +1,6 @@
 # Release test gate
 
-Updated November2, 2026. `./check.sh` builds native deck/CDJ code, runs lint/types, validates the
+Updated November3, 2026. `./check.sh` builds native deck/process-guard/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
 stay together and the complete inventory is reconciled across workers. All
@@ -218,7 +218,9 @@ integrations and run native ORM/SQLCipher queries over disposable RAM in the
 explicit isolated check. Clang static audit receipts are additional evidence,
 not a replacement for the mandatory Cocoa/native gate.
 
-Final night delivery for source `fc696312…` passes2531cases:2467offscreen in
+Final November3 night delivery for runtime fingerprint `fc696312…` (published
+application source `d08ee91…`; installed signed base `d19f3eb…`, dirty=true)
+passes2531cases:2467offscreen in
 618.725s and64Cocoa in67.664s, zero skips/expected failures. The full gate was
 rerun after the catalog alternating-row contrast correction. Both signed public/
 personal packages and isolated native ORM/SQLCipher probes pass; installed normal

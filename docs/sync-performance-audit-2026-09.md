@@ -5,9 +5,18 @@ starting another live planner, or reading device media. Validation uses small,
 synthetic devices. See `HANDOFF.md` for the installed build and remaining live
 acceptance; source tests are not a device throughput benchmark.
 
+Reviewed November3 against release `d08ee91`. All run times, counts and installation
+instructions below belong to the dated September campaign. Current source
+acquisition requires an exact digest and a stable captured filesystem epoch;
+old proofs never bless an unchecked newer epoch. Current installed provenance and
+remaining physical gates are in [HANDOFF](HANDOFF.md), with later component
+measurements in [the performance audit](performance-audit.md).
+
 ## September 28: ordinary Sync trusts committed inventory
 
-Sonny confirmed that SoundBox exclusively manages this iPod's music. The
+For this September schema-3 iPod campaign, Sonny confirmed that SoundBox
+exclusively managed this iPod's music. This is not exclusive authority over CDJ
+USB libraries: rekordbox and SoundBox remain equal CDJ exporters. The
 expected external edit is a Rockbox append of an already-owned song to a
 playlist. The desktop therefore uses incremental composite Sync by default:
 
@@ -112,8 +121,10 @@ of the caller's original plan.
 - The generic filesystem exporter still verifies existing destination bytes
   and prepares its selected derivatives before copy. Batching removes repeated
   work across overlapping playlists in that batch, but does not turn schema-2
-  export into the schema-3 incremental planner. Its staging behavior remains a
-  separate follow-up; never route a composite iPod through it.
+  export into the schema-3 incremental planner. The later lifecycle consolidation
+  bounds generic execution to one captured source/derivative at a time; the
+  whole-selected-set staging described by this baseline is superseded. Never
+  route a composite iPod through the generic exporter.
 - Classic-iPod write pacing remains 150 ms per relevant operation. USB copy,
   on-device verification, database/artwork validation, and final dashboard
   refresh remain real costs. Unchanged payloads must not be recopied to make
@@ -122,7 +133,7 @@ of the caller's original plan.
   cache miss may hydrate a complete cloud file; an evicted file with changed
   metadata must be verified again. No retry policy can safely invent its bytes.
 
-## Acceptance
+## September acceptance checklist
 
 Regression checks cover retry without source rehash, same-size edits with
 preserved mtime, corrupt/missing proof records, unreadable and continuously
@@ -131,11 +142,12 @@ before device writes, a clean subsequent plan, unchanged stock compatibility,
 changed-format rejection, overlapping playlists, combined initial drops, and
 generic queue arrivals/device boundaries.
 
-After installation, run one normal confirmed sync and then an unchanged sync.
+The campaign proposed a normal confirmed sync followed by an unchanged sync.
 Compare phase timings, full source-proof bytes, derivative/copy counts, and
 finalization time. Compare a combined overlapping-playlist drop with separate
 generations using synthetic fixtures first. Do not claim an end-to-end speedup
-until the installed application has completed those real-device checks.
+until the installed application has completed those real-device checks. This
+historical checklist grants no new live run or application restart.
 
 ## Build 108 live follow-up
 
@@ -149,6 +161,8 @@ in CRANKDAT's per-file materialization. SeaDrive concurrently removed 83 files /
 10,149 MB from its cache. The failed source was then a zero-block placeholder
 with only ctime changed relative to its latest proof. The original generation
 58 manifest remained exact and rollback reported no error. This is failed
-hardware acceptance: initial preflight refresh does not cover eviction between
-preflight and staging. Fix that boundary with exact source/payload verification
-and one-track staging before asking for another full live retry.
+hardware acceptance for build108: initial preflight refresh did not cover eviction
+between preflight and staging. The subsequent lifecycle consolidation added exact
+source/payload capture and one-track staging; see [its dated results](ipod-lifecycle-audit-2026-09.md).
+The November3 pass additionally pairs every expected digest with the stable
+captured epoch. Neither fix establishes an unperformed physical retry.

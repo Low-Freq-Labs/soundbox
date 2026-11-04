@@ -1,6 +1,7 @@
 # Native CDJ USB export
 
-Updated October29, 2026. The personal app prepares classic Device Library and
+Reviewed November3, 2026 against application source release `d08ee91`.
+The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
 and waveforms from his export. Exact firmware, the wider performance/control
 matrix and newer OneLibrary hardware remain separate acceptance. Installed
@@ -30,7 +31,10 @@ Unsupported schemas preserve data. Classic-only libraries acquire Plus
 from their native records and cue metadata, without rebuilding their media.
 
 `cdj_source` captures the read-only desktop DB/WAL snapshot, selected IDs/UUIDs,
-metadata/counters, current DB cues and source playlist order. Accepted source
+metadata/counters, current DB cues, source playlist order and the complete rendered
+global My Tag tree. The revision binds these exact captured inputs, including
+their order; selected content-file/tag membership queries share that snapshot.
+Accepted source
 Tag/Cue/Grid and durable native-playlist edits drain before capture; a second
 capture detects concurrent changes. Native playlist selections rebind by stable
 ID after that drain, so a rename/membership save is reflected and a deleted
@@ -49,8 +53,13 @@ confirmation. Drops prepare selected new/changed inputs only. Unchanged native
 records may be adopted by source identity, counters and metadata, without reading
 USB media. Existing audio placement survives display-only changes. Updating or
 removing a playlist retains collection songs and performs no orphan-media sweep.
-A repeated unchanged export writes nothing. The track menu immediately right of
-Q in the installed October29 detection-stage release
+A repeated unchanged export writes nothing. Pure catalog reconstruction may be
+reused only under the current render policy, exact captured input signatures and
+fresh matching committed catalog/profile bytes; source, target and recovery
+guards still run. An external player-profile edit can require one manifest-only
+inventory refresh during explicit export, preserving all live catalog, media
+and profile bytes. Profile-only changes do not signal song/playlist drift.
+The track menu immediately right of Q, introduced in the October29 stage,
 also exports the loaded native song directly to the collection, including on
 an empty USB, with no synthetic playlist. Its mount token/UUID survives discovery
 and source-save deferrals; locally bound recovery remembers interrupted standalone
@@ -111,8 +120,9 @@ Native complete-file comparisons cover tempo, Mic Echo 1/2/3⁄4, Headphones B
 None/Stereo/Mono Split, Auto Cue Level Hot Cue and Talkover −∞, including reverse
 changes. Mic Echo is a numerator/denominator pair; Talkover −∞ uses two separated
 bytes, preserving intervening mixer fields. The five sample files were restored
-byte for byte after the final comparison. Current USB tempo is ±10; the earlier
-±16 capture is historical. Other choices come from the bounded format catalogue;
+byte for byte after the final comparison. The October29 reference ended at ±10;
+the earlier ±16 capture is historical. Neither observation states the user's
+current preference. Other choices come from the bounded format catalogue;
 this is not a claim that every choice has been exercised on hardware.
 
 The information button opens Summary immediately, deferring artwork lookup/decode
@@ -122,9 +132,10 @@ anchors selectable technical details in a bordered panel. Lyricist is omitted
 from Info and Comments spans the full row. The local-edit note sits bottom left,
 opposite Close. Global My Settings and Keyboard scroll at the right window edge.
 Album Artist, Track Number, Disc Number, Original Artist, Composer, Remixer and
-Mix Name are omitted. Supported edits are SoundBox-local metadata used for export;
-BPM remains tied to the beatgrid controls. Info fields also appear as optional
-browser columns. Prepared row cache schema2 and library cache schema8 carry the
+Mix Name are omitted. Supported desktop-song edits are SoundBox-local metadata used for export;
+BPM remains tied to the beatgrid controls. USB-song Track Info is read-only and
+offers no desktop source-edit authority. Info fields also appear as optional
+browser columns. Prepared row cache schema3 and library cache schema11 carry the
 new display inputs without resetting curation, analysis or artwork. New optional
 fields stay hidden when older header state is restored; deliberate selections
 that exceed the viewport can scroll. Progress/count/Cancel share a fixed-height
@@ -168,7 +179,7 @@ A fifth capture isolates Sonny's native ±10→±16 tempo change. The full resul
 148-byte profile matches the precomputed codec output; this does not accept
 other settings mappings or live SoundBox publication. The [developer pickup
 note](../research/cdj_export/RBXPORT_HANDOFF.md#developer-pickup--start-here)
-collects the current reproduction command, implementation sequence and evidence.
+collects the reproduction command, original implementation sequence and evidence.
 
 Classic `export.pdb` changed only its header sequence; all 15 analysis companions
 and five settings/profile files stayed byte-identical through the override.
@@ -214,8 +225,9 @@ CDJ-3000 on October 28. Record exact firmware before the next campaign.
 Acceptance is against a real rekordbox-exported control on those decks, not just
 our own parser's output.
 The output need not reproduce irrelevant stale bytes, but all required structures,
-references and observable features must work. Rekordbox's desktop database and
-source audio remain read-only.
+references and observable features must work. This exporter reads the desktop
+database and source audio without changing them. Independently accepted desktop
+edit/conversion domains are separate; see [the prep contract](rekordbox-prep.md).
 
 ## Where the existing work lives
 
@@ -247,8 +259,10 @@ preserves a 40-byte page header, upward-growing row heap, backward row indexes
 and original padding/deleted-row bytes on round-trip. Track rows have a 136-byte
 header and 21 string offsets. The observed index/data page arrangement is a
 property of the small reference exports, not a universal two-page-per-table rule.
-The current `build_file` assembler has one data page per table and is explicitly
-for small libraries; full-library pagination/capacity remains unimplemented.
+The historical Python `build_file` assembler has one data page per table and is
+for small research libraries. The integrated `native/cdj` renderer and shared
+fixture adapter implement scalable pagination; the Python prototype is not the
+production writer.
 
 OneLibrary, formerly Device Library Plus (`exportLibrary.db`), is a different
 compatibility target, not a universally optional cosmetic sidecar. AlphaTheta's
@@ -257,32 +271,37 @@ describes classic Device Library for CDJ-3000 and OneLibrary requirements for
 CDJ-3000X and other named newer products. Consult the current
 [USB export compatibility guide](https://rekordbox.com/en/support/usb-export/)
 before each hardware campaign; record the exact model, firmware, rekordbox version,
-filesystem and library format. No OneLibrary writer is integrated into SoundBox;
-a pinned upstream writer is now extracted in the private source kit described
-in the backend handoff. A classic-only result must not be presented as support
+filesystem and library format. SoundBox integrates both writers through
+`native/cdj`, with pinned crate sources in its vendor subtree. The extracted
+private source kit in the historical handoff records the earlier research stage.
+A classic-only result must not be presented as support
 for every CDJ/XDJ.
 
 The shipped player already imports rekordbox analysis and authoritative live-DB
 cues; see [PLAYER](PLAYER.md). Those readers and SoundBox's canonical analysis
-provide useful inputs, not proof of valid device files. The bridge expresses
-PQTZ units, cue semantics and proposed waveform streams; complete container/tag
-encoding, path consistency and actual on-deck behavior still need validation.
+provide useful inputs, not proof of valid device files. The research bridge
+expresses PQTZ units, cue semantics and proposed waveform streams; it is not the
+integrated binary encoder. The runtime renderer has offline container, metadata
+and path checks; wider on-deck behavior remains a separate acceptance matrix.
 The October 27 strict research contract separates `DisplayWaveformFields` from
 byte-preserving `NativeWaveformStreams`. It no longer labels three-byte display
 RGB as packed PWV5 or averages spectral bands into a purported exact PWV7.
 Invalid beat numbers, nonrepresentable tempos, cue identities, endpoints and
 out-of-range values are rejected instead of substituted or clamped. These are
 field/provenance boundaries, not a complete binary encoder or hardware proof.
-Future export must capture fresh authoritative DB cues: accepted cue edits can
+Export captures fresh authoritative DB cues: accepted cue edits can
 be DB-only, leaving ANLZ cue sections stale. Drain accepted saves before capture;
 bind verified grids, original waveform sections and cue identities to the same
 track/audio source. Display palettes, GPU mips and RAM-only previews confer no
 device serialization authority. Unknown original sections remain preserved.
 
-Current SoundBox candidate policy allows MP3, WAV, AIFF/AIF and FLAC; it excludes
-AAC/ALAC/M4A/MP4 from future CDJ export. This is SoundBox's present policy in
-`track_analysis.export_eligibility`, not a claim that CDJs cannot play those codecs.
-A filename allowlist does not replace per-model codec/sample-rate/bit-depth checks.
+The current CDJ planners admit `.mp3`, `.wav`, `.aif`, `.aiff`, `.flac` and `.m4a`
+source suffixes. They still require verified native source metadata/analysis and
+captured media; this allowlist does not certify every contained codec or player.
+`track_analysis.export_eligibility` governs an analysis path, not this exporter
+allowlist. The original CDJ-2000 and CDJ-3000 have different lossless-format
+profiles; see [media compatibility](cdj-media-compatibility.md). Filename checks
+never replace actual format checks or model/firmware acceptance.
 
 ## What the recorded experiments establish
 
@@ -361,8 +380,9 @@ CDJ contract above now defines the scoped exception and remaining hardware gates
 ordinary stock, dual and Rockbox/filesystem exporters retain their guard. Do not borrow iPod recovery
 as permission to modify a CDJ USB.
 
-Once the declared device/feature matrix passes, wire the backend into the shared
-app with honest capability reporting and the normal release/install gates.
+The shared app integration and normal release/install gates are complete for the
+current personal release; the wider device/feature matrix remains open. Keep
+capability reporting bounded to the recorded evidence.
 Distribution review of any scaffold/spec/dependency is separate from personal
 hardware acceptance. Manual grid editing and writing playlists into rekordbox's
 desktop DB are separate features, not prerequisites silently included in this task.

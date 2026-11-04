@@ -4,8 +4,10 @@ This audit separates three identities: rekordbox owns native song/playlist IDs,
 SoundBox owns its curation and durable edit intentions, and SeaDrive supplies the
 audio behind a filesystem path. A visible Finder entry, a populated waveform,
 or a running tray application does not prove that audio can currently be read.
-The fixes described here are installed in the November2 delivery. Exact binary,
-curation and validation provenance belongs in [HANDOFF](HANDOFF.md).
+The November2 fixes described here remain in the November3 build157/source
+release `d08ee91`. Dated counts/provider observations below are historical;
+exact current binary, curation and validation provenance belongs in
+[HANDOFF](HANDOFF.md).
 
 ## Completed migration and dated source proof
 
@@ -66,6 +68,9 @@ Registry credentials, account tokens and private acquisition workflows do not
 belong in this audit or its output.
 
 ## Provider behavior
+
+These provider/version observations were recorded November2; they are not a fresh
+service, installed-version or provider-readiness check.
 
 The locally installed SeaDrive is3.0.27 (`com.seafile.seadrive`). SeaDrive3 uses
 macOS File Provider; opening its Finder root can start the extension. Reading
@@ -144,10 +149,12 @@ only already-proven pure work is reused within its bounded lifetime.
 ## Retry and cancellation limits
 
 Python acquisition streams one source into disposable local staging while hashing,
-then inspects or transforms that local snapshot. With an expected digest, exact
-captured bytes remain authoritative across metadata drift. Without one, acquisition
-requires a stable device/inode/size/mtime/ctime observation, with one unstable-capture
-retry. Partial or failed captures are discarded. Local staging space is checked
+then inspects or transforms that local snapshot. An expected digest binds captured
+bytes, allowing metadata drift before capture; it never blesses an unverified
+replacement epoch. Every capture, with or without that digest, requires matching
+canonical path and before/opened/closed/after device/inode/size/mtime/ctime, with
+one unstable-capture retry. Partial or failed captures are discarded. Local staging
+space is checked
 before capture; the configured budget allows one source and working derivative.
 
 Only macOS CloudStorage ENEEDAUTH receives the two cancellable three-second

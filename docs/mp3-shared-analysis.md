@@ -1,10 +1,14 @@
 # MP3 shared-analysis follow-up
 
-Started November 2, 2026 at Sonny's request. **The accepted CBR profile is installed
-and enabled in personal build155.** It covers initial full BPM/Grid+Key/waveforms
+Started November 2, 2026 at Sonny's request. **The accepted CBR profile remains
+installed and enabled in current personal build157/source release `d08ee91`.**
+Its original production delivery was build155; the dated checkpoints below retain
+that history. It covers initial full BPM/Grid+Key/waveforms
 on bare unlocked MPEG-1/no-Info/Xing CBR, stereo44.1kHz. VBR, Info/gapless, mono
 and48kHz MP3 publication remain gated. The separate WAV v1 scope is unchanged.
 Current runtime provenance stays in [HANDOFF](HANDOFF.md).
+Leave the installed app running; historical closed-app work instructions below
+are not current permission to stop it, repeat a pilot or add generated songs.
 
 ## Implemented preparation
 
@@ -97,7 +101,8 @@ Their exact source digests/sizes are in `reference-audio-manifest.json`. The sho
 clip supplies independent duration/bitrate evidence for VBR bucket research.
 These are disposable generated test audio, not copies of Sonny's music.
 
-Sonny operates native app inputs, as required by the project instructions:
+The completed November2 native-reference procedure was operated by Sonny,
+as required by the project instructions. It is retained as history, not a new task:
 
 1. Import the three clips into rekordbox with automatic analysis off; leave them
    unanalyzed. Capture a stable read-only baseline after native startup/import.
@@ -171,7 +176,7 @@ test inventory; a second run was interrupted for the audit-status correction.
 Neither is recorded as a passing gate. Compact evidence is retained under the
 new private root; those were preparation-stage passes.
 
-The expanded final bare `./check.sh` now passes all2178cases:2114offscreen in
+The expanded November2 pilot-stage bare `./check.sh` passed all2178cases:2114offscreen in
 500.178s plus64Cocoa in67.790s, zero skips/expected failures, with lint/types,
 native/Rust builds/tests and required fixtures passing. It includes the CBR row
 proposal, exact source-pilot adapter and independent VBR reconstruction. Review
@@ -181,11 +186,12 @@ closed apps, unchanged source baseline/crown state and all9existing authorities.
 Those checks preceded the explicitly approved source pilot; the source receipt
 and native acceptance are retained separately.
 
-The final production `./check.sh --render` passed2200cases:2136offscreen479.024s
+The initial CBR production `./check.sh --render` passed2200cases:2136offscreen479.024s
 plus64Cocoa67.962s, zero skips or expected failures. Types cover103core files.
 Fresh strict signature, native code-section parity, all151first-party package
 modules compared to source, no research/test PYZ modules and isolated native smoke
-passed. Build155/runtime fingerprintd9e5f2d5… is installed; signed Contents,
+passed. Build155/runtime fingerprintd9e5f2d5… was installed at that checkpoint;
+signed Contents,
 native startup, saved white icon, current curation and9old+1new authority verify.
 One metadata-copy attempt restored154safely; the retry used the platform helper
 and one transient rollback root, with no library rollback or forced termination.
@@ -207,25 +213,29 @@ Sonny completed the installed file drop and reported successful behavior with sl
 adding/updating. A fresh read-only snapshot proves committed native581972561:
 120BPM/8B,64beats273–31773ms, exact target/contentFile rows, three packet hashes
 and original audio. Operation45a4b2b1-e484-43b5-9c7b-5e22a249c0a7 is terminal.
-Current95imports/11analyses/93bindings supersede the preinstall baseline; queues
-are empty. The small receipt is in production-delivery/installed-import-check-readback.json.
+The resulting95imports/11analyses/93bindings superseded that preinstall baseline;
+queues were empty at the check. These are historical counts, superseded by newer
+user state and HANDOFF. The small receipt is in
+production-delivery/installed-import-check-readback.json.
 
-The active follow-up measures all native command latency using existing private
-DB copies. Sonny is keeping SoundBox closed; leave it closed during this work.
-This changes the next task, not the accepted MP3 publication scope.
+The then-active follow-up measured native command latency using existing private
+DB copies while Sonny kept SoundBox closed. That work and closed-app instruction
+are historical; current build157 is running for his use. The performance work
+did not broaden the accepted MP3 publication scope.
 
-The subsequent native-command performance package is installed in personal155
+The subsequent native-command performance package was installed in personal155
 with runtime fingerprint8882e36f… (distinct from the earlierd9e5…CBR delivery).
 All2219tests,152packaged first-party modules, native code/data section parity,
-signature and installed isolated CoreAudio/Metal checks pass. All11analyses,
-93bindings and10authorities are preserved. Sonny requested SoundBox remain
-closed, so the new package has no normal curated launch/UI latency measurement.
+signature and installed isolated CoreAudio/Metal checks passed. All11analyses,
+93bindings and10authorities were preserved. Sonny requested SoundBox remain
+closed at that checkpoint, so that package had no normal curated launch/UI latency
+measurement.
 See HANDOFF and the performance audit for its exact scope and remaining costs.
 
-The subsequent second native-command performance delivery is installed at22:56
+The subsequent second native-command performance delivery was installed at22:56
 in personal155, runtime33689af7…/2266tests/154Python modules. All three native
-binaries match tested code/data; installed isolated native player/process checks
-pass. Full private CBR workflow now measures12.030s (fixture renderer, no detector
-or GUI). Current11analyses/93bindings/10authorities and newer UI state are exact.
-The real app remains closed for Sonny's next session. Exact provenance and
+binaries matched tested code/data; installed isolated native player/process checks
+passed. Full private CBR workflow then measured12.030s (fixture renderer, no detector
+or GUI). At that checkpoint11analyses/93bindings/10authorities and newer UI state were exact.
+The real app remained closed at that checkpoint. Exact current provenance and
 per-command limits are in HANDOFF/performance audit; no MP3 scope is broadened.

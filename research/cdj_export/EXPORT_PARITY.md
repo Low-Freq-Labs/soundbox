@@ -10,7 +10,15 @@ explicitly selected this gate:
 - Preserve/report all raw database mismatches; never relabel them byte-identical.
 - Same required file set, with no unreported extra or missing export files.
 
-## Current result
+Reviewed November3 against application source release `d08ee91`. The result below
+is the retained October28 native-reference receipt, not a rerun or a new hardware
+claim. The fixture adapter now shares `native/cdj::complete_metadata` with the
+integrated application renderer; pagination, fresh desktop DTO capture and the
+dedicated CDJ transaction are implemented separately from this standalone CLI.
+Current contracts and installation evidence are in [the CDJ guide](../../docs/cdj-usb-export.md)
+and [HANDOFF](../../docs/HANDOFF.md).
+
+## October28 result
 
 The backend has generated the five-track **smol test** playlist locally. The
 native-equivalence gate **passes** for this fixture. Literal whole-export byte
@@ -61,10 +69,13 @@ The isolated Rust 1.99.0 toolchain is under
 `soundbox-cdj-ref/toolchain-1.99/install/`; its downloaded components were checked
 against the official manifest hashes. No shell profile or global toolchain was
 changed. Cargo dependencies/build output stay under the private reference root,
-with two compile jobs. The upstream kit remains byte-identical to its pinned
-source manifest; corrections live in our separate adapter.
+with two compile jobs. The retained private upstream kit remains an archival
+reference. Current Cargo manifests use the checked-in pinned vendor closure under
+`native/cdj/vendor/rbxport` and the shared SoundBox metadata wrapper; corrections
+do not modify the vendor sources. Fixtures and the isolated toolchain remain
+private prerequisites, not assets supplied by cloning this repository.
 
-Current artifacts:
+Retained October28 artifacts:
 
 - `soundbox-cdj-ref/native-parity-export/`: complete generated native-layout tree.
 - `native-parity-export-comparison.json`: selected gate, every file hash, all
@@ -92,9 +103,9 @@ render both databases and extended tags, and republish the native analysis paths
 It does **not** copy the reference library databases into output. It carries the
 five profile files as deliberately selected export inputs.
 
-The first generated result exposed real upstream omissions. The separate adapter
-now supplies input-owned content-link/counter fields and the independent My Tag
-master identity, legacy counter/date/publication strings, background and sort
+The first generated result exposed real upstream omissions. Metadata completion,
+now shared with `native/cdj`, supplies input-owned content-link/counter fields and
+the independent My Tag master identity, legacy counter/date/publication strings, background and sort
 preferences, native null/zero/search defaults and all four native indexes.
 Legacy tag sequence conversion now preserves the shared canonical order rather
 than subtracting one from an already device-level sequence. These changes are
@@ -110,38 +121,41 @@ escapes fail, while random encryption alone remains visible as a raw failure.
 
 The fixture DTO was prepared from the captured native **exported metadata** plus
 the captured five audio payloads. It is an input to the renderer, not evidence
-that live SoundBox source selection/curation integration already works. The
-building agent must replace fixture acquisition with SoundBox's verified source
-snapshot/selection adapter and supply fresh authoritative cues and metadata.
+that live SoundBox source selection/curation integration works. The application
+now captures a fresh source snapshot/selection through `soundbox.cdj_source`,
+supplying authoritative cues and metadata; those independent source/transaction
+checks do not change what this historical fixture establishes.
 Do not infer export authority from browser-cache rows. My Tag master identity and
 per-track counters must be explicit verified inputs; do not hard-code this user's
 values or assume the My Tag master ID equals the desktop library DBID.
 
-## Limits before app integration or hardware acceptance
+## Standalone scope and remaining acceptance
 
-- The metadata-completion adapter currently rejects a track table exceeding its
-  bounded one-page fixture limit. Underlying upstream pagination exists, but
-  complete new-row/page-slot handling for these extra legacy fields is not yet
-  integrated. This is not a full-library exporter.
+- The original one-page metadata-completion limit has been removed in the shared
+  renderer, with pagination/slot regressions. This five-track receipt still does
+  not establish full-library hardware capacity or performance.
 - Media/analysis/profile preparation uses explicit captured local inputs. Live
-  library selection, SoundBox overrides, new analysis authoring and edit freshness
-  still need the application adapter. A single passing WAV fixture does not
+  library selection, SoundBox overrides and edit freshness use the separate
+  application adapter; new native source-analysis publication has its own accepted
+  format-specific authorities. A single passing WAV fixture does not
   prove arbitrary codecs, Unicode/long paths, folders, updates or scale.
 - The fixture has no artwork, memory cues or saved loops. Existing hot-cue/grid
   bytes match native exactly; missing feature references remain explicit.
-- This is a fresh one-shot fixture renderer. Managed ownership, coexistence,
-  incremental sync, cancellation and coordinated failure recovery are not a
-  production CDJ transaction yet. Upstream manifest/locks/sync records are kept
+- This is a fresh one-shot fixture renderer. It does not implement the production
+  transaction's managed ownership, coexistence, incremental sync, cancellation or
+  coordinated failure recovery. Upstream manifest/locks/sync records are kept
   in build records for diagnosis rather than claimed as SoundBox's contract.
 - No live USB writer is added, no source database/audio/global preferences are
-  modified, and the installed app is untouched by this parallel work. Existing
-  production exporters keep their `/PIONEER` guard. Both profiles remain excluded
-  from any claim of shipped CDJ support.
+  modified by this fixture command. Ordinary stock/dual/Rockbox production
+  exporters keep their `/PIONEER` guard; only the dedicated integrated CDJ
+  boundary has scoped publication authority. Current personal runtime support
+  does not close public distribution or wider hardware acceptance.
 - The accepted fixture gate is a prerequisite, not CDJ recognition/behavior
   acceptance. No additional native/deck tests are being requested in place of
   remaining implementation. Newer-hardware acceptance remains separate.
 
-The immediate next implementation is live SoundBox DTO acquisition and scalable
-legacy metadata rendering, followed by the dedicated guarded CDJ transaction.
-Keep [My Settings](MY_SETTINGS_PLAN.md) work sequenced behind getting this export
-path integrated; its field prototype does not substitute for playlist export.
+Live SoundBox DTO acquisition, scalable legacy metadata rendering and the guarded
+CDJ transaction have since been integrated. The original [My Settings](MY_SETTINGS_PLAN.md)
+proposal is historical; production uses explicit44-field USB/Global controls,
+without named presets or automatic propagation. Broader native mappings and
+model/firmware/control acceptance remain separate gates.

@@ -3,8 +3,10 @@
 Historical evidence; dated status and instructions below apply only to their
 original checkpoints. Current behavior and priorities are in [PLAYER](../PLAYER.md),
 [ROADMAP](../ROADMAP.md) and [HANDOFF](../HANDOFF.md).
-Original `build/` evidence paths now resolve beneath the external archive listed
-in [project layout](../PROJECT_LAYOUT.md). Inspect old scripts before reuse.
+Original `build/` paths are historical evidence locators. Some private archives
+have since been retired; [project layout](../PROJECT_LAYOUT.md) distinguishes
+retained receipts from deleted material. Old paths do not guarantee retention
+or authorize replay; inspect retained scripts before reuse.
 
 Dated validation on 2026-07-23:
 

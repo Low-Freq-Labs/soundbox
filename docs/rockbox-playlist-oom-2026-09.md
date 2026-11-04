@@ -1,7 +1,11 @@
 # Rockbox playback OOM investigation — September 27, 2026
 
-The inspection below describes the pre-fix installed build. Subsequent user
-request removes all sync preference writes; see the follow-up at the end.
+The inspection below describes the September27 pre-fix installed build. The
+subsequent user request removed all sync preference writes; see the follow-up.
+Reviewed November3 against release `d08ee91`: sync still preserves user-owned
+Rockbox preferences. All device/config observations and proposed physical trials
+below are dated investigation history, not current live state or authorization.
+Current installation and acceptance limits are in [HANDOFF](HANDOFF.md).
 
 ## Conclusion and scope
 
@@ -14,9 +18,9 @@ No OOM was reproduced or allocator trace captured in this investigation.
 The reported symptom is a mid-song stop with “Playlist OOM”; repeated Play attempts
 eventually resume at the same position without reboot. The most actionable lead
 is background database work: the saved config enables it although the user does
-not use Database. SoundBox forces that setting and a minimum 10,000-entry playlist
-allocation. Both policies need review. Background allocation contention is a
-hypothesis, not a diagnosis.
+not use Database. The inspected old SoundBox policy forced that setting and a
+minimum10,000-entry playlist allocation; both were subsequently removed.
+Background allocation contention is a hypothesis, not a diagnosis.
 
 Evidence is private and ignored under
 `soundbox-ipod-ref/playlist-oom/20260927-223541/`: scoped inventory, copied firmware/
@@ -266,7 +270,8 @@ Read-only inspection of the captured official v4.0-final source establishes:
   System / Debug / View battery (`battery_read_info`). This is still the same
   hardware sensor, not an independent measurement of battery-terminal voltage.
 
-Next physical comparison: same wired playback with Bluetooth positively off,
+The September30 proposed physical comparison was the same wired playback with
+Bluetooth positively off,
 recording raw debug voltage before playback and after any forced restart,
 plus exact warning/reset behavior and elapsed time. Repeated Bluetooth-on/off
 comparisons may isolate the added load/control path. If failure persists,

@@ -20,7 +20,12 @@ CRUD and registered-track membership passed separate October30 native acceptance
 and now have their own production authority and app integration. New-track
 registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
-are installed. Broader analysis replacement/codecs/gain/metadata remain gated. The current shared-library transition is in
+are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
+separately accepted initial full-analysis authority; it never inherits the WAV
+authority. These paths remain in the November3 build157/source release; exact
+provenance is in [HANDOFF](HANDOFF.md). Other analysis profiles, existing-analysis
+replacement, gain and broader metadata remain gated. The current shared-library
+transition is in
 [shared-library-workflow-plan.md](shared-library-workflow-plan.md).
 
 ## Original October26 scope, with subsequently accepted grid behavior
@@ -56,7 +61,9 @@ above govern current work; they do not broaden Tag/Cue/Grid permissions.
 - Unchecked setting **Include rekordbox tracks that aren't in a playlist**.
   Off retains the current playlist-based scope and Sonny's ALL LOCAL workflow;
   on includes the broader active Collection. Preserve hides. Default-off excluded
-  tracks do not enter background preparation. No separate Unfiled view.
+  tracks do not enter background preparation. No separate Unfiled view. This was
+  the original proposal; current native Collection reads all active supported
+  local audio records independently of playlist membership, preserving hides.
 - Automatic saves; no ordinary Save buttons, pending-edit chores, or Undo/Redo
   in v1. Group rapid nudges after 250 ms inactivity with a one-second maximum.
   Capture cue positions/targets immediately. Verify before declaring success.
@@ -263,8 +270,9 @@ MPEG fields, loops, comments and colors must never be normalized to new defaults
 Native also touches the selected ALL LOCAL node's timestamp in
 `masterPlaylists6.xml`, without changing `djmdPlaylist`. SoundBox's DB-only pilot
 passed native creation/deletion acceptance with XML and ANLZ unchanged; that
-timestamp update is unnecessary for the accepted integration. No SoundBox analysis
-or companion-XML writer is justified.
+timestamp update is unnecessary for the accepted cue integration. This cue proof
+grants no analysis or companion-XML write scope; separately accepted domains keep
+their own explicit authorities.
 
 `soundbox.rekordbox_cues` is a **pure row planner**, without SQL/file access or a
 live-write API. It binds raw track/cue/aggregate revisions and exact deletion
@@ -316,8 +324,10 @@ text-focus boundaries remain. New Command-number defaults yield to preexisting
 explicit custom shortcuts. Preview remains usable without write authority.
 
 Three raw snapshot queries capture source revisions and native cue identities
-outside normalized display dictionaries. Instant-paint schema 7 reads older 4–6
-caches, which remain unverified for editing until fresh source load. These fields
+outside normalized display dictionaries. The cue milestone used instant-paint
+schema7 and read older4–6 caches. Current `libcache` uses schema11 and reads
+schemas4–11; every cached view remains unverified for editing until fresh source
+load. These fields
 do not alter waveform fingerprints or force recooking. Cue saves publish only a
 new target Track/Library view and live markers, without seeking/reloading audio,
 rebuilding browser rows or reparsing the entire library. Tag saves still refresh
@@ -349,8 +359,10 @@ Q toggle; cue creation remains exact when Q is off.
 Milestone 2 and its installed branding/theme UI pass were accepted by Sonny on
 October 26. Cue editing, responsive session overlays and the Text color menu
 correction preceded milestone 4. Single-tag intelligent-playlist creation and the
-default-off Collection setting follow the grid review. Playlist-only scope is
-unchanged. Ask Sonny for specific native UI actions when reference evidence is
+default-off Collection setting were then-next proposals. Intelligent-list creation
+remains gated; current native Collection includes all active supported local audio,
+not only playlist references. Ask Sonny for specific native UI actions when
+reference evidence is
 required; do not drive rekordbox remotely.
 
 ## Milestone 4 — grid source acceptance and desktop controls
@@ -470,7 +482,11 @@ A fresh library application releases completed grid overlays/pins for external
 rekordbox corrections. The native audio callback never enters the source writer
 or waits on its lock.
 
-Nudges coalesce after 250 ms of inactivity, with a one-second maximum group age.
+The original grid-controller RAM FIFO coalesces nudges after250ms of inactivity,
+with a one-second maximum group age. Current ordinary native/import gestures use
+`PrepEditController`: each intention is durable before presentation and the owned
+pump wakes on the next event turn when eligible. The original FIFO behavior below
+does not replace that persistence contract.
 Ordered offsets are retained, so crossing zero and reversing does not resurrect a
 clipped beat. Discrete edits queue in order. A cue created while a grid save runs
 is immediately usable and saves next through the same owner. Fresh cue revisions
@@ -538,7 +554,9 @@ Library/cache/source state. Saving requires an exact base match, source metadata
 Analysis Lock and the full native pure transform/end bounds. Before native end
 metadata arrives, provisional doubling omits the final extrapolated half-beat;
 the checked preview reconciles that trailing boundary without moving audio.
-Source conflicts cancel the unconfirmed tail; normal quit drains accepted work,
+At that checkpoint source conflicts canceled the unconfirmed RAM tail. Current
+ordinary prep retains durable conflicting intentions for reconciliation; normal
+quit drains accepted work,
 even if a different track is selected. Hermetic tests hold the probe open while
 sending one mouse click, then cover FIFO order, lock/identity rejection and quit.
 This changes admission timing, not the accepted native grid write protocol.

@@ -491,13 +491,15 @@ test, after unchanged source-identity and native/manual provenance guards.
   signed package/smoke/install/startup and exact curation/analysis preservation
   pass (see HANDOFF). The subsequent approved third-stop/height pass adds
   physical-pixel motion at64 and peak-retaining signed reconstruction at64–256.
-  Other RGB stops remain fractional. RGB 384 retains October27 coverage C's exact area, and other RGB stops
-  use only the bounded faint-detail shoulder below 18% coverage. 3BAND also
+  Other RGB stops remain fractional. The November2 color update supersedes
+  October27 coverage C's384-only exact-area exception: every RGB stop now uses
+  the fixed92pt/s reference color field and bounded faint-detail shoulder below
+  18% coverage, including384. 3BAND also
   stays continuous. BLUE rounds its display offset to physical pixels
   through 384 points/s and logical points at 576–1500. Historically, logical points at
   256/384 made visible steps, and fractional motion paired with conservative
-  RGB coverage brought fuzz back. C removes that partial-pixel brightness boost
-  at RGB 384 instead of changing detail. Never confuse those combinations. Historical
+  RGB coverage brought fuzz back. Historical C removed that partial-pixel brightness
+  boost at RGB384 instead of changing detail. Never confuse those combinations. Historical
   whole-pixel probes used different detail/coverage rules and were rejected.
   Do not infer current acceptance from those old measurements. The buffer needs a
   generous guarded margin scaled by the attribute density and absolute
@@ -563,12 +565,12 @@ test, after unchanged source-identity and native/manual provenance guards.
   the same clipped moments used for visible color. The older minimum of two
   separate edge integrals overfilled pixels and was removed October 2. Keep
   the final fragment covered by its declared numerical oracle: BLUE retains
-  exact joint area, as does RGB 384. Other RGB stops now boost only faint coverage
-  below 0.18, using c′=c×(1+1.5×(1−c/0.18)²); normal coverage is untouched.
+  exact joint area. Every RGB stop, including384, boosts only faint coverage
+  below0.18, using c′=c×(1+1.5×(1−c/0.18)²); normal coverage is untouched.
   This monotonic shoulder adds at most 0.04, joins exact area smoothly and never
   fills zero-area pixels or changes hue. The broad October 6 occupied-column
-  policy was removed. Independent area/color and mutation oracles protect C
-  and the faint-only behavior across red, blue, green and orange.
+  policy was removed. Independent area/color and mutation oracles protect
+  joint-area integration and faint-only behavior across red, blue, green and orange.
   The interval's minimum full width is one physical pixel before coverage;
   it must follow drawable scale, not the old fixed 3.6-point width. This keeps
   the two half-pixel AA supports from overlapping. The historical High & Scared close-RGB phase sweep cut the aligned
@@ -641,7 +643,8 @@ test, after unchanged source-identity and native/manual provenance guards.
   reconstruction erased.
 - **Do not cure source aliasing by widening the final image filter.** The
   earlier four-pixel close-source rule is historical. Current compact detail
-  uses the physical-pixel close source footprint and final pixel coverage. Keep any needed
+  uses a physical-pixel close source footprint except the accepted logical-pixel
+  footprint at RGB576/864; final coverage remains one physical pixel. Keep any needed
   reconstruction in song space; no adjacent-LOD blends or temporal blur.
 - **Inactive preview is an idempotent native transition.** PlayerBar publishes
   coarse transport text positions during ordinary playback. Those
@@ -1097,7 +1100,8 @@ test, after unchanged source-identity and native/manual provenance guards.
 - Integrate tiny clipped pieces using local midpoint moments. Subtraction of
   global squared/cubed endpoints can corrupt color centroids by cancellation,
   producing different BLUE color when an identical segment is reversed.
-- `./check.sh` gates: pyflakes + **mypy on `soundbox/` (must stay 0 errors)** +
+- `./check.sh` gates: pyflakes + **mypy on `soundbox/` and `soundbox_personal/`
+  (must stay 0 errors)** +
   the full suite. `desktop/` is NOT mypy-gated yet (PySide6 stub gaps).
 - Never `assertX(...) and assertY(...)` (short-circuits the second). Never test
   dict/py semantics against themselves — drive the real app helper. A
@@ -1197,8 +1201,9 @@ test, after unchanged source-identity and native/manual provenance guards.
   for sig/entry/diff/prune — any new "don't export this track" feature must flow
   through it or devices won't drift.
 - Artist aliases: `build_registry(..., aliases)` applies them TWICE so chains
-  resolve (yeschef→YESCHEF!→YES CHEF). `suggest_merges` is O(n²) with quick-ratio
-  prefilters — keep it off the main thread.
+  resolve (yeschef→YESCHEF!→YES CHEF). `suggest_merges` retains quadratic worst-case
+  pair work, with length buckets, matcher-index reuse and quick-ratio upper-bound
+  pruning; keep it off the main thread. Original asymmetric rank/tie order matters.
 - Row alignment: QTreeView items QSS-locked to `height:24px`; table + rb tree use
   `ScrollPerItem` — don't reintroduce pixel scrolling or padding-based heights.
 
@@ -1286,8 +1291,9 @@ test, after unchanged source-identity and native/manual provenance guards.
   Comments may be absent from JSON; preserve that representation and all other
   existing fields. `rekordbox_cues` plans rows only; the separate accepted writer
   owns transactions. DB-only native cue add/delete acceptance passed; none of this
-  grants ANLZ permission: only the separate accepted grid API may publish its
-  exact DAT/PQTZ and EXT/PQT2 delta.
+  grants ANLZ permission. The separate accepted grid API may publish its exact
+  DAT/PQTZ and EXT/PQT2 delta; initial WAV/CBR MP3 analysis uses its independently
+  accepted packet-publication domains, never cue authority.
 - **Recover before copying a source after a crash.** A spilled rollback journal
   can leave uncommitted pages in master.db; copying DB/WAL alone cannot repair
   them. Refresh preflight uses only a prior explicit authority to recover its
@@ -1296,8 +1302,9 @@ test, after unchanged source-identity and native/manual provenance guards.
   Verified inactive zero-header journals remain untouched. Never manufacture a
   data mutation or manually delete a journal to clear this state.
 - **Cue edit identity must not recook audio.** Raw source revisions and native
-  IDs live outside normalized display dictionaries. Cache schema 7 retains those
-  fields; older cache paints remain read-only until a fresh source read. Cue saves
+  IDs live outside normalized display dictionaries. Current cache schema11 retains
+  those fields (introduced in schema7); older cache paints remain read-only until
+  a fresh source read. Cue saves
   publish a new target Track/Library view on the GUI thread and update markers
   directly; tags still require full smart-membership refresh. Never read a native
   cue timestamp from the 20-Hz visual clock or let a save finishing under a held
@@ -1318,8 +1325,11 @@ test, after unchanged source-identity and native/manual provenance guards.
   sync metadata fails closed. `rekordbox_tags` alone owns this API, restricted by
   source identity, exact schema/version authority, expected rows and closed native
   processes. Never generalize to cloud sync or a new version without evidence.
-  Sonny normally operates the UI; his October31 grant allows careful agent
-  control for generated references with verified selection, preserving real music.
+  Sonny operates the real app UI. His later October31 no-controls instruction
+  supersedes the earlier generated-reference input grant: do not automate mouse,
+  keyboard or Accessibility inputs into his real SoundBox/rekordbox. Private
+  fixtures and read-only evidence remain permitted; an old pilot grants no new
+  source publisher or real-app input authority.
 - **Tag saves and readiness checks own a TaskOwner lane.** Retain through finished
   delivery and join; source selection/refresh/backup/restore must wait. A committed
   write followed by refresh failure is an error requiring reconciliation, never
@@ -1395,7 +1405,10 @@ test, after unchanged source-identity and native/manual provenance guards.
 - rekordbox auto-writes a `PIONEER/` folder onto any USB it touches. It is a
   hard external-product boundary: count its space, but never use it for drift,
   manifest ownership, verification, cleanup, import, browsing actions, or an
-  ordinary write. The explicit generic whole-volume Erase is the only exception.
+  ordinary write. The separately accepted `cdj_*` boundary is the scoped
+  generic-FAT32/exFAT native-catalog/export exception, with its own mount/source/
+  metadata/recovery guards. Explicit generic whole-volume Erase remains a
+  separately confirmed destructive action.
 
 ## Cover art (optional SoundCloud provider + shared Rockbox/stock rendering)
 
@@ -2305,9 +2318,11 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
 - Cue handle reuse requires fresh authority, source inode and exact native ID/
   UUID/path bindings. Underlying backup counter/epoch verification, closed-app
   and recovery guards remain live. Never turn store reuse into a media proof cache.
-- Native command timing logs measure worker callback execution, excluding queued
-  wait and GUI acknowledgement. Private-copy performance is not observed native
-  UI or cloud latency. Sonny is keeping SoundBox closed during this delivery.
+- Native command timing logs measure dispatch, worker execution and GUI
+  acknowledgement separately; unknown durable-FIFO wait is explicit. Private-copy
+  performance is not observed native UI or cloud latency. The November2 delivery
+  used a closed-app window; current installed/running state is in HANDOFF and
+  does not grant permission to close Sonny's app.
 
 ## November2 second native performance pass
 
