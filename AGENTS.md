@@ -15,6 +15,7 @@ The prior November3 build160 was b0ccb1ab…/410196e9…; Git-count build number
 not unique runtime identity. Sonny’s November4 “wrap up” authorizes committing
 and pushing the tested UI/export source. The signed installed base remains
 c2415d5…/dirty=true; source publication does not restamp or reinstall it.
+Tested source release `4a3d29aab0eb97a34bcce445cb6d70df3e1c1685` matches all675frozen inputs.
 HANDOFF distinguishes publication history, installed bytes and the one rollback.
 
 - Info prepares artwork before modal show. Its wait wheel colors only native

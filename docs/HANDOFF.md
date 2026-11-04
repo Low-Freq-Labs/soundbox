@@ -15,7 +15,9 @@ Branch `main`. The installed signed base is
 `c2415d5c3e9874919ca07b54b04636a282203ee2`, dirty=true. The November4 wrap-up
 authorizes publication of the tested UI/export source, following the earlier
 `d08ee91d18fe89e9fa520f7f242d1cd3015ec903` release and documentation closure.
-Source publication does not change the running bundle’s declared base or bytes.
+The tested source release is `4a3d29aab0eb97a34bcce445cb6d70df3e1c1685`; its following
+documentation closure records this handoff. Source publication does not change
+the running bundle’s declared base or bytes.
 Both old and new artifacts use Git-count build160; distinguish them exactly:
 
 - Current runtime: `7bbe8577a80ba08fdef36efb4de1b3877820a2974a4b534ce36d6c43884fbfc8`.
@@ -171,3 +173,10 @@ verified installation:1115613504logical regular-file bytes, exact paths in
 `post-install-retirement.json`. Source, venv, native/CDJ/check outputs and required fixtures stay.
 [Archived checkpoints](archive/native-analysis-delivery-checkpoints-2026-11-02-03.md)
 never authorize rollback, source publication or restoring disposed files.
+
+November4 wrap-up preserves the running app and its current rollback while Sonny
+tries the update. All675committed source/test/build inputs match the release
+freeze; no additional runtime edit/rebuild/reinstall was made for publication.
+The SSH agent had no identities, so Git publication uses the existing authenticated
+GitHub HTTPS credential helper for this command only; remote/global preferences
+remain unchanged. Exact publication identity is in the private publication receipt.
