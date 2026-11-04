@@ -1,8 +1,8 @@
 # SoundBox device layouts
 
-Reviewed November3, 2026 against application source release `d08ee91`.
-Dated hardware sections retain their historical
-observations; current installation and acceptance are in `HANDOFF.md`.
+Status checked November4,2026 against source release `4a3d29a` and installed
+runtime `7bbe8577…`. Older audits and hardware observations below retain their
+dated scope; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
 
@@ -41,12 +41,23 @@ in memory after disconnect; export artwork preparation stops cooperatively.
 ### Native CDJ USB pilot
 
 October29: the dedicated generic-USB exporter maintains classic Device Library
-and Plus together on writable FAT32/exFAT. It preserves existing native collection
-records and other playlists across rekordbox/SoundBox switching. Drops export
-selected new/changed inputs directly; Update Playlists reconciles SoundBox's
-managed selection. Retained songs are inventory, not an audit; playlist removal
-retains the collection. Interruption resumes internally, and newer coherent native
-exports supersede old pending catalogs. Fresh source metadata/cues and exact new
+and Plus together on writable FAT32/exFAT. It preserves unrelated native records
+and playlists across rekordbox/SoundBox switching, including existing differences
+between the formats. Drops export selected new/changed inputs directly. Export
+opens playlist/folder checkboxes on the left and connected devices on the right;
+one target is preselected and several targets may be checked. One action queues
+those targets through the existing serialized exporters, with source/playlist and
+mount/UUID checks before each target. Cancellation/shutdown clear pending targets;
+existing iPod first-generation plan review remains intact.
+
+Replacing a selected USB playlist removes its old memberships and prunes removed
+songs only when no remaining playlist in either native format uses them. Shared
+assets and unrelated collection-only songs stay. Removed assets are rollback-backed
+until durable commit, then their exact backup payloads retire to free USB space;
+interrupted retirement resumes. There is no whole-drive orphan sweep. New copies
+still need peak transaction free space. Retained songs are inventory, not an audit.
+Interruption resumes internally, and newer coherent native exports supersede old
+pending catalogs. Fresh source metadata/cues and exact new
 audio copies remain required. Ordinary stock/dual/Rockbox PIONEER guards remain.
 
 USB tabs are Overview, Playlists, Category, Sort, Column, Color, My Settings.
@@ -55,9 +66,12 @@ Column controls the default right column; Color edits eight titles. My Settings
 has44 player/mixer fields and explicit Save to Global / Load Global, with the
 global profile in SoundBox Settings seeded from the actual USB. Unrelated exports
 preserve profiles/unknown bytes. Native name differs from the real volume name.
-The context menu is Update Playlists, Import My Settings, Reformat USB, Eject.
-Reformat confirms the physical external USB, real name and FAT32/exFAT MBR choice;
-HFS+ remains excluded. No actual format acceptance is claimed by mock tests.
+The generic USB context menu is Export, Import My Settings, Reformat USB, Eject.
+Reformat confirms the physical external USB, real name and FAT32/exFAT MBR choice.
+Source separation includes native analysis locations; post-erase checks verify the
+physical disk, MBR, one first data partition, filesystem, volume and mount before
+initialization. HFS+ remains excluded. Mock tests do not establish physical
+format acceptance.
 
 Headers use26 points; detail/song rows and empty stripes match the regular24-point
 browser. USB columns share browser state. Activation validates the selected actual
@@ -648,7 +662,7 @@ presentation without rereading M3U8 payloads. Cache publication waits for
 QThread.finished and stale mount tokens retire snapshots. Overview selection and
 expanding rows perform no removable-file I/O. Explicit song loading uses the same
 serialized device lane and read-only path validation; it grants no write authority.
-Native Update Playlists/internal recovery follow the dedicated CDJ contract.
+Native Export/internal recovery follow the dedicated CDJ contract.
 Reformat has its own destructive confirmation; stock/dual/Rockbox guards remain separate.
 The former raw filesystem browser is no longer a USB tab. Its guarded backend
 mutation/import paths remain, but the new playlist tree exposes no such actions.

@@ -1,7 +1,7 @@
 # Shared app and optional personal modules
 
-Allocation requested October26,2026; implementation reviewed November3 against
-source release `d08ee91` and installed build157. Product direction: one shared application,
+Allocation requested October26,2026; status checked November4 against source
+release `4a3d29a` and installed build160/runtime `7bbe8577…`. Product direction: one shared application,
 nearly identical public/personal UI, optional installed modules adding a small
 number of capabilities. Sonny clarified that the public product remains the
 complete music manager, spanning iPod/MP3 players and USB export. Personal

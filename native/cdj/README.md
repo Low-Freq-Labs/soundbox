@@ -24,6 +24,14 @@ no metadata, linked paths or other existing files are admitted. It never discove
 source library or writes a USB. Python captures inputs and owns authorized
 publication/recovery through the dedicated generic-FAT32/exFAT CDJ session.
 
+Selected merges validate the requested playback records and exact memberships
+in both native formats while preserving each format's unrelated baseline; a
+pre-existing whole-catalog difference is not an export veto. Allocation reserves
+both namespaces. Removed selected members are checked against remaining playlist
+references in both formats, and shared/unrelated assets survive. The parent
+transaction retains affected originals until durable commit, then retires exact
+removed-media backups to reclaim space. Plus-only display remains supported.
+
 Source packaging includes the executable and upstream license/full GPL text, not
 private fixtures. Distribution review and CDJ hardware acceptance remain open.
 See [the complete contract](../../docs/cdj-usb-export.md).

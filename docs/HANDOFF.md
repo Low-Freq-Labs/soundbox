@@ -147,6 +147,26 @@ edit and all native recovery/acceptance material. Artists is virtual-only; never
 recreate its removed1527native entries. Prior Mocha145/9A/425-beat source proof
 and separate WAV/CBR-MP3 authorities remain accepted; no authority was broadened.
 
+## Documentation consistency follow-up
+
+Sonny asked to check all guides/roadmaps for stale information after wrap-up.
+The November4 pass covers all75tracked Markdown documents:39current first-party,
+11archived and25pinned upstream. It reuses the prior38full-content reviews with
+subsequent changes, new audit content and complete-corpus status/behavior/link
+checks. Stale Export/collection-retention/global-catalog-equality wording, old
+build157/source pointers and ambiguous historical validation claims are corrected.
+The roadmap retains genuinely open physical/codec/distribution gates.
+
+All648local links/18anchors were checked with no first-party/archive errors.
+58upstream targets are absent from the pinned vendor subset; those documents
+remain exact, and no exhaustive external-URL check is claimed. All243pinned crate
+files are verified unchanged. Per-file before/after hashes, review basis and
+findings are under `~/Library/Logs/Soundbox/documentation-consistency-2026-11-04/`;
+PROJECT_LAYOUT records scope. This is documentation-only: the675runtime/test/build
+inputs and installed executable remain exact, with no rebuild/reinstall,
+native-library/device writes, real-app inputs or playback interruption. Preserve every newer
+user edit and the current rollback while Sonny tests the update.
+
 ## Evidence and retention
 
 `~/Library/Logs/Soundbox/export-polish-2026-11-04/` retains the675-input freeze,

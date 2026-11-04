@@ -7,7 +7,7 @@ are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11
 
 ## Delivered personal runtime
 
-Installed personal build160 retains the November3 build155 features below and
+Installed personal build160 retains the earlier build155 features below and
 includes the export, broader efficiency, correctness and UI polish passes, plus
 the November4 multi-device Export selector, selected-member cleanup, themed wait
 wheel and format-review safeguards. The current
@@ -74,8 +74,8 @@ while its replacement decodes. It fixes popup text gutters, literal metadata,
 Retina review images, oversized footer messages and delayed navigation callbacks.
 In-place Artists/default-photo refreshes preserve surviving selections and place.
 The [polish audit](ui-polish-audit.md) records coverage, generated regressions and
-remaining GUI image/state/filesystem/network costs. HANDOFF distinguishes this
-worktree from the installed runtime and records final delivery status.
+remaining GUI image/state/filesystem/network costs. HANDOFF distinguishes the
+published source from the signed installed base and records final delivery status.
 
 ## Installed broader efficiency pass, November3 evening
 
@@ -90,8 +90,9 @@ The176-file first-party source inventory records measured/static/deferred depth;
 this is not a claim that every workload or dependency has been profiled.
 
 This broader pass first passed2406tests as runtime d5cb4451… and remains included
-in the current night delivery below. Current provenance is in HANDOFF. That
-completed night pass addresses completion copies, fuzzy matching, thumbnails, USB status and
+in the later night pass and the current November4 delivery. Current provenance is
+in HANDOFF. That night pass addresses completion copies, fuzzy matching, thumbnails,
+USB status and
 provider lifetime work; [measurements and limits](performance-audit.md) distinguish
 implemented findings from retained tradeoffs. Fresh guards and recovery remain.
 
@@ -118,7 +119,7 @@ from implemented findings; no claim of universally perfect code is made.
 
 The November2 dedicated per-command review covered every native writer plus shared
 primitives. Its measured process/queue/cue/grid/registration/locator/backup/XML gains
-remain included in the current November3 delivery. Measurements describe private
+remain included in the November4 delivery. Measurements describe private
 copies, not actual gesture latency. The November3 local preparation order and
 metadata recovery are installed; exact current validation/provenance is in
 [HANDOFF](HANDOFF.md), with the detailed workload limits in
@@ -151,14 +152,15 @@ See the [implementation plan](shared-library-workflow-plan.md).
 
 ## Device acceptance and performance
 
-Rekordbox and SoundBox are equal exporters. Preserve the current native USB
-catalogs/media across either application's writes. Dedicated CDJ publication is
-implemented for classic Device Library plus Device Library Plus; playlist drops
-start directly. Sonny reports playback, artwork and waveforms working. The full
-November4 source adds a multi-device Export selector and selected-playlist
-reference-counted media cleanup, with per-format unrelated-catalog preservation;
-release/install status is in HANDOFF. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider physical coverage
-remain open. See [the CDJ contract](cdj-usb-export.md).
+Rekordbox and SoundBox are equal exporters. Preserve unrelated native USB
+playlists, records and media across either application’s writes. Dedicated CDJ
+publication is implemented for classic Device Library plus Device Library Plus; playlist drops
+start directly. Sonny reports playback, artwork and waveforms working.
+The November4 delivery adds a multi-device Export selector and selected-playlist
+reference-counted media cleanup, with per-format unrelated-catalog preservation.
+Source release `4a3d29a` and installed runtime `7bbe8577…` are recorded separately
+in HANDOFF. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
+physical coverage remain open. See [the CDJ contract](cdj-usb-export.md).
 
 Stock/dual/Rockbox follow-up still requires real reconnect/power-cycle, playing
 music during discovery, no-op/changed Sync, overlapping drops, cancel/retry and

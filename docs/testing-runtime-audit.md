@@ -3,8 +3,10 @@
 This is the dated November2 runtime investigation and its implementation
 checkpoints. The current discovered gate and installed provenance are in
 [test-release-gate.md](test-release-gate.md) and [HANDOFF.md](HANDOFF.md); the
-November3 final2531-case gate took686.389s across its test phases, not the older
-22-minute baseline below.
+November3 final2531-case gate took686.389s across its test phases. The November4
+2564-case delivery took641.675s across its accepted offscreen/Cocoa phases
+(574.225s +67.450s); its low-battery cadence failure and unchanged-source AC rerun
+are recorded separately in HANDOFF. Neither is the older22-minute baseline below.
 
 At the audited baseline, growing encrypted transaction and crash-recovery
 coverage explained most of the roughly22-minute runtime. Running independent offscreen modules in

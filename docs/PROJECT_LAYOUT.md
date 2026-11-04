@@ -1,7 +1,7 @@
 # Project layout and retention
 
 
-Reviewed November3,2026. This describes the checkout and retained evidence,
+Reviewed November4,2026. This describes the checkout and retained evidence,
 not the installed app's live library or waveform caches. Current app/source
 provenance and exact rollback location are in [HANDOFF](HANDOFF.md).
 
@@ -26,6 +26,37 @@ its exact record is `post-install-retirement.json`. Older November3 retirements
 remain dated evidence, not current output/rollback inventories. Keep source,
 venv, native/CDJ/check outputs, required fixtures, originals and native recovery.
 No app-output cleanup authorizes removing music, source or acceptance material.
+
+## Documentation consistency — November4
+
+The follow-up covers all75tracked Markdown files:39current first-party guides,
+plans/research notes,11archived records and25pinned upstream references. It reuses
+the prior full-content review receipts for the38existing first-party documents,
+checks their subsequent changes plus the additional UI-polish audit, and scans the
+complete corpus for current status, old/new behavior, permissions, retention and
+local links. Current source claims are checked against release4a3d29a/runtime
+7bbe8577…; this is a documentation audit, not a new hardware or dependency audit.
+
+Corrections reconcile Export/multi-device selection and removed-member cleanup,
+per-format unrelated-catalog preservation, build/source pointers, superseded
+validation counts, source-analysis/format postconditions, and the installed versus
+published source distinction. Dated native-reference results and historical build
+counts remain history rather than being rewritten as new proof. The roadmap and
+ideas continue to distinguish delivered work, accepted source domains and open
+hardware/codec/distribution gates.
+
+All648local Markdown links were checked, including18anchor links. There are no
+missing first-party/archive targets or anchors. The58remaining missing targets
+are inside pinned upstream documentation and point outside the vendored subset;
+all243pinned crate files remain exact. Those references are retained verbatim,
+not silently repaired or treated as SoundBox runtime instructions. External URL
+availability was not exhaustively revalidated. Per-file before/after hashes,
+review basis, findings and link records are retained under
+`~/Library/Logs/Soundbox/documentation-consistency-2026-11-04/`.
+
+Runtime source, installed executable, AppData, device contents and the running
+session are unchanged. No rebuild, reinstall, playback input or acceptance pilot
+belongs to this documentation-only follow-up.
 
 ## Documentation consistency — November3
 
@@ -107,7 +138,7 @@ Sonny explicitly requested reducing accumulated diagnostics, backup copies and
 extra app/packaging storage. Removed22,117 generated files, all five obsolete app
 bundles, duplicate dist/packaging, compiler/Python caches and loose scratch files.
 At that October31 checkpoint the installed verified app remained and no rollback
-bundle remained. Current retention is recorded in the November3 section and HANDOFF. Build retains
+bundle remained. Current retention is recorded in the November4 section and HANDOFF. Build retains
 about18MiB of checked native/CDJ/analysis binaries, release reports and small proof
 records. Source, unfinished research and regression tests are retained.
 

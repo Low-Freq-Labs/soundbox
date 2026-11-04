@@ -1,6 +1,6 @@
 # research/cdj_export — CDJ USB export prototype
 
-Reviewed November3,2026 against application source release `d08ee91`.
+Status checked November4,2026 against application source release `4a3d29a`.
 The desktop uses the shared renderer in
 [`native/cdj`](../../native/cdj/README.md), fresh `soundbox.cdj_source` capture and
 reviewed `cdj_transaction` publication. The standalone export tools below remain explicit
@@ -25,9 +25,11 @@ native evidence and the historical integration sequence. It covers classic Devic
 and OneLibrary, the pinned local source kit, completed native captures and the
 passing offline fixture. Both formats are maintained automatically by the runtime;
 newer-player hardware acceptance remains pending.
-The required product experience is one export that always maintains both
-databases with identical playlist hierarchy/membership/order, shared media and
-coordinated recovery. Users never choose or separately enable the formats.
+The product experience is one export that maintains the selected hierarchy and
+exact memberships/order in both formats with shared media and coordinated
+recovery. Existing unrelated differences between the two catalogs remain each
+format’s own baseline; global equivalence of the whole USB is not a publication
+requirement. Users never choose or separately enable the formats.
 
 ## What's here
 

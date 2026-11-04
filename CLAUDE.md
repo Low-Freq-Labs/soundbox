@@ -111,6 +111,22 @@ installation and all curation/authorities/icon remain preserved. Full detached
 queue serialization, cooperative pre-response network
 waits and physical-device acceptance remain explicit costs/proof boundaries.
 
+## Documentation consistency follow-up — November4
+
+Sonny requested another complete check for stale guides/roadmaps after wrap-up.
+The75-file inventory covers39current first-party documents,11archives and25
+pinned upstream references. Prior full-content reviews are reused with subsequent
+changes and current behavior/status rechecked against release4a3d29a/runtime
+7bbe8577… . Export/cleanup/format wording, old build157 pointers and superseded
+validation statements are corrected. All648local links/18anchors were checked:
+no first-party/archive errors;58pinned-upstream targets lie outside the vendored
+subset and remain explicitly documented. All243vendor files remain exact.
+Per-file review basis/hashes and limitations are in PROJECT_LAYOUT/HANDOFF and
+private documentation-consistency-2026-11-04 receipts. This does not reaccept
+historical pilots or claim an exhaustive remote-link/dependency/hardware audit.
+Leave the installed app, user state and devices untouched; no documentation-only
+rebuild/reinstall/restamp is needed. AGENTS/CLAUDE remain byte-identical.
+
 ## Documentation consistency follow-up — November3
 
 Sonny asked whether every document had been checked for stale information. The

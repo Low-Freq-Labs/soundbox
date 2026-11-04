@@ -1,7 +1,7 @@
 # Shared library, analysis and player corrections
 
-Current-status review November3,2026 against source release `d08ee91` and installed
-build157. This plan began at build148 on October30. Direct shared imports, initial
+Current-status review November4,2026 against source release `4a3d29a` and installed
+build160/runtime `7bbe8577…`. This plan began at build148 on October30. Direct shared imports, initial
 supported WAV and independently accepted narrow CBR MP3 analysis, durable prep and
 the requested player/Graveyard controls are now installed. The full shared-primary outcome still has
 broader codec/replacement/gain/metadata gates. [HANDOFF](HANDOFF.md) records the
@@ -15,7 +15,7 @@ AAC/ALAC sets; actual bytes, manual musical edits and source authority remain
 preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences,
 with fixed person Artists, home Collection and folder icons. All2144cases passed
 for that dated build154 delivery. It is historical: HANDOFF records the later
-November3 build157/2531-test delivery, signed dirty-source provenance and published
+November4 build160/2564-test delivery, signed dirty-source provenance and published
 source-release identity separately.
 
 Local prep stays usable while analysis saves fail or cloud ctime changes: each

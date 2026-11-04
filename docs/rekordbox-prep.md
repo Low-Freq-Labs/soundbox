@@ -22,7 +22,7 @@ registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
 are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
 separately accepted initial full-analysis authority; it never inherits the WAV
-authority. These paths remain in the November3 build157/source release; exact
+authority. These paths remain in the November4 build160/source release; exact
 provenance is in [HANDOFF](HANDOFF.md). Other analysis profiles, existing-analysis
 replacement, gain and broader metadata remain gated. The current shared-library
 transition is in

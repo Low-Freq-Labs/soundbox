@@ -4,8 +4,8 @@ This audit separates three identities: rekordbox owns native song/playlist IDs,
 SoundBox owns its curation and durable edit intentions, and SeaDrive supplies the
 audio behind a filesystem path. A visible Finder entry, a populated waveform,
 or a running tray application does not prove that audio can currently be read.
-The November2 fixes described here remain in the November3 build157/source
-release `d08ee91`. Dated counts/provider observations below are historical;
+The November2 fixes described here remain in the November4 build160/source
+release `4a3d29a`. Dated counts/provider observations below are historical;
 exact current binary, curation and validation provenance belongs in
 [HANDOFF](HANDOFF.md).
 
@@ -72,7 +72,7 @@ belong in this audit or its output.
 These provider/version observations were recorded November2; they are not a fresh
 service, installed-version or provider-readiness check.
 
-The locally installed SeaDrive is3.0.27 (`com.seafile.seadrive`). SeaDrive3 uses
+At the November2 audit, the locally installed SeaDrive was3.0.27 (`com.seafile.seadrive`). SeaDrive3 uses
 macOS File Provider; opening its Finder root can start the extension. Reading
 placeholder data requests a download, and local bytes may later be evicted.
 These are separate states from the tray application's transfer counters.

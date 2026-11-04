@@ -226,3 +226,22 @@ rerun after the catalog alternating-row contrast correction. Both signed public/
 personal packages and isolated native ORM/SQLCipher probes pass; installed normal
 startup and exact current library/authority/icon preservation pass. Dated hashes,
 review scope and remaining hardware/network limits are in [HANDOFF](HANDOFF.md).
+
+## November4 delivery and source publication
+
+The installed build160/runtime7bbe8577… and source release4a3d29a… retain the
+November3 coverage and add Info first-frame/publication lifetime, multi-target
+Export selection/identity/cancellation, selected-catalog preservation and
+reference-counted removal/retirement recovery, plus format source/postcondition
+checks. Reconciled reports pass2564cases:2500offscreen and64Cocoa, zero skips or
+expected failures. Both signed profiles match675frozen source/test/build inputs;
+160personal/156public packaged modules and native code sections match the tested
+source/builds. Installed isolated startup and exact curated-state/icon checks pass.
+
+A120Hz cadence check failed at4%battery (65presentations against a108minimum).
+After AC was connected, its focused check and the complete64-case native phase
+passed with unchanged source and thresholds. Retain both runs; do not silently
+accept the battery failure or omit the case. Stable display/power conditions
+matter for this timing gate. The native rerun and complete report inventories
+were verified together. Current provenance and physical acceptance limits remain
+in [HANDOFF](HANDOFF.md); documentation publication does not restart the app.

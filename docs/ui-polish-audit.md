@@ -66,10 +66,10 @@ ran beside the full suite and illustrate the deliberate wait-before-show tradeof
 not live compositor/playback latency or a general speed claim. Qt timer delivery
 continues during preparation; a strict timer deadline is not asserted.
 
-Both signed build160 candidates pass packaged Python/entrypoint/native-section
+The November3 signed build160 candidates passed packaged Python/entrypoint/native-section
 parity and isolated native deck/process/SQL startup:159personal/155public runtime
 modules, with zero library/device/art work. The40distinct targeted Cocoa cases
-pass. The final `./check.sh --render` passes all2547tests (2483offscreen and64
+passed. That November3 `./check.sh --render` passed all2547tests (2483offscreen and64
 native Cocoa), with zero skips/expected failures, lint/types/native/offline
 fixtures and inspected renders. Installed status remains in HANDOFF; the first
 complete offscreen attempt exposed an old test that explicitly required opening

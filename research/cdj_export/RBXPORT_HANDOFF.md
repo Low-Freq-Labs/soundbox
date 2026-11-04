@@ -1,6 +1,6 @@
 # CDJ export backend handoff — October 28, 2026
 
-**Reviewed November3 against application source release `d08ee91`:** this document
+**Status checked November4 against application source release `4a3d29a`:** this document
 is the retained October28 research handoff. The application integrates its renderer
 through `native/cdj` and the dedicated
 `soundbox.cdj_*`/`desktop.cdj` boundary. The original pending-selection/pagination/
@@ -14,8 +14,11 @@ transaction tasks. Runtime/fixture Cargo dependencies now use the checked-in
 vendor closure under `native/cdj`, not the archived private kit. Direct USB My
 Settings has44 fields and explicit Save to Global / Load Global; named presets
 and automatic Follow Global/Custom propagation remain deferred. The current
-installed build157 and2531-test release evidence are in HANDOFF, with installed
-dirty-source provenance kept separate from Git release `d08ee91`.
+installed build160 and2564-test release evidence are in HANDOFF, with installed
+dirty-source base c2415d5… kept separate from Git release `4a3d29a`. Selected
+exports now preserve unrelated per-format differences and reclaim only removed
+members unused by other USB playlists; the historical whole-fixture equivalence
+checks below do not impose a global equality requirement on ordinary export.
 
 Everything below records the October28 pickup checkpoint. Its pending tasks,
 uncommitted-source statements, test counts, device UUIDs and preference values

@@ -367,9 +367,9 @@ player/mixer settings directly. Global My Settings lives in SoundBox Settings,
 with explicit Save to Global / Load Global controls. Existing settings survive
 ordinary playlist exports. Overview uses a compact two-column General layout.
 
-rekordbox and SoundBox can export over each other at any time. Existing native
-collections and other playlists are preserved. Drops export directly. Export
-opens playlist checkboxes on the left and connected-device checkboxes on the
+rekordbox and SoundBox can export over each other at any time. Unrelated native
+collection-only records and other playlists are preserved. Drops export directly.
+Export opens playlist checkboxes on the left and connected-device checkboxes on the
 right; select several devices to export to each from one action. Only selected
 playlists update. Removed songs leave the USB when no other USB playlist uses
 them; shared songs and unrelated collection-only records stay. Retained songs
