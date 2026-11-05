@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import sys
 
-import shutil
 from pathlib import Path
 
 from . import __version__, rekordbox_xml, sync as sync_mod
@@ -160,20 +159,6 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     except RuntimeError as exc:  # safety guard tripped
         print(f"\n{exc}")
         return 2
-
-    # Free-space sanity check against the target volume (best-effort).
-    try:
-        free = shutil.disk_usage(target if target.exists() else target.parent).free
-        if report.bytes_to_copy > free:
-            print(
-                f"\n[!] WARNING: needs {_human(report.bytes_to_copy)} but target "
-                f"has only {_human(free)} free."
-            )
-            if not dry:
-                print("    Aborting before copy. Free up space or pick a larger target.")
-                return 3
-    except OSError:
-        pass
 
     report.print()
 

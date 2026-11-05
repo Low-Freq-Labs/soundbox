@@ -8,6 +8,22 @@ Current behavior/release evidence is in [HANDOFF](HANDOFF.md), current measured
 costs in [performance-audit](performance-audit.md), and remaining work in
 [ROADMAP](ROADMAP.md).
 
+November4 reconciliation against whole-app build165/runtime `7ffde716…`:
+build163/source `cf2ef5b` is an earlier delivery. The historical
+skip-allowed gate and absent public profile below have been replaced by mandatory
+zero-skip offscreen/Cocoa inventories and inspected public/personal artifacts.
+UI preference saves coalesce; state/artwork publication remains serialized and
+recoverable. Generic USBs now have explicit selected-playlist Export, no idle
+catalog/drift comparison and no final completion/eject read. Small TEST-1/TEST-2
+fixture exports passed, without establishing full-library or player acceptance.
+The unchanged composite-iPod performance target, broader queue/controller work
+and public distribution gates remain separate. The later whole-app audit covers
+lazy startup surfaces, coalesced queue wakes, idle decoder waits, scoped pure-work
+reuse and collision/conversion recovery corrections; its evidence is recorded in
+the performance audit. It does not complete the sole-command-queue migration or
+every-line correctness proof. Historical counts, line totals
+and proposed changes below must not be treated as today's inventory/backlog.
+
 September 27, 2026. Source baseline: `97fc023`, initially clean `main`.
 This is a source audit and implementation plan, not a completed refactor or a
 public-release certification. No application behavior or installed bundle changed during the initial audit.

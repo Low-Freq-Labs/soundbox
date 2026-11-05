@@ -5,9 +5,56 @@ verification and preservation baseline. This roadmap describes current behavior
 and remaining work. Older release hashes, test counts and original pending gates
 are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11-01.md).
 
+## Whole-app audit delivered — later November4
+
+The [whole-app audit](performance-audit.md#whole-app-audit--november4-after-ipod-review)
+is installed in personal build 165/runtime 7ffde716… (installed 22:50:20,
+reopened 22:51:50, verified 22:55:01). All 2779 tests, both signed profiles/code parity
+and three isolated native/process/SQLCipher probes pass. All 694 frozen inputs,
+fresh library/all 10 authorities/art indexes/white icon are exact. 184 first-party
+source files have explicit full/targeted/prior-exact review depth.
+
+Device/Settings demand, queue coalescing, idle decoding and state/artwork/query
+reuse reduce repeated work. Import collision and conversion recovery fixes
+preserve newer files; source authority and atomic publication boundaries remain.
+The ordered cue-style failure is reproduced/fixed with exact ten-state rendering.
+Matched signed3740-row startup is 1.20s median/1.24s p95 versus 3.15s/3.18s before;
+first row-cache miss1.45s versus 4.19s. Snapshot readiness excludes fresh source,
+compositor/persistent icon/device readiness and machine-cold launch. Current
+handoff/retention are in HANDOFF; physical iPod acceptance remains separate.
+Sonny's subsequent wrap-up request authorizes publishing the tested source and
+reconciled documentation. Publication preserves this installed runtime; current
+repository/release identity and protected rollback bases belong in HANDOFF.
+
+## Earlier iPod audit — November4
+
+The [stock/Rockbox/dual audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+was delivered in the preceding personal build165/runtime26f15fb4…. Catalog/source reuse,
+linear dedup, partial-export ownership/collision fixes, scoped explicit metadata
+Sync and GUI retirement/read fixes pass2695tests, both signed code-matched
+profiles and isolated native/SQLCipher checks. Fresh library/authorities/art/icon
+are exact. Three agents used offline fixtures only; physical iPod/firmware/eject
+acceptance remains open. Source was local/unpublished at that checkpoint; the
+whole-app delivery above supersedes that installation.
+
+## Later USB testing corrections — November4
+
+Local implementation addresses the format-dialog failure, independent-drive
+export during format, missing USB Info covers and the related catalog/receipt/
+identity/cancellation findings in the [audit](performance-audit.md#usb-deep-audit--november4-later-testing).
+The then-connected two USBs received separate FAT32/exFAT hardware-test
+authorization. Those completed, dated tests grant no later erase or replay.
+Personal build165 is installed/reopened/verified. All2639tests pass with both Qt
+phases reconciled, both signed package profiles/code parity and isolated native/
+SQLCipher checks pass, and fresh library/authorities/art indexes/white icon remain
+exact. Failed cadence/locked-console runs remain preserved; the unchanged native
+retry passed after Sonny unlocked/connected power. Source was local/unpublished
+at that checkpoint. The whole-app delivery above supersedes that runtime;
+protected prior rollback bases still await acceptance.
+
 ## USB simplification follow-up — November4
 
-Personal build163 is installed, normally reopened and verified. The complete
+The preceding personal build163 was installed, normally reopened and verified. The complete
 2595-test gate, both signed/isolated package profiles and fresh curated-state/
 authority/icon preservation checks pass. HANDOFF records exact runtime identity. Generic USBs now
 have selected-playlist export only, no sync/pending display or idle source/catalog
@@ -24,11 +71,12 @@ and remaining physical acceptance boundaries.
 
 ## Delivered personal runtime
 
-Installed personal build163 retains the earlier build155 features below and
+Installed personal build165 retains build163 and the earlier build155 features below and
 includes the export, broader efficiency, correctness and UI polish passes, plus
 the November4 multi-device Export selector, selected-member cleanup, themed wait
-wheel and format-review safeguards, plus the USB simplification above. The current
-delivery passes2595offscreen/Cocoa tests, both signed package profiles and
+wheel and format-review safeguards, USB simplification, iPod audit and whole-app
+demand/lifecycle/recovery audit above.
+The current whole-app delivery passes2779offscreen/Cocoa tests, both signed package profiles and
 installed isolated/normal startup with exact curated-state checks.
 Exact binary/source provenance belongs in HANDOFF. It includes:
 
@@ -73,7 +121,8 @@ Exact binary/source provenance belongs in HANDOFF. It includes:
 - Graveyard search/info/storage, position-preserving Restore and confirmed
   Collection/disk Delete with recoverable Trash/shared-file protection. Sonny
   confirms bulk Delete works;515 file-disposal receipts and four user-confirmed
-  local dismissals are current state. Absent identities offer explicit local-only
+  local dismissals were present at the November4 verification; newer user edits
+  supersede those dated counts. Absent identities offer explicit local-only
   dismissal through the same user button.
 - Automatic recoverable compatibility conversion and existing-record locator
   updates.124 WAV conversions completed with exact originals retained. Combined
@@ -85,7 +134,7 @@ send input events into his app or substitute synthetic proof for native acceptan
 
 ## UI polish follow-up — November3
 
-The installed build160 follow-up prepares Info artwork before modal presentation, refreshes
+The earlier build160 follow-up, retained in build165, prepares Info artwork before modal presentation, refreshes
 the matching dialog after actual cover publication, and retains the old cover
 while its replacement decodes. It fixes popup text gutters, literal metadata,
 Retina review images, oversized footer messages and delayed navigation callbacks.
@@ -144,7 +193,8 @@ metadata recovery are installed; exact current validation/provenance is in
 fresh. Sonny approved installation of the export efficiency pass below and manually
 closed build155. Build160 was installed and normally reopened; that earlier
 source was published under Sonny's wrap-up request without restamping/reinstalling
-its running bundle. Build163 above now supersedes that runtime. Its tested USB/UI source release
+its running bundle. Build163 subsequently superseded that runtime, followed by
+the current build165 whole-app delivery. Its tested USB/UI source release
 `cf2ef5bef366ce126178b0f04cf969840e203592` is published under Sonny's subsequent November4 wrap-up, without
 restamping or reinstalling the running app.
 
@@ -178,7 +228,7 @@ start directly. Sonny reports playback, artwork and waveforms working.
 The earlier November4 delivery added a multi-device Export selector and selected-playlist
 reference-counted media cleanup, with per-format unrelated-catalog preservation.
 That source release `4a3d29a` and its prior installed runtime `7bbe8577…`
-are separate historical identities; HANDOFF records the current build163 runtime. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
+are separate historical identities; HANDOFF records the current build165 runtime. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
 physical coverage remain open. See [the CDJ contract](cdj-usb-export.md).
 
 Stock/dual/Rockbox follow-up still requires real reconnect/power-cycle, playing
@@ -188,8 +238,8 @@ acceptance. Normal idle eject does not require Sync/Verify. The November3 source
 efficiency pass defers export startup/cache work until
 detection, indexes USB playlist matching and filesystem destinations, and shares
 repeated iPod availability/display work within each drift poll. Synthetic component
-benchmarks improved; these changes first passed the2531-test delivery and remain in build160.
-This work remains in build160; normal curated startup/state checks pass.
+benchmarks improved; these changes first passed the2531-test delivery and remain
+in the current build165 whole-app delivery. Normal curated startup/state checks pass.
 Exact validation/provenance and installed status belong in HANDOFF.
 Selected source capture and guarded no-op merge reconstruction are now implemented.
 Repeated new-media verification and physical throughput remain measured follow-ups;

@@ -816,14 +816,17 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
         # row width (was starting inset past a phantom branch column).
         self.setRootIsDecorated(False)
         self.setIndentation(0)
-        self._hover = None
+        self._hover = QPersistentModelIndex()
 
     def _set_hover(self, item):
-        if item is self._hover:
+        index = QPersistentModelIndex(self.indexFromItem(item)) if item is not None else QPersistentModelIndex()
+        if index == self._hover:
             return
-        if self._hover is not None:
-            self._hover.setBackground(0, QBrush())  # clear
-        self._hover = item
+        # Discovery may rebuild the device rows while a drag remains active.
+        # Deleted rows invalidate this index instead of leaving a freed wrapper.
+        if self._hover.isValid():
+            self.itemFromIndex(QModelIndex(self._hover)).setBackground(0, QBrush())
+        self._hover = index
         if item is not None:
             item.setBackground(0, QColor(theme.PURPLE))  # glow the drop target
 

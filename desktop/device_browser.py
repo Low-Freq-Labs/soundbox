@@ -140,6 +140,10 @@ class DeviceBrowserMixin:
 
     def _eject(self, dev: str):
         if getattr(self,'_export_batch',None):return
+        if (getattr(self, '_usb_format_device', '') and
+                dev in getattr(self, '_usb_format_volumes', (self._usb_format_device,))):
+            QMessageBox.warning(self, 'USB is formatting', 'Wait for macOS to finish formatting this USB.')
+            return
         # Never race device work. Finalization owns and finishes its dashboard
         # scan before success; Eject does not cancel or complete that work.
         readers = ("_dev_scan_worker", "_stock_view_worker", "_device_verify_worker")

@@ -8,6 +8,8 @@ from uuid import UUID,uuid5
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QMessageBox
 
+from .task_owner import DeferredCall
+
 from desktop.native_timing import phase
 from soundbox import rekordbox_db, shared_imports as jobs, wave_conversion, analysis, analysis_jobs, imports,media_conversion_jobs
 from soundbox.rekordbox_registration_store import RegistrationStore, load_authority
@@ -29,6 +31,7 @@ class SharedImportController(QObject):
         self._analysis_deferred=set()
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(2000)
         self.timer.timeout.connect(self.pump)
+        self._pump_wakeup=DeferredCall(lambda:self.pump(),self)
         self.tags.idle.connect(self.schedule)
 
     @property
@@ -70,7 +73,7 @@ class SharedImportController(QObject):
                 else 'Adding songs…')
 
     def schedule(self):
-        if not self.closing:QTimer.singleShot(0,self.pump)
+        if not self.closing:self._pump_wakeup.schedule()
 
     def _registration(self, lib):
         if self.registration_factory:return self.registration_factory(lib)
@@ -500,3 +503,4 @@ class SharedImportController(QObject):
 
     def stop(self):
         self.closing=True;self.tags.admission_paused=False;self.timer.stop()
+        self._pump_wakeup.stop()

@@ -1,19 +1,209 @@
 # Performance audit — November 2–3, 2026
 
+## Whole-app audit — November4 after iPod review
+
+Sonny requested another multi-agent pass across startup, browser/artwork,
+background/audio lifecycle and persistence/source transactions, with particular
+attention to work performed without an attached USB/iPod. The earlier installed
+runtime 26f15fb4… is the comparison baseline; HANDOFF records delivery of the
+replacement. Generated fixtures exercise changes without controlling the real
+apps or mutating real music, native libraries or attached devices.
+
+| Finding | Correction and measured scope |
+| --- | --- |
+| Hidden Settings and device pages construct thousands of widgets during launch | Build Settings on first open and each device page on first requested view. Passive resize/theme/backup/shutdown paths inspect existing pages without constructing them. Export stays disabled without capable targets; detection stays active |
+| Artist title cleanup repeatedly evicts its regular expressions from Python's shared cache | Bounded1024-artist edge-pattern cache preserves exact output;3600 rows/300artists compile7201→601patterns,0.7445→0.0733s in the isolated helper sample |
+| Identical model filter/sort requests reset selection and redo work | Skip unchanged requests; edits refresh cached search/sort fields, including artwork sort after in-place refresh |
+| Every artwork assignment deep-copies unrelated nested records | Copy namespace maps and replace changed entries while retaining publication snapshots, rollback and concurrency checks. One eligibility pass reads source policy once; publication still checks current policy |
+| Repeated queue notifications traverse the whole native catalog | Coalesce GUI wakeups per event turn;100notifications/4000 tracks become one discovery,4000visits and two authority reads instead of 100discoveries/400000visits/200reads. Explicit admission remains fresh |
+| Busy analysis resumes schedule overlapping retry chains | One owned single-shot timer; an empty queue performs no busy probe or retry |
+| Idle decoder wakes every3ms forever | Event-epoch waits park unloaded/EOF/paused-full-ring states. Private paired one-second fixtures show245–272wait returns→0. Active buffer pacing, cloud cancellation and render callback remain unchanged |
+| Unchanged state/history and already-published Grid packets are serialized/staged again | State no-op comparison preserves JSON types, numeric representation and map order under current file identity; Graveyard compares exact bytes inside its lock; Grid compares exact target bytes/mode/mtime and validates any existing staging evidence before skipping publication. Fresh recovery/source/apps/authority guards remain |
+| Device import trusts equal destination size and overwrites a fallback collision | Acquire/hash source once, compare exact duplicates and publish with exclusive destination creation; preserve occupied names, races and cancellation |
+| Conversion recovery can replace a newly changed original after its first hash | Bind the existing digest pass to stable source descriptor/path epochs and recheck after the fresh lease guard immediately before replacement/displacement; retain journal and original on conflict |
+| Full native-reader classification repeats queries | Shared active/audio classification plus bounded scalar relationship loading reduces the generated reader fixture from 8to6SELECTs; ordered complete DTOs remain exact |
+| Optional derived cache corruption aborts startup | Bound captures and validate historical library/browser shapes; malformed derived data falls back to reconstruction without changing canonical state |
+| Standalone-track menu still uses global device busy state | Bind that final export action to its own candidate target, preserving unrelated-drive export during formatting |
+| Lazy Settings could lose automatic connected-account refresh or cached likes | Lightweight provider root binding, lazy shared cached metadata and a window-owned cancellable initial refresh preserve behavior. Settings attaches to that worker/result; token rotation remains serialized and manual retry remains available |
+| Ordered tests expose a borrowed cue-button style wrapper of the wrong Qt type | Remove manual unpolish/polish immediately after the local stylesheet already repolishes the changed filled state. The ordered prefix reproduces the original error; ten private empty/filled/pressed/add/remove frames are pixel-exact without the duplicate calls |
+
+The unchanged60-second waveform-preparation metadata pass measured198.8ms wall,
+195.1ms CPU for3740synthetic tracks, with zero header/readiness/sidecar/audio reads
+and zero tasks. It remains: replacing it without a complete change-key proof would
+trade correctness for a small periodic cost. Fresh source, native-app, payload,
+recovery and atomic publication checks remain at their authority boundaries.
+No removal of required atomic saves or native transaction stages is claimed.
+
+The baseline signed app measured3117.471ms median and 3137.196ms p95 across 20 warm
+launches of 3740 generated browser rows (4252.719ms first row-cache miss). An
+intermediate source process measured1046.126ms median and 1074.753ms p95
+(1146.722ms row-cache miss). These include process/bootstrap, imports, native
+player initialization, selection/search and a synchronous Qt paint proxy. They
+exclude fresh source verification, compositor presentation and physical-device
+readiness. Source CLI isolation also excludes persistent Finder/Dock icon work;
+the final signed-package comparison belongs in HANDOFF. All warm results are
+retained, including outliers; no slow launches are discarded.
+
+The final paired signed apps use the same 3740-row workload after all tests/builds,
+with an unlocked console and 20 warm launches each:
+
+| Metric | Prior signed26f15fb4… | Current signed7ffde716… |
+| --- | ---: | ---: |
+| Warm median |3151.935ms|1203.228ms|
+| Warm p95 |3178.523ms|1237.419ms|
+| First row-cache miss |4185.058ms|1452.147ms|
+
+Median reduction 61.826%; all current readiness checks pass with no device surfaces/
+backends, Settings, NumPy or stock-converter initialization. This remains a
+snapshot-browser/Qt paint proxy, excluding fresh source, compositor/persistent
+icon/device readiness and machine-cold launch. Normal actual reopen separately
+loads3296 native tracks/85 playlists with 0prep/0art fetches. The complete2779-case
+gate, both signed profiles/code parity and three isolated native/process/RAM-SQLCipher
+probes pass. Installed 22:50:20, reopened 22:51:50, verified 22:55:01 with exact fresh
+library/all 10 authorities/art indexes/white icon. Source was local/unpublished
+at installation; Sonny's subsequent wrap-up authorizes publication without
+changing the installed signed bytes or running session.
+
+Private module-depth inventories, peer reviews, counters, failures, final gates
+and package/startup receipts live under
+`~/Library/Logs/Soundbox/soundbox-deep-audit-2026-11-04/`. This is a first-party
+runtime audit with explicit review depth, not a new audit/acceptance of every
+pinned dependency, codec, DSP algorithm, firmware or hardware configuration.
+The source census covers 184 first-party Python/native files:129 reported full
+reads,29 targeted reviews and 26same-day scoped USB/iPod reviews with matching
+hashes. Large app/player/native-renderer/source-proof bodies marked targeted
+remain targeted, not every-line correctness proofs. The first complete offscreen
+attempt ran2712 cases with two cue-style errors; its native phase did not run.
+That failed attempt and the shorter ordered reproduction remain retained.
+
 The subsequent [UI polish review](ui-polish-audit.md) covers incomplete first
 frames, artwork publication, text/DPR/layout and navigation resets. Its fixes
 and remaining GUI-thread costs are separate from the dated measurements below;
 consult HANDOFF for installation status.
 
+## iPod deep audit — November4 after USB testing
+
+Sonny requested the same agent-assisted inspection for stock, Rockbox-only and
+composite iPods. He has no iPod available. Three agents inspected those backends
+and cross-reviewed each other and the desktop changes. Validation uses generated
+temporary fixtures and writable copies of retained offline captures; no actual
+iPod, source library or running app is controlled. The source changes below were
+delivered in the preceding personal build165/runtime26f15fb4… and remain in the
+current whole-app build. Its source was local/unpublished at that iPod checkpoint;
+the subsequent whole-app wrap-up authorizes publication.
+All2695tests pass (2631offscreen/64Cocoa), both signed profiles match tested code,
+and package/installed native+SQLCipher probes pass. Fresh state/all10authorities/
+art indexes/white icon remain exact; HANDOFF has precise identities and times.
+
+| Finding | Correction and evidence |
+| --- | --- |
+| Stock dashboard parsed, read its header and hashed separate live database reads | Capture bounded native catalogs once per worker; parse/header/hash share captured bytes. Dashboard+status uses two complete DB reads instead of three plus a header. ArtworkDB uses two reads instead of one so same-epoch FAT edits are detected. Captures never become persistent freshness or commit authority |
+| Every stock-only no-op reopened selected source audio | A matching native shadow can retain its accepted raw-source SHA, complete Mac epoch and MA446 compatibility result. Fixture no-op performs zero acquisitions/format probes and zero retained-media hashes; legacy shadow reads two sources once, one changed ctime reads one. Legacy no-op enriches only disposable Mac proof fields, preserving generation/commit time |
+| Stock curated artwork was read once for segment hashes and again for concatenation | Verify segment and combined digests in the same read; two opens become one per segment |
+| Equal-size composite dedup searched every earlier candidate | Lazy digest sets preserve first occurrence and exact byte semantics. At1024unique same-size synthetic files,523776pairwise comparisons become zero, with one hash per colliding source; a unique-size singleton needs no hash |
+| Overlapping playlists repeatedly computed source presence, canonical paths and effective display | Per-operation observations/signature encoding reduce a20-playlist/60-membership fixture from300to182source `is_file` calls and120to4display-helper calls, preserving both source contracts and all ordered references |
+| Composite historical identity and publication planning reread the same small M3U8 | Reuse the bounded captured bytes within that plan; fresh commit-time hash guards remain. A growing file cannot bypass the1MiB read cap |
+| Partial Rockbox exports discarded other playlists' ownership of shared media/art | Union retained and selected owners; deletion preserves every remaining reference. Separate source identities with equal artist/title receive separate audio/artwork folders, including across separate exports |
+| Different logical entries sharing one canonical source silently took the first display edits | Reject conflicting effective title/artist before writes; matching display still shares one payload. The first full-gate attempt was interrupted for this reachable last-review correction, then restarted |
+| An adopted, unowned Rockbox file could be overwritten on a later edit | Refuse replacement without manifest ownership; keep unrelated files intact |
+| Interrupted adoption trusted FAT timestamps and edge fingerprints | Freshly hash only the affected candidate with descriptor/path epochs and cancellation; middle edits cannot reuse old proof JSON, and no new per-file proof JSON is written |
+| Explicit Rockbox Sync missed same-membership title/artist/source changes | Compare managed desired paths/display/profile and unique source metadata on explicit Sync, export affected playlists only, then prune only unreferenced owned paths. Unchanged explicit Sync uses source stats, zero payload reads and zero writes; idle badge remains a playlist-change hint |
+| GUI admission read removable manifests, recovery and hardware facts | Use cached view/facts only for presentation; existing owned plan/read workers perform actual reads. Cached reorder/delete selection becomes a precondition compared against the planner's own single fresh manifest capture |
+| A fast final scan could report success before queued retirement, or miss a newly connected finished handler | The already-connected scan owner publishes rows and retires before consuming finalization callbacks. Newly attached unrelated iPods queue their dashboard until the completion dialog releases |
+| The Info button on an iPod page could edit a stale desktop song | Keep the action within the displayed device context; iPod details remain in its device view |
+| Parent aliases could redirect small metadata reads into reserved/foreign trees | Guard native/manifest/playlist paths before payload reads, use bounded pinned captures, reject aliases and preserve the PIONEER exclusion |
+
+The dedup CPU sample measured0.458885s→0.020753s with preverified digests;
+this isolates helper CPU and is not an end-to-end speedup claim. The remaining
+182source-presence calls include shared stock/filesystem planning: this is not
+zero metadata I/O. Normal composite committed-inventory reuse remains distinct
+from a fresh integrity proof; stock-only ctime drift deliberately reacquires.
+Changed media still materializes in planning and again at commit, one source plus
+derivative at a time. Classic150ms pacing, fresh affected-file guards, recovery,
+manifest/database-last publication and serialized iPod completion remain. iPod
+polls still inspect their small native databases and selected source metadata;
+this does not remove the independent iPod status semantics.
+
+No physical throughput, firmware playback/artwork, cloud latency, reconnect/eject
+or historical hardware failure gate is accepted by this audit. Existing source
+immutability, MA446/codec gates, single-copy identities, native authorities and
+firmware-owned config/TCD boundaries remain. Exact counters/test commands and
+peer review are retained privately under
+`~/Library/Logs/Soundbox/ipod-deep-audit-2026-11-04/`.
+
+## USB deep audit — November4 later testing
+
+Sonny reported an unfinished format, unrelated USB Export being unavailable and
+missing covers in USB Track Info, then requested three agents across the generic
+USB implementation. He separately authorized fresh FAT32/exFAT tests on the two
+connected USBs while leaving SoundBox open. The following corrections are installed in personal build165; their source
+was local and unpublished at that USB checkpoint. The subsequent whole-app
+wrap-up authorizes publication.
+
+| Finding | Correction and evidence |
+| --- | --- |
+| Format confirmation raised `AttributeError` on `dialog.Accepted`; erase never started and `_exporting` stayed set | Use the explicit QDialog enum and failure-safe dialog/worker retirement; direct regression reaches actual backend admission and covers reject/error/shutdown |
+| One formatting drive blocked every export | Separate format ownership, reserve all captured physical-disk volumes, admit another USB into the ordinary export lane, and preserve its worker/progress during format completion |
+| Native erase stages were hidden | Stream bounded diskutil output and show useful unmount/erase/mount stages; reap the process even after output-consumer failure, without killing a running erase |
+| USB Info supplied no artwork loader | Capture only the selected native cover, capped at8MiB, decode off-thread and retire before presentation; no Mac-cache substitution |
+| Path-indexed browser rows conflated native records sharing audio | Carry native membership IDs separately; retain distinct metadata/covers and native USB art badges; container selection cannot fall through to stale desktop Info |
+| Cross-capture checks missed previously absent native companions | Add complete before/after presence checks for WAL/catalog/profile files and preserve exact byte rereads: actual FAT32 and exFAT probes proved changed contents can retain equal epochs |
+| Local completed-proof maps rewrote all earlier assets per copy and trusted coarse file epochs | Remove redundant per-asset completed-proof writes; existing journal hashes and fresh affected-byte checks drive interrupted recovery/adoption; historical proof artifacts remain untouched |
+| Incremental export cast logical imported IDs to integers and looked up manual art under native IDs | Use native IDs for catalog identity, logical IDs for curated artwork; full initial/repeat/update regression |
+| Initial candidate audio was hashed in two consecutive passes | Bind captured size/SHA in the existing make-plan hash pass; corruption still fails before USB writes |
+| Cancellation did not reach several metadata/native/baseline phases | Propagate checks into catalog inspection, settings/upgrade/initialization and chunked baseline hashing |
+| Export target validation performed a mounted-path stat on the GUI thread | Use cached selection facts for admission; worker-side fresh physical/path checks remain authoritative |
+| Unrelated remounts cancelled a waiting USB export | Bind scan deferral to the requested USB; its own remount still cancels |
+| Reopening Export retained every closed dialog's widget tree | Delete accepted/rejected dialogs after detaching the selected values; repeated-close regression checks parent ownership |
+| Desktop artwork publication could refresh a USB dialog with the same numeric ID | Mark USB dialogs outside desktop artwork refresh, preserving the USB read lane |
+
+The former completed-map serialization for2000synthetic assets totals
+344,710,388bytes; the final implementation performs zero per-asset completed-proof
+writes. This is removed serialization, not a physical throughput benchmark. The
+intermediate append ledger was discarded after cross-review established that its
+stat-only reuse proof was unsafe on FAT filesystems. Actual FAT32 and exFAT each
+allowed12/12same-size64-byte rewrites with equal device/inode/size/mtime/ctime.
+Exact catalog byte rereads remain necessary; new regressions reject changed
+catalogs and interrupted payloads even when all reported epochs stay equal.
+Offscreen Summary/Info renders show the selected USB cover before first show.
+An introduced browser-membership helper initially leaked into manifest views and
+made the hardware repeat write a manifest; central projection and initial/merge/
+settings/no-op regressions caught and corrected it. This was an audit regression,
+not a claimed defect of build163; failed evidence remains retained.
+
+Review covered generic-USB GUI admission/format/browser/info, device detection and
+worker routing, `usb_format`, `cdj_usb`, `cdj_source`, `cdj_catalog`, `cdj_export`,
+`cdj_incremental`, `cdj_transaction`, and native wrapper inspect/render/merge call
+sites. Pinned vendor integrity remains independently gated; this is not an
+exhaustive dependency/DSP audit or a new iPod/player-firmware acceptance.
+Changed-set audio staging, two fresh desktop metadata captures, bounded small
+catalog/manifest checks and affected-file recovery hashes remain. Two small
+manifest reads could eventually reuse a captured model with the existing later
+fresh guards; this audit does not claim every duplicate metadata read is removed. OS-blocked reads stop
+only when the OS returns. Exact current physical timings, tests and package status
+are in HANDOFF and private `usb-deep-audit-2026-11-04` receipts. Both signed
+profiles/code parity and package/installed isolated backend probes pass. All2639
+tests pass:2575offscreen and64native after the unlocked, powered retry. Earlier
+cadence/locked-screen failures remain retained and thresholds unchanged. Build165
+was installed19:57:13, reopened19:59:02 and verified20:00:23 with exact fresh
+library/authorities/art indexes/white icon. No source was published at that USB
+installation checkpoint; later publication does not restamp the installed app.
+
 ## Generic USB follow-up — November4
 
-The subsequent USB source pass removes generic USB drift/status comparisons from
-detection and idle polling, along with their export-playlist capture and native
-catalog freshness reads. USB catalogs load for explicit browser requests or the
+The preceding build163 USB pass removed generic USB drift/status comparisons from
+detection, idle polling and source-only edit events, along with their
+export-playlist capture and native catalog freshness reads. USB catalogs load for explicit browser requests or the
 small native-library merge required by selected export. Export is additive to
 unrelated existing playlists, avoids Collection/Artists construction and removes
-one duplicate catalog read in planning. Completion and Eject start no final USB
-read. Existing device worker ownership and normal macOS eject remain intact;
+one duplicate catalog read in planning. Fresh source captures now query selected
+cue and playlist-membership rows in bounded chunks and skip unrelated smart-list
+evaluation; the complete small ancestry tree and active-track identity guards
+remain. Explicit USB/tab clicks refresh once, including an already-checked tab;
+internal restoration and row expansion do not. Successful writes clear stale song
+rows with a browse notice while preserving settings drafts/view state. Completion
+and Eject start no final USB read or post-result scan. Existing device worker
+ownership and normal macOS eject remain intact;
 iPod/Rockbox sync behavior is separate.
 
 Formatting uses a quick same-filesystem erase when the current disk already has

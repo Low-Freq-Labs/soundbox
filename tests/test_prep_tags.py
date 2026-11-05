@@ -134,6 +134,26 @@ class TagInterface(unittest.TestCase):
                 changed.emit.assert_not_called()
         finally:button.popup.close();button.deleteLater()
 
+    def test_membership_tooltips_refresh_without_relayout_or_losing_elided_full_label(self):
+        from unittest import mock
+        button = MyTagsButton();button.setFixedWidth(240)
+        self.addCleanup(button.deleteLater)
+        tags = [LibraryTag('short', 'Dubstep'),
+                LibraryTag('long', 'A very long tag label that must be shown in its tooltip')]
+        button.set_state(tags, [{'short', 'long'}, set()])
+        boxes = dict(button.checkboxes)
+        self.assertIn('Assigned to 1 of 2', boxes['short'].toolTip())
+        self.assertIn('Assigned to 1 of 2', boxes['long'].toolTip())
+        with mock.patch.object(button._content_action, 'changed') as changed:
+            button.set_state(tags, [{'short', 'long'}, {'short', 'long'}])
+            changed.emit.assert_not_called()
+        self.assertIs(button.checkboxes['short'], boxes['short'])
+        self.assertEqual(boxes['short'].toolTip(), '')
+        self.assertEqual(boxes['long'].toolTip(), tags[1].name)
+        button.set_state(tags, [{'long'}, set(), set()])
+        self.assertIn('Assigned to 1 of 3', boxes['long'].toolTip())
+        self.assertEqual(boxes['short'].toolTip(), '')
+
     def test_request_captures_selected_ids_and_uuid_before_a_selection_change(self):
         with tempfile.TemporaryDirectory() as td:
             entered=threading.Event();release=threading.Event();requests=[]

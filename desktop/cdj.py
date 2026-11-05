@@ -6,7 +6,7 @@ from copy import deepcopy
 import threading
 
 from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from .devices import device_facts
 
@@ -51,9 +51,9 @@ class CdjDeviceMixin:
         if from_drop and drop_target is None:
             drop_target = (self._device_mount_tokens.get(dev,0),device_facts(dev,cached_only=True).volume_uuid)
         if self._defer_device_operation_until_scan_finishes(
-                lambda: self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)):
+                lambda: self._begin_cdj_export(dev, playlists, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone),target=dev):
             return
-        if self._device_operation_owned():
+        if self._device_operation_owned(dev):
             QMessageBox.information(self, 'Device busy', 'Wait for the current device operation.')
             return
         # Accepted source edits drain before freezing a generation; a timer keeps
@@ -196,6 +196,8 @@ class CdjDeviceMixin:
             if dev == self._current_device_path:
                 self._present_usb_device(dev)
         self._update_device_action_state()
+        if getattr(self, '_usb_format_device', ''):
+            self._show_usb_format_status()
 
     def _apply_usb_settings(self, changes):
         dev = self._current_device_path
@@ -214,11 +216,15 @@ class CdjDeviceMixin:
                 self.settings.pop('cdj_my_settings',None)
                 return
         profile = self.settings.get('cdj_my_settings',{})
-        self.usb_device_pages.global_profile = deepcopy(profile)
-        editor=self.usb_device_pages.my_settings
-        if editor.profile!=current or editor.global_profile!=profile:
-            editor.set_profile(current,profile,preserve_edits=True)
-        if self._global_my_settings.profile!=profile:self._global_my_settings.set_profile(profile)
+        pages = vars(self).get('usb_device_pages')
+        if pages is not None:
+            pages.global_profile = deepcopy(profile)
+            editor = pages.my_settings
+            if editor.profile!=current or editor.global_profile!=profile:
+                editor.set_profile(current,profile,preserve_edits=True)
+        editor = getattr(self, '_global_my_settings', None)
+        if editor is not None and editor.profile!=profile:
+            editor.set_profile(profile)
 
     def _save_global_my_settings(self, profile):
         from soundbox import my_settings
@@ -228,10 +234,14 @@ class CdjDeviceMixin:
         if not self._save_state(invalidate_views=False):
             self.settings['cdj_my_settings'] = previous
             return
-        self._global_my_settings.set_profile(profile)
-        self.usb_device_pages.global_profile = deepcopy(profile)
-        native = getattr(self.usb_device_pages._snapshot,'native',None)
-        self.usb_device_pages.my_settings.set_profile(my_settings.values(native.files) if native else {},profile)
+        editor = getattr(self, '_global_my_settings', None)
+        if editor is not None:
+            editor.set_profile(profile)
+        pages = vars(self).get('usb_device_pages')
+        if pages is not None:
+            pages.global_profile = deepcopy(profile)
+            native = getattr(pages._snapshot,'native',None)
+            pages.my_settings.set_profile(my_settings.values(native.files) if native else {},profile)
         self._flash_status('Global My Settings saved')
 
     def _promote_usb_settings(self, profile):
@@ -277,37 +287,144 @@ class CdjDeviceMixin:
         facts=device_facts(dev,cached_only=True);token=self._device_mount_tokens.get(dev,0)
         sources=[Path(self.lib.source),*[t.path for t in self.lib.tracks_by_id.values()]] if self.lib else []
         if self.lib:sources.extend(Path(t.source_analysis_path) for t in self.lib.tracks_by_id.values() if t.source_analysis_path)
-        self._exporting=True;self._release_eject_ready()
+        self._usb_format_device=dev
+        self._usb_format_volumes=(dev,)
+        self._usb_format_started=False
+        self._usb_format_original_text=''
+        self._release_eject_ready()
         worker=CdjWorker(lambda _cancel,_progress:usb_format.capture(dev,token=token,volume_uuid=facts.volume_uuid,sources=sources))
-        self._cdj_worker=worker
         def show(result):
+            if isinstance(result,Exception):self._finish_usb_format(dev,result);return
             self._stop_pulse()
-            if isinstance(result,Exception):self._finish_cdj(dev,result);return
+            self._usb_format_volumes=result.volumes
             from .usb_preferences import FormatUsbDialog
             dialog=FormatUsbDialog(result,self)
-            if dialog.exec()!=dialog.Accepted or self._shutting_down:
-                self._exporting=False;self._update_device_action_state();return
+            try:
+                accepted=dialog.exec()==QDialog.DialogCode.Accepted
+                choice=dialog.choice if accepted else None
+            finally:
+                dialog.deleteLater()
+            if not accepted or self._shutting_down:
+                self._finish_usb_format(dev,None,cancelled=True);return
             global_profile=deepcopy(self.settings.get('cdj_my_settings',{}))
-            format_name,format_filesystem=dialog.choice
+            format_name,format_filesystem=choice
             recovery=self._data_file.parent/'cdj-recovery'
-            def format_and_initialize(_cancel,_progress):
-                info=usb_format.format_usb(result,format_name,format_filesystem,sources=sources)
+            def format_and_initialize(cancel,progress):
+                info=usb_format.format_usb(result,format_name,format_filesystem,sources=sources,
+                    should_cancel=cancel,on_progress=progress)
                 path=Path(info['MountPoint'])
+                progress(0,0,'Initializing USB')
                 plan=cdj_export.plan_initialize(path,token=path.stat().st_dev,volume_uuid=info['VolumeUUID'],
-                    sources=sources,profile=global_profile,name=info['VolumeName'],recovery_root=recovery)
+                    sources=sources,profile=global_profile,name=info['VolumeName'],recovery_root=recovery,
+                    should_cancel=cancel)
                 try:cdj_transaction.commit(plan)
                 finally:plan.close()
                 return str(path)
-            next_worker=CdjWorker(format_and_initialize);self._cdj_worker=next_worker
-            def finished(value):
-                self._finish_cdj(dev,value if isinstance(value,Exception) else None)
-                if not isinstance(value,Exception):self._flash_status('USB formatted · Global My Settings loaded',15)
-            next_worker.finished.connect(lambda w=next_worker:self._finish_device_result_worker('_cdj_worker',w,finished))
-            self.cancel_btn.setVisible(False);self._start_pulse('Formatting USB')
-            self._start_device_worker(next_worker,dev,'format')
+            next_worker=CdjWorker(format_and_initialize)
+            self._usb_format_started=True
+            self._start_usb_format_worker(next_worker,dev,
+                lambda value:self._finish_usb_format(dev,value),'Formatting USB')
+        self._start_usb_format_worker(worker,dev,show,'Reading USB')
+
+    def _start_usb_format_worker(self,worker,dev,callback,label):
+        """Own the erase separately so another drive can use the export lane."""
+        self._usb_format_worker=worker
+        worker.progress.connect(lambda _done,_total,text:
+            self._usb_format_progress(dev,text) if self._usb_format_worker is worker else None)
+        def finished():
+            worker.wait()
+            if self._usb_format_worker is not worker:return
+            self._usb_format_worker=None
+            worker.deleteLater()
+            if self._shutting_down:
+                self._usb_format_device=''
+                return
+            try:
+                callback(worker.result)
+            except Exception as exc:
+                self._finish_usb_format(dev,exc)
+        worker.finished.connect(finished)
+        self._usb_format_progress(dev,label)
+        try:
+            worker.start()
+        except Exception as exc:
+            self._usb_format_worker=None
+            worker.deleteLater()
+            self._finish_usb_format(dev,exc)
+            return
+        self._update_device_action_state()
+
+    def _usb_format_progress(self,dev,label):
+        if dev!=getattr(self,'_usb_format_device','') or self._shutting_down:return
+        native=(('Started erase','Formatting USB'),('Unmounting','Unmounting USB'),
+                ('Erasing','Erasing USB'),('Mounting','Mounting USB'),
+                ('Finished erase','Finishing USB format'),('Creating the partition map','Preparing USB'),
+                ('Waiting for partitions','Preparing USB'),('Formatting disk','Formatting USB'))
+        stages={'Reading USB','Checking USB','Formatting USB','Erasing USB',
+                'Finishing USB format','Initializing USB'}
+        if label not in stages:
+            label=next((stage for prefix,stage in native if label.startswith(prefix)),'')
+            if not label:return
+        self._usb_format_label=label
+        self._show_usb_format_status()
+
+    def _show_usb_format_status(self):
+        dev=getattr(self,'_usb_format_device','')
+        if not dev:return
+        row=self._usb_device_rows.get(dev)
+        name=row[0] if row else Path(dev).name
+        for at in range(self.device_tree.topLevelItemCount()):
+            item=self.device_tree.topLevelItem(at)
+            from .trees import DEVPATH_ROLE
+            if item.data(0,DEVPATH_ROLE)==dev:
+                if not self._usb_format_original_text:self._usb_format_original_text=item.text(0)
+                item.setText(0,f'{name} · {self._usb_format_label}…')
+        # A simultaneous export owns the footer and its Cancel control.
+        if ((not getattr(self,'_usb_format_started',False) or not self._device_operation_owned(''))
+                and not getattr(self,'_export_batch',None)):
+            self._start_pulse(f'{self._usb_format_label} · {name}')
             self.cancel_btn.setVisible(False)
-        worker.finished.connect(lambda w=worker:self._finish_device_result_worker('_cdj_worker',w,show))
-        self._start_pulse('Reading USB');self._start_device_worker(worker,dev,'inspect')
+
+    def _finish_usb_format(self,dev,result,*,cancelled=False):
+        self._usb_format_device=''
+        idle=not self._device_operation_owned('') and not getattr(self,'_export_batch',None)
+        if idle:self._stop_pulse()
+        if isinstance(result,Exception):
+            QMessageBox.warning(self,'USB format stopped',str(result))
+            if idle:self._flash_status('USB format stopped',15)
+        elif not cancelled and idle:
+            self._flash_status('USB formatted · Global My Settings loaded',15)
+        if getattr(self,'_usb_format_started',False):
+            from .devices import forget_device_mount
+            from .trees import DEVPATH_ROLE
+            # Every old partition identity is retired, including an erase that
+            # succeeded before initialization failed. Never offer stale targets
+            # while another export holds discovery off.
+            for volume in self._usb_format_volumes:
+                forget_device_mount(volume)
+                self._device_coordinator.disconnect(volume)
+                for cache in (self._usb_view_cache,self._device_profiles,
+                              self._device_mount_tokens,self._usb_device_rows):
+                    cache.pop(volume,None)
+                self._usb_view_requests.discard(volume)
+                for at in range(self.device_tree.topLevelItemCount()-1,-1,-1):
+                    if self.device_tree.topLevelItem(at).data(0,DEVPATH_ROLE)==volume:
+                        self.device_tree.takeTopLevelItem(at)
+                if self._current_device_path==volume:
+                    self._current_device_path=''
+                    self.stack.setCurrentIndex(0)
+            self._device_mount_refresh_pending=True
+        if cancelled or isinstance(result,Exception):
+            row=self._usb_device_rows.get(dev)
+            if row:
+                from .trees import DEVPATH_ROLE
+                for at in range(self.device_tree.topLevelItemCount()):
+                    item=self.device_tree.topLevelItem(at)
+                    if item.data(0,DEVPATH_ROLE)==dev:
+                        item.setText(0,self._usb_format_original_text or row[0])
+        self._update_device_action_state()
+        self._sync_cue_editing()
+        if getattr(self,'_device_mount_refresh_pending',False):QTimer.singleShot(0,self._refresh_devices)
 
     def _recover_cdj(self, dev):
         from soundbox import cdj_transaction
@@ -448,9 +565,9 @@ class CdjDeviceMixin:
         self.table.setColumnWidth(column,width)
 
     def _enrich_usb_row(self, song, row):
-        if (self.lib and song.source_db_id == self.lib.source_library_id and song.source_id in self.lib.tracks_by_id
-                and song.artwork):
-            row['art'] = self.art_cache.status_kind(song.source_id)
+        # A desktop artwork cache can change independently of the exported
+        # cover. USB rows describe their native catalog reference only.
+        row['art'] = 'cover' if song.artwork else ''
 
     def _load_usb_song(self, song):
         snapshot = self.usb_device_pages._snapshot

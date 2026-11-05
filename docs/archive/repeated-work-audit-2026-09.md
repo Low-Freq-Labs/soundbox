@@ -8,6 +8,10 @@ have since been retired; [project layout](../PROJECT_LAYOUT.md) distinguishes
 retained receipts from deleted material. Old paths do not guarantee retention
 or authorize replay; inspect retained scripts before reuse.
 
+Historical app-control, source-write, installer, restore, replay and cleanup
+instructions below grant no present authorization. Current permissions and
+protected recovery bases are governed by [the current handoff](../HANDOFF.md).
+
 The initial read-only audit followed generation 63's incremental-sync acceptance.
 The original findings below describe the pre-change baseline at `50a47ba` plus
 the incremental/spacing changes. Sonny subsequently authorized all five non-USB

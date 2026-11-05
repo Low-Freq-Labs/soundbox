@@ -1,7 +1,9 @@
 # SoundBox device layouts
 
-November4,2026 USB follow-up source changes are described below; installed
-provenance remains separate in HANDOFF. Older audits and hardware observations retain their
+Reviewed November4,2026 against installed whole-app build165 (runtime7ffde716…,
+signed base19a3075/dirty=true); prior build163 used published source `cf2ef5b`.
+Installed identity, physical fixture timings and remaining gates are in HANDOFF.
+Older audits and hardware observations retain their
 dated scope; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
@@ -32,7 +34,11 @@ Unknown or failed probes never grant extra capability.
 
 Device-specific export work waits for detection. Launch keeps the mount watcher
 and read-only discovery active, while full export backends and artwork cache
-indexes load on demand. Empty scans do not construct export playlists. After
+indexes load on demand. Device pages are constructed only for a requested device
+view; passive resizing, theme changes, backup and shutdown never create them.
+Export stays disabled without a capable attached target. Standalone-track menu
+actions use that target's busy state, including during another USB's format.
+Empty scans do not construct export playlists. After
 detection of an iPod/Rockbox target, the worker obtains GUI-captured inputs before
 checking drift; capture failure remains `Sync status pending` for those profiles.
 Generic USB detection captures no export playlists and reads no native catalog
@@ -40,7 +46,30 @@ for drift. Canceled/stale captures cannot start
 dashboard preload. Already loaded modules and reusable local caches may remain
 in memory after disconnect; export artwork preparation stops cooperatively.
 
-### Native CDJ USB pilot
+### Later iPod efficiency/correctness work
+
+The [November4 iPod audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+covers stock, Rockbox-only and dual-boot paths using generated/private offline
+fixtures. It reuses operation-local catalogs/source contracts, preserves shared
+playlist ownership, isolates colliding artwork folders, freshly verifies
+interrupted candidates and moves remaining device reads out of GUI admission.
+Explicit Rockbox Sync checks source metadata/display even with unchanged playlist
+membership; its idle badge remains playlist-based. Retained-media inventory is
+not a fresh integrity certificate. Existing codec, firmware, recovery and source
+boundaries remain. No iPod hardware was available. Its preceding runtime26f15fb4… passed2695tests; current whole-app runtime7ffde716…
+passes2779tests with exact fresh state/icon. HANDOFF has precise delivery identities.
+
+### Native CDJ USB export
+
+The later November4 [USB audit](performance-audit.md#usb-deep-audit--november4-later-testing)
+is installed in personal build165. It fixes format confirmation, permits
+another USB to export during a confirmed format, streams native erase stages and
+loads USB Info covers from their selected device references. Formatting reserves
+every captured partition of its physical disk; discovery waits until the native
+erase worker retires. The ordinary export lane remains serialized and retains
+fresh target/source and transactional guards. The preceding USB pass closed2639tests and both package
+profiles; the later iPod pass above retains these fixes. State/icon preservation
+is recorded in HANDOFF.
 
 October29: the dedicated generic-USB exporter maintains classic Device Library
 and Plus together on writable FAT32/exFAT. It preserves unrelated native records
@@ -105,8 +134,10 @@ never external-device/write authority. A busy lane retains the request and retri
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
 retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
-three-second poll. Generic USB polling observes mount/storage facts without source
-comparison or catalog reads. Ordinary unmounted folders retain the 30-second attachment grace.
+three-second poll. Known generic-USB-only connections have no recurring mounted-path
+scan or source-event scan. Mount changes, retryable discovery and deliberate browser
+requests may refresh connection/storage facts; they do not compute sync state.
+Ordinary unmounted folders retain the 30-second attachment grace.
 Verified external mounts appear disabled as `NAME · Checking…`. The first iPod/Rockbox scan
 computes sync drift before publishing the selectable row at QThread.finished;
 unknown/failed iPod/Rockbox checks say `Sync status pending`, never imply a clean result.
@@ -271,10 +302,11 @@ a fresh plan may identify only an overlapping regular file at the freshly
 derived deterministic path and expected size. Full SHA-256 verification is
 deferred from the confirmation-blocking plan into commit preflight, where every
 candidate must match the freshly derived payload before the first device write.
-Those proofs are recorded in a disposable Mac-side interrupted-verification
-journal keyed by the baseline manifest hash; an additional USB reset resumes
-proof from the first unverified file rather than rereading every completed
-payload. Recovery verification contributes to visible sync progress. The
+Every adoption/preflight freshly hashes each affected candidate with stable
+descriptor/path identities and cancellation checks. Same-size FAT edits can
+retain all reported epochs, so old interrupted-verification JSON cannot
+authorize reuse after a USB reset. Historical proof files remain untouched;
+no new per-file proof JSON is written. Recovery verification contributes to visible sync progress. The
 device ownership manifest still changes only at the final successful
 publication.
 
@@ -338,9 +370,10 @@ snapshot while planning, syncing, deleting, or performing the post-operation
 read. A successful read replaces all three surfaces together. A transient read
 failure keeps that snapshot visible and reports that it is the last verified
 state; it must never clear individual tabs into a misleading blank view.
-The device header exposes Sync at all times, including when the last background
-drift scan said the device was current; the context menu offers the same manual
-recheck. Applying playlist order adds device-presentation fields to schema 3.
+The shared device-header action is Export and opens the playlist/device selector.
+The iPod context menu retains Sync for an explicit managed-library recheck, even
+when its last background drift scan was clean; these iPod semantics do not apply
+to generic USBs. Applying playlist order adds device-presentation fields to schema 3.
 The next explicit Delete treats that reordered generation as its baseline and
 reconciles any other source-side playlist drift in the same confirmed plan;
 presentation changes and unrelated source drift cannot create a Sync-first
@@ -534,8 +567,10 @@ smart-rule header word that Clickwheel normalizes, reparses the final bytes, and
 compares existing playback state, track identities, selected order, and built-in
 smart rules before a commit is even possible.
 
-The format check is destination-specific. Rockbox/generic exports retain their
-supported FLAC/AIFF/24-bit/float/high-rate formats under their destination policy.
+The format check is destination-specific. Rockbox/filesystem exports retain their
+supported FLAC/AIFF/24-bit/float/high-rate formats under that destination policy.
+Generic CDJ USB export has its own source/native-analysis and player compatibility
+boundaries in the CDJ guide; the broader Rockbox list does not certify CDJ media.
 Disposable artwork/display-metadata derivatives preserve audio essence and
 technical properties; this does not promise byte-identical exported containers.
 The MA446 planner alone
@@ -549,9 +584,11 @@ are stereo PCM16/44.1-kHz. A read-only full-library audit found 722 PCM24/44.1,
 files may never be treated as isolated exceptions.
 
 SoundBox curation is resolved before that destination check. **Remove from
-Collection** is a global export veto and **Remove from Playlist** is a veto for
-that stable playlist ID. Playlist menus expose both scopes; Collection exposes
-only its global scope. Neither curated-away track reaches stock format inspection,
+Collection** excludes the selected song from SoundBox exports. Ordinary native
+**Remove from Playlist** persists an identity-bound edit through the separately
+accepted native playlist writer; it is not a new local-only veto. Local custom
+playlists remove their actual local membership, while legacy stored exclusions
+remain honored. Neither curated-away track reaches stock format inspection,
 artwork, copy planning, or iTunesDB rendering. Consequently, the stock
 confirmation's selected count is the effective SoundBox playlist—not raw
 Rekordbox membership—and curated-away tracks do not appear misleadingly in the
@@ -656,8 +693,9 @@ catalog. Parsing runs off the UI thread and eject refuses to race it.
 Non-stock USB/Rockbox devices now use **Overview** and **Playlists** tabs in the
 same device header and dashboard styling. Overview reuses the iPod's alternating
 2×2 detail panels: Identity, Storage, Playlists and SoundBox. Identity/storage
-facts come from the verified mount-probe cache; free space uses the existing
-completed device scan. Rockbox sync status remains separate. Generic USBs show
+facts come from the verified mount-probe cache; free space uses the latest
+completed requested connection scan, not an idle generic-USB storage poll.
+Rockbox sync status remains separate. Generic USBs show
 export readiness without sync or pending-change status. Read errors remain explicit.
 
 Generic USBs prefer the bounded native CDJ snapshot described above. Otherwise,
@@ -733,10 +771,12 @@ separately validated `iTunesDB` implementation.
   `soundbox.stock_ipod` transaction. On dual boot it may be invoked only by the
   composite planner with coordinated recovery, rollback, and manifest-last
   publication.
-- Existing unknown target files are conflicts and never claimed except through
-  the baseline-bound, exact path/size/SHA-256 interrupted-generation recovery
-  above. A differing manifest-owned file is required repair work and is
-  atomically replaced.
+- Unrelated unknown target files remain untouched. A planned output colliding
+  with a different unowned file is a conflict; matching existing media can be
+  referenced without claiming ownership. Only the baseline-bound exact
+  path/size/SHA-256 interrupted-generation proof above can adopt an unowned
+  survivor. File replacement/repair retains its destination-specific ownership
+  and rollback checks; discovery never grants mutation authority.
 - Copies land as `.sbpart` and atomically rename only after completion.
 - Filesystem/stock/composite normal Sync cleanup is limited to manifest-owned
   SoundBox paths. The separate filesystem-device **Erase all files from device…**
@@ -754,11 +794,13 @@ separately validated `iTunesDB` implementation.
   handles flushing; a refusal is reported without a force-unmount fallback.
   A finishing background read queues Eject behind QThread.finished and suppresses
   replacement polls. Active writes must finish or stop safely first. Required
-  finalization reads remain serialized; failed integrity does not prevent idle
+  iPod finalization reads remain serialized; generic USB completion starts none.
+  Failed integrity does not prevent idle
   eject. The post-sync polling hold ends when the completion dialog is dismissed.
 
-Unknown devices also expose a threaded import action. Selected audio or M3U8
-entries copy in exact playlist order to
+The retained filesystem-browser backend also supports an explicit threaded
+import action; the current generic USB tabs/menu do not expose that old raw-browser
+action. Selected audio or M3U8 entries in that backend copy in exact playlist order to
 `~/Music/SoundBox Media/Unknown Artist/` by default, then register those owned
 copies in SoundBox. The device and original Finder/Downloads files are never
 moved, modified, or automatically removed.
@@ -923,8 +965,8 @@ omissions are recorded in HANDOFF.md. It contains real database/recovery/config
 baselines but excludes source audio and PIONEER. Keep originals read-only and use
 disposable test copies. Metadata-only fixtures cannot validate real USB or
 firmware playback. A user-requested fresh menu/tag-display configuration was
-written and normally ejected; this does not change the exporter's automatic
-configuration allowlist.
+written and normally ejected at that checkpoint; it grants no automatic firmware
+preference writes under the current user-owned-settings policy.
 
 
 Explicit composite Repair plans missing manifest-owned Rockbox audio and per-track

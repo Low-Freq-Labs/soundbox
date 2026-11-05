@@ -21,11 +21,14 @@ import urllib.parse
 import urllib.request
 
 from soundbox.providers import ConnectionFailure
+from .operations import ProviderCancelled, operation_scope, read_response
 
 REDIRECT_URI = "http://127.0.0.1:53927/soundcloud/callback"
 _API = "https://api.soundcloud.com"
 _AUTH = "https://secure.soundcloud.com"
 _service: SoundCloudConnection | None = None
+_configured_root: Path | None = None
+_service_lock = threading.RLock()
 
 
 class ConnectionError(ConnectionFailure):
@@ -127,7 +130,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def _json_request(url: str, *, token: str = "", form: dict | None = None,
                   post: bool = False, basic: tuple[str, str] | None = None,
-                  resolve_user: bool = False) -> dict:
+                  resolve_user: bool = False, stop: threading.Event | None = None) -> dict:
+    if stop is not None:
+        _check(stop)
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or parsed.netloc not in ("api.soundcloud.com", "secure.soundcloud.com"):
         raise ConnectionError("SoundCloud returned an invalid API address.")
@@ -146,7 +151,15 @@ def _json_request(url: str, *, token: str = "", form: dict | None = None,
     try:
         with urllib.request.build_opener(_NoRedirect).open(
                 urllib.request.Request(url, data=data, headers=headers), timeout=15) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
+            if stop is not None and data is None and basic is None:
+                # Metadata GETs can cancel after each receive. Keep the old
+                # per-receive socket budget, without imposing a new whole-scan
+                # deadline. Auth POSTs must finish reading rotating credentials
+                # so their caller can persist the returned token immediately.
+                with operation_scope(stop.is_set, timeout=float("inf")):
+                    raw = read_response(response, 4 * 1024 * 1024 + 1, timeout=15)
+            else:
+                raw = response.read(4 * 1024 * 1024 + 1)
         if len(raw) > 4 * 1024 * 1024:
             raise ConnectionError("SoundCloud's response was too large.")
         result = json.loads(raw) if raw else {}
@@ -162,7 +175,7 @@ def _json_request(url: str, *, token: str = "", form: dict | None = None,
             if (target.scheme == "https" and target.netloc == "api.soundcloud.com"
                     and len(parts) == 3 and parts[1] == "users" and parts[2]
                     and not target.query and not target.fragment):
-                return _json_request(location, token=token)
+                return _json_request(location, token=token, stop=stop)
             raise ConnectionError("SoundCloud did not resolve that address to a user profile.") from None
         messages = {401: "SoundCloud authorization expired. Connect again.",
                     429: "SoundCloud is rate limiting requests. Try refreshing likes later."}
@@ -171,6 +184,8 @@ def _json_request(url: str, *, token: str = "", form: dict | None = None,
                    messages.get(exc.code, f"SoundCloud request failed (HTTP {exc.code})."))
         exc.close()
         raise ConnectionError(message, status=exc.code) from None
+    except ProviderCancelled:
+        raise Cancelled("Cancelled") from None
     except (OSError, ValueError):
         raise ConnectionError("Could not reach SoundCloud. Check your connection and try again.") from None
 
@@ -199,14 +214,34 @@ def _read(path: Path) -> dict:
         return {}
 
 
+def _cached_entries(root: Path, state: dict) -> tuple[dict, ...] | None:
+    """Read only the disposable index belonging to this connected account."""
+    if not state.get("connected") or not isinstance(state.get("user_id"), str) or not state["user_id"]:
+        return None
+    cached = _read(root / "likes.json")
+    if (cached.get("schema") != 1 or cached.get("user_id") != state["user_id"]
+            or not isinstance(cached.get("entries"), list)):
+        return None
+    # A truncated/old disposable row must not break first-demand artwork lookup.
+    # Keep the representation used by _track_entry; absent artists are supported
+    # by the matching policy and older metadata-only indexes.
+    return tuple(entry for entry in cached["entries"]
+                 if isinstance(entry, dict)
+                 and all(isinstance(entry.get(key), str) for key in
+                         ("id", "title", "webpage_url", "thumbnail", "uploader"))
+                 and ("artists" not in entry or (isinstance(entry["artists"], list)
+                      and all(isinstance(artist, str) for artist in entry["artists"]))))
+
+
 class SoundCloudConnection:
     def __init__(self, root: Path, store=None):
         self.root = root
         self.store = store if store is not None else Keychain(hashlib.sha256(str(root.resolve()).encode()).hexdigest())
         self._state = _read(root / "connection.json")
-        self._entries: tuple[dict, ...] = ()
+        self._entries = _cached_entries(root, self._state) or ()
         self._lock = threading.RLock()
         self._operations = threading.Lock()
+        self._initial_refresh_attempted = False
 
     def status(self) -> dict:
         with self._lock:
@@ -360,27 +395,46 @@ class SoundCloudConnection:
     def refresh(self, stop: threading.Event, progress: Callable[[str], None]) -> None:
         with self._operations:
             _check(stop)
-            cached = _read(self.root / "likes.json")
-            if (cached.get("schema") == 1 and cached.get("user_id") == self.status().get("user_id")
-                    and self.status().get("connected") and isinstance(cached.get("entries"), list)):
-                with self._lock:
-                    self._entries = tuple(e for e in cached["entries"] if isinstance(e, dict))
-            saved = self.store.read()
-            saved = self._ready_tokens(saved, stop)
+            self._initial_refresh_attempted = True
+            self._refresh_saved(stop, progress)
+
+    def refresh_initial(self, stop: threading.Event, progress: Callable[[str], None]) -> None:
+        """One automatic connected refresh, shared by the window and Settings.
+
+        This runs on their retained workers. The same operation lock that owns
+        rotating tokens makes later Settings admission reuse an initial attempt.
+        Explicit Refresh stays repeatable after success or failure.
+        """
+        with self._operations:
             _check(stop)
-            self._refresh(saved, stop, progress)
+            if self._initial_refresh_attempted:
+                return
+            self._initial_refresh_attempted = True
+            if self.status().get("connected"):
+                self._refresh_saved(stop, progress)
+
+    def _refresh_saved(self, stop, progress) -> None:
+        with self._lock:
+            cached = _cached_entries(self.root, self._state)
+            if cached is not None:
+                self._entries = cached
+        saved = self.store.read()
+        saved = self._ready_tokens(saved, stop)
+        _check(stop)
+        self._refresh(saved, stop, progress)
 
     def _refresh(self, saved: dict, stop: threading.Event, progress: Callable[[str], None]) -> None:
+        self._initial_refresh_attempted = True
         token = saved["access_token"]
         public = saved.get("mode") == "public"
         if public:
             profile = public_profile_url(saved.get("public_profile", ""))
             user = _json_request(_API + "/resolve?" + urllib.parse.urlencode({"url": profile}),
-                                 token=token, resolve_user=True)
+                                 token=token, resolve_user=True, stop=stop)
             if user.get("kind") != "user":
                 raise ConnectionError("Enter a SoundCloud user profile, rather than a track or playlist.")
         else:
-            user = _json_request(_API + "/me", token=token)
+            user = _json_request(_API + "/me", token=token, stop=stop)
         _check(stop)
         user_id = str(user.get("urn") or user.get("id") or "")
         if not user_id:
@@ -403,7 +457,7 @@ class SoundCloudConnection:
             if parsed.scheme != "https" or parsed.netloc != "api.soundcloud.com" or url in visited:
                 raise ConnectionError("SoundCloud returned an invalid likes page.")
             visited.add(url)
-            page = _json_request(url, token=token)
+            page = _json_request(url, token=token, stop=stop)
             collection = page.get("collection")
             if not isinstance(collection, list):
                 raise ConnectionError("SoundCloud returned an invalid likes list.")
@@ -475,11 +529,27 @@ def _track_entry(track: dict) -> dict | None:
             "artists": [str(track.get("metadata_artist") or "")]}
 
 
+def bind_root(root: Path) -> None:
+    """Remember AppData without reading files, credentials or creating service UI."""
+    global _configured_root, _service
+    with _service_lock:
+        root = Path(root)
+        if _configured_root != root:
+            _configured_root = root
+            _service = None
+
+
 def create(root: Path) -> SoundCloudConnection:
+    """Share the same service between provider demand and later Settings UI."""
     global _service
-    _service = SoundCloudConnection(root / "connections" / "soundcloud")
-    return _service
+    with _service_lock:
+        bind_root(root)
+        if _service is None:
+            _service = SoundCloudConnection(root / "connections" / "soundcloud")
+        return _service
 
 
 def liked_entries() -> tuple[dict, ...]:
-    return _service.entries() if _service else ()
+    with _service_lock:
+        service = create(_configured_root) if _configured_root is not None else _service
+    return service.entries() if service is not None else ()

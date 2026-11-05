@@ -1,7 +1,11 @@
 # Shared app and optional personal modules
 
-Allocation requested October26,2026; status checked November4 against source
-release `4a3d29a` and installed build160/runtime `7bbe8577…`. Product direction: one shared application,
+Allocation requested October26,2026; status checked November4 against tested
+source release `cf2ef5b` and then-installed build163/runtime `42aefd35…`.
+The same boundary remains in current whole-app build165/runtime7ffde716…; both signed
+profiles/code parity and isolated native/SQLCipher checks pass. No new dependency
+or distribution clearance is implied.
+Product direction: one shared application,
 nearly identical public/personal UI, optional installed modules adding a small
 number of capabilities. Sonny clarified that the public product remains the
 complete music manager, spanning iPod/MP3 players and USB export. Personal
@@ -24,9 +28,12 @@ Build/install validation is recorded in the current handoff.
 
 “Public” means intended shared product scope, subject to the release gates in
 [ROADMAP.md](ROADMAP.md), not a declaration that today's build is ready to ship.
-Device management is shared, including guarded file maintenance and confirmed
-generic-volume Erase. Validated rekordbox-compatible/CDJ USB export is
-also shared product scope. Neither profile may bypass source/device safety
+Device management is shared: selected-playlist Export, Import My Settings,
+confirmed Reformat USB and Eject are current generic-USB controls; iPod tools
+retain their own sync/maintenance surfaces. Raw filesystem editing and generic
+Erase backends remain legacy maintenance code, not the current visible device UI.
+Validated rekordbox-compatible/CDJ USB export is shared product scope.
+Neither profile may bypass source/device safety
 contracts. September 28 clarification: Sonny wants features in public when their
 specific implementation can be properly distributed and operated. Online features,
 including Unknown-Artist suggestions, are not inherently personal-only. The table's
@@ -80,19 +87,19 @@ they are not a completed legal or dependency clearance.
 | Suggest artists for Unknowns (online consensus) | Omit | Retain via provider | Separate from local merge suggestions |
 | `yt_dlp` and provider-specific network/matching code | Exclude package | Optional dependency | Personal bundles it; public physically excludes it |
 | Device discovery, loading status, dashboard, normal eject | Keep | Same | Core serialized device controller |
-| Rockbox filesystem export / generic FAT32–exFAT native CDJ export | Shared scope, guarded | Same; CDJ remains a testing pilot | Separate firmware/layout contracts and publication boundaries |
+| Rockbox filesystem export / generic FAT32–exFAT native CDJ export | Shared scope, guarded | Same implemented selected-playlist export | Generic USBs export selected playlists without sync/drift status or idle catalog reads; remaining player/hardware gates and iPod firmware/layout contracts stay separate |
 | Stock MA446 export | Keep after acceptance | Same allowlist | Validated MP3/supported WAV only |
 | Dual MA446 stock/Rockbox single-copy sync | Keep after acceptance | Same allowlist | Schema 3; one transaction authority |
 | Managed playlist deletion, reference-counted cleanup | Keep, confirmed | Same | Core sync semantics, not an unlock bypass |
 | Rockbox append adoption into custom playlists | Keep | Same | Existing managed paths only; no rekordbox writes |
 | Verify / Deep Verify | Keep, explicit | Same | Read-only; never prerequisite for idle eject |
-| Read-only device file browsing/import | Keep | Same | Confined source paths and serialized reads |
-| Raw device file rename/delete/Assign Artist/New Folder | Keep, guarded | Same | Shared device tools with target/source guards and confirmations |
-| Whole generic-volume Erase | Keep, separately confirmed | Same | Exact target confirmation; never enabled for stock/dual |
+| Native USB music/settings browsing and Import My Settings | Keep | Same | Explicit browser/settings reads; no raw filesystem tab |
+| Reformat USB | Keep, separately confirmed | Same | Exact generic-USB target/source/layout guards; not enabled for stock/dual |
+| Legacy raw filesystem browsing/import/editing and generic Erase backends | Retained core code; not current visible controls | Same | Legacy maintenance boundaries remain guarded; do not advertise a raw file manager or Erase action in the current USB UI |
 | Backup/restore | Keep | Same | Staged restore/recovery and serialized core state ownership |
 | Diagnostic logging / actionable errors | Keep | Same | No user paths/library data bundled as examples |
 | Exact native traces, developer scripts and legacy XML CLI | Not product UI | Developer tools | Separate tools; do not treat as personal feature unlock |
-| Packaged native CDJ USB pilot | Backend packaged; public release withheld | Personal testing build | Both frozen profiles include the dedicated renderer; physical and dependency/distribution review remain open |
+| Packaged native CDJ USB exporter | Implemented; public distribution withheld | Selected-playlist export with small physical fixture proof | Both frozen profiles include the dedicated renderer; player/hardware and dependency/distribution gates remain open |
 | CDJ research harnesses and hardware fixtures | Exclude | Developer workspace only | Only the compiled dedicated renderer enters app profiles; research code and private fixtures are not bundled |
 | Other stock models, schema-2→3 migration, Windows | Not yet supported | Same | Personal profile does not expand firmware authority |
 
@@ -106,8 +113,12 @@ discovery; this design does not import or describe them.
 The same main window, deck, library and device tabs remain. The online fetch,
 rescan, URL and Unknown-Artist discovery actions disappear. “Choose cover art…”
 still opens local selection. The artist catalog retains local image controls.
-Device file editing, confirmed generic Erase and managed Sync/Delete/Verify/Eject
-remain normal shared controls with their existing device-specific safeguards.
+Selected-playlist Export, Import My Settings, confirmed Reformat USB and Eject
+remain shared USB controls. Managed iPod Sync/Delete/Verify retain their own
+device-specific safeguards. Retained raw-file-editing and generic Erase backends
+are legacy maintenance code, not current visible device controls.
+Generic USB completion/eject perform no final read;
+small native catalogs are read only for an explicit browser/export/settings action.
 No locked buttons, empty provider panels, upgrade banners or alternate layout.
 
 ## Attachment contract
@@ -129,6 +140,12 @@ No locked buttons, empty provider panels, upgrade banners or alternate layout.
    activate a module absent from the public artifact. A null provider schedules
    no network work. Optional provider jobs use core cancellation/ownership and
    bounded resource budgets.
+   Settings widgets are created on demand. Personal connection setup binds the
+   AppData path without I/O; cached same-account likes and the later Connections
+   UI share one service. A window-owned initial refresh preserves the connected
+   account's launch refresh without constructing Settings, while public schedules
+   no personal work. Export preparation/caches likewise remain demand-driven by
+   compatible connected devices; ordinary desktop artwork stays available.
 5. Initial delivery uses explicit build composition: shared core plus a
    known provider package in the personal artifact, shared core alone in public.
    This gives attach/detach at build and restart without a code fork. Loading

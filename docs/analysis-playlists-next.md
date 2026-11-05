@@ -31,6 +31,10 @@ The 44×28 hamburger button uses the existing toolbar layout. Menu order:
    no synthetic visible playlist. The action freezes mount token/UUID through
    discovery/source-save deferrals. It uses the dedicated CDJ transaction,
    preserves current songs/playlists and is a true no-op when unchanged.
+   Its choices use cached presentation for compatible attached FAT32/exFAT USBs;
+   each action requires a loaded native song, writable identity and an available
+   lane for that device. Device pages/export caches initialize on demand; the
+   worker retains fresh target/source/recovery checks.
    Initial and incremental exports and interrupted standalone intent resumption
    are exercised with the compiled renderer on disposable targets.
 4. Analyze Track.

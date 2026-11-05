@@ -1,6 +1,8 @@
 """Imported (non-rekordbox) tracks: soundbox.imports + the untracked exemption."""
 
 import tempfile
+import hashlib
+import os
 import unittest
 import wave
 from pathlib import Path
@@ -203,6 +205,121 @@ class FixLinks(unittest.TestCase):
 
 
 class DeviceImport(unittest.TestCase):
+    def test_equal_sized_collision_and_occupied_fallback_are_preserved(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'device' / 'set.mp3'
+            source.parent.mkdir()
+            source.write_bytes(b'new!')
+            artist = root / 'media' / 'Unknown Artist'
+            artist.mkdir(parents=True)
+            original = artist / source.name
+            suffix = hashlib.sha1(os.fsencode(source.resolve())).hexdigest()[:6]
+            fallback = artist / f'set_{suffix}.mp3'
+            original.write_bytes(b'old!')
+            fallback.write_bytes(b'keep')
+            with mock.patch('soundbox.source_acquisition.record_metric') as metrics:
+                result = imports.copy_from_device([source], artist.parent)
+            canonical_bytes = sum(call.args[1] for call in metrics.call_args_list
+                                  if call.args[0] == 'canonical_bytes_read')
+            self.assertEqual(canonical_bytes, source.stat().st_size)
+            self.assertEqual(result, [artist / f'set_{suffix}-2.mp3'])
+            self.assertEqual(original.read_bytes(), b'old!')
+            self.assertEqual(fallback.read_bytes(), b'keep')
+            self.assertEqual(result[0].read_bytes(), b'new!')
+            self.assertEqual(source.read_bytes(), b'new!')
+
+    def test_exact_existing_payload_is_reused_without_publication(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'set.mp3'
+            source.write_bytes(b'exact bytes')
+            media = root / 'media'
+            first = imports.copy_from_device([source, source], media)
+            before = first[0].stat()
+            with mock.patch('soundbox.mac_trash.exclusive_move', side_effect=AssertionError('repeat wrote')):
+                second = imports.copy_from_device([source], media)
+            self.assertEqual(second, first)
+            self.assertEqual(first[0].stat().st_mtime_ns, before.st_mtime_ns)
+            self.assertEqual(first[0].read_bytes(), source.read_bytes())
+
+    def test_exclusive_name_race_does_not_overwrite_occupant(self):
+        from soundbox.mac_trash import exclusive_move
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'set.mp3'
+            source.write_bytes(b'new!')
+            raced = []
+            def publish(stage, target):
+                if not raced:
+                    target.write_bytes(b'keep')
+                    raced.append(target)
+                exclusive_move(stage, target)
+            with mock.patch('soundbox.mac_trash.exclusive_move', side_effect=publish):
+                result = imports.copy_from_device([source], root / 'media')
+            self.assertEqual(raced[0].read_bytes(), b'keep')
+            self.assertNotEqual(result, raced)
+            self.assertEqual(result[0].read_bytes(), b'new!')
+            self.assertEqual(source.read_bytes(), b'new!')
+
+    def test_symlink_occupant_is_preserved_and_not_reused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'set.mp3'
+            source.write_bytes(b'same')
+            outside = root / 'outside.mp3'
+            outside.write_bytes(b'same')
+            artist = root / 'media' / 'Unknown Artist'
+            artist.mkdir(parents=True)
+            link = artist / source.name
+            link.symlink_to(outside)
+            result = imports.copy_from_device([source], artist.parent)
+            self.assertTrue(link.is_symlink())
+            self.assertNotEqual(result, [link])
+            self.assertEqual(outside.read_bytes(), b'same')
+            self.assertEqual(result[0].read_bytes(), b'same')
+
+    def test_cancel_and_publication_failure_leave_no_partial_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'set.mp3'
+            source.write_bytes(b'original' * 200000)
+            media = root / 'media'
+            with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                imports.copy_from_device([source], media, should_cancel=lambda: True)
+            self.assertFalse(media.exists())
+            with mock.patch('soundbox.mac_trash.exclusive_move', side_effect=OSError('publish refused')):
+                with self.assertRaisesRegex(OSError, 'publish refused'):
+                    imports.copy_from_device([source], media)
+            self.assertEqual(list((media / 'Unknown Artist').iterdir()), [])
+            self.assertEqual(source.read_bytes(), b'original' * 200000)
+
+    def test_long_unicode_collision_keeps_valid_bounded_filename(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / (('漢' * 82) + '.mp3')
+            source.write_bytes(b'new')
+            artist = root / 'media' / 'Unknown Artist'
+            artist.mkdir(parents=True)
+            (artist / source.name).write_bytes(b'old')
+            result = imports.copy_from_device([source], artist.parent)
+            self.assertLessEqual(len(os.fsencode(result[0].name)), 255)
+            self.assertEqual(result[0].read_bytes(), b'new')
+            self.assertEqual((artist / source.name).read_bytes(), b'old')
+
+    def test_cancellation_during_source_capture_removes_only_its_staging(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'set.mp3'
+            source.write_bytes(b'a' * (3 * 1024 * 1024))
+            media = root / 'media'
+            def cancel_after_chunk():
+                return any(path.stat().st_size for path in media.rglob('set.mp3'))
+            with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                imports.copy_from_device([source], media, should_cancel=cancel_after_chunk)
+            self.assertEqual(list((media / 'Unknown Artist').iterdir()), [])
+            self.assertEqual(source.read_bytes(), b'a' * (3 * 1024 * 1024))
+
     def test_playlist_order_copies_to_soundbox_media_without_touching_device(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

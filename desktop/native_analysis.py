@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject, QTimer
 
+from .task_owner import DeferredCall
+
 from soundbox import analysis, analysis_jobs, local_grid, track_analysis
 from soundbox.native_media import metadata_identity_proof, METADATA_PENDING
 from soundbox.rekordbox_analysis_store import AnalysisStore, load_authority, prepare, retire_confirmed, load_plan
@@ -117,7 +119,9 @@ class NativeAnalysisController(QObject):
         self._detection_reconciled=set()
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(2000)
         self.timer.timeout.connect(self.pump);self.tags.idle.connect(self.schedule)
-        self.tags.changed.connect(self.discover)
+        self._pump_wakeup=DeferredCall(lambda:self.pump(),self)
+        self._discovery_wakeup=DeferredCall(lambda:self.discover(),self)
+        self.tags.changed.connect(self.schedule_discovery)
 
     @property
     def pending(self):return self.window.settings.get(KEY,[])
@@ -130,7 +134,10 @@ class NativeAnalysisController(QObject):
             self.tags.analysis_update_status=message;self.tags.changed.emit()
 
     def schedule(self):
-        if not self.closing:QTimer.singleShot(0,self.pump)
+        if not self.closing:self._pump_wakeup.schedule()
+
+    def schedule_discovery(self):
+        if not self.closing:self._discovery_wakeup.schedule()
 
     def _detection_index(self):
         # A synchronous discover/pump owns this observation only until it returns.
@@ -378,4 +385,6 @@ class NativeAnalysisController(QObject):
         if not self.window._save_state():self.window.settings[KEY]=old;return
         self.not_before=0.0;self.schedule()
 
-    def stop(self):self.closing=True;self.timer.stop()
+    def stop(self):
+        self.closing=True;self.timer.stop()
+        self._pump_wakeup.stop();self._discovery_wakeup.stop()

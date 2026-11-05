@@ -1,8 +1,9 @@
 # Graveyard Collection and file deletion
 
 The feature and separate authority are installed; [HANDOFF](HANDOFF.md) records
-the current validated delivery and preserved state. Sonny confirms bulk Delete works and515 user
-disposal receipts are preserved. No agent has disposed of real source audio or
+the current validated delivery and preserved state. Sonny confirmed the November1
+515-entry bulk Delete; later user disposals and current receipt counts are in
+HANDOFF. No agent has disposed of real source audio or
 run removal SQL as an implementation test. Sonny chooses and confirms targets.
 
 ## Confirmation and source contract

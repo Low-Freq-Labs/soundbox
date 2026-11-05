@@ -143,6 +143,70 @@ class RoundTrip(unittest.TestCase):
 
 
 class Tolerant(unittest.TestCase):
+    def test_valid_json_with_malformed_container_or_display_rows_falls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'cache.json'
+            libcache.dump(_lib(), path)
+            valid = json.loads(path.read_bytes())
+            malformed = [None, [], 'json text', {'schema': libcache.SCHEMA}]
+            import copy
+            for field, value in (
+                    ('tracks', {'1': []}), ('playlists', {}),
+                    ('source_tags', [False]), ('source', [])):
+                data = copy.deepcopy(valid)
+                data[field] = value
+                malformed.append(data)
+            for field, value in (
+                    ('name', []), ('location_uri', 2), ('total_time', 'bad'),
+                    ('added_ts', float('inf')), ('size', 10**500),
+                    ('info', []), ('source_cues', [2]), ('source_tag_ids', [False])):
+                data = copy.deepcopy(valid)
+                data['tracks'][0][libcache._TRACK_FIELDS.index(field)] = value
+                malformed.append(data)
+            data = copy.deepcopy(valid)
+            data['tracks'].append(copy.deepcopy(data['tracks'][0]))
+            malformed.append(data)
+            data = copy.deepcopy(valid)
+            data['playlists'][0][1] = 'not a folder list'
+            malformed.append(data)
+            for data in malformed:
+                with self.subTest(data=data):
+                    path.write_text(json.dumps(data))
+                    self.assertIsNone(libcache.load(path))
+
+    def test_truncated_legacy_playlist_and_excessively_nested_json_fall_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'cache.json'
+            libcache.dump(_lib(), path)
+            data = json.loads(path.read_bytes())
+            data['schema'] = 4
+            data['playlists'] = [['Set']]
+            path.write_text(json.dumps(data))
+            self.assertIsNone(libcache.load(path))
+            path.write_text('[' * 2000 + ']' * 2000)
+            self.assertIsNone(libcache.load(path))
+
+    def test_oversized_growing_and_linked_cache_never_reaches_parser(self):
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'cache.json'
+            libcache.dump(_lib(), path)
+            with mock.patch.object(libcache, '_MAX_CACHE_BYTES', 8), \
+                    mock.patch.object(libcache.json, 'loads', side_effect=AssertionError('Oversized parse')):
+                self.assertIsNone(libcache.load(path))
+            original = os.fstat
+            def growing(fd):
+                before = original(fd)
+                with path.open('ab') as handle:
+                    handle.write(b' ' * 64)
+                return before
+            with mock.patch.object(libcache.os, 'fstat', side_effect=growing), \
+                    mock.patch.object(libcache.json, 'loads', side_effect=AssertionError('Growing parse')):
+                self.assertIsNone(libcache.load(path))
+            link = path.with_name('linked.json')
+            link.symlink_to(path)
+            self.assertIsNone(libcache.load(link))
+
     def test_v4_snapshot_is_normalized_without_losing_instant_paint(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "c.json"

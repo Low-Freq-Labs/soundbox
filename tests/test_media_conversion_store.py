@@ -86,6 +86,89 @@ class ExistingMediaConversion(unittest.TestCase):
         with self.assertRaises(RecoveryRequired):self.writer.recover()
         self.assertEqual(self.audio.read_bytes(),b'user replacement');self.assertTrue(self.writer.journal.exists())
 
+    def test_recovery_preserves_source_changed_after_digest_during_binding_checks(self):
+        def pause(phase):
+            if phase=='journal':raise RuntimeError('interrupted')
+        original=self.audio.read_bytes()
+        with mock.patch.object(store,'_fault',side_effect=pause),self.assertRaises(RuntimeError):self.convert()
+        bind=self.writer._bindings
+        replacement=b'user recording changed during native binding checks'
+        def change(*args,**kwargs):
+            result=bind(*args,**kwargs);self.audio.write_bytes(replacement);return result
+        with mock.patch.object(self.writer,'_bindings',side_effect=change):
+            with self.assertRaisesRegex(RecoveryRequired,'before conversion publication'):
+                self.writer.recover()
+        self.assertEqual(self.audio.read_bytes(),replacement)
+        self.assertTrue(self.writer.journal.exists())
+        self.assertTrue(list(self.audio.parent.glob('.soundbox-media-*')))
+        self.assertEqual((self.writer._folder(self.op)/'original.wav').read_bytes(),original)
+
+    def test_recovery_rechecks_source_epoch_after_fresh_publication_guard(self):
+        def pause(phase):
+            if phase=='journal':raise RuntimeError('interrupted')
+        with mock.patch.object(store,'_fault',side_effect=pause),self.assertRaises(RuntimeError):self.convert()
+        bind=self.writer._bindings;guard=self.writer.lease._guard;ready=False
+        replacement=b'user recording changed while the final source guard ran'
+        def bindings(*args,**kwargs):
+            nonlocal ready
+            result=bind(*args,**kwargs);ready=True;return result
+        def guarded():
+            guard()
+            if ready:self.audio.write_bytes(replacement)
+        with mock.patch.object(self.writer,'_bindings',side_effect=bindings), \
+                mock.patch.object(self.writer.lease,'_guard',side_effect=guarded):
+            with self.assertRaisesRegex(RecoveryRequired,'before conversion publication'):
+                self.writer.recover()
+        self.assertEqual(self.audio.read_bytes(),replacement)
+        self.assertTrue(self.writer.journal.exists())
+
+    def test_audio_digest_binds_one_pass_and_rejects_inode_replacement(self):
+        original=store.hashlib.file_digest
+        with mock.patch.object(store.hashlib,'file_digest',wraps=original) as digest:
+            value,epoch=store._current_audio(self.audio)
+        digest.assert_called_once()
+        self.assertEqual(value,store._sha(self.audio))
+        self.assertEqual(epoch,store.identity(self.audio.stat()))
+        def replace_inode(stream,algorithm):
+            value=original(stream,algorithm);other=self.audio.with_name('replacement.wav')
+            other.write_bytes(self.audio.read_bytes());other.replace(self.audio);return value
+        with mock.patch.object(store.hashlib,'file_digest',side_effect=replace_inode):
+            with self.assertRaisesRegex(RecoveryRequired,'during conversion verification'):
+                store._current_audio(self.audio)
+
+    def test_codec_recovery_preserves_source_changed_before_target_link(self):
+        self._check_codec_recovery_guard(1)
+
+    def test_codec_recovery_preserves_source_changed_before_original_displacement(self):
+        self._check_codec_recovery_guard(2)
+
+    def _check_codec_recovery_guard(self,boundary):
+        import numpy as np
+        import soundfile as sf
+        path=self.audio.with_name(f'guard-{boundary}.flac')
+        sf.write(path,np.zeros((44100,2)),44100,subtype='PCM_24')
+        operation=str(uuid4());original=path.read_bytes()
+        def pause(phase):
+            if phase=='journal':raise RuntimeError('interrupted')
+        with mock.patch.object(store,'_fault',side_effect=pause),self.assertRaises(RuntimeError):
+            self.writer.convert(path,operation)
+        bind=self.writer._codec_bindings;guard=self.writer.lease._guard;calls=0
+        replacement=b'new user recording while codec publication guard ran'
+        def bindings(*args,**kwargs):
+            nonlocal calls
+            result=bind(*args,**kwargs);calls+=1;return result
+        def guarded():
+            guard()
+            if calls==boundary:path.write_bytes(replacement)
+        with mock.patch.object(self.writer,'_codec_bindings',side_effect=bindings), \
+                mock.patch.object(self.writer.lease,'_guard',side_effect=guarded):
+            with self.assertRaisesRegex(RecoveryRequired,'before conversion publication'):
+                self.writer.recover()
+        self.assertEqual(path.read_bytes(),replacement)
+        self.assertEqual(path.with_suffix('.wav').exists(),boundary==2)
+        self.assertTrue(self.writer.journal.exists())
+        self.assertEqual((self.writer._folder(operation)/'original.flac').read_bytes(),original)
+
     def test_process_exit_before_and_after_replacement_recovers_without_native_sql_or_duplicate_conversion(self):
         for phase in ('prepared','journal','replaced','receipt'):
             with self.subTest(phase=phase):

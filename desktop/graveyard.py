@@ -1,6 +1,8 @@
 """On-demand read-only Graveyard information and storage accounting."""
 from copy import deepcopy
 import json
+import os
+import stat
 
 from PySide6.QtCore import QObject,QTimer,Signal
 
@@ -9,6 +11,32 @@ from soundbox.state_io import atomic_bytes
 from .task_owner import TaskOwner
 from .workers import OneShotTask
 from .devices import human
+
+
+_MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
+
+
+def _retain_archive(area, relative, document):
+    """Skip an identical history publication after a fresh locked byte read."""
+    payload = json.dumps(document, allow_nan=False).encode()
+    if len(payload) > _MAX_ARCHIVE_BYTES:
+        raise ValueError('Graveyard identity archive exceeds its bound')
+    with area.lock:
+        path = area.path(str(relative))
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            before = None
+        else:
+            with os.fdopen(descriptor, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_ARCHIVE_BYTES:
+                    raise ValueError('Graveyard identity archive is invalid')
+                before = stream.read(_MAX_ARCHIVE_BYTES + 1)
+            if len(before) > _MAX_ARCHIVE_BYTES:
+                raise ValueError('Graveyard identity archive exceeds its bound')
+        if before != payload:
+            atomic_bytes(path, payload)
 
 
 class GraveyardController(QObject):
@@ -68,9 +96,9 @@ class GraveyardController(QObject):
                             source=str(source),library_id=library_id,display=entry['display'],proof=entry.get('proof',{}))
                 payload=dict(format=graveyard.RECOVERED_FORMAT,source=str(source),library_id=library_id,tracks=remembered)
                 try:
-                    with w._state_repository.area.lock:
-                        atomic_bytes(graveyard.archive_path(w.tag_controller.data_root,source,library_id),
-                                     json.dumps(payload,allow_nan=False).encode())
+                    _retain_archive(w._state_repository.area,
+                        graveyard.archive_path(w.tag_controller.data_root,source,library_id)
+                        .relative_to(w.tag_controller.data_root),payload)
                 except (OSError,ValueError) as exc:
                     archive_error='Storage checked; could not retain historical file identities — '+str(exc)
             items=[w._grave.topLevelItem(index) for index in range(w._grave.topLevelItemCount())]

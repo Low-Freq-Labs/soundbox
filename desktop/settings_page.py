@@ -477,7 +477,10 @@ class SettingsPageMixin:
             from .connections import SoundCloudSection
             service = self.providers.connections.create(self._data_file.parent)
             self._soundcloud_section = SoundCloudSection(
-                service, connections, isolated=self._isolated)
+                service, connections, isolated=self._isolated,
+                startup_worker=getattr(self, '_connection_initial_worker', None),
+                startup_complete=getattr(self, '_connection_initial_complete', False),
+                startup_result=getattr(self, '_connection_initial_result', None))
             connection_layout.addWidget(self._soundcloud_section, 1, Qt.AlignTop)
         else:
             connection_layout.addStretch(1)
@@ -635,7 +638,7 @@ class SettingsPageMixin:
         self._state_maintenance = True
         # Complete pending USB view preferences before the final save. Their
         # idle notification must not cross a backup/restore publication barrier.
-        usb_pages = getattr(self, 'usb_device_pages', None)
+        usb_pages = vars(self).get('usb_device_pages')
         if usb_pages is not None:
             usb_pages._remember_view()
         self._settings_save_timer.stop()
@@ -867,7 +870,22 @@ class SettingsPageMixin:
         self._refresh_title_rules()
         self._apply_and_refresh()
 
+    def _ensure_settings_page(self):
+        if getattr(self, '_settings_page_created', False):
+            return
+        page = self._settings_page()
+        placeholder = self.body_stack.widget(1)
+        current = self.body_stack.currentWidget() is placeholder
+        self.body_stack.insertWidget(1, page)
+        self.body_stack.removeWidget(placeholder)
+        placeholder.deleteLater()
+        self._settings_page_created = True
+        self._sync_settings_controls()
+        if current:
+            self.body_stack.setCurrentWidget(page)
+
     def _open_settings(self):
+        self._ensure_settings_page()
         # The gear toggles: on Settings it returns to the main view (like Back).
         on_settings = self.body_stack.currentIndex() == 1
         self._sync_rekordbox_connection()

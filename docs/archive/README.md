@@ -3,6 +3,9 @@
 These records preserve completed investigations and superseded experiments.
 Dates, test counts, candidate settings, temporary paths and pending statements
 apply to their original checkpoints. They do not override current guidance.
+Archived approvals and app-control, source-pilot, restore or cleanup instructions
+grant no present authority. They do not authorize replaying a completed pilot,
+restoring old library/audio bytes or retiring currently protected recovery bases.
 Start with [HANDOFF](../HANDOFF.md), [ROADMAP](../ROADMAP.md),
 [PLAYER](../PLAYER.md) or [ARCHITECTURE](../ARCHITECTURE.md).
 

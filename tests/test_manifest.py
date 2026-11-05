@@ -3,6 +3,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from soundbox import manifest
 from soundbox.library import Library, Playlist
@@ -17,6 +18,42 @@ def lib_of(*pls):
 
 
 class TestManifest(unittest.TestCase):
+    def test_manifest_reads_and_save_refuse_redirected_state_directory(self):
+        for destination in ("PIONEER", "outside"):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                root = base / "IPOD"
+                root.mkdir()
+                forbidden = root / "PIONEER" if destination == "PIONEER" else base / "outside"
+                forbidden.mkdir()
+                payload = forbidden / "manifest.json"
+                payload.write_bytes(b"protected native bytes")
+                (root / ".soundbox").symlink_to(forbidden, target_is_directory=True)
+                for reader in (manifest.load, manifest.load_composite,
+                               manifest.has_composite_ownership):
+                    with mock.patch.object(Path, "open", side_effect=AssertionError("no payload read")):
+                        with self.assertRaises(RuntimeError):
+                            reader(root)
+                with self.assertRaises(RuntimeError):
+                    manifest.save(root, {"schema": 2, "playlists": {}, "files": {}})
+                self.assertEqual(payload.read_bytes(), b"protected native bytes")
+                self.assertEqual(list(forbidden.iterdir()), [payload])
+
+    def test_manifest_file_symlink_never_reads_pioneer_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            forbidden = root / "PIONEER/export.pdb"
+            forbidden.parent.mkdir()
+            forbidden.write_bytes(b"protected native bytes")
+            path = manifest.manifest_path(root)
+            path.parent.mkdir()
+            path.symlink_to(forbidden)
+            with mock.patch.object(Path, "open", side_effect=AssertionError("no payload read")):
+                for reader in (manifest.load, manifest.load_composite,
+                               manifest.has_composite_ownership):
+                    with self.assertRaises(RuntimeError):
+                        reader(root)
+
     def test_external_pioneer_ownership_is_discarded_without_touching_payload(self):
         root = Path(tempfile.mkdtemp())
         pioneer = root / "PIONEER" / "rekordbox" / "export.pdb"

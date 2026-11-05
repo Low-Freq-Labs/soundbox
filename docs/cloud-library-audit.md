@@ -4,8 +4,9 @@ This audit separates three identities: rekordbox owns native song/playlist IDs,
 SoundBox owns its curation and durable edit intentions, and SeaDrive supplies the
 audio behind a filesystem path. A visible Finder entry, a populated waveform,
 or a running tray application does not prove that audio can currently be read.
-The November2 fixes described here remain in the November4 build160/source
-release `4a3d29a`. Dated counts/provider observations below are historical;
+The November2 fixes described here remain in the November4 whole-app delivery,
+personal build165/runtime `7ffde716…`. Build163/source release `cf2ef5b` is an earlier
+delivery. Dated counts/provider observations below are historical;
 exact current binary, curation and validation provenance belongs in
 [HANDOFF](HANDOFF.md).
 

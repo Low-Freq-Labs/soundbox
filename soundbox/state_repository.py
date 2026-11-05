@@ -20,7 +20,7 @@ class InvalidState(ValueError):
     pass
 
 
-def validate_state(data: Any) -> dict:
+def _validate_state(data: Any) -> dict:
     if not isinstance(data, dict):
         raise InvalidState('Library must be a JSON object')
     maps = ('custom', 'imported', 'artist_overrides', 'title_overrides',
@@ -94,13 +94,47 @@ def validate_state(data: Any) -> dict:
             except (ValueError, TypeError, KeyError) as exc:
                 raise InvalidState('Invalid saved analysis result') from exc
     # Unknown namespaces and settings remain byte-value-equivalent on roundtrip.
-    return copy.deepcopy(data)
+    return data
+
+
+def validate_state(data: Any) -> dict:
+    """Validate and detach caller-owned state before retaining/publication."""
+    return copy.deepcopy(_validate_state(data))
+
+
+def _same_json(left: Any, right: Any) -> bool:
+    """Compare already-owned JSON without conflating bool/int or map order.
+
+    This is only a no-op hint against a successfully encoded private document;
+    unknown Python values still take the full validator/encoder path.
+    """
+    if left is right:
+        return True
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        if (list(left) != list(right)
+                or any(type(key) is not str for key in left)):
+            return False
+        return all(_same_json(value, right[key]) for key, value in left.items())
+    if type(left) is list:
+        return len(left) == len(right) and all(
+            _same_json(a, b) for a, b in zip(left, right))
+    if type(left) is float:
+        # JSON preserves the sign on zero and the numeric representation.
+        return bool(left.hex() == right.hex())
+    if type(left) in (str, int, bool, type(None)):
+        return bool(left == right)
+    return False
 
 
 def read_state(path: Path) -> dict:
     if path.stat().st_size > _MAX_STATE_BYTES:
         raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
-    return validate_state(json.loads(path.read_text(encoding='utf-8')))
+    # json.loads created this tree solely for the reader. The repository keeps
+    # it privately and detaches once on return; a second complete copy here adds
+    # no ownership boundary. Public validate_state still always detaches.
+    return _validate_state(json.loads(path.read_text(encoding='utf-8')))
 
 
 @dataclass(frozen=True)
@@ -195,7 +229,12 @@ class StateRepository:
                 raise StateChangedError('Library was restored; reload before saving')
             if not self.writable:
                 raise OSError('Library recovery required; restore a valid backup before saving')
-            document = validate_state({**self._document, **changes})
+            candidate = {**self._document, **changes}
+            if (self._saved_payload is not None and self._saved_identity is not None
+                    and _same_json(candidate, self._document)
+                    and self._identity() == self._saved_identity):
+                return
+            document = validate_state(candidate)
             payload = json.dumps(document, indent=2, allow_nan=False).encode('utf-8')
             if len(payload) > _MAX_STATE_BYTES:
                 raise InvalidState('Library JSON exceeds the 64 MiB safety limit; previous state was preserved')

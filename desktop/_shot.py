@@ -130,6 +130,8 @@ def _render() -> None:
     # whole harness lifetime. Never probe real removable devices beside the app.
     MainWindow._refresh_devices = lambda self, **kwargs: None
     win = MainWindow()
+    if settings_tab or analysis_menus or text_menu:
+        win._ensure_settings_page()
     from . import theme
     win._apply_theme_color(accent or theme.DEFAULT_ACCENT, save=False)
     if text_color is not None:

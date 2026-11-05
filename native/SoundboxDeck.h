@@ -214,6 +214,7 @@ double sb_deck_detail_sample_rate(SBDeckRef deck);
 double sb_deck_detail_peak_height(SBDeckRef deck);
 uint64_t sb_deck_audio_detail_mip_count(SBDeckRef deck);
 uint64_t sb_deck_audio_detail_buffer_bytes(SBDeckRef deck);
+uint64_t sb_deck_decode_wait_returns(SBDeckRef deck);
 uint64_t sb_deck_cue_marker_count(SBDeckRef deck);
 double sb_deck_pixels_per_second(SBDeckRef deck);
 uint64_t sb_deck_display_callback_count(SBDeckRef deck);

@@ -22,7 +22,7 @@ import logging
 import os
 from pathlib import Path
 import time
-from typing import Any, Callable, cast
+from typing import Any, Callable, Sequence, cast
 
 from . import artencode
 from . import metadata
@@ -45,6 +45,7 @@ from .source_verification import SourceVerificationCache
 from .source_read_retry import source_read_error
 from .stock_artwork import StockArtworkCache
 from .stock_ipod_shadow import StockIpodShadowStore
+from .device_manifest_capture import read_device_manifest
 from .stock_ipod import (
     StockIpodCommitResult,
     StockIpodSyncPlan,
@@ -509,13 +510,10 @@ def _plan_recoverable_file(
 def _read_existing_manifest(
     root: Path,
 ) -> tuple[dict[str, Any] | None, bytes | None, str | None]:
-    path = legacy_manifest.manifest_path(root)
-    if not path.exists():
-        return None, None, None
-    if not path.is_file():
-        raise DualIpodError("SoundBox manifest path is not a regular file")
     try:
-        payload = path.read_bytes()
+        payload = read_device_manifest(root)
+        if payload is None:
+            return None, None, None
         data = legacy_manifest.parse_composite(payload)
     except (OSError, ValueError) as exc:
         raise DualIpodError("Existing SoundBox manifest is unreadable") from exc
@@ -530,10 +528,16 @@ def composite_device_drift(
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
     audit_existing: bool = False,
+    captured_manifest: tuple[dict[str, Any], bytes] | None = None,
 ) -> legacy_manifest.Drift | None:
-    """Diff schema-3 ownership against the currently exportable Rockbox view."""
+    """Diff schema-3 ownership against the currently exportable Rockbox view.
+
+    A dashboard worker may share its own current read_composite observation.
+    It is read-only presentation input; planning/commit capture independently.
+    """
     root = Path(target)
-    manifest,payload = legacy_manifest.read_composite(root)
+    manifest,payload = (captured_manifest if captured_manifest is not None
+                       else legacy_manifest.read_composite(root))
     manifest_sha256 = hashlib.sha256(payload).hexdigest()
     interrupted_recovery = _matching_interrupted_recovery(
         root, manifest, manifest_sha256, {})
@@ -705,8 +709,9 @@ def _changed_managed_playlist_keys(
     reads and hashes only changed small payloads before accepting anything.
     """
     changed: set[str] = set()
+    session = sync_mod.DeviceSession(root, [], create=False)
     for identity, (device_path, row) in _managed_playlist_rows(manifest).items():
-        live = root / _relative_manifest_path(device_path)
+        live = session.guard(_relative_manifest_path(device_path))
         try:
             if live.is_symlink() or not live.is_file():
                 changed.add(identity)
@@ -763,6 +768,7 @@ def _read_historical_playlist_identities(
     """Authenticate old path/ID pairs without requiring old Mac paths to exist."""
     live_playlists: dict[str, bytes] = {}
     historical_ids: dict[str, str] = {}
+    session = sync_mod.DeviceSession(root, [], create=False)
     owned_media = {
         str(path).casefold()
         for path, row in (manifest.get("files") or {}).items()
@@ -770,12 +776,16 @@ def _read_historical_playlist_identities(
         and row.get("kind") in {"shared-stock-media", "rockbox-media"}
     }
     for identity, (device_path, row) in _managed_playlist_rows(manifest).items():
-        live = root / _relative_manifest_path(device_path)
+        checkpoint()
+        live = session.guard(_relative_manifest_path(device_path))
         if live.is_symlink() or not live.is_file():
             raise DualIpodError(f"Managed Rockbox playlist is missing: {device_path}")
         if live.stat().st_size > _MAX_MANAGED_PLAYLIST_BYTES:
             raise DualIpodError(f"Rockbox playlist is too large to reconcile safely: {identity}")
-        payload = live.read_bytes()
+        with live.open("rb") as handle:
+            payload = handle.read(_MAX_MANAGED_PLAYLIST_BYTES + 1)
+        if len(payload) > _MAX_MANAGED_PLAYLIST_BYTES:
+            raise DualIpodError(f"Rockbox playlist is too large to reconcile safely: {identity}")
         live_playlists[identity] = payload
         try:
             size = int(row.get("size") or -1)
@@ -1024,8 +1034,31 @@ def _unique_playlist_tracks(library: Library, keys: list[str],
     output: list[str] = []
     seen_ids: set[str] = set()
     seen_paths: set[Path] = set()
-    by_size: dict[int, list[Path]] = {}
+    # A unique size needs no audio read. Once a second source has that size,
+    # compare digests through an index rather than revisiting every earlier
+    # candidate (large equal-duration PCM libraries otherwise become quadratic).
+    first_by_size: dict[int, Path] = {}
+    digests_by_size: dict[int, set[str]] = {}
+
+    def source_digest(source: Path) -> str:
+        if source not in hashes:
+            row = (committed_media or {}).get(str(source), {})
+            digest = str(row.get("source_sha256") or "")
+            stat = source.stat()
+            if (row.get("source") == str(source)
+                    and row.get("source_sha256_verified") is True
+                    and row.get("source_size") == stat.st_size
+                    and row.get("source_mtime_ns") == stat.st_mtime_ns
+                    and len(digest) == 64
+                    and all(c in "0123456789abcdef" for c in digest)):
+                hashes[source] = digest
+                record_metric("manifest_dedup_hash_reuses")
+            else:
+                hashes[source] = verifier.verify(source, _sha256)[0]
+        return hashes[source]
+
     for track_id in keys:
+        checkpoint()
         if track_id in seen_ids:
             continue
         seen_ids.add(track_id)
@@ -1037,30 +1070,17 @@ def _unique_playlist_tracks(library: Library, keys: list[str],
             seen_paths.add(path)
             if path.is_file():
                 size = path.stat().st_size
-                candidates = by_size.setdefault(size, [])
-                duplicate = False
-                for previous in candidates:
-                    for source in (previous, path):
-                        if source not in hashes:
-                            row = (committed_media or {}).get(str(source), {})
-                            digest = str(row.get("source_sha256") or "")
-                            stat = source.stat()
-                            if (row.get("source") == str(source)
-                                    and row.get("source_sha256_verified") is True
-                                    and row.get("source_size") == stat.st_size
-                                    and row.get("source_mtime_ns") == stat.st_mtime_ns
-                                    and len(digest) == 64
-                                    and all(c in "0123456789abcdef" for c in digest)):
-                                hashes[source] = digest
-                                record_metric("manifest_dedup_hash_reuses")
-                            else:
-                                hashes[source] = verifier.verify(source, _sha256)[0]
-                    if hashes[previous] == hashes[path]:
-                        duplicate = True
-                        break
-                if duplicate:
+                first = first_by_size.setdefault(size, path)
+                if first == path:
+                    output.append(track_id)
                     continue
-                candidates.append(path)
+                if size not in digests_by_size:
+                    digests_by_size[size] = {source_digest(first)}
+                digest = source_digest(path)
+                digests = digests_by_size[size]
+                if digest in digests:
+                    continue
+                digests.add(digest)
         output.append(track_id)
     return output
 
@@ -1199,7 +1219,7 @@ def _verify_manifest_file_before(
 ) -> tuple[Path, int, str]:
     """Verify exact manifest bytes without broadening rewrite ownership."""
     relative = _relative_manifest_path(device_path)
-    live = root / relative
+    live = sync_mod.DeviceSession(root, [], create=False).guard(relative)
     try:
         size = live.stat().st_size
     except OSError as exc:
@@ -1241,7 +1261,7 @@ def _manifest_file_baseline(
     reproducible source-side payload.
     """
     relative = _relative_manifest_path(device_path)
-    live = root / relative
+    live = sync_mod.DeviceSession(root, [], create=False).guard(relative)
     try:
         size = live.stat().st_size
     except OSError as exc:
@@ -1408,6 +1428,7 @@ def _playlist_writes(
     *,
     reconcile: bool = False,
     approved_external: dict[str, tuple[Path, int, str]] | None = None,
+    captured_playlists: dict[str, bytes] | None = None,
 ) -> tuple[list[DualPlaylistWrite], list[DualFileDelete]]:
     output: list[DualPlaylistWrite] = []
     used: dict[str, str] = {}
@@ -1417,6 +1438,25 @@ def _playlist_writes(
     )
     prior_by_key = _managed_playlist_rows(existing or {})
     approved_external = approved_external or {}
+    session = sync_mod.DeviceSession(target, [], create=False)
+
+    def verified_prior(identity: str, prior: tuple[str, dict[str, Any]]) -> tuple[Path, int, str]:
+        if captured_playlists is None or identity not in captured_playlists:
+            return _verify_owned_before(target, prior[0], prior[1])
+        # The historical-ID pass already captured these bounded bytes in this
+        # plan. Reuse that content observation, retaining fresh commit-time
+        # checks before any write. This cache cannot authorize external edits.
+        relative = _relative_manifest_path(prior[0])
+        session.guard(relative)
+        row = prior[1]
+        payload = captured_playlists[identity]
+        digest = hashlib.sha256(payload).hexdigest()
+        if (not row.get("owned") or len(payload) != int(row.get("size") or -1)
+                or digest != row.get("sha256")):
+            raise DualIpodError(
+                f"Managed device file changed outside SoundBox: {prior[0]}")
+        return relative, len(payload), digest
+
     order_width = max(2, len(str(len(selected))))
     for index, (playlist, device_name) in enumerate(zip(
             selected, device_names, strict=True)):
@@ -1442,7 +1482,7 @@ def _playlist_writes(
         used[key] = identity
         payload = pl_mod.render_m3u8(entries_by_playlist[index]).encode("utf-8")
         payload_hash = hashlib.sha256(payload).hexdigest()
-        live = target / relative
+        live = session.guard(relative)
         desired_mtime = float(
             _PLAYLIST_ORDER_EPOCH + index * _PLAYLIST_ORDER_STEP)
         changed = True
@@ -1454,8 +1494,7 @@ def _playlist_writes(
         if prior is not None:
             approved_before = approved_external.get(identity)
             if approved_before is None:
-                relative_before, size_before, hash_before = _verify_owned_before(
-                    target, prior[0], prior[1])
+                relative_before, size_before, hash_before = verified_prior(identity, prior)
             else:
                 relative_before, size_before, hash_before = approved_before
                 if relative_before != _relative_manifest_path(prior[0]):
@@ -1526,8 +1565,7 @@ def _playlist_writes(
         ):
             approved_before = approved_external.get(identity)
             if approved_before is None:
-                prior_relative, size, digest = _verify_owned_before(
-                    target, device_path, row)
+                prior_relative, size, digest = verified_prior(identity, (device_path, row))
             else:
                 prior_relative, size, digest = approved_before
                 if prior_relative != _relative_manifest_path(device_path):
@@ -1540,7 +1578,7 @@ def _playlist_writes(
 
 def plan_dual_ipod_sync(
     library: Library,
-    selected: list[Playlist],
+    selected: list[Playlist] | None,
     target: str | Path,
     *,
     model_number: str,
@@ -1559,6 +1597,8 @@ def plan_dual_ipod_sync(
     respect_selected_order: bool = False,
     on_progress: Callable[[int, int, str], None] | None = None,
     expected_playlist_rows: dict[str, dict[str, Any]] | None = None,
+    expected_manifest: dict[str, Any] | None = None,
+    extra_playlists: Sequence[Playlist] = (),
     adoptable_playlist_keys: set[str] | None = None,
     audit_existing: bool = True,
 ) -> DualIpodSyncPlan:
@@ -1578,17 +1618,24 @@ def plan_dual_ipod_sync(
                  label, now - phase_started, now - started)
         phase_started = now
 
-    LOG.info("Dual sync plan started: %d selected playlists, reconcile=%s",
-             len(selected), reconcile)
     source_verifier = SourceVerificationCache(rockbox_media_cache.root)
     root = Path(target).expanduser().resolve(strict=True)
     planning_session = sync_mod.DeviceSession(root, [], create=False)
     if not (root / ".rockbox").is_dir() or not (root / "iPod_Control").is_dir():
         raise DualIpodError("Composite sync requires both .rockbox and iPod_Control")
-    if not selected and not reconcile:
-        raise DualIpodError("Select at least one playlist for dual-boot sync")
     existing_manifest, existing_payload, manifest_hash_before = (
         _read_existing_manifest(root))
+    if expected_manifest is not None and existing_manifest != expected_manifest:
+        raise DualIpodError("Composite manifest changed before planning; make a fresh plan")
+    if selected is None:
+        if not reconcile or existing_manifest is None:
+            raise DualIpodError("Composite Sync requires an existing ownership manifest")
+        selected = legacy_manifest.managed_current_playlists(
+            existing_manifest, library, list(extra_playlists))
+    if not selected and not reconcile:
+        raise DualIpodError("Select at least one playlist for dual-boot sync")
+    LOG.info("Dual sync plan started: %d selected playlists, reconcile=%s",
+             len(selected), reconcile)
     trust_inventory = existing_manifest is not None and not audit_existing
     interrupted_recovery_hint = _matching_interrupted_recovery(
         root, existing_manifest, manifest_hash_before, {})
@@ -1658,15 +1705,21 @@ def plan_dual_ipod_sync(
         if any(key in kept[item.playlist_key] for key in item.track_ids)
     )
     phase("Playlist reconciliation complete")
-    effective, missing, unsupported = _filtered_playlists(library, combined)
+    effective, missing, unsupported = _filtered_playlists(
+        library, combined, source_presence={})
     device_playlist_names = _device_playlist_names(effective)
     unique_sources: dict[Path, Any] = {}
     display_by_source: dict[Path, tuple[str, str]] = {}
+    canonical_sources: dict[Path, Path] = {}
+    display_by_track: dict[str, tuple[str, str]] = {}
     for playlist in effective:
         for track in library.resolve(playlist):
             source = track.path
-            if source.is_file() and source.suffix.lower() in ROCKBOX_SUPPORTED_SUFFIXES:
-                source = source.resolve(strict=True)
+            if source not in canonical_sources:
+                canonical_sources[source] = source.resolve(strict=True)
+            source = canonical_sources[source]
+            display = display_by_track.get(track.track_id)
+            if display is None:
                 display = _effective_display_metadata(
                     library,
                     track,
@@ -1675,13 +1728,14 @@ def plan_dual_ipod_sync(
                     artist_overrides=artist_overrides,
                     title_overrides=title_overrides,
                 )
-                previous = display_by_source.get(source)
-                if previous is not None and previous != display:
-                    raise DualIpodError(
-                        "One source file resolved to conflicting Rockbox metadata: "
-                        f"{source}")
-                unique_sources.setdefault(source, track)
-                display_by_source[source] = display
+                display_by_track[track.track_id] = display
+            previous = display_by_source.get(source)
+            if previous is not None and previous != display:
+                raise DualIpodError(
+                    "One source file resolved to conflicting Rockbox metadata: "
+                    f"{source}")
+            unique_sources.setdefault(source, track)
+            display_by_source[source] = display
 
     # Planning is intentionally visible. Each source has one media/profile
     # pass and one Rockbox-art pass; guarded playlist deletions also verify each
@@ -1690,6 +1744,7 @@ def plan_dual_ipod_sync(
     # plan, and final ownership reconciliation. This remains no-target-write
     # work.
     expected_rows = expected_playlist_rows or {}
+    playlist_metadata_cache: dict[str, bytes] = {}
     planning_total = max(
         1, len(unique_sources) * 2 + len(expected_rows) + 4)
     planning_done = 0
@@ -1715,6 +1770,7 @@ def plan_dual_ipod_sync(
                 playlist,
                 artist_overrides=artist_overrides,
                 title_overrides=title_overrides,
+                metadata_cache=playlist_metadata_cache,
             )
             expected = expected_rows[key]
             # The committed row also carries device-presentation state such as
@@ -1974,7 +2030,7 @@ def plan_dual_ipod_sync(
                         media_plan,
                     ))
         else:
-            live = root / relative
+            live = planning_session.guard(relative)
             if live.exists():
                 if interrupted_recovery is None:
                     raise DualIpodError(
@@ -2095,7 +2151,7 @@ def plan_dual_ipod_sync(
                             image.sha256,
                             "rockbox-artwork",
                         ))
-                elif live.exists():
+                elif planning_session.guard(relative).exists():
                     if interrupted_recovery is None:
                         raise DualIpodError(
                             f"Unowned Rockbox artwork conflict: {live}")
@@ -2134,6 +2190,7 @@ def plan_dual_ipod_sync(
         existing_manifest,
         reconcile=reconcile,
         approved_external=approved_external_playlists,
+        captured_playlists=playlist_baselines[0] if playlist_baselines else None,
     )
     planning_done += 1
     emit_planning("Playlists")
@@ -2277,6 +2334,7 @@ def plan_dual_ipod_sync(
             playlist,
             artist_overrides=artist_overrides,
             title_overrides=title_overrides,
+            metadata_cache=playlist_metadata_cache,
         )
         row["device_name"] = device_name
         playlist_rows[legacy_manifest.playlist_key(playlist)] = row
@@ -2570,7 +2628,8 @@ def commit_dual_ipod_sync(
                 f"Managed playlist changed after dry-run: "
                 f"{playlist_item.relative_path}")
 
-    free = os.statvfs(plan.target).f_bavail * os.statvfs(plan.target).f_frsize
+    space = os.statvfs(plan.target)
+    free = space.f_bavail * space.f_frsize
     changed_playlists = [item for item in plan.playlists if item.changed]
     recovery_bytes = sum(
         item.size_before for item in plan.file_rewrites

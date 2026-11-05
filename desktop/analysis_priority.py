@@ -4,8 +4,6 @@ from pathlib import Path
 import tempfile
 import threading
 
-from PySide6.QtCore import QTimer
-
 from soundbox import analysis, analysis_jobs, shared_imports, track_analysis
 from soundbox.source_acquisition import SourceContract, acquire_source
 from soundbox.native_media import METADATA_PENDING
@@ -122,10 +120,10 @@ class AnalysisPriorityMixin:
         if self._shutting_down or self._analysis_owner.stopping:
             return
         if worker.stop.is_set():
-            QTimer.singleShot(0, self, self._start_next_analysis)
+            self._schedule_next_analysis()
             return
         if isinstance(worker.result, Exception) and str(worker.result) == METADATA_PENDING:
-            QTimer.singleShot(2000, self, self._start_next_analysis)
+            self._schedule_next_analysis(2000)
             return
         pending = self.settings.get(analysis_jobs.KEY, [])
         try:
@@ -150,4 +148,4 @@ class AnalysisPriorityMixin:
             self._flash_status(f'Couldn’t prepare waveform: {exc}', 15)
             # Remove this failed head from the RAM queue; other songs keep moving.
             self._analysis_queue = [entry for entry in self._analysis_queue if entry[3] != worker.job_id]
-        QTimer.singleShot(0, self, self._start_next_analysis)
+        self._schedule_next_analysis()

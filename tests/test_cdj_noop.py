@@ -40,6 +40,23 @@ class CdjNoop(unittest.TestCase):
         self.assertFalse(plan.requires_commit)
         self.assertEqual({p:(target/p).read_bytes() for p in paths},before)
 
+    def test_display_membership_ids_never_enter_export_or_settings_manifests(self):
+        case=self.fixture
+        manifest=json.loads((case.target/cdj_transaction.MANIFEST).read_text())
+        self.assertNotIn('playlist_track_ids',manifest['view'])
+        case.request['tracks'][0]['title']='Changed native fixture'
+        changed=self.plan()
+        self.assertNotIn('playlist_track_ids',changed.manifest['view'])
+        cdj_transaction.commit(changed)
+        settings=cdj_export.plan_settings(case.target,{'device_name':'USB fixture name'},
+            token=case.token,volume_uuid=case.volume,recovery_root=case.recovery)
+        case.plans.append(settings)
+        self.assertNotIn('playlist_track_ids',settings.manifest['view'])
+        cdj_transaction.commit(settings)
+        repeat=self.plan()
+        self.assertEqual(repeat.changes,())
+        self.assertFalse(repeat.requires_commit)
+
     def test_source_change_at_second_capture_fails_before_any_skipped_render(self):
         changed=deepcopy(self.fixture.request);changed['source_revision']='changed'
         with patch.object(cdj_incremental,'run_renderer',side_effect=AssertionError('Rendered')):

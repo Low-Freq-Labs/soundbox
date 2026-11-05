@@ -793,6 +793,7 @@ class ImportAnalysisFlow(unittest.TestCase):
 
     def test_graveyard_cmd_a_selects_all_without_running_custom_downbeat_binding(self):
         from desktop.keyboard import Keymap
+        self.win._ensure_settings_page()
         grave=self.win._grave;grave.clear()
         for title in ('One','Two','Three'):grave.addTopLevelItem(QTreeWidgetItem([title,'' ]))
         self.win._keyboard_router.keymap=Keymap({'schema':1,'bindings':{'grid.downbeat':['Ctrl+A']}})
@@ -802,7 +803,7 @@ class ImportAnalysisFlow(unittest.TestCase):
         self.assertEqual(len(grave.selectedItems()),3)
 
     def test_theme_and_text_hex_commit_through_existing_save_path_without_picker(self):
-        self.win.show();self.win._open_settings();self.app.processEvents()
+        self.win.show();self.win._open_settings();self.win.activateWindow();QTest.qWait(1)
         with mock.patch('desktop.settings_page.QColorDialog') as picker, mock.patch.object(self.win,'_schedule_settings_save') as save:
             button=self.win._theme_color;button._start_edit();QTest.keyClicks(button.editor,'12ab34');QTest.keyClick(button.editor,Qt.Key_Return)
             self.assertEqual(self.win.settings['theme_accent'],'#12ab34');save.assert_called_once()

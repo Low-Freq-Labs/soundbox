@@ -66,6 +66,23 @@ def _audio(path):
     return s
 
 
+def _current_audio(path):
+    """Bind one existing digest pass to the exact stable source inode/epoch."""
+    before = identity(_audio(path))
+    with Path(path).open('rb') as stream:
+        opened = identity(os.fstat(stream.fileno()))
+        digest = hashlib.file_digest(stream,'sha256').hexdigest()
+        closed = identity(os.fstat(stream.fileno()))
+    if not before == opened == closed == identity(_audio(path)):
+        raise RecoveryRequired('Audio changed during conversion verification; evidence retained')
+    return digest, before
+
+
+def _require_audio_epoch(path, expected):
+    if identity(_audio(path)) != expected:
+        raise RecoveryRequired('Audio changed before conversion publication; evidence retained')
+
+
 def _fault(_phase):pass
 
 
@@ -167,11 +184,12 @@ class ConversionStore:
         record,plan=self._record();path=Path(plan['path']);target=Path(plan['target']);stage=Path(plan['stage']);folder=Path(record['folder'])
         original=folder/('original'+path.suffix.lower())
         if path==target:
-            current=_sha(path);_audio(path)
+            current,current_epoch=_current_audio(path)
             if current==plan['before_sha256']:
                 self._bindings(path,plan['native']);_audio(stage)
                 if _sha(stage)!=plan['after_sha256']:raise RecoveryRequired('Prepared conversion bytes changed')
-                self.lease._guard();os.replace(stage,path);sync_dir(path.parent);_fault('replaced')
+                self.lease._guard();_require_audio_epoch(path,current_epoch)
+                os.replace(stage,path);sync_dir(path.parent);_fault('replaced')
             elif current!=plan['after_sha256']:
                 raise RecoveryRequired('Audio differs from both conversion states; preserve newer data and original backup')
         else:
@@ -183,16 +201,18 @@ class ConversionStore:
                 _audio(target)
                 if _sha(target)!=plan['after_sha256']:raise RecoveryRequired('Conversion destination has different bytes')
             else:
-                self._codec_bindings(path,plan['native']);_audio(path)
-                if _sha(path)!=plan['before_sha256']:raise RecoveryRequired('Original codec bytes changed')
+                self._codec_bindings(path,plan['native']);current,current_epoch=_current_audio(path)
+                if current!=plan['before_sha256']:raise RecoveryRequired('Original codec bytes changed')
                 _audio(stage)
                 if _sha(stage)!=plan['after_sha256']:raise RecoveryRequired('Prepared codec bytes changed')
-                self.lease._guard();os.link(stage,target);stage.unlink();sync_dir(target.parent);_fault('replaced')
+                self.lease._guard();_require_audio_epoch(path,current_epoch)
+                os.link(stage,target);stage.unlink();sync_dir(target.parent);_fault('replaced')
             displaced=folder/('displaced'+path.suffix.lower())
             if path.exists() or path.is_symlink():
-                self._codec_bindings(path,plan['native']);_audio(path)
-                if _sha(path)!=plan['before_sha256'] or displaced.exists():raise RecoveryRequired('Original codec occupant changed')
-                self.lease._guard();path.rename(displaced);sync_dir(path.parent);_fault('displaced')
+                self._codec_bindings(path,plan['native']);current,current_epoch=_current_audio(path)
+                if current!=plan['before_sha256'] or displaced.exists():raise RecoveryRequired('Original codec occupant changed')
+                self.lease._guard();_require_audio_epoch(path,current_epoch)
+                path.rename(displaced);sync_dir(path.parent);_fault('displaced')
             if displaced.exists():
                 _regular(displaced)
                 if _sha(displaced)!=plan['before_sha256']:raise RecoveryRequired('Displaced original differs')

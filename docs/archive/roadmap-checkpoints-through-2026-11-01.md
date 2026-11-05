@@ -4,6 +4,10 @@ Archived checkpoint evidence, superseded by [the current roadmap](../ROADMAP.md)
 and [handoff](../HANDOFF.md). Installed hashes, counts and pending statements below
 apply only to their original checkpoints. Never use these snapshots as restore targets.
 
+Historical app-control, source-write, installer, restore, replay and cleanup
+instructions below grant no present authorization. Current permissions and
+protected recovery bases are governed by [the current handoff](../HANDOFF.md).
+
 # SoundBox roadmap
 
 Updated November1, 2026. Current priorities and remaining acceptance are below;

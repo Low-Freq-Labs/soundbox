@@ -263,6 +263,7 @@ class UsbDevicePages(QWidget):
         self._view_save_timer.setInterval(120)
         self._view_save_timer.timeout.connect(self.view_changed.emit)
         self._songs = {}
+        self._songs_by_id = {}
         self._display_rows = {}
         self.row_enricher = None
         self.stack.addWidget(self.playlist_tree)
@@ -358,6 +359,7 @@ class UsbDevicePages(QWidget):
                 self.my_settings.set_profile(current,self.global_profile,preserve_edits=same_device)
         self._view_key = facts.volume_uuid or target
         self._songs = {s.path:s for s in native.songs} if native and available else {}
+        self._songs_by_id = {s.id:s for s in native.songs} if native and available else {}
         self._display_rows.clear()
         self.playlist_tree.clear()
         if not available:
@@ -483,8 +485,10 @@ class UsbDevicePages(QWidget):
         playlist = item.data(0, Qt.UserRole)
         if not isinstance(playlist, (UsbPlaylist, CdjPlaylist)) or item.childCount():
             return
-        for title,path in playlist.entries:
-            song = self._songs.get(path) or CdjSong(path,path,title)
+        for index,(title,path) in enumerate(playlist.entries):
+            identity = playlist.song_ids[index] if isinstance(playlist,CdjPlaylist) and index<len(playlist.song_ids) else ''
+            song = self._songs_by_id.get(identity) if identity else self._songs.get(path)
+            song = song or CdjSong(path,path,title)
             seconds = max(0,song.duration)
             hours,remainder = divmod(seconds,3600)
             minutes,seconds = divmod(remainder,60)
@@ -496,7 +500,7 @@ class UsbDevicePages(QWidget):
             row.update(song.info)
             if self.row_enricher:
                 self.row_enricher(song,row)
-            self._display_rows[song.path] = row
+            self._display_rows[song.id] = row
             child = QTreeWidgetItem(item,[str(row_display_value(row,key)) for key,_label,_hidden in COLUMNS])
             child.setData(0,Qt.UserRole,song)
             child.setTextAlignment(2,Qt.AlignCenter)

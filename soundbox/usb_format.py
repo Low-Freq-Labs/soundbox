@@ -2,8 +2,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 import logging
+import os
 import plistlib
 import re
+import selectors
 import subprocess
 import time
 from .sync import assert_target_safe
@@ -99,9 +101,64 @@ def name_for(name, filesystem):
     return name
 
 
-def format_usb(plan, name, filesystem, *, sources=()):
+def _erase(command, on_progress):
+    """Relay native erase stages, retaining only a bounded diagnostic tail.
+
+    Erase is intentionally not interrupted or timed out: diskutil owns the
+    filesystem operation until it exits. A presentation failure must likewise
+    never abandon a still-running erase process.
+    """
+    process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    tail=b''
+    pending=b''
+    def report(line):
+        label=line.decode('utf-8',errors='replace').strip()[:200]
+        if label:
+            try:on_progress(0,0,label)
+            except Exception:_LOG.exception('USB format progress could not be displayed')
+    try:
+        assert process.stdout is not None
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout,selectors.EVENT_READ)
+            while True:
+                if not selector.select(timeout=.25):continue
+                block=os.read(process.stdout.fileno(),65536)
+                if not block:break
+                tail=(tail+block)[-8192:]
+                parts=re.split(b'[\r\n]',pending+block)
+                pending=parts.pop()[-2000:]
+                for line in parts:report(line)
+            if pending:report(pending)
+    except BaseException:
+        # A broken selector/raw read cannot leave a verbose child blocked on
+        # its full output pipe while we wait. Drain in bounded chunks through
+        # the independent buffered reader, preserving the original exception.
+        if process.stdout is not None:
+            try:
+                while process.stdout.read(65536):pass
+            except Exception:_LOG.exception('USB format output could not be drained')
+        raise
+    finally:
+        # Even a failed consumer/read must retain ownership until native erase
+        # finishes; cancelling/tearing down a QThread cannot stop this command.
+        try:status=process.wait()
+        finally:
+            if process.stdout is not None:process.stdout.close()
+    if status:raise RuntimeError(tail.decode('utf-8',errors='replace').strip()[-2000:] or
+                                 f'macOS USB erase failed (status {status})')
+
+
+def format_usb(plan, name, filesystem, *, sources=(), on_progress=None, should_cancel=None):
     started=time.monotonic()
     name=name_for(name,filesystem)
+    def progress(done,total,label):
+        if on_progress is not None:
+            try:on_progress(done,total,label)
+            except Exception:_LOG.exception('USB format progress could not be displayed')
+    def cancelled():
+        if should_cancel and should_cancel():raise RuntimeError('USB format cancelled; nothing erased')
+    cancelled()
+    progress(0,0,'Checking USB')
     fresh=capture(plan.target,token=plan.mount[0],volume_uuid=plan.volume_uuid,sources=sources)
     if fresh!=plan:raise ValueError('The USB changed since the format dialog opened')
     # This is the only destructive command. The UI has already presented this
@@ -111,11 +168,12 @@ def format_usb(plan, name, filesystem, *, sources=()):
         command=['/usr/sbin/diskutil','eraseVolume',filesystem,name,plan.reusable_partition]
     else:
         command=['/usr/sbin/diskutil','eraseDisk',filesystem,name,'MBRFormat',plan.disk]
+    cancelled()
+    progress(0,0,'Erasing USB')
     erase_started=time.monotonic()
-    result=subprocess.run(command,capture_output=True,text=True)
-    _LOG.info('USB format %s disk=%s seconds=%.3f',command[1],plan.disk,time.monotonic()-erase_started)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout).strip()[-2000:])
+    try:_erase(command,progress)
+    finally:_LOG.info('USB format %s disk=%s seconds=%.3f',command[1],plan.disk,time.monotonic()-erase_started)
+    progress(0,0,'Finishing USB format')
     listing=_plist('list','-plist',plan.disk)
     disks=listing.get('AllDisksAndPartitions',[])
     if (len(disks)!=1 or disks[0].get('DeviceIdentifier')!=plan.disk

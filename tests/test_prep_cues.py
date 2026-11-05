@@ -55,6 +55,30 @@ class CueEditingInterface(unittest.TestCase):
         self.assertEqual(released, [('hot', 0)])
         panel.deleteLater()
 
+    def test_cue_fill_and_remove_repolish_through_stylesheets_without_borrowed_style(self):
+        panel = CuePanel()
+        self.addCleanup(panel.deleteLater)
+        panel.set_loaded(True)
+        panel.set_editable(True)
+        # Qt replaces its private stylesheet-style object during these changes.
+        # A borrowed wrapper can already be invalid when Python queries it.
+        with mock.patch.object(panel.hot_slots[0], 'style',
+                               side_effect=AssertionError('borrowed style queried')), \
+                mock.patch.object(panel.memory_slots[1], 'style',
+                                  side_effect=AssertionError('borrowed style queried')):
+            panel.set_cues([dict(kind='hot', slot=0, position_ms=10003),
+                            dict(kind='memory', slot=1, position_ms=22314)])
+            self.assertTrue(panel.hot_slots[0].property('filled'))
+            self.assertEqual(panel.hot_slots[0].text(), 'A  0:10')
+            self.assertTrue(panel.memory_slots[1].property('filled'))
+            self.assertTrue(panel.memory_slots[1].isEnabled())
+            panel.set_cues([])
+            self.assertFalse(panel.hot_slots[0].property('filled'))
+            self.assertEqual(panel.hot_slots[0].text(), 'A   —')
+            self.assertEqual(panel.hot_slots[0].styleSheet(), '')
+            self.assertFalse(panel.memory_slots[1].property('filled'))
+            self.assertTrue(panel.hot_slots[0].isEnabled())
+
     def test_cue_request_captures_revision_page_position_and_blocks_tag_lane(self):
         with tempfile.TemporaryDirectory() as td:
             lib = library()

@@ -13,6 +13,7 @@ from PySide6.QtCore import QStandardPaths, QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit
 
 from desktop.connections import CredentialsDialog, SoundCloudSection
+from soundbox.providers import ConnectionFailure
 
 _app = None
 
@@ -62,6 +63,59 @@ class ConnectionsUI(unittest.TestCase):
             _app.processEvents()
             time.sleep(0.001)
         self.assertEqual(self.section._tasks.pending, 0)
+
+    def test_initial_refresh_uses_shared_once_hook_but_manual_refresh_stays_explicit(self):
+        calls = []
+        self.service.refresh_initial = lambda stop, progress: calls.append('initial')
+        self.service.refresh = lambda stop, progress: calls.append('explicit')
+        self.section._refresh_initial()
+        self.wait_idle()
+        self.section.refresh()
+        self.wait_idle()
+        self.assertEqual(calls, ['initial', 'explicit'])
+
+    def test_window_refresh_remains_busy_cancelable_until_matching_owner_retires(self):
+        from unittest.mock import Mock
+        worker = Mock()
+        section = SoundCloudSection(self.service, isolated=True, startup_worker=worker)
+        self.addCleanup(section.deleteLater)
+        self.addCleanup(section._tasks.drain)
+        self.assertFalse(section.refresh_button.isEnabled())
+        self.assertFalse(section.cancel_button.isHidden())
+        calls = []
+        self.service.refresh = lambda stop, progress: calls.append('explicit')
+        section.refresh()
+        self.assertEqual(section._tasks.pending, 0)
+        section._cancel()
+        worker.cancel.assert_called_once_with()
+        section.finish_startup(object())
+        self.assertFalse(section.refresh_button.isEnabled())
+        section.finish_startup(worker, ConnectionFailure('Connection offline'))
+        self.assertTrue(section.refresh_button.isEnabled())
+        self.assertEqual(section.status.text(), 'Connection offline')
+        section.refresh()
+        deadline = time.monotonic() + 3
+        while section._tasks.pending and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(.001)
+        self.assertEqual(section._tasks.pending, 0)
+        self.assertEqual(calls, ['explicit'])
+
+    def test_completed_window_attempt_does_not_repeat_and_keeps_safe_failure_for_settings(self):
+        self.service.state.update(connected=True, count=1)
+        for result, message in ((ConnectionFailure('Safe offline error'), 'Safe offline error'),
+                                (ValueError('private unexpected contents'),
+                                 'Could not complete the SoundCloud connection. Try again.'),
+                                (None, 'Connected as SoundCloud · 1 liked tracks')):
+            with self.subTest(result=result), \
+                    patch('desktop.connections.QStandardPaths.isTestModeEnabled', return_value=False), \
+                    patch('desktop.connections.QTimer.singleShot') as timer:
+                section = SoundCloudSection(self.service, startup_complete=True, startup_result=result)
+                self.addCleanup(section.deleteLater)
+                self.addCleanup(section._tasks.drain)
+                timer.assert_not_called()
+                self.assertEqual(section.status.text(), message)
+                self.assertTrue(section.refresh_button.isEnabled())
 
     def test_connect_save_then_edit_prefilled_credentials_and_disconnect(self):
         rounds = [("client-1", "secret-1", "https://soundcloud.com/test-user"),

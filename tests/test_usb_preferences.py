@@ -87,12 +87,12 @@ class UsbFormatTests(unittest.TestCase):
                 info.update(VolumeName=final_name,FilesystemType=native_fs)
                 listing['AllDisksAndPartitions'][0]['Partitions'][0]['VolumeName']=final_name
                 with mock.patch('soundbox.usb_format.capture',return_value=plan) as capture, \
-                     mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)) as run, \
+                     mock.patch('soundbox.usb_format._erase') as run, \
                      mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
                     self.assertEqual(usb_format.format_usb(plan,'My USB',filesystem),info)
                     capture.assert_called_once()
                     self.assertEqual(run.call_args.args[0],['/usr/sbin/diskutil','eraseDisk',filesystem,final_name,'MBRFormat','disk99'])
-        with mock.patch('soundbox.usb_format.capture',return_value=None),mock.patch('soundbox.usb_format.subprocess.run') as run:
+        with mock.patch('soundbox.usb_format.capture',return_value=None),mock.patch('soundbox.usb_format._erase') as run:
             with self.assertRaisesRegex(ValueError,'changed'):usb_format.format_usb(plan,'USB','FAT32')
             run.assert_not_called()
 
@@ -132,7 +132,7 @@ class UsbFormatTests(unittest.TestCase):
                     info.update(VolumeName='My USB',FilesystemType='exfat')
                     listing['AllDisksAndPartitions'][0]['Partitions'][0]['VolumeName']='My USB'
                 with mock.patch('soundbox.usb_format.capture',return_value=plan), \
-                     mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)) as run, \
+                     mock.patch('soundbox.usb_format._erase') as run, \
                      mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
                     usb_format.format_usb(plan,'My USB',filesystem)
                 expected=['/usr/sbin/diskutil',command,filesystem,info['VolumeName']]
@@ -149,7 +149,7 @@ class UsbFormatTests(unittest.TestCase):
                 objects={'map':listing['AllDisksAndPartitions'][0],'disk':whole,'volume':info}
                 objects[area][key]=value
                 with mock.patch('soundbox.usb_format.capture',return_value=plan), \
-                     mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)), \
+                     mock.patch('soundbox.usb_format._erase'), \
                      mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
                     with self.assertRaisesRegex(RuntimeError,'USB formatted'):
                         usb_format.format_usb(plan,'My USB','FAT32')
@@ -160,10 +160,99 @@ class UsbFormatTests(unittest.TestCase):
         requested['DeviceIdentifier']='disk99s2';info['DeviceIdentifier']='disk99s2'
         listing['AllDisksAndPartitions'][0]['Partitions'].insert(0,{'DeviceIdentifier':'disk99s1','VolumeName':'Unexpected'})
         with mock.patch('soundbox.usb_format.capture',return_value=plan), \
-             mock.patch('soundbox.usb_format.subprocess.run',return_value=mock.Mock(returncode=0)), \
+             mock.patch('soundbox.usb_format._erase'), \
              mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
             with self.assertRaisesRegex(RuntimeError,'one data partition'):
                 usb_format.format_usb(plan,'My USB','FAT32')
+
+    def test_cancel_before_erase_never_starts_diskutil_or_post_format_reads(self):
+        plan,*_=self.format_fixture()
+        for checks,capture_calls in (([True],0),([False,True],1)):
+            with self.subTest(checks=checks), \
+                 mock.patch('soundbox.usb_format.capture',return_value=plan) as capture, \
+                 mock.patch('soundbox.usb_format._erase') as erase, \
+                 mock.patch('soundbox.usb_format._plist') as plist:
+                with self.assertRaisesRegex(RuntimeError,'nothing erased'):
+                    usb_format.format_usb(plan,'My USB','FAT32',should_cancel=mock.Mock(side_effect=checks))
+                self.assertEqual(capture.call_count,capture_calls)
+                erase.assert_not_called();plist.assert_not_called()
+
+    def test_format_reports_native_stages_and_does_not_cancel_an_erase_in_progress(self):
+        plan,listing,whole,info=self.format_fixture()
+        cancelled=False
+        labels=[]
+        def erase(command,progress):
+            nonlocal cancelled
+            cancelled=True
+            progress(0,0,'Unmounting disk')
+            progress(0,0,'Mounting disk')
+        with mock.patch('soundbox.usb_format.capture',return_value=plan), \
+             mock.patch('soundbox.usb_format._erase',side_effect=erase), \
+             mock.patch('soundbox.usb_format._plist',side_effect=[listing,whole,info]):
+            result=usb_format.format_usb(plan,'My USB','FAT32',should_cancel=lambda:cancelled,
+                                        on_progress=lambda _done,_total,label:labels.append(label))
+        self.assertEqual(result,info)
+        self.assertEqual(labels,['Checking USB','Erasing USB','Unmounting disk','Mounting disk','Finishing USB format'])
+
+    def test_native_erase_streams_output_before_exit_and_closes_and_reaps_its_process(self):
+        import sys
+        actual=usb_format.subprocess.Popen
+        children=[]
+        stages=[]
+        def start(*args,**kwargs):
+            kwargs['stdin']=usb_format.subprocess.PIPE
+            process=actual(*args,**kwargs);children.append(process);return process
+        def progress(_done,_total,label):
+            stages.append((label,children[0].poll()))
+            if label=='Unmounting disk':
+                children[0].stdin.write(b'y');children[0].stdin.flush()
+        code="import sys; print('Unmounting disk',flush=True); sys.stdin.read(1); print('Mounting disk',flush=True)"
+        with mock.patch('soundbox.usb_format.subprocess.Popen',side_effect=start):
+            try:usb_format._erase([sys.executable,'-c',code],progress)
+            finally:children[0].stdin.close()
+        self.assertEqual([s[0] for s in stages],['Unmounting disk','Mounting disk'])
+        self.assertIsNone(stages[0][1])
+        self.assertEqual(children[0].returncode,0)
+        self.assertTrue(children[0].stdout.closed)
+
+    def test_native_erase_bounds_failed_output_and_survives_a_failed_progress_consumer(self):
+        import sys
+        actual=usb_format.subprocess.Popen
+        children=[]
+        def start(*args,**kwargs):
+            process=actual(*args,**kwargs);children.append(process);return process
+        code="import os,sys; os.write(1,b'x'*200000); os.write(2,b'\\nNative erase refused\\n'); sys.exit(7)"
+        with mock.patch('soundbox.usb_format.subprocess.Popen',side_effect=start), \
+             mock.patch('soundbox.usb_format._LOG.exception') as logged:
+            with self.assertRaisesRegex(RuntimeError,'Native erase refused') as error:
+                usb_format._erase([sys.executable,'-c',code],mock.Mock(side_effect=RuntimeError('closed view')))
+        self.assertLessEqual(len(str(error.exception)),2000)
+        self.assertEqual(children[0].returncode,7)
+        self.assertTrue(children[0].stdout.closed)
+        logged.assert_called()
+
+    def test_native_erase_raw_read_failure_drains_a_verbose_child_before_reaping(self):
+        import sys
+        actual_start=usb_format.subprocess.Popen
+        actual_read=usb_format.os.read
+        children=[]
+        failed=False
+        def start(*args,**kwargs):
+            process=actual_start(*args,**kwargs);children.append(process);return process
+        def read(fd,size):
+            nonlocal failed
+            if children and fd==children[0].stdout.fileno() and not failed:
+                failed=True
+                raise OSError('simulated native-output read failure')
+            return actual_read(fd,size)
+        code="import os; os.write(1,b'x'*200000)"
+        with mock.patch('soundbox.usb_format.subprocess.Popen',side_effect=start), \
+             mock.patch('soundbox.usb_format.os.read',side_effect=read):
+            with self.assertRaisesRegex(OSError,'simulated native-output read failure'):
+                usb_format._erase([sys.executable,'-c',code],lambda *_:None)
+        self.assertTrue(failed)
+        self.assertEqual(children[0].returncode,0)
+        self.assertTrue(children[0].stdout.closed)
 
 
 class TrackInfoTests(unittest.TestCase):

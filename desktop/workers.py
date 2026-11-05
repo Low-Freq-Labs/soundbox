@@ -556,6 +556,14 @@ class ArtFillWorker(QThread):
         profiles = {}
         hidden = getattr(self.lib, "hidden_ids", set())
         if callable(profile_fetch):
+            self._wait_for_playback()
+            if self._stop:
+                return
+            # Eligibility observes one policy snapshot for this pass, rather
+            # than reopening its JSON for every existing cover. Publication's
+            # cache mutation still checks fresh policy and exact cover bytes.
+            excluded_ids = self.cache.source_excluded_ids(
+                tid for tid in self.lib.tracks_by_id if tid not in hidden)
             replaced = attempted = 0
             for track in tuple(self.lib.tracks_by_id.values()):
                 self._wait_for_playback()
@@ -565,7 +573,7 @@ class ArtFillWorker(QThread):
                 if tid in hidden:
                     continue
                 entry = self.cache.index.get(tid) or {}
-                if not self.cache.source_excluded(tid) and entry.get("fallback") != "excluded-source":
+                if tid not in excluded_ids and entry.get("fallback") != "excluded-source":
                     continue
                 title = (self.title_overrides or {}).get(tid) or track.name
                 artist = metadata.effective_artist(

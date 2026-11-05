@@ -3,7 +3,7 @@
 A native macOS (PySide6) music-library bridge from **rekordbox** to **stock or
 Rockbox iPods / USB players** — browse the live rekordbox library, curate it,
 edit existing My Tags, and drag playlists onto a device: exact order, per-track
-cover art, honest sync semantics.
+cover art, selected-playlist USB export and firmware-specific iPod sync.
 
 ## Start here
 
@@ -25,6 +25,28 @@ The installed correctness/efficiency follow-up adds guarded source capture and r
 recovery, protects newer USB settings and artwork, and loads catalog thumbnails
 only as rows become visible. [The audit](docs/performance-audit.md) separates
 measured changes, failure tests and remaining design/hardware limits.
+
+The later [USB audit](docs/performance-audit.md#usb-deep-audit--november4-later-testing)
+corrects format confirmation, permits another USB to export during formatting,
+and restores native USB covers in Track Info. Those changes are installed in personal build165;
+[HANDOFF](docs/HANDOFF.md) records validation, preservation and rollback details.
+
+The subsequent [iPod audit](docs/performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+reduces stock/composite repeated reads and planning, preserves shared Rockbox file
+ownership and propagates explicit source/title/artist changes efficiently. It was
+delivered in the preceding personal build165/runtime26f15fb4… with2695passing
+tests and remains in the current build. No iPod hardware was available, so
+firmware/physical acceptance remains separate.
+
+The [whole-app audit](docs/performance-audit.md#whole-app-audit--november4-after-ipod-review)
+adds Settings/device views on demand, coalesced background work, idle decoder
+parking and fewer duplicate artwork/state operations. It also protects colliding
+device imports and files changed during conversion recovery. Current validation,
+signed startup timing and installation status are tracked in [HANDOFF](docs/HANDOFF.md).
+The November4 personal build165/runtime7ffde716… is installed/reopened/verified;
+all2779tests pass. Matched signed3740-row startup fell from3.15s to1.20s median
+(1.24s p95), measuring snapshot-browser readiness rather than fresh-source or
+physical-device readiness. Fresh library/authorities/art indexes/white icon remain exact.
 
 ### Requirements
 
@@ -71,10 +93,14 @@ From the repository root on a Mac with those prerequisites available:
 python3.14 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 ./build_native.sh
+./build_cdj.sh
 ./.venv/bin/python soundbox_app.py
 ```
 
 The `.venv` location matters: the build and check scripts use it directly.
+CDJ export and RBXport analysis also need the pinned local Rust toolchain used by
+`build_cdj.sh`; its provisioning and required offline fixtures are described in
+the [release test guide](docs/test-release-gate.md).
 The native build produces `build/native/libsoundbox_deck.dylib`. If the deck
 cannot load, SoundBox reports the problem and disables playback while leaving
 library management available.
@@ -125,7 +151,9 @@ review remain open. Physical iPod acceptance is still pending. See the
 [CDJ contract](docs/cdj-usb-export.md) and [roadmap](docs/ROADMAP.md).
 
 Background upkeep reuses unchanged analysis and prepared artwork, title edits
-refresh only their display row, and idle device watching waits for mount changes.
+refresh only their display row, and generic-USB idle watching uses mount hints
+without scanning the mounted drive. Connected iPods retain their bounded drift
+polling.
 Ordinary player preferences save in a short batch; library edits still save
 immediately. Export backends and artwork indexes load when needed for a detected
 target; stock-iPod artwork preparation waits for an attached iPod and stops on
@@ -404,7 +432,8 @@ fit, retaining the full message on hover. Supported metadata edits stay in Sound
 feed export without changing source audio. See [CDJ limits](docs/cdj-usb-export.md).
 
 **Curation.** Inline Title/Artist edits (double-click or right-click) become
-per-track overrides that rename files on the device — sources untouched.
+per-track overrides used for exported names/display metadata; source files stay
+untouched. Existing CDJ audio placement survives display-only changes.
 Every override teaches the artist deriver (trusted-name gating for reversed
 "Title - Artist" flips, collab-aware splitting, Unknown rescue from titles).
 An explicit named transformation credit such as `(WHALES REMIX)` becomes the
@@ -628,7 +657,7 @@ Rockbox itself. Sync adopts a new song only when its path already maps to
 SoundBox-managed media, removes a newly appended duplicate instead of listing
 the song twice, and updates both firmware playlist views without copying the
 audio again. Unknown device songs are not imported automatically, and
-device-side deletion/reorder edits fail closed. **Cancel is honest** — generic
+device-side deletion/reorder edits fail closed. **Cancel is honest** — Rockbox/
 filesystem exports retain playable partial M3U8s flagged for retry; stock/composite
 transactions stop at safe boundaries and report rollback or committed state.
 Filesystem export finalization scrubs AppleDouble files in touched directories;
@@ -664,11 +693,9 @@ On-The-Go is generated by stock firmware and cannot be deleted through iTunesDB.
 Idle eject requests normal macOS eject without Sync, Verify, or Deep Verify.
 If a background read is active, eject waits for it to finish. SoundBox reports
 macOS refusal and never falls back to force-unmount.
-The device browser can copy selected audio/M3U8 entries in order into
-`~/Music/SoundBox Media/Unknown Artist/` without changing the device. Click one
-for rename, new folder, delete, and assign-artist. Playlist entries that escape
-the selected volume through `..` or a symlink are refused. Browser mutations
-are pinned to the exact confirmed mount and cannot span devices. A root `/PIONEER` rekordbox/CDJ
+USB tabs browse native playlists/tracks and load selected device songs; they do
+not expose a raw file manager or general rename/new-folder/delete/import actions.
+A root `/PIONEER` rekordbox/CDJ
 export counts toward used space and stays excluded from ordinary stock/dual/
 Rockbox/filesystem Sync, ownership, verification, import and cleanup. Generic
 USBs use the separate native CDJ contract described above.
@@ -697,7 +724,9 @@ Old managed-audio bytes are discarded after success; unowned paths are untouched
 If USB remounts during planning, confirmation, or a generation, the pinned
 identity check refuses the stale plan and the last committed library remains authoritative.
 Re-queueing the playlist verifies and adopts only exact completed leftovers;
-Mac-side proof journaling makes that verification resumable too. Additional
+Each adoption/preflight freshly hashes its affected candidate; old FAT timestamp/edge
+proofs cannot authenticate changed middle bytes. Historical Mac-side journals
+remain retained without new per-file proof writes. Additional
 playlist drops made while a dual-iPod sync is running are queued and deduplicated,
 then planned against the newly committed media instead of recopied.
 On composite iPods, Sync, playlist export, and managed-playlist deletion follow the same visible
@@ -756,10 +785,12 @@ Before that first composite generation, deleting old stock playlists removes
 their now-unreferenced iTunesDB records and linked device media after the guarded
 database commit. Source-library audio and unrelated Rockbox paths stay untouched.
 
-**Persistence.** Everything user-made lives in one portable
-`library.json` (overrides, playlists, imported records, hides, settings) at
-`~/Library/Application Support/LowFreqLabs/Soundbox/` — keyed by stable
-track IDs so a newer rekordbox library preserves all work. Atomic saves,
+**Persistence.** Curation records such as overrides, playlists, imported records,
+hides and settings live in `library.json` under
+`~/Library/Application Support/LowFreqLabs/Soundbox/`. Artwork, history and native
+authority/recovery files occupy separate protected areas. Stable track IDs retain
+curation across normal refreshes of the same source; choosing another library
+never transfers native write authority. Atomic saves,
 rotating backups, schema-validated corruption recovery, and full backup/restore
 with staged publication, exact rollback and interrupted-operation recovery
 `.zip` (library + history + art cache) in Settings. Window size/position,

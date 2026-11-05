@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from soundbox import manifest
+from soundbox import manifest, dual_ipod
+from soundbox.device_manifest_capture import read_device_manifest
 from soundbox.dual_ipod import _read_existing_manifest, composite_device_drift
 from soundbox.library import Library
 
@@ -22,18 +23,17 @@ class CompositeManifestCapture(unittest.TestCase):
         self.path.write_bytes(self.before)
 
     def replace_after_capture(self):
-        original=Path.read_bytes;reads=[]
-        def read(path):
-            raw=original(path)
-            if path==self.path:
-                reads.append(path)
-                self.path.write_bytes(self.after)
+        reads=[]
+        def read(root):
+            raw=read_device_manifest(root)
+            reads.append(root)
+            self.path.write_bytes(self.after)
             return raw
         return read,reads
 
     def test_planning_model_payload_and_digest_are_from_one_fresh_read(self):
         read,reads=self.replace_after_capture()
-        with patch.object(Path,'read_bytes',read):
+        with patch.object(dual_ipod,'read_device_manifest',read):
             data,raw,digest=_read_existing_manifest(self.root)
         self.assertEqual(len(reads),1)
         self.assertEqual(data,self.first)
@@ -45,7 +45,7 @@ class CompositeManifestCapture(unittest.TestCase):
 
     def test_poll_recovery_binding_hashes_the_same_observed_payload(self):
         read,reads=self.replace_after_capture()
-        with patch.object(Path,'read_bytes',read), \
+        with patch.object(manifest,'read_device_manifest',read), \
                 patch('soundbox.dual_ipod._matching_interrupted_recovery',return_value=None) as recovery:
             self.assertIsNone(composite_device_drift(Library({},[],'synthetic'),self.root))
         self.assertEqual(len(reads),1)

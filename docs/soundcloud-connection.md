@@ -30,6 +30,13 @@ also refreshes at application launch. **Disconnect** removes SoundBox's saved
 credentials, application tokens, and disposable index locally. It sends no
 revocation or sign-out request, so it does not revoke the website's authorization.
 
+Settings is constructed on first open. Automatic connected-account refresh runs
+independently on a window-owned worker, and opening Connections attaches to that
+worker or its completed result. Cancel remains available until retirement; a
+completed initial attempt does not repeat just because Settings opens later.
+Cached likes for the same account remain available before Settings opens, while
+manual Refresh stays repeatable. Credential/token operations remain serialized.
+
 The earlier browser/loopback connection remains backend compatibility for an
 already-authorized legacy account and its token refresh/revocation. New connections
 always use public likes; the UI exposes no browser/loopback setup. No SoundCloud
@@ -65,6 +72,10 @@ A complete scan replaces the index atomically; a failed/cancelled scan
 retains the previous complete same-account index. Account changes clear old likes
 before scanning. Rotating refresh tokens are persisted immediately, before any
 subsequent request; their single-use semantics require serialized account jobs.
+Metadata GETs check cancellation between receives and retain the existing
+per-receive timeout. Connect/header waits can still delay cancellation. Token
+POST responses finish reading and persist any rotated credentials before the
+caller honors cancellation; aborting that response could lose the usable token.
 
 A confident, unambiguous liked upload whose uploader name matches the artist is
 tried before general search. Other accountable likes remain fallback evidence.
@@ -96,7 +107,9 @@ automatic matches. Uploader-name matching does not certify an official account.
 Offline tests cover public client-credentials authentication without a browser or
 callback, profile validation and resolution redirects, token reuse/rotation,
 pagination, account changes, failed scans, local public disconnect, credential
-privacy, editing/cancelling credentials, worker retirement, general-search
+privacy, editing/cancelling credentials, worker retirement, lazy Settings with
+same-account cached likes, shared launch refresh/cancellation/completion,
+receive-bound metadata cancellation, general-search
 fallback and mixed manual results. Legacy OAuth callback/PKCE tests remain.
 Hermetic UI renders never use live Keychain, account sessions or devices.
 Real Keychain consent, application-token exchange and the user's actual public-likes scan

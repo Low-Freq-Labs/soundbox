@@ -130,6 +130,45 @@ class WaveConversion(unittest.TestCase):
                 self.assertEqual(self.path.stat().st_ino,inode);self.assertEqual(self.path.read_bytes(),after)
                 self.assertEqual((self.recovery/self.op/conversion.result_key(self.path)/'original.wav').read_bytes(),before)
 
+    def test_recovery_preserves_source_changed_between_digest_and_publication(self):
+        for boundary in ('stage-verification','guard'):
+            with self.subTest(boundary=boundary):
+                self.op=str(uuid4());wave(self.path);before=self.path.read_bytes()
+                def pause(phase):
+                    if phase=='prepared':raise RuntimeError('interrupted')
+                with mock.patch.object(conversion,'_fault',side_effect=pause),self.assertRaises(RuntimeError):self.convert()
+                replacement=b'new user source while conversion recovery was checked'
+                sha=conversion._sha
+                def stage_checked(path):
+                    value=sha(path)
+                    if boundary=='stage-verification' and path.name.startswith('.soundbox-wave-'):
+                        self.path.write_bytes(replacement)
+                    return value
+                def guard():
+                    if boundary=='guard':self.path.write_bytes(replacement)
+                with mock.patch.object(conversion,'_sha',side_effect=stage_checked):
+                    with self.assertRaisesRegex(ValueError,'changed before replacement'):
+                        self.convert(guard=guard)
+                self.assertEqual(self.path.read_bytes(),replacement)
+                directory=self.recovery/self.op/conversion.result_key(self.path)
+                self.assertEqual((directory/'original.wav').read_bytes(),before)
+                receipt=json.loads((directory/'receipt.json').read_bytes())
+                self.assertTrue(Path(receipt['stage']).exists())
+
+    def test_current_digest_uses_one_descriptor_pass_and_rejects_inode_replacement(self):
+        wave(self.path);original=conversion.hashlib.file_digest
+        with mock.patch.object(conversion.hashlib,'file_digest',wraps=original) as digest:
+            value,epoch=conversion._current_digest(self.path)
+        digest.assert_called_once()
+        self.assertEqual(value,hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.assertEqual(epoch,analysis.identity(self.path.stat()))
+        def replace_inode(stream,algorithm):
+            result=original(stream,algorithm);other=self.path.with_name('replacement.wav')
+            other.write_bytes(self.path.read_bytes());other.replace(self.path);return result
+        with mock.patch.object(conversion.hashlib,'file_digest',side_effect=replace_inode):
+            with self.assertRaisesRegex(ValueError,'during verification'):
+                conversion._current_digest(self.path)
+
     def test_changed_source_or_native_guard_does_not_get_overwritten(self):
         wave(self.path);original=self.path.read_bytes()
         def changed(phase):

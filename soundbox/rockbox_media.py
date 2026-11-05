@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import stat as stat_mod
 import struct
 import tempfile
 from dataclasses import asdict, dataclass, replace, field
@@ -26,7 +27,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import COMM, ID3, TIT2, TPE1, TXXX
 from mutagen.mp4 import MP4
 
-from .operation_control import phase_progress, record_metric
+from .operation_control import checkpoint, phase_progress, record_metric
 from . import artencode
 
 
@@ -44,7 +45,6 @@ _LEGACY_NORMALIZED_MEDIA_PROFILES = frozenset({
     "rockbox-no-embedded-art-normalized-tags-no-purchase-receipts-v1",
 })
 ART_PROFILE = "rockbox-paletted8-bmp-universal-v6"
-INTERRUPTED_VERIFY_SCHEMA = 1
 
 
 from .source_acquisition import SourceContract, acquire_source, SourceAcquisitionError
@@ -76,12 +76,12 @@ def _atomic_write(path: Path, data: bytes) -> None:
 
 
 class InterruptedFileVerifier:
-    """Resumable Mac-side proof for whole files left by a device remount.
+    """Fresh exact-byte proof for an interrupted file before adoption.
 
-    The first encounter streams the full device file and records its exact
-    SHA-256. Later plans reuse that proof only while size, FAT timestamp, and a
-    small first/last-byte fingerprint still match. The cache is disposable and
-    scoped to the committed composite-manifest hash.
+    FAT32/exFAT can retain every stat field across a same-size content edit.
+    Even an edge fingerprint misses middle edits, so historical Mac-side
+    receipts cannot authorize adoption. Read only the affected candidate once
+    per call; leave old disposable receipts untouched and write no new ones.
     """
 
     def __init__(self, root: str | Path, baseline_sha256: str):
@@ -90,46 +90,7 @@ class InterruptedFileVerifier:
                 char not in "0123456789abcdef" for char in baseline):
             raise RockboxMediaError(
                 "Interrupted verification requires an exact manifest SHA-256")
-        self.path = (
-            Path(root) / "interrupted-verification" / f"{baseline}.json")
-        self.rows: dict[str, dict[str, Any]] = {}
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-            if (
-                raw.get("schema") == INTERRUPTED_VERIFY_SCHEMA
-                and raw.get("baseline_sha256") == baseline
-                and isinstance(raw.get("files"), dict)
-            ):
-                self.rows = {
-                    str(key): dict(value)
-                    for key, value in raw["files"].items()
-                    if isinstance(value, dict)
-                }
-        except (OSError, ValueError, TypeError):
-            pass
         self.baseline_sha256 = baseline
-
-    @staticmethod
-    def _edge_sha256(path: Path, size: int) -> str:
-        window = min(1024 * 1024, size)
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            digest.update(handle.read(window))
-            if size > window:
-                handle.seek(max(window, size - window))
-                digest.update(handle.read(window))
-        return digest.hexdigest()
-
-    def _save(self) -> None:
-        payload = {
-            "schema": INTERRUPTED_VERIFY_SCHEMA,
-            "baseline_sha256": self.baseline_sha256,
-            "files": self.rows,
-        }
-        _atomic_write(
-            self.path,
-            json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n",
-        )
 
     def verify(
             self,
@@ -139,32 +100,40 @@ class InterruptedFileVerifier:
             size: int,
             sha256: str,
     ) -> bool:
-        if live.is_symlink() or not live.is_file():
+        checkpoint()
+        before = live.lstat()
+        if not stat_mod.S_ISREG(before.st_mode) or before.st_size != size:
             return False
-        stat = live.stat()
-        if stat.st_size != size:
-            return False
-        key = "/" + str(relative_path).replace(os.sep, "/").lstrip("/")
-        row = self.rows.get(key)
-        if (
-            row is not None
-            and int(row.get("size") or -1) == size
-            and str(row.get("sha256") or "") == sha256
-            and int(row.get("mtime_ns") or -1) == stat.st_mtime_ns
-            and str(row.get("edge_sha256") or "")
-            == self._edge_sha256(live, size)
-        ):
-            return True
-        if _sha256(live) != sha256:
-            return False
-        self.rows[key] = {
-            "size": size,
-            "sha256": sha256,
-            "mtime_ns": stat.st_mtime_ns,
-            "edge_sha256": self._edge_sha256(live, size),
-        }
-        self._save()
-        return True
+        digest = hashlib.sha256()
+        read = 0
+        phase_progress("Verifying interrupted file", 0, size, str(relative_path))
+        record_metric("interrupted_verification_reads")
+        # Refuse a last-component symlink substituted between lstat and open.
+        descriptor = os.open(live, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            while True:
+                checkpoint()
+                block = handle.read(min(1024 * 1024, size - read + 1))
+                if not block:
+                    break
+                digest.update(block)
+                read += len(block)
+                record_metric("interrupted_verification_bytes_read", len(block))
+                if read > size:
+                    break
+            closed = os.fstat(handle.fileno())
+        after = live.lstat()
+
+        def identity(observation: os.stat_result) -> tuple[int, ...]:
+            return (observation.st_dev, observation.st_ino, observation.st_size,
+                    observation.st_mtime_ns, observation.st_ctime_ns)
+
+        phase_progress("Verifying interrupted file", read, size, str(relative_path))
+        return (read == size and digest.hexdigest() == sha256
+                and identity(before) == identity(opened)
+                == identity(closed) == identity(after)
+                and stat_mod.S_ISREG(after.st_mode))
 
 
 def _embedded_picture_count(path: Path) -> int:

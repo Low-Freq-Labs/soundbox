@@ -1520,9 +1520,9 @@ class CuePanel(QWidget):
                                 if kind == 'hot' else "Hold to preview · Space latches")]
                     button.setToolTip(" · ".join(part for part in details if part))
                     button.setEnabled(self._loaded)
-                if filled_changed:
-                    button.style().unpolish(button)
-                    button.style().polish(button)
+                # Every filled/unfilled transition changes the local sheet,
+                # which already repolishes after the property update. Avoid
+                # querying its borrowed, replaced stylesheet-style wrapper.
 
     def _press(self, kind: str, slot: int):
         cue = self._cues[kind][slot]

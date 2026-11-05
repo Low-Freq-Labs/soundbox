@@ -3,12 +3,35 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
+import io
 
 from soundbox import browser_cache
 from soundbox.library import Track
 
 
 class BrowserCache(unittest.TestCase):
+    def test_deep_malformed_cache_falls_back(self):
+        with tempfile.TemporaryDirectory() as area:
+            path = Path(area) / 'browsercache.json'
+            path.write_text('[' * 2000 + '0' + ']' * 2000)
+            self.assertIsNone(browser_cache.load(path, 'key'))
+
+    def test_capture_rejects_growth_and_oversize_before_json(self):
+        with tempfile.TemporaryDirectory() as area:
+            path = Path(area) / 'browsercache.json'
+            path.write_bytes(b'{}')
+            stream = io.BytesIO(b'{}extra')
+            stream.fileno = lambda: 123
+            with (mock.patch.object(Path, 'open', return_value=stream),
+                  mock.patch.object(browser_cache.os, 'fstat', return_value=path.stat()),
+                  mock.patch.object(browser_cache.json, 'loads', side_effect=AssertionError('unbounded parse'))):
+                self.assertIsNone(browser_cache.load(path, 'key'))
+            with path.open('wb') as handle:
+                handle.truncate(64 * 1024**2 + 1)
+            with mock.patch.object(browser_cache.json, 'loads', side_effect=AssertionError('oversize parse')):
+                self.assertIsNone(browser_cache.load(path, 'key'))
+
     def test_round_trip_and_corrupt_stale_or_linked_cache_falls_back(self):
         row = Track('1', 'Title', 'Artist', 'file:///missing.wav').to_row()
         rows = {'1': row}

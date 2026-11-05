@@ -1,6 +1,7 @@
 """Track-bound source protocol on synthetic temp libraries, never live AppData."""
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -108,6 +109,83 @@ class GridSourceTransactions(unittest.TestCase):
         self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
         self.assertFalse(self.store.journal.exists())
         self.assertFalse(self.store.payloads.exists())
+
+    def test_independent_recovery_and_unchanged_secondary_create_no_staging_writes(self):
+        original = self.store._copy_for_publish
+        with mock.patch.object(self.store, '_copy_for_publish', wraps=original) as stage:
+            self.assertTrue(self.store.apply(self.request()))
+            self.assertEqual([call.args[0] for call in stage.call_args_list], ['DAT', 'EXT'])
+            stage.reset_mock()
+            before = self.ext_path.stat()
+            self.assertTrue(self.store.apply(self.request()))
+            # The primary changes once. Its independent recovery readback and
+            # both unchanged secondary publications retain their exact bytes.
+            self.assertEqual([call.args[0] for call in stage.call_args_list], ['DAT'])
+            after = self.ext_path.stat()
+            self.assertEqual((before.st_ino, before.st_mode, before.st_mtime_ns),
+                             (after.st_ino, after.st_mode, after.st_mtime_ns))
+
+    def test_noop_publication_preserves_source_and_checks_all_leftover_evidence(self):
+        self.store.payloads.mkdir()
+        info = self.dat_path.stat()
+        meta = dict(path=str(self.dat_path), mode=info.st_mode & 0o777,
+                    mtime_ns=info.st_mtime_ns, before=grids._sha(self.dat), after=grids._sha(self.dat))
+        record = {'files': {'DAT': meta}}
+        staged = self.store.payloads / 'publish.DAT'
+        for leftover in (None, self.dat):
+            with self.subTest(leftover=leftover is not None):
+                if leftover is not None:
+                    staged.write_bytes(leftover)
+                with mock.patch.object(grids, 'atomic_bytes', wraps=grids.atomic_bytes) as publish, \
+                        mock.patch('os.fsync', wraps=os.fsync) as sync:
+                    self.store._publish('DAT', self.dat, record)
+                publish.assert_not_called()
+                sync.assert_not_called()
+                self.assertFalse(staged.exists())
+        after = self.dat_path.stat()
+        self.assertEqual((info.st_ino, info.st_mode, info.st_mtime_ns),
+                         (after.st_ino, after.st_mode, after.st_mtime_ns))
+        staged.write_bytes(b'unknown recovery bytes')
+        with self.assertRaisesRegex(offline.RecoveryRequired, 'Unknown grid publication'):
+            self.store._publish('DAT', self.dat, record)
+        self.assertEqual(staged.read_bytes(), b'unknown recovery bytes')
+        staged.unlink()
+        staged.symlink_to(self.extra_path)
+        with self.assertRaises(offline.WriteProofError):
+            self.store._publish('DAT', self.dat, record)
+        self.assertEqual(self.extra_path.read_bytes(), b'never touch this companion')
+        staged.unlink()
+        for values in (dict(mode=True), dict(mode=0o1000), dict(mtime_ns=True), dict(mtime_ns='invalid')):
+            with self.subTest(values=values), self.assertRaises(offline.RecoveryRequired):
+                self.store._publish('DAT', self.dat, {'files': {'DAT': {**meta, **values}}})
+        with self.assertRaises((OverflowError, OSError)):
+            self.store._publish('DAT', self.dat, {'files': {'DAT': {**meta, 'mtime_ns': 10**100}}})
+        # A metadata mismatch still exercises the old native staging checks and
+        # leaves the already-equal source's metadata alone.
+        with mock.patch.object(self.store, '_copy_for_publish', wraps=self.store._copy_for_publish) as copy:
+            different_mode = (info.st_mode & 0o777) ^ 0o040
+            self.store._publish('DAT', self.dat, {'files': {'DAT': {**meta, 'mode': different_mode}}})
+        copy.assert_called_once()
+        self.assertEqual(self.dat_path.stat().st_mode, info.st_mode)
+        self.assertEqual(self.dat_path.read_bytes(), self.dat)
+
+    def test_publication_rechecks_changed_target_after_private_staging(self):
+        self.store.payloads.mkdir()
+        info = self.dat_path.stat()
+        desired = self.dat + b'new private fixture bytes'
+        record = {'files': {'DAT': dict(path=str(self.dat_path), mode=info.st_mode & 0o777,
+            mtime_ns=info.st_mtime_ns, before=grids._sha(self.dat), after=grids._sha(desired))}}
+        original = self.store._copy_for_publish
+        def race(*args):
+            staged = original(*args)
+            self.dat_path.write_bytes(b'foreign source replacement')
+            return staged
+        with mock.patch.object(self.store, '_copy_for_publish', side_effect=race), \
+                mock.patch.object(self.store.lease, '_guard'), \
+                self.assertRaises(offline.RecoveryRequired):
+            self.store._publish('DAT', desired, record)
+        self.assertEqual(self.dat_path.read_bytes(), b'foreign source replacement')
+        self.assertTrue((self.store.payloads / 'publish.DAT').exists())
 
     def test_manual_bpm_requires_separate_acceptance_and_recovers_new_metadata(self):
         before = self.store.snapshot()

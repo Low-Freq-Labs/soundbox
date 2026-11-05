@@ -8,6 +8,10 @@ have since been retired; [project layout](../PROJECT_LAYOUT.md) distinguishes
 retained receipts from deleted material. Old paths do not guarantee retention
 or authorize replay; inspect retained scripts before reuse.
 
+Historical app-control, source-write, installer, restore, replay and cleanup
+instructions below grant no present authorization. Current permissions and
+protected recovery bases are governed by [the current handoff](../HANDOFF.md).
+
 Dated validation on 2026-07-23:
 
 - Full gate: 477 tests passed, one platform skip; offscreen reference render

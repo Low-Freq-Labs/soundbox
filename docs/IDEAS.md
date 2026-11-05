@@ -1,6 +1,6 @@
 # SoundBox exploratory ideas
 
-Reviewed November3,2026; October25 ranking findings remain dated evidence. These are concepts requiring a UX workshop with Sonny,
+Reviewed November4,2026; October25 ranking findings remain dated evidence. These are concepts requiring a UX workshop with Sonny,
 not active tasks or approved changes. Committed sequencing belongs in
 [ROADMAP](ROADMAP.md); current player behavior belongs in [PLAYER](PLAYER.md).
 The original July 22 proposal is preserved in Git history.
@@ -39,15 +39,15 @@ replacement or an implemented training system.
 | Idea | Existing foundation | Possible future addition |
 | --- | --- | --- |
 | Sync report | Backend reports and completion dialogs expose transaction outcomes | A more detailed summary of additions, removals, bytes, durations and warnings |
-| Dry-run preview | Guarded planning and confirmation already exist | A designed itemized preview of the proposed device changes |
+| iPod dry-run preview | Stock/composite iPods retain guarded planning/confirmation; selected USB export is already authorized by its gesture | An optional itemized iPod preview, without adding a USB approval step |
 | Device health | Stock-iPod tabs show identity, storage, music, playlists and playback facts | Reliable battery/filesystem facts or equivalent Rockbox diagnostics where available |
-| Incremental-sync feedback | Manifest reconciliation already avoids unchanged transfers | A concise unchanged/modified/new breakdown without replacing the sync engine |
+| Export/sync result detail | Explicit operations already avoid unchanged transfers | A concise unchanged/modified/new breakdown after a requested operation, without idle USB comparisons |
 | Sync history | Transaction/recovery evidence exists | A user-facing history of device, date, changes, bytes and duration |
 | Duplicate inspector | Existing identity/source checks protect sync correctness | Review alternate files or masters and select a preferred version explicitly |
 | Artwork dashboard | ART column, artist catalog, missing-art workflow and sticky blocks exist | One consolidated coverage view with explicit repair actions |
 | Smart collections | Curated playlists exist | Small automatic views such as Recently Added, Never Played or Needs Cue Points |
 | Library health | Missing-link repair, artwork status and playlist checks exist | A consolidated factual view of unresolved issues; no unexplained quality score |
-| Verification summary | Explicit Verify/Deep Verify/Repair and transaction results exist | A clearer report of exactly what was checked, without gating ordinary idle eject |
+| iPod verification summary | Stock/Rockbox Verify and composite Repair remain explicit tools | A clearer report of requested checks; generic USBs retain no verification menu or eject check |
 | DJ readiness | Individual metadata and source checks exist | An explicit checklist for a chosen destination, without implying unsupported CDJ export |
 
 Recovery counts and database digests remain backend diagnostics, not stock-device

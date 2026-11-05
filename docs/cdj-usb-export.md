@@ -1,6 +1,6 @@
 # Native CDJ USB export
 
-Updated November4, 2026 for installed build163 and selected-only USB exports;
+Updated November4, 2026 for installed build165 and selected-only USB exports;
 completed release/installation checks and exact provenance are in HANDOFF.
 The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
@@ -39,7 +39,10 @@ from their native records and cue metadata, without rebuilding their media.
 `cdj_source` captures the read-only desktop DB/WAL snapshot, selected IDs/UUIDs,
 metadata/counters, current DB cues, source playlist order and the complete rendered
 global My Tag tree. The revision binds these exact captured inputs, including
-their order; selected content-file/tag membership queries share that snapshot.
+their order; selected content-file, cue and tag membership queries share that
+snapshot. Playlist membership queries are bounded to the explicit selections,
+with unrelated smart-list evaluation skipped. Structural/ancestor and active-ID
+checks remain; an optimization never substitutes cached browser membership.
 Accepted source
 Tag/Cue/Grid and durable native-playlist edits drain before capture; a second
 capture detects concurrent changes. Native playlist selections rebind by stable
@@ -131,6 +134,9 @@ read lane and loads a separate device ID without substituting Mac audio or sourc
 cue overlays. Views retain per-volume tab, hierarchy, selection and scroll.
 In the playlist browser, clicking a folder or playlist expands/collapses it;
 only song rows receive selection highlighting. Checkbox actions remain separate.
+Native playlist membership IDs keep distinct records' metadata and covers
+separate even when those records reference the same audio file. Artwork badges
+describe the USB catalog reference rather than the current Mac artwork cache.
 
 Category and Sort support enabling, disabling and reordering their lists while
 retaining mandatory native entries. Column sets the default native right-hand
@@ -170,7 +176,12 @@ opposite Close. Global My Settings and Keyboard scroll at the right window edge.
 Album Artist, Track Number, Disc Number, Original Artist, Composer, Remixer and
 Mix Name are omitted. Supported desktop-song edits are SoundBox-local metadata used for export;
 BPM remains tied to the beatgrid controls. USB-song Track Info is read-only and
-offers no desktop source-edit authority. Info fields also appear as optional
+offers no desktop source-edit authority. Its cover comes from the selected
+native USB artwork reference, captured through pinned no-follow descriptors with
+an8MiB limit and decoded from those bytes off-thread. It never substitutes the
+Mac artwork cache or reads other covers, catalogs or audio for the information
+request. Discovery finishes before that selected read, and device admission is
+held until its decoder retires. Info fields also appear as optional
 browser columns. Prepared row cache schema3 and library cache schema11 carry the
 new display inputs without resetting curation, analysis or artwork. New optional
 fields stay hidden when older header state is restored; deliberate selections
@@ -191,6 +202,30 @@ layout remains outside the current writer boundary. Probe/erase timings are logg
 separately. Fresh native initialization excludes the renderer's workspace lock
 from the candidate file set. Current hardware timing and acceptance are recorded
 in HANDOFF; older mock-only format validation describes the prior release.
+
+The later November4 audit fixes the confirmation-dialog exception that prevented
+erase from starting. These corrections are installed in personal build165. Source was local and
+unpublished at that installation checkpoint; the subsequent whole-app wrap-up
+authorizes publication without changing its signed bytes. HANDOFF records the
+signed dirty base and fingerprint. Formatting owns a separate worker
+and reserves every mounted partition on its physical disk. Once confirmation is
+accepted, another USB can open Export and use the ordinary export lane. Discovery
+waits while erase runs; format completion never clears an unrelated export's
+worker, progress or Cancel control. Old partition identities retire before fresh
+discovery. Native unmount/erase/mount stages update the formatting device row.
+Cancellation is checked before native erase starts; an already-running macOS
+erase is retained and reaped before shutdown can continue. Fresh target/source
+and final physical/map/filesystem checks remain.
+
+This audit also retains exact cross-catalog byte checks and adds complete before/after
+identity and presence checks, removes redundant per-asset completed-proof
+writes, and removes a duplicate initial candidate audio hash pass. Actual FAT32
+and exFAT tests showed changed same-size bytes retaining identical epochs, so
+interrupted recovery/adoption freshly hashes affected payloads. Normal retained
+manifest inventory remains unaudited. Logical imported IDs retain their separate numeric native IDs
+and artwork lookup. Browser-only membership IDs preserve different records that
+share an audio path and are excluded from publication manifests. See the
+[audit findings and limits](performance-audit.md#usb-deep-audit--november4-later-testing).
 
 `native/cdj` contains the pinned upstream runtime/dev closure; vendor verification
 checks243 original crate files. Runtime changes live in SoundBox's wrapper modules.
@@ -234,17 +269,21 @@ all compared database records/schema/indexes equal, no extra/missing files**.
 Raw database differences remain reported; literal whole-export byte identity is
 false. See [export parity](../research/cdj_export/EXPORT_PARITY.md) for a repeatable
 build/export/compare command. The original research handoff left application DTO/pagination/publication open.
-Those integration pieces are now implemented in the pilot above; new physical
-acceptance remains pending.
+Those integration pieces are now implemented in the production contract above.
+Build163 also passed the bounded FAT32/exFAT fixture-write/update/repeat campaign
+in HANDOFF; the wider on-player/model/firmware matrix remains separate.
 
 ## Product goal
 
-**One export automatically maintains both classic Device Library and OneLibrary.**
+**One selected export maintains both classic Device Library and OneLibrary.**
 Users manage one playlist tree and one track order. There is no format choice,
 Plus enable/conversion step, separate selection or second sync operation.
-Both database encoders consume the same frozen generation, preserve the same
-hierarchy/order/membership and reference one set of audio/artwork/analysis files.
-Every rename, move, reorder, addition and removal reconciles in both views.
+For the requested selection, both encoders consume the same frozen generation,
+preserve its hierarchy/order/membership and reference one shared set of
+audio/artwork/analysis files.
+Requested selected-playlist renames, moves, reorders, additions and removals
+reconcile in both views. Unselected playlists retain their own USB baselines;
+ordinary export does not propagate unrelated source changes.
 Publication/recovery must coordinate the complete generation, and failure of
 either database cannot produce a success result. Exact format-specific encoding
 and acceptance evidence remain backend concerns. This was the October28 research target; the production contract above now implements both formats.

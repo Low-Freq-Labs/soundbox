@@ -1,9 +1,18 @@
 # SoundBox player
 
-Current as of 2026-11-03. This is the player reference: shipped behavior,
-architecture, cache ownership, non-regression rules, validation references, and
-remaining prep work. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before
-changing the deck.
+Current as of 2026-11-04. This reference retains the tested source `cf2ef5b`/build 163
+player behavior through installed whole-app build165/runtime7ffde716…, with the
+idle-decoder and duplicate cue-style scheduling corrections below. All 66 Cocoa
+cases pass. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before changing the deck.
+
+The later November4 whole-app audit adjusts decoder waits and removes duplicate
+cue-button repolish. Unloaded,
+EOF and paused-full-ring decoding parks until a control generation wakes it.
+Active ring pacing and cloud cancellation remain bounded by their existing waits;
+the render callback, DSP, clocks, samples and waveform geometry remain unchanged.
+Generated parked/replay/seek/replacement/shutdown tests and the final native gate
+are recorded in HANDOFF; ten cue-style states also remain pixel-exact after
+removing redundant manual repolish. This is not new hardware playback acceptance.
 
 Initial shared analysis is installed for full BPM/Grid+Key and native waveforms
 on bare stereo PCM16/24 WAV44.1/48kHz and, through its independent accepted domain,
@@ -11,7 +20,17 @@ bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3. Other profiles and
 existing-analysis replacement remain gated; [HANDOFF](HANDOFF.md) records exact
 installed proof and the published-source versus signed-build provenance.
 
-## Current installed behavior — November2–3
+## Current installed behavior — November2–4
+
+The November4 USB/theme follow-up preserves the native player, audio, waveform
+and musical-data contracts below. Shared progress lettering uses the saved
+accent-text color over the fill and light text over the empty region. Export
+controls and the artwork-review spinner follow the current/live accent; fixed
+transport/cue/waveform colors keep their semantic meaning. USB/iPod browser
+containers expand/collapse without selection highlighting; only tracks select.
+Generic USB browsing is an explicit read, independent of playback: connection,
+idle polling, source edits, export completion and eject do not refresh catalogs.
+These USB rules do not replace stock/Rockbox iPod sync behavior.
 
 The supplied Gorilla Glue RGB screenshot at92pt/s is the fixed color reference.
 Its rendered frame remains pixel-exact. Main-lane RGB evaluates that same
@@ -114,8 +133,10 @@ are rendered from that same vector. Only the named accent shapes/border change. 
 saved icon also persists after exit using NSWorkspace custom-icon metadata on
 the app root. Contents, the signed ICNS, executable and signing identity remain
 unchanged. Isolated/development runs never customize the installed app.
-Repeated application of the same saved color does not recook the icon. This is
-installed behavior; HANDOFF records exact package and preservation evidence.
+Repeated application of the same saved color within one app process does not
+recook the icon. A fresh frozen launch still renders/encodes the saved icon and
+reapplies its native metadata; the startup snapshot timing excludes persistent
+icon readiness. HANDOFF records exact package and preservation evidence.
 
 ## Implemented player behavior
 
@@ -200,7 +221,8 @@ retain progress until the last verified save; failures show the operation and
 error instead. Focus-return saved-grid checks are silent and never report a save.
 
 The transport layout field has matching rounded corners and an inset chevron;
-its menu retains native behavior. The field text has an 11-pixel left inset.
+its themed Qt popup retains keyboard/navigation behavior and a right check gutter.
+The field text has an 11-pixel left inset.
 The centered track title uses15px semibold type. Track/jump rows and columns use
 equal5-pixel gaps. Q uses semibold lettering and checked red#ed3343.
 
@@ -249,7 +271,8 @@ Transport controls:
   **Simple** and **Browser** are visible, disabled placeholders in that order;
   no layout-switching behavior or saved layout setting is implemented. The
   transport column/divider spans the waveform and prep rows.
-  Its field uses matching rounded corners and an inset chevron; the popup remains native.
+  Its field uses matching rounded corners and an inset chevron; its Qt popup
+  follows the shared theme and matches the field width.
 - Previous/next track follows the active table/view order and preserves ordinary
   playback intent: paused stays paused; playing continues at the next first beat.
 - Cue pads center their icon/letter/time group, use 12px semibold text and 10px
@@ -396,8 +419,9 @@ Cue panel:
   publication keeps background/cache readers on their original snapshot. Ordinary
   native/import prep persists intentions before presentation and exact prepared
   requests before publication. Failure retains those intentions and reconciles
-  source/receipts before retry; unknown recovery blocks writes. Normal quit closes
-  admission and drains accepted work before stopping owners. RAM presentation
+  source/receipts before retry; unknown recovery blocks writes. Normal Quit keeps
+  the window and source pumps usable until captured saves finish. Teardown then
+  closes admission and drains the owners. RAM presentation
   alone is not proof of native success; durable intentions survive restart.
 - `source_cue_revision` and `source_cue_refs` retain raw edit identities outside
   display cues/waveform fingerprints. Snapshot cache schema11 reads older4–10
@@ -880,9 +904,9 @@ an unused Qt envelope on the UI thread. Packed PWV5 visibility repair uses
 vector operations with the same nearest authored-color/tie behavior. Cancelled
 workers recheck after detail decompression, and native display-stream uploads
 check their track generation before preparation and again under the publication
-lock. Cue slots avoid repeated refreshes for equal data and repolish only when
-the filled state changes. Shader geometry, palettes, zoom levels and scrolling
-are unchanged.
+lock. Cue slots avoid repeated refreshes for equal data. Their local stylesheet
+owns filled-state repolish; the November4 audit removes the earlier duplicate
+manual call. Shader geometry, palettes, zoom levels and scrolling are unchanged.
 Regressions cover production native delivery of four-minute detail, stale stream
 rejection, scalar/vector color equivalence, and native-rate AAC/ALAC supplements.
 
@@ -1332,11 +1356,16 @@ previous components for the same bytes and records their actual engine provenanc
 This separate explicit detector does not replace the waveform fallback analyzer
 or invalidate existing caches. See the [audit](rbxport-reference-audit-2026-10.md).
 
-The follow-up whole-v3 caller evaluates a nearby integer only for fully measured
+The retained whole-v3 refinement evaluates a nearby integer only for fully measured
 steady results, using three-section onset fits and consistent captured attack
 phase before regenerating the grid. Raw estimates and the fit measurements remain
 available; fractional/variable and legacy results stay valid. This policy is
 independent of manual input, native grids and the automatic-analysis toggle.
+The current caller records `rbxport-b739d369-whole-v4` and additionally restores
+an opening beat only from bounded measured attack evidence. BPM confidence
+below0.5 produces no new BPM/grid; same-byte partial reanalysis retains previous
+valid components and their engine provenance. These detection rules grant no
+additional native source-write authority.
 
 ## November1 control follow-up
 

@@ -1,7 +1,10 @@
 # Shared library, analysis and player corrections
 
-Current-status review November4,2026 against source release `4a3d29a` and installed
-build160/runtime `7bbe8577…`. This plan began at build148 on October30. Direct shared imports, initial
+Current-status review November4,2026 against the whole-app delivery, personal
+build165/runtime `7ffde716…`, with exact provenance recorded in HANDOFF.
+Build163, source release `4a3d29a` and build160/runtime `7bbe8577…` are prior
+delivery evidence.
+This plan began at build148 on October30. Direct shared imports, initial
 supported WAV and independently accepted narrow CBR MP3 analysis, durable prep and
 the requested player/Graveyard controls are now installed. The full shared-primary outcome still has
 broader codec/replacement/gain/metadata gates. [HANDOFF](HANDOFF.md) records the
@@ -14,9 +17,10 @@ waveform now appears once at its finished geometry/palette, including long
 AAC/ALAC sets; actual bytes, manual musical edits and source authority remain
 preserved. Playlist-only Star/Music note/Vinyl crate choices are local preferences,
 with fixed person Artists, home Collection and folder icons. All2144cases passed
-for that dated build154 delivery. It is historical: HANDOFF records the later
-November4 build160/2564-test delivery, signed dirty-source provenance and published
-source-release identity separately.
+for that dated build154 delivery. It and the later build163/2595-test delivery are
+historical. HANDOFF records the current whole-app delivery, signed dirty-source
+provenance and published source-release identity separately; publication alone
+never restamps the installed app.
 
 Local prep stays usable while analysis saves fail or cloud ctime changes: each
 gesture is durable before a worker proves the original bytes. Adaptive saved
@@ -539,7 +543,8 @@ drawables/UI; personal build, safe install, real state/normal restart verificati
 A locked screen invalidates display timing; an actual Keychain request can hold
 a shutdown. Do not suppress failures, weaken thresholds or kill workers to pass.
 Keep logs bounded, retire reproducible build output after verified installation,
-and preserve the sole necessary rollback plus acceptance/device fixtures.
+and preserve the current handoff's required rollback bases plus acceptance/device
+fixtures. A historical checkpoint never authorizes retiring a still-protected base.
 
 Final closure requires ordinary saves using the shared native store without
 app-branded save footers or a separate publication step, the entire matrix,

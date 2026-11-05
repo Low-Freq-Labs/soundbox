@@ -3,7 +3,7 @@ import unittest
 from PySide6.QtCore import QMimeData, QPoint, Qt
 from PySide6.QtGui import QDragMoveEvent, QDropEvent, QDragLeaveEvent, QColor
 from PySide6.QtWidgets import QApplication, QTreeWidgetItem
-from desktop.trees import PlaylistTree, PATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE
+from desktop.trees import DeviceTree, PlaylistTree, PATH_ROLE, DEVPATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE
 from desktop import theme
 
 
@@ -45,3 +45,30 @@ class NativePlaylistHover(unittest.TestCase):
         self.tree.dropEvent(event)
         self.assertTrue(event.isAccepted());self.assertEqual(hits,[('3',['sb-real-one','sb-real-two'])])
         self.assertEqual(self.target.background(0).style(),Qt.NoBrush)
+
+
+class DeviceHover(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):cls.app=QApplication.instance() or QApplication([])
+
+    def test_refresh_during_drag_uses_rebuilt_target_and_clears_without_freed_item(self):
+        tree=DeviceTree();tree.resize(300,200);tree.show()
+        self.addCleanup(tree.close);self.addCleanup(tree.deleteLater)
+        old=QTreeWidgetItem(['Old device']);old.setData(0,DEVPATH_ROLE,'/fixture/old')
+        tree.addTopLevelItem(old);tree._set_hover(old)
+        tree.clear()
+        # Leave immediately after unplugging must also tolerate an invalid row.
+        tree.dragLeaveEvent(QDragLeaveEvent())
+        target=QTreeWidgetItem(['New device']);target.setData(0,DEVPATH_ROLE,'/fixture/new')
+        tree.addTopLevelItem(target);self.app.processEvents()
+        mime=QMimeData();mime.setText('cust\tTest playlist')
+        pos=tree.visualItemRect(target).center()
+        move=QDragMoveEvent(pos,Qt.CopyAction,mime,Qt.LeftButton,Qt.NoModifier)
+        tree.dragMoveEvent(move)
+        self.assertEqual(target.background(0).color(),QColor(theme.PURPLE))
+        hits=[];tree.dropped.connect(lambda path,items:hits.append((path,items)))
+        drop=QDropEvent(pos,Qt.CopyAction,mime,Qt.LeftButton,Qt.NoModifier)
+        tree.dropEvent(drop)
+        self.assertTrue(drop.isAccepted())
+        self.assertEqual(hits,[('/fixture/new',[('cust','Test playlist')])])
+        self.assertEqual(target.background(0).style(),Qt.NoBrush)

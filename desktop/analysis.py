@@ -250,12 +250,12 @@ class AnalysisMixin:
 
     def _start_next_analysis(self):
         if (self._shutting_down or self._analysis_owner.stopping
-                or self._analysis_worker is not None):
+                or self._analysis_worker is not None or not self._analysis_queue):
             return
         source_busy=getattr(self,'_analysis_source_busy',lambda:self.tag_controller.owned)
         if (source_busy() or self._refresh_worker is not None
                 or self._device_operation_owned()):
-            QTimer.singleShot(500, self, self._start_next_analysis)
+            self._schedule_next_analysis(500)
             return
         while self._analysis_queue:
             original, track, prefs, identity = self._analysis_queue[0]
@@ -278,14 +278,14 @@ class AnalysisMixin:
                 continue
             ready=getattr(self,'_analysis_prerequisite_ready',None)
             if ready is not None and not ready(current,job):
-                QTimer.singleShot(500,self,self._start_next_analysis)
+                self._schedule_next_analysis(500)
                 return
             if not (job['preferences']['bpm'] or job['preferences']['key']):
                 before=self.settings.get(analysis_jobs.KEY,[])
                 self.settings[analysis_jobs.KEY]=analysis_jobs.finish(before,identity)
                 if not self._save_state():
                     self.settings[analysis_jobs.KEY]=before
-                    QTimer.singleShot(500,self,self._start_next_analysis)
+                    self._schedule_next_analysis(500)
                     return
                 self._analysis_queue.pop(0)
                 continue
@@ -303,12 +303,24 @@ class AnalysisMixin:
             worker.start()
             return
 
+    def _schedule_next_analysis(self, delay=0):
+        """Coalesce retry wakeups; the callback inspects the current queue."""
+        if self._shutting_down or self._analysis_owner.stopping:
+            return
+        timer = getattr(self, '_analysis_retry_timer', None)
+        if timer is None:
+            timer = self._analysis_retry_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._start_next_analysis)
+        if not timer.isActive() or timer.remainingTime() > delay:
+            timer.start(delay)
+
     def _analysis_retired(self, worker):
         self._analysis_worker = None
         if self._shutting_down or self._analysis_owner.stopping:
             return
         if worker.stop.is_set():
-            QTimer.singleShot(0,self,self._start_next_analysis)
+            self._schedule_next_analysis()
             return
         track = worker.tracks[0]
         try:
@@ -382,7 +394,7 @@ class AnalysisMixin:
             except ValueError:
                 pass  # Preserve unknown evidence; never rewrite a corrupt queue.
             self._flash_status(f'Couldn’t analyze {track.name}: {exc}', 15)
-        QTimer.singleShot(0, self, self._start_next_analysis)
+        self._schedule_next_analysis()
 
     def _refresh_analysis_row(self, track_id):
         """Update one finished song without rebuilding the view/selection."""

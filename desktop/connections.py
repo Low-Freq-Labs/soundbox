@@ -128,11 +128,13 @@ class _ConnectionJob(QThread):
 
 
 class SoundCloudSection(QWidget):
-    def __init__(self, service, parent=None, *, isolated=False):
+    def __init__(self, service, parent=None, *, isolated=False, startup_worker=None,
+                 startup_complete=False, startup_result=None):
         super().__init__(parent)
         self.service = service
         self._tasks = TaskOwner(self)
         self._worker = None
+        self._startup_worker = startup_worker
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         heading = QLabel("SOUNDCLOUD PUBLIC LIKES")
@@ -166,12 +168,16 @@ class SoundCloudSection(QWidget):
             lambda stop, progress, browser: service.disconnect(stop, progress)))
         self.cancel_button.clicked.connect(self._cancel)
         self._sync()
-        if not isolated and not QStandardPaths.isTestModeEnabled() and service.status().get("connected"):
-            QTimer.singleShot(0, self.refresh)
+        if startup_complete:
+            self._show_startup_result(startup_result)
+        if (startup_worker is None and not startup_complete and not isolated
+                and not QStandardPaths.isTestModeEnabled()
+                and service.status().get("connected")):
+            QTimer.singleShot(0, self, self._refresh_initial)
 
     def _sync(self):
         state = self.service.status()
-        busy = self._worker is not None
+        busy = self._worker is not None or self._startup_worker is not None
         connected, configured = state.get("connected", False), state.get("configured", False)
         self.connect_button.setVisible(not connected)
         self.edit_button.setVisible(configured)
@@ -180,6 +186,8 @@ class SoundCloudSection(QWidget):
         self.cancel_button.setVisible(busy)
         for button in (self.connect_button, self.edit_button, self.refresh_button, self.disconnect_button):
             button.setEnabled(not busy)
+        if self._startup_worker is not None:
+            self.status.setText("Refreshing SoundCloud likes…")
         if not busy:
             if connected:
                 label = "Public likes for" if state.get("mode") == "public" else "Connected as"
@@ -192,9 +200,27 @@ class SoundCloudSection(QWidget):
         if self._worker is not None:
             self._worker.stop()
             self.status.setText("Cancelling…")
+        elif self._startup_worker is not None:
+            self._startup_worker.cancel()
+            self.status.setText("Cancelling…")
+
+    def finish_startup(self, worker, result=None):
+        """The window calls this after its shared refresh owner retires."""
+        if self._startup_worker is worker:
+            self._startup_worker = None
+            if not self._tasks.stopping:
+                self._sync()
+                self._show_startup_result(result)
+
+    def _show_startup_result(self, result):
+        if isinstance(result, Exception):
+            self.status.setText(str(result) if isinstance(result, ConnectionFailure) else
+                                "Could not complete the SoundCloud connection. Try again.")
+            self.connect_button.setText("Reconnect" if self.service.status().get("connected") else "Connect")
+            self.connect_button.show()
 
     def _run(self, operation, completed=None):
-        if self._tasks.stopping or self._worker is not None:
+        if self._tasks.stopping or self._worker is not None or self._startup_worker is not None:
             return
         worker = _ConnectionJob(operation)
         self._worker = worker
@@ -243,3 +269,7 @@ class SoundCloudSection(QWidget):
 
     def refresh(self):
         self._run(lambda stop, progress, browser: self.service.refresh(stop, progress))
+
+    def _refresh_initial(self):
+        self._run(lambda stop, progress, browser:
+                  getattr(self.service, 'refresh_initial', self.service.refresh)(stop, progress))

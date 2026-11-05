@@ -7,11 +7,17 @@ were downloaded at immutable revisions into private audit evidence; no upstream
 app/test script was run against the live library and no new dependency was added.
 Installed provenance and release validation are in [HANDOFF](HANDOFF.md).
 
-Reviewed November3 against source release `d08ee91`. Algorithm and validation
+Rechecked November4 against whole-app build165/runtime `7ffde716…`; build163/
+tested source `cf2ef5b` is an earlier delivery. Algorithm and validation
 statements below describe the October30 audit; later component scheduling,
 bounded saved-analysis reuse and tempo refinements are documented in
 [PLAYER](PLAYER.md) and [the performance audit](performance-audit.md). They do not
 change the pinned upstream source or broaden native source-write acceptance.
+The current caller records `rbxport-b739d369-whole-v4`: it retains the bounded
+head/tail contract, whole-v3 integer/attack fit and opening-beat restoration from
+measured early attacks. BPM-only execution skips the key detector. Legacy engine
+records and independent grid/key provenance remain supported. The adaptive-v2
+identifier below records the original October30 checkpoint, not today's engine.
 
 ## Sources and useful boundaries
 
@@ -23,7 +29,7 @@ change the pinned upstream source or broaden native source-write acceptance.
 | [onelibrary-sync](https://github.com/chrisle/onelibrary-sync/tree/1cc5462c7474d488e8b85cb912a29f81988f018f) | `1cc5462c` | Converts OneLibrary to classic Device Library with decoded-result checks. SoundBox already prepares both catalogs, merges retained native inventory and verifies publication. Useful independent reference, without adding a second exporter. |
 | [alphatheta-connect-rs](https://github.com/chrisle/alphatheta-connect-rs/tree/74e8a9193aff81af2b7e3b49d2dc0b9bbfb87769) | `74e8a919` | Network PRO DJ LINK protocols are a different feature area. Keep as reference; no network integration was introduced. |
 
-OneLibrary is the current name for Device Library Plus, confirmed by the
+At the October30 audit, OneLibrary was the name used for Device Library Plus by the
 [official rekordbox FAQ](https://rekordbox.com/en/support/faq/devicelibraryplus-6/).
 SoundBox already emits that `exportLibrary.db` alongside classic `export.pdb`.
 The name alone neither changes our exact-schema authority nor establishes new
@@ -43,11 +49,13 @@ is authoritative when a web description and code differ:
 - [Key](https://github.com/chrisle/rbxport/blob/b739d369665b492534dc2eae0733322c040a26d5/crates/rbl-analysis/src/key.rs): the existing default rule is the0.1 minor preference. Key-only uses the same upstream key detector and preserves grids. Do not enable optional experimental rules merely because they exist.
 - Inconclusive/unchecked components preserve previous results for the same audio digest. Different bytes never inherit the old grid/key. Legacy `constant-v1` records remain readable and playable. `grid_engine`/`key_engine` preserve component provenance through partial reanalysis, and playback reports the saved grid's engine.
 
-The new default is `rbxport-b739d369-adaptive-v2`. Performance/Normal/Power saving
+The October30 default was `rbxport-b739d369-adaptive-v2`. Performance/Normal/Power saving
 continue to select child scheduling priority, not different musical algorithms.
 Audio capture, cancellation/reaping, Analysis Lock, native/manual-grid precedence,
 existing cues and source-file immutability remain intact. This tuning does not
-publish detected analysis to rekordbox; that authority remains separate.
+itself grant publication authority. Initial WAV and narrow CBR MP3 publication
+subsequently passed their independent exact-library authorities; other codecs,
+replacement and broader metadata remain gated.
 
 ## Waveform values and rendering
 

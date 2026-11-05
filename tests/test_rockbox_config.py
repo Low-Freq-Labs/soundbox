@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from soundbox.rockbox_config import (
+    database_file_count,
     database_refresh_pending,
     database_auto_update_enabled,
     theme_album_art_sides,
@@ -15,6 +18,40 @@ from soundbox.rockbox_config import (
 
 
 class RockboxConfigTests(unittest.TestCase):
+    def test_redirected_rockbox_state_is_never_read_or_enumerated(self):
+        for destination in ("PIONEER", "outside"):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                root = base / "IPOD"
+                root.mkdir()
+                forbidden = root / "PIONEER" if destination == "PIONEER" else base / "outside"
+                forbidden.mkdir()
+                (root / ".rockbox").symlink_to(forbidden, target_is_directory=True)
+                (forbidden / "config.cfg").write_bytes(b"tagcache_autoupdate: on\n")
+                with mock.patch.object(Path, "open", side_effect=AssertionError("no read")), \
+                        mock.patch.object(Path, "glob", side_effect=AssertionError("no enumeration")):
+                    self.assertEqual(theme_album_art_sides(root), ())
+                    self.assertFalse(database_auto_update_enabled(root))
+                    self.assertEqual(database_file_count(root), 0)
+                    self.assertFalse(database_refresh_pending(root))
+
+    def test_oversize_config_read_has_a_fixed_byte_bound(self):
+        class Counted(io.BytesIO):
+            consumed = 0
+            def read(self, size=-1):
+                value = super().read(size)
+                self.consumed += len(value)
+                return value
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".rockbox").mkdir()
+            config = root / ".rockbox/config.cfg"
+            config.write_bytes(b"fixture")
+            payload = Counted(b"#" * (3 * 1024 * 1024))
+            with mock.patch.object(Path, "open", return_value=payload):
+                self.assertEqual(theme_album_art_sides(root), ())
+            self.assertEqual(payload.consumed, 1024 * 1024 + 1)
+
     def test_database_auto_update_observation_does_not_change_preferences(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

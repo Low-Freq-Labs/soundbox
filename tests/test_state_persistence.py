@@ -286,6 +286,84 @@ class ArtworkPublication(unittest.TestCase):
 
 
 class LibraryRepository(unittest.TestCase):
+    def test_load_detaches_once_and_public_validation_still_detaches(self):
+        from soundbox import state_repository
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            path.write_text(json.dumps({'custom': {'Set': ['1']},
+                                        'extensions': {'nested': ['original']}}))
+            repo = StateRepository(path)
+            detach = state_repository.copy.deepcopy
+            with mock.patch.object(state_repository.copy, 'deepcopy', wraps=detach) as copies:
+                loaded = repo.load()
+            self.assertEqual(copies.call_count, 1)
+            loaded['custom']['Set'].append('late')
+            loaded['extensions']['nested'].append('late')
+            repo.save({'settings': {}})
+            saved = json.loads(path.read_bytes())
+            self.assertEqual(saved['custom']['Set'], ['1'])
+            self.assertEqual(saved['extensions']['nested'], ['original'])
+            checked = validate_state(saved)
+            checked['custom']['Set'].append('detached')
+            self.assertEqual(saved['custom']['Set'], ['1'])
+
+    def test_exact_noop_avoids_full_copy_encoding_and_publication(self):
+        from soundbox import state_repository
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            values = {'custom': {'Set': [str(i) for i in range(1000)]},
+                      'extensions': {'ordered': {'one': 1.0, 'two': True}}}
+            repo.save(values)
+            before = path.read_bytes()
+            with (
+                mock.patch.object(state_repository, 'validate_state',
+                                  side_effect=AssertionError('No-op revalidated')),
+                mock.patch.object(state_repository.json, 'dumps',
+                                  side_effect=AssertionError('No-op reencoded')),
+                mock.patch.object(repo.area, 'publish',
+                                  side_effect=AssertionError('No-op republished')),
+            ):
+                repo.save(values)
+            self.assertEqual(path.read_bytes(), before)
+            values['custom']['Set'].append('after-save')
+            repo.save({'settings': {}})
+            self.assertNotIn('after-save', json.loads(path.read_bytes())['custom']['Set'])
+
+    def test_noop_hint_preserves_json_types_zero_sign_and_object_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            repo.save({'settings': {'hide_untracked': True},
+                       'custom': {'First': [], 'Second': []},
+                       'extension': {'number': 1.0, 'zero': 0.0}})
+            with self.assertRaises(InvalidState):
+                repo.save({'settings': {'hide_untracked': 1}})
+            repo.save({'custom': {'Second': [], 'First': []}})
+            payload = path.read_text()
+            self.assertLess(payload.index('"Second"'), payload.index('"First"'))
+            repo.save({'extension': {'number': 1, 'zero': -0.0}})
+            payload = path.read_text()
+            self.assertLess(payload.index('"Second"'), payload.index('"First"'))
+            self.assertIn('"number": 1,', payload)
+            self.assertIn('"zero": -0.0', payload)
+
+    def test_noop_hint_does_not_hide_missing_or_replaced_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            values = {'custom': {'Set': ['1']}}
+            repo.save(values)
+            before = path.read_bytes()
+            path.unlink()
+            repo.save(values)
+            self.assertEqual(path.read_bytes(), before)
+            replacement = path.with_name('replacement.json')
+            replacement.write_bytes(before.replace(b'"1"', b'"2"'))
+            replacement.replace(path)
+            repo.save(values)
+            self.assertEqual(path.read_bytes(), before)
+
     def test_backup_reuses_only_exact_previously_validated_bytes(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'library.json'

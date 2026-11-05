@@ -17,7 +17,8 @@ import uuid
 import hashlib
 import math
 import os
-import shutil
+import stat
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -63,12 +64,23 @@ def new_id() -> str:
 
 def copy_from_device(
         selected: list[Path],
-        media_root: Path | None = None) -> list[Path]:
+        media_root: Path | None = None, *, should_cancel=lambda: False) -> list[Path]:
     """Copy selected device tracks/playlists into SoundBox Media in order.
 
     Device originals are read-only. M3U8 entries are expanded in playlist
     order; duplicate source paths keep their first occurrence.
     """
+    from .mac_trash import exclusive_move
+    from .operation_control import checkpoint
+    from .source_acquisition import SourceContract, acquire_source
+    from .state_io import sync_dir
+
+    def check_cancel():
+        checkpoint()
+        if should_cancel():
+            raise RuntimeError('Device import cancelled')
+
+    check_cancel()
     destination = (
         Path(media_root).expanduser()
         if media_root is not None
@@ -76,6 +88,7 @@ def copy_from_device(
     ordered: list[Path] = []
     seen: set[Path] = set()
     for raw in selected:
+        check_cancel()
         path = Path(raw).expanduser().resolve()
         candidates = [path]
         if path.suffix.lower() == ".m3u8":
@@ -88,6 +101,7 @@ def copy_from_device(
                 (path.parent.parent
                  if path.parent.name == "Playlists" else path.parent))
             for line in text.splitlines():
+                check_cancel()
                 entry = line.strip()
                 if not entry or entry.startswith("#"):
                     continue
@@ -101,39 +115,97 @@ def copy_from_device(
                         f"{entry}")
                 candidates.append(candidate)
         for source in candidates:
+            check_cancel()
             if source in seen or not is_audio(source) or not source.is_file():
                 continue
             seen.add(source)
             ordered.append(source)
 
     artist_dir = destination / "Unknown Artist"
+    if artist_dir.is_symlink():
+        raise RuntimeError('Device import destination redirects outside its media folder')
     artist_dir.mkdir(parents=True, exist_ok=True)
+    canonical_artist = artist_dir.resolve(strict=True)
+    artist_identity = artist_dir.stat()
+    def check_destination():
+        current = artist_dir.lstat()
+        if (not stat.S_ISDIR(current.st_mode)
+                or (current.st_dev, current.st_ino) != (artist_identity.st_dev, artist_identity.st_ino)
+                or artist_dir.resolve(strict=True) != canonical_artist):
+            raise RuntimeError('Device import destination changed during capture')
     copied: list[Path] = []
     for source in ordered:
-        name = sanitize_component(source.stem) + source.suffix.lower()
-        target = artist_dir / name
-        if target.exists():
-            if target.stat().st_size == source.stat().st_size:
-                copied.append(target)
-                continue
-            suffix = hashlib.sha1(str(source).encode()).hexdigest()[:6]
-            target = artist_dir / (
-                f"{sanitize_component(source.stem)}_{suffix}"
-                f"{source.suffix.lower()}")
-        tmp = target.with_name(target.name + ".sbpart")
-        try:
-            shutil.copyfile(source, tmp)
-            with tmp.open("rb") as handle:
-                os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except OSError:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
-        copied.append(target)
+        check_cancel()
+        # Capture/hash the selected source once. The captured inode itself is
+        # published, so no second device read or extra audio copy is needed.
+        with tempfile.TemporaryDirectory(prefix='.soundbox-import-', dir=artist_dir) as directory:
+            with acquire_source(SourceContract(source), Path(directory), should_cancel=should_cancel) as captured:
+                suffix = hashlib.sha1(os.fsencode(source)).hexdigest()[:6]
+                synced = False
+                for attempt in range(10000):
+                    check_cancel()
+                    check_destination()
+                    token = '' if attempt == 0 else '_' + suffix + (f'-{attempt}' if attempt > 1 else '')
+                    extension = source.suffix.lower()
+                    room = 255 - len(os.fsencode(token + extension))
+                    stem = os.fsencode(sanitize_component(source.stem))[:room].decode('utf-8', errors='ignore').rstrip(' .-_') or '_'
+                    target = artist_dir / (stem + token + extension)
+                    if target.exists() or target.is_symlink():
+                        if _same_import_payload(target, captured.size, captured.sha256,
+                                                should_cancel=should_cancel):
+                            check_cancel()
+                            copied.append(target)
+                            break
+                        continue
+                    if not synced:
+                        with captured.path.open('rb') as handle:
+                            os.fsync(handle.fileno())
+                        synced = True
+                    check_cancel()
+                    check_destination()
+                    try:
+                        # RENAME_EXCL refuses a same-name race, including a
+                        # symlink or unrelated equal-sized file. Never replace.
+                        exclusive_move(captured.path, target)
+                    except FileExistsError:
+                        continue
+                    sync_dir(artist_dir)
+                    copied.append(target)
+                    break
+                else:
+                    raise RuntimeError('Too many occupied names for the selected device import')
     return copied
+
+
+def _same_import_payload(path: Path, size: int, digest: str, *, should_cancel=lambda: False) -> bool:
+    """Exact, read-only reuse of an existing Mac-side import, never size alone."""
+    from .operation_control import checkpoint
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size != size:
+            return False
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            actual = hashlib.sha256()
+            read = 0
+            while read <= size:
+                checkpoint()
+                if should_cancel():
+                    raise RuntimeError('Device import cancelled')
+                block = stream.read(min(1024 * 1024, size + 1 - read))
+                if not block:
+                    break
+                actual.update(block)
+                read += len(block)
+            closed = os.fstat(stream.fileno())
+        after = path.lstat()
+        def epoch(value):
+            return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+        return (read == size and epoch(before) == epoch(opened) == epoch(closed) == epoch(after)
+                and stat.S_ISREG(after.st_mode) and actual.hexdigest() == digest)
+    except FileNotFoundError:
+        return False
 
 
 def duration_seconds(path: Path) -> int:

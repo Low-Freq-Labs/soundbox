@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox as BaseComboBox, QListVie
 
 from . import theme
 
+_COMBO_POPUP_HINTS = (QStyle.SH_ComboBox_UseNativePopup, QStyle.SH_ComboBox_Popup)
 
 def _mark(painter, x, y, *, check=False):
     painter.setRenderHint(QPainter.Antialiasing)
@@ -77,7 +78,7 @@ class Menu(BaseMenu):
 
 class _PopupStyle(QProxyStyle):
     def styleHint(self, hint, option=None, widget=None, returnData=None):
-        if hint in (QStyle.SH_ComboBox_UseNativePopup, QStyle.SH_ComboBox_Popup):
+        if hint in _COMBO_POPUP_HINTS:
             return 0
         return super().styleHint(hint, option, widget, returnData)
 

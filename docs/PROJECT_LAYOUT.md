@@ -11,13 +11,66 @@ Cocoa renders under `~/Library/Logs/Soundbox/ui-polish-2026-11-03/`.
 Its source/package/install status is separate from the dated retention and
 documentation-only closure below; HANDOFF records the current state.
 
-## Current retention — November4
+## Whole-app wrap-up publication — November4
 
-Build163 (runtime42aefd35…) is installed and normally reopened. Its immediate
-7bbe8577… rollback and the previously protected b0ccb1ab… base share one existing
-private directory pending acceptance; exact paths are in HANDOFF. Current2595-test/
-690-input package/install/state proofs and packaging-retirement.json are under
-`~/Library/Logs/Soundbox/usb-simplification-2026-11-04/`.
+The completed USB/iPod/app audits and documentation are being published on main,
+matching all694 frozen inputs/runtime7ffde716… . Installed personal build165 stays
+signed to19a3075/dirty=true; no restamp/reinstall or app control is needed. The
+single current HANDOFF replaces the accumulated diary; its previous full text is
+retained privately as `handoff-before-wrapup.txt`.
+
+Fresh wrap-up evidence: `~/Library/Logs/Soundbox/soundbox-wrapup-2026-11-04/`.
+Per-file full current-document reviews, archive scope/permission/link reviews,
+pinned reference/license integrity, dependencies and local link/anchor validation
+are recorded separately. Exact commit/push and frozen-input identity appear in
+`publication.json`. The installed app, user state and five pending-acceptance bases
+remain untouched while Sonny tests; no new hardware or codec authority is implied.
+
+## Whole-app audit delivery — later November4
+
+Personal build 165/runtime 7ffde716… is installed/reopened/verified. The complete
+2779-case gate,694 frozen inputs, both signed code-matched profiles, three isolated
+native/process/RAM-SQLCipher probes and fresh state/icon preservation pass.
+Private root: `~/Library/Logs/Soundbox/soundbox-deep-audit-2026-11-04/`.
+It retains 184-file review-depth evidence, agent/peer/counter/epoch fixtures,
+failed/final gates, ten cue-state parity/ordered replay proofs, renders, paired
+signed startup reports, fresh `preinstall-state/` and installation/normal-startup
+receipts. Completed one-use installers/resume scripts must not be replayed.
+
+Immediate prior26f15fb4…/c6c3a247… and all four earlier pending-acceptance bases
+share the existing rollback directory; current `protected-rollbacks.json` and
+HANDOFF record paths/hashes. The earlier four remain exact. Six owned redundant
+dist/COLLECT/PyInstaller directories are retired after installed verification:
+1,116,266,340 logical regular-file bytes (`packaging-retirement.json`). Keep the
+installed app, five protected bases, source/venv, native/CDJ/check outputs,
+required fixtures, originals and recovery. Installation itself used no source
+publication or new physical iPod/source/device writes; the later wrap-up above
+publishes the completed source. Earlier retention checkpoints below are dated.
+
+## Prior iPod audit delivery — November4
+
+The preceding personal build165/runtime26f15fb4… was installed/reopened/verified;2695tests and
+686frozen inputs pass. Detailed agent/counter/source/package/install/state/render
+proofs and interrupted/failed/final gate evidence are private under
+`~/Library/Logs/Soundbox/ipod-deep-audit-2026-11-04/`. The immediate prior USB
+runtime7dbab44d… plus the three protected42aefd35…/7bbe8577…/b0ccb1ab… bases
+share the existing rollback directory pending acceptance; exact paths/hashes are
+in HANDOFF and the new protected-rollbacks.json. This grants no restore authority.
+Own redundant personal/public dist/COLLECT/PyInstaller output was retired after
+verified installation:1,116,081,690logical regular-file bytes across six exact
+directories. Keep installed app, source/venv, native/CDJ/check outputs, required
+fixtures, originals and native recovery. At that checkpoint source remained
+local/unpublished and no physical iPod acceptance occurred. The retention rows below describe prior work.
+
+## Prior USB retention — November4
+
+The preceding USB build165 (runtime7dbab44d…) was installed and normally reopened. Its immediate
+build163/runtime42aefd35… rollback plus the protected7bbe8577… andb0ccb1ab… bases
+share one existing private directory pending acceptance; exact paths are in
+HANDOFF and its then-current `protected-rollbacks.json`. That2639-test/638-input source,
+package/install/state proofs and packaging-retirement.json are under
+`~/Library/Logs/Soundbox/usb-deep-audit-2026-11-04/`. The preceding build163 proofs
+remain dated evidence under `~/Library/Logs/Soundbox/usb-simplification-2026-11-04/`.
 The older generated fc696312…/d5cb4451… build157 apps were retired under standing
 cleanup after Sonny used/positively accepted the prior build160 Info behavior.
 Exact paths, hashes and retention resolution are in `older-rollbacks-retired.json`
@@ -25,12 +78,49 @@ under `~/Library/Logs/Soundbox/export-polish-2026-11-04/`. That earlier director
 retains its final2564-test reports,675-input freeze, subagent format review, native
 battery/AC evidence, both package proofs and installation/state checks.
 Redundant dist/COLLECT/PyInstaller output is retired only after verified install;
-its exact record is `post-install-retirement.json`. Older November3 retirements
+that exact retirement record is `packaging-retirement.json` in the preceding build165 USB-audit
+evidence root (1,115,875,784logical regular-file bytes across six directories). `post-install-retirement.json` in the earlier export-polish root describes
+only that earlier build160 cleanup. Older November3 retirements
 remain dated evidence, not current output/rollback inventories. Keep source,
 venv, native/CDJ/check outputs, required fixtures, originals and native recovery.
 No app-output cleanup authorizes removing music, source or acceptance material.
 
-## Documentation consistency — November4
+## Documentation consistency — November4 (build163 follow-up)
+
+Sonny requested another complete documentation check after publication19a3075.
+The inventory covers all75tracked Markdown files:39current first-party documents,
+11archives and25pinned upstream references. All39current texts were read and
+reconciled with applicable source/release evidence. The duplicate AGENTS/CLAUDE
+body shares one review with byte-parity verification. Archives received explicit
+scope/permission/retention/link checks; historical bodies and acceptance values
+remain dated evidence. Vendor references and both licenses remain exact to the
+pinned243-file closure; this is not a new upstream semantic or license-clearance
+audit. Three dependency manifests were read; all55pinned packages match the local
+installed development environment. No upgrades were performed.
+
+Corrections include generic USB versus iPod routing/polling, Export controls,
+selected-only publication, cue-intent durability, destination filename contracts,
+removed raw-file UI, progress/theme/track selection, current detector version,
+protected rollback bases, source-run prerequisites and retired historical plans.
+Old completion/eject/restore/pilot/cleanup instructions cannot override the current
+contract. At that review, build163/sourcecf2ef5b was current, distinct from
+prior deliveries and its signed740ad53/dirty=true installation base. Build165
+now supersedes that installation; HANDOFF records the current dirty source.
+
+Per-file before/after hashes, findings, code-check basis, scope limits and exact
+local-link results are in
+`~/Library/Logs/Soundbox/documentation-build163-2026-11-04/`. The58known missing
+upstream targets lie outside the vendored subset. All652local link/image/reference
+definition targets and22anchors were checked, with no first-party/archive
+missing targets or anchor errors. Remote URL availability and historical prose were not
+exhaustively revalidated. Those changes remained local at that checkpoint and
+are included in the later wrap-up publication above. That documentation-only review preserved all690frozen inputs
+and its installed executable without rebuild/reinstall/input, native-library or
+device writes or authority changes. The later explicitly authorized USB audit/
+installation has separate source/physical/state evidence; do not transfer old
+authorization or frozen-input claims across those tasks.
+
+## Earlier documentation consistency — November4 (build160)
 
 The follow-up covers all75tracked Markdown files:39current first-party guides,
 plans/research notes,11archived records and25pinned upstream references. It reuses
@@ -61,7 +151,7 @@ Runtime source, installed executable, AppData, device contents and the running
 session are unchanged. No rebuild, reinstall, playback input or acceptance pilot
 belongs to this documentation-only follow-up.
 
-## Documentation consistency — November3
+## Earlier documentation consistency — November3
 
 The repository-wide pass inventories74 tracked Markdown files:38 current
 first-party guides/plans/research notes,11 archived records and25 pinned upstream
@@ -88,7 +178,7 @@ documentation-only correction.
 | `docs/` | Current behavior, handoff, roadmap, exploratory ideas and open audits |
 | `docs/archive/` | Clearly dated completed audits and superseded experiments; not current instructions |
 | `.venv/` | Active pinned development environment; installed SoundBox does not depend on it |
-| `build/native/`, `build/check/` | Current development native library and latest release reports |
+| `build/native/`, `build/check/`, `build/cdj/release/soundbox-cdj` | Current checked native binaries and latest release reports; retain required inputs |
 | `build/rekordbox-write-proof/` | Small private copy-only prep-write evidence; no live-write authority |
 | AppData `rekordbox_recovery/` | Private native-reference evidence, encrypted baselines and shared Tag/Cue/Grid receipts; preserve unresolved recovery |
 | AppData `rekordbox-*-authority.json` | Ten independent accepted domains: tags, cues, grid, playlists, registration, initial WAV analysis, separate CBR MP3 analysis, removal, media conversion and media locator. Manual BPM/reordering have additional gates; source selection never grants permission |
@@ -113,7 +203,14 @@ Python, mypy and Hypothesis also recreate their ignored caches during developmen
 Ignored does not automatically mean safe to delete: diagnostic evidence may live
 under `build/` until deliberately archived.
 
-## Historical accepted retention — November2
+## Historical retention records
+
+The following records describe their dated checkpoints, not current file/app/
+cache inventories or permission to repeat cleanup. Current retention is above
+and in HANDOFF. Never turn an old retained-path or deletion statement into a new
+restore, erase or source-write instruction.
+
+### Historical accepted retention — November2
 
 The full wrap-up verified the final personal build154, exact signed Contents,
 native startup and current curation before retiring seven known obsolete
@@ -371,8 +468,10 @@ Current installed provenance and recovery location remain in [HANDOFF](HANDOFF.m
 
 
 October28 native CDJ pilot: `native/cdj/` contains the runtime adapter, pinned
-vendored Rust source/provenance and notices. `build/cdj/` is disposable compilation
-output; the documented isolated toolchain remains in `soundbox-cdj-ref/`.
+vendored Rust source/provenance and notices. `build/cdj/` holds generated compiler output, including the current checked
+`release/soundbox-cdj` helper that must remain available for tests/source runs.
+Only confirmed reproducible intermediates may be retired; the isolated toolchain
+remains in `soundbox-cdj-ref/`.
 `offline-integration-20261028/` below that private root is a required immutable
 release fixture, pinned by `tests/fixtures/cdj-reference.json`. Never replace it
 with live device/source reads. The standalone fixture exporter and native control
@@ -385,5 +484,7 @@ October29 UI/analysis/playlist checkpoint: private native source reference captu
 22 supplied UI screenshots, release/state receipts and unshipped prototypes are
 retained in `~/Library/Logs/Soundbox/playlist-analysis-ui-2026-10-29/`. Its
 `unfinished-prototypes/resume.patch` passed a read-only apply check against the
-checkpoint; review it before reuse. No private DB/audio/authority is committed.
+checkpoint. It is superseded prototype evidence, not a current resume plan; do
+not apply/replay it without a fresh task-specific review against current APIs and
+authority boundaries. No private DB/audio/authority is committed.
 See [next-session scope](analysis-playlists-next.md) and HANDOFF.

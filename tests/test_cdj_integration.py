@@ -99,6 +99,24 @@ class CdjIntegrationTests(unittest.TestCase):
         db.execute("PRAGMA key='"+key.replace("'","''")+"'")
         return db
 
+    def test_browser_membership_ids_preserve_native_records_sharing_one_audio_path(self):
+        self.extra_track('18');self.playlist.keys=['17','18','17']
+        cdj_transaction.commit(self.plan())
+        before=read_library(self.target,self.token)
+        tracks={song.source_id:song for song in before.songs}
+        with self.plus_connection() as db:
+            db.execute('UPDATE content SET path=? WHERE content_id=?',(tracks['17'].path,int(tracks['18'].id)))
+        plus=read_library(self.target,self.token,snapshot_only=True)
+        playlist=next(p for p in plus.playlists if p.title==self.playlist.name)
+        self.assertEqual(playlist.song_ids,(tracks['17'].id,tracks['18'].id,tracks['17'].id))
+        self.assertEqual({path for _title,path in playlist.entries},{tracks['17'].path})
+        self.assertNotIn('playlist_track_ids',plus.catalog)
+        # The independent classic reader retains native membership order too.
+        (self.target/DATABASE_FILES[2]).unlink()
+        classic=read_library(self.target,self.token,snapshot_only=True)
+        self.assertEqual(next(p for p in classic.playlists if p.title==self.playlist.name).song_ids,
+                         playlist.song_ids)
+
     def test_exporting_one_playlist_does_not_capture_or_refresh_other_exported_playlists(self):
         retained_track = self.extra_track('18')
         self.playlist.keys = ['18']

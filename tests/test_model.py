@@ -262,3 +262,71 @@ class Search(unittest.TestCase):
         m.set_rows(rows)                # _hay must rebuild, old term gone
         m.set_filter("rezz");    self.assertEqual(self._ids(m), [])
         m.set_filter("renamed"); self.assertEqual(self._ids(m), ["1"])
+
+
+class IncrementalModelWork(unittest.TestCase):
+    def test_same_normalized_filter_and_sort_preserve_selection_indexes_without_work(self):
+        from unittest import mock
+        from PySide6.QtCore import QPersistentModelIndex
+        import desktop.model as model
+        m = TrackModel(_rows())
+        m.set_filter("a")
+        m.sort(_col("title"))
+        selected = QPersistentModelIndex(m.index(1, 0))
+        resets = []
+        m.modelReset.connect(lambda: resets.append(True))
+        with mock.patch.object(model, "row_matches", side_effect=AssertionError("repeated search")), \
+                mock.patch.object(model, "_sort_value", side_effect=AssertionError("repeated sort")):
+            m.set_filter("  A  ")
+            m.sort(_col("title"), Qt.AscendingOrder)
+        self.assertEqual(resets, [])
+        self.assertTrue(selected.isValid())
+        self.assertEqual(selected.data(), "Bravo")
+
+    def test_replacing_rows_still_reapplies_an_unchanged_filter_and_sort(self):
+        m = TrackModel(_rows())
+        m.set_filter("alpha")
+        m.sort(_col("title"))
+        rows = _rows()
+        rows[1]["title"] = "No longer matches"
+        rows[0]["title"] = "alpha replacement"
+        m.set_rows(rows)
+        m.set_filter("alpha")
+        self.assertEqual([row["id"] for row in m._rows], ["1"])
+
+    def test_inline_edit_reindexes_filter_and_updates_duplicate_memberships(self):
+        first = _rows()[0]
+        m = TrackModel([dict(first), dict(first), _rows()[1]])
+        m.set_filter("bravo")
+        edits = []
+        m.cell_edited.connect(lambda *args: edits.append(args))
+        self.assertTrue(m.setData(m.index(0, _col("title")), "Renamed"))
+        self.assertEqual(m.rowCount(), 0)
+        self.assertEqual(edits, [("title", "1", "Renamed")])
+        m.set_filter("renamed")
+        self.assertEqual([row["title"] for row in m._rows], ["Renamed", "Renamed"])
+
+    def test_inline_sort_edit_reorders_without_changing_export_order(self):
+        m = TrackModel(_rows())
+        m.sort(_col("title"))
+        self.assertTrue(m.setData(m.index(0, _col("title")), "Zulu"))
+        self.assertEqual([row["title"] for row in m._rows], ["Bravo", "Charlie", "delta", "Zulu"])
+        m.sort(-1)
+        self.assertEqual([row["id"] for row in m._rows], ["1", "2", "3", "4"])
+
+    def test_identical_explicit_edit_still_records_manual_intent(self):
+        m = TrackModel(_rows())
+        edits = []
+        m.cell_edited.connect(lambda *args: edits.append(args))
+        self.assertTrue(m.setData(m.index(0, 0), "Bravo"))
+        self.assertEqual(edits, [("title", "1", "Bravo")])
+
+    def test_art_fill_keeps_browsing_order_until_explicit_same_direction_sort(self):
+        m = TrackModel([{'id': 'one', 'art': 'cover'}, {'id': 'two', 'art': 'miss'}])
+        m.sort(_col('art'))
+        m.refresh_art(lambda tid: 'miss' if tid == 'one' else 'cover')
+        self.assertEqual([row['id'] for row in m._rows], ['one', 'two'])
+        m.sort(_col('art'))
+        self.assertEqual([row['id'] for row in m._rows], ['two', 'one'])
+        m.sort(-1)
+        self.assertEqual([row['id'] for row in m._rows], ['one', 'two'])

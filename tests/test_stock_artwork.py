@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -17,6 +19,8 @@ from soundbox.stock_artwork import (
     StockArtworkError,
     render_stock_artwork,
     validate_stock_artwork,
+    StockArtworkSegment,
+    _combined_sha256,
 )
 
 
@@ -51,6 +55,28 @@ class StockArtwork(unittest.TestCase):
             {format_id: width * height * 2
              for format_id, (width, height) in FORMATS.items()},
         )
+
+    def test_combined_digest_verifies_each_payload_in_its_only_read(self):
+        paths = [self.root / "one.rgb565", self.root / "two.rgb565"]
+        values = [b"first" * 100, b"second" * 100]
+        segments = []
+        for path, value in zip(paths, values):
+            path.write_bytes(value)
+            segments.append(StockArtworkSegment(path, len(value), hashlib.sha256(value).hexdigest()))
+        opened = []
+        original_open = Path.open
+
+        def observed(path, *args, **kwargs):
+            opened.append(path)
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", observed):
+            combined = _combined_sha256(segments)
+        self.assertEqual(combined, hashlib.sha256(b"".join(values)).hexdigest())
+        self.assertEqual(opened, paths)
+        paths[1].write_bytes(b"x" * len(values[1]))
+        with self.assertRaisesRegex(StockArtworkError, "content"):
+            _combined_sha256(segments)
 
     def test_corrupt_cached_payload_is_rebuilt(self):
         prepared = self.cache.prepare(self.image)

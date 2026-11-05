@@ -257,6 +257,12 @@ _UNCAPTURED_MANIFEST = object()
 
 
 def make_plan(session, candidate, *, selection, db_id, view, workspace=None, should_cancel=lambda:False, settings_only=False, recovery_root=None, allowed_profile_changes=(), retained_files=(), source_contracts=None, catalog_baseline=None, allowed_asset_changes=(), expected_manifest=_UNCAPTURED_MANIFEST, expected_profile_hashes=None, removed_files=()):
+    # The inspector also returns per-membership IDs for browser presentation.
+    # Keep that ephemeral projection out of every render/merge/settings/initialize
+    # manifest, matching read_library's catalog. Otherwise an unchanged repeat
+    # would publish a new generation solely to remove this display field.
+    view = dict(view)
+    view.pop('playlist_track_ids', None)
     if session.read_optional(JOURNAL, limit=8*1024*1024) is not None:
         raise ValueError('Interrupted CDJ transaction requires recovery before another export')
     previous,old_manifest = read_manifest(session)
@@ -323,9 +329,9 @@ def make_plan(session, candidate, *, selection, db_id, view, workspace=None, sho
                     and path not in ('PIONEER/'+n for n in PROFILE_FILES)
                     and owner['sha256'] == new_hash and info.st_size == owner['size']):
                 old = owner['sha256']
-            elif reusable.get(path)==new_hash and reuse_proof.get('observations',{}).get(path)==list(_identity(info)):
-                old=new_hash
             else:
+                # Interrupted, unowned payloads require fresh exact bytes.
+                # FAT/exFAT can preserve the entire stat tuple across writes.
                 old = _hash_file(destination, should_cancel)
         profile_path = path in ('PIONEER/' + n for n in PROFILE_FILES)
         if path in expected_profile_hashes and old != expected_profile_hashes[path]:
@@ -382,12 +388,12 @@ def _json(value):
     return (json.dumps(value, sort_keys=True, separators=(',', ':'))+'\n').encode()
 
 
-def _check_baseline(session, change):
+def _check_baseline(session, change, should_cancel=lambda:False):
     path = session.guard(session.target/change.path)
     if change.old_sha256 is None:
         if path.exists():
             raise ValueError('USB changed after approval; a new destination is occupied')
-    elif not path.is_file() or _hash_file(path) != change.old_sha256:
+    elif not path.is_file() or _hash_file(path,should_cancel) != change.old_sha256:
         raise ValueError('USB changed after approval; prepare the export again')
 
 
@@ -405,7 +411,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     for change in plan.changes:
         if should_cancel():
             raise RuntimeError('CDJ export cancelled before publication')
-        _check_baseline(session, change)
+        _check_baseline(session, change,should_cancel)
         # Small metadata is checked before publication; new audio is hashed in
         # its one copy pass, rather than read twice locally and again from USB.
         if change.new_sha256 and not change.path.startswith('Contents/') and _hash_file(plan.candidate/change.path, should_cancel) != change.new_sha256:
@@ -414,7 +420,7 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
         return plan.manifest
     for path in DATABASE_FILES:
         if path in plan.manifest['files'] and not any(c.path==path for c in plan.changes):
-            if _hash_file(session.guard(session.target/path))!=plan.manifest['files'][path]['sha256']:
+            if _hash_file(session.guard(session.target/path),should_cancel)!=plan.manifest['files'][path]['sha256']:
                 raise ValueError('USB library changed during preparation; retry the update')
     transaction = '.soundbox-cdj/transactions/'+plan.manifest['generation']
     journal = dict(schema=1, volume_uuid=plan.volume_uuid, mount_identity=list(plan.mount_identity),
@@ -436,7 +442,6 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
     finally:
         os.close(directory_fd)
     session.atomic_write(session.target/JOURNAL, _json(journal))
-    completed={}
     total=len(plan.changes)+sum(c.retire for c in plan.changes)
     try:
         # Retire each original immediately before its replacement. The durable
@@ -447,18 +452,13 @@ def commit(plan, *, should_cancel=lambda:False, on_progress=lambda *_:None):
                 raise RuntimeError('CDJ export cancelled; restoring previous generation')
             if change.path in DATABASE_FILES:
                 assert_no_database_journals(session.target,session.mount_identity[0])
-            _check_baseline(session, change)
+            _check_baseline(session, change,should_cancel)
             path = session.guard(session.target/change.path)
             if change.old_sha256:
                 backup = session.guard(session.target/transaction/change.path)
                 session.rename(path, backup)
             if change.new_sha256:
                 session.atomic_copy(plan.candidate/change.path, path, should_cancel=should_cancel,expected_sha256=change.new_sha256)
-                if change.old_sha256 is None and change.path not in DATABASE_FILES and change.path not in {'PIONEER/'+name for name in PROFILE_FILES}:
-                    completed[change.path]=dict(sha256=change.new_sha256,observation=list(_identity(path.stat())))
-                    from .state_io import atomic_bytes
-                    atomic_bytes(receipt.with_suffix('.completed.json'),_json(dict(schema=1,
-                        volume_uuid=session.volume_uuid,generation=plan.manifest['generation'],files=completed)))
             on_progress(index+1, total, change.path)
         session.atomic_write(session.target/MANIFEST, _json(plan.manifest))
         journal['state'] = 'committed'
@@ -521,12 +521,6 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
     expected = json.loads(receipt.read_bytes())
     if expected != {k:v for k,v in value.items() if k != 'state'}:
         raise ValueError('USB journal does not match its locally approved recovery receipt')
-    completed={}
-    try:
-        record=json.loads(receipt.with_suffix('.completed.json').read_bytes())
-        if (record.get('schema')==1 and record.get('volume_uuid')==session.volume_uuid
-                and record.get('generation')==value['new_manifest']['generation']):completed=record.get('files',{})
-    except (OSError,ValueError,TypeError):pass
     transaction = value.get('transaction', '')
     if (not transaction.startswith('.soundbox-cdj/transactions/')
             or len(PurePosixPath(transaction).parts) != 3
@@ -560,10 +554,10 @@ def recover(session, recovery_root, *, dry_run=False, retain_new=False):
     for change in value['changes']:
         path = session.guard(session.target/_relative(change['path']))
         backup = session.guard(session.target/transaction/change['path'])
-        proof=completed.get(change['path'],{})
-        if path.is_file() and proof.get('sha256')==change['new'] and proof.get('observation')==list(_identity(path.stat())):
-            live=change['new']
-        else:live = _hash_file(path) if path.is_file() else None
+        # A prior copy and equal stat fields cannot prove current USB bytes.
+        # Old completed maps/ledgers are ignored; the locally bound intent and
+        # exact fresh live/backup hashes alone authorize recovery actions.
+        live = _hash_file(path) if path.is_file() else None
         saved = _hash_file(backup) if backup.is_file() else None
         if saved not in (None, change['old']) or live not in (None, change['old'], change['new']):
             raise ValueError('Ambiguous CDJ recovery bytes; preserve all evidence')

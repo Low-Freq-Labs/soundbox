@@ -31,7 +31,7 @@ class Host(ExportSelectionMixin,QWidget):
             active=None,results=[],cancelled=False,error='',started=False)
 
     def _sync_playlists(self):return []
-    def _device_operation_owned(self):return self._exporting
+    def _device_operation_owned(self, target=None):return self._exporting or bool(getattr(self,"_usb_format_device","") and (target is None or target==self._usb_format_device))
     def _start_pulse(self,*_):pass
     def _stop_pulse(self):pass
     def _update_device_action_state(self):pass
@@ -156,6 +156,50 @@ class ExportDialogTests(unittest.TestCase):
                 mock.patch('desktop.export_dialog.QMessageBox.information'):
             host._start_next_export_target()
         self.assertIsNone(host._export_batch)
+
+    def test_formatting_first_target_does_not_block_export_to_second_or_stat_the_mount(self):
+        host=self.host()
+        first,second=host._export_batch['pending']
+        host._usb_format_device=first['path']
+        host._usb_format_volumes=(first['path'],)
+        with mock.patch('desktop.export_dialog.QMessageBox.information'), \
+                mock.patch('desktop.export_dialog.Path.stat',side_effect=AssertionError('UI-thread USB I/O')):
+            host._start_next_export_target();self.drain()
+        self.assertEqual([call[0] for call in host.calls],[second['path']])
+        self.assertIn('Device disconnected or changed',host._export_batch['results'][0][1])
+
+    def test_export_dialog_omits_all_volumes_of_formatting_disk(self):
+        host=self.host()
+        first,second=host._export_batch['pending']
+        host._export_batch=None
+        host._usb_format_device=first['path']
+        host._usb_format_volumes=(first['path'],)
+        host._usb_device_rows={}
+        for profile in host._device_profiles.values():
+            profile.cdj_export=True;profile.stock_write=False;profile.rockbox_export=False;profile.label='USB'
+        host._start_next_export_target=mock.Mock()
+        captured=[]
+        def choose(playlists,targets,**options):
+            captured.extend(targets)
+            return SimpleNamespace(exec=lambda:1,selection=lambda:(['one'],targets),deleteLater=mock.Mock())
+        with mock.patch('desktop.export_dialog.ExportDialog',side_effect=choose), \
+                mock.patch('desktop.export_dialog.device_facts',side_effect=lambda dev,**_:SimpleNamespace(
+                    volume_uuid=Path(dev).name,writable=True,free_bytes=100)):
+            host._show_export_dialog(second['path'])
+        self.assertEqual([target['path'] for target in captured],[second['path']])
+        host._start_next_export_target.assert_called_once()
+
+    def test_rejected_export_dialog_retires_its_parented_widget_tree(self):
+        from PySide6.QtCore import QCoreApplication, QEvent
+        host=self.host();host._export_batch=None;host._usb_device_rows={}
+        for profile in host._device_profiles.values():
+            profile.cdj_export=True;profile.stock_write=False;profile.rockbox_export=False;profile.label='USB'
+        with mock.patch.object(ExportDialog,'exec',return_value=0), \
+                mock.patch('desktop.export_dialog.device_facts',side_effect=lambda dev,**_:SimpleNamespace(
+                    volume_uuid=Path(dev).name,writable=True,free_bytes=100)):
+            for _ in range(5):host._show_export_dialog()
+        QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
+        self.assertEqual(host.findChildren(ExportDialog),[])
 
     def test_changed_source_or_deleted_selection_cannot_retarget_queued_work(self):
         for change in ('source','playlist'):

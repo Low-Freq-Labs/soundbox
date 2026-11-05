@@ -8,7 +8,35 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, QThread, QEventLoop, Signal, Slot, Qt
+from PySide6.QtCore import QObject, QThread, QEventLoop, QTimer, Signal, Slot, Qt
+
+
+class DeferredCall(QObject):
+    """One GUI callback per event turn, with explicit stop admission.
+
+    Queue data stays with its controller; a wakeup never carries a command or
+    replaces the controller's fresh admission checks. The QObject context also
+    cancels delivery if its parent is deleted before the next event turn.
+    """
+    def __init__(self, callback: Callable[[], None], parent: QObject | None = None):
+        super().__init__(parent)
+        self._callback = callback
+        self._pending = False
+        self.stopping = False
+
+    def schedule(self) -> None:
+        if self.stopping or self._pending:
+            return
+        self._pending = True
+        QTimer.singleShot(0, self, self._deliver)
+
+    def _deliver(self) -> None:
+        self._pending = False
+        if not self.stopping:
+            self._callback()
+
+    def stop(self) -> None:
+        self.stopping = True
 
 
 class TaskOwner(QObject):

@@ -24,6 +24,7 @@ import tempfile
 from typing import Any
 
 from .preparation_inventory import PreparationInventory, signature
+from .operation_control import checkpoint
 
 PROFILE = "ma446-video-rgb565-v1"
 FORMATS: dict[int, tuple[int, int]] = {
@@ -44,6 +45,7 @@ def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            checkpoint()
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -498,11 +500,16 @@ def _combined_sha256(segments: list[StockArtworkSegment]) -> str:
     for segment in segments:
         if segment.size != segment.path.stat().st_size:
             raise StockArtworkError(f"Prepared payload changed size: {segment.path}")
-        if _sha256_file(segment.path) != segment.sha256:
-            raise StockArtworkError(f"Prepared payload changed content: {segment.path}")
+        segment_digest = hashlib.sha256()
+        size = 0
         with segment.path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                checkpoint()
                 digest.update(chunk)
+                segment_digest.update(chunk)
+                size += len(chunk)
+        if size != segment.size or segment_digest.hexdigest() != segment.sha256:
+            raise StockArtworkError(f"Prepared payload changed content: {segment.path}")
     return digest.hexdigest()
 
 

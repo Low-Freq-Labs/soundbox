@@ -124,20 +124,30 @@ class ExportSelectionMixin:
         return list({playlist_key(p):p for p in [*self.lib.playlists,*self._sync_playlists()]}.values())
 
     def _show_export_dialog(self, preferred=''):
-        if self.lib is None or self._device_operation_owned() or getattr(self,'_export_batch',None):return
+        if self.lib is None or self._device_operation_owned('') or getattr(self,'_export_batch',None):return
         binding=(str(self.lib.source),str(self.lib.source_library_id))
         targets=[]
         for path,profile in self._device_profiles.items():
+            if (getattr(self, '_usb_format_device', '')
+                    and path in getattr(self, '_usb_format_volumes', (self._usb_format_device,))):continue
             facts=device_facts(path,cached_only=True)
             token=self._device_mount_tokens.get(path,0)
             capable=(profile.cdj_export or profile.stock_write or profile.rockbox_export)
             if not capable or not facts.writable or not facts.volume_uuid or not token:continue
             row=self._usb_device_rows.get(path)
             targets.append(dict(path=path,name=row[0] if row else Path(path).name,
-                label=profile.label,free=facts.free_bytes,token=token,uuid=facts.volume_uuid,kind=profile.kind))
+                label=profile.label,free=row[1] if row else facts.free_bytes,
+                token=token,uuid=facts.volume_uuid,kind=profile.kind))
+        if not targets:
+            self._flash_status('Connect a writable USB or supported iPod to export')
+            return
         dialog=ExportDialog(self._export_playlists(),targets,preferred=preferred,parent=self)
-        if dialog.exec()!=QDialog.Accepted:return
-        keys,targets=dialog.selection()
+        try:
+            if dialog.exec()!=QDialog.DialogCode.Accepted:return
+            keys,targets=dialog.selection()
+            keys=list(keys);targets=[dict(target) for target in targets]
+        finally:
+            dialog.deleteLater()
         if not keys or not targets:return
         self._export_batch=dict(binding=binding,keys=keys,pending=list(targets),active=None,
             results=[],cancelled=False,error='',started=False)
@@ -154,8 +164,9 @@ class ExportSelectionMixin:
             lines=[f"{name}: {note}" for name,note in batch['results']]
             if batch['cancelled']:lines.append('Remaining exports cancelled.')
             QMessageBox.information(self,'Export finished','\n'.join(lines))
+            if getattr(self, '_usb_format_device', ''):self._show_usb_format_status()
             return
-        if self._device_operation_owned():
+        if self._device_operation_owned(''):
             QTimer.singleShot(100,self._start_next_export_target)
             return
         from .cdj import _source_edits_pending
@@ -184,7 +195,7 @@ class ExportSelectionMixin:
             else:
                 self._on_device_drop(dev,[('rb',p.display_path) if p.pid else ('sbview','collection') if p.name=='Collection'
                     else ('sbview','artists') if p.name=='Artists' else ('cust',p.name) for p in playlists],_from_export=True)
-            batch['started']=bool(self._device_operation_owned() or self._cdj_waiting)
+            batch['started']=bool(self._device_operation_owned('') or self._cdj_waiting)
             if not batch['started']:batch['error']='Export did not start or was cancelled'
         except Exception as exc:
             batch['error']=str(exc)
@@ -197,15 +208,16 @@ class ExportSelectionMixin:
         target=batch['active'] if batch else None
         if target and target['path']==dev:
             profile=self._device_profiles.get(dev)
-            if (not profile or profile.kind!=target['kind'] or not facts.writable
-                    or (self._device_mount_tokens.get(dev,0),facts.volume_uuid)!=(target['token'],target['uuid'])
-                    or Path(dev).stat().st_dev!=target['token']):
+            if ((getattr(self, '_usb_format_device', '') and
+                    dev in getattr(self, '_usb_format_volumes', (self._usb_format_device,)))
+                    or not profile or profile.kind!=target['kind'] or not facts.writable
+                    or (self._device_mount_tokens.get(dev,0),facts.volume_uuid)!=(target['token'],target['uuid'])):
                 raise ValueError('Device disconnected or changed; select the connected device again')
 
     def _maybe_finish_export_target(self):
         batch=getattr(self,'_export_batch',None)
         if (batch is None or batch['active'] is None or self._shutting_down
-                or self._device_operation_owned() or self._cdj_waiting):return
+                or self._device_operation_owned('') or self._cdj_waiting):return
         target=batch['active']
         batch['results'].append((target['name'],batch['error'] or ('Cancelled' if batch['cancelled'] else 'Export complete')))
         batch['active']=None

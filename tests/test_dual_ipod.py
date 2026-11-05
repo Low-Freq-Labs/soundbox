@@ -41,6 +41,7 @@ from soundbox.rockbox_media import (
 )
 from soundbox.stock_artwork import StockArtworkCache
 from soundbox.stock_ipod_shadow import StockIpodShadowStore
+from soundbox.source_verification import SourceVerificationCache
 from soundbox.sync import DeviceSession
 
 
@@ -140,6 +141,58 @@ class CompositeDriftEfficiencyTests(unittest.TestCase):
             self.base / "new-missing-location.wav").as_uri()
         self.assertEqual(len(dual_ipod.composite_device_drift(
             self.library, self.target).changed), 12)
+
+    def test_dashboard_capture_is_reused_without_mutating_or_rereading_manifest(self):
+        observation = device_manifest.read_composite(self.target)
+        before = json.dumps(observation[0], sort_keys=True)
+        with mock.patch.object(device_manifest, "read_composite",
+                               side_effect=AssertionError("dashboard reread manifest")):
+            drift = dual_ipod.composite_device_drift(
+                self.library, self.target, captured_manifest=observation)
+        self.assertFalse(drift.any())
+        self.assertEqual(json.dumps(observation[0], sort_keys=True), before)
+
+
+class CompositeDedupEfficiencyTests(unittest.TestCase):
+    def test_equal_sized_unique_sources_use_linear_digest_comparisons(self):
+        class CountedDigest(str):
+            comparisons = 0
+
+            def __eq__(self, other):
+                type(self).comparisons += 1
+                return super().__eq__(other)
+
+            __hash__ = str.__hash__
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracks = {}
+            count = 256
+            for index in range(count):
+                path = root / f"{index}.wav"
+                path.write_bytes(index.to_bytes(4, "little"))
+                tracks[str(index)] = Track(str(index), "Same title", "Fixture", path.as_uri())
+            duplicate = root / "duplicate.wav"
+            duplicate.write_bytes((root / "0.wav").read_bytes())
+            tracks["duplicate"] = Track("duplicate", "Different title", "Other", duplicate.as_uri())
+            unique_size = root / "unique-size.wav"
+            unique_size.write_bytes(b"12345")
+            tracks["unique-size"] = Track("unique-size", "Unique size", "Fixture", unique_size.as_uri())
+            library = Library(tracks, [], root)
+            verifier = SourceVerificationCache(root / "proofs")
+            real_verify = verifier.verify
+
+            def verify(*args):
+                digest, stat = real_verify(*args)
+                return CountedDigest(digest), stat
+
+            with mock.patch.object(verifier, "verify", side_effect=verify) as reads:
+                kept = dual_ipod._unique_playlist_tracks(
+                    library, [*tracks, "0", "duplicate"], {}, verifier)
+            self.assertEqual(kept, [*map(str, range(count)), "unique-size"])
+            self.assertEqual(reads.call_count, count + 1)
+            self.assertEqual(verifier.bytes_read, (count + 1) * 4)
+            self.assertLess(CountedDigest.comparisons, count * 4)
 
 
 class DualIpodSyncTests(unittest.TestCase):
@@ -288,6 +341,127 @@ class DualIpodSyncTests(unittest.TestCase):
             identity_key="fixture-device",
             **kwargs,
         )
+
+    def test_small_playlist_capture_is_reused_only_within_plan(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        relative = next(path for path, row in manifest["files"].items()
+                        if row["kind"] == "playlist")
+        playlist_path = (self.ipod / relative.lstrip("/")).resolve()
+        original_open = Path.open
+        opened = []
+
+        def opening(path, *args, **kwargs):
+            if path == playlist_path:
+                opened.append(path)
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "open", opening):
+            plan = self._plan(reconcile=True, audit_existing=False)
+            self.assertFalse(plan.requires_commit)
+            self.assertEqual(len(opened), 1)
+            # A captured planning read never replaces commit's fresh check.
+            playlist_path.write_bytes(playlist_path.read_bytes() + b"# edited\n")
+            with self.assertRaisesRegex(DualIpodError, "playlist changed"):
+                commit_dual_ipod_sync(plan)
+
+    def test_managed_selection_and_precondition_share_one_manifest_capture(self):
+        custom = Playlist("Custom", [], ["unsafe"], pid="cust:custom")
+        commit_dual_ipod_sync(self._plan(selected=[self.playlist, custom]))
+        expected = device_manifest.load_composite(self.ipod)
+        with mock.patch.object(dual_ipod, "_read_existing_manifest",
+                               wraps=dual_ipod._read_existing_manifest) as capture:
+            plan = plan_dual_ipod_sync(
+                self.library, None, self.ipod, model_number="MA446", filesystem="msdos",
+                rockbox_media_cache=self.media_cache, rockbox_art_cache=self.rockbox_art_cache,
+                art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
+                stock_shadow_store=self.stock_shadow_store, identity_key="fixture-device",
+                reconcile=True, extra_playlists=(custom,), expected_manifest=expected,
+                audit_existing=False)
+        self.assertEqual(capture.call_count, 1)
+        self.assertFalse(plan.requires_commit)
+        self.assertEqual(set(json.loads(plan.manifest_payload)["playlists"]),
+                         {"dual-test", "cust:custom"})
+
+    def test_managed_selection_requires_reconcile_and_an_existing_manifest(self):
+        for reconcile in (False, True):
+            with self.subTest(reconcile=reconcile), self.assertRaisesRegex(
+                    DualIpodError, "existing ownership manifest"):
+                plan_dual_ipod_sync(
+                    self.library, None, self.ipod, model_number="MA446", filesystem="msdos",
+                    rockbox_media_cache=self.media_cache, rockbox_art_cache=self.rockbox_art_cache,
+                    reconcile=reconcile)
+
+    def test_stale_manifest_precondition_refuses_before_media_work(self):
+        commit_dual_ipod_sync(self._plan())
+        expected = device_manifest.load_composite(self.ipod)
+        path = device_manifest.manifest_path(self.ipod)
+        changed = {**expected, "generation": expected["generation"] + 1}
+        path.write_text(json.dumps(changed))
+        before = path.read_bytes()
+        with mock.patch.object(self.media_cache, "plan_from_committed",
+                               side_effect=AssertionError("stale plan reached media work")), \
+                mock.patch.object(DeviceSession, "atomic_write",
+                                  side_effect=AssertionError("stale plan wrote device")):
+            with self.assertRaisesRegex(DualIpodError, "manifest changed before planning"):
+                plan_dual_ipod_sync(
+                    self.library, None, self.ipod, model_number="MA446", filesystem="msdos",
+                    rockbox_media_cache=self.media_cache, rockbox_art_cache=self.rockbox_art_cache,
+                    reconcile=True, expected_manifest=expected)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_overlapping_playlist_metadata_scales_with_tracks_and_preserves_order(self):
+        playlists = [Playlist(f"Overlap {index}", [], ["safe", "unsafe", "safe"],
+                              pid=f"overlap-{index}") for index in range(20)]
+        with mock.patch.object(dual_ipod, "_effective_display_metadata",
+                               wraps=dual_ipod._effective_display_metadata) as display:
+            plan = self._plan(selected=playlists)
+        # One desired-display derivation and one signature encoding per track,
+        # regardless of repeated references within/across the selected playlists.
+        self.assertEqual(display.call_count, 4)
+        rows = json.loads(plan.manifest_payload)["playlists"]
+        self.assertTrue(all(row["tracks"] == ["safe", "unsafe", "safe"]
+                            for row in rows.values()))
+        self.assertEqual(len(plan.media_plans), 2)
+        self.assertEqual(len(plan.playlists), 20)
+
+    def test_growing_playlist_capture_is_bounded(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        relative = next(path for path, row in manifest["files"].items()
+                        if row["kind"] == "playlist")
+        playlist_path = (self.ipod / relative.lstrip("/")).resolve()
+        original_open = Path.open
+        reads = []
+
+        class GrowingPlaylist(io.BytesIO):
+            def read(self, size=-1):
+                reads.append(size)
+                return super().read(size)
+
+        def opening(path, *args, **kwargs):
+            if path == playlist_path:
+                return GrowingPlaylist(b"x" * (dual_ipod._MAX_MANAGED_PLAYLIST_BYTES + 100))
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "open", opening), self.assertRaisesRegex(
+                DualIpodError, "too large"):
+            dual_ipod._read_historical_playlist_identities(self.ipod, manifest, self.library)
+        self.assertEqual(reads, [dual_ipod._MAX_MANAGED_PLAYLIST_BYTES + 1])
+
+    def test_playlist_parent_redirect_is_rejected_before_payload_read(self):
+        commit_dual_ipod_sync(self._plan())
+        manifest = device_manifest.load_composite(self.ipod)
+        original = self.ipod / "Playlists"
+        reserved = self.ipod / "PIONEER"
+        original.rename(reserved)
+        original.symlink_to(reserved, target_is_directory=True)
+        with mock.patch.object(Path, "open", side_effect=AssertionError(
+                "redirected playlist payload was opened")):
+            with self.assertRaisesRegex(RuntimeError, "reserved for rekordbox/CDJ"):
+                dual_ipod._read_historical_playlist_identities(self.ipod, manifest, self.library)
+            with self.assertRaisesRegex(RuntimeError, "reserved for rekordbox/CDJ"):
+                dual_ipod._changed_managed_playlist_keys(self.ipod, manifest)
 
     def test_cancel_between_media_files_rolls_back_and_records_outcome(self):
         from threading import Event

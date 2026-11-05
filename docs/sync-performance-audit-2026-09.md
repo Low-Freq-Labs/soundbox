@@ -1,16 +1,32 @@
 # Sync performance audit — September 26, 2026
 
+The later [November4 iPod audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+adds source/catalog reuse, ownership/path corrections and GUI retirement fixes.
+It uses offline fixtures only and does not close the historical hardware gates.
+See HANDOFF for source/package/install status.
+
 This audit accompanied the real composite run without restarting SoundBox,
 starting another live planner, or reading device media. Validation uses small,
 synthetic devices. See `HANDOFF.md` for the installed build and remaining live
 acceptance; source tests are not a device throughput benchmark.
 
-Reviewed November3 against release `d08ee91`. All run times, counts and installation
+Reviewed November3 against release `d08ee91`; the current wrapper was rechecked
+November4 against whole-app build165/runtime `7ffde716…`. All run times, counts and installation
 instructions below belong to the dated September campaign. Current source
 acquisition requires an exact digest and a stable captured filesystem epoch;
 old proofs never bless an unchecked newer epoch. Current installed provenance and
 remaining physical gates are in [HANDOFF](HANDOFF.md), with later component
-measurements in [the performance audit](performance-audit.md).
+measurements in [the performance audit](performance-audit.md). Here, generic
+ExportWorker/schema-2 refers to the filesystem engine, not the current native CDJ
+USB path. Current CDJ USBs update only selected playlists, have no automatic
+sync/pending state or idle/source-event scan, and start no final completion/eject
+read. Current FAT32/exFAT physical fixture timings are in HANDOFF; they do not
+close the separate historical iPod performance/failure gates.
+
+The November4 interrupted-adoption correction supersedes the old persisted-proof
+reuse described in the September table below: affected device bytes are freshly
+hashed because FAT32/exFAT epochs can repeat. Canonical Mac-source verification
+and ordinary retained export inventory have their own separate scopes.
 
 ## September 28: ordinary Sync trusts committed inventory
 

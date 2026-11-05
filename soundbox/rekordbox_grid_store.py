@@ -245,6 +245,24 @@ class PilotGridStore:
     def _publish(self, role, raw, record):
         self._exact_end(record)
         target = Path(record['files'][role]['path'])
+        if self._file(target) == raw:
+            mode = record['files'][role]['mode']
+            mtime = record['files'][role]['mtime_ns']
+            if type(mode) is not int or not 0 <= mode <= 0o777 or type(mtime) is not int:
+                raise RecoveryRequired('Invalid grid metadata in recovery')
+            current = target.stat()
+            # Matching native metadata also witnesses that chmod/utime's values
+            # are representable. Unusual or changed metadata retains the old
+            # staging path and its filesystem checks; never chmod the source.
+            if mode == current.st_mode & 0o777 and mtime == current.st_mtime_ns:
+                staged = self.payloads / ('publish.' + role)
+                if staged.exists() or staged.is_symlink():
+                    _regular(staged)
+                    if _sha(staged.read_bytes()) not in (
+                            record['files'][role][side] for side in ('before', 'after')):
+                        raise RecoveryRequired('Unknown grid publication staging bytes')
+                    staged.unlink()
+                return
         staged = self._copy_for_publish(role, raw, record)
         if self._file(target) == raw:
             staged.unlink()

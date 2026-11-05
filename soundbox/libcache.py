@@ -12,7 +12,9 @@ corruption/schema drift by returning None — a bad cache never blocks startup.
 from __future__ import annotations
 
 import json
+import math
 import os
+import stat
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from .library import Library, LibraryTag, Playlist, Track
 
 SCHEMA = 11
 _READABLE_SCHEMAS = {4, 5, 6, 7, 8, 9, 10, SCHEMA}
+_MAX_CACHE_BYTES = 256 * 1024**2
 
 # The Track fields worth persisting (everything the browser/export needs).
 # `path`/`duration_str`/`file_type` are computed properties, not stored.
@@ -33,6 +36,56 @@ _TRACK_FIELDS = (
     "info", "source_native_id", "source_native_path",
 )
 _PLAYLIST_FIELDS = ("name", "folder_path", "keys", "pid")
+_TEXT_FIELDS = frozenset((
+    "track_id", "name", "artist", "location_uri", "bpm", "key", "date_added",
+    "genre", "kind", "bitrate", "rating", "year", "source_analysis_path",
+    "source_uuid", "source_cue_revision", "source_native_id", "source_native_path",
+))
+
+
+def _track_values(row, fields):
+    if not isinstance(row, list) or not 4 <= len(row) <= len(_TRACK_FIELDS):
+        return None
+    values = dict(zip(fields, row))
+    if any(not isinstance(values[key], str) for key in _TEXT_FIELDS if key in values):
+        return None
+    for key in ('total_time', 'added_ts', 'size'):
+        value = values.get(key, 0)
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            return None
+    if type(values.get('imported', False)) is not bool or not isinstance(values.get('info', {}), dict):
+        return None
+    for key in ('source_cues', 'source_cue_refs'):
+        cues = values.get(key)
+        if cues is not None and (
+                not isinstance(cues, list) or any(not isinstance(cue, dict) for cue in cues)):
+            return None
+    tags = values.get('source_tag_ids')
+    if tags is not None and (not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags)):
+        return None
+    if 'source_cue_refs' in values and values['source_cue_refs'] is None:
+        return None
+    return values if values['track_id'] else None
+
+
+def _playlist_values(row, schema):
+    if not isinstance(row, list):
+        return None
+    if schema == 4:
+        if len(row) != 5:
+            return None
+        values = dict(name=row[0], folder_path=row[1], keys=row[2], pid=row[4])
+    else:
+        if not 3 <= len(row) <= len(_PLAYLIST_FIELDS):
+            return None
+        values = dict(zip(_PLAYLIST_FIELDS, row))
+    if (not isinstance(values['name'], str)
+            or not isinstance(values.get('pid', ''), str)
+            or any(not isinstance(values[key], list)
+                   or any(not isinstance(value, str) for value in values[key])
+                   for key in ('folder_path', 'keys'))):
+        return None
+    return values
 
 
 def dump(lib: Library, path: str | Path) -> None:
@@ -90,7 +143,26 @@ def load(path: str | Path) -> Library | None:
     """Reconstruct the cached Library, or None on any problem (missing, corrupt,
     wrong schema) — the caller falls back to the live read alone."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        # This derived cache is optional. Bound allocation before parsing, and
+        # reject a growing/partial file rather than pushing malformed values
+        # into the first UI paint. No cache observation is source authority.
+        p = Path(path)
+        details = p.lstat()
+        if not stat.S_ISREG(details.st_mode) or details.st_size > _MAX_CACHE_BYTES:
+            return None
+        with p.open('rb') as handle:
+            size = os.fstat(handle.fileno()).st_size
+            if size > _MAX_CACHE_BYTES:
+                return None
+            payload = handle.read(size + 1)
+        if len(payload) != size:
+            return None
+        data = json.loads(payload.decode('utf-8'))
+        if (not isinstance(data, dict) or not isinstance(data.get('tracks'), list)
+                or not isinstance(data.get('playlists'), list)
+                or any(not isinstance(data.get(key, ''), str)
+                       for key in ('source', 'source_kind', 'source_library_id'))):
+            return None
         schema = data.get("schema")
         if schema not in _READABLE_SCHEMAS:
             return None
@@ -106,18 +178,24 @@ def load(path: str | Path) -> Library | None:
         tracks = {}
         fields = _TRACK_FIELDS[:20] if schema < 7 else _TRACK_FIELDS[:22] if schema == 7 else _TRACK_FIELDS
         for row in data["tracks"]:
-            t = Track(**dict(zip(fields, row)))
+            values = _track_values(row, fields)
+            if values is None:
+                return None
+            t = Track(**values)
+            if t.track_id in tracks:
+                return None
             tracks[t.track_id] = t
-        if schema == 4:
-            # V4 included the rekordbox-XML-only key_type before pid. Normalize
-            # it away without sacrificing the one-time instant paint.
-            playlists = [
-                Playlist(name=row[0], folder_path=row[1], keys=row[2], pid=row[4])
-                for row in data["playlists"]
-            ]
-        else:
-            playlists = [Playlist(**dict(zip(_PLAYLIST_FIELDS, row)))
-                         for row in data["playlists"]]
+        playlists = []
+        for row in data['playlists']:
+            values = _playlist_values(row, schema)
+            if values is None:
+                return None
+            playlists.append(Playlist(**values))
+        tags = data.get('source_tags', [])
+        if (not isinstance(tags, list) or any(not isinstance(row, list)
+                or not 2 <= len(row) <= 4 or any(not isinstance(value, str) for value in row)
+                for row in tags)):
+            return None
         if not tracks:
             return None
         return Library(
@@ -127,7 +205,7 @@ def load(path: str | Path) -> Library | None:
             source_kind=data.get("source_kind", "cache"),
             source_library_id=data.get("source_library_id", ""),
             source_playlist_catalog=data.get("source_playlist_catalog", {}),
-            source_tags=[LibraryTag(*row) for row in data.get("source_tags", [])],
+            source_tags=[LibraryTag(*row) for row in tags],
         )
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
         return None

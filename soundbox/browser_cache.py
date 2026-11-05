@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 import tempfile
 
@@ -30,9 +31,17 @@ def _digest(rows: dict) -> str:
 
 def load(path: Path, key: str) -> dict[str, dict] | None:
     try:
-        if path.is_symlink() or path.stat().st_size > 64 * 1024**2:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 64 * 1024**2:
             return None
-        data = json.loads(path.read_bytes())
+        with path.open('rb') as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_size > 64 * 1024**2:
+                return None
+            raw = stream.read(opened.st_size + 1)
+            if len(raw) != opened.st_size:
+                return None
+        data = json.loads(raw)
         if data['schema'] != SCHEMA or data['inputs'] != key:
             return None
         rows = data['rows']
@@ -44,7 +53,7 @@ def load(path: Path, key: str) -> dict[str, dict] | None:
         if _digest(rows) != data['sha256']:
             return None
         return rows
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError):
         return None
 
 

@@ -64,8 +64,15 @@ def _art_mutation[**P, R](method: Callable[Concatenate[Any, P], R]) -> Callable[
                 self._revision = self._area.art_revision
             before = (self.index, self._defaults, self._default_assignments,
                       self._default_track_ids)
-            self.index = copy.deepcopy(self.index)
-            self._defaults = copy.deepcopy(self._defaults)
+            # Mutations replace/remove individual entries. Detach namespace
+            # maps for rollback without cloning every unrelated cover, photo
+            # and assignment for a one-track change (or an unchanged balance).
+            self.index = dict(self.index)
+            self._defaults = {
+                **self._defaults,
+                "photos": dict(self._defaults["photos"]),
+                "assignments": dict(self._defaults["assignments"]),
+            }
             self._default_assignments = dict(self._default_assignments)
             self._changes = {}
             self._writing = True
@@ -532,7 +539,7 @@ class ArtCache:
             self._write(self.root / f"{tid}.jpg", safe)
             if e.get("ext") != "jpg":
                 self._write(p, None)
-                e["ext"] = "jpg"
+                self.index[tid] = {**e, "ext": "jpg"}
             fixed += 1
         if fixed:
             self._save()
@@ -610,6 +617,22 @@ class ArtCache:
         entry = self.index.get(track_id) or {}
         return entry.get("status") == "ok" and excluded_source(
             url=entry.get("src", ""), excluded_accounts=self.source_exclusions())
+
+    @_art_read
+    def source_excluded_ids(self, track_ids) -> frozenset[str]:
+        """One current policy observation for read-only batch eligibility.
+
+        Publication still checks the current policy and cover under its own
+        mutation lock; this observation is never approval to replace artwork.
+        """
+        from .art_sources import excluded_source
+        entries = [(tid, self.index.get(tid) or {}) for tid in track_ids]
+        entries = [(tid, entry) for tid, entry in entries if entry.get("status") == "ok"]
+        if not entries:
+            return frozenset()
+        exclusions = self.source_exclusions()
+        return frozenset(tid for tid, entry in entries if excluded_source(
+            url=entry.get("src", ""), excluded_accounts=exclusions))
 
     @_art_read
     def excluded_accounts(self) -> tuple[str, ...]:

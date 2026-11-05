@@ -1,6 +1,6 @@
 # Release test gate
 
-Updated November3, 2026. `./check.sh` builds native deck/process-guard/CDJ code, runs lint/types, validates the
+Updated November4, 2026. `./check.sh` builds native deck/process-guard/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
 stay together and the complete inventory is reconciled across workers. All
@@ -20,6 +20,20 @@ The [November2 runtime audit](testing-runtime-audit.md) records the complete
 timing review, isolation checks and a controlled encrypted-subset comparison.
 Each case still runs with its existing cipher/recovery settings. Module weights
 affect scheduling only; new tests cannot be excluded by missing timing hints.
+
+## Whole-app delivery — later November4
+
+The final bare `./check.sh --render` reconciles2779 cases:2713 offscreen in 460.325s
+and 66 Cocoa in 68.917s, zero skips/expected failures. All 694 frozen inputs remain
+exact. The first offscreen cue-style failure and its ordered reproduction remain
+retained; the corrected prefix and ten rendered states pass. When the console
+locked, only the owned shell was held before render/Cocoa; Sonny unlocked, fresh
+console/process/source proof passed, and the same shell resumed. No locked-display
+failure was accepted and no thresholds changed. Both signed profiles match tested
+Python/entrypoint/native code; package and installed native/process/RAM-SQLCipher
+probes pass. Fresh actual state/authorities/art/icon remain exact through normal
+reopen. This is dated release evidence; HANDOFF records current identity/retention
+and the independent physical-device/firmware limits.
 
 ## Required private fixtures
 
@@ -227,9 +241,9 @@ personal packages and isolated native ORM/SQLCipher probes pass; installed norma
 startup and exact current library/authority/icon preservation pass. Dated hashes,
 review scope and remaining hardware/network limits are in [HANDOFF](HANDOFF.md).
 
-## November4 delivery and source publication
+## Earlier November4 build160 delivery and source publication
 
-The installed build160/runtime7bbe8577… and source release4a3d29a… retain the
+The earlier installed build160/runtime7bbe8577… and source release4a3d29a… retained the
 November3 coverage and add Info first-frame/publication lifetime, multi-target
 Export selection/identity/cancellation, selected-catalog preservation and
 reference-counted removal/retirement recovery, plus format source/postcondition
@@ -245,3 +259,26 @@ accept the battery failure or omit the case. Stable display/power conditions
 matter for this timing gate. The native rerun and complete report inventories
 were verified together. Current provenance and physical acceptance limits remain
 in [HANDOFF](HANDOFF.md); documentation publication does not restart the app.
+
+## November4 build163 USB/theme delivery
+
+Tested source `cf2ef5b` passed the final bare gate:2595cases, comprising2531
+offscreen in579.369s and64Cocoa in67.506s, zero skips/expected failures. Both signed
+package profiles match all690frozen source/test/build inputs, with161personal/
+157public first-party Python modules plus both entrypoints. Installed build163
+has runtime fingerprint `42aefd35…`; exact bytes and preservation are in HANDOFF.
+
+New regressions cover explicit-only generic-USB catalog reads, no idle drift or
+completion/eject scan, discovery retirement before eject, selected source-capture
+bounds, same-filesystem format reuse and layout/source guards, renderer-lock
+exclusion from initialization, collapsed Export folders, current/live accents,
+one/two/five-device layout, filled-region progress lettering and track-only browser
+selection. A prior full run exposed an iPod tab-navigation regression and an old
+USB browse expectation; corrected focused checks and the final complete gate
+passed. Keep the failed reports as failure evidence, not an accepted release.
+
+Separate TEST-1/TEST-2 format/export/update/repeat receipts exercise small frozen
+fixtures on FAT32/exFAT hardware. They do not certify players, broad performance,
+iPod physical behavior or public distribution. No new native-library or codec
+authority follows from this delivery. This documentation review does not rerun
+the gate, rebuild/reinstall the unchanged runtime or interact with the real app.

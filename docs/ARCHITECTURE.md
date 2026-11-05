@@ -1,5 +1,70 @@
 # SoundBox architecture
 
+## Whole-app demand and lifecycle audit — November4
+
+This audit is installed in personal build 165/runtime 7ffde716…;2779 tests, both
+signed profiles/code parity and installed isolated/normal startup checks pass.
+The matched signed snapshot-browser median is 1.20s; fresh source/device readiness
+remains separate. HANDOFF records exact provenance/state/retention.
+
+The [whole-app audit](performance-audit.md#whole-app-audit--november4-after-ipod-review)
+keeps USB/iPod page construction behind an explicit device view and export
+caches/backends behind device demand. Mount detection remains available. Empty
+stable stack slots preserve existing page indices; passive theme/layout/state
+barriers/shutdown inspect already-created pages. Settings builds once on first
+open and synchronizes the current preferences then. Background connected-account
+refresh belongs to a window TaskOwner, independent of Settings construction;
+the shared provider's cached likes remain usable and the section attaches to its
+active worker or completed safe result. Closing Settings does not destroy work.
+
+Native-analysis/import notifications coalesce per GUI turn. Analysis retry uses
+one owned single-shot timer; explicit admission and source guards stay fresh.
+TrackModel skips identical filters/sorts while its materialized order is current;
+inline edits invalidate search data and update repeated track memberships. Art
+updates preserve the current view and mark an Art sort dirty for explicit reuse.
+Title cleanup retains at most 1,024 compiled artist-edge pattern pairs with keys
+up to 256 characters; oversized inputs keep the same transform without residency.
+This pure-text reuse changes no display derivation or browser-cache schema.
+The decoder uses a generation-bound wake condition while unloaded, EOF or paused
+with a full ring. Control transitions advance/wake that condition; the audio
+callback retains its existing lock-free notification and active decoding retains
+its short timed buffer wait. No render/DSP/sample/waveform algorithm changed.
+
+Canonical state no-op detection retains exact JSON types/map order and current
+file identity. Graveyard history compares locked exact bytes. Grid publication
+skips private staging only for exact current bytes, mode and mtime, after checking
+any existing staging evidence. Device imports compare exact bytes and create new
+destinations exclusively. Conversion recovery binds its one source hash pass to
+before/opened/closed/after epochs, then rechecks that same identity after the
+fresh source lease guard before replacement. Required recovery, source authority,
+atomic saves and database/manifest-last publication remain. HANDOFF records the
+tested and installed artifact rather than inferring it from this source review.
+
+The installed later November4 [iPod audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+adds operation-local native/manifest captures, retained stock source contracts,
+shared Rockbox ownership, source/display-aware explicit filesystem Sync and
+GUI retirement fixes. It uses offline fixtures only; HANDOFF has artifact status.
+Interrupted adoption always freshly hashes its affected candidates, superseding
+older persistent timestamp/edge-proof reuse. Source/codec/firmware boundaries remain.
+
+## Installed USB audit follow-up — November4
+
+The installed build165 [USB corrections](performance-audit.md#usb-deep-audit--november4-later-testing)
+give formatting its own retained QThread and physical-disk volume reservation.
+The ordinary device coordinator continues to serialize export operations, while
+another USB can export during confirmed native erase. Discovery and general source
+work remain held; format completion retires its old mount identities and never
+clears another export's state. Shutdown retains native erase through process exit.
+Selected USB Info artwork uses the existing TaskOwner decoder with a bounded
+descriptor-pinned byte capture. Browser membership IDs stay outside publication
+DTOs/manifests. Catalog snapshots recheck exact bytes, all epochs and
+presence. Actual FAT32/exFAT probes demonstrated equal epochs after changed bytes;
+recovery/adoption therefore hashes affected bytes freshly. Redundant per-asset
+completed-proof writes are removed; existing historical artifacts stay untouched.
+That USB build165 was installed and verified before the later whole-app delivery
+above. Its source was local/unpublished at that checkpoint. Current repository,
+runtime and protected-retention identities belong in HANDOFF.
+
 ## Duplicate membership confirmation
 
 `desktop.duplicate_dialog` presents the existing Skip/Add Anyway decision in a
@@ -87,7 +152,8 @@ or reset curation, provider namespaces, images, sticky removals or analysis.
                 See research/cdj_export/.
     docs/       this documentation.
 
-The October28 CDJ pilot integrates the pinned Rust renderer under `native/cdj`.
+The CDJ exporter, introduced as the October28 pilot, integrates the pinned Rust
+renderer under `native/cdj`.
 `soundbox.cdj_source` captures fresh native metadata/cues and verifies source
 playlist order; `cdj_usb` copies bounded native metadata/profile files for local
 parsing; `cdj_pdb` independently checks DeviceSQL pages/indexes; `cdj_export`
@@ -107,7 +173,10 @@ differ. cdj_transaction checksums while copying, resumes completed payloads, and
 lets a later coherent native export supersede an older interrupted catalog intent.
 USB/global My Settings use44 logical fields and byte-preserving selected patches;
 no automatic global propagation. usb_format revalidates the reviewed physical USB
-before FAT32/exFAT MBR formatting. Track.info and SoundBox-local settings.track_info
+before FAT32/exFAT MBR formatting, reusing a correctly typed full-capacity sole
+first partition only for same-filesystem quick erase. Other layouts or filesystem
+changes repartition; post-format physical/map/filesystem checks remain.
+Track.info and SoundBox-local settings.track_info
 overrides feed display/export; browsercache schema3 and libcache schema11 preserve
 these fields without analysis/art rebuilds. The ordinary desktop playlist API
 shares the accepted Tag/Cue/Grid lane and has separate explicit authority. The
@@ -181,7 +250,8 @@ captured, manual drafts survive, and native publication cannot consume intermedi
 BPM paired with an older key. Source writes yield to runnable local preparation;
 failed songs retain their intentions while other local jobs continue. Captured
 cue gestures remain immediately usable and durable while source work waits.
-Normal quit still drains accepted cue jobs, including those captured before close.
+Normal Quit keeps the window and source pumps usable while captured saves finish;
+teardown then drains accepted cue jobs before stopping their owner.
 Automatic detection off admits waveform-only prerequisites for native imports,
 without invoking either detector or creating fabricated musical results. Explicit
 waveform-only repair continues through its existing cache repair route.
@@ -399,7 +469,7 @@ canonical path; matching expected bytes cannot bless a replacement file's epoch.
 Metadata drift before capture can pass, and one bounded metadata-instability
 retry remains. Rockbox media inspection, normalization and essence checks use captured
 bytes. Stock planning consumes those technical facts or captures its own source;
-stock execution also captures plain payloads before copying. Generic export
+stock execution also captures plain payloads before copying. The filesystem exporter
 prepares/copies/discards per file and suppresses destructive cleanup on failure.
 Temporary device payloads are explicitly fsynced and verified before atomic replacement and the mount is
 revalidated at that publication boundary.
@@ -459,7 +529,9 @@ provider imports, and the existing rekordbox modules remain concrete adapters.
 versioned map and physical-key router), `keyboard_page` (capture/conflict editor),
 `model` (`TrackModel`), `player`, `theme`, `stock_device_view` (iPod dashboard),
 `usb_device_view` (seven USB pages and immutable native snapshots),
-`usb_preferences` (USB/global controls), `track_info` (Summary/Info).
+`usb_preferences` (USB/global controls), `export_dialog` (selected playlists and
+one-to-five target choices), `progress` (accent-aware progress lettering),
+`track_info` (Summary/Info).
 MainWindow composes these mixins with TrackInfoMixin and QMainWindow.
 `native_deck.py` adapts the native C ABI to PlayerBar's small transport
 protocol.
@@ -493,12 +565,22 @@ The packaged helper comes from build/cdj/release, never the debug profile. Sourc
 in the serialized device lane through QThread.finished. Generic USB catalog
 snapshots refresh on explicit browser requests; connection/remount invalidates
 old snapshots without reading catalogs. Generic USBs have no idle drift poll or
-sync/pending-state UI. Completion invalidates the cached snapshot without a final
-read. Eject submits the normal diskutil request after any already-owned worker
-finishes, and starts no verification or final read. Backend UUID/mount authority is absent from the
+sync/pending-state UI. Source-only changes do not start generic-USB-only scans.
+Successful writes replace stale visible song rows with an honest browse notice,
+retaining settings drafts and the last real hierarchy/selection for a deliberate
+USB/tab refresh. Failed, cancelled and unchanged operations retain their snapshot.
+An already-checked tab click refreshes once; programmatic restoration never does.
+Completion starts no final read. Eject submits the normal diskutil request after
+any already-owned worker
+finishes, and starts no verification or final read. Successful eject retires its
+row and all mount caches in memory without starting a connection scan. Backend
+UUID/mount authority is absent from the
 Identity rows. No USB tab roots QFileSystemModel at the mount. See the CDJ guide
 for staging space, current-native catalog adoption, profile preservation and recovery limits.
-The shared device header is 26 points; BrowserDetailTree continues the regular
+The shared device header is 26 points; TrackBrowserTree builds on BrowserDetailTree
+to make folders/playlists nonselectable single-click containers while preserving
+track selection, stock reorder and independent checkboxes. BrowserDetailTree
+continues the regular
 24-point alternating grid below real rows. USB song rows use COLUMNS and shared
 browser header state. Immutable CdjSong records retain actual USB audio/analysis
 references; explicit activation validates them in the device lane and uses a
@@ -855,8 +937,9 @@ manifest use destination-filesystem temporaries plus atomic replacement.
 Composite normal Sync trusts the committed inventory; Verify checks references
 and sizes, and Deep Verify hashes all managed files using the schema-3 reader.
 Explicit composite Repair audits inventory and restores missing owned Rockbox
-audio/art while refusing unexpected occupants. The generic exporter retains its
-existing manifest-owned repair policy. Pruning follows explicit ownership rows
+audio/art while refusing unexpected occupants. The legacy filesystem exporter
+retains its manifest-owned repair policy; generic CDJ USBs expose no Repair/Verify
+workflow. Pruning follows explicit ownership rows
 and never walks `/Music`
 as authority. Unknown content remains untouched. Stock iPod writes are a
 separate additive transaction: a pinned Clickwheel version renders only in a
@@ -947,8 +1030,10 @@ never external-device/write authority. A busy lane retains the request and retri
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
 retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
-three-second poll. Generic USB polling updates mount/storage facts only and never
-reads native catalogs for sync status. Ordinary unmounted folders retain the 30-second attachment grace.
+three-second poll. Generic-USB-only idle/source events start no mounted-path scan.
+Mount changes, retryable discovery or an explicit browser request may refresh
+connection/storage facts, without a source comparison or native-catalog status
+check. Ordinary unmounted folders retain the 30-second attachment grace.
 Verified external mounts appear disabled as `NAME · Checking…`. The first iPod/Rockbox scan
 computes sync drift before publishing the selectable row at QThread.finished;
 unknown/failed iPod/Rockbox checks say `Sync status pending`, never imply a clean result.
@@ -1042,12 +1127,14 @@ refresh, preserving compressed waveform payloads.
   acceptance passed on No Trust, with audio/ANLZ/XML untouched. Cue saves publish
   a new target Track and Library view without audio reload, browser rebuild or
   full source read. Raw revisions/native IDs stay outside display cue hashes.
-  `desktop.cue_session` overlays queued edits in RAM without mutating that
-  verified Library. The deck sees pending cues immediately; the shared controller
-  executes their FIFO in background, rebasing revisions and resolving temporary
-  identities to native IDs after each read-back. Failure drops the unconfirmed
-  tail and refreshes source state. Normal window shutdown drains the queue before
-  generic TaskOwner.stop; abrupt exit can lose not-yet-started RAM intents.
+  `desktop.cue_session` supplies RAM overlay helpers without mutating that
+  verified Library. Ordinary native and captured-import gestures first persist
+  bound intentions through `prep_edits`/`desktop.prep_controller`, then preview
+  immediately while the shared source FIFO saves. Exact receipt/readback proofs
+  precede acknowledgement or retry, and failures/restart retain durable intentions
+  and newer edits. Normal shutdown drains accepted saves before TaskOwner.stop.
+  The older RAM-only session route remains nondurable; do not mistake its tail
+  cancellation behavior for the ordinary durable prep workflow.
   Recovery receipts bind the physical source-file identity and may recognize an
   exact inactive zero-header SQLite journal without changing/deleting that file.
   Replaced DB files fail before SQLite recovery opens them.
@@ -1119,8 +1206,11 @@ refresh, preserving compressed waveform payloads.
 - **Playlist identity = rekordbox `pid`** (`DjmdPlaylist.ID`), stable across
   rename/move → it is the device-sync identity. Rename/move = same pid (syncs);
   a genuinely new playlist = new pid = fresh export.
-- **Device filenames = SoundBox effective titles**, always (sanitized +
-  length-budgeted; source files never renamed).
+- **Device filenames belong to the destination contract.** Rockbox/filesystem
+  paths derive from sanitized, length-budgeted effective titles; stock uses
+  scrambled Fxx names, and native CDJ placement preserves/reconciles its own
+  catalog-bound audio paths. Effective title/artist live in the appropriate
+  metadata/database fields. Export never renames source files.
 - **Browser default order = newest-ADDED first in Collection and every playlist**, one timeline across both planes:
   `Track.added_ts` = rekordbox `created_at` for mirror tracks, SoundBox import
   time for imported audio (falls back to file birthtime when unknown). See the
@@ -1175,7 +1265,10 @@ refresh, preserving compressed waveform payloads.
 `desktop.theme` resolves the saved `theme_accent` into base/light/dark/subtle
 roles. `theme_text_mode` (White/Black/Custom) and `theme_text_custom` independently
 control text on accent-colored selections/buttons; White is the default and
-custom colors survive mode/accent changes. General Settings applies changes across
+custom colors survive mode/accent changes. `ThemeProgressBar` paints the selected
+accent-text role only over its fill and normal light lettering over the empty
+region, so a white accent with black text remains readable at every percentage.
+General Settings applies changes across
 small widget-local accent declarations, vector wordmark and custom-painted
 chrome without reloading a track or resetting QApplication's stylesheet. Native
 color-dialog signals feed a16ms coalescing preview; previews never mutate saved
@@ -1192,11 +1285,14 @@ project SVG removes one tiny ink cutout so its overlaid gray shine has no white
 streak; the supplied original remains untouched. The exact SVG is bundled
 and fingerprinted. Default PNG/ICNS derive from the same vector; eight modern PNG
 ICNS representations round-trip exactly through native iconutil readback.
-One normalized color per application avoids repeated rendering for text-only or
+One normalized color per application process avoids repeated rendering for text-only or
 repeated settings application. Qt's Cocoa application-icon API changes the running
 Dock/Command-Tab image. A normal packaged launch/commit also persists the saved
 icon through NSWorkspace custom-icon metadata at the app root, preserving signed
 Contents bytes; isolated/development runs do not customize the installed app.
+Each fresh frozen launch still renders/encodes and reapplies that metadata;
+there is no persisted exact-icon no-op proof across launches. Snapshot-browser
+startup measurements exclude persistent icon readiness.
 Cancel does not touch the icon. Headless transaction/image checks and native
 NSApplication icon captures cover the commit path; HANDOFF gives installed status.
 
@@ -1228,8 +1324,12 @@ application deactivation, shutdown and successful remapping release them safely.
 Text/dialog/navigation handling stays with Qt. See [KEYBOARD](KEYBOARD.md).
 
 The personal connection factory is admitted by `connections.soundcloud` in the
-versioned provider manifest. It receives only an AppData root; the core section
-owns its worker admission, progress and TaskOwner retirement. New connections
+versioned provider manifest. It receives only an AppData root, initially bound
+without I/O. A window TaskOwner owns the connected account's initial refresh;
+the later Settings section attaches to that worker or its safe completed result
+and owns explicit account jobs. Both paths share one service and its serialized
+credential/token operations. Cached same-account likes load locally at service
+demand without a credential/network request. New connections
 use the client-credentials grant with HTTP Basic authentication, resolve a public
 profile, and read its public likes without a browser or callback. Existing website
 redirects and authorizations are unchanged; public disconnect clears local state
@@ -1354,9 +1454,12 @@ the outer geometry before applying inner pane sizes.
 retaining unknown extension namespaces. Invalid shapes enter recovery just like
 invalid JSON; without a usable backup, normal saves remain disabled. Save failures
 return false at the UI adapter and retain a visible window-title warning.
-Identical saves compare serialized bytes and persisted filesystem identity under
-that same lock before skipping backup/publication/fsync. Missing/replaced state
-or restored generations cannot reuse this shortcut. Zoom/jump/display/autoplay
+An identical candidate first compares exact JSON types, map order and values
+against the validated saved document, plus its current filesystem identity under
+that same lock. A hit skips validation copies, encoding, backup/publication and
+fsync; changed candidates still validate and encode, with a serialized-byte
+fallback for initial reuse. Missing/replaced state or restored generations cannot
+reuse this shortcut. Zoom/jump/display/autoplay
 preferences debounce for 400 ms; curation, backup/restore and shutdown save
 immediately and cancel any pending preference timer.
 
@@ -1365,6 +1468,11 @@ also holds a `QLockFile` for its AppData directory to reject a second writer app
 `artwork` owns local ArtCache/results/defaults without importing online discovery;
 `artfetch` retains compatibility aliases. Artwork mutations stage image/index/default
 changes together, publish under the area lock, and revert memory on failure.
+Mutation detaches the top-level index and photo/assignment maps; changed rows are
+replaced, and untouched nested metadata is shared read-only. New in-place nested
+mutation would violate rollback ownership. Public cover/review snapshots remain
+defensive copies. Artwork eligibility observes exclusions once per worker pass;
+publication still checks the fresh policy and exact cover baseline under its owner.
 
 Backup copies a consistent snapshot under that lock, then compresses outside it
 and atomically publishes the zip. Restore validates bounded archive/folder input,
@@ -1418,14 +1526,25 @@ checks the bundle signature and its declared revision/version against a clean
 checkout. A dirty checkout or bundle, bad signature, or mismatched metadata
 fails verification. This is signed build metadata captured at stamping time,
 not independent proof that packaged code was compiled from those sources.
-Both stable and ad-hoc signing happen after all plist edits.
+Both stable and ad-hoc signing happen after all plist edits. This strict
+clean-HEAD helper can legitimately reject an already verified installed build
+whose signed base is older/dirty or whose root has the saved Finder/Dock icon.
+Use HANDOFF's exact frozen-source, packaged-code, signed-Contents and normal deep
+signature evidence for that installed identity; do not restamp, reinstall, strip
+custom icon metadata or re-sign a running app merely to satisfy the helper.
 
-An explicitly authorized installation is a state-preserving handoff:
-gracefully quit SoundBox, back up/hash `library.json`, move the previous app
-bundle to a temporary rollback directory, `ditto` the tested bundle into
-`/Applications`, verify its signature, relaunch, and inspect the startup log.
-Never use `rm -rf` for installation and never touch SoundBox AppData while
-replacing the application bundle.
+An explicitly authorized installation is a state-preserving handoff. If SoundBox
+is running, Sonny quits it normally; the agent sends no real-app input or
+termination. Freshly check absence before staging and before the swap. Copy/hash
+the current library, all accepted authorities, art indexes and custom icon facts
+into private preservation evidence. Stage the tested bundle under a new absent
+name, verify its signature and exact Contents, then move the previous app to a
+new protected rollback basename and install the stage. Restore the old bundle if
+the stage handoff fails while the application path is absent, including a receipt
+write failure. Verify installed signature/Contents/icon and unchanged live-state
+bytes before an authorized normal relaunch and startup inspection. Preserve prior
+protected bases. Never use `rm -rf`, replay an older installer, or write/restore
+AppData merely to replace the app; fresh read-only preservation copies are allowed.
 
 ## Safety contract
 

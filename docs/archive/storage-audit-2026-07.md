@@ -8,6 +8,10 @@ have since been retired; [project layout](../PROJECT_LAYOUT.md) distinguishes
 retained receipts from deleted material. Old paths do not guarantee retention
 or authorize replay; inspect retained scripts before reuse.
 
+Historical app-control, source-write, installer, restore, replay and cleanup
+instructions below grant no present authorization. Current permissions and
+protected recovery bases are governed by [the current handoff](../HANDOFF.md).
+
 Audit date: 2026-07-13 · Resolved: 2026-07-19 (was `CACHEISSUE.md` at repo root)
 
 All footprints, cleanup approvals and rollback counts below are dated historical

@@ -1,5 +1,14 @@
 # Test runtime audit — November 2, 2026
 
+The later November4 whole-app audit retains the first2712-case offscreen attempt
+with two ordered cue-style errors; its native phase did not run. The isolated
+187-case prefix reproduces the error and passes after removing redundant manual
+repolish; ten cue states remain pixel-exact. The second gate passes all2713offscreen cases in460.325s, with all three
+partitions complete and zero skips/expected failures. After Sonny unlocked, fresh console/owned-process/source proof resumed the
+same shell. Main render and all66Cocoa cases pass in68.917s. The complete2779-case
+gate takes529.242s across its test phases, excluding the explicit display hold. Both signed profiles/code parity and installed isolated/normal-startup checks
+pass; current delivery and preservation details are in HANDOFF.
+
 This is the dated November2 runtime investigation and its implementation
 checkpoints. The current discovered gate and installed provenance are in
 [test-release-gate.md](test-release-gate.md) and [HANDOFF.md](HANDOFF.md); the
@@ -7,6 +16,16 @@ November3 final2531-case gate took686.389s across its test phases. The November4
 2564-case delivery took641.675s across its accepted offscreen/Cocoa phases
 (574.225s +67.450s); its low-battery cadence failure and unchanged-source AC rerun
 are recorded separately in HANDOFF. Neither is the older22-minute baseline below.
+The later November4 build163/source `cf2ef5b` gate passed2595cases in646.875s
+across its test phases (579.369s offscreen +67.506s Cocoa), with zero skips or
+expected failures. These remain dated release measurements, not fixed inventories
+or proof of physical-device/firmware performance.
+
+The later November4 iPod gate passes2695cases in635.237s across its accepted
+test phases (567.523s offscreen +67.714s Cocoa), with complete inventories and
+zero skips/expected failures. Its interrupted late-review attempt and one
+failed test-host fixture remain separately retained; HANDOFF records the final
+package/install and hardware limits.
 
 At the audited baseline, growing encrypted transaction and crash-recovery
 coverage explained most of the roughly22-minute runtime. Running independent offscreen modules in

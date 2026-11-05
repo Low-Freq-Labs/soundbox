@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -59,7 +60,8 @@ class ArtworkBulkMutation(unittest.TestCase):
             self.assertEqual(bulk.store_many([*ids,ids[0]],self.result,avatar_only=True),ids)
         self.assertEqual(encoded.call_count,1);self.assertEqual(published.call_count,1)
         self.assertEqual(saved.call_count,1);self.assertEqual(balanced.call_count,1)
-        self.assertEqual(sum(call.args[0] is old_index for call in copied.call_args_list),1)
+        self.assertEqual(sum(call.args[0] is old_index for call in copied.call_args_list),0)
+        self.assertIs(bulk.index["track-039"],old_index["track-039"])
         self.assertEqual(self.files(bulk),self.files(sequential))
         self.assertEqual({p:p.read_bytes() for p in sources},original)
 
@@ -145,6 +147,72 @@ class ArtworkBulkMutation(unittest.TestCase):
         sequential.store_ok(ids[0],self.result);bulk.store_many(ids,self.result)
         self.assertFalse(bulk._defaults_index_path.exists())
         self.assertEqual(self.files(bulk),self.files(sequential))
+
+    def test_normalization_failure_preserves_existing_entry_and_nested_owner(self):
+        root=self.root/'normalization';root.mkdir()
+        (root/'legacy.png').write_bytes(image('blue'))
+        (root/'index.json').write_text(artwork.json.dumps({
+            'legacy':dict(status='ok',ext='png',extension={'nested':['keep']})}))
+        cache=artwork.ArtCache(root);before=self.files(cache)
+        index=cache.index;entry=index['legacy'];nested=entry['extension']
+        with mock.patch.object(cache._area,'publish',side_effect=OSError('fixture normalize failure')):
+            with self.assertRaisesRegex(OSError,'fixture normalize failure'):cache.normalize_all()
+        self.assertIs(cache.index,index);self.assertIs(cache.index['legacy'],entry)
+        self.assertIs(cache.index['legacy']['extension'],nested)
+        self.assertEqual(entry['ext'],'png');self.assertEqual(self.files(cache),before)
+        self.assertEqual(cache.normalize_all(),(1,1))
+        self.assertEqual(cache.index['legacy']['ext'],'jpg')
+        self.assertEqual(entry['ext'],'png')
+        self.assertIs(cache.index['legacy']['extension'],nested)
+
+    def test_unchanged_balance_keeps_unrelated_cover_and_photo_owners(self):
+        _seq,cache,_naive,_ids,_sources=self.pair()
+        old_index=cache.index;entries=dict(old_index)
+        photos=dict(cache._defaults['photos']);before=self.files(cache)
+        with mock.patch.object(artwork.copy,'deepcopy',wraps=deepcopy) as copied, \
+                mock.patch.object(cache._area,'publish',side_effect=AssertionError('unchanged publish')):
+            cache.configure_default_tracks(cache._default_track_ids)
+        self.assertEqual(copied.call_count,0)
+        self.assertEqual(self.files(cache),before)
+        for key,entry in entries.items():self.assertIs(cache.index[key],entry)
+        for key,entry in photos.items():self.assertIs(cache._defaults['photos'][key],entry)
+
+    def test_failed_normalization_releases_serial_owner_before_another_cache_publishes(self):
+        root=self.root/'concurrent';root.mkdir()
+        original_image=image('blue');(root/'legacy.png').write_bytes(original_image)
+        (root/'index.json').write_text(artwork.json.dumps({
+            'legacy':dict(status='ok',ext='png',extension={'nested':['keep']})}))
+        cache=artwork.ArtCache(root);other=artwork.ArtCache(root)
+        original_entry=cache.index['legacy'];publish=cache._area.publish
+        entered=threading.Event();release=threading.Event();errors=[]
+        def failing_publish(*args,**kwargs):
+            if not entered.is_set():
+                entered.set()
+                if not release.wait(2):raise AssertionError('fixture release missing')
+                raise OSError('fixture publication failure')
+            return publish(*args,**kwargs)
+        def normalize():
+            try:cache.normalize_all()
+            except Exception as exc:errors.append(exc)
+        def update():
+            try:other.store_none('new')
+            except Exception as exc:errors.append(exc)
+        with mock.patch.object(cache._area,'publish',side_effect=failing_publish):
+            first=threading.Thread(target=normalize);second=threading.Thread(target=update)
+            first.start()
+            try:
+                self.assertTrue(entered.wait(2));second.start()
+            finally:release.set()
+            first.join(3);second.join(3)
+            self.assertFalse(first.is_alive());self.assertFalse(second.is_alive())
+        self.assertEqual([str(exc) for exc in errors],['fixture publication failure'])
+        self.assertEqual(original_entry['ext'],'png')
+        self.assertIs(cache.index['legacy'],original_entry)
+        current=artwork.ArtCache(root)
+        self.assertEqual(current.index['legacy'],original_entry)
+        self.assertEqual(current.index['new'],{'status':'none'})
+        self.assertEqual((root/'legacy.png').read_bytes(),original_image)
+        self.assertFalse((root/'legacy.jpg').exists())
 
 
 if __name__=='__main__':unittest.main()

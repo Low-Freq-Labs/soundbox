@@ -150,6 +150,7 @@ class TrackModel(QAbstractTableModel):
         self._rows = list(self._all_rows)   # what's shown (after filter + sort)
         self._filter = ""
         self._sort: tuple[str, bool] | None = None  # (row key, descending) — view-only
+        self._sort_dirty = False
 
     def set_rows(self, rows: list[dict]) -> None:
         self._all_rows = list(rows)
@@ -162,13 +163,19 @@ class TrackModel(QAbstractTableModel):
         format) and multi-term: each whitespace-separated word must match SOME
         field, so 'rezz edc' finds a Rezz set titled '… @ EDC'. Case-insensitive
         substring per term."""
-        self._filter = (text or "").strip().lower()
+        normalized = (text or "").strip().lower()
+        if normalized == self._filter:
+            return
+        self._filter = normalized
         self._apply_filter()
 
     def sort(self, column: int, order=Qt.AscendingOrder) -> None:
         """Header-click sort — VIEW ONLY (export always uses rekordbox order).
         column -1 (indicator cleared) restores the original playlist order."""
-        self._sort = None if column < 0 else (COLUMNS[column][0], order == Qt.DescendingOrder)
+        sorting = None if column < 0 else (COLUMNS[column][0], order == Qt.DescendingOrder)
+        if sorting == self._sort and not self._sort_dirty:
+            return
+        self._sort = sorting
         self._apply_filter()
 
     def _apply_filter(self) -> None:
@@ -181,6 +188,7 @@ class TrackModel(QAbstractTableModel):
         if self._sort:
             key, desc = self._sort
             self._rows.sort(key=lambda r: _sort_value(key, r), reverse=desc)
+        self._sort_dirty = False
         self.endResetModel()
 
     def refresh_art(self, kind_for_id) -> None:
@@ -193,6 +201,8 @@ class TrackModel(QAbstractTableModel):
             if r.get("art", "") != k:
                 r["art"] = k
                 changed = True
+        if changed and self._sort and self._sort[0] == 'art':
+            self._sort_dirty = True
         if changed and self._rows:
             self.dataChanged.emit(self.index(0, ART_COL),
                                   self.index(len(self._rows) - 1, ART_COL),
@@ -265,9 +275,20 @@ class TrackModel(QAbstractTableModel):
             return False
         v = str(value).strip()[:_EDIT_MAX.get(key, 255)].rstrip()
         row = self._rows[index.row()]
-        row[key] = v
-        self.cell_edited.emit(key, row.get("id", ""), v)
-        self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+        track_id = row.get("id", "")
+        column = index.column()
+        for candidate in self._all_rows:
+            if candidate is row or track_id and candidate.get("id") == track_id:
+                candidate[key] = v
+                candidate.pop("_hay", None)
+        self.cell_edited.emit(key, track_id, v)
+        if self._filter or self._sort and self._sort[0] == key:
+            self._apply_filter()
+        else:
+            for position, candidate in enumerate(self._rows):
+                if candidate is row or track_id and candidate.get("id") == track_id:
+                    current = self.index(position, column)
+                    self.dataChanged.emit(current, current, [Qt.DisplayRole, Qt.EditRole])
         return True
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):

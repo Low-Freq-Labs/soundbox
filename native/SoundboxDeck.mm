@@ -1,5 +1,6 @@
 #include "MP3Origin.h"
 #include "CloudReadiness.h"
+#include "DecodeWake.h"
 #import "SoundboxDeck.h"
 
 #import <AppKit/AppKit.h>
@@ -472,6 +473,7 @@ public:
         playRequested_.store(false, std::memory_order_release);
         playing_.store(false, std::memory_order_release);
         visualClockValid_.store(false, std::memory_order_release);
+        decodeWake_.notify_all();
         requestDisplay();
     }
 
@@ -782,6 +784,10 @@ public:
     uint64_t audioDetailBufferBytes() {
         std::lock_guard<std::mutex> lock(renderMutex_);
         return audioDetailBuffer_ ? audioDetailBuffer_.length : 0;
+    }
+
+    uint64_t decodeWaitReturns() const {
+        return decodeWake_.waitReturns();
     }
 
     uint64_t cueMarkerCount() {
@@ -5342,7 +5348,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
         void *clientData) {
         auto *deck = static_cast<SBDeck *>(clientData);
         deck->deviceChangeRequested_.store(true, std::memory_order_release);
-        deck->decodeWake_.notify_one();
+        deck->decodeWake_.notify_all();
         return noErr;
     }
 
@@ -5439,7 +5445,9 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
         uint64_t observedSeek = 0;
         uint64_t leadFrames = 0;
         uint64_t silenceRemaining = 0;
-        while (!stopRequested_.load(std::memory_order_acquire)) {
+        while (true) {
+            const uint64_t wakeEpoch = decodeWake_.snapshot();
+            if (stopRequested_.load(std::memory_order_acquire)) break;
             if (deviceChangeRequested_.exchange(
                     false, std::memory_order_acq_rel)) {
                 restartAudioUnitForDefaultDevice();
@@ -5466,8 +5474,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
                     const int readiness = sbCloudReadiness(path,
                         [&] { return sbReadSourceByte(path); },
                         [&] {
-                            std::unique_lock<std::mutex> lock(wakeMutex_);
-                            return !decodeWake_.wait_for(lock,
+                            return !decodeWake_.waitForCancellation(
                                 std::chrono::seconds(3), [&] {
                                     return stopRequested_.load()
                                         || generation != generation_.load();
@@ -5549,7 +5556,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
             }
 
             if (!file || activeGeneration != generation_.load()) {
-                waitForDecodeWork();
+                decodeWake_.wait(wakeEpoch, false);
                 continue;
             }
 
@@ -5570,7 +5577,8 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
             }
 
             if (ring_.freeSpace() < kDecodeChunk) {
-                waitForDecodeWork();
+                decodeWake_.wait(wakeEpoch,
+                    playRequested_.load(std::memory_order_acquire));
                 continue;
             }
 
@@ -5590,7 +5598,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
             @autoreleasepool {
                 if (file.framePosition >= file.length) {
                     decoderEnded_.store(true, std::memory_order_release);
-                    waitForDecodeWork();
+                    decodeWake_.wait(wakeEpoch, false);
                     continue;
                 }
                 AVAudioFrameCount requested = kDecodeChunk;
@@ -5604,19 +5612,19 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
                 if (!ok) {
                     if (file.framePosition >= file.length) {
                         decoderEnded_.store(true, std::memory_order_release);
-                        waitForDecodeWork();
+                        decodeWake_.wait(wakeEpoch, false);
                         continue;
                     }
                     const char *message = error.localizedDescription.UTF8String;
                     setError(-21, message ? message : "Audio decode failed");
                     decoderEnded_.store(true, std::memory_order_release);
-                    waitForDecodeWork();
+                    decodeWake_.wait(wakeEpoch, false);
                     continue;
                 }
                 const uint32_t count = buffer.frameLength;
                 if (!count) {
                     decoderEnded_.store(true, std::memory_order_release);
-                    waitForDecodeWork();
+                    decodeWake_.wait(wakeEpoch, false);
                     continue;
                 }
                 float *const *channels = buffer.floatChannelData;
@@ -5642,11 +5650,6 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
                 }
             }
         }
-    }
-
-    void waitForDecodeWork() {
-        std::unique_lock<std::mutex> lock(wakeMutex_);
-        decodeWake_.wait_for(lock, std::chrono::milliseconds(3));
     }
 
     void waitForRenderIdle() {
@@ -5744,8 +5747,7 @@ fragment float4 deck_fragment(Out in [[stage_in]]) {
     std::thread decodeThread_;
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> deviceChangeRequested_{false};
-    std::mutex wakeMutex_;
-    std::condition_variable decodeWake_;
+    SBDecodeWake decodeWake_;
     std::mutex commandMutex_;
     std::string pendingPath_;
     uint64_t pendingLeadFrames_ = 0;
@@ -6293,6 +6295,10 @@ uint64_t sb_deck_audio_detail_buffer_bytes(SBDeckRef deck) {
     return deck
         ? static_cast<SBDeck *>(deck)->audioDetailBufferBytes()
         : 0;
+}
+
+uint64_t sb_deck_decode_wait_returns(SBDeckRef deck) {
+    return deck ? static_cast<SBDeck *>(deck)->decodeWaitReturns() : 0;
 }
 
 uint64_t sb_deck_cue_marker_count(SBDeckRef deck) {

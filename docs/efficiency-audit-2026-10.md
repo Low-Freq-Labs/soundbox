@@ -7,6 +7,21 @@ provenance is in [HANDOFF](HANDOFF.md), player policy in [PLAYER](PLAYER.md),
 measured follow-up costs in [performance-audit](performance-audit.md), and active
 work in [ROADMAP](ROADMAP.md). These older candidates are not a current backlog.
 
+Rechecked November4 against whole-app build165/runtime `7ffde716…`; build163/
+source `cf2ef5b` is an earlier delivery. The scope-first reader
+proposal and count/policy/receipt fixes below subsequently shipped; active native
+Collection discovery is supported rather than a future opt-in. Generic USBs are
+now explicit playlist-export targets with no idle catalog/drift comparison or
+completion/eject read. Selected export capture queries bounded selected cue and
+playlist memberships, skips unrelated smart-list evaluation and avoids unnecessary
+Collection/Artists construction. Small physical FAT32/exFAT fixture exports passed;
+the old deferred generic-export statements describe their dated checkpoints, not
+an unimplemented build163 request. Full-library/player acceptance and iPod sync
+performance remain separate. The later whole-app audit also removes unused
+Settings/device construction, repeated regex/model/artwork/state work and private
+Grid staging; its matched signed startup measurement is in performance-audit/
+HANDOFF. Those results do not rewrite the dated measurements below.
+
 Evidence disposition, October28: Sonny accepted the build and closed further
 waveform comparison/tuning for now. After the directory audit, he authorized
 removing the private comparison archive and obsolete experiment/test output.

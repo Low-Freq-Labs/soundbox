@@ -6,6 +6,10 @@ They do not override [the current handoff](../HANDOFF.md). All four obsolete
 app copies and their temporary root were retired at wrap-up; native acceptance
 archives, recovery, exact originals and required fixtures remain protected.
 
+Historical app-control, source-write, installer, restore, replay and cleanup
+instructions below grant no present authorization. Current permissions and
+protected recovery bases are governed by [the current handoff](../HANDOFF.md).
+
 # SoundBox current handoff
 
 Updated November3,2026 after the straight-sided crate-icon installation. Branch

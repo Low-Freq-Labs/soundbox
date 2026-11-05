@@ -101,7 +101,9 @@ class MyTagsButton(QToolButton):
 
     def _size_popup(self):
         signature=(self.width(),self._signature,self.font().toString())
-        if self._popup_layout==signature:return
+        if self._popup_layout==signature:
+            self._sync_membership_tips()
+            return
         self._popup_layout=signature
         self.ensurePolished()
         option = QStyleOption()
@@ -129,10 +131,6 @@ class MyTagsButton(QToolButton):
             cell_width = column_width if columns == 2 else width
             label = box.fontMetrics().elidedText(self._labels[tid], Qt.ElideRight, max(1, cell_width - 24))
             box.setText(label)
-            tip = self._membership_tips.get(tid, '')
-            if label != self._labels[tid]:
-                tip = (tip + '\n' if tip else '') + self._labels[tid]
-            box.setToolTip(tip)
             box.setGeometry(8 + (index // rows) * (column_width + 8),
                             first_y + (index % rows) * (row_height + 2), cell_width, row_height)
             box.show()
@@ -141,6 +139,14 @@ class MyTagsButton(QToolButton):
         self.content.updateGeometry()
         self._content_action.changed.emit()
         self.popup.setFixedSize(QSize(self.width(), self.content.height() + padding.height()))
+        self._sync_membership_tips()
+
+    def _sync_membership_tips(self):
+        for tid, box in self.checkboxes.items():
+            tip = self._membership_tips.get(tid, '')
+            if box.text() != self._labels[tid]:
+                tip = (tip + '\n' if tip else '') + self._labels[tid]
+            box.setToolTip(tip)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

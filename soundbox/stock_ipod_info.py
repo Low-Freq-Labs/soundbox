@@ -8,7 +8,7 @@ creates, edits, renames, or removes anything on the mounted device.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,10 +18,10 @@ from clickwheel.ipod import (  # type: ignore[import-untyped]
     get_ipod_tracks,
     merge_playcounts,
     parse_itunesdb,
-    read_play_counts,
 )
 
 from .stock_ipod import normalize_model_number, supports_stock_write
+from .stock_ipod_capture import StockIpodNativeCapture, capture_stock_ipod_native
 
 
 @dataclass(frozen=True)
@@ -140,6 +140,10 @@ def read_stock_ipod_header(root: str | Path) -> StockIpodHeader:
     path = Path(root) / "iPod_Control" / "iTunes" / "iTunesDB"
     with path.open("rb") as handle:
         data = handle.read(0xA4)
+    return _header_from_bytes(data)
+
+
+def _header_from_bytes(data: bytes) -> StockIpodHeader:
     if len(data) < 0x50 or data[:4] != b"mhbd":
         raise ValueError("The stock iPod database header is invalid")
     header_length = struct.unpack_from("<I", data, 0x04)[0]
@@ -183,14 +187,6 @@ def confirmed_model_from_recovery(root: str | Path) -> str:
         if supports_stock_write(model):
             return model
     return ""
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _playlist_snapshots(database: dict, tracks: list[dict]) -> tuple[StockIpodPlaylistSnapshot, ...]:
@@ -267,20 +263,21 @@ def read_stock_ipod_snapshot(
     firmware_version: str = "",
     firmware_source: str = "",
     transport_revision: str = "",
+    native_capture: StockIpodNativeCapture | None = None,
 ) -> StockIpodSnapshot:
     """Parse a complete, immutable view of a mounted classic stock iPod."""
     target = Path(root).expanduser().resolve(strict=True)
-    database_path = target / "iPod_Control" / "iTunes" / "iTunesDB"
-    header = read_stock_ipod_header(target)
-    database = parse_itunesdb(str(database_path))
+    captured = native_capture or capture_stock_ipod_native(target, include_artwork=False)
+    captured.require_target(target)
+    header = _header_from_bytes(captured.database)
+    database = parse_itunesdb(io.BytesIO(captured.database))
     raw_tracks = [dict(item) for item in get_ipod_tracks(database)]
 
-    play_counts_path = database_path.with_name("Play Counts")
     pending_by_index: dict[int, tuple[int, int]] = {}
     pending_records = 0
     playback_status = "No pending playback records"
-    if play_counts_path.is_file():
-        entries = read_play_counts(target)
+    if captured.play_counts is not None:
+        entries = captured.playback_entries(expected_tracks=len(raw_tracks))
         if entries is None:
             playback_status = "Playback records are unreadable"
         elif len(entries) != len(raw_tracks):
@@ -366,7 +363,7 @@ def read_stock_ipod_snapshot(
         library_persistent_id=header.library_persistent_id,
         database_version=header.version,
         checksum_scheme=header.checksum_scheme,
-        database_sha256=_sha256(database_path),
+        database_sha256=captured.database_sha256,
         media_bytes=sum(item.size for item in tracks),
         pending_playback_records=pending_records,
         playback_status=playback_status,

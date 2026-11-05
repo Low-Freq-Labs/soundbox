@@ -377,3 +377,211 @@ class SoundCloudConnection(unittest.TestCase):
                     patch.object(discovery, "fetch_by_search", return_value="general art") as search:
                 self.assertEqual(discovery.fetch_best("Artist", "Song"), "general art")
                 search.assert_called_once_with("Artist", "Song")
+
+
+class CachedLikesDemand(unittest.TestCase):
+    def setUp(self):
+        self.area = tempfile.TemporaryDirectory()
+        self.addCleanup(self.area.cleanup)
+        self.root = Path(self.area.name)
+        self.addCleanup(patch.stopall)
+        patch.object(sc, '_configured_root', None).start()
+        patch.object(sc, '_service', None).start()
+        patch.object(sc.Keychain, '_libraries', side_effect=AssertionError('Keychain')).start()
+        patch.object(sc, '_json_request', side_effect=AssertionError('network')).start()
+
+    def _cached(self, *, state_user='user:1', cache_user='user:1', connected=True, entries=None):
+        root = self.root / 'connections' / 'soundcloud'
+        root.mkdir(parents=True)
+        (root / 'connection.json').write_text(json.dumps({
+            'schema': 1, 'connected': connected, 'user_id': state_user}))
+        (root / 'likes.json').write_text(json.dumps({
+            'schema': 1, 'user_id': cache_user,
+            'entries': [sc._track_entry(track(title='Song'))] if entries is None else entries}))
+
+    def test_bind_has_no_io_then_first_art_demand_uses_cached_likes_and_shared_service(self):
+        self._cached()
+        with patch.object(sc, '_read', side_effect=AssertionError('startup read')):
+            sc.bind_root(self.root)
+            self.assertIsNone(sc._service)
+        with patch.object(discovery, '_flat_search', side_effect=AssertionError('general search')), \
+                patch.object(discovery, '_download', return_value=(b'cover', 'image/jpeg')):
+            result = discovery.fetch_best('Artist', 'Artist - Song')
+        service = sc._service
+        self.assertEqual(result.source_url, 'https://soundcloud.com/artist/one')
+        self.assertIs(sc.create(self.root), service)
+        self.assertEqual(len(service.entries()), 1)
+        sc.bind_root(self.root / 'other')
+        self.assertIsNone(sc._service)
+        self.assertEqual(sc.liked_entries(), ())
+
+    def test_other_account_disconnected_or_invalid_rows_do_not_enter_matching(self):
+        cases = ({'cache_user': 'user:other'}, {'connected': False},
+                 {'entries': [{'id': 'broken'}, None, {'id': [], 'title': 'bad'}]})
+        for i, kwargs in enumerate(cases):
+            with self.subTest(case=kwargs):
+                self.root = Path(self.area.name) / str(i)
+                self._cached(**kwargs)
+                sc.bind_root(self.root)
+                self.assertEqual(sc.liked_entries(), ())
+
+    def test_parallel_first_demand_constructs_only_one_service(self):
+        self._cached()
+        sc.bind_root(self.root)
+        constructor = sc.SoundCloudConnection
+        with patch.object(sc, 'SoundCloudConnection', wraps=constructor) as create:
+            results = []
+            threads = [Thread(target=lambda: results.append(sc.liked_entries())) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+            self.assertEqual(create.call_count, 1)
+            self.assertEqual(len(results), 8)
+            self.assertTrue(all(len(result) == 1 for result in results))
+
+    def test_initial_refresh_is_shared_serialized_and_explicit_refresh_remains_repeatable(self):
+        self._cached()
+        service = sc.create(self.root)
+        service.store = MemoryKeychain(saved_tokens())
+        calls = []
+        def api(url, **_kwargs):
+            calls.append(url)
+            if url.endswith('/me'):
+                return {'id': 'user:1', 'username': 'Fixture user'}
+            return {'collection': [track()]}
+        with patch.object(sc, '_json_request', side_effect=api):
+            workers = [Thread(target=lambda: service.refresh_initial(Event(), lambda _: None)) for _ in range(2)]
+            for worker in workers:worker.start()
+            for worker in workers:
+                worker.join(2)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(sum(url.endswith('/me') for url in calls), 1)
+            service.refresh(Event(), lambda _: None)
+            self.assertEqual(sum(url.endswith('/me') for url in calls), 2)
+
+    def test_cancelled_initial_admission_and_failed_refresh_keep_explicit_retry(self):
+        self._cached()
+        service = sc.create(self.root)
+        service.store = MemoryKeychain(saved_tokens())
+        stop = Event();stop.set()
+        with self.assertRaises(sc.Cancelled):service.refresh_initial(stop, lambda _: None)
+        stop.clear()
+        with patch.object(sc, '_json_request', side_effect=sc.ConnectionError('offline')) as api:
+            with self.assertRaises(sc.ConnectionError):service.refresh_initial(stop, lambda _: None)
+            service.refresh_initial(stop, lambda _: None)
+            self.assertEqual(api.call_count, 1)
+            with self.assertRaises(sc.ConnectionError):service.refresh(stop, lambda _: None)
+            self.assertEqual(api.call_count, 2)
+        self.assertEqual(len(service.entries()), 1)
+
+    def test_disconnected_initial_refresh_never_reads_credentials(self):
+        sc.bind_root(self.root)
+        service = sc.create(self.root)
+        service.refresh_initial(Event(), lambda _: None)
+
+
+class MetadataRequestCancellation(unittest.TestCase):
+    class Response:
+        def __init__(self, data, *, on_read=None, whole=False):
+            self.stream = io.BytesIO(data)
+            self.on_read = on_read
+            self.whole = whole
+            self.reads = []
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def read(self, size):
+            if not self.whole:
+                raise AssertionError('uncancellable whole metadata read')
+            data = self.stream.read(size)
+            if self.on_read:
+                self.on_read()
+            return data
+
+        def read1(self, size):
+            self.reads.append(size)
+            data = self.stream.read(size)
+            if self.on_read:
+                self.on_read()
+            return data
+
+    def test_trickle_get_cancels_after_one_receive_and_closes_response(self):
+        from unittest.mock import Mock
+        stop = Event()
+        response = self.Response(b'{"collection":', on_read=stop.set)
+        opener = Mock()
+        opener.open.return_value = response
+        with patch.object(sc.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaises(sc.Cancelled):
+                sc._json_request('https://api.soundcloud.com/me/likes/tracks', stop=stop)
+        self.assertEqual(response.reads, [64 * 1024])
+        self.assertTrue(response.closed)
+
+    def test_get_size_json_and_http_error_guards_remain_sanitized(self):
+        from unittest.mock import Mock
+        for payload, message in ((b' ' * (4 * 1024 * 1024 + 1), 'too large'),
+                                 (b'{private-response', 'Could not reach'),
+                                 (b'[]', 'Could not reach')):
+            response = self.Response(payload)
+            opener = Mock()
+            opener.open.return_value = response
+            with self.subTest(message=message), patch.object(sc.urllib.request, 'build_opener', return_value=opener):
+                with self.assertRaisesRegex(sc.ConnectionError, message) as error:
+                    sc._json_request('https://api.soundcloud.com/me', stop=Event())
+                self.assertNotIn('private-response', str(error.exception))
+            self.assertTrue(response.closed)
+            self.assertLessEqual(sum(response.reads), 4 * 1024 * 1024 + 64 * 1024)
+        opener = Mock()
+        body = io.BytesIO(b'private-server-body')
+        opener.open.side_effect = urllib.error.HTTPError(
+            'https://api.soundcloud.com/me', 503, 'private-token', {}, body)
+        with patch.object(sc.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaises(sc.ConnectionError) as error:
+                sc._json_request('https://api.soundcloud.com/me', stop=Event())
+        self.assertEqual(error.exception.status, 503)
+        self.assertNotIn('private-token', str(error.exception))
+        self.assertTrue(body.closed)
+
+    def test_resolve_redirect_carries_get_cancellation(self):
+        from unittest.mock import Mock
+        stop = Event()
+        response = self.Response(b'{"kind":"user"}', on_read=stop.set)
+        opener = Mock()
+        opener.open.side_effect = [urllib.error.HTTPError(
+            'https://api.soundcloud.com/resolve', 302, 'Found',
+            {'Location': 'https://api.soundcloud.com/users/42'}, io.BytesIO()), response]
+        with patch.object(sc.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaises(sc.Cancelled):
+                sc._json_request('https://api.soundcloud.com/resolve?url=profile',
+                                 resolve_user=True, stop=stop)
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertTrue(response.closed)
+
+    def test_auth_response_finishes_and_rotating_tokens_persist_before_cancel(self):
+        from unittest.mock import Mock
+        stop = Event()
+        response = self.Response(json.dumps(dict(access_token='new-private-access',
+                                                  refresh_token='new-private-refresh',
+                                                  expires_in=3600)).encode(),
+                                 on_read=stop.set, whole=True)
+        opener = Mock()
+        opener.open.return_value = response
+        store = MemoryKeychain(saved_tokens(expires_at=0))
+        with tempfile.TemporaryDirectory() as area, \
+                patch.object(sc.urllib.request, 'build_opener', return_value=opener):
+            connection = sc.SoundCloudConnection(Path(area), store)
+            with self.assertRaises(sc.Cancelled):
+                connection.refresh(stop, lambda *_args: None)
+            self.assertFalse((Path(area)/'likes.json').exists())
+        self.assertEqual(store.value['refresh_token'], 'new-private-refresh')
+        self.assertEqual(store.value['access_token'], 'new-private-access')
+        self.assertEqual(response.reads, [])
+        self.assertTrue(response.closed)
+        self.assertEqual(opener.open.call_count, 1)

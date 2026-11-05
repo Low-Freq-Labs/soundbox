@@ -38,6 +38,7 @@ _HOT_CUE_COLORS = (
     [255, 55, 111], [69, 172, 219], [125, 193, 61], [170, 114, 255],
     [48, 210, 110], [224, 100, 27], [48, 90, 255], [195, 175, 4],
 )
+_AUDIO_FILE_TYPES = (1, 4, 5, 6, 11, 12)
 
 
 def db_available(path: str | Path | None = None) -> bool:
@@ -69,7 +70,7 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
             tags, memberships = _read_tags(db)
             identities = list(db.get_property())
             library_id = str(identities[0].DBID) if len(identities) == 1 else ""
-            active_ids = _active_track_ids(db)
+            active_ids, audio_ids = _track_id_sets(db)
             playlists = _read_playlists(db, active_ids)
             try:catalog = _playlist_catalog(db)
             except (AttributeError,TypeError,ValueError) as exc:
@@ -77,7 +78,8 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
                 catalog = {}
             # Collection is shared independently of playlist membership. Native
             # FileType 19 rows are placeholders, even when they contain paths.
-            tracks_by_id = _read_tracks(db, source, memberships, track_ids=_audio_track_ids(db))
+            tracks_by_id = _read_tracks(
+                db, source, memberships, track_ids=audio_ids, full_audio=True)
             try:
                 _populate_cue_edit_state(db, tracks_by_id)
             except Exception as exc:  # optional write identity must not disable browsing
@@ -291,18 +293,40 @@ def _active_track_ids(db) -> set[str]:
     return {str(row.ID) for row in query if not _deleted(row)}
 
 
+def _track_id_sets(db) -> tuple[set[str], set[str]]:
+    """Classify the full snapshot's active/native-audio IDs in one read."""
+    from pyrekordbox.db6.tables import DjmdContent
+    from sqlalchemy import func
+    query = db.get_content()
+    if hasattr(query, 'with_entities'):
+        rows = query.with_entities(DjmdContent.ID, DjmdContent.FileType).filter(
+            func.coalesce(DjmdContent.rb_local_deleted, 0) == 0)
+        active, audio = set(), set()
+        for identity, kind in rows:
+            active.add(str(identity))
+            if kind in _AUDIO_FILE_TYPES:
+                audio.add(str(identity))
+        return active, audio
+    active, audio = set(), set()
+    for row in query:
+        if not _deleted(row):
+            active.add(str(row.ID))
+            if getattr(row, 'FileType', None) in _AUDIO_FILE_TYPES:
+                audio.add(str(row.ID))
+    return active, audio
+
+
 def _audio_track_ids(db) -> set[str]:
     from pyrekordbox.db6.tables import DjmdContent
     from sqlalchemy import func
     query = db.get_content()
-    types = (1, 4, 5, 6, 11, 12)
     if hasattr(query, 'with_entities'):
         return {str(row[0]) for row in query.with_entities(DjmdContent.ID).filter(
-            func.coalesce(DjmdContent.rb_local_deleted, 0) == 0, DjmdContent.FileType.in_(types))}
-    return {str(row.ID) for row in query if not _deleted(row) and getattr(row,'FileType',None) in types}
+            func.coalesce(DjmdContent.rb_local_deleted, 0) == 0, DjmdContent.FileType.in_(_AUDIO_FILE_TYPES))}
+    return {str(row.ID) for row in query if not _deleted(row) and getattr(row,'FileType',None) in _AUDIO_FILE_TYPES}
 
 
-def _content_rows(db, track_ids):
+def _content_rows(db, track_ids, *, full_audio=False):
     from pyrekordbox.db6.tables import DjmdContent
     from sqlalchemy.orm import joinedload
     query = db.get_content()
@@ -312,7 +336,16 @@ def _content_rows(db, track_ids):
     query = query.options(joinedload(DjmdContent.Artist),
                           joinedload(DjmdContent.Key), joinedload(DjmdContent.Genre),
                           joinedload(DjmdContent.Album),joinedload(DjmdContent.Label))
-    if track_ids is None:
+    if full_audio:
+        from sqlalchemy import func
+        # The full reader already classified this immutable private snapshot.
+        # An equivalent predicate avoids large IN lists and repeated query
+        # compilation. All joined relationships are scalar, so 500-row ORM
+        # batches retain eager metadata without N+1 or collection joins.
+        yield from query.filter(
+            func.coalesce(DjmdContent.rb_local_deleted, 0) == 0,
+            DjmdContent.FileType.in_(_AUDIO_FILE_TYPES)).order_by(DjmdContent.ID).yield_per(500)
+    elif track_ids is None:
         yield from query
     else:
         # Bound parameters for libraries larger than SQLite's variable limit.
@@ -323,11 +356,14 @@ def _content_rows(db, track_ids):
 
 def _read_tracks(db, source: Path | None = None,
                  tag_memberships: dict[str, list[str]] | None = None, *,
-                 track_ids: set[str] | None = None) -> dict[str, Track]:
+                 track_ids: set[str] | None = None,
+                 full_audio: bool = False) -> dict[str, Track]:
     cues_by_track = _read_cues(db)
     out: dict[str, Track] = {}
     share = ((source or REKORDBOX_DB).expanduser().parent / 'share').resolve()
-    for c in _content_rows(db, track_ids):
+    content_rows = (_content_rows(db, track_ids, full_audio=True)
+                    if full_audio else _content_rows(db, track_ids))
+    for c in content_rows:
         if _deleted(c) or (track_ids is not None and str(c.ID) not in track_ids):
             continue
         loc = c.FolderPath or ""

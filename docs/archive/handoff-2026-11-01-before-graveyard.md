@@ -5,6 +5,10 @@ This is superseded checkpoint evidence. Pending claims and counts below apply
 only to their original checkpoints; use [the current handoff](../HANDOFF.md).
 Never restore these older library/audio snapshots over later user changes.
 
+Historical app-control, source-write, installer, restore, replay and cleanup
+instructions below grant no present authorization. Current permissions and
+protected recovery bases are governed by [the current handoff](../HANDOFF.md).
+
 November1, 2026 (October31 continuation). Branch **main**, HEAD `74e2a91a51e2ab94de5075dcfca9c1c0b2e94c29`.
 This uncommitted continuation follows the prior published wrap-up. Sonny resumed
 direct-import implementation; no new commit/push was requested. No subagents are authorized.

@@ -2,6 +2,8 @@
 
 import hashlib
 import io
+import json
+import os
 import struct
 import tempfile
 import unittest
@@ -42,50 +44,92 @@ def _tagged_mp3(path: Path) -> None:
 
 
 class InterruptedVerification(unittest.TestCase):
-    def test_exact_proof_is_persisted_and_reused_without_full_rehash(self):
+    def test_each_adoption_reads_exact_bytes_without_redundant_proof_writes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             live = root / "IPOD/Music/Artist/Track.wav"
             live.parent.mkdir(parents=True)
-            live.write_bytes(b"device payload" * 200_000)
+            payload = b"device payload" * 200_000
+            live.write_bytes(payload)
             digest = _hash(live)
             cache = root / "cache"
             baseline = "a" * 64
+            with mock.patch("soundbox.rockbox_media.record_metric") as metric:
+                for verifier in (InterruptedFileVerifier(cache, baseline),
+                                 InterruptedFileVerifier(cache, baseline)):
+                    self.assertTrue(verifier.verify(
+                        live, relative_path=Path("Music/Artist/Track.wav"),
+                        size=len(payload), sha256=digest))
+            read_bytes = sum(call.args[1] for call in metric.call_args_list
+                             if call.args[0] == "interrupted_verification_bytes_read")
+            self.assertEqual(read_bytes, 2 * len(payload))
+            self.assertFalse(cache.exists())
+            self.assertEqual(live.read_bytes(), payload)
 
-            first = InterruptedFileVerifier(cache, baseline)
-            self.assertTrue(first.verify(
-                live,
-                relative_path=Path("Music/Artist/Track.wav"),
-                size=live.stat().st_size,
-                sha256=digest,
-            ))
-            self.assertTrue(next(
-                (cache / "interrupted-verification").glob("*.json")).is_file())
-
-            resumed = InterruptedFileVerifier(cache, baseline)
-            with mock.patch(
-                    "soundbox.rockbox_media._sha256",
-                    side_effect=AssertionError("full hash should be cached")):
-                self.assertTrue(resumed.verify(
-                    live,
-                    relative_path=Path("Music/Artist/Track.wav"),
-                    size=live.stat().st_size,
-                    sha256=digest,
-                ))
-
-    def test_changed_file_does_not_reuse_cached_proof(self):
+    def test_equal_fat_epoch_and_edges_never_accept_changed_middle_from_old_proof(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             live = root / "track.wav"
-            live.write_bytes(b"before" * 400_000)
-            size = live.stat().st_size
+            live.write_bytes(b"a" * (3 * 1024 * 1024))
+            before = live.stat()
             digest = _hash(live)
-            verifier = InterruptedFileVerifier(root / "cache", "b" * 64)
-            self.assertTrue(verifier.verify(
-                live, relative_path=Path("track.wav"), size=size, sha256=digest))
-            live.write_bytes(b"after!" * 400_000)
-            self.assertFalse(verifier.verify(
-                live, relative_path=Path("track.wav"), size=size, sha256=digest))
+            cache = root / "cache"
+            proof = cache / "interrupted-verification" / ("b" * 64 + ".json")
+            proof.parent.mkdir(parents=True)
+            old_receipt = json.dumps({
+                "schema": 1, "baseline_sha256": "b" * 64,
+                "files": {"/track.wav": {
+                    "size": before.st_size, "sha256": digest,
+                    "mtime_ns": before.st_mtime_ns,
+                    "edge_sha256": hashlib.sha256(b"a" * (2 * 1024 * 1024)).hexdigest(),
+                }},
+            }).encode()
+            proof.write_bytes(old_receipt)
+            with live.open("r+b") as handle:
+                handle.seek(1536 * 1024)
+                handle.write(b"changed middle")
+            os.utime(live, ns=(before.st_atime_ns, before.st_mtime_ns))
+            # Reproduce coarse FAT epochs, including ctime, without real media.
+            original_lstat = Path.lstat
+            def coarse_lstat(path):
+                return before if path == live else original_lstat(path)
+            with mock.patch.object(Path, "lstat", coarse_lstat), \
+                    mock.patch("soundbox.rockbox_media.os.fstat", return_value=before), \
+                    mock.patch("soundbox.rockbox_media.record_metric") as metric:
+                for _ in range(2):
+                    verifier = InterruptedFileVerifier(cache, "b" * 64)
+                    self.assertFalse(verifier.verify(
+                        live, relative_path=Path("track.wav"),
+                        size=before.st_size, sha256=digest))
+            read_bytes = sum(call.args[1] for call in metric.call_args_list
+                             if call.args[0] == "interrupted_verification_bytes_read")
+            self.assertEqual(read_bytes, 2 * before.st_size)
+            self.assertEqual(proof.read_bytes(), old_receipt)
+            self.assertEqual(list(proof.parent.iterdir()), [proof])
+
+    def test_cancelled_adoption_does_not_read_or_write(self):
+        from threading import Event
+        from soundbox.operation_control import OperationCancelled, operation_scope
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            live = root / "track.wav"
+            live.write_bytes(b"audio")
+            stop = Event()
+            stop.set()
+            with operation_scope(stop), self.assertRaises(OperationCancelled):
+                InterruptedFileVerifier(root / "cache", "c" * 64).verify(
+                    live, relative_path=Path("track.wav"), size=5, sha256=_hash(live))
+            self.assertFalse((root / "cache").exists())
+
+    def test_symlink_is_not_an_adoption_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.wav"
+            source.write_bytes(b"audio")
+            live = root / "track.wav"
+            live.symlink_to(source)
+            self.assertFalse(InterruptedFileVerifier(root / "cache", "d" * 64).verify(
+                live, relative_path=Path("track.wav"), size=5, sha256=_hash(source)))
 
 
 class RockboxAudioDerivative(unittest.TestCase):

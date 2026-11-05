@@ -41,13 +41,15 @@ fn inspect(root: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
     let mut statement = conn.prepare("SELECT playlist_id, playlist_id_parent, name, attribute FROM playlist ORDER BY sequenceNo, playlist_id LIMIT 10001")?;
     let mut playlists = statement.query_map([], |r| Ok(json!({"id": r.get::<_,i64>(0)?.to_string(), "parent": r.get::<_,Option<i64>>(1)?.unwrap_or(0).to_string(), "title": r.get::<_,String>(2)?, "folder": r.get::<_,i64>(3)? != 0, "entries": []})))?.collect::<Result<Vec<_>,_>>()?;
     if playlists.len() > 10_000 { return Err("too many playlists".into()); }
-    let mut statement = conn.prepare("SELECT p.playlist_id, c.title, c.path FROM playlist_content p JOIN content c ON p.content_id=c.content_id ORDER BY p.playlist_id, p.sequenceNo LIMIT 200001")?;
-    let entries = statement.query_map([], |r| Ok((r.get::<_,i64>(0)?.to_string(), json!([r.get::<_,String>(1)?,r.get::<_,String>(2)?]))))?.collect::<Result<Vec<_>,_>>()?;
+    let mut statement = conn.prepare("SELECT p.playlist_id, c.title, c.path, c.content_id FROM playlist_content p JOIN content c ON p.content_id=c.content_id ORDER BY p.playlist_id, p.sequenceNo LIMIT 200001")?;
+    let entries = statement.query_map([], |r| Ok((r.get::<_,i64>(0)?.to_string(), json!([r.get::<_,String>(1)?,r.get::<_,String>(2)?]), r.get::<_,i64>(3)?.to_string())))?.collect::<Result<Vec<_>,_>>()?;
     if entries.len() > 200_000 { return Err("too many playlist entries".into()); }
     let positions: std::collections::HashMap<String,usize> = playlists.iter().enumerate().map(|(i,p)|(p["id"].as_str().unwrap_or_default().to_owned(),i)).collect();
-    for (id, entry) in entries {
+    let mut playlist_track_ids:std::collections::BTreeMap<String,Vec<String>>=std::collections::BTreeMap::new();
+    for (id, entry, track_id) in entries {
         let at = positions.get(&id).ok_or("entry references a missing playlist")?;
         playlists[*at]["entries"].as_array_mut().ok_or("missing entries")?.push(entry);
+        playlist_track_ids.entry(id).or_default().push(track_id);
     }
     let settings = rbl_onelibrary::settings::StickSettings::read(&root.join("PIONEER/rekordbox/exportLibrary.db"))?;
     let mut classic_background = None;
@@ -114,7 +116,7 @@ fn inspect(root: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
         let pdb=rbl_pdb::Pdb::parse(&bytes)?;
         if let Some(table)=pdb.table(rbl_pdb::PageType::Artwork) {reserved_image_ids.extend(pdb.named_rows(table).iter().map(|r|r.id));}
     }
-    Ok(json!({"preferences":preferences,"track_rows":tracks,"playlists":playlists,"tracks":count,"name":settings.device_name,"native_tags":tags,"divergent_tracks":divergent_tracks,
+    Ok(json!({"preferences":preferences,"track_rows":tracks,"playlists":playlists,"playlist_track_ids":playlist_track_ids,"tracks":count,"name":settings.device_name,"native_tags":tags,"divergent_tracks":divergent_tracks,
         "classic_track_rows":classic["track_rows"],"classic_playlists":classic["playlists"],
         "divergent_playlists":divergent_playlists,
         "classic_tags":classic_tags,
@@ -142,12 +144,14 @@ fn inspect_classic(root: &Path) -> Result<serde_json::Value,Box<dyn Error>> {
     let tracks_by_id=tracks.iter().map(|t|(t.id,t)).collect::<std::collections::HashMap<_,_>>();
     let by_playlist=group_playlist_entries(&entries);
     let mut playlists=Vec::new();
+    let mut playlist_track_ids:std::collections::BTreeMap<String,Vec<String>>=std::collections::BTreeMap::new();
     for node in &nodes {
         let ordered=by_playlist.get(&node.id).map(Vec::as_slice).unwrap_or_default();
         let members=ordered.iter().map(|e| {
             let t=tracks_by_id.get(&e.track_id).ok_or("classic entry references missing track")?;
             Ok(json!([t.title,t.file_path]))
         }).collect::<Result<Vec<_>,Box<dyn Error>>>()?;
+        playlist_track_ids.insert(node.id.to_string(),ordered.iter().map(|e|e.track_id.to_string()).collect());
         playlists.push(json!({"id":node.id.to_string(),"parent":node.parent_id.to_string(),"title":node.name,"folder":node.is_folder,"entries":members}));
     }
     let names=|kind|pdb.table(kind).map(|t|pdb.named_rows(t).into_iter().map(|r|(r.id,r.name)).collect::<std::collections::HashMap<_,_>>()).unwrap_or_default();
@@ -164,7 +168,7 @@ fn inspect_classic(root: &Path) -> Result<serde_json::Value,Box<dyn Error>> {
         }
     }
     let browse=[16,17,18].iter().map(|k|soundbox_cdj::browse_rows(&raw,*k)).collect::<Result<Vec<_>,_>>()?;
-    Ok(json!({"tracks":tracks.len(),"playlists":playlists,"track_rows":tracks.iter().map(|t|json!({"id":t.id,"source_id":t.master_content_id,"master_db_id":t.master_db_id,"audio":t.file_path,"analysis":t.analyze_path,"title":t.title,"artist":name(&artists,t.artist_id),"bpm":t.tempo_x100,"duration":t.duration_sec,"key":name(&keys,t.key_id),"genre":name(&genres,t.genre_id),"bitrate":t.bitrate,"date_added":t.date_added,"artwork":name(&artwork,t.artwork_id)})).collect::<Vec<_>>(),"name":property.device_name,
+    Ok(json!({"tracks":tracks.len(),"playlists":playlists,"playlist_track_ids":playlist_track_ids,"track_rows":tracks.iter().map(|t|json!({"id":t.id,"source_id":t.master_content_id,"master_db_id":t.master_db_id,"audio":t.file_path,"analysis":t.analyze_path,"title":t.title,"artist":name(&artists,t.artist_id),"bpm":t.tempo_x100,"duration":t.duration_sec,"key":name(&keys,t.key_id),"genre":name(&genres,t.genre_id),"bitrate":t.bitrate,"date_added":t.date_added,"artwork":name(&artwork,t.artwork_id)})).collect::<Vec<_>>(),"name":property.device_name,
         "background_plus":null,"background_classic":property.background_color,"tag_master_id":master,
         "preferences":{"classic_browse":browse,"name":property.device_name,"classic":property.background_color}}))
 }

@@ -19,6 +19,7 @@ import uuid
 from . import cdj_source, manifest
 from .cdj_transaction import CdjPlan, _hash_file, load_manifest, make_plan
 from .cdj_usb import CATALOG_RENDER_POLICY, DATABASE_FILES, digest, read_library, run_renderer
+from .library import Track
 from .source_acquisition import SourceContract, acquire_source
 
 LOG = logging.getLogger('soundbox')
@@ -37,7 +38,7 @@ def input_signature(dto, extra, artwork):
     return digest(json.dumps(value,sort_keys=True,separators=(',',':')).encode())
 
 
-def native_matches(row,dto,extra,image,art_cache):
+def native_matches(row,dto,extra,image,art_cache,track_id=None):
     """Reuse a native export's inventory by identity/metadata, without auditing media."""
     if row.get('source_id')!=dto['id'] or row.get('file_size')!=dto['file_size'] or not dto['file_size'] or dto['file_size']!=source_epoch(dto['source_path'])[2]:
         return False
@@ -53,7 +54,7 @@ def native_matches(row,dto,extra,image,art_cache):
     if str(info.get('playCount',''))!=str(dto['metadata']['play_count']):return False
     if info.get('hotCueAutoLoad')!=('On' if dto['metadata']['hot_cue_auto_load'] else 'Off'):return False
     if art_cache is not None:
-        entry=dict(getattr(art_cache,'index',{}).get(str(dto['id']),{}))
+        entry=dict(getattr(art_cache,'index',{}).get(track_id if track_id is not None else str(dto['id']),{}))
         if entry.get('origin')=='manual' or (entry.get('status')=='blocked' and row.get('artwork')):return False
         if image is not None and not row.get('artwork'):return False
         if not hasattr(art_cache,'index') and image is not None:return False
@@ -138,7 +139,7 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         if identity in foreign_playlists:
             candidates_by_name.setdefault((existing['name'], existing['parent'], existing['folder']), set()).add(identity)
     next_track = int(previous['next_track_id'])
-    tracks = {}
+    tracks: dict[int, Track] = {}
     used_sources = set()
     # Existing source->device bindings are exact manifest identities, not titles.
     touched_nodes=set()
@@ -182,7 +183,9 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         identity = node(source_id,playlist.name,parent,False)
         members = []
         for track in library.resolve(playlist):
-            tid = int(track.track_id)
+            tid = int(track.native_id)
+            if tid in tracks and tracks[tid].track_id != track.track_id:
+                raise ValueError('Selected logical tracks share an ambiguous native identity')
             tracks[tid] = track;used_sources.add(tid)
             if tid not in by_source:
                 by_source[tid] = next_track;next_track += 1
@@ -190,7 +193,9 @@ def _catalog(library, playlists, previous, all_playlists, additive, standalone=(
         nodes[identity]['tracks'] = members
         selection[key] = dict(key=key,pid=playlist.pid,name=playlist.name,folder=playlist.folder_path)
     for track in standalone:
-        tid=int(track.track_id)
+        tid=int(track.native_id)
+        if tid in tracks and tracks[tid].track_id != track.track_id:
+            raise ValueError('Selected logical tracks share an ambiguous native identity')
         tracks[tid]=track;used_sources.add(tid)
         if tid not in by_source:
             by_source[tid]=next_track;next_track+=1
@@ -298,7 +303,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
     started = time.monotonic()
     catalog = _catalog(library,playlists,previous,all_playlists,additive,standalone)
     tracks = catalog['tracks']
-    if native is None:native = read_library(session.target,session.mount_identity[0])
+    if native is None:native = read_library(session.target,session.mount_identity[0],should_cancel=should_cancel)
     if native is None or any(digest(raw)!=previous['files'][path]['sha256']
             for path,raw in native.files if path in DATABASE_FILES):
         raise ValueError('USB library changed while preparing; retry after rekordbox finishes exporting')
@@ -318,7 +323,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         elif cached.get(str(tid),{}).get('signature')!=signatures[tid]:
             row=native_rows.get(catalog['by_source'][tid],{})
             if (str(tid) not in cached and row.get('master_db_id')==captured['db_id']
-                    and native_matches(row,dto,extras[tid],images[tid],art_cache)):
+                    and native_matches(row,dto,extras[tid],images[tid],art_cache,track.track_id)):
                 adopted.add(tid)
             else:changed.append(dto)
     workspace = tempfile.TemporaryDirectory(prefix='soundbox-cdj-incremental-')
@@ -344,7 +349,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
                     cue_rows[song.id]=read_cues(local)
             finally:reader.close()
             path=root/'classic-cues.json';path.write_text(json.dumps(cue_rows))
-            run_renderer('upgrade',root,root/'baseline',path)
+            run_renderer('upgrade',root,root/'baseline',path,should_cancel=should_cancel)
         inputs = root/'inputs';inputs.mkdir()
         required = sum(Path(t['source_path']).stat().st_size for t in changed)
         if required*2+128*1024*1024>shutil.disk_usage(root).free:
@@ -415,7 +420,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         if changed:
             path = root/'request.json';path.write_text(json.dumps(request))
             run_renderer('render',root,path,root/'partial',should_cancel=should_cancel)
-            partial = read_library(root/'partial',(root/'partial').stat().st_dev)
+            partial = read_library(root/'partial',(root/'partial').stat().st_dev,should_cancel=should_cancel)
             for song in partial.songs:
                 if (song.path,str(PurePosixPath(song.analysis).parent))!=placements[int(song.source_id)]:
                     raise ValueError('Native CDJ layout disagrees with the reserved placement')
@@ -510,7 +515,7 @@ def plan_incremental(library, playlists, session, previous, *, all_playlists=(),
         remember_standalone(plan.manifest, previous, library, standalone)
         records = deepcopy(cached)
         plan.manifest['foreign_playlists']=[i for i in previous.get('foreign_playlists',[]) if i not in catalog['reverse']]
-        managed_ids={catalog['by_source'][int(t.track_id)] for t in tracks}
+        managed_ids={catalog['by_source'][int(t.native_id)] for t in tracks}
         plan.manifest['foreign_tracks']=[i for i in previous.get('foreign_tracks',[]) if i not in managed_ids]
         for dto in captured['tracks']:
             tid = int(dto['id'])

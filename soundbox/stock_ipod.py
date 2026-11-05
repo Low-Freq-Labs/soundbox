@@ -20,13 +20,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
+import logging
 import os
 import secrets
 import struct
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -37,7 +39,6 @@ from clickwheel.ipod import (  # type: ignore[import-untyped]
     get_ipod_tracks,
     merge_playcounts,
     parse_itunesdb,
-    read_play_counts,
 )
 from clickwheel.ipod.ipod_models import capabilities_for_family_gen  # type: ignore[import-untyped]
 from clickwheel.ipod.itunesdb_writer import (  # type: ignore[import-untyped]
@@ -77,6 +78,9 @@ from .stock_ipod_shadow import (
     StockIpodShadowStore,
     StockIpodSyncStatus,
 )
+from .stock_ipod_capture import (
+    StockIpodCaptureError, StockIpodNativeCapture, capture_stock_ipod_native,
+)
 from .sync import DeviceSession, assert_target_safe
 
 
@@ -85,6 +89,7 @@ SUPPORTED_MODELS = {
     "MA446": ("iPod Video", "5.5th Gen"),
 }
 _CLASSIC_USB_SETTLE_SECONDS = 0.15
+_STOCK_SOURCE_PROFILE = "ma446-mp3-pcm16-stereo-44100-v1"
 
 
 def _pace_classic_usb() -> None:
@@ -866,6 +871,7 @@ def _shadow_matches_live(
     model: str,
     serial_number: str,
     database_sha256: str,
+    native_capture: StockIpodNativeCapture | None = None,
 ) -> tuple[bool, str]:
     if shadow is None:
         return False, "No committed Mac-side baseline"
@@ -880,10 +886,18 @@ def _shadow_matches_live(
         return False, "iTunesDB changed since the last SoundBox commit"
     artwork_dir = root / "iPod_Control" / "Artwork"
     artwork_db = artwork_dir / "ArtworkDB"
+    if native_capture is not None:
+        native_capture.require_target(root)
+        if not native_capture.includes_artwork:
+            raise ValueError("Stock sync-status capture must include ArtworkDB")
     if shadow.artwork_database_sha256:
-        if not artwork_db.is_file() or _sha256(artwork_db) != shadow.artwork_database_sha256:
+        actual_art_hash = (native_capture.artwork_database_sha256
+                           if native_capture is not None
+                           else _sha256(artwork_db) if artwork_db.is_file() else "")
+        if actual_art_hash != shadow.artwork_database_sha256:
             return False, "ArtworkDB changed since the last SoundBox commit"
-    elif artwork_db.exists():
+    elif (native_capture.artwork_database is not None
+          if native_capture is not None else artwork_db.exists()):
         return False, "ArtworkDB appeared since the last SoundBox commit"
     for name, row in shadow.ithmb.items():
         path = artwork_dir / name
@@ -930,6 +944,7 @@ def inspect_stock_ipod_sync_status(
     serial_number: str,
     shadow_store: StockIpodShadowStore,
     extra_playlists: tuple[Playlist, ...] = (),
+    native_capture: StockIpodNativeCapture | None = None,
 ) -> StockIpodSyncStatus:
     """Compare one mounted iPod with its Mac shadow without writing either."""
     root = Path(target).expanduser().resolve(strict=True)
@@ -937,14 +952,18 @@ def inspect_stock_ipod_sync_status(
     if shadow is None:
         return StockIpodSyncStatus(
             "untracked", "No committed Mac-side fast-sync baseline")
-    database = _db_path(root)
+    if native_capture is not None:
+        native_capture.require_target(root)
+    database = root / "iPod_Control/iTunes/iTunesDB" if native_capture is not None else _db_path(root)
     matches, reason = _shadow_matches_live(
         shadow,
         root=root,
         identity_key=identity_key,
         model=normalize_model_number(model_number),
         serial_number=serial_number,
-        database_sha256=_sha256(database),
+        database_sha256=(native_capture.database_sha256
+                         if native_capture is not None else _sha256(database)),
+        native_capture=native_capture,
     )
     if not matches:
         return StockIpodSyncStatus(
@@ -995,7 +1014,8 @@ def inspect_stock_ipod_sync_status(
             or stat.st_mtime_ns != int(row.get("art_mtime_ns") or -1)
         ):
             changed.add(f"art:{row.get('track_id') or art_path}")
-    pending = database.with_name("Play Counts").is_file()
+    pending = (native_capture.play_counts is not None if native_capture is not None
+               else database.with_name("Play Counts").is_file())
     if pending:
         changed.add("play-counts")
     if changed:
@@ -1084,6 +1104,29 @@ def plan_stock_ipod_sync(
     if len({name.casefold() for name in names}) != len(names):
         raise StockIpodError("Selected stock-iPod playlist names must be unique")
 
+    # Resolve the small native baseline before opening any selected audio. A
+    # matching shadow can retain an already accepted, unchanged Mac source
+    # contract; legacy/missing/changed source proofs still acquire exact bytes.
+    database = _db_path(root)
+    try:
+        captured = capture_stock_ipod_native(root, include_artwork=False)
+    except StockIpodCaptureError as exc:
+        raise StockIpodError(str(exc)) from exc
+    original = captured.database
+    if len(original) < 0x32 or original[:4] != b"mhbd":
+        raise StockIpodError("iTunesDB has an invalid header")
+    hashing_scheme = struct.unpack_from("<H", original, 0x30)[0]
+    if hashing_scheme != 0:
+        raise StockIpodError(
+            f"MA446 database unexpectedly requires checksum scheme {hashing_scheme}")
+    database_sha256 = captured.database_sha256
+    shadow = shadow_store.load(identity_key) if shadow_store and identity_key else None
+    shadow_fast_path, shadow_reason = _shadow_matches_live(
+        shadow, root=root, identity_key=identity_key, model=model,
+        serial_number=serial_number, database_sha256=database_sha256)
+    if not shadow_fast_path:
+        shadow = None
+
     payload_overrides: dict[Path, Path | PlannedRockboxMedia] = {}
     for raw_source, raw_payload in (media_payloads or {}).items():
         source = Path(raw_source).expanduser().resolve(strict=True)
@@ -1103,6 +1146,7 @@ def plan_stock_ipod_sync(
     compatibility: dict[Path, str] = {}
     captured_hashes: dict[Path, str] = {}
     captured_technical: dict[Path, tuple[int, int, int]] = {}
+    captured_observations: dict[Path, os.stat_result] = {}
 
     def capture_properties(path: Path, planned=None) -> None:
         with acquire_source(SourceContract(
@@ -1112,6 +1156,7 @@ def plan_stock_ipod_sync(
                  Path(tempfile.gettempdir()) / "soundbox-source-staging")) as snapshot:
             compatibility[path] = _stock_media_omission(snapshot.path)
             captured_hashes[path] = snapshot.sha256
+            captured_observations[path] = snapshot.observation
             if not compatibility[path]:
                 captured_technical[path] = _technical_audio(snapshot.path)
 
@@ -1123,7 +1168,28 @@ def plan_stock_ipod_sync(
     def media_omission(path: Path) -> str:
         if path not in compatibility:
             planned = payload_overrides.get(path)
-            if (allow_dual_boot and path.suffix.lower() in {".mp3", ".wav"}
+            retained = (shadow.sources.get(str(path))
+                        if shadow is not None and not allow_dual_boot and planned is None else None)
+            observed = path.stat() if retained else None
+            epoch = ([observed.st_dev, observed.st_ino, observed.st_size,
+                      observed.st_mtime_ns, observed.st_ctime_ns] if observed else None)
+            if (retained and observed is not None
+                    and retained.get("stock_media_profile") == _STOCK_SOURCE_PROFILE
+                    and retained.get("source_epoch") == epoch
+                    and len(str(retained.get("source_sha256") or "")) == 64
+                    and isinstance(retained.get("stock_technical"), list)
+                    and len(retained["stock_technical"]) == 3
+                    and all(isinstance(value, int) and value >= 0
+                            for value in retained["stock_technical"])):
+                # This is the old accepted contract, not a new proof. Keep its
+                # exact epoch; never bless a changed inode/ctime with old bytes.
+                compatibility[path] = ""
+                captured_hashes[path] = str(retained["source_sha256"])
+                captured_observations[path] = observed
+                technical = retained["stock_technical"]
+                captured_technical[path] = (int(technical[0]), int(technical[1]),
+                                            int(technical[2]))
+            elif (allow_dual_boot and path.suffix.lower() in {".mp3", ".wav"}
                     and isinstance(planned, PlannedRockboxMedia)
                     and planned.source_sha256_verified
                     and managed_payload_baselines.get(str(path))
@@ -1190,38 +1256,13 @@ def plan_stock_ipod_sync(
         source: payload for _track, source, payload in resolved}
     assert_target_safe(root, [*sources, *payload_by_source.values()])
 
-    database = _db_path(root)
-    original = database.read_bytes()
-    if len(original) < 0x32 or original[:4] != b"mhbd":
-        raise StockIpodError("iTunesDB has an invalid header")
-    hashing_scheme = struct.unpack_from("<H", original, 0x30)[0]
-    if hashing_scheme != 0:
-        raise StockIpodError(
-            f"MA446 database unexpectedly requires checksum scheme {hashing_scheme}")
-
-    database_sha256 = hashlib.sha256(original).hexdigest()
-    shadow = (
-        shadow_store.load(identity_key)
-        if shadow_store and identity_key else None)
-    shadow_fast_path, shadow_reason = _shadow_matches_live(
-        shadow,
-        root=root,
-        identity_key=identity_key,
-        model=model,
-        serial_number=serial_number,
-        database_sha256=database_sha256,
-    )
-    if not shadow_fast_path:
-        shadow = None
-
-    parsed = parse_itunesdb(str(database))
+    parsed = parse_itunesdb(io.BytesIO(original))
     parsed_tracks = get_ipod_tracks(parsed)
-    play_counts_path = database.with_name("Play Counts")
     play_counts_hash: str | None = None
     merged_entries = 0
-    if play_counts_path.exists():
-        play_counts_hash = _sha256(play_counts_path)
-        entries = read_play_counts(root)
+    if captured.play_counts is not None:
+        play_counts_hash = hashlib.sha256(captured.play_counts).hexdigest()
+        entries = captured.playback_entries(expected_tracks=len(parsed_tracks))
         if entries is None or len(entries) != len(parsed_tracks):
             raise StockIpodError(
                 "Play Counts is unreadable or does not match the iTunesDB; "
@@ -1925,7 +1966,7 @@ def plan_stock_ipod_sync(
     info_by_dbid = {int(info.dbid): info for info in track_infos}
     for source in sources:
         checkpoint()
-        canonical_stat = source.stat()
+        canonical_stat = captured_observations.get(source) or source.stat()
         dbid = source_to_dbid[source]
         location = str(info_by_dbid[dbid].location or "")
         shadow_sources[str(source)] = {
@@ -1938,6 +1979,15 @@ def plan_stock_ipod_sync(
             "device_path": location.lstrip(":").replace(":", "/"),
             "track_id": first_track_for_source[source].track_id,
         }
+        if source in captured_observations:
+            shadow_sources[str(source)].update({
+                "source_epoch": [canonical_stat.st_dev, canonical_stat.st_ino,
+                                 canonical_stat.st_size, canonical_stat.st_mtime_ns,
+                                 canonical_stat.st_ctime_ns],
+                "source_sha256": captured_hashes[source],
+                "stock_media_profile": _STOCK_SOURCE_PROFILE,
+                "stock_technical": list(captured_technical[source]),
+            })
     previous_managed_keys = set(managed_playlist_keys_before)
     shadow_playlists = {
         key: dict(value) for key, value in (shadow.playlists if shadow else {}).items()
@@ -1996,7 +2046,7 @@ def plan_stock_ipod_sync(
         for source in sources
     }
     planning_session.revalidate()
-    return StockIpodSyncPlan(
+    plan = StockIpodSyncPlan(
         target=root,
         target_mount_identity=planning_session.mount_identity,
         model_number=model,
@@ -2036,6 +2086,19 @@ def plan_stock_ipod_sync(
         rockbox_media_cache=rockbox_media_cache,
         interrupted_file_verifier=interrupted_file_verifier,
     )
+    if (not plan.requires_commit and shadow is not None and shadow_store is not None
+            and shadow_sources != shadow.sources
+            and not shadow_store.root.resolve().is_relative_to(root)):
+        # A legacy baseline may be a true no-op forever. Retain newly acquired
+        # Mac source proofs without manufacturing a device commit/generation.
+        # Another generation wins; a disposable-cache failure is advisory.
+        try:
+            if shadow_store.load(identity_key) == shadow:
+                shadow_store.save(replace(shadow, sources=shadow_sources))
+        except (OSError, ValueError):
+            logging.getLogger("soundbox").warning(
+                "Could not enrich disposable stock source proofs", exc_info=True)
+    return plan
 
 
 def commit_stock_ipod_sync(
@@ -2050,13 +2113,15 @@ def commit_stock_ipod_sync(
             "iPod target was remounted after dry-run; make a fresh plan")
     database = session.guard(plan.database_relative_path)
     play_counts = session.guard(database.with_name("Play Counts"))
-    if _sha256(database) != plan.database_sha256_before:
+    original_database = database.read_bytes()
+    if hashlib.sha256(original_database).hexdigest() != plan.database_sha256_before:
         raise StockIpodError("iTunesDB changed after dry-run; make a fresh plan")
+    original_play_counts = play_counts.read_bytes() if play_counts.is_file() else None
     if plan.play_counts_sha256_before is None:
         if play_counts.exists():
             raise StockIpodError("Play Counts appeared after dry-run; make a fresh plan")
-    elif not play_counts.is_file() or _sha256(
-            play_counts) != plan.play_counts_sha256_before:
+    elif original_play_counts is None or hashlib.sha256(
+            original_play_counts).hexdigest() != plan.play_counts_sha256_before:
         raise StockIpodError("Play Counts changed after dry-run; make a fresh plan")
     for adoption in plan.adoptions:
         destination = session.guard(adoption.relative_path)
@@ -2198,8 +2263,6 @@ def commit_stock_ipod_sync(
     stamp = time.strftime("%Y%m%d-%H%M%S")
     recovery = Path(".soundbox") / "stock-ipod-recovery" / (
         f"{stamp}-{plan.database_sha256_before[:12]}")
-    original_database = database.read_bytes()
-    original_play_counts = play_counts.read_bytes() if play_counts.is_file() else None
     try:
         statvfs = os.statvfs(plan.target)
         free = statvfs.f_bavail * statvfs.f_frsize
@@ -2719,7 +2782,11 @@ def plan_stock_ipod_playlist_delete(
             "Empty-playlist index repair cannot also delete playlists")
 
     database = _db_path(root)
-    original = database.read_bytes()
+    try:
+        captured = capture_stock_ipod_native(root, include_artwork=False)
+    except StockIpodCaptureError as exc:
+        raise StockIpodError(str(exc)) from exc
+    original = captured.database
     if len(original) < 0x32 or original[:4] != b"mhbd":
         raise StockIpodError("iTunesDB has an invalid header")
     hashing_scheme = struct.unpack_from("<H", original, 0x30)[0]
@@ -2727,14 +2794,13 @@ def plan_stock_ipod_playlist_delete(
         raise StockIpodError(
             f"MA446 database unexpectedly requires checksum scheme {hashing_scheme}")
 
-    parsed = parse_itunesdb(str(database))
+    parsed = parse_itunesdb(io.BytesIO(original))
     parsed_tracks = get_ipod_tracks(parsed)
-    play_counts_path = database.with_name("Play Counts")
     play_counts_hash: str | None = None
     merged_entries = 0
-    if play_counts_path.exists():
-        play_counts_hash = _sha256(play_counts_path)
-        entries = read_play_counts(root)
+    if captured.play_counts is not None:
+        play_counts_hash = hashlib.sha256(captured.play_counts).hexdigest()
+        entries = captured.playback_entries(expected_tracks=len(parsed_tracks))
         if entries is None or len(entries) != len(parsed_tracks):
             raise StockIpodError(
                 "Play Counts is unreadable or does not match the iTunesDB; "
@@ -3027,13 +3093,15 @@ def commit_stock_ipod_playlist_delete(
             "iPod target was remounted after dry-run; make a fresh plan")
     database = session.guard(plan.database_relative_path)
     play_counts = session.guard(database.with_name("Play Counts"))
-    if _sha256(database) != plan.database_sha256_before:
+    original_database = database.read_bytes()
+    if hashlib.sha256(original_database).hexdigest() != plan.database_sha256_before:
         raise StockIpodError("iTunesDB changed after dry-run; make a fresh plan")
+    original_play_counts = play_counts.read_bytes() if play_counts.is_file() else None
     if plan.play_counts_sha256_before is None:
         if play_counts.exists():
             raise StockIpodError("Play Counts appeared after dry-run; make a fresh plan")
-    elif not play_counts.is_file() or _sha256(
-            play_counts) != plan.play_counts_sha256_before:
+    elif original_play_counts is None or hashlib.sha256(
+            original_play_counts).hexdigest() != plan.play_counts_sha256_before:
         raise StockIpodError("Play Counts changed after dry-run; make a fresh plan")
     for item in plan.media_deletes:
         path = session.guard(item.relative_path)
@@ -3084,8 +3152,6 @@ def commit_stock_ipod_playlist_delete(
     stamp = time.strftime("%Y%m%d-%H%M%S")
     recovery = Path(".soundbox") / "stock-ipod-recovery" / (
         f"{stamp}-delete-{plan.database_sha256_before[:12]}")
-    original_database = database.read_bytes()
-    original_play_counts = play_counts.read_bytes() if play_counts.is_file() else None
     try:
         statvfs = os.statvfs(plan.target)
         free = statvfs.f_bavail * statvfs.f_frsize

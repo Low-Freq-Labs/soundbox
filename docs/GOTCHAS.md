@@ -1,5 +1,83 @@
 # SoundBox gotchas & niche facts
 
+## Whole-app demand audit — November4
+
+- `cached_property` access constructs its value. Passive resize/theme/backup/
+  shutdown handlers must use `vars(window).get(...)` for device pages, never
+  `getattr` or `hasattr` on their property names. Settings is also lazy; guards
+  comparing focus to an absent widget must first reject `None`.
+- Keep automatic account refresh independent of lazy Settings. Share the same
+  cached provider service, once-only initial refresh, owner-retirement callback
+  and cancellation/result state; do not attach a late `finished` handler.
+- Identical filter/sort requests can skip work only while no relevant row field
+  changed. Artwork refresh mutates rows in place and must invalidate art sorting.
+- Coalesce wakeups, never accepted commands. Deferred queue discovery still
+  validates current source/authority; one retry timer must stop for empty queues.
+- Idle decoder wait generations are captured before inspecting current state.
+  Every control transition that can resume/change decoding wakes that generation;
+  the render consumer remains lock-free. Preserve timed active buffer pacing.
+- Same-size import files are not duplicates. Compare exact content and publish
+  exclusively so a competing destination or fallback name survives.
+- Conversion recovery must compare the final source against the epoch of its
+  verified hash, not a newly captured epoch after staging/native work. Preserve
+  originals/stages/journals on conflict. Stable descriptor and path checks share
+  the existing digest pass; they do not justify another retained-media scan.
+- Grid no-op publication requires exact bytes plus recorded mode/mtime and known
+  staging evidence. Do not remove fresh whole-recovery/source/apps/authority
+  checks or atomic publication for genuinely changed packets.
+- Cue filled/unfilled transitions already change the local stylesheet after the
+  dynamic property. Do not follow that automatic repolish with a second borrowed
+  `button.style().unpolish/polish` path: ordered fixtures exposed a stale/wrong Qt
+  wrapper there. Empty/filled/pressed/add/remove rendering is independently exact.
+
+## November4 iPod audit follow-up
+
+- Share native catalog bytes only inside one owned operation; parse/header/hash
+  must describe the same observation. Exact repeated reads still matter on FAT.
+  Captured presentation is never a persistent freshness or commit authority.
+- Keep raw Mac source SHA/epoch/compatibility separate from transformed device
+  size/SHA. Stock-only exact-epoch reuse skips source acquisition; legacy/ctime
+  changes reacquire. Enrich old no-op shadow proofs only after successful planning,
+  with unchanged generation/time and exact old-shadow comparison.
+- Partial Rockbox export must retain every other playlist owner. Different source
+  files with equal display need distinct artwork directories; unowned matching
+  payloads never become permission to overwrite or prune them.
+- Interrupted adoption hashes the affected whole file freshly; coarse FAT epochs
+  plus edge hashes cannot authenticate its middle. Keep historical proof files.
+- Reorder/delete dialogs use cached presentation and pass its manifest as a
+  precondition to the backend's own capture. No second GUI-side manifest read.
+- Final scan callbacks belong to its already-connected owner retirement slot.
+  `isRunning()==False` is earlier than queued `finished`; connecting another
+  finished handler at that point can miss the emission. Publish rows/retire first.
+  Do not start a newly attached iPod's dashboard after promising completion/Eject.
+- Rockbox-only idle drift is a playlist-change hint. Explicit Sync additionally
+  compares managed source stats/display/profile, without hashing retained media.
+
+## Later November4 USB audit — installed build165
+
+- Use `QDialog.DialogCode.Accepted`, never an instance's `Accepted` attribute.
+  The format dialog exception happened before erase and stranded global busy
+  state. Retire format ownership on rejected/failed dialogs as well as workers.
+- Confirmed format has its own retained worker and reserves every captured
+  partition of that physical disk. Another USB may export through the ordinary
+  lane. Format completion cannot clear that export's flags, progress or Cancel.
+  Discovery waits; old partition identities retire before replacement discovery.
+- Stream bounded native erase output; show useful stages instead of mkfs geometry.
+  Honor cancellation before erase only, then retain/reap the running native
+  process. Drain stdout on consumer/read failure before joining a verbose child.
+- USB Info needs its selected native cover resolver. Capture bytes off-thread
+  with the pinned read session; never substitute the Mac art cache. Native
+  membership IDs distinguish records sharing a path. Strip browser-only helper
+  fields before manifest creation or an unchanged export can write a manifest.
+- Catalog snapshots need exact repeated bytes and complete cross-file epoch/
+  presence checks, including previously absent WAL/profiles/catalogs. Recovery proof
+  writes must not manufacture a stat-only content certificate: actual FAT32 and
+  exFAT probes changed bytes while retaining all five epoch fields. Interrupted
+  recovery/adoption hashes affected files; redundant per-asset completed-proof
+  maps/ledgers are no longer written. Historical proof files stay untouched.
+- Logical `sb-…` track IDs are not numeric native content IDs. Incremental
+  catalog work uses `Track.native_id`, while curated art uses the logical ID.
+
 Hard-won + researched. **Read before touching workers, playlists, sync, art, or
 the iPod path.** Related: `ARCHITECTURE.md`, `ROADMAP.md`.
 
@@ -149,7 +227,7 @@ test, after unchanged source-identity and native/manual provenance guards.
   behavior/status belongs in the relevant docs; committed work goes in
   `ROADMAP.md`; exploratory UX belongs in `docs/IDEAS.md`.
 - **Installation must preserve rollback and AppData.** Back up/hash
-  `library.json`, gracefully quit, move the old app bundle into a temporary
+  `library.json`, wait for Sonny to quit normally, move the old app bundle into a temporary
   rollback directory, install with `ditto`, verify/relaunch/log-check, and
   compare curated state. Never use `rm -rf /Applications/Soundbox.app`; never
   replace or clear SoundBox AppData as part of an app install.
@@ -205,6 +283,14 @@ test, after unchanged source-identity and native/manual provenance guards.
   scalar's65536 outputs exactly; it changes cost, never geometry or palette.
 
 ## Qt / PySide6 (these bite HARD)
+- **Accent controls must resolve the live theme.** Export checkbox QSS must use
+  current theme roles, not imported color-string copies. Progress text uses
+  `ThemeProgressBar`: the saved accent-text color over filled pixels, normal
+  light text over the empty region. Fixed transport/cue/waveform data colors stay
+  independent. Device choices fill one through five rows with USB/iPod icons;
+  export folders start collapsed. `TrackBrowserTree` makes device playlist/folder
+  rows toggle without selection while tracks remain selectable and checkbox
+  gestures, keyboard navigation and stock reorder keep their own behavior.
 - **Tree stripes and embedded controls need explicit geometry.** QTreeView paints
   alternate backgrounds only for real items. Device BrowserDetailTree extends
   the same 24-point grid through empty space without fake rows. Legacy embedded device
@@ -418,7 +504,9 @@ test, after unchanged source-identity and native/manual provenance guards.
   ran on the UI thread. Keep packed color repair vectorized and check cancelled
   workers after detail reads. Display-stream publication must reject stale
   generations under the native render lock, just like signed detail. Cue-button
-  style polish is needed only when the filled property changes.
+  local stylesheet changes are needed only when the filled property changes;
+  those changes already repolish, so do not manually unpolish/polish through
+  the borrowed style wrapper.
 - **libsndfile does not decode AAC/ALAC here.** Complete imports still need their
   compact supplement. Use QAudioDecoder at native rate/channels and the same
   1-ms reducer; never silently retry an unsupported primary decoder forever or
@@ -939,8 +1027,10 @@ test, after unchanged source-identity and native/manual provenance guards.
   on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
   unchanged mount/timestamp state starts no idle discovery worker. Failed probes
   retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
-  three-second poll. Generic USB polling keeps only mount/storage observations;
-  it does not capture source playlists, inspect catalogs or compute drift.
+  three-second poll. Known generic-USB-only idle/source events start no mounted-path
+  scan. Mount changes, retryable discovery and explicit browser requests can
+  refresh connection/storage facts, without source-playlist capture, native
+  catalog status inspection or drift computation.
   Ordinary unmounted folders retain the 30-second attachment grace.
   Verified external mounts appear disabled as `NAME · Checking…`. The first iPod/Rockbox scan
   computes sync drift before publishing the selectable row at QThread.finished;
@@ -1083,6 +1173,11 @@ test, after unchanged source-identity and native/manual provenance guards.
   again before Edit after any scripted rewrite.
 
 ## Cancel semantics (sync.py — don't regress)
+
+These partial-M3U/schema-2 rules belong to the filesystem/Rockbox engine, not the
+native CDJ USB transaction. Generic CDJ USBs never acquire a sync/pending badge;
+their accepted selected export/recovery contract is below and in the CDJ guide.
+
 - `sync.run` on cancel: writes HONEST partial m3u8s (only on-device entries +
   "# CANCELLED: N …" footer) and records incomplete playlists with **sig="partial"**
   → drift flags them → next Sync completes. A cancelled export must NEVER look
@@ -1202,9 +1297,12 @@ test, after unchanged source-identity and native/manual provenance guards.
   unrelated empty brackets. Other custom plain words/phrases likewise match
   only as a complete trailing unit or complete paired-bracket contents. Raw
   regex remains the explicitly advanced, run-as-written escape hatch.
-- `manifest._excluded(pl, hidden, removals)` is the single source of veto truth
-  for sig/entry/diff/prune — any new "don't export this track" feature must flow
-  through it or devices won't drift.
+- `manifest._excluded(pl, hidden, removals)` supplies the existing filesystem/
+  iPod signature, entry, diff and prune exclusions. Preserve those semantics and
+  current Library visibility when adding an export veto. Native CDJ capture
+  resolves the explicit selection freshly; never add automatic generic-USB drift
+  merely to signal an exclusion. Ordinary native playlist removal uses its
+  accepted source writer rather than creating a local-only veto.
 - Artist aliases: `build_registry(..., aliases)` applies them TWICE so chains
   resolve (yeschef→YESCHEF!→YES CHEF). `suggest_merges` retains quadratic worst-case
   pair work, with length buckets, matcher-index reuse and quick-ratio upper-bound
@@ -1265,8 +1363,10 @@ test, after unchanged source-identity and native/manual provenance guards.
   record until atomic publication and never escalate to full fallback cooking.
   Schedule these ahead of full cooks that may be waiting for 25 GiB. `library.json`,
   its small rotating backups, art, and existing analysis are not expendable.
-  Installer app rollbacks are temporary and only one may exist during
-  verification.
+  Installer app rollbacks are temporary; retain only the exact pending-acceptance
+  bases identified in current HANDOFF. Those explicitly protected bases take
+  precedence over historical one-rollback cleanup guidance; never retire them
+  merely because a newer package passed automated checks.
 - **Status presentation has one owner at a time.** Per-file acquisition/copy/
   verification notifications update hover details only; they never replace the
   operation label, track count, pulse or overall percentage. Reserve count width
@@ -1406,14 +1506,17 @@ test, after unchanged source-identity and native/manual provenance guards.
   can predate the actual add by weeks (e.g. a track bounced 6/29, added 7/10 reads
   `DateCreated=6/29`, `created_at=7/10 16:43`). Collection's newest-added sort keys
   on `created_at` → `Track.added_ts`. `DateCreated[:10]` stays as display `date_added`.
-- rekordbox reorders → manifest sig is order-sensitive → reorder = drift = resync.
+- iPod/Rockbox manifest signatures are order-sensitive, so source playlist
+  reorder can require explicit managed Sync there. Generic CDJ USBs apply current
+  selected order only during the requested export and never compute a drift badge.
 - rekordbox auto-writes a `PIONEER/` folder onto any USB it touches. It is a
   hard external-product boundary: count its space, but never use it for drift,
   manifest ownership, verification, cleanup, import, browsing actions, or an
   ordinary write. The separately accepted `cdj_*` boundary is the scoped
   generic-FAT32/exFAT native-catalog/export exception, with its own mount/source/
-  metadata/recovery guards. Explicit generic whole-volume Erase remains a
-  separately confirmed destructive action.
+  metadata/recovery guards. The current generic USB menu exposes separately
+  confirmed Reformat USB; whole-volume Erase remains a guarded filesystem-backend
+  operation, not an extra CDJ menu action.
 
 ## Cover art (optional SoundCloud provider + shared Rockbox/stock rendering)
 
@@ -1805,7 +1908,9 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   confirmation dialog. A dual recovery plan may identify an exact-path,
   exact-size candidate, but commit preflight must verify its full expected
   SHA-256 before the first write. Report that verification through normal sync
-  progress and persist completed proofs in the Mac-side journal.
+  progress. Every adoption/preflight freshly hashes the affected candidate;
+  coarse FAT epochs cannot reuse earlier content proofs. Historical proof files
+  remain untouched, and no new per-file proof JSON is written.
 - **The mounted on-disk layout selects the exporter.** SoundBox does not know
   which firmware the user last booted. `/.rockbox/` alone uses ordinary Rockbox
   export; `/.rockbox/` plus `iPod_Control/` uses only the MA446/FAT32 composite
@@ -1850,10 +1955,10 @@ for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
   confirmation modal and compare it before commit performs any write. Never cross
   the remount to delete paths remembered by the old session. A dual recovery
   directory named for the still-current manifest can authorize a later retry to
-  adopt only freshly planned path/size/SHA-256 matches. Persist each completed
-  full-hash proof in Mac-side disposable state and recheck its size, timestamp,
-  and edge fingerprint so repeated USB resets resume verification rather than
-  rereading all prior survivors. The UI uses recorded transaction outcomes; an
+  adopt only freshly planned path/size/SHA-256 matches. Freshly hash each affected
+  candidate at adoption/preflight; same-size FAT edits can preserve every epoch
+  and the edge fingerprint while changing the middle. Never bless them using
+  persisted receipts. Preserve historical proof files without new proof writes. The UI uses recorded transaction outcomes; an
   incomplete rollback must retain recovery and must never claim that all new
   files were removed. Unknown outcomes must not claim no device writes.
 - **A filesystem-browser confirmation grants authority to one mounted volume,
@@ -2141,10 +2246,16 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   unrelated collection-only records. Exact removed assets stay recoverable until
   durable commit, then retire their backups to free device space. Resume partial
   committed retirement; never require already retired originals for rollback.
-- Generic USB completion invalidates its cached browser snapshot without reading
-  the device again. Eject only submits normal diskutil eject, after an existing
+- Generic USB writes clear stale song rows with an honest browse notice while
+  preserving settings drafts and the last real expansion/selection state. A
+  deliberate USB/tab click refreshes once, including already-checked tabs and
+  failed cached reads; internal restoration and row expansion never read.
+  Failed, cancelled and unchanged exports retain the previous view. Completion
+  performs no final device read or post-summary scan. Eject only submits normal
+  diskutil eject, after an existing
   owner retires; it starts no last catalog read, verification or sync comparison.
-  Respect macOS refusal and never force-unmount.
+  Respect macOS refusal and never force-unmount. Successful eject retires its
+  row/caches in memory and starts no replacement scan.
 - A same-filesystem format may reuse only a full-capacity, single first MBR
   partition with the expected FAT32/exFAT partition type. Other layouts and
   filesystem switches use whole-disk repartitioning. Keep fresh physical identity,

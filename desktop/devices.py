@@ -203,7 +203,7 @@ def device_facts(path, *, cached_only: bool = False) -> DeviceFacts:
     ipod = (
         _classic_ipod_facts(key)
         if not cached_only and str(info.get("MediaType") or "").casefold() == "ipod"
-        else {}
+        else _IPOD_FACTS_CACHE.get(key, {})
     )
     return DeviceFacts(
         volume_uuid=str(info.get("VolumeUUID") or ""),

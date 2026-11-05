@@ -11,14 +11,14 @@ class CdjDropIntent(unittest.TestCase):
         from pathlib import Path
         track=SimpleNamespace(path=Path('/synthetic/music/song.wav'),source_analysis_path='/synthetic/analysis/ANLZ0000.DAT')
         host=SimpleNamespace(lib=SimpleNamespace(source='/synthetic/library/master.db',tracks_by_id={'17':track}),
-            _defer_device_operation_until_scan_finishes=lambda _callback:False,_device_operation_owned=lambda:False,
+            _defer_device_operation_until_scan_finishes=lambda _callback:False,_device_operation_owned=lambda *_:False,
             _device_profiles={'/not-a-device':SimpleNamespace(kind='generic_usb')},_device_mount_tokens={'/not-a-device':91},
             _release_eject_ready=mock.Mock(),_start_pulse=mock.Mock(),_finish_device_result_worker=mock.Mock(),
-            _start_device_worker=mock.Mock())
+            _start_device_worker=mock.Mock(),_start_usb_format_worker=lambda worker,*_:setattr(host,"_usb_format_worker",worker))
         with mock.patch('desktop.cdj.device_facts',return_value=SimpleNamespace(volume_uuid='synthetic-volume')), \
              mock.patch('soundbox.usb_format.capture') as capture:
             CdjDeviceMixin._reformat_usb(host,'/not-a-device')
-            host._cdj_worker.operation(lambda:False,lambda *_:None)
+            host._usb_format_worker.operation(lambda:False,lambda *_:None)
         self.assertEqual(capture.call_args.kwargs['sources'],[
             Path('/synthetic/library/master.db'),track.path,Path(track.source_analysis_path)])
 
@@ -60,7 +60,7 @@ class CdjDropIntent(unittest.TestCase):
     def test_drop_authorization_survives_discovery_deferral(self):
         pending=[]
         host=SimpleNamespace(_shutting_down=False,lib=object(),_begin_cdj_export=mock.Mock(),
-            _defer_device_operation_until_scan_finishes=lambda callback:pending.append(callback) or True)
+            _defer_device_operation_until_scan_finishes=lambda callback,**_:pending.append(callback) or True)
         playlists=[object()]
         CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',playlists,from_drop=True,drop_target=(7,'fixture'))
         pending[0]()
@@ -70,8 +70,8 @@ class CdjDropIntent(unittest.TestCase):
         for source_busy in (False,True):
             pending=[]
             host=SimpleNamespace(_shutting_down=False,lib=object(),_begin_cdj_export=mock.Mock(),
-                _defer_device_operation_until_scan_finishes=lambda callback:False if source_busy else pending.append(callback) or True,
-                _device_operation_owned=lambda:False,tag_controller=SimpleNamespace(owned=source_busy),
+                _defer_device_operation_until_scan_finishes=lambda callback,**_:False if source_busy else pending.append(callback) or True,
+                _device_operation_owned=lambda *_:False,tag_controller=SimpleNamespace(owned=source_busy),
                 _start_pulse=mock.Mock(),cancel_btn=mock.Mock())
             track=object()
             with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
@@ -93,8 +93,8 @@ class CdjDropIntent(unittest.TestCase):
     def test_drop_authorization_survives_waiting_for_source_edits(self):
         pending=[]
         host=SimpleNamespace(_shutting_down=False,lib=object(),_begin_cdj_export=mock.Mock(),
-            _defer_device_operation_until_scan_finishes=lambda _:False,
-            _device_operation_owned=lambda:False,tag_controller=SimpleNamespace(owned=True),
+            _defer_device_operation_until_scan_finishes=lambda _,**_options:False,
+            _device_operation_owned=lambda *_:False,tag_controller=SimpleNamespace(owned=True),
             _start_pulse=mock.Mock(),cancel_btn=mock.Mock())
         playlists=[object()]
         with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
@@ -109,7 +109,7 @@ class CdjDropIntent(unittest.TestCase):
         pending=[];controller=SimpleNamespace(pending=[object()],queue_error=lambda:'')
         lib=SimpleNamespace(source='/synthetic/master.db',source_library_id='synthetic',playlists=[old])
         host=SimpleNamespace(_shutting_down=False,lib=lib,_begin_cdj_export=mock.Mock(),
-            _defer_device_operation_until_scan_finishes=lambda _:False,_device_operation_owned=lambda:False,
+            _defer_device_operation_until_scan_finishes=lambda _,**_options:False,_device_operation_owned=lambda *_:False,
             tag_controller=SimpleNamespace(owned=False),playlist_controller=controller,
             _start_pulse=mock.Mock(),cancel_btn=mock.Mock())
         with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):
@@ -127,7 +127,7 @@ class CdjDropIntent(unittest.TestCase):
                 controller=SimpleNamespace(pending=[object()],queue_error=lambda:'')
                 lib=SimpleNamespace(source='/synthetic/master.db',source_library_id='synthetic',playlists=[old])
                 host=SimpleNamespace(_shutting_down=False,lib=lib,_begin_cdj_export=mock.Mock(),
-                    _defer_device_operation_until_scan_finishes=lambda _:False,_device_operation_owned=lambda:False,
+                    _defer_device_operation_until_scan_finishes=lambda _,**_options:False,_device_operation_owned=lambda *_:False,
                     tag_controller=SimpleNamespace(owned=False),playlist_controller=controller,
                     _start_pulse=mock.Mock(),_stop_pulse=mock.Mock(),_flash_status=mock.Mock(),cancel_btn=mock.Mock())
                 with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:pending.append(callback)):

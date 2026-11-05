@@ -1,5 +1,5 @@
 """Track information with complete artwork on its first visible frame."""
-from PySide6.QtCore import Qt, QThread, QEventLoop, QSize
+from PySide6.QtCore import Qt, QThread, QEventLoop, QSize, QBuffer, QIODevice
 from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (QApplication,QDialog,QDialogButtonBox,QGridLayout,QHBoxLayout,
     QLabel,QLineEdit,QMessageBox,QPlainTextEdit,QPushButton,QScrollArea,QTabWidget,QVBoxLayout,QWidget)
@@ -31,9 +31,13 @@ class ArtworkWorker(QThread):
 
     def run(self):
         try:
-            path=self.resolve()
-            if path and not self.isInterruptionRequested():
-                reader=QImageReader(str(path))
+            source=self.resolve()
+            if source and not self.isInterruptionRequested():
+                buffer=None
+                if isinstance(source,bytes):
+                    buffer=QBuffer();buffer.setData(source);buffer.open(QIODevice.ReadOnly)
+                    reader=QImageReader(buffer)
+                else:reader=QImageReader(str(source))
                 bounds=QSize(self.side,self.side)
                 size=reader.size()
                 if size.isValid():reader.setScaledSize(size.scaled(bounds,Qt.KeepAspectRatio))
@@ -45,11 +49,12 @@ class ArtworkWorker(QThread):
 
 
 class TrackInfoDialog(QDialog):
-    def __init__(self, row, *, artwork=None, pick_art=None, save=None, parent=None):
+    def __init__(self, row, *, artwork=None, pick_art=None, save=None, parent=None, desktop_artwork=True):
         super().__init__(parent)
         self.setWindowTitle('Track information');self.resize(800,760)
         self.row=dict(row);self.controls={};self.save_callback=save
         self._artwork=artwork;self._pick_art=pick_art;self._image=QImage()
+        self._desktop_artwork=desktop_artwork
         self._owner=TaskOwner(self);self._art_worker=None;self._info_built=False
         self._art_ready=False;self._art_dirty=False
         self._covers=[]
@@ -231,21 +236,46 @@ def _exec_info(dialog):
 
 
 class TrackInfoMixin:
+    def _open_usb_track_info(self,snapshot,song,row):
+        if snapshot is None or snapshot.error or snapshot.notice:
+            return
+        defer=getattr(self,'_defer_device_operation_until_scan_finishes',None)
+        if defer and defer(lambda:self._open_usb_track_info(snapshot,song,row)):
+            return
+        busy=getattr(self,'_device_operation_owned',None)
+        if busy and busy():
+            self._flash_status('Wait for the current device operation');return
+        from soundbox.cdj_usb import read_artwork
+        dialog=TrackInfoDialog(dict(row,location=str(snapshot.target)+song.path),
+            artwork=lambda:read_artwork(snapshot.target,snapshot.mount_token,song),parent=self,desktop_artwork=False)
+        # Keep timer-driven discovery out of this selected read while its
+        # TaskOwner dispatches Qt events and joins the finished decoder.
+        exporting=getattr(self,'_exporting',False)
+        self._exporting=True
+        try:
+            dialog.prepare_artwork()
+        finally:
+            self._exporting=exporting
+        _exec_info(dialog)
+
     def _refresh_info_artwork(self,track_ids):
         ids=set(track_ids)
         for dialog in self.findChildren(TrackInfoDialog):
-            if dialog.row.get('id') in ids and not dialog._owner.stopping:
+            if dialog._desktop_artwork and dialog.row.get('id') in ids and not dialog._owner.stopping:
                 dialog._load_artwork()
 
     def _open_track_info(self):
         from .usb_device_view import CdjSong
+        if self.stack.currentIndex()==1 and self.device_content_stack.currentIndex()==1:
+            self._flash_status('iPod track details are shown in the device view');return
         if self.stack.currentIndex()==1 and self.device_content_stack.currentIndex()==2:
             item=self.usb_device_pages.playlist_tree.currentItem()
             song=item.data(0,Qt.UserRole) if item else None
             if isinstance(song,CdjSong):
-                row=self.usb_device_pages._display_rows.get(song.path,{})
-                _exec_info(TrackInfoDialog(dict(row,location=str(self.usb_device_pages._snapshot.target)+song.path),parent=self))
+                row=dict(self.usb_device_pages._display_rows.get(song.id,{}))
+                self._open_usb_track_info(self.usb_device_pages._snapshot,song,row)
                 return
+            self._flash_status('Select a USB track to view its information');return
         grave=getattr(self,'_grave',None)
         if grave is not None and grave.isVisible():
             from .settings_page import _GRAVE_ROLE

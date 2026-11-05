@@ -17,8 +17,13 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sync import DeviceSession
 
 from .paths import is_external_device_path
+from .device_manifest_capture import read_device_manifest
 
 SCHEMA = 2
 COMPOSITE_SCHEMA = 3
@@ -66,15 +71,27 @@ def manifest_path(device_root) -> Path:
     return Path(device_root) / _DIRNAME / _FILENAME
 
 
+def _guarded_manifest_path(device_root, *, create: bool = False) -> tuple[Path, DeviceSession]:
+    # Local import avoids the manifest/sync module dependency at import time.
+    from .sync import DeviceSession
+    root = Path(device_root)
+    if not create and not root.exists():
+        raise FileNotFoundError(root)
+    session = DeviceSession(root, [], create=create)
+    return session.guard(manifest_path(root)), session
+
+
 def has_composite_ownership(device_root) -> bool:
     """Bounded read-only guard for the dual-library schema.
 
     Older Rockbox-only export/resync code must never interpret schema 3 as an
     empty schema-2 manifest and overwrite its cross-firmware ownership state.
     """
+    payload = read_device_manifest(device_root)
+    if payload is None:
+        return False
     try:
-        data = json.loads(
-            manifest_path(device_root).read_text(encoding="utf-8"))
+        data = json.loads(payload.decode("utf-8"))
     except (OSError, ValueError):
         return False
     return isinstance(data, dict) and int(data.get("schema") or 0) == COMPOSITE_SCHEMA
@@ -93,8 +110,11 @@ def _empty() -> dict:
 
 def load(device_root) -> dict:
     """Read a device's manifest, or a blank one if absent/corrupt."""
+    payload = read_device_manifest(device_root)
+    if payload is None:
+        return _empty()
     try:
-        data = json.loads(manifest_path(device_root).read_text(encoding="utf-8"))
+        data = json.loads(payload.decode("utf-8"))
     except (OSError, ValueError):
         return _empty()
     if not isinstance(data, dict) or not isinstance(data.get("playlists"), dict):
@@ -128,9 +148,11 @@ def load_composite(device_root) -> dict:
 def read_composite(device_root) -> tuple[dict, bytes]:
     """Return one fresh captured payload and its strictly validated model."""
     try:
-        payload = manifest_path(device_root).read_bytes()
+        payload = read_device_manifest(device_root)
     except OSError as exc:
         raise ValueError("Composite SoundBox manifest is unreadable") from exc
+    if payload is None:
+        raise ValueError("Composite SoundBox manifest is unreadable")
     return parse_composite(payload),payload
 
 
@@ -208,6 +230,8 @@ def composite_playlist_status(
     """
     composite_library_counts(manifest)  # strict schema/profile validation
     root = Path(device_root).expanduser().resolve(strict=True)
+    from .sync import DeviceSession
+    session = DeviceSession(root, [], create=False)
     output: dict[str, tuple[str, ...]] = {}
     changed: set[str] = set()
     for raw_path, row in manifest["files"].items():
@@ -223,6 +247,7 @@ def composite_playlist_status(
         if not parts or any(part in {".", ".."} for part in parts):
             raise ValueError("Composite playlist path is invalid")
         candidate = root / Path(*parts)
+        session.guard(candidate)
         try:
             path = candidate.resolve(strict=True)
         except OSError:
@@ -269,7 +294,7 @@ def composite_playlist_entries(
 
 
 def save(device_root, manifest: dict) -> None:
-    p = manifest_path(device_root)
+    p, session = _guarded_manifest_path(device_root, create=True)
     p.parent.mkdir(parents=True, exist_ok=True)
     output = manifest
     if isinstance(manifest.get("files"), dict):
@@ -282,12 +307,13 @@ def save(device_root, manifest: dict) -> None:
         }
     encoded = json.dumps(
         output, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.sbpart")
+    tmp = session.guard(p.with_name(f".{p.name}.{os.getpid()}.sbpart"))
     try:
         with tmp.open("wb") as handle:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        session.guard(p)
         os.replace(tmp, p)
     except OSError:
         try:

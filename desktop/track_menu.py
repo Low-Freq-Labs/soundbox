@@ -60,7 +60,7 @@ class TrackMenuMixin:
             target = (self._device_mount_tokens.get(dev, 0), facts.volume_uuid)
             action = exports.addAction(dev.rsplit('/', 1)[-1])
             action.setEnabled(bool(track and not track.imported and facts.writable and facts.volume_uuid
-                                   and not self._device_operation_owned()))
+                                   and not self._device_operation_owned(dev)))
             action.triggered.connect(lambda _checked=False, path=dev, captured=target, song=track:
                 self._begin_cdj_export(path, standalone=(song,), from_drop=True, drop_target=captured))
         if not exports.actions():

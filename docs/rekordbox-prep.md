@@ -5,6 +5,17 @@ preferences and bounded native commands are documented in
 [native-playlist-order.md](native-playlist-order.md). Artists is a virtual
 SoundBox view and creates no native organization jobs.
 
+The later November4 whole-app audit coalesces discovery/queue wakeups and removes
+redundant private Grid staging when live bytes, mode and mtime already equal the
+recorded desired state. Existing staging evidence is still validated, and fresh
+source/library/schema/apps/authority/whole-recovery checks and final independent
+readback remain. Conversion recovery separately binds its existing source digest
+to before/opened/closed/after epochs and rechecks that exact identity after its
+fresh lease guard before replacing/displacing audio. Conflicts retain originals,
+stages and journal/receipt evidence. These changes introduce no SQL, codec or
+musical-data authority. See [audit scope and evidence](performance-audit.md#whole-app-audit--november4-after-ipod-review)
+and [current delivery](HANDOFF.md).
+
 Approved October 26, 2026. This document separates the agreed product behavior
 from implemented My Tag/cue work and remaining prep work. Sonny asked to
 proceed slowly and review each milestone before continuing. Native tag and DB-only
@@ -22,8 +33,10 @@ registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
 are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
 separately accepted initial full-analysis authority; it never inherits the WAV
-authority. These paths remain in the November4 build160/source release; exact
-provenance is in [HANDOFF](HANDOFF.md). Other analysis profiles, existing-analysis
+authority. These paths remain installed in the November4 whole-app delivery,
+personal build165/runtime `7ffde716…`; earlier build163/build160 source releases
+are dated delivery evidence. Exact provenance is in [HANDOFF](HANDOFF.md).
+Other analysis profiles, existing-analysis
 replacement, gain and broader metadata remain gated. The current shared-library
 transition is in
 [shared-library-workflow-plan.md](shared-library-workflow-plan.md).

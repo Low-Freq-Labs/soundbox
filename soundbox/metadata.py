@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from functools import lru_cache
 
 TAG = "tag"          # came straight from rekordbox Artist field
 NAME = "name"        # parsed from the track Name
@@ -310,6 +311,15 @@ def _artist_set(a: str) -> set:
     return {_fold(p) for p in _COLLAB_SPLIT.split(a or "") if p.strip()}
 
 
+def _compile_artist_edges(artist: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    escaped = re.escape(artist)
+    return (re.compile(rf"^\s*{escaped}\s*[-–—_:]+\s*", re.IGNORECASE),
+            re.compile(rf"\s*[-–—_:]+\s*{escaped}\s*$", re.IGNORECASE))
+
+
+_cached_artist_edges = lru_cache(maxsize=1024)(_compile_artist_edges)
+
+
 def neat_title(name: str, artist: str) -> str:
     """Display/export title cleanup: drop a redundant KNOWN-artist name glued to
     the title's edge ('Zero - Enter The Dragon' by Zero → 'Enter The Dragon';
@@ -323,9 +333,14 @@ def neat_title(name: str, artist: str) -> str:
     ca = clean_artist(artist)
     if not name or len(ca) < 2 or ca == UNKNOWN_ARTIST:
         return name
-    esc = re.escape(ca)
-    out = re.sub(rf"^\s*{esc}\s*[-–—_:]+\s*", "", name.strip(), flags=re.IGNORECASE)
-    out = re.sub(rf"\s*[-–—_:]+\s*{esc}\s*$", "", out, flags=re.IGNORECASE)
+    # The stdlib regex cache holds only 512 patterns. Two dynamic edge
+    # expressions per artist evict each other in an ordinary large library.
+    # Retain bounded pure text/compiled patterns, never source or row authority.
+    # Oversized external strings keep the exact transform without residency.
+    prefix, suffix = (_cached_artist_edges(ca) if len(ca) <= 256
+                      else _compile_artist_edges(ca))
+    out = prefix.sub("", name.strip())
+    out = suffix.sub("", out)
     aset = _artist_set(ca)
     if out == name.strip() and " - " in out and aset:
         # Exact edge missed — try the segments as artist SETS (handles collab
@@ -503,7 +518,6 @@ def valid_pattern(entry: str) -> bool:
         return False
 
 
-from functools import lru_cache
 
 
 @lru_cache(maxsize=8)

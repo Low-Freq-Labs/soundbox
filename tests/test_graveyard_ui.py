@@ -27,6 +27,7 @@ class GraveyardUI(unittest.TestCase):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);self.root=Path(temp.name).resolve()
         with mock.patch('soundbox.rekordbox_db.db_available',return_value=False),mock.patch.object(MainWindow,'_refresh_devices'):
             self.w=MainWindow(isolated_dir=self.root/'state')
+        self.w._ensure_settings_page()
         self.addCleanup(self.close);w=self.w
         self.path=self.root/'chosen.wav';self.path.write_bytes(b'private synthetic audio')
         tracks={tid:Track(tid,tid,'Artist',self.path.as_uri()) for tid in ('chosen','untouched')}

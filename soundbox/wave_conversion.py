@@ -42,8 +42,12 @@ def _regular(path):
 
 
 def _current_digest(path):
-    before = identity(_regular(path)); value = _sha(path)
-    if before != identity(_regular(path)) or Path(path).resolve(strict=True) != path:
+    before = identity(_regular(path))
+    with Path(path).open('rb') as stream:
+        opened = identity(os.fstat(stream.fileno()))
+        value = hashlib.file_digest(stream,'sha256').hexdigest()
+        closed = identity(os.fstat(stream.fileno()))
+    if not before == opened == closed == identity(_regular(path)) or Path(path).resolve(strict=True) != path:
         raise ValueError('WAVE changed during verification')
     return value, before
 
@@ -229,8 +233,8 @@ def convert(path, root, operation_id, track_id, *, expected_sha256=None, reduce_
             raise ValueError('Conversion stage identity differs')
         _regular(stage)
         if _sha(stage) != receipt['after_sha256']:raise ValueError('Converted recovery bytes changed')
-        before = identity(path.stat()); guard()
-        if identity(path.stat()) != before:raise ValueError('WAVE changed before replacement')
+        guard()
+        if identity(_regular(path)) != current_epoch:raise ValueError('WAVE changed before replacement')
         os.replace(stage,path); sync_dir(path.parent); _fault('replaced')
         receipt['epoch'] = identity(path.stat()); atomic_bytes(receipt_path,json.dumps(receipt).encode())
         return receipt

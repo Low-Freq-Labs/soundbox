@@ -18,6 +18,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat as stat_mod
 import tempfile
 from contextlib import ExitStack
 import unicodedata
@@ -231,6 +232,9 @@ class PlannedFile:
     target_path: Path
     size: int
     track_id: str = ""        # to look up this track's cover art
+    title: str = ""
+    artist: str = ""
+    source_mtime_ns: int = 0
     # Canonical library file when ``source`` is a disposable Rockbox-safe
     # derivative.  Source audio itself is never modified.
     original_source: Path | None = None
@@ -536,6 +540,7 @@ def plan(
     derive_artists: bool = True,
     artist_overrides: dict | None = None,
     title_overrides: dict | None = None,
+    existing_files: dict | None = None,
 ) -> tuple[dict[str, PlannedFile], dict[int, list[pl_mod.M3UEntry]]]:
     """Build the copy plan + playlist entries. READ ONLY (no writes).
 
@@ -545,25 +550,48 @@ def plan(
     """
     music_root = target / "Music"
     files: dict[str, PlannedFile] = {}          # device_path -> PlannedFile
-    occupied_keys: set[str] = set()            # normalized FAT destination identities
+    occupied_keys: set[str] = set()            # normalized FAT file/folder identities
+    occupied_sources: dict[str, str] = {}
+    for path, row in (existing_files or {}).items():
+        if not isinstance(row, dict) or row.get("kind") != "track":
+            continue
+        key = _destination_key(path)
+        source = str(row.get("source") or "")
+        for identity in (key, key.rsplit("/", 1)[0]):
+            occupied_keys.add(identity)
+            # Legacy shared folders may already have multiple sources. Never
+            # reuse an ambiguous artwork directory for a new payload.
+            prior = occupied_sources.get(identity, source)
+            occupied_sources[identity] = source if prior == source else ""
     src_to_device: dict[str, str] = {}          # source str -> device_path
     entries_by_pl: dict[int, list[pl_mod.M3UEntry]] = {}
+    observations: dict[Path, os.stat_result | None] = {}
+    source_keys: dict[Path, str] = {}
+    display_by_track: dict[str, tuple[str, str]] = {}
+    display_by_source: dict[str, tuple[str, str]] = {}
 
     for idx, plist in enumerate(selected):
         entries: list[pl_mod.M3UEntry] = []
         for track in lib.resolve(plist):
             src = track.path
-            try:
-                exists = src.is_file()
-            except OSError:
-                exists = False
-            if not exists:
+            if src not in observations:
+                try:
+                    current = src.stat()
+                    record_metric("source_metadata_observations")
+                    observations[src] = current if stat_mod.S_ISREG(current.st_mode) else None
+                except OSError:
+                    observations[src] = None
+            observation = observations[src]
+            if observation is None:
                 entries.append(pl_mod.M3UEntry(None, track.artist, track.name))
                 continue
 
-            src_key = str(src)
-            device_path = src_to_device.get(src_key)
-            if device_path is None:
+            src_key = source_keys.get(src)
+            if src_key is None:
+                src_key = str(src.expanduser().resolve())
+                source_keys[src] = src_key
+            display = display_by_track.get(track.track_id)
+            if display is None:
                 override = (title_overrides or {}).get(track.track_id)
                 artist = metadata.effective_artist(
                     track.track_id, override or track.name, track.artist,
@@ -580,17 +608,32 @@ def plan(
                 title = metadata.effective_title(
                     track.track_id, track.name, artist, title_overrides,
                     getattr(lib, "title_junk", None))
+                display = (title, artist)
+                display_by_track[track.track_id] = display
+            previous_display = display_by_source.get(src_key)
+            if previous_display is not None and previous_display != display:
+                raise RockboxMediaError(
+                    "One source file resolved to conflicting Rockbox metadata: "
+                    f"{src_key}")
+            display_by_source[src_key] = display
+            title, artist = display
+            device_path = src_to_device.get(src_key)
+            if device_path is None:
                 device_path = _assign_device_path(
                     src, artist, files, music_root, title,
-                    occupied_keys=occupied_keys)
-                occupied_keys.add(_destination_key(device_path))
+                    occupied_keys=occupied_keys, occupied_sources=occupied_sources)
+                key = _destination_key(device_path)
+                for identity in (key, key.rsplit("/", 1)[0]):
+                    occupied_keys.add(identity)
+                    occupied_sources[identity] = src_key
                 src_to_device[src_key] = device_path
                 files[device_path] = PlannedFile(
                     source=src,
                     device_path=device_path,
                     target_path=target / device_path.lstrip("/"),
-                    size=src.stat().st_size,
+                    size=observation.st_size, source_mtime_ns=observation.st_mtime_ns,
                     track_id=track.track_id,
+                    title=title, artist=artist,
                     original_source=src,
                 )
             entries.append(pl_mod.M3UEntry(device_path, track.artist, track.name))
@@ -602,28 +645,41 @@ def _assign_device_path(
     src: Path, artist: str, files: dict[str, PlannedFile], music_root: Path,
     name_override: str | None = None,
     *, occupied_keys: set[str] | None = None,
+    occupied_sources: dict[str, str] | None = None,
 ) -> str:
-    """Pick a unique device path, disambiguating collisions from *different*
-    source files by appending a short source hash before the extension."""
+    """Give each source its own FAT-safe audio and artwork directory."""
     base = device_music_path(src, artist, name_override=name_override)
-    # One plan-local index avoids renormalizing every prior destination for
-    # every new source. Standalone callers retain the complete files baseline.
-    occupied = (occupied_keys if occupied_keys is not None
-                else {_destination_key(path) for path in files})
-    if _destination_key(base) not in occupied:
+    owners = occupied_sources
+    if owners is None:
+        owners = {}
+        for path, planned in files.items():
+            key = _destination_key(path)
+            source = str(planned.canonical_source.expanduser().resolve())
+            for identity in (key, key.rsplit("/", 1)[0]):
+                prior = owners.get(identity, source)
+                owners[identity] = source if prior == source else ""
+    occupied = occupied_keys if occupied_keys is not None else set(owners)
+    source = str(src.expanduser().resolve())
+
+    def available(candidate: str) -> bool:
+        key = _destination_key(candidate)
+        return all(identity not in occupied or owners.get(identity) == source
+                   for identity in (key, key.rsplit("/", 1)[0]))
+
+    if available(base):
         return base
-    # FAT32 is case-insensitive and macOS/device firmware can disagree about
-    # composed Unicode. Treat all equivalent spellings as the same name.
-    stem, dot, ext = base.rpartition(".")
-    suffix = hashlib.sha1(str(src).encode()).hexdigest()[:6]
-    candidate = f"{stem}_{suffix}{dot}{ext}" if dot else f"{base}_{suffix}"
-    counter = 2
-    while _destination_key(candidate) in occupied:
-        candidate = (
-            f"{stem}_{suffix}-{counter}{dot}{ext}"
-            if dot else f"{base}_{suffix}-{counter}")
+    # Disambiguate the directory too: cover.bmp is folder-scoped in Rockbox.
+    # Equal artist/title with different codecs must not share either cover.
+    base_path = Path(base)
+    suffix = hashlib.sha1(source.encode()).hexdigest()[:6]
+    counter = 1
+    while True:
+        token = suffix if counter == 1 else f"{suffix}-{counter}"
+        folder = base_path.parent.with_name(f"{base_path.parent.name}_{token}")
+        candidate = str(folder / f"{base_path.stem}_{token}{base_path.suffix}")
+        if available(candidate):
+            return candidate
         counter += 1
-    return candidate
 
 
 def run(
@@ -640,6 +696,7 @@ def run(
     art_cache=None,
     rockbox_media_cache=None,
     rockbox_art_cache=None,
+    reuse_managed_inventory: bool = False,
 ) -> SyncReport:
     """Execute (or simulate, if dry_run) the sync. All writes are under target.
 
@@ -653,9 +710,11 @@ def run(
             "This device uses SoundBox composite dual-library ownership; "
             "the Rockbox-only exporter is disabled for it.")
 
+    previous_manifest = manifest.load(target)
     files, entries_by_pl = plan(lib, selected, target, derive_artists=derive_artists,
                                 artist_overrides=artist_overrides,
-                                title_overrides=title_overrides)
+                                title_overrides=title_overrides,
+                                existing_files=previous_manifest.get("files"))
     assert_target_safe(target, [pf.canonical_source for pf in files.values()])
     session = (
         DeviceSession(
@@ -663,7 +722,6 @@ def run(
             [path for pf in files.values()
              for path in (pf.canonical_source, pf.source)])
         if not dry_run else None)
-    previous_manifest = manifest.load(target) if not dry_run else {}
     managed_files = {
         str(path): dict(row)
         for path, row in (previous_manifest.get("files") or {}).items()
@@ -690,6 +748,11 @@ def run(
         for entry in entries_by_pl[index]:
             if entry.device_path is not None:
                 memberships.setdefault(entry.device_path, set()).add(key)
+    artwork_by_parent: dict[str, list[str]] = {}
+    if reuse_managed_inventory:
+        for path, row in managed_files.items():
+            if row.get("kind") == "artwork":
+                artwork_by_parent.setdefault(str(Path(path).parent), []).append(path)
 
     # --- Free-space precheck ---------------------------------------------
     # Refuse to start writing if the NEW files won't fit, with one clear message,
@@ -747,6 +810,30 @@ def run(
             cancelled = True
             break
         tgt = pf.target_path
+        previous = managed_files.get(device_path) or {}
+        if reuse_managed_inventory and previous.get("owned") is True:
+            from .rockbox_media import NORMALIZED_MEDIA_PROFILE
+            profile = NORMALIZED_MEDIA_PROFILE if rockbox_media_cache is not None else "original"
+            expected_identity = f"{pf.size}:{pf.source_mtime_ns}:{profile}"
+            if (previous.get("source") == str(pf.canonical_source.resolve())
+                    and previous.get("source_identity") == expected_identity
+                    and previous.get("title") == pf.title
+                    and previous.get("artist") == pf.artist):
+                # Ordinary Sync retains committed inventory. Explicit Export
+                # still captures and checks live bytes, including repair.
+                previous["playlists"] = sorted(
+                    set(previous.get("playlists") or ())
+                    | memberships.get(device_path, set()))
+                for art_path in artwork_by_parent.get(str(Path(device_path).parent), ()):
+                    row = managed_files[art_path]
+                    row["playlists"] = sorted(
+                        set(row.get("playlists") or ())
+                        | memberships.get(device_path, set()))
+                already.add(device_path)
+                record_metric("retained_device_media")
+                if on_progress:
+                    on_progress(done, total, pf.source.name)
+                continue
         staged = ExitStack()
         original_source = pf.source
         try:
@@ -754,11 +841,14 @@ def run(
                 session.guard(tgt)
             source_stat = pf.canonical_source.stat()
             captured_hash = ""
+            source_size = source_stat.st_size
+            source_mtime_ns = source_stat.st_mtime_ns
             if not dry_run:
                 if on_progress:
                     on_progress(done - 1, total, f"Acquiring {pf.canonical_source.name}")
                 if rockbox_media_cache is not None:
-                    prepared = rockbox_media_cache.prepare(pf.canonical_source)
+                    prepared = rockbox_media_cache.prepare(
+                        pf.canonical_source, title=pf.title, artist=pf.artist)
                     staged.callback(rockbox_media_cache.discard, prepared)
                     pf.source = prepared.payload
                     pf.size = prepared.payload_size
@@ -766,6 +856,8 @@ def run(
                     pf.removed_embedded_images = prepared.removed_images
                     report.sanitized_media += bool(prepared.removed_images)
                     captured_hash = prepared.payload_sha256
+                    source_size = prepared.source_size
+                    source_mtime_ns = prepared.source_mtime_ns
                 else:
                     snapshot = staged.enter_context(acquire_source(
                         SourceContract(pf.canonical_source.resolve()),
@@ -774,8 +866,10 @@ def run(
                     pf.source = snapshot.path
                     pf.size = snapshot.size
                     captured_hash = snapshot.sha256
+                    source_size = snapshot.size
+                    source_mtime_ns = snapshot.observation.st_mtime_ns
             source_identity = (
-                f"{source_stat.st_size}:{source_stat.st_mtime_ns}"
+                f"{source_size}:{source_mtime_ns}"
                 f":{pf.payload_profile or 'original'}")
             previous = managed_files.get(device_path) or {}
             expected_hash = (
@@ -791,7 +885,8 @@ def run(
                     _sha256(tgt) if tgt.stat().st_size == pf.size else "")
                 if actual_hash == expected_hash:
                     already.add(device_path)
-                elif device_path in managed_files and session is not None:
+                elif (device_path in managed_files and previous.get("owned", False)
+                      and session is not None):
                     # Only a manifest-owned destination may be repaired.
                     session.atomic_copy(pf.source, tgt)
                     bytes_copied += pf.size
@@ -823,9 +918,12 @@ def run(
                         if previous else not was_present),
                     "source": str(pf.canonical_source.resolve()),
                     "source_identity": source_identity,
+                    "title": pf.title, "artist": pf.artist,
                     "size": pf.size,
                     "sha256": expected_hash,
-                    "playlists": sorted(memberships.get(device_path, ())),
+                    "playlists": sorted(
+                        set(previous.get("playlists") or ())
+                        | memberships.get(device_path, set())),
                 }
         except (OSError, RockboxMediaError, SourceAcquisitionError) as exc:
             global_errors.append(f"ERROR copying {pf.canonical_source} -> {tgt}: {exc}")
@@ -884,7 +982,8 @@ def run(
                             "size": img.stat().st_size,
                             "sha256": art_hash,
                             "playlists": sorted(
-                                memberships.get(device_path, ())),
+                                set(previous_art.get("playlists") or ())
+                                | memberships.get(device_path, set())),
                         }
                 except (OSError, RockboxMediaError) as exc:
                     global_errors.append(
@@ -1130,6 +1229,10 @@ def resync(
     NOTE: this trusts the manifest — it won't re-copy a file you manually deleted off
     the device (all rekordbox-driven edits are handled). Full re-verify isn't the goal."""
     target = Path(target).expanduser()
+    if manifest.has_composite_ownership(target):
+        raise RuntimeError(
+            "This device uses SoundBox composite dual-library ownership; "
+            "the Rockbox-only exporter is disabled for it.")
     m = manifest.load(target)
     prev = m.get("playlists", {})
     by_key = manifest.current_playlists_by_key(lib, extra)
@@ -1139,7 +1242,39 @@ def resync(
 
     drift = manifest.diff(m, lib, extra)
     drifted_keys = {k for k, *_ in (drift.renamed + drift.moved + drift.changed)}
+    # Explicit Sync checks current managed inputs; idle diff remains a bounded
+    # playlist-only hint for schema 2. Source observations are metadata only:
+    # payload capture/hashing is reserved for playlists that actually changed.
+    files, entries = plan(
+        lib, wanted, target, artist_overrides=artist_overrides,
+        title_overrides=title_overrides, existing_files=m.get("files"))
+    from .rockbox_media import NORMALIZED_MEDIA_PROFILE
+    expected_profile = NORMALIZED_MEDIA_PROFILE if rockbox_media_cache is not None else "original"
+    prior_files = m.get("files") or {}
+    prior_paths_by_key: dict[str, set[str]] = {}
+    for path, row in prior_files.items():
+        if isinstance(row, dict) and row.get("kind") == "track":
+            for key in row.get("playlists") or ():
+                prior_paths_by_key.setdefault(key, set()).add(path)
+    changed_media_paths: set[str] = set()
+    for path, planned in files.items():
+        row = prior_files.get(path) or {}
+        expected_identity = f"{planned.size}:{planned.source_mtime_ns}:{expected_profile}"
+        if (row.get("source") != str(planned.canonical_source.resolve())
+                or row.get("source_identity") != expected_identity
+                or row.get("title") != planned.title
+                or row.get("artist") != planned.artist):
+            changed_media_paths.add(path)
+    for index, playlist in enumerate(wanted):
+        key = manifest.playlist_key(playlist)
+        desired_paths = {entry.device_path for entry in entries[index]
+                         if entry.device_path is not None}
+        prior_paths = prior_paths_by_key.get(key, set())
+        if desired_paths != prior_paths or desired_paths & changed_media_paths:
+            drifted_keys.add(key)
     to_export = [p for p in wanted if manifest.playlist_key(p) in drifted_keys]
+    if not to_export and not removed_keys:
+        return SyncReport(dry_run=False, cancelled=bool(should_cancel and should_cancel()))
 
     # 1) Re-export ONLY the drifted playlists (copy any new files + rewrite their m3u8s
     #    + upsert their manifest entries). Unchanged playlists are skipped entirely —
@@ -1149,7 +1284,8 @@ def resync(
                  artist_overrides=artist_overrides, title_overrides=title_overrides,
                  art_cache=art_cache,
                  rockbox_media_cache=rockbox_media_cache,
-                 rockbox_art_cache=rockbox_art_cache)
+                 rockbox_art_cache=rockbox_art_cache,
+                 reuse_managed_inventory=True) if to_export else SyncReport(dry_run=False)
 
     # 2) Stale playlists are removed below through manifest ownership only.
 
@@ -1182,13 +1318,13 @@ def resync(
                 key for key in (row.get("playlists") or [])
                 if key not in removed_keys
             ]
-        sources = [
-            track.path for track in lib.tracks_by_id.values()
-            if track.path.is_file()
-        ]
+        sources = [track.path for track in lib.tracks_by_id.values()]
         session = DeviceSession(target, sources)
-        _prune_manifest_owned(
-            session, mm.setdefault("files", {}), media=media_prune)
+        rows = mm.setdefault("files", {})
+        media_prune = media_prune or any(
+            not row.get("playlists") and row.get("kind") in {"track", "artwork"}
+            for row in rows.values())
+        _prune_manifest_owned(session, rows, media=media_prune)
         session.revalidate()
         manifest.save(target, mm)
 

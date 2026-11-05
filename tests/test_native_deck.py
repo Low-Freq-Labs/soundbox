@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ctypes
 import csv
 import json
 import math
@@ -159,6 +160,74 @@ class NativeDeckContract(unittest.TestCase):
             QTest.qWait(10)
             elapsed += 10
         self.assertTrue(predicate(), f"condition missed after {timeout_ms} ms")
+
+    def _decoder_waits(self):
+        count = self.deck._lib.sb_deck_decode_wait_returns
+        count.argtypes = [ctypes.c_void_p]
+        count.restype = ctypes.c_uint64
+        return count(self.deck._handle)
+
+    def _assert_decoder_parked(self):
+        QTest.qWait(50)
+        before = self._decoder_waits()
+        QTest.qWait(150)
+        self.assertEqual(self._decoder_waits(), before)
+
+    def test_decoder_parks_unloaded_at_eof_and_resumes_commands_and_shutdown(self):
+        self._assert_decoder_parked()
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() == 2000)
+        self._assert_decoder_parked()
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() > 50)
+        self.deck.setPosition(1800)
+        self._wait_until(lambda: self.deck.position() >= 1990)
+        self._wait_until(lambda: self.deck._end_emitted)
+        self._assert_decoder_parked()
+        self.deck.play()
+        self._wait_until(lambda: 10 < self.deck.position() < 1000)
+        self.deck.pause()
+        self._assert_decoder_parked()
+        self.deck.setPosition(400)
+        self.deck.play()
+        self._wait_until(lambda: 450 < self.deck.position() < 1200)
+        self.deck.pause()
+        self._assert_decoder_parked()
+        errors = []
+        self.deck.errorOccurred.connect(lambda _, message: errors.append(message))
+        self.deck.setSource(QUrl.fromLocalFile(str(Path(self.temp.name) / 'missing.wav')))
+        self._wait_until(lambda: bool(errors))
+        self._assert_decoder_parked()
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() == 2000)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() > 50)
+        self.deck.pause()
+        self._assert_decoder_parked()
+        start = time.monotonic()
+        self.deck.close()
+        self.assertLess(time.monotonic() - start, 1)
+
+    def test_decoder_paused_full_ring_parks_then_play_and_replacement_resume(self):
+        long_audio = Path(self.temp.name) / 'paused-full-ring.wav'
+        with wave.open(str(long_audio), 'wb') as out:
+            out.setnchannels(2)
+            out.setsampwidth(2)
+            out.setframerate(44100)
+            out.writeframes(bytes(44100 * 30 * 4))
+        self.deck.setSource(QUrl.fromLocalFile(str(long_audio)))
+        self._wait_until(lambda: self.deck.duration() == 30000)
+        self._assert_decoder_parked()
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() > 50)
+        self.deck.pause()
+        self._assert_decoder_parked()
+        self.deck.setSource(QUrl.fromLocalFile(str(self.audio)))
+        self._wait_until(lambda: self.deck.duration() == 2000)
+        self.deck.play()
+        self._wait_until(lambda: self.deck.position() > 50)
+        self.deck.pause()
+        self._assert_decoder_parked()
 
     def test_full_library_cue_retriggers_do_not_scan_and_return_within_response_budget(self):
         from desktop.app import MainWindow

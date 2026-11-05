@@ -168,6 +168,7 @@ class CdjPlaylist:
     title: str
     folder: bool
     entries: tuple[tuple[str, str], ...]
+    song_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -236,38 +237,55 @@ def patch_display(raw, changes):
     return bytes(output)
 
 
-def read_library(target, token, *, allow_pending=False, check_pair=False, snapshot_only=False):
+def read_library(target, token, *, allow_pending=False, check_pair=False, snapshot_only=False, should_cancel=None):
     """Copy only native databases/profiles; parse local copies, never live SQL."""
+    def cancelled():
+        if should_cancel and should_cancel():
+            raise RuntimeError('CDJ preparation cancelled')
+    cancelled()
     if not snapshot_only:assert_no_database_journals(target,token)
     session = CdjReadSession(target, token)
     try:
+        paths = (*DATABASE_FILES, *('PIONEER/'+name for name in PROFILE_FILES),
+                 *(DATABASE_FILES[2]+suffix for suffix in ('-wal','-journal','-shm')),
+                 '.soundbox-cdj/pending.json', '.soundbox-cdj/manifest.json')
+        def stamp(path):
+            cancelled()
+            try:return session.stamp(path)
+            except FileNotFoundError:return None
+        # Bind the entire pair, including absent companions, before its first
+        # payload read. Per-file reads still verify descriptor and path epochs.
+        # FAT32/exFAT can preserve BOTH mtime and ctime across same-size writes,
+        # so the complete capture also needs exact bounded byte comparisons.
+        before = {path:stamp(path) for path in paths}
+        def read(path, *, limit=64*1024*1024):
+            cancelled()
+            return session.read(path, limit=limit)
         try:
-            session.read('.soundbox-cdj/pending.json', limit=8*1024*1024)
+            read('.soundbox-cdj/pending.json', limit=8*1024*1024)
         except FileNotFoundError:
             pass
         else:
             if not allow_pending:
                 raise ValueError('USB export interrupted — choose Export to continue')
         try:
-            managed = json.loads(session.read('.soundbox-cdj/manifest.json', limit=8*1024*1024)).get('library_managed', True)
+            managed = json.loads(read('.soundbox-cdj/manifest.json', limit=8*1024*1024)).get('library_managed', True)
         except FileNotFoundError:
             managed = False
         files = {}
         for path in DATABASE_FILES:
             try:
-                files[path] = session.read(path)
+                files[path] = read(path)
             except FileNotFoundError:
                 pass
         companions={}
         if snapshot_only:
             try:
-                journal=session.read(DATABASE_FILES[2]+'-journal')
+                journal=read(DATABASE_FILES[2]+'-journal')
             except FileNotFoundError:journal=b''
             if journal:raise ValueError('USB library is updating; reading it again shortly')
-            try:companions[DATABASE_FILES[2]+'-wal']=session.read(DATABASE_FILES[2]+'-wal')
+            try:companions[DATABASE_FILES[2]+'-wal']=read(DATABASE_FILES[2]+'-wal')
             except FileNotFoundError:pass
-        if DATABASE_FILES[0] not in files and DATABASE_FILES[2] not in files:
-            return None
         from .cdj_pdb import audit
         for path in DATABASE_FILES[:2]:
             if path in files:
@@ -276,29 +294,37 @@ def read_library(target, token, *, allow_pending=False, check_pair=False, snapsh
                     raise ValueError('Invalid native page/index structure: '+str(issues[:3]))
         for name in PROFILE_FILES:
             try:
-                files['PIONEER/' + name] = session.read('PIONEER/' + name, limit=64 * 1024)
+                files['PIONEER/' + name] = read('PIONEER/' + name, limit=64 * 1024)
             except FileNotFoundError:
                 pass
-        # Recheck every file after the complete capture, including deck profile saves.
-        for path, raw in (files|companions).items():
-            if session.read(path, limit=max(len(raw), 64 * 1024)) != raw:
+        for path,raw in (files|companions).items():
+            if read(path,limit=max(len(raw),64*1024)) != raw:
                 raise ValueError('USB library changed during capture; retry after rekordbox finishes')
+        for path in paths:
+            if stamp(path) != before[path]:
+                raise ValueError('USB library changed during capture; retry after rekordbox finishes')
+        if DATABASE_FILES[0] not in files and DATABASE_FILES[2] not in files:
+            return None
         with tempfile.TemporaryDirectory(prefix='soundbox-cdj-view-') as directory:
             root = Path(directory)
             for path, raw in (files|companions).items():
                 local = root/path
                 local.parent.mkdir(parents=True, exist_ok=True)
                 local.write_bytes(raw)
-            result = run_renderer('inspect', root)
-            if check_pair:run_renderer('catalog-check',root)
+            result = run_renderer('inspect', root, should_cancel=should_cancel)
+            if check_pair:run_renderer('catalog-check',root,should_cancel=should_cancel)
         display = {}
         if 'PIONEER/DEVSETTING.DAT' in files:
             try:
                 display = display_values(files['PIONEER/DEVSETTING.DAT'])
             except ValueError:
                 display = dict.fromkeys(DISPLAY_FIELDS,'Unsupported')
+        # Membership identity belongs to presentation, not the title/path export
+        # DTO. Distinct native records may share one on-device audio path.
+        membership_ids = result.pop('playlist_track_ids', {})
         playlists = tuple(CdjPlaylist(str(row['id']), str(row['parent']), row['title'], row['folder'],
-                          tuple(tuple(entry) for entry in row['entries'])) for row in result['playlists'])
+                          tuple(tuple(entry) for entry in row['entries']),
+                          tuple(membership_ids.get(str(row['id']), ()))) for row in result['playlists'])
         by_id = {p.id:p for p in playlists}
         if len(by_id) != len(playlists):
             raise ValueError('Duplicate native playlist identity')
@@ -402,5 +428,25 @@ def prepare_playback(target, token, song):
                     checked('/'+sibling.relative_to(Path(target)).as_posix())
         session.revalidate()
         return audio, analysis
+    finally:
+        session.close()
+
+
+def read_artwork(target, token, song):
+    """Capture only the selected native cover through the USB read boundary.
+
+    Return bytes so an image decoder never reopens a device path after its
+    descriptor/path checks. Browser snapshots confer no desktop-art identity.
+    """
+    if not song.artwork:
+        return b''
+    relative = song.artwork.removeprefix('/')
+    parts = relative.split('/')
+    if (len(parts) < 3 or parts[:2] != ['PIONEER', 'Artwork']
+            or any(not part or part in ('.', '..') or any(c in part for c in ':\\\0') for part in parts)):
+        raise ValueError('Invalid USB artwork reference')
+    session = CdjReadSession(target, token)
+    try:
+        return session.read(relative, limit=8 * 1024 * 1024)
     finally:
         session.close()

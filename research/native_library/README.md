@@ -5,12 +5,16 @@ workspaces have no source discovery or publish-to-source API. Separate
 one-plan source pilots are described below. Ordinary core registration and initial
 full WAV/narrow CBR MP3 analysis now have separate accepted authorities and desktop
 integration; these research workspaces never provision or load those permissions.
-The accepted domains remain installed in build163; current binary/source
+The accepted domains remain installed in whole-app build165/runtime7ffde716…; current binary/source
 provenance is in HANDOFF. Build160/source release `4a3d29a`/runtime `7bbe8577…`
 are prior delivery evidence. Existing
 Tag/Cue/Grid/Playlist permissions do not authorize registration or analysis writes.
 The [shared-workflow plan](../../docs/shared-library-workflow-plan.md) defines the
 requested product behavior; [HANDOFF](../../docs/HANDOFF.md) records live status.
+Completed source pilots below are terminal historical evidence. Their approvals
+do not authorize a new source action, replay, song import or native-app input.
+An unresolved recovery must retain its exact domain/plan/evidence and current
+guards; these examples never provision ordinary production authority.
 
 `registration.py` constructs the observed bare content row independently from
 explicit file facts, native identity/clock seeds and frozen library properties.
@@ -139,8 +143,10 @@ TEMP replay matches the complete native inventory and rolls back exactly.
 toolchain and untouched vendor. It authors fresh waveform sections around the
 supplied captured grid, retaining explicit reference opaque headers/PWVC. It has
 no SQL or publisher. The generated packet has matching section order/dimensions
-but different waveform values; its empty PQT2 uses observed manual invalidation
-bytes whose suitability for initial publication remains unaccepted. Its2 Rust
+but different waveform values. At this copy-only checkpoint, the empty PQT2's
+observed manual-invalidation bytes had no initial-publication acceptance.
+The later exact generated-WAV pilot and ordinary WAV/CBR acceptances below are
+independent, narrower proofs rather than permission for other profiles. Its2 Rust
 tests cover input/path/endpoint guards and output preservation. Build/test with
 the toolchain environment from build_cdj.sh, using this crate's own locked manifest
 and shared build/cdj target; do not install a system toolchain or modify vendor.
@@ -303,5 +309,5 @@ code and full native recovery remain protected. The core scanner/planner promoti
 retains exact old proposal outputs; research wrappers reexport those APIs.
 Production uses its own accepted CBR authority/store/FIFO and contains no research
 modules. The original build155 delivery passed2200tests/package/native/curation
-checks; it is historical, superseded by the build160/2564-test delivery in HANDOFF.
+checks; it is historical, superseded by the build165/2779-test delivery in HANDOFF.
 VBR/Info/gapless/mono/48kHz publication remains outside that accepted profile.

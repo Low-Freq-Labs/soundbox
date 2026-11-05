@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import struct
@@ -45,6 +46,8 @@ from soundbox.stock_ipod_info import (
 )
 from soundbox.stock_artwork import StockArtworkCache, read_stock_artwork_slots
 from soundbox.stock_ipod_shadow import StockIpodShadowStore
+from soundbox.stock_ipod_capture import capture_stock_ipod_native
+from soundbox import stock_ipod_capture
 from soundbox.sync import DeviceSession
 
 
@@ -107,7 +110,7 @@ class StockPlaylistCapacity(unittest.TestCase):
 
             def parse(path):
                 result = real_parse(path)
-                if Path(path) == database:
+                if hasattr(path, "read") or Path(path) == database:
                     result["mhlp"] = [ObservedPlaylist(row) for row in result["mhlp"]]
                 return result
 
@@ -348,6 +351,152 @@ class StockIpodSync(unittest.TestCase):
     def test_serial_model_map_is_narrow_and_fail_closed(self):
         self.assertEqual(model_from_serial("8M650V0HV9M"), ("MA446", "V9M"))
         self.assertEqual(model_from_serial("SERIAL-WEE"), ("", "WEE"))
+
+    def test_snapshot_and_status_share_one_exact_native_capture(self):
+        shadow_store = StockIpodShadowStore(self.base / "stock-state")
+        identity = "stock-ipod-v1:capture-fixture"
+        plan = plan_stock_ipod_sync(
+            self.library, [self.playlist], self.ipod,
+            model_number="MA446", filesystem="msdos",
+            art_cache=self.art_cache, stock_art_cache=self.stock_art_cache,
+            identity_key=identity, shadow_store=shadow_store)
+        commit_stock_ipod_sync(plan)
+        root = self.ipod.resolve()
+        database = root / "iPod_Control/iTunes/iTunesDB"
+        artwork = root / "iPod_Control/Artwork/ArtworkDB"
+        opened = []
+        real_open = stock_ipod_capture.os.open
+
+        def observed(path, *args, **kwargs):
+            if path in (database, artwork):
+                opened.append(path)
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch.object(stock_ipod_capture.os, "open", observed):
+            captured = capture_stock_ipod_native(root)
+            snapshot = read_stock_ipod_snapshot(
+                root, model_number="MA446", native_capture=captured)
+            status = inspect_stock_ipod_sync_status(
+                self.library, root, identity_key=identity,
+                model_number="MA446", serial_number="", shadow_store=shadow_store,
+                native_capture=captured)
+        self.assertEqual(opened.count(database), 2)
+        self.assertEqual(opened.count(artwork), 2)
+        self.assertEqual(snapshot.database_sha256, plan.summary()["database_sha256_after"])
+        self.assertEqual(status.state, "up_to_date")
+
+    def test_snapshot_identity_tracks_and_digest_remain_one_observation(self):
+        captured = capture_stock_ipod_native(self.ipod)
+        database = self.ipod / "iPod_Control/iTunes/iTunesDB"
+        replacement = bytearray(captured.database)
+        struct.pack_into("<Q", replacement, 0x48, 0xABCDEF)
+        database.write_bytes(replacement)
+        snapshot = read_stock_ipod_snapshot(
+            self.ipod, model_number="MA446", native_capture=captured)
+        self.assertEqual(snapshot.database_sha256, captured.database_sha256)
+        self.assertNotEqual(snapshot.database_sha256, _hash(database))
+        self.assertNotEqual(snapshot.library_persistent_id, 0xABCDEF)
+
+    def test_stock_noop_reuses_exact_committed_source_proofs_without_audio_reads(self):
+        store = StockIpodShadowStore(self.base / "stock-state")
+        options = dict(model_number="MA446", filesystem="msdos",
+                       identity_key="stock-ipod-v1:source-fixture", shadow_store=store)
+        first = plan_stock_ipod_sync(self.library, [self.playlist], self.ipod, **options)
+        commit_stock_ipod_sync(first)
+        before = self._snapshot(self.ipod)
+        real_hash = stock_ipod._sha256
+
+        def bounded_hash(path):
+            if "Music" in Path(path).parts:
+                raise AssertionError("Retained device media was hashed")
+            return real_hash(path)
+
+        with (mock.patch.object(stock_ipod, "acquire_source",
+                                side_effect=AssertionError("Unchanged source acquisition")),
+              mock.patch.object(stock_ipod, "_technical_audio",
+                                side_effect=AssertionError("Unchanged source format read")),
+              mock.patch.object(stock_ipod, "_sha256", side_effect=bounded_hash)):
+            repeated = plan_stock_ipod_sync(
+                self.library, [self.playlist], self.ipod, **options)
+        self.assertTrue(repeated.shadow_fast_path)
+        self.assertFalse(repeated.requires_commit)
+        self.assertEqual(self._snapshot(self.ipod), before)
+
+    def test_stock_old_shadow_and_ctime_change_reacquire_instead_of_renewing_proof(self):
+        from dataclasses import replace
+        store = StockIpodShadowStore(self.base / "stock-state")
+        identity = "stock-ipod-v1:source-fixture"
+        options = dict(model_number="MA446", filesystem="msdos",
+                       identity_key=identity, shadow_store=store)
+        first = plan_stock_ipod_sync(self.library, [self.playlist], self.ipod, **options)
+        commit_stock_ipod_sync(first)
+        original_acquire = stock_ipod.acquire_source
+        old = store.load(identity)
+        self.assertIsNotNone(old)
+        assert old is not None
+        legacy = {path: {key: value for key, value in row.items()
+                        if key not in {"source_epoch", "source_sha256",
+                                       "stock_media_profile", "stock_technical"}}
+                  for path, row in old.sources.items()}
+        store.save(replace(old, sources=legacy))
+        with mock.patch.object(stock_ipod, "acquire_source", wraps=original_acquire) as capture:
+            legacy_plan = plan_stock_ipod_sync(
+                self.library, [self.playlist], self.ipod, **options)
+        self.assertEqual(capture.call_count, 2)
+        self.assertFalse(legacy_plan.requires_commit)
+        upgraded = store.load(identity)
+        self.assertIsNotNone(upgraded)
+        assert upgraded is not None
+        self.assertEqual((upgraded.generation, upgraded.committed_at),
+                         (old.generation, old.committed_at))
+        with mock.patch.object(stock_ipod, "acquire_source",
+                               side_effect=AssertionError("Legacy proof upgrade did not persist")):
+            self.assertFalse(plan_stock_ipod_sync(
+                self.library, [self.playlist], self.ipod, **options).requires_commit)
+        store.save(old)
+        source = self.existing_source
+        original_stat = source.stat()
+        os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        self.assertNotEqual(source.stat().st_ctime_ns, original_stat.st_ctime_ns)
+        with mock.patch.object(stock_ipod, "acquire_source", wraps=original_acquire) as capture:
+            changed = plan_stock_ipod_sync(self.library, [self.playlist], self.ipod, **options)
+        self.assertEqual(capture.call_count, 1)
+        proof = changed.shadow_sources[str(source.resolve())]
+        self.assertNotEqual(proof["source_epoch"], old.sources[str(source.resolve())]["source_epoch"])
+
+    def test_source_proof_retains_capture_epoch_when_source_changes_later_in_plan(self):
+        from dataclasses import replace
+        store = StockIpodShadowStore(self.base / "stock-state")
+        identity = "stock-ipod-v1:late-source-fixture"
+        options = dict(model_number="MA446", filesystem="msdos",
+                       identity_key=identity, shadow_store=store)
+        first = plan_stock_ipod_sync(self.library, [self.playlist], self.ipod, **options)
+        commit_stock_ipod_sync(first)
+        old = store.load(identity)
+        assert old is not None
+        legacy = {path: {key: value for key, value in row.items()
+                        if key != "source_epoch"} for path, row in old.sources.items()}
+        store.save(replace(old, sources=legacy))
+        source = self.existing_source.resolve()
+        before = source.stat()
+        technical = stock_ipod._technical_audio
+        changed = False
+
+        def change_after_capture(snapshot):
+            nonlocal changed
+            if snapshot.name == source.name and not changed:
+                payload = bytearray(source.read_bytes())
+                payload[-1] ^= 1
+                source.write_bytes(payload)
+                os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+                changed = True
+            return technical(snapshot)
+
+        with mock.patch.object(stock_ipod, "_technical_audio", change_after_capture):
+            plan = plan_stock_ipod_sync(self.library, [self.playlist], self.ipod, **options)
+        self.assertFalse(plan.requires_commit)
+        self.assertEqual(plan.shadow_sources[str(source)]["source_epoch"][-1], before.st_ctime_ns)
+        self.assertNotEqual(source.stat().st_ctime_ns, before.st_ctime_ns)
 
     def test_commit_copies_media_db_last_and_archives_recovery(self):
         source_hashes = (_hash(self.existing_source), _hash(self.new_source))

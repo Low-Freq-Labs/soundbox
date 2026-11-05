@@ -81,6 +81,11 @@ class ConnectionFactory(Protocol):
     def create(self, root: Path) -> ConnectionService: ...
 
 
+class InitialRefreshService(ConnectionService, Protocol):
+    """Optional shared automatic refresh; explicit refresh remains repeatable."""
+    def refresh_initial(self, stop: Event, progress: Callable[[str], None]) -> None: ...
+
+
 @dataclass(frozen=True)
 class Providers:
     profile: str

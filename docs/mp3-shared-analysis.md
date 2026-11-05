@@ -1,8 +1,9 @@
 # MP3 shared-analysis follow-up
 
 Started November 2, 2026 at Sonny's request. **The accepted CBR profile remains
-installed and enabled in personal build163.** Earlier source release `4a3d29a`
-and build160 are prior delivery evidence; this USB/UI update changes no MP3 authority.
+installed and enabled in the November4 whole-app delivery, personal build165/
+runtime `7ffde716…`.** Earlier build163, source release `4a3d29a` and build160 are
+prior delivery evidence; the whole-app audit changes no MP3 authority.
 Its original production delivery was build155; the dated checkpoints below retain
 that history. It covers initial full BPM/Grid+Key/waveforms
 on bare unlocked MPEG-1/no-Info/Xing CBR, stereo44.1kHz. VBR, Info/gapless, mono

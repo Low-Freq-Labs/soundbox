@@ -1,7 +1,7 @@
 # Existing Collection media compatibility
 
-November1,2026 implementation/reference record, status checked November4 against
-source release `4a3d29a`; current installation and outstanding cases are in
+November1,2026 implementation/reference record, reconciled November4 against the
+whole-app delivery, personal build165/runtime `7ffde716…`; current installation and outstanding cases are in
 [HANDOFF](HANDOFF.md). Sonny requested an automatic format check for the entire Collection
 and future additions, with recoverable replacement in place so files work on both
 the original CDJ-2000 and CDJ-3000. This is authorized semantic scope. The file-only automatic WAVE/unregistered-lossless controller is installed
@@ -83,7 +83,12 @@ own exact library/schema/version/reference authority permits desktop WAVE
 replacement and unregistered lossless-to-WAVE materialization. Each intent is
 saved before admission to the existing desktop source worker. Exact originals,
 staged output and immutable plan precede the common recovery journal. Before/
-after audio hashes define recovery; foreign occupants fail closed. Codec changes
+after audio hashes define recovery; foreign occupants fail closed. The November4
+recovery correction binds the existing single digest pass to before/opened/
+closed/after inode/epoch checks and rechecks that exact source epoch after the
+fresh lease guard before replacement, linking or displacement. Changes retain
+the original, private stage and journal instead of overwriting newer audio.
+Codec changes
 retain their original and publish a same-folder WAV without overwriting a name
 collision. Registered cross-codec changes require their separate locator/type
 authority. The narrow named-track pilot is provisioned; the general native locator profile is now provisioned after acceptance. New shared imports finish conversion and acknowledge current

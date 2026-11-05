@@ -23,6 +23,8 @@ exact audio-only Contents set already captured inside its disposable local outpu
 no metadata, linked paths or other existing files are admitted. It never discovers mounts, opens the live
 source library or writes a USB. Python captures inputs and owns authorized
 publication/recovery through the dedicated generic-FAT32/exFAT CDJ session.
+The advisory workspace lock `.rbxport-write.lock` is removed after successful
+initialization; it is not a player asset or part of the USB candidate inventory.
 
 Selected merges validate the requested playback records and exact memberships
 in both native formats while preserving each format's unrelated baseline; a
@@ -33,7 +35,10 @@ transaction retains affected originals until durable commit, then retires exact
 removed-media backups to reclaim space. Plus-only display remains supported.
 
 Source packaging includes the executable and upstream license/full GPL text, not
-private fixtures. Distribution review and CDJ hardware acceptance remain open.
+private fixtures. Distribution review and the wider CDJ model/firmware/control
+acceptance matrix remain open. Build163's FAT32/exFAT fixture writes, selected
+updates and zero-write repeats are bounded physical USB evidence in HANDOFF,
+not certification of player behavior or full-library performance.
 See [the complete contract](../../docs/cdj-usb-export.md).
 
 The `analyze` command reads one already captured local audio file through pinned

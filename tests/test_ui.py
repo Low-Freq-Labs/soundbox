@@ -69,6 +69,9 @@ def setUpModule():
     # mounted player is never inspected by tests running beside the real app.
     with mock.patch.object(MainWindow, "_refresh_devices", autospec=True):
         _win = MainWindow()
+    # This shared fixture exercises Settings controls directly throughout the
+    # module; production creates them only on the first explicit Settings visit.
+    _win._ensure_settings_page()
     _win._dev_timer.stop()  # no background device polling during tests
     _win.lib = _make_lib()
     _win._build_artist_registry()
@@ -623,6 +626,8 @@ class SettingsPage(unittest.TestCase):
                 second = MainWindow(isolated_dir=area)
                 try:
                     self.assertEqual(second.settings['theme_accent'], '#00ff00')
+                    self.assertFalse(hasattr(second, '_theme_text_mode'))
+                    second._ensure_settings_page()
                     self.assertEqual(second._theme_text_mode.currentData(), 'custom')
                     self.assertEqual(second._theme_text_color.text(), '#112233')
                     self.assertIn('selection-color: #112233', theme.QSS)
@@ -937,8 +942,8 @@ class StockIpodUI(unittest.TestCase):
                 lambda dev, playlists, **kwargs:
                 events.append(("begin", dev, playlists, kwargs)))
             with (
-                mock.patch(
-                    "desktop.app.device_manifest.load_composite",
+                mock.patch.object(
+                    _win, "_cached_composite_manifest",
                     return_value=current_manifest,
                 ),
                 mock.patch.object(
@@ -1003,8 +1008,8 @@ class StockIpodUI(unittest.TestCase):
                 lambda dev, playlists, **kwargs:
                 events.append((dev, playlists, kwargs)))
             with (
-                mock.patch(
-                    "desktop.app.device_manifest.load_composite",
+                mock.patch.object(
+                    _win, "_cached_composite_manifest",
                     return_value=current_manifest,
                 ),
                 mock.patch.object(
@@ -1636,7 +1641,8 @@ class StockIpodUI(unittest.TestCase):
             self.assertEqual(completed, [])
 
             worker.running = False
-            worker.finished.emit()
+            for callback in worker._surface_refresh_callbacks:
+                callback()
 
             self.assertFalse(_win._exporting)
             self.assertEqual(completed, ["complete"])
@@ -3336,10 +3342,6 @@ class StockIpodUI(unittest.TestCase):
         _win._begin_dual_ipod_sync = (
             lambda device, playlists, **kwargs:
             events.append(("begin", device, playlists, kwargs)))
-        payload = {
-            "playlist_order": ["cust:SET ONE"],
-            "playlists": {"cust:SET ONE": {}},
-        }
         try:
             with (
                 mock.patch.object(
@@ -3348,17 +3350,16 @@ class StockIpodUI(unittest.TestCase):
                 mock.patch.object(
                     device_manifest,
                     "load_composite",
-                    side_effect=lambda _dev: events.append(("load",)) or payload),
+                    side_effect=AssertionError("GUI read the device manifest")),
             ):
                 _win._sync_device(dev)
             self.assertEqual(
                 [event[0] for event in events],
-                ["confirm", "load", "begin"],
+                ["confirm", "begin"],
             )
-            begin = events[2]
+            begin = events[1]
             self.assertEqual(begin[1], dev)
-            self.assertEqual([p.display_path for p in begin[2]],
-                             ["CRATES / SET ONE"])
+            self.assertIsNone(begin[2])  # worker resolves managed playlists
             self.assertTrue(begin[3]["reconcile"])
             self.assertTrue(begin[3]["confirmed"])
             self.assertEqual(begin[3]["action"], "sync")
@@ -3366,7 +3367,8 @@ class StockIpodUI(unittest.TestCase):
             events.clear()
             with (
                 mock.patch.object(_win, "_confirm_ipod_sync", return_value=True) as confirm,
-                mock.patch.object(device_manifest, "load_composite", return_value=payload),
+                mock.patch.object(device_manifest, "load_composite",
+                                  side_effect=AssertionError("GUI read the device manifest")),
             ):
                 _win._sync_device(dev, audit_existing=True)
             confirm.assert_called_once_with(dev, audit_existing=True)
@@ -3406,7 +3408,7 @@ class StockIpodUI(unittest.TestCase):
                 calls.append((device, list(selected), kwargs)))
             with (
                 mock.patch.object(
-                    device_manifest, "load_composite", return_value=manifest),
+                    _win, "_cached_composite_manifest", return_value=manifest),
                 mock.patch.object(
                     QMessageBox, "question", return_value=QMessageBox.Yes),
             ):
@@ -3468,17 +3470,16 @@ class StockIpodUI(unittest.TestCase):
         _win._begin_stock_ipod_sync = (
             lambda device, playlists, *, reconcile=False:
             calls.append((device, playlists, reconcile)))
-        shadow = SimpleNamespace(playlists={"cust:SET ONE": {}})
         try:
             with (
                 mock.patch.object(_win, "_stock_device_key", return_value="fixture"),
                 mock.patch.object(
-                    _win.stock_ipod_shadow_store, "load", return_value=shadow),
+                    _win.stock_ipod_shadow_store, "load",
+                    side_effect=AssertionError("GUI read the shadow")),
             ):
                 _win._sync_device(dev)
             self.assertEqual(calls[0][0], dev)
-            self.assertEqual([p.display_path for p in calls[0][1]],
-                             ["CRATES / SET ONE"])
+            self.assertIsNone(calls[0][1])
             self.assertTrue(calls[0][2])
         finally:
             _win._begin_stock_ipod_sync = real
@@ -9942,6 +9943,7 @@ class RepeatedBackgroundWork(unittest.TestCase):
         worker = SimpleNamespace(retry_discovery=True, results=None)
         host = SimpleNamespace(
             _dev_scan_worker=worker, _finish_worker=lambda *args: None,
+            _deliver_device_scan_callbacks=lambda worker: MainWindow._deliver_device_scan_callbacks(host, worker),
             _shutting_down=False, _device_coordinator=SimpleNamespace(eject_pending=False),
             _stock_view_pending={}, _stock_view_worker=None)
         with mock.patch('desktop.app.time.monotonic', return_value=100):

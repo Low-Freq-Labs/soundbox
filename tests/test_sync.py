@@ -1,4 +1,6 @@
 import io
+import os
+import wave
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +9,7 @@ from urllib.parse import quote
 
 from soundbox import manifest, rekordbox_xml, sync as sync_mod
 from soundbox.library import Library, Playlist, Track
-from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache
+from soundbox.rockbox_media import RockboxArtworkCache, RockboxMediaCache, RockboxMediaError, _riff_info_values
 
 
 def loc(p: Path) -> str:
@@ -80,6 +82,246 @@ class TestSyncEndToEnd(unittest.TestCase):
                 self.lib, self.lib.playlists, self.target, dry_run=True)
 
         self.assertEqual(manifest.manifest_path(self.target).read_bytes(), before)
+
+    def test_partial_reexport_preserves_other_playlist_media_and_art_owners(self):
+        first = Playlist("First", [], ["1"], pid="first")
+        second = Playlist("Second", [], ["1"], pid="second")
+        self.lib.playlists = [first, second]
+        canonical_art = self.root / "art.jpg"
+        canonical_art.write_bytes(b"fixture artwork")
+        art_cache = mock.Mock()
+        art_cache.image_path.return_value = canonical_art
+        sync_mod.run(self.lib, [first, second], self.target, layout="tree",
+                     dry_run=False, art_cache=art_cache)
+        sync_mod.run(self.lib, [first], self.target, layout="tree",
+                     dry_run=False, art_cache=art_cache)
+        rows = manifest.load(self.target)["files"]
+        for row in rows.values():
+            if row["kind"] in {"track", "artwork"}:
+                self.assertEqual(row["playlists"], ["first", "second"])
+        self.lib.playlists = [second]
+        report = sync_mod.resync(self.lib, self.target, art_cache=art_cache)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(
+            (self.target / "Music/Artist X/Good One/Good One.flac").read_bytes(),
+            b"AAAA")
+        self.assertEqual(
+            (self.target / "Music/Artist X/Good One/cover.jpg").read_bytes(),
+            b"fixture artwork")
+        self.assertIn("Good One.flac", (self.target / "Playlists/Second.m3u8").read_text())
+        self.assertFalse((self.target / "Playlists/First.m3u8").exists())
+
+    def test_same_source_conflicting_logical_metadata_refuses_before_writes(self):
+        source = self.lib.tracks_by_id["1"].path
+        tracks = {
+            key: Track(key, "Original", "Artist", source.as_uri())
+            for key in ("logical", "native")
+        }
+        playlist = Playlist("Same source", [], ["logical", "native"], pid="same")
+        library = Library(tracks, [playlist], self.xml)
+        original = source.read_bytes()
+        for titles, artists in (
+            ({"logical": "First", "native": "Second"}, {}),
+            ({}, {"logical": "First artist", "native": "Second artist"}),
+        ):
+            with self.subTest(titles=titles, artists=artists), \
+                    mock.patch.object(sync_mod.DeviceSession, "atomic_copy",
+                                      side_effect=AssertionError("no device copy")):
+                with self.assertRaisesRegex(RockboxMediaError, "conflicting Rockbox metadata"):
+                    sync_mod.run(library, [playlist], self.target, dry_run=False,
+                                 title_overrides=titles, artist_overrides=artists)
+            self.assertFalse(self.target.exists())
+            self.assertEqual(source.read_bytes(), original)
+
+    def test_same_source_compatible_logical_metadata_shares_payload_and_caches_display(self):
+        source = self.lib.tracks_by_id["1"].path
+        tracks = {
+            key: Track(key, "Original", "Artist", source.as_uri())
+            for key in ("logical", "native")
+        }
+        first = Playlist("First", [], ["logical", "native"], pid="first")
+        second = Playlist("Second", [], ["native", "logical"], pid="second")
+        library = Library(tracks, [first, second], self.xml)
+        titles = {"logical": "Shared title", "native": "Shared title"}
+        artists = {"logical": "Shared artist", "native": "Shared artist"}
+        with mock.patch.object(sync_mod.metadata, "effective_title",
+                               wraps=sync_mod.metadata.effective_title) as title, \
+                mock.patch.object(sync_mod.metadata, "effective_artist",
+                                  wraps=sync_mod.metadata.effective_artist) as artist:
+            files, entries = sync_mod.plan(
+                library, [first, second], self.target,
+                title_overrides=titles, artist_overrides=artists)
+        self.assertEqual(title.call_count, 2)
+        self.assertEqual(artist.call_count, 2)
+        self.assertEqual(len(files), 1)
+        self.assertEqual(len({entry.device_path for group in entries.values() for entry in group}), 1)
+        planned = next(iter(files.values()))
+        self.assertEqual((planned.title, planned.artist), ("Shared title", "Shared artist"))
+        report = sync_mod.run(library, [first, second], self.target, dry_run=False,
+                             title_overrides=titles, artist_overrides=artists)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(sum(row.copied for row in report.playlists), 4)
+        self.assertEqual(len(list((self.target / "Music").rglob("*.flac"))), 1)
+
+    def test_separate_exports_isolate_equal_titles_and_keep_original_paths(self):
+        first = Playlist("First", [], ["1"], pid="first")
+        second = Playlist("Second", [], ["2"], pid="second")
+        for track in self.lib.tracks_by_id.values():
+            track.name = "Same title"
+            track.artist = "Same artist"
+        self.lib.playlists = [first, second]
+        art = {}
+        for track_id in ("1", "2"):
+            art[track_id] = self.root / f"art-{track_id}.jpg"
+            art[track_id].write_bytes(f"cover {track_id}".encode())
+        art_cache = mock.Mock()
+        art_cache.image_path.side_effect = art.get
+        for playlist in (first, second):
+            report = sync_mod.run(self.lib, [playlist], self.target, layout="tree",
+                                  dry_run=False, art_cache=art_cache)
+            self.assertFalse(any(row.errors for row in report.playlists))
+        rows = manifest.load(self.target)["files"]
+        media = {row["source"]: path for path, row in rows.items() if row["kind"] == "track"}
+        self.assertEqual(len(media), 2)
+        self.assertEqual(len({Path(path).parent for path in media.values()}), 2)
+        for track_id in ("1", "2"):
+            source = self.lib.tracks_by_id[track_id].path
+            destination = self.target / media[str(source.resolve())].lstrip("/")
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+            self.assertEqual((destination.parent / "cover.jpg").read_bytes(),
+                             art[track_id].read_bytes())
+        # A reversed overlap batch must retain both committed bindings.
+        sync_mod.run(self.lib, [second, first], self.target, layout="tree",
+                     dry_run=False, art_cache=art_cache)
+        final_media = {row["source"]: path for path, row in manifest.load(self.target)["files"].items()
+                       if row["kind"] == "track"}
+        self.assertEqual(final_media, media)
+
+    def test_unchanged_resync_performs_no_payload_reads_or_device_writes(self):
+        sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
+        before = {path.relative_to(self.target): path.read_bytes()
+                  for path in self.target.rglob("*") if path.is_file()}
+        with mock.patch.object(sync_mod, "run", side_effect=AssertionError("no export")), \
+                mock.patch.object(sync_mod.rockbox_config, "theme_album_art_sides",
+                                  side_effect=AssertionError("no theme reads")), \
+                mock.patch.object(manifest, "save", side_effect=AssertionError("no writes")), \
+                mock.patch.object(sync_mod, "_sha256", side_effect=AssertionError("no payload reads")):
+            report = sync_mod.resync(self.lib, self.target)
+        self.assertFalse(report.cancelled)
+        self.assertEqual(report.bytes_to_copy, 0)
+        after = {path.relative_to(self.target): path.read_bytes()
+                 for path in self.target.rglob("*") if path.is_file()}
+        self.assertEqual(after, before)
+
+    def test_explicit_sync_propagates_source_display_edits_and_removes_old_owned_paths(self):
+        sync_mod.run(self.lib, self.lib.playlists, self.target, layout="tree", dry_run=False)
+        source = self.lib.tracks_by_id["1"].path
+        before = source.stat()
+        source.write_bytes(b"CCCC")
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        report = sync_mod.resync(self.lib, self.target)
+        self.assertEqual(report.playlists[0].copied, 1)
+        original = self.target / "Music/Artist X/Good One/Good One.flac"
+        self.assertEqual(original.read_bytes(), b"CCCC")
+        report = sync_mod.resync(self.lib, self.target,
+                                 title_overrides={"1": "Changed title"},
+                                 artist_overrides={"1": "Changed artist"})
+        changed = self.target / "Music/Changed artist/Changed title/Changed title.flac"
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(changed.read_bytes(), b"CCCC")
+        self.assertFalse(original.exists())
+        self.assertEqual(source.read_bytes(), b"CCCC")
+        self.assertIn("Changed title.flac", (self.target / "Playlists/SETS/My Set.m3u8").read_text())
+
+    def test_one_changed_overlap_member_does_not_reacquire_retained_audio(self):
+        first = Playlist("First", [], ["1", "2"], pid="first")
+        second = Playlist("Second", [], ["1"], pid="second")
+        self.lib.playlists = [first, second]
+        sync_mod.run(self.lib, [first, second], self.target, layout="tree", dry_run=False)
+        changed = self.lib.tracks_by_id["1"].path
+        before = changed.stat()
+        changed.write_bytes(b"EDIT")
+        os.utime(changed, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        retained = self.lib.tracks_by_id["2"].path
+        retained_device = self.target / "Music/Artist Y/Good Two/Good Two.mp3"
+        forbidden = {retained.resolve(), retained_device.resolve()}
+        hash_file = sync_mod._sha256
+        def checked_hash(path):
+            self.assertNotIn(path.resolve(), forbidden)
+            return hash_file(path)
+        with mock.patch.object(sync_mod, "_sha256", side_effect=checked_hash), \
+                mock.patch("soundbox.source_acquisition.record_metric") as metric:
+            report = sync_mod.resync(self.lib, self.target)
+        self.assertFalse(any(row.errors for row in report.playlists))
+        self.assertEqual(sum(c.args[1] for c in metric.call_args_list
+                             if c.args[0] == "canonical_bytes_read"), 4)
+        self.assertEqual(sum(1 for c in metric.call_args_list if c.args[0] == "acquisitions"), 1)
+        self.assertEqual(retained_device.read_bytes(), b"BBBBBB")
+        for playlist in (first, second):
+            self.assertIn("Good One.flac", (self.target / f"Playlists/{playlist.name}.m3u8").read_text())
+
+    def test_normalized_rockbox_explicit_sync_has_zero_audio_work_when_unchanged(self):
+        source = self.src / "actual.wav"
+        with wave.open(str(source), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(2)
+            output.setframerate(44_100)
+            output.writeframes(b"\1\0\2\0" * 100)
+        original = source.read_bytes()
+        track = Track("actual", "First title", "Fixture artist", source.as_uri())
+        playlist = Playlist("First", [], ["actual"], pid="first")
+        library = Library({"actual": track}, [playlist], self.xml)
+        media_cache = RockboxMediaCache(self.root / "media-cache")
+        sync_mod.run(library, [playlist], self.target, layout="tree", dry_run=False,
+                     rockbox_media_cache=media_cache)
+        old_path = self.target / "Music/Fixture artist/First title/First title.wav"
+        self.assertEqual(_riff_info_values(old_path), ("First title", "Fixture artist"))
+        with mock.patch("soundbox.source_acquisition.record_metric") as acquisition_metric, \
+                mock.patch("soundbox.rockbox_media.record_metric") as transform_metric, \
+                mock.patch.object(sync_mod, "record_metric") as device_metric:
+            report = sync_mod.resync(library, self.target, rockbox_media_cache=media_cache,
+                                     title_overrides={"actual": "Second title"})
+        self.assertFalse(any(row.errors for row in report.playlists))
+        new_path = self.target / "Music/Fixture artist/Second title/Second title.wav"
+        self.assertEqual(_riff_info_values(new_path), ("Second title", "Fixture artist"))
+        self.assertFalse(old_path.exists())
+        self.assertEqual(sum(c.args[1] for c in acquisition_metric.call_args_list
+                             if c.args[0] == "canonical_bytes_read"), len(original))
+        self.assertEqual(sum(1 for c in transform_metric.call_args_list
+                             if c.args[0] == "transformations"), 1)
+        self.assertEqual(sum(c.args[1] for c in device_metric.call_args_list
+                             if c.args[0] == "device_bytes_written"), new_path.stat().st_size)
+        self.assertFalse(list((self.root / "media-cache").rglob("*.wav")))
+        observed = []
+        stat = Path.stat
+        def source_stat(path, *args, **kwargs):
+            if path == source:
+                observed.append(path)
+            return stat(path, *args, **kwargs)
+        with mock.patch.object(media_cache, "prepare", side_effect=AssertionError("no transform")), \
+                mock.patch.object(sync_mod, "_sha256", side_effect=AssertionError("no payload reads")), \
+                mock.patch.object(sync_mod.DeviceSession, "atomic_copy", side_effect=AssertionError("no copies")), \
+                mock.patch.object(manifest, "save", side_effect=AssertionError("no writes")), \
+                mock.patch.object(Path, "stat", source_stat):
+            report = sync_mod.resync(library, self.target, rockbox_media_cache=media_cache,
+                                     title_overrides={"actual": "Second title"})
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(report.bytes_to_copy, 0)
+        self.assertEqual(report.playlists, [])
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_preexisting_referenced_media_is_never_overwritten(self):
+        destination = self.target / "Music/Artist X/Good One/Good One.flac"
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"AAAA")
+        sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
+        row = manifest.load(self.target)["files"]["/Music/Artist X/Good One/Good One.flac"]
+        self.assertFalse(row["owned"])
+        destination.write_bytes(b"user edited content")
+        report = sync_mod.run(self.lib, self.lib.playlists, self.target, dry_run=False)
+        self.assertEqual(destination.read_bytes(), b"user edited content")
+        self.assertEqual(report.playlists[0].conflicts, 1)
+        self.assertTrue(report.playlists[0].errors)
 
     def test_sync_copies_and_writes_playlists(self):
         rep = sync_mod.run(self.lib, self.lib.playlists, self.target, layout="both", dry_run=False)

@@ -97,7 +97,7 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
                     raise ValueError('Interrupted USB song changed or is unavailable; export its current selection again')
                 resumed.append(track)
             standalone = tuple(resumed)
-    native = read_library(target,token)
+    native = read_library(target,token,should_cancel=should_cancel)
     if native is not None:
         from .cdj_catalog import current_baseline
         previous = current_baseline(native,previous,int(library.source_library_id))
@@ -235,19 +235,21 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
         by_device_id = {p['device_id']:p['id'] for p in request['playlists']}
         for playlist in result['view']['playlists']:
             playlist['source_id'] = by_device_id[int(playlist['id'])]
-        # Audio in the candidate must equal the exact captured canonical bytes.
+        # Bind candidate audio to captured bytes in make_plan's existing hash
+        # pass, rather than stream the complete local audio set twice.
         actual = {int(t['source_id']): t for t in result['view']['track_rows']}
-        for dto, contract in zip(request['tracks'], contracts):
-            row = actual[dto['id']]
-            payload = root/'candidate'/row['audio'].lstrip('/')
-            from .cdj_transaction import _hash_file
-            if payload.stat().st_size != contract['size'] or _hash_file(payload, should_cancel) != contract['sha256']:
-                raise ValueError('Generated CDJ audio differs from captured source')
+        source_contracts: dict[str, dict] = {}
+        for dto,contract in zip(request['tracks'],contracts):
+            audio = actual[dto['id']]['audio'].lstrip('/')
+            prior_contract = source_contracts.setdefault(audio,contract)
+            if (prior_contract['size'],prior_contract['sha256']) != (contract['size'],contract['sha256']):
+                raise ValueError('Generated CDJ audio aliases different captured sources')
         shutil.rmtree(inputs)
         plan = make_plan(session, root/'candidate', selection=selection,
                          db_id=request['db_id'], view=result['view'], workspace=workspace,
-                         should_cancel=should_cancel, recovery_root=recovery_root,expected_manifest=baseline_manifest)
-        candidate_native = read_library(root/'candidate', (root/'candidate').stat().st_dev)
+                         should_cancel=should_cancel, recovery_root=recovery_root,expected_manifest=baseline_manifest,
+                         source_contracts=source_contracts)
+        candidate_native = read_library(root/'candidate', (root/'candidate').stat().st_dev,should_cancel=should_cancel)
         plan.manifest['export_signature'] = signature(candidate_native.settings_signature,
             [(Path(path).name,raw) for path,raw in candidate_native.files if path not in DATABASE_FILES])
         plan.manifest['selection_hint'] = selection_hint(library,list(jobs.values()),titles=titles,artists=artists)
@@ -284,7 +286,7 @@ def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_can
     session = CdjSession(target, sources, token=token, volume_uuid=volume_uuid)
     from .cdj_transaction import recover
     recover(session,recovery_root,retain_new=True)
-    native = read_library(target, token)
+    native = read_library(target, token,should_cancel=should_cancel)
     if native is None:
         raise ValueError('Export a playlist before editing native USB settings')
     previous,baseline_manifest = read_manifest(session)
@@ -315,9 +317,9 @@ def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_can
         if general:
             path = root/'changes.json'
             path.write_text(json.dumps(general))
-            run_renderer('settings', root, path)
+            run_renderer('settings', root, path,should_cancel=should_cancel)
             path.unlink()
-        view = run_renderer('inspect', root)
+        view = run_renderer('inspect', root,should_cancel=should_cancel)
         plan = make_plan(session, root, selection=previous['selection'] if previous else [],
                          db_id=previous['db_id'] if previous else 0, view=view, workspace=workspace,
                          should_cancel=should_cancel, settings_only=True, recovery_root=recovery_root,
@@ -338,22 +340,23 @@ def plan_settings(target, changes, *, token, volume_uuid, sources=(), should_can
         raise
 
 
-def plan_initialize(target, *, token, volume_uuid, sources=(), profile=None, name=None, recovery_root=None):
+def plan_initialize(target, *, token, volume_uuid, sources=(), profile=None, name=None, recovery_root=None, should_cancel=lambda:False):
     """Explicit freshly formatted USB initialization; no source-library scan."""
     from . import my_settings
     session=CdjSession(target,sources,token=token,volume_uuid=volume_uuid)
-    if read_library(target,token) is not None:raise ValueError('The USB already has a native library')
+    if read_library(target,token,should_cancel=should_cancel) is not None:raise ValueError('The USB already has a native library')
     _previous,baseline_manifest=read_manifest(session)
     workspace=tempfile.TemporaryDirectory(prefix='soundbox-cdj-initialize-')
     try:
         root=Path(workspace.name).resolve();request=root/'initialize.json'
         request.write_text(json.dumps({'name':name or Path(target).name}))
-        view=run_renderer('initialize',root,request,root/'candidate')
+        view=run_renderer('initialize',root,request,root/'candidate',should_cancel=should_cancel)
         folder=root/'candidate/PIONEER'
         for filename,raw in my_settings.new_files(profile or {}).items():(folder/filename).write_bytes(raw)
         (folder/'DEVSETTING.DAT').write_bytes(default_display())
         return make_plan(session,root/'candidate',selection=[],db_id=0,view=view,workspace=workspace,
-                         recovery_root=recovery_root,settings_only=True,expected_manifest=baseline_manifest)
+                         recovery_root=recovery_root,settings_only=True,expected_manifest=baseline_manifest,
+                         should_cancel=should_cancel)
     except Exception:
         workspace.cleanup();raise
 

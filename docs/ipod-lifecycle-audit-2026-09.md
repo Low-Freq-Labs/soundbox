@@ -1,16 +1,27 @@
 # iPod lifecycle consolidation — September 26, 2026
 
+The later [November4 iPod audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+adds source/catalog reuse, ownership/path corrections and GUI retirement fixes.
+It uses offline fixtures only and does not close the historical hardware gates.
+See HANDOFF for source/package/install status.
+
 Historical implementation audit of the September 26 dirty checkout (base
 bb0a202), when Favorites contained 202 entries. That count is not a current
 restore target; use `HANDOFF.md` for the latest curated baseline, installation
 and acceptance gates. Preserve generation-58 recovery until separately reviewed
 hardware acceptance; automated fixtures are not that acceptance.
 
-Reviewed November3 against release `d08ee91`. This document records the dated
+Reviewed November3 against release `d08ee91`; the current wrapper was rechecked
+November4 against whole-app build165/runtime `7ffde716…`. This document records the dated
 September implementation and runs, including failures before later fixes. Current
 installed provenance and gates are in [HANDOFF](HANDOFF.md); later source-level
 efficiency/correctness evidence is in [the performance audit](performance-audit.md).
 Historical exact-byte proofs do not waive today's stable captured-epoch checks.
+The connection/drift/finalization rows below are the dated iPod/filesystem design.
+Current generic CDJ USBs instead have selected-only export, no automatic sync
+status or idle/source-event scan, explicit browser reads, and no final
+completion/eject read. Successful eject retires its row/caches in memory. Those
+USB changes do not remove the separate iPod sync/finalization contract.
 
 ## Inventory before consolidation
 

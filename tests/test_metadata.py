@@ -311,6 +311,51 @@ class NeatTitle(unittest.TestCase):
                          "Zeds Dead x NGHTMRE - Frontlines")
 
 
+class ArtistEdgeReuse(unittest.TestCase):
+    def setUp(self):
+        from soundbox import metadata
+        metadata._cached_artist_edges.cache_clear()
+        self.addCleanup(metadata._cached_artist_edges.cache_clear)
+
+    def test_large_repeated_artist_batches_compile_only_unique_edge_patterns(self):
+        import re
+        from unittest import mock
+        from soundbox import metadata
+        artists = [f"Artist {index}" for index in range(300)]
+        re.purge()
+        with mock.patch.object(re._compiler, 'compile', wraps=re._compiler.compile) as compile_pattern:
+            for _ in range(4):
+                for artist in artists:
+                    self.assertEqual(metadata.neat_title(f'{artist} - The Song', artist), 'The Song')
+        # More than512 dynamic patterns thrash Python's process-wide regex
+        # cache. Real compilation must instead scale with unique artists.
+        self.assertLessEqual(compile_pattern.call_count, 2 * len(artists) + 10)
+
+    def test_artist_pattern_cache_is_bounded_and_does_not_retain_oversized_keys(self):
+        from soundbox import metadata
+        long_artist = 'λ' * 300
+        self.assertEqual(metadata.neat_title(f'{long_artist} — Song', long_artist), 'Song')
+        self.assertEqual(metadata._cached_artist_edges.cache_info().currsize, 0)
+        for index in range(1100):
+            artist = f'Bounded Artist {index}'
+            self.assertEqual(metadata.neat_title(f'{artist} - Song', artist), 'Song')
+        self.assertEqual(metadata._cached_artist_edges.cache_info().currsize, 1024)
+
+    def test_literal_unicode_punctuation_edges_and_collaboration_policy_remain_exact(self):
+        from soundbox.metadata import neat_title
+        for name, artist, expected in (
+            ('A$AP [Live] — Song', 'A$AP [Live]', 'Song'),
+            ('ADÉLA _ Song', 'ADÉLA', 'Song'),
+            ('Song : Ade\u0301la', 'Ade\u0301la', 'Song'),
+            ('İSTANBUL - Song', 'istanbul', 'Song'),
+            ('Artist (VIP) - Song', 'Artist', 'Artist (VIP) - Song'),
+            ('B & A - Song', 'A x B', 'Song'),
+            ('Song (A Remix)', 'A Remix', 'Song (A Remix)'),
+        ):
+            with self.subTest(name=name, artist=artist):
+                self.assertEqual(neat_title(name, artist), expected)
+
+
 class TidyTitle(unittest.TestCase):
     """Display-grade junk stripping (mined from Sonny's 259 title fixes)."""
 

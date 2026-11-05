@@ -9,8 +9,33 @@ lock can still delay opening. It adds no artwork prefetch to track loading.
 
 The November3 follow-up was installed as build160, runtime `b0ccb1ab…`. The
 earlier November4 update is runtime `7bbe8577…` and includes the prior Export
-selector/cleanup work recorded here. The latest USB/theme follow-up is installed as build163;
+selector/cleanup work recorded here. That USB/theme follow-up was delivered as build163 and retained in build165;
 [HANDOFF](HANDOFF.md) records its exact replacement runtime.
+
+## Whole-app follow-up — later November4
+
+Current build165/runtime7ffde716… includes the broader
+[whole-app audit](performance-audit.md#whole-app-audit--november4-after-ipod-review).
+Settings and device surfaces are built on demand, with current saved preferences
+applied when opened. Cached likes remain available before Settings opens; the
+window retains the automatic connected-account refresh, cancellation and failure
+result for the later Connections panel.
+
+Repeated identical browser filters/sorts avoid resets. Inline title/artist edits
+invalidate search/sort data and update duplicate memberships; background artwork
+keeps browsing order until an explicit Art sort. Device drag highlights use stable
+model indexes across discovery rebuilds. Standalone track export checks its own
+target's busy state, and My Tags refreshes partial-membership tooltips without
+rebuilding its open popup.
+
+Full-suite ordering exposed a Qt stylesheet-style wrapper failure in redundant
+cue-button repolish. The same ordered 187-case prefix reproduced it. Local
+stylesheet changes already repolish filled-state transitions, so the duplicate
+manual calls were removed. Ten private rendered states remain byte-identical;
+the corrected prefix and final complete gate pass. Cue creation, holds, keyboard
+routing and source publication retain their existing semantics. This adds no
+hardware/player acceptance. The older179-file presentation inventory below remains
+dated evidence, distinct from the current 184-file full/targeted/prior-exact review.
 
 ## USB/theme follow-up — November4
 
@@ -36,7 +61,8 @@ white/blue/orange controls, and one/two/five-device panels were inspected. The
 full main-window render also preserves the selected white accent/black lettering.
 Focused offscreen/Cocoa gestures cover label/branch clicks, keyboard expansion,
 checkboxes and track-only highlighting. No input was sent to the running app.
-HANDOFF records final full validation and whether these changes are installed.
+These changes were delivered in build163/source `cf2ef5b` and retained in build165; HANDOFF records exact
+runtime, full validation and curated-state preservation.
 
 ## Fixed presentation problems
 
@@ -61,7 +87,7 @@ this pass.
 
 ## Review coverage
 
-The private inventory covers all 179 current first-party application files:
+The November3 private inventory covered all 179 then-current first-party application files:
 58 desktop Python files, 106 engine/personal Python files, the entrypoint and
 14 native sources/headers. Each has a source hash and explicit review depth.
 Repository-wide inventory/presentation-risk scans are distinct from deeper
@@ -150,8 +176,11 @@ and target identities bind queued work; failed targets can report their result
 while later targets continue, and cancellation/shutdown clear remaining work.
 USB target results aggregate; iPod first-generation plan review remains intact.
 Generated dialog renders and queue tests are retained under the November4 export
-log directory. Read-only mount facts identify two writable generic USB targets;
-no actual USB export was performed by the agent.
+log directory. At this earlier checkpoint, read-only mount facts identified two
+writable generic USB targets and no actual USB export was performed. The later
+build163 follow-up formatted TEST-1/TEST-2 and exercised frozen-fixture export,
+selected update and unchanged repeat; exact scope/timings are in HANDOFF. Those
+tests do not establish player/firmware or full-library performance acceptance.
 
 The reported native merge error was reproduced from three small catalog copies,
 with one extra Plus-only collection song and identical playlist memberships.

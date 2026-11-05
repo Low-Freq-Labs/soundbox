@@ -64,6 +64,12 @@ def run(state: Path, report: Path) -> None:
             'native': bool(win.player_bar.player.is_native),
             'numpy_loaded': 'numpy' in sys.modules,
             'stock_converter_loaded': 'clickwheel.ipod.artworkdb_writer.rgb565' in sys.modules,
+            'device_surfaces': [name for name in ('usb_device_pages', 'stock_ipod_pages')
+                                if name in vars(win)],
+            'device_backends': [name for name in ('soundbox.sync', 'soundbox.stock_ipod',
+                                'soundbox.dual_ipod', 'soundbox.cdj_export', 'soundbox.rockbox_media')
+                                if name in sys.modules],
+            'settings_created': hasattr(win, '_settings_tabs'),
         }, indent=2) + '\n')
         # Normal source refresh checkpoints these derived rows. Isolated mode
         # has no source reader, so checkpoint explicitly after stopping the clock.
