@@ -1,8 +1,10 @@
 # SoundBox device layouts
 
-Reviewed November4,2026 against installed whole-app build165 (runtime7ffde716…,
-signed base19a3075/dirty=true); prior build163 used published source `cf2ef5b`.
-Installed identity, physical fixture timings and remaining gates are in HANDOFF.
+Reviewed November5,2026 against installed responsiveness build167
+(runtime3fb0ff60…, signed base0075ab1/dirty=true). Build165/runtime7ffde716…
+and build163/published USB source `cf2ef5b` are earlier deliveries.
+Installed identity and remaining gates are in HANDOFF. Dated physical fixture
+timings are in the [November4 USB audit](performance-audit.md#physical-usb-fixture-timings--november4).
 Older audits and hardware observations retain their
 dated scope; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
@@ -56,20 +58,33 @@ interrupted candidates and moves remaining device reads out of GUI admission.
 Explicit Rockbox Sync checks source metadata/display even with unchanged playlist
 membership; its idle badge remains playlist-based. Retained-media inventory is
 not a fresh integrity certificate. Existing codec, firmware, recovery and source
-boundaries remain. No iPod hardware was available. Its preceding runtime26f15fb4… passed2695tests; current whole-app runtime7ffde716…
-passes2779tests with exact fresh state/icon. HANDOFF has precise delivery identities.
+boundaries remain. No iPod hardware was available. Its preceding runtime26f15fb4…
+passed2695tests; the subsequent whole-app runtime7ffde716… passed2779tests.
+Current build167 passes2795tests with exact fresh state/icon. HANDOFF has precise
+delivery identities.
+
+The November4 responsiveness follow-up removes one redundant parse of the final
+patched stock database: sync and deletion reuse that exact parsed result for all
+their existing semantic checks. Stock source presence/canonical paths are shared
+only within each membership phase. The second phase observes every unique path
+freshly after acquisition/reconciliation and rejects disappearance or redirection;
+source acquisition, format/content proofs and commit guards remain independent.
+Full rendering still runs for semantic no-ops before retaining original bytes.
+Generated50000-membership planning measured4013.40→1206.89ms; this is local CPU/
+filesystem fixture evidence, not iPod throughput or firmware acceptance.
 
 ### Native CDJ USB export
 
 The later November4 [USB audit](performance-audit.md#usb-deep-audit--november4-later-testing)
-is installed in personal build165. It fixes format confirmation, permits
+was delivered in personal build165 and remains in build167. It fixes format
+confirmation, permits
 another USB to export during a confirmed format, streams native erase stages and
 loads USB Info covers from their selected device references. Formatting reserves
 every captured partition of its physical disk; discovery waits until the native
 erase worker retires. The ordinary export lane remains serialized and retains
 fresh target/source and transactional guards. The preceding USB pass closed2639tests and both package
-profiles; the later iPod pass above retains these fixes. State/icon preservation
-is recorded in HANDOFF.
+profiles; the later iPod pass above retains these fixes. That audit records its
+dated state/icon preservation; HANDOFF records current build167 delivery.
 
 October29: the dedicated generic-USB exporter maintains classic Device Library
 and Plus together on writable FAT32/exFAT. It preserves unrelated native records
@@ -109,8 +124,16 @@ physical disk, MBR, one first data partition, filesystem, volume and mount befor
 initialization. A same-filesystem quick erase reuses an existing full-capacity
 single first MBR partition only when its partition type also matches. Other
 layouts or filesystem changes repartition. Per-probe/erase timings are logged.
-HFS+ remains excluded. Current physical format evidence is in HANDOFF; the prior
-release's format tests were mock-only.
+HFS+ remains excluded. Dated physical format evidence is in the
+[November4 USB timings](performance-audit.md#physical-usb-fixture-timings--november4)
+and [later USB audit](performance-audit.md#usb-deep-audit--november4-later-testing);
+HANDOFF records current runtime/gates. The earlier release's format tests were mock-only.
+
+Explicit USB settings saves capture the complete desktop source/analysis path
+set before worker admission, preserving the overlap boundary without copying
+unrelated songs, cues or playlist catalogs. Selected playlist export still freezes
+its library/curation snapshot separately. Neither change permits automatic
+settings propagation or weakens the worker's fresh target/source checks.
 
 Headers use26 points; detail/song rows and empty stripes match the regular24-point
 browser. USB columns share browser state. Activation validates the selected actual
@@ -960,8 +983,9 @@ a remembered serial from Apple's unmatched historical record. That observation
 required a verified stock-mode connection before boot-mode fallback could
 populate the unknown fields; see HANDOFF.md for current runtime evidence.
 
-For offline lifecycle work, the private September 26 metadata capture and exact
-omissions are recorded in HANDOFF.md. It contains real database/recovery/config
+For offline lifecycle work, the dated [lifecycle audit](ipod-lifecycle-audit-2026-09.md)
+describes the private September26 metadata capture and exact omissions. That
+capture contains real database/recovery/config
 baselines but excludes source audio and PIONEER. Keep originals read-only and use
 disposable test copies. Metadata-only fixtures cannot validate real USB or
 firmware playback. A user-requested fresh menu/tag-display configuration was

@@ -29,6 +29,41 @@ class _LocalGridFixture:
 
 
 class LocalGridDrafts(_LocalGridFixture, unittest.TestCase):
+    def test_browser_projection_preserves_draft_scalars_without_copying_beat_rows(self):
+        after = local_grid.edit(self.record, 'bpm', 12000)
+        before = deepcopy(after)
+        expected = local_grid.effective_result(after)
+        with mock.patch('soundbox.local_grid.deepcopy', side_effect=AssertionError('Browser copied beat rows')):
+            display = local_grid.display_fields(after)
+        self.assertEqual(display, {'bpm': expected['bpm'], 'key': expected['key'], 'grid_draft': True})
+        self.assertEqual(after, before)
+        self.assertIsNone(local_grid.display_fields(None))
+        self.assertIs(local_grid.display_fields(self.record), self.record)
+        # A malformed musical grid must still fail even though the browser
+        # only consumes its BPM. Mutation cannot reuse an earlier validation.
+        after['grid_draft']['beats'][-1][1] = -1
+        with self.assertRaises(ValueError):
+            local_grid.display_fields(after)
+
+    def test_browser_row_keeps_native_draft_and_track_info_precedence(self):
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        after = local_grid.edit(self.record, 'bpm', 12000)
+        track = Track('fixture', 'Synthetic', 'Artist', self.audio.as_uri(), bpm='90.00', key='8A')
+        baseline = {'id': track.track_id, 'bpm': '90.00', 'key': '8A'}
+        host = SimpleNamespace(lib=None, _row_cache={track.track_id: baseline},
+            settings={'track_info': {track.track_id: {'bpm': '100.00', 'key': '9A'}}},
+            _analysis_result=lambda _track: after, _waveform_bpm=lambda _track: 150)
+        with mock.patch('soundbox.local_grid.deepcopy', side_effect=AssertionError('Browser copied beat rows')):
+            native = MainWindow._row_for(host, track)
+            track.imported = True
+            imported = MainWindow._row_for(host, track)
+        self.assertEqual((native['bpm'], native['key']), ('100.00', '9A'))
+        self.assertEqual((imported['bpm'], imported['key']), ('120.00', '9A'))
+        self.assertFalse(native['bpm_estimated'])
+        self.assertFalse(imported['bpm_estimated'])
+        self.assertEqual(baseline, {'id': track.track_id, 'bpm': '90.00', 'key': '8A'})
+
     def test_manual_bpm_preserves_detector_and_anchor_and_survives_restart_and_native_mapping(self):
         before = deepcopy(self.record)
         after = local_grid.edit(self.record, 'bpm', 12000)

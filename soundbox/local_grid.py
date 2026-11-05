@@ -39,6 +39,19 @@ def effective_result(record):
     return {**record, 'beats': deepcopy(draft['beats']), 'bpm': draft['bpm']}
 
 
+def display_fields(record):
+    """Resolve validated browser BPM/key without copying musical beat rows.
+
+    Presentation still checks the complete draft on every observation. Playback
+    and editors use effective_result for their separately owned musical data.
+    """
+    if record is None or not record.get('grid_draft'):
+        return record
+    validate_draft(record)
+    return {'bpm': record['grid_draft']['bpm'], 'key': record.get('key'),
+            'grid_draft': True}
+
+
 def edit(record, operation, value=0):
     from .analysis import validate_result
     validate_result(record)

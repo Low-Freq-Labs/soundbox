@@ -1,6 +1,6 @@
 # Release test gate
 
-Updated November4, 2026. `./check.sh` builds native deck/process-guard/CDJ code, runs lint/types, validates the
+Updated November5, 2026. `./check.sh` builds native deck/process-guard/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
 stay together and the complete inventory is reconciled across workers. All
@@ -20,6 +20,29 @@ The [November2 runtime audit](testing-runtime-audit.md) records the complete
 timing review, isolation checks and a controlled encrypted-subset comparison.
 Each case still runs with its existing cipher/recovery settings. Module weights
 affect scheduling only; new tests cannot be excluded by missing timing hints.
+
+## Responsiveness delivery — November4–5
+
+The final bare `./check.sh --render` passes all2795 discovered cases:2729 offscreen
+in457.657s and66 Cocoa in69.078s, zero skips/expected failures and exact inventories.
+Lint/types, native/CDJ builds,243 pinned vendor files and required offline fixtures
+pass. New coverage verifies eager Settings controls/saved colors before Show,
+one owned account refresh, event routing, browser metadata precedence, newest-draft
+rollback, exact JSON comparison, stock final-byte semantic validation/fresh source
+phases, USB settings source separation and signed-range byte parity.
+
+Retain the interrupted inventory attempt (a test landed after discovery), the
+complete offscreen run's stale lazy-Settings assertion failure, and the457-case
+UI replay after updating that assertion to require eager readiness. The final
+complete gate follows those attempts; no cases, phases or thresholds were removed.
+Both signed profiles/code parity and package/installed isolated native/process/
+RAM-SQLCipher checks pass. Renders and authorized normal startup were verified.
+
+The November5 documentation-only wrap-up reuses these proofs only after verifying
+all693 frozen source/test/build/asset inputs remain exact. It changes no runtime,
+packaging profile, test inventory, required fixture or installed bytes; no rebuild,
+restamp or real-app controls are part of publication. HANDOFF records current
+provenance, preserved state and independent hardware/firmware acceptance limits.
 
 ## Whole-app delivery — later November4
 

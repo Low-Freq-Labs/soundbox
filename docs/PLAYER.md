@@ -1,9 +1,18 @@
 # SoundBox player
 
-Current as of 2026-11-04. This reference retains the tested source `cf2ef5b`/build 163
-player behavior through installed whole-app build165/runtime7ffde716…, with the
-idle-decoder and duplicate cue-style scheduling corrections below. All 66 Cocoa
-cases pass. Read it with `ARCHITECTURE.md` and `GOTCHAS.md` before changing the deck.
+The November4–5 responsiveness delivery reuses exact aligned range
+levels while loading/reducing cached waveforms. Every output byte and
+partial final cell stays exact; cache schema, DSP, palette, geometry, clocks,
+audio transport and native rendering are unchanged. Settings is prepared during
+startup at Sonny's request, and Track Info still prepares the selected full cover
+before appearing. Validation and installation status are in [HANDOFF](HANDOFF.md).
+
+Current as of 2026-11-05, installed personal build167/runtime3fb0ff60….
+This delivery preserves the player/renderer contracts below, including the earlier
+idle-decoder and duplicate cue-style corrections. All 66 Cocoa cases pass within
+the 2,795-test release gate. Read this with `ARCHITECTURE.md` and `GOTCHAS.md` before
+changing the deck; exact signed provenance and dated preservation checks remain
+in [HANDOFF](HANDOFF.md).
 
 The later November4 whole-app audit adjusts decoder waits and removes duplicate
 cue-button repolish. Unloaded,
@@ -20,7 +29,7 @@ bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3. Other profiles and
 existing-analysis replacement remain gated; [HANDOFF](HANDOFF.md) records exact
 installed proof and the published-source versus signed-build provenance.
 
-## Current installed behavior — November2–4
+## Current installed behavior — November2–5
 
 The November4 USB/theme follow-up preserves the native player, audio, waveform
 and musical-data contracts below. Shared progress lettering uses the saved

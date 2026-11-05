@@ -1,6 +1,15 @@
 # Test runtime audit — November 2, 2026
 
-The later November4 whole-app audit retains the first2712-case offscreen attempt
+The November4–5 responsiveness gate passes all2795 cases in526.735s across its
+test phases (2729 offscreen457.657s +66 Cocoa69.078s), zero skips/expected failures
+and complete inventories. The interrupted inventory attempt and stale lazy-Settings
+assertion failure remain distinct from the final pass; the corrected readiness
+assertion also passes its457-case UI replay. Encryption, recovery matrices,
+partitioning and thresholds remain unchanged. November5 documentation publication
+reuses this gate only with all693 frozen runtime/test/build inputs exact; it does
+not rerun or restamp the installed app for prose changes.
+
+The preceding November4 whole-app audit retains the first2712-case offscreen attempt
 with two ordered cue-style errors; its native phase did not run. The isolated
 187-case prefix reproduces the error and passes after removing redundant manual
 repolish; ten cue states remain pixel-exact. The second gate passes all2713offscreen cases in460.325s, with all three

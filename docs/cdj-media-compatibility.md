@@ -1,7 +1,7 @@
 # Existing Collection media compatibility
 
-November1,2026 implementation/reference record, reconciled November4 against the
-whole-app delivery, personal build165/runtime `7ffde716…`; current installation and outstanding cases are in
+November1,2026 implementation/reference record, reconciled November5 against the
+responsiveness delivery, personal build167/runtime `3fb0ff60…`; current installation and outstanding cases are in
 [HANDOFF](HANDOFF.md). Sonny requested an automatic format check for the entire Collection
 and future additions, with recoverable replacement in place so files work on both
 the original CDJ-2000 and CDJ-3000. This is authorized semantic scope. The file-only automatic WAVE/unregistered-lossless controller is installed

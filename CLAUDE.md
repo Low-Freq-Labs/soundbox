@@ -5,6 +5,45 @@ Rockbox iPods / USB players**, with a CoreAudio/Metal DJ-style player. Sonny
 (Low Freq Labs) operates the personal build. Read this file and
 [docs/HANDOFF.md](docs/HANDOFF.md) at the start of every session.
 
+## Responsiveness delivery — November4–5,2026
+
+Sonny reopened the whole-codebase bottleneck review with three agents, then
+explicitly rejected lazy Settings: prepare all Settings tabs during startup so
+the first click is ready. This supersedes the earlier Settings-on-demand policy;
+device pages/export backends remain on demand. Track Info must have its selected
+image ready before first show, without a later placeholder-to-cover swap.
+Current source changes, measured costs and remaining queue/state architecture
+work are in docs/performance-audit.md and HANDOFF. Sonny explicitly approved installation/reopen November5 after closing SoundBox.
+Personal build167/runtime3fb0ff6095859d5dae6b763bde9d38ab69c25acbc22edf95151903f452046892
+is installed/running at `/Applications/Soundbox.app`: installed00:02:43.967,
+reopened00:03:38.713, final installation verification00:07:51.543968 (PID24850).
+Read-only wrap-up verification at12:13:54.788997 found the same signed Contents,
+state/icon and all six protected executables, with PID24850 still running.
+Executableafbe5187055c5d798f6c8f1dc4d7b5faee11b1d6a9becbeeb48167d9186e4504;
+signed0075ab1ea2f1ed7a87b33dbf53b383231a78f8bb/dirty=true. All2795 tests,
+both signed profiles/code parity and installed isolated checks pass. Fresh
+librarya6b99aa5…/all10 authorities/art indexes/white icon remain exact; newer saved
+columns were preserved. Normal reopen loads3296 native tracks/85playlists,
+schedules0prep and fetches0art. Leave167 running for user testing. No real-app
+inputs/termination, musical source/device writes or new authority were used.
+The immediate7ffde716… base plus five older protected bases remain in the same
+rollback directory. Six owned redundant packaging directories are retired;
+HANDOFF records identities, retention, measurements and remaining architecture
+work. This supersedes build165's installed status below, not its dated evidence.
+No later app control, device erase, restoration or installer replay is granted.
+
+Sonny subsequently requested full wrap-up: publish the completed source and
+reconciled documentation on main. The November5 review covers all39 current
+first-party texts in full,11 archives for historical scope/permissions/retention/
+links,25 pinned upstream references and2 notices by exact integrity, all55 local
+dependency pins, and local targets/anchors. Private per-file and publication
+receipts are under `~/Library/Logs/Soundbox/soundbox-wrapup-2026-11-05/`.
+All693 frozen runtime/test/build inputs remain exact, so the passing2795-case
+gate and signed package proofs are reused. Documentation publication does not
+restamp/reinstall build167, change its true signed0075ab1/dirty=true base, control
+the real apps or retire any of the six protected rollback bases. HANDOFF records
+the published release identity and current dated observations.
+
 ## Whole-app audit delivered — November4,2026
 
 Sonny requested three agents across startup/browser/artwork, background/native
@@ -12,12 +51,12 @@ lifecycle and persistence/source transactions, plus device initialization only
 when devices are attached. The184-file source census records129 reported full
 reads,29 targeted reviews and 26 prior same-day exact-hash scoped reviews; large
 targeted bodies and pinned dependencies are not every-line correctness proofs.
-Settings/device pages and export caches are lazy; queue wakes coalesce, idle
+At that checkpoint Settings/device pages and export caches were lazy; queue wakes coalesce, idle
 decoding parks, repeated art/state/Grid staging work is removed, and import/
 conversion-recovery collisions preserve newer files. Required atomic publication,
 source/apps/authority/recovery guards and all native writer scopes remain.
 
-Personal build 165/runtime 7ffde716cf03f74411a9256614e52ffd60a5c351fc56145a62b613d7be3f520d is installed/running at
+At that checkpoint, personal build165/runtime7ffde716cf03f74411a9256614e52ffd60a5c351fc56145a62b613d7be3f520d was installed/running at
 /Applications/Soundbox.app (PID15767 at22:55:01). Executable22fe4b7e3b2495a98ad3bc14def3766efb461823e3bcbcfe65a21da97a837fde; signed base
 19a3075339f3a0ad619f1faeacb5b79d6465c9cb/dirty=true. Installed 22:50:20,
 reopened 22:51:50 and verified 22:55:01. All 2779 tests pass (2713 offscreen/66 Cocoa),

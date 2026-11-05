@@ -5,7 +5,45 @@ import unittest
 
 import numpy as np
 
-from soundbox.track_analysis import StreamingAnalyzer
+from soundbox.track_analysis import StreamingAnalyzer, _range_mip_sections, RANGE_MIP_DIVISORS
+from soundbox.waveform_detail import DETAIL_DIVISORS
+
+
+class RangeMipParity(unittest.TestCase):
+    def test_every_cell_matches_direct_song_anchored_extrema(self):
+        rng = np.random.default_rng(4107)
+        for count in (1, 2, 3, 7, 13, 17, 63, 64, 65, 127, 193, 257, 1025):
+            low = rng.integers(-32768, 32768, count, dtype=np.int16)
+            high = rng.integers(-32768, 32768, count, dtype=np.int16)
+            low[0] = -32768
+            high[-1] = 32767
+            # Reordered, repeated and non-multiple levels must also retain the
+            # original base-clock cells, including their partial last cell.
+            for divisors in (RANGE_MIP_DIVISORS, DETAIL_DIVISORS,
+                             (64, 3, 2, 12, 1, 4, 6, 13, 64, 5)):
+                with self.subTest(count=count, divisors=divisors):
+                    packed, actual_count = _range_mip_sections(
+                        low.astype('<i2').tobytes(), high.astype('<i2').tobytes(), divisors)
+                    self.assertEqual(actual_count, count)
+                    for divisor in divisors:
+                        expected_low = np.asarray([
+                            min(low[start:start + divisor])
+                            for start in range(0, count, divisor)], dtype='<i2').tobytes()
+                        expected_high = np.asarray([
+                            max(high[start:start + divisor])
+                            for start in range(0, count, divisor)], dtype='<i2').tobytes()
+                        self.assertEqual(packed[f'detail_minimum_d{divisor}'], expected_low)
+                        self.assertEqual(packed[f'detail_maximum_d{divisor}'], expected_high)
+
+    def test_empty_truncated_and_invalid_inputs_keep_the_existing_contract(self):
+        self.assertEqual(_range_mip_sections(b'', b'\0\0'), ({}, 0))
+        packed, count = _range_mip_sections(b'\x00\x80x', b'\xff\x7f\0\0', (1, 2))
+        self.assertEqual(count, 1)
+        self.assertEqual(packed['detail_minimum_d2'], b'\x00\x80')
+        self.assertEqual(packed['detail_maximum_d2'], b'\xff\x7f')
+        for divisor in (0, -1):
+            with self.assertRaises(ValueError):
+                _range_mip_sections(b'\0\0', b'\0\0', (divisor,))
 
 
 class WaveformAllocationParity(unittest.TestCase):

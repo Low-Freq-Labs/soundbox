@@ -104,15 +104,14 @@ class CdjDeviceMixin:
         self._exporting = True
         self._cdj_plan = None
         recovery = self._data_file.parent/'cdj-recovery'
-        # Freeze curation dictionaries and playlist selection on the GUI thread.
-        library, titles, artists = deepcopy(self.lib), dict(self.titles), dict(self.overrides)
-        playlists = deepcopy(tuple(playlists))
-        standalone = deepcopy(tuple(standalone))
-        # Additive publication touches only this explicit selection. Building
-        # Collection/Artists export views would sort/copy unrelated library rows.
-        all_playlists = ()
-        global_profile = deepcopy(self.settings.get('cdj_my_settings',{}))
         if settings is None:
+            # Freeze curation and selection before the worker sees them.
+            library, titles, artists = deepcopy(self.lib), dict(self.titles), dict(self.overrides)
+            playlists = deepcopy(tuple(playlists))
+            standalone = deepcopy(tuple(standalone))
+            # Additive publication touches only this explicit selection.
+            all_playlists = ()
+            global_profile = deepcopy(self.settings.get('cdj_my_settings',{}))
             operation = lambda cancel, progress: cdj_export.plan_export(
                 library, playlists, dev, token=token, volume_uuid=facts.volume_uuid,
                 all_playlists=all_playlists, titles=titles, artists=artists, art_cache=self.art_cache,
@@ -120,10 +119,14 @@ class CdjDeviceMixin:
                 global_profile=global_profile,standalone=standalone)
         else:
             changes = dict(settings)
+            # Settings need source separation, not detached song/cue/catalog
+            # data. Capture those paths now; later library edits cannot alter
+            # the worker's original overlap boundary.
+            sources = [Path(self.lib.source), *[t.path for t in self.lib.tracks_by_id.values()],
+                       *[Path(t.source_analysis_path) for t in self.lib.tracks_by_id.values() if t.source_analysis_path]]
             operation = lambda cancel, _progress: cdj_export.plan_settings(
                 dev, changes, token=token, volume_uuid=facts.volume_uuid,
-                sources=[Path(library.source), *[t.path for t in library.tracks_by_id.values()],
-                         *[Path(t.source_analysis_path) for t in library.tracks_by_id.values() if t.source_analysis_path]],
+                sources=sources,
                 should_cancel=cancel, recovery_root=recovery)
         worker = CdjWorker(operation)
         self._cdj_worker = worker

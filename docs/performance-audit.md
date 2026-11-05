@@ -1,6 +1,154 @@
-# Performance audit — November 2–3, 2026
+# Performance audit — November 2–5, 2026
+
+## Bottleneck and responsiveness follow-up — November4
+
+Sonny requested a fresh whole-codebase bottleneck investigation with three agents,
+including whether previous optimizations hurt everyday use. The follow-up targets
+GUI/browser/Settings/artwork, source/persistence/analysis queues, device planners,
+and player cache loading. A structural census records 184 first-party runtime
+files, including the entrypoint; semantic review and fresh profiles are targeted,
+not an every-line audit of all 76,000-plus lines or pinned dependencies. The
+workloads below use generated disposable state or copies of retained offline
+evidence. No real-app input, musical-source/device writes, or new native
+authority belongs to these measurements. HANDOFF distinguishes source/package
+validation from installed behavior.
+
+### Largest costs and tradeoffs, ranked by interaction impact
+
+1. **Whole-state saves on the GUI thread.** Every changed save validates,
+   detaches and encodes the complete library, including saved grids. A retained
+   November4 state copy (1.96MB,16 analysis records/5993 beats) measured28.37ms
+   per changed save before this follow-up. Generated1000-song/500-beat state
+   measured980.56ms, versus290.86ms for an unchanged save. These are repository
+   timings, excluding the surrounding UI callback. The scalar-first comparison
+   below helps, but per-song durable storage and ordered publication are the next
+   architectural target. Preserve persist-before-presentation, rollback, restore
+   fencing and exact source-intent ownership. The existing64MiB ceiling also
+   bounds dense saved grids; raising the ceiling alone does not solve the stall.
+2. **Settings first-use construction.** The previous demand-loading change moved
+   work from launch to the first Settings click. Five alternating fresh-process
+   offscreen samples measured858.57ms before this follow-up and579.89ms after
+   event filtering alone. Repeat opens cost about4.5ms. Sonny explicitly rejected
+   that first-click delay and requested Settings ready to use; the source now
+   prepares it during startup. Device pages and export backends remain on demand.
+3. **Global analysis queue priority delays unrelated source edits.** Since the
+   November3 analysis-first change, any matching queued analysis can hold tags
+   and other source jobs even while no detector worker runs. This implements the
+   requested waveform→BPM→key order, but exposes a fairness cost for long batches.
+   A future change should bind dependencies per song and measure bounded fairness
+   while retaining accepted source ordering and the single writer/lock/journal.
+   Local DSP's device-operation deferral is older; concurrency requires separate
+   resource/storage evidence, not simply removing that gate.
+4. **Explicit export still freezes an entire desktop library on the GUI.** A
+   generated4000-song/100-playlist/20000-membership snapshot costs about102ms
+   with8 display cues and8 native references per song,324ms with32 of each.
+   USB-settings saves now capture only source paths. Playlist export still needs
+   an explicit immutable selected snapshot plus complete source-overlap guards;
+   moving a live mutable library copy into a worker would break that ownership.
+5. **Large native work remains substantial in workers.** A verified encrypted
+   backup measured574.93ms and full semantic inventory751.56ms on a retained
+   private66.25MB source-copy fixture; SHA-256 alone36.50ms. These independent
+   primitive measurements are not additive end-to-end timings. Stock planning
+   still renders and semantically validates its whole native database. Preserve
+   fresh app/source/authority/recovery guards rather than buying speed by
+   removing them. Physical media throughput, cloud stalls, firmware and eject
+   acceptance remain unmeasured in this pass.
+
+### First implementation batch
+
+| Workload | Before | After | Scope |
+| --- | ---: | ---: | --- |
+|3740 browser rows,500 manual drafts×480beats |214.50ms|78.81ms|Warmed row projection; full draft validation retained, discarded beat deep copies removed |
+|Same browser,11 dense drafts×3200beats |44.43ms|22.66ms|No-draft13.68→14.11ms is near noise |
+|Analysis acknowledgement,256 pending500-beat prep jobs |85.04ms|1.59ms|Persistence/paint stubbed; actual selected-job attachment and rollback exercised |
+|Changed scalar save,retained state copy |28.66ms|21.50ms|Five alternating samples; nested no-op comparison deferred until after scalars |
+|Changed scalar save,500 generated analyses |460.04ms|323.12ms|Full validation,detachment,encoding and atomic publication remain |
+|Stock no-op plan,3000 empty playlists |744.58ms|512.10ms|Six alternating samples; remove only duplicate final-output parsing |
+|Stock plan,50000 overlapping memberships |4013.40ms|1206.89ms|Four alternating samples against the preceding source; exact no-op/output bytes |
+|USB settings GUI setup,4000songs/8cues+8references each |122.58ms|2.10ms|Eight alternating samples; traced peak29.35MB→0.87MB |
+|Avatar groups,3740songs/300artists |296.80ms|49.75ms|Policy reads4040→301; selected image paths still check fresh policy |
+|First Settings click,complete6tabs |561.45ms|12.50ms|Five alternating source/offscreen pairs; all controls ready before Show |
+|One-hour generated compact waveform cache load |160.12ms|39.48ms|Seven samples per cohort; no audio decode,native upload or compositor |
+|Same exact3.6M-cell range reduction |119.42ms|5.41ms|Ten alternating samples,all output sections byte-exact |
+
+Range reduction reuses a finer level only when cell divisors divide exactly;
+neutral extrema preserve partial song-end cells. Irregular levels, reordered
+requests, signed extremes and odd/mismatched byte lengths retain their old
+contract. No cache schema, DSP, waveform palette, clocks or geometry changes.
+Analysis completion retains the previous immutable queue reference and detaches
+only its selected job; failed persistence restores the original references and
+newer cue/grid drafts survive. Stock validation consumes the renderer's parsed
+final patched bytes, with every track/playlist/artwork semantic check retained.
+The state no-op hint still distinguishes types, numeric representation, signed
+zero and map order; current file identity and durable publication remain fresh.
+
+Unchanged saves measured8.19→8.05ms on the retained state and140.97→128.66ms
+on500 generated analyses. Earlier cohorts remain retained;
+these samples vary with machine scheduling and are not a claimed fixed latency.
+Eager Settings deliberately adds startup work: the same source/offscreen
+3740-row Qt-paint proxy measured813.15→1382.48ms, excluding process bootstrap.
+This supersedes optimizing startup by deferring its construction to the click.
+No tabs are deferred until later use. Signed-package startup has separate scope.
+
+Selected Track Info preparation is already bounded: a generated500px JPEG in
+an isolated themed Cocoa dialog measured25.11ms median to first-show, with its
+cover ready on every first frame. A deliberately held60ms shared state lock
+raised it to83.18ms. A4096px test image cost166.57ms, but a read-only header census
+found all3646 current cached JPEGs at most500px. The native wait cursor measured
+0.29ms. The first dialog in a fresh QApplication cost159.20ms including cold
+fonts/native setup; an already constructed MainWindow normally pays those earlier.
+These do not measure actual user-click/compositor timing or excuse observed live
+lag. No speculative placeholder, artwork pop-in or unsafe lock bypass was added.
+The browser/event-filter improvements also apply to this existing dialog path.
+
+Stock source observations are scoped to one planning phase and keyed by original
+path; the later membership phase reobserves and rejects disappeared/redirected
+sources. Acquisition, compatibility, source content/epochs and device commit
+proofs stay fresh. Repeated playlist memberships and distinct source identities
+retain their order and metadata. USB settings still capture every source/native
+analysis path for overlap rejection, without unrelated musical data copies.
+
+The confirmed recent responsiveness tradeoff is first-open Settings latency.
+The earlier no-op state comparison also walked large analysis graphs before
+discovering a changed scalar. Browser draft copies, whole-export snapshots and
+stock planner repetition predate the last demand-loading release. These are
+specific provenance findings, not a claim that every workflow is regression-free.
+No blanket “quality of life unchanged” conclusion follows from fixture timings.
+
+Lean probes, all retained samples, profiles and review receipts are private under
+`~/Library/Logs/Soundbox/bottleneck-audit-2026-11-04/`. Failed and intermediate
+attempts stay distinguishable from final validation. See HANDOFF for the final
+gate, build and installation boundary.
+
+The complete2795-case gate passes (2729 offscreen457.657s/66Cocoa69.078s),
+with both signed profiles/entrypoints/native sections matching tested source and
+both isolated native/process/RAM-SQLCipher probes passing. Populated/Settings/
+packaged-empty renders were inspected. The interrupted inventory attempt and
+stale lazy-Settings test failure remain retained; the latter now checks saved
+controls/colors before first show and passes its457-case UI replay and final gate.
+
+Fresh paired signed packages,20 warm launches each on3740 generated rows:
+then-installed165 median1158.431ms/p951212.583ms versus the now-installed167
+median1783.129ms/p951820.624ms; first row-cache miss1263.154→1944.436ms.
+This intentionally adds about625ms median for ready Settings. The old1500ms
+startup-proxy target is unchanged and reports false for build167. No slow
+sample is discarded. Paint/search/selection/native readiness pass; Settings is
+created before display, while device pages/backends, NumPy and stock converter
+remain uninitialized. Fresh-source/compositor/persistent-icon/device readiness
+and machine-cold launch remain outside this proxy. HANDOFF records installed
+fingerprint3fb0ff60… and publication status. Sonny approved installation/reopen after
+closing SoundBox on November5. Build167 was installed00:02:43.967, reopened
+00:03:38.713 and finally verified00:07:51.543968 with exact fresh library/all10 authorities/
+art indexes/white icon. Newer saved columns were preserved. Installed isolated
+checks pass; normal startup loads3296 native tracks/85playlists, schedules0prep
+and fetches0art. No real-app input/termination or musical source/device writes
+were used. Six protected bases remain; redundant owned packaging is retired.
 
 ## Whole-app audit — November4 after iPod review
+
+This is the preceding build165 checkpoint. Its lazy-Settings policy and startup
+figures are historical; the explicit ready-at-launch requirement and build167
+measurements above supersede them. Device pages remain on demand.
 
 Sonny requested another multi-agent pass across startup, browser/artwork,
 background/audio lifecycle and persistence/source transactions, with particular
@@ -76,7 +224,7 @@ remain targeted, not every-line correctness proofs. The first complete offscreen
 attempt ran2712 cases with two cue-style errors; its native phase did not run.
 That failed attempt and the shorter ordered reproduction remain retained.
 
-The subsequent [UI polish review](ui-polish-audit.md) covers incomplete first
+The separate [UI polish review](ui-polish-audit.md) covers incomplete first
 frames, artwork publication, text/DPR/layout and navigation resets. Its fixes
 and remaining GUI-thread costs are separate from the dated measurements below;
 consult HANDOFF for installation status.
@@ -93,7 +241,8 @@ current whole-app build. Its source was local/unpublished at that iPod checkpoin
 the subsequent whole-app wrap-up authorizes publication.
 All2695tests pass (2631offscreen/64Cocoa), both signed profiles match tested code,
 and package/installed native+SQLCipher probes pass. Fresh state/all10authorities/
-art indexes/white icon remain exact; HANDOFF has precise identities and times.
+art indexes/white icon remained exact. Precise dated identities/times stay in
+`~/Library/Logs/Soundbox/ipod-deep-audit-2026-11-04/`; HANDOFF records the current app.
 
 | Finding | Correction and evidence |
 | --- | --- |
@@ -180,8 +329,9 @@ Changed-set audio staging, two fresh desktop metadata captures, bounded small
 catalog/manifest checks and affected-file recovery hashes remain. Two small
 manifest reads could eventually reuse a captured model with the existing later
 fresh guards; this audit does not claim every duplicate metadata read is removed. OS-blocked reads stop
-only when the OS returns. Exact current physical timings, tests and package status
-are in HANDOFF and private `usb-deep-audit-2026-11-04` receipts. Both signed
+only when the OS returns. Exact dated physical timings, tests and package status
+remain in private `usb-deep-audit-2026-11-04` receipts; HANDOFF records the current
+installation and limits. Both signed
 profiles/code parity and package/installed isolated backend probes pass. All2639
 tests pass:2575offscreen and64native after the unlocked, powered retry. Earlier
 cadence/locked-screen failures remain retained and thresholds unchanged. Build165
@@ -211,7 +361,8 @@ a matching FAT32/exFAT partition type and one full-capacity first MBR partition.
 Other layouts/filesystem changes still repartition. Physical/source checks and
 postconditions remain; diskutil probe and erase phases now log their durations.
 Fresh native initialization removes the local renderer lock from its candidate
-inventory. Hardware timings and final validation belong in HANDOFF. The older
+inventory. Hardware timings are in the dated section below; HANDOFF records
+current final validation/provenance. The older
 synthetic measurements below do not benchmark this newer USB workflow.
 
 ### Physical USB fixture timings — November4
@@ -241,8 +392,9 @@ no writes, other playlist memberships survived, the final fixture payload hash
 matched and no pending journal remained. The first hardware attempt exposed an
 unpublished renderer lock during initialization; the corrected native helper and
 new real initialization regression passed before these successful results.
-Private exact receipts and commands live under the November4 USB evidence root
-recorded in HANDOFF. There was no desktop-source write, real-app input or iPod
+Private exact receipts and commands live under
+`~/Library/Logs/Soundbox/usb-simplification-2026-11-04/`. There was no desktop-source
+write, real-app input or iPod
 physical acceptance.
 
 ## Correctness and remaining-cost pass, November3 night

@@ -4,9 +4,10 @@ This audit separates three identities: rekordbox owns native song/playlist IDs,
 SoundBox owns its curation and durable edit intentions, and SeaDrive supplies the
 audio behind a filesystem path. A visible Finder entry, a populated waveform,
 or a running tray application does not prove that audio can currently be read.
-The November2 fixes described here remain in the November4 whole-app delivery,
-personal build165/runtime `7ffde716…`. Build163/source release `cf2ef5b` is an earlier
-delivery. Dated counts/provider observations below are historical;
+The November2 fixes described here remain in the November5 responsiveness delivery,
+personal build167/runtime `3fb0ff60…`. Whole-app build165/runtime `7ffde716…`
+and build163/source release `cf2ef5b` are earlier deliveries.
+Dated counts/provider observations below are historical;
 exact current binary, curation and validation provenance belongs in
 [HANDOFF](HANDOFF.md).
 
@@ -32,8 +33,9 @@ queue. Earlier native-artist progress belongs to a discontinued experiment and
 is not an upgrade-completion target. The user explicitly requested removing those
 temporary generated records through the existing accepted playlist deletion
 domain, bound to their recorded generated root/IDs. This grants no song/audio,
-real custom-playlist or unrelated native-playlist deletion. Current cleanup
-readback and installed status belong in [HANDOFF](HANDOFF.md).
+real custom-playlist or unrelated native-playlist deletion. Dated cleanup
+readback remains in the private playlist-unification evidence described below;
+[HANDOFF](HANDOFF.md) records current installed status.
 The03:55 accepted cleanup removed exactly1527generated playlists, their root and
 3163owned memberships. The04:21 strict read-only policy audit computes1575virtual
 groups covering all3290visible songs, verifies all ten native custom playlists,

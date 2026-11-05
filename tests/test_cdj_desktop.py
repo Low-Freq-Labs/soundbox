@@ -7,6 +7,60 @@ from desktop.cdj import CdjDeviceMixin
 
 
 class CdjDropIntent(unittest.TestCase):
+    def settings_host(self, library, target):
+        from pathlib import Path
+        started = []
+        host = SimpleNamespace(_shutting_down=False, lib=library,
+            _defer_device_operation_until_scan_finishes=lambda *_args, **_kwargs:False,
+            _device_operation_owned=lambda *_:False, tag_controller=SimpleNamespace(owned=False),
+            _device_profiles={target:SimpleNamespace(kind='generic_usb',cdj_export=True,rockbox_export=True)},
+            _device_mount_tokens={target:91}, _release_eject_ready=mock.Mock(),
+            _data_file=Path('/synthetic/state/library.json'), _set_device_progress=mock.Mock(),
+            _start_pulse=mock.Mock(), _sync_cue_editing=mock.Mock(),
+            progress=mock.Mock(), cancel_btn=mock.Mock(),
+            _start_device_worker=lambda worker,*_:started.append(worker))
+        return host, started
+
+    def test_settings_freezes_only_source_paths_without_copying_song_graphs(self):
+        from pathlib import Path
+        class UncopyableTrack:
+            path = Path('/synthetic/music/song.wav')
+            source_analysis_path = '/synthetic/analysis/ANLZ0000.DAT'
+            def __deepcopy__(self, _memo):
+                raise AssertionError('Settings copied unrelated song/cue data')
+        track = UncopyableTrack()
+        library = SimpleNamespace(source='/synthetic/library/master.db', tracks_by_id={'17':track})
+        host, started = self.settings_host(library, '/not-a-device')
+        with mock.patch('desktop.cdj.device_facts', return_value=SimpleNamespace(
+                volume_uuid='synthetic-volume', writable=True)), \
+                mock.patch('soundbox.cdj_export.plan_settings') as settings:
+            CdjDeviceMixin._begin_cdj_export(host, '/not-a-device', settings={'device_name':'Fixture'})
+            library.source='/new/library/master.db'
+            track.path=Path('/new/music/song.wav')
+            track.source_analysis_path='/new/analysis/ANLZ0000.DAT'
+            started[0].operation(lambda:False, lambda *_:None)
+        self.assertEqual(settings.call_args.kwargs['sources'], [
+            Path('/synthetic/library/master.db'), Path('/synthetic/music/song.wav'),
+            Path('/synthetic/analysis/ANLZ0000.DAT')])
+
+    def test_settings_still_refuses_a_target_overlapping_source_analysis(self):
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            target = str(Path(directory).resolve()/'USB')
+            Path(target).mkdir()
+            track = SimpleNamespace(path=Path('/synthetic/music/song.wav'),
+                source_analysis_path=str(Path(target)/'ANLZ0000.DAT'))
+            library = SimpleNamespace(source='/synthetic/library/master.db',tracks_by_id={'17':track})
+            host, started = self.settings_host(library, target)
+            host._device_mount_tokens[target]=Path(target).stat().st_dev
+            with mock.patch('desktop.cdj.device_facts',return_value=SimpleNamespace(
+                    volume_uuid='synthetic-volume',writable=True)):
+                CdjDeviceMixin._begin_cdj_export(host,target,settings={'device_name':'Fixture'})
+                with self.assertRaisesRegex(RuntimeError,'overlaps source library'):
+                    started[0].operation(lambda:False,lambda *_:None)
+            self.assertEqual(list(Path(target).iterdir()),[])
+
     def test_format_source_separation_includes_external_analysis_locations(self):
         from pathlib import Path
         track=SimpleNamespace(path=Path('/synthetic/music/song.wav'),source_analysis_path='/synthetic/analysis/ANLZ0000.DAT')

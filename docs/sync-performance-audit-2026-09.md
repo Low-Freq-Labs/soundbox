@@ -11,7 +11,7 @@ synthetic devices. See `HANDOFF.md` for the installed build and remaining live
 acceptance; source tests are not a device throughput benchmark.
 
 Reviewed November3 against release `d08ee91`; the current wrapper was rechecked
-November4 against whole-app build165/runtime `7ffde716…`. All run times, counts and installation
+November5 against responsiveness build167/runtime `3fb0ff60…`. All run times, counts and installation
 instructions below belong to the dated September campaign. Current source
 acquisition requires an exact digest and a stable captured filesystem epoch;
 old proofs never bless an unchecked newer epoch. Current installed provenance and
@@ -20,8 +20,16 @@ measurements in [the performance audit](performance-audit.md). Here, generic
 ExportWorker/schema-2 refers to the filesystem engine, not the current native CDJ
 USB path. Current CDJ USBs update only selected playlists, have no automatic
 sync/pending state or idle/source-event scan, and start no final completion/eject
-read. Current FAT32/exFAT physical fixture timings are in HANDOFF; they do not
-close the separate historical iPod performance/failure gates.
+read. Dated FAT32/exFAT fixture timings are in the
+[November4 USB audit](performance-audit.md#physical-usb-fixture-timings--november4);
+they do not close the separate historical iPod performance/failure gates.
+
+The latest stock planning follow-up shares source presence/canonical observations
+within each membership phase, starts a fresh observation map for the next phase,
+and reuses the exact final patched database parse for full semantic validation.
+It preserves acquisition/compatibility/recovery/commit checks and native rendering
+on no-ops. Its generated50000-membership result4013.40→1206.89ms is in the current
+performance audit; it is separate from every physical time below.
 
 The November4 interrupted-adoption correction supersedes the old persisted-proof
 reuse described in the September table below: affected device bytes are freshly

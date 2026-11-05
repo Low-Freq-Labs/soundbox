@@ -116,7 +116,17 @@ def _same_json(left: Any, right: Any) -> bool:
         if (list(left) != list(right)
                 or any(type(key) is not str for key in left)):
             return False
-        return all(_same_json(value, right[key]) for key, value in left.items())
+        # Settings commonly hold large saved grids before small control values.
+        # Find a changed scalar before walking those unrelated nested records.
+        # Delay only containers; order, types and scalar representation retain
+        # the same exact comparison, including signed zero.
+        nested = []
+        for key, value in left.items():
+            if type(value) in (dict, list):
+                nested.append((value, right[key]))
+            elif not _same_json(value, right[key]):
+                return False
+        return all(_same_json(value, other) for value, other in nested)
     if type(left) is list:
         return len(left) == len(right) and all(
             _same_json(a, b) for a, b in zip(left, right))

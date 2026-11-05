@@ -1,9 +1,10 @@
 # MP3 shared-analysis follow-up
 
 Started November 2, 2026 at Sonny's request. **The accepted CBR profile remains
-installed and enabled in the November4 whole-app delivery, personal build165/
-runtime `7ffde716…`.** Earlier build163, source release `4a3d29a` and build160 are
-prior delivery evidence; the whole-app audit changes no MP3 authority.
+installed and enabled in the November5 responsiveness delivery, personal build167/
+runtime `3fb0ff60…`.** Whole-app build165/runtime `7ffde716…`, build163,
+source release `4a3d29a` and build160 are prior delivery evidence; the responsiveness
+audit changes no MP3 authority.
 Its original production delivery was build155; the dated checkpoints below retain
 that history. It covers initial full BPM/Grid+Key/waveforms
 on bare unlocked MPEG-1/no-Info/Xing CBR, stereo44.1kHz. VBR, Info/gapless, mono
@@ -232,12 +233,14 @@ signature and installed isolated CoreAudio/Metal checks passed. All11analyses,
 93bindings and10authorities were preserved. Sonny requested SoundBox remain
 closed at that checkpoint, so that package had no normal curated launch/UI latency
 measurement.
-See HANDOFF and the performance audit for its exact scope and remaining costs.
+The [performance audit](performance-audit.md) retains that command review's exact
+scope and remaining costs; HANDOFF records current delivery.
 
 The subsequent second native-command performance delivery was installed at22:56
 in personal155, runtime33689af7…/2266tests/154Python modules. All three native
 binaries matched tested code/data; installed isolated native player/process checks
 passed. Full private CBR workflow then measured12.030s (fixture renderer, no detector
 or GUI). At that checkpoint11analyses/93bindings/10authorities and newer UI state were exact.
-The real app remained closed at that checkpoint. Exact current provenance and
-per-command limits are in HANDOFF/performance audit; no MP3 scope is broadened.
+The real app remained closed at that checkpoint. Exact current provenance is in
+HANDOFF; the performance audit retains the per-command measurement limits.
+No MP3 scope is broadened.

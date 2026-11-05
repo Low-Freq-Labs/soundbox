@@ -1,20 +1,48 @@
 # Project layout and retention
 
 
-Reviewed November4,2026. This describes the checkout and retained evidence,
+Reviewed November5,2026. This describes the checkout and retained evidence,
 not the installed app's live library or waveform caches. Current app/source
 provenance and exact rollback location are in [HANDOFF](HANDOFF.md).
 
-The subsequent [UI polish review](ui-polish-audit.md) adds a179-file source
+The earlier [UI polish review](ui-polish-audit.md) adds a179-file source
 inventory, frozen runtime/test hashes, generated presentation regressions and
 Cocoa renders under `~/Library/Logs/Soundbox/ui-polish-2026-11-03/`.
 Its source/package/install status is separate from the dated retention and
 documentation-only closure below; HANDOFF records the current state.
 
+## Responsiveness delivery and wrap-up — November5
+
+Personal build167/runtime3fb0ff60… supersedes the dated installations below.
+Its2795-case complete gate,693 frozen runtime/test/build inputs, both signed
+profiles/code parity and installed isolated/normal startup checks pass. Settings
+is ready before first show; the signed startup cost is explicitly retained in
+[performance](performance-audit.md). Installation/reopen was separately approved
+by Sonny after he closed SoundBox. Documentation publication keeps the signed
+0075ab1/dirty=true base, installed app, live user state and real apps untouched.
+
+Private implementation evidence: `~/Library/Logs/Soundbox/bottleneck-audit-2026-11-04/`.
+Full wrap-up evidence: `~/Library/Logs/Soundbox/soundbox-wrapup-2026-11-05/`.
+The latter inventories all39 current first-party texts,11 archives,25 pinned
+upstream references and2 notices, with per-file review depth/basis/hashes,
+dependency-pin verification and local target/anchor checks. Publication receipts
+bind the exact unchanged runtime inputs to the passing gate; no documentation-only
+rebuild or restamp is needed. Prior HANDOFF text is retained privately.
+
+Six protected bases await acceptance in the existing directory recorded in
+HANDOFF; the newest is `Soundbox-before-responsiveness-audit.app` (7ffde716…).
+All six identities remain in `protected-rollbacks.json` in the implementation
+root. Six owned redundant dist/COLLECT/PyInstaller directories were retired after
+verified install:1,116,279,963 logical regular-file bytes. Keep the installed app,
+all six rollback bases, source/venv, native/CDJ/check outputs, required fixtures,
+124 conversion originals and native recovery. Dated retention below grants no
+new cleanup, restore, hardware erase, source write or app control.
+
 ## Whole-app wrap-up publication — November4
 
-The completed USB/iPod/app audits and documentation are being published on main,
-matching all694 frozen inputs/runtime7ffde716… . Installed personal build165 stays
+The completed USB/iPod/app audits and documentation were published on main as
+01d146c4ee9fbdc942c0a60c90db732a52545111,
+matching all694 frozen inputs/runtime7ffde716… . At that checkpoint build165 stayed
 signed to19a3075/dirty=true; no restamp/reinstall or app control is needed. The
 single current HANDOFF replaces the accumulated diary; its previous full text is
 retained privately as `handoff-before-wrapup.txt`.
@@ -28,7 +56,7 @@ remain untouched while Sonny tests; no new hardware or codec authority is implie
 
 ## Whole-app audit delivery — later November4
 
-Personal build 165/runtime 7ffde716… is installed/reopened/verified. The complete
+At that checkpoint personal build165/runtime7ffde716… was installed/reopened/verified. The complete
 2779-case gate,694 frozen inputs, both signed code-matched profiles, three isolated
 native/process/RAM-SQLCipher probes and fresh state/icon preservation pass.
 Private root: `~/Library/Logs/Soundbox/soundbox-deep-audit-2026-11-04/`.
@@ -105,7 +133,7 @@ protected rollback bases, source-run prerequisites and retired historical plans.
 Old completion/eject/restore/pilot/cleanup instructions cannot override the current
 contract. At that review, build163/sourcecf2ef5b was current, distinct from
 prior deliveries and its signed740ad53/dirty=true installation base. Build165
-now supersedes that installation; HANDOFF records the current dirty source.
+superseded that installation before build167; HANDOFF records current provenance.
 
 Per-file before/after hashes, findings, code-check basis, scope limits and exact
 local-link results are in
@@ -238,7 +266,7 @@ Sonny explicitly requested reducing accumulated diagnostics, backup copies and
 extra app/packaging storage. Removed22,117 generated files, all five obsolete app
 bundles, duplicate dist/packaging, compiler/Python caches and loose scratch files.
 At that October31 checkpoint the installed verified app remained and no rollback
-bundle remained. Current retention is recorded in the November4 section and HANDOFF. Build retains
+bundle remained. Current retention is recorded in the November5 section and HANDOFF. Build retains
 about18MiB of checked native/CDJ/analysis binaries, release reports and small proof
 records. Source, unfinished research and regression tests are retained.
 
@@ -330,8 +358,10 @@ Sonny requested wrap-up of the efficiency/player/browser changes and manual-BPM 
 The final wrap-up retires superseded rollback apps and duplicate dist/personal
 packaging, retaining the installed app, active checkout, build/native, build/check,
 and small QA/install/state records. Protected native-source references, encrypted
-recovery, frozen waveforms and iPod/CDJ fixtures stay intact. Exact current
-provenance, validation and cleanup receipts are in [HANDOFF](HANDOFF.md).
+recovery, frozen waveforms and iPod/CDJ fixtures stay intact. Exact dated
+validation/cleanup receipts remain under
+`~/Library/Logs/Soundbox/retained-release-records-2026-10-28/`; current provenance
+and rollback retention are in [HANDOFF](HANDOFF.md).
 
 ## Final directory audit — October 28
 
@@ -454,7 +484,8 @@ under that archive and now identify deleted historical evidence. They are not
 current operational paths. Required regression fixtures remain in the checkout.
 Latest gate reports remain
 at `build/check/`. Moving files out of this directory does not itself reclaim
-volume space; Trash can be emptied separately when desired.
+volume space. Any later Trash emptying needs its own explicit scope and
+confirmation; this historical cleanup grants none.
 
 Current player guidance is in [PLAYER](PLAYER.md); experiments formerly embedded
 there are in [player history](archive/player-history-2026-07-to-09.md). Completed

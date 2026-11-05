@@ -342,7 +342,10 @@ class AnalysisMixin:
             results = {key: analysis.merge_result(before.get(key), result, worker.preferences)
                        for key, result in worker.result.items()}
             prep=getattr(self,'prep_controller',None)
-            prep_before=deepcopy(self.settings.get('pending_prep_edits',[]))
+            # attach_result detaches its selected job and replaces the queue.
+            # Keep the published queue for exact rollback; copying unrelated
+            # pending grids here stalls every detector completion on the GUI.
+            prep_before=self.settings.get('pending_prep_edits',[])
             if prep:
                 results={key:prep.attach_result(current,result) for key,result in results.items()}
             if results:

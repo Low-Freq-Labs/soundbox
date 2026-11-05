@@ -129,7 +129,7 @@ class _ConnectionJob(QThread):
 
 class SoundCloudSection(QWidget):
     def __init__(self, service, parent=None, *, isolated=False, startup_worker=None,
-                 startup_complete=False, startup_result=None):
+                 startup_complete=False, startup_result=None, auto_refresh=True):
         super().__init__(parent)
         self.service = service
         self._tasks = TaskOwner(self)
@@ -170,10 +170,15 @@ class SoundCloudSection(QWidget):
         self._sync()
         if startup_complete:
             self._show_startup_result(startup_result)
-        if (startup_worker is None and not startup_complete and not isolated
+        if (auto_refresh and startup_worker is None and not startup_complete and not isolated
                 and not QStandardPaths.isTestModeEnabled()
                 and service.status().get("connected")):
             QTimer.singleShot(0, self, self._refresh_initial)
+
+    def attach_startup(self, worker):
+        """Bind the window's sole automatic refresh before its worker starts."""
+        self._startup_worker = worker
+        self._sync()
 
     def _sync(self):
         state = self.service.status()

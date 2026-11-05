@@ -37,8 +37,11 @@ removed-media backups to reclaim space. Plus-only display remains supported.
 Source packaging includes the executable and upstream license/full GPL text, not
 private fixtures. Distribution review and the wider CDJ model/firmware/control
 acceptance matrix remain open. Build163's FAT32/exFAT fixture writes, selected
-updates and zero-write repeats are bounded physical USB evidence in HANDOFF,
-not certification of player behavior or full-library performance.
+updates and zero-write repeats are bounded evidence in the
+[November4 physical USB timing record](../../docs/performance-audit.md#physical-usb-fixture-timings--november4),
+not certification of player behavior or full-library performance. Exact dated
+receipts remain under `~/Library/Logs/Soundbox/usb-simplification-2026-11-04/`;
+the later USB audit uses `~/Library/Logs/Soundbox/usb-deep-audit-2026-11-04/`.
 See [the complete contract](../../docs/cdj-usb-export.md).
 
 The `analyze` command reads one already captured local audio file through pinned

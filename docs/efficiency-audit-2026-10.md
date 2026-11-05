@@ -7,8 +7,9 @@ provenance is in [HANDOFF](HANDOFF.md), player policy in [PLAYER](PLAYER.md),
 measured follow-up costs in [performance-audit](performance-audit.md), and active
 work in [ROADMAP](ROADMAP.md). These older candidates are not a current backlog.
 
-Rechecked November4 against whole-app build165/runtime `7ffde716…`; build163/
-source `cf2ef5b` is an earlier delivery. The scope-first reader
+Rechecked November5 against responsiveness build167/runtime `3fb0ff60…`;
+whole-app build165/runtime `7ffde716…` and build163/source `cf2ef5b` are earlier
+deliveries. The scope-first reader
 proposal and count/policy/receipt fixes below subsequently shipped; active native
 Collection discovery is supported rather than a future opt-in. Generic USBs are
 now explicit playlist-export targets with no idle catalog/drift comparison or
@@ -19,8 +20,11 @@ the old deferred generic-export statements describe their dated checkpoints, not
 an unimplemented build163 request. Full-library/player acceptance and iPod sync
 performance remain separate. The later whole-app audit also removes unused
 Settings/device construction, repeated regex/model/artwork/state work and private
-Grid staging; its matched signed startup measurement is in performance-audit/
-HANDOFF. Those results do not rewrite the dated measurements below.
+Grid staging. Sonny subsequently rejected lazy Settings: build167 prepares all
+six tabs before first show, accepting the measured startup cost so its first
+click is ready. Device surfaces/export backends remain on demand. Current matched
+startup measurements and remaining synchronous-state/queue costs are in
+performance-audit/HANDOFF. Those results do not rewrite the dated measurements below.
 
 Evidence disposition, October28: Sonny accepted the build and closed further
 waveform comparison/tuning for now. After the directory audit, he authorized
@@ -30,6 +34,10 @@ removing the private comparison archive and obsolete experiment/test output.
 state records, canonical native acceptance/recovery and required fixtures remain;
 see [PROJECT_LAYOUT](PROJECT_LAYOUT.md) for exact retention. Measurements below
 are historical evidence, not a promise that raw comparisons can still be replayed.
+The small historical release/install/state records referenced below are retained
+under `~/Library/Logs/Soundbox/retained-release-records-2026-10-28/` with their
+original subpaths; HANDOFF describes current delivery. Those records do not
+recreate the deleted diagnostic images, movies or scratch programs.
 
 Initial source baseline: `a25de73`, clean `main`; then-installed personal build 131.
 Final implementation and build 133 installation are recorded at the end.
@@ -361,8 +369,9 @@ The first diagnostic flat-red controls had the wrong byte order and are supersed
 by the corrected STOP CAPPIN controls; no product rendering was changed by that
 diagnostic correction. The 100-load memory observations remain valid separately.
 
-Final gate, packaged timing, installation provenance and visual acceptance
-are recorded in HANDOFF. No headline startup or exact waveform/CDJ
+The later sections and retained dated release records describe the final gate,
+packaged timing, installation provenance and visual acceptance for this checkpoint.
+No headline startup or exact waveform/CDJ
 compatibility claim follows from these probes.
 
 Earlier implementation checkpoint (20 launches, including the initial
@@ -465,8 +474,9 @@ upgrades/grid tasks. Initial receipt-policy reconciliation is not a waveform rec
 Postquit/postlaunch checks preserved curation, all 4,041 art/review file hashes and
 three source authority files exactly. Only persisted setting difference was zoom
 1500→384; analysis record count remained 3,276. Backups, final state hashes,
-installation time and the one prior-app rollback are in HANDOFF and the private
-release evidence directory. No task-initiated source edit or device export occurred.
+installation time and the then-single prior-app rollback are historical facts in
+the retained dated release records. Current rollback retention is governed by
+HANDOFF. No task-initiated source edit or device export occurred.
 Sonny's installed-build acceptance and future physical iPod/CDJ gates remain
 separate from automated checks. No third-party code/assets were incorporated.
 
@@ -484,7 +494,8 @@ Focused GPU 23 and UI 64 checks passed. Native tests cover rapid playing-hot tap
 playing/paused replacements and explicit Pause during a pending seek; that last
 case caught and corrected a stale gain-completion race. Actual translated frames
 and overlapping recenterings passed at all zooms/modes. Cue rendering was inspected.
-Final full gate, package and install evidence follow in HANDOFF.
+The dated final gate, package and install evidence remain in the retained release
+records; current delivery provenance is in HANDOFF.
 
 The muted frozen-fixture MainWindow probe displayed 3,740 synthetic rows and
 captured 240 submitted drawables per zoom, comparing the installed C dylib with
@@ -507,10 +518,11 @@ launches measured median 1,438 ms / p95 1,464 ms (all under 1,500); the separate
 row-cache miss was 3,336 ms. All readiness/deferred-import checks passed. Actual
 source load returned 3,740 tracks / 75 playlists, reused 3,237 preparation receipts and
 scheduled zero tasks. Curation, 4,041 art/review hashes and all authorities stayed
-exact; postquit/postlaunch library bytes match. See HANDOFF for exact receipts.
+exact; postquit/postlaunch library bytes match. Exact historical receipts remain
+in the retained dated release records.
 That release did not resolve occasional presentation gaps; verified continuous
 RGB source translation is a separate result. Sonny subsequently closed further
-comparison work as recorded in the current handoff.
+comparison work at that dated checkpoint.
 
 
 ### October28 selected RGB edge B and playback clock
@@ -539,7 +551,8 @@ adds no polling/library/audio work. Four clock/UI tests cover hour boundaries,
 long sets, immediate seek/cue-position updates, coalescing, preview ownership and
 actual label wiring/room. Flexible gaps distribute the unchanged controls across
 the row. Both short/hour render layouts were inspected. Installation, state
-preservation, startup measurements and actual final provenance are in HANDOFF.
+preservation, startup measurements and final provenance for that checkpoint remain
+in the retained dated release records; HANDOFF records current delivery.
 
 
 ### October28 browser polish and manual BPM endpoint correction
@@ -552,7 +565,8 @@ A synthetic 3,000-row Cocoa resize comparison (240 steps, no cProfile) measured
 median 46.931→36.265 ms and p95 60.522→45.186 ms; horizontal-bar Show/Hide events
 fell from119/118 to0/0. This is programmatic resize/processEvents wall time,
 not a compositor/live-gesture or120fps guarantee. Earlier populated traces still
-show occasional missed presentations. Installed receipts are in HANDOFF.
+show occasional missed presentations. Its historical installation receipts
+remain in the retained dated release records.
 
 Sonny rejected the thin black text-outline preview. It never changed production
 source, launched a live viewer or reached an installed build.
@@ -575,5 +589,6 @@ fixed138.00 transform matched complete native DAT/EXT bytes. Native source was
 left at Sonny's138.00 edit; no historical source state was restored. Focused
 regressions cover shorthand/retry, endpoint bounds, bounded framing-only reads,
 malformed/changed/redirected files, WAL interruption on both sides of commit,
-normal edits avoiding audio and a subsequent BPM change. Final gate and installed
-curation evidence are recorded in HANDOFF.
+normal edits avoiding audio and a subsequent BPM change. Its dated final gate
+and installation/curation evidence remain in the retained release records and
+the separate private manual-BPM evidence root; HANDOFF records current delivery.

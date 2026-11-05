@@ -116,6 +116,14 @@ from .choices import Menu as QMenu
 from .progress import ThemeProgressBar
 
 
+_WINDOW_EVENT_TYPES = frozenset((
+    QEvent.Quit, QEvent.Resize, QEvent.Show, QEvent.MouseButtonRelease,
+    QEvent.KeyPress, QEvent.MouseButtonPress, QEvent.Wheel,
+    QEvent.ApplicationActivate, QEvent.ApplicationDeactivate, QEvent.MouseMove,
+    QEvent.ShortcutOverride, QEvent.KeyRelease,
+))
+
+
 from soundbox import (
     browser_cache, engine, file_locations, imports, libcache,
     manifest as device_manifest, metadata, paths, rekordbox_db,
@@ -587,10 +595,13 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._mount_snapshot = mounted_volume_snapshot()
             self._mount_table_timer.start()
         self._load_state()  # restore custom playlists + last-opened XML
+        # Settings must be ready before the first visible frame. Construct its
+        # controls before installing the application-wide input filter too.
+        self._ensure_settings_page()
         if (not self._isolated and not QStandardPaths.isTestModeEnabled()
                 and self.providers.connections is not None):
-            # Preserve automatic connected-account refresh without building its
-            # hidden Settings widgets or doing credential/network work here.
+            # The window owns one connected-account refresh; its ready Settings
+            # section attaches without doing credential/network work here.
             QTimer.singleShot(0, self, self._prepare_connections)
         # Direct imports keep opaque macOS bookmarks. Healthy paths need only a
         # cheap stat; a moved file resolves by persistent identity without a
@@ -640,6 +651,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         worker = OneShotTask(refresh)
         self._connection_initial_worker = worker
         self._connection_initial_complete = False
+        section = getattr(self, '_soundcloud_section', None)
+        if section is not None:
+            section.attach_startup(worker)
         self._connection_tasks.adopt(worker, retired)
         worker.start()
 
@@ -875,8 +889,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._row_cache[t.track_id] = r
         result = dict(r)
         result['bpm_estimated'] = False
-        from soundbox.local_grid import effective_result
-        detected = effective_result(self._analysis_result(t))
+        from soundbox.local_grid import display_fields
+        detected = display_fields(self._analysis_result(t))
         if detected:
             if (not t.bpm or (t.imported and detected.get('grid_draft'))) and detected.get('bpm'):
                 result['bpm'] = f"{detected['bpm']:.2f}"
@@ -1105,23 +1119,28 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
     # ---------- player ----------
     def eventFilter(self, obj, ev):
-        if (obj is QApplication.instance() and ev.type() == QEvent.Quit
+        event_type = ev.type()
+        # This application-wide filter also sees every style/layout event while
+        # constructing a page. Only input, browser geometry and quit belong here.
+        if event_type not in _WINDOW_EVENT_TYPES:
+            return super().eventFilter(obj, ev)
+        if (obj is QApplication.instance() and event_type == QEvent.Quit
                 and self._defer_quit_for_saves()):
             ev.ignore()
             return True
         usb_pages = vars(self).get('usb_device_pages')
-        if (ev.type() in (QEvent.Resize, QEvent.Show)
+        if (event_type in (QEvent.Resize, QEvent.Show)
                 and getattr(self, '_browser_columns_shown', False)
                 and (obj is self.table.viewport()
                      or obj is self.artists_view.viewport()
                      or (usb_pages is not None and obj is usb_pages.playlist_tree.viewport()))
-                and (obj.isVisible() or ev.type() == QEvent.Show)):
+                and (obj.isVisible() or event_type == QEvent.Show)):
             # Hidden pages can retain their old geometry until Show. Refit
             # before the browser is painted after returning from Settings.
-            width = ev.size().width() if ev.type() == QEvent.Resize else obj.width()
+            width = ev.size().width() if event_type == QEvent.Resize else obj.width()
             self._fit_browser_columns(fill=True, available=width)
         if (getattr(self, "now_playing", None) is obj
-                and ev.type() == QEvent.MouseButtonRelease
+                and event_type == QEvent.MouseButtonRelease
                 and ev.button() == Qt.LeftButton):
             self._focus_now_playing()
             return True
@@ -1129,33 +1148,33 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # Configurable shortcuts are deck controls only from browsing surfaces. Editors,
         # search, settings trees, dialogs, and the device browser keep their
         # native text/toggle behavior. Text editing retains its standard chords.
-        if ev.type() in (
+        if event_type in (
                 QEvent.KeyPress,QEvent.MouseButtonPress,QEvent.MouseButtonRelease,
                 QEvent.Wheel, QEvent.Resize, QEvent.ApplicationActivate,
                 QEvent.ApplicationDeactivate):
             self._defer_library_prep(
-                1.0 if ev.type() in (
+                1.0 if event_type in (
                     QEvent.ApplicationActivate,
                     QEvent.ApplicationDeactivate) else 0.75)
-        elif (ev.type() == QEvent.MouseMove
+        elif (event_type == QEvent.MouseMove
               and getattr(ev, "buttons", lambda: Qt.NoButton)()
               & Qt.LeftButton):
             self._defer_library_prep()
 
-        if ev.type() == QEvent.ApplicationActivate:
+        if event_type == QEvent.ApplicationActivate:
             self.player_bar.resynchronize_transport()
             self.grid_controller.set_current(self.player_bar.current_track(), force=True)
             return super().eventFilter(obj, ev)
-        if ev.type() == QEvent.ApplicationDeactivate:
+        if event_type == QEvent.ApplicationDeactivate:
             self._keyboard_router.release_all()
             return super().eventFilter(obj, ev)
-        if ev.type() not in (
+        if event_type not in (
                 QEvent.ShortcutOverride, QEvent.KeyPress, QEvent.KeyRelease):
             return super().eventFilter(obj, ev)
         focus = QApplication.focusWidget()
         grave = getattr(self, '_grave', None)
         if grave is not None and focus is grave and ev.matches(QKeySequence.SelectAll):
-            if ev.type()==QEvent.KeyPress:grave.selectAll()
+            if event_type==QEvent.KeyPress:grave.selectAll()
             ev.accept();return True
         browsing = self._space_should_play(focus)
         if grave is not None and focus is grave:
@@ -1177,7 +1196,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 and ev.modifiers() in (Qt.NoModifier,Qt.ShiftModifier)
                 and self.stack.currentIndex()==0):
             # Sidebar clicks choose a playlist; arrows browse its songs.
-            if ev.type()==QEvent.KeyPress:
+            if event_type==QEvent.KeyPress:
                 self.table.setFocus(Qt.ShortcutFocusReason)
                 self.table.keyPressEvent(ev)
             ev.accept();return True
@@ -6987,8 +7006,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if self.lib is None:
             return []
         groups: dict[str, list[str]] = {}
+        kinds = self.art_cache.status_kinds(self.lib.tracks_by_id)
         for tid in self.lib.tracks_by_id:
-            if self.art_cache.status_kind(tid) == "avatar":
+            if kinds[tid] == "avatar":
                 t = self.lib.tracks_by_id[tid]
                 artist = metadata.effective_artist(
                     tid, t.name, t.artist, self.overrides, True,

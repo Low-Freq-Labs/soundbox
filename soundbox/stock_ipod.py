@@ -836,7 +836,8 @@ def _render_database(
     smart_raw: list[dict],
     master_name: str,
     capabilities: Any,
-) -> bytes:
+) -> tuple[bytes, dict]:
+    """Render and parse the final patched bytes once for caller validation."""
     with tempfile.TemporaryDirectory(prefix="soundbox-stock-ipod-render.") as td:
         root = Path(td)
         itunes = root / "iPod_Control" / "iTunes"
@@ -859,8 +860,8 @@ def _render_database(
         source.write_bytes(rendered)
         # A second parse proves that the final, patched bytes are structurally
         # readable before they are ever eligible for a device commit.
-        parse_itunesdb(str(source))
-    return rendered
+        parsed = parse_itunesdb(str(source))
+    return rendered, parsed
 
 
 def _shadow_matches_live(
@@ -1214,18 +1215,28 @@ def plan_stock_ipod_sync(
     resolved: list[tuple[Track, Path, Path]] = []
     omissions: list[StockMediaOmission] = []
     missing: list[Path] = []
+    source_observations: dict[Path, Path | None] = {}
+
+    def observe_source(path: Path, observations: dict[Path, Path | None]) -> Path | None:
+        # Memberships can repeat a source thousands of times. This is only a
+        # phase-local path observation; acquisition and commit keep their own
+        # fresh descriptor/epoch/content proofs.
+        if path not in observations:
+            try:
+                exists = path.is_file()
+            except OSError:
+                exists = False
+            observations[path] = path.resolve(strict=True) if exists else None
+        return observations[path]
+
     for playlist in selected:
         checkpoint()
         for track in library.resolve(playlist):
-            source = track.path
-            try:
-                exists = source.is_file()
-            except OSError:
-                exists = False
-            if not exists:
-                missing.append(source)
+            observed_source = observe_source(track.path, source_observations)
+            if observed_source is None:
+                missing.append(track.path)
             else:
-                source = source.resolve(strict=True)
+                source = observed_source
                 omission = media_omission(source)
                 if omission:
                     omissions.append(StockMediaOmission(
@@ -1585,14 +1596,17 @@ def plan_stock_ipod_sync(
         claimed_dbids.add(planned_dbid)
 
     playlist_sequences: dict[str, list[int]] = {name: [] for name in names}
+    playlist_source_observations: dict[Path, Path | None] = {}
     for playlist, name in zip(selected, names, strict=True):
         for track in library.resolve(playlist):
-            source = track.path
-            if source.is_file():
-                resolved_source = source.resolve(strict=True)
-                if resolved_source in source_to_dbid:
-                    playlist_sequences[name].append(
-                        source_to_dbid[resolved_source])
+            # Reobserve after acquisition and reconciliation rather than reuse
+            # the first phase's existence/canonical-path result.
+            playlist_source = observe_source(track.path, playlist_source_observations)
+            if playlist_source is None or playlist_source != source_observations.get(track.path):
+                raise StockIpodError(
+                    f"Selected source identity changed during planning: {track.path}")
+            if playlist_source in source_to_dbid:
+                playlist_sequences[name].append(source_to_dbid[playlist_source])
 
     raw_regular = [
         item for item in (parsed.get("mhlp") or [])
@@ -1810,14 +1824,9 @@ def plan_stock_ipod_sync(
             and (root / relative).is_file()
         )
     )
-    rendered = _render_database(
+    rendered, check = _render_database(
         original, track_infos, regular, smart, smart_raw,
         str(master_raw.get("Title") or "iPod"), capabilities)
-
-    with tempfile.TemporaryDirectory(prefix="soundbox-stock-ipod-validate.") as td:
-        staged = Path(td) / "iTunesDB"
-        staged.write_bytes(rendered)
-        check = parse_itunesdb(str(staged))
     output_tracks = get_ipod_tracks(check)
     output_by_track_id = {
         int(raw.get("trackID") or 0): int(raw.get("dbid") or 0)
@@ -2994,7 +3003,7 @@ def plan_stock_ipod_playlist_delete(
         if (root / relative).is_file()
     )
 
-    rendered = _render_database(
+    rendered, check = _render_database(
         original,
         track_infos,
         regular,
@@ -3003,10 +3012,6 @@ def plan_stock_ipod_playlist_delete(
         str(master_raw.get("Title") or "iPod"),
         capabilities,
     )
-    with tempfile.TemporaryDirectory(prefix="soundbox-stock-ipod-delete-validate.") as td:
-        staged = Path(td) / "iTunesDB"
-        staged.write_bytes(rendered)
-        check = parse_itunesdb(str(staged))
     output_tracks = get_ipod_tracks(check)
     output_by_dbid = {int(raw.get("dbid") or 0): raw for raw in output_tracks}
     if len(output_tracks) != len(retained_raw_tracks):

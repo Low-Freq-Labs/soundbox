@@ -1,7 +1,7 @@
 # research/cdj_export — CDJ USB export prototype
 
-Status checked November4,2026 against installed whole-app build165/runtime7ffde716…;
-the preceding published USB source was `cf2ef5b`.
+Status checked November5,2026 against installed responsiveness build167/runtime3fb0ff60…;
+published USB source `cf2ef5b` is an earlier delivery.
 The desktop uses the shared renderer in
 [`native/cdj`](../../native/cdj/README.md), fresh `soundbox.cdj_source` capture and
 reviewed `cdj_transaction` publication. The standalone export tools below remain explicit

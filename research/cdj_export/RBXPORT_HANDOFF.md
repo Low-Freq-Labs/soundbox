@@ -1,6 +1,6 @@
 # CDJ export backend handoff — October 28, 2026
 
-**Status checked November4 against installed whole-app build165/runtime7ffde716…:** this document
+**Status checked November5 against installed responsiveness build167/runtime3fb0ff60…:** this document
 is the retained October28 research handoff. The application integrates its renderer
 through `native/cdj` and the dedicated
 `soundbox.cdj_*`/`desktop.cdj` boundary. The original pending-selection/pagination/
@@ -16,8 +16,9 @@ Settings has44 fields and explicit Save to Global / Load Global; named presets
 and automatic Follow Global/Custom propagation remain deferred. The earlier
 build160/2564-test release had dirty-source base c2415d5…, separate from Git
 release `4a3d29a`; these are dated proofs. The later build163/2595-test USB delivery
-and its physical fixture evidence are historical; current build165/2779-test
-delivery and exact runtime/source identities are in HANDOFF. Selected
+and its physical fixture evidence are historical, as is build165/2779-test.
+Current build167/2795-test delivery and exact runtime/source identities are in
+HANDOFF. Selected
 exports now preserve unrelated per-format differences and reclaim only removed
 members unused by other USB playlists; the historical whole-fixture equivalence
 checks below do not impose a global equality requirement on ordinary export.

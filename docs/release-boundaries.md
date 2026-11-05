@@ -1,8 +1,8 @@
 # Shared app and optional personal modules
 
-Allocation requested October26,2026; status checked November4 against tested
-source release `cf2ef5b` and then-installed build163/runtime `42aefd35…`.
-The same boundary remains in current whole-app build165/runtime7ffde716…; both signed
+Allocation requested October26,2026; status checked November5 against installed
+personal build167/runtime3fb0ff60… and its separately validated public package.
+Both retain the same shared/optional boundary; both signed
 profiles/code parity and isolated native/SQLCipher checks pass. No new dependency
 or distribution clearance is implied.
 Product direction: one shared application,
@@ -140,11 +140,13 @@ No locked buttons, empty provider panels, upgrade banners or alternate layout.
    activate a module absent from the public artifact. A null provider schedules
    no network work. Optional provider jobs use core cancellation/ownership and
    bounded resource budgets.
-   Settings widgets are created on demand. Personal connection setup binds the
-   AppData path without I/O; cached same-account likes and the later Connections
-   UI share one service. A window-owned initial refresh preserves the connected
-   account's launch refresh without constructing Settings, while public schedules
-   no personal work. Export preparation/caches likewise remain demand-driven by
+   All six Settings tabs are ready before first show. Personal provider root
+   binding performs no I/O; the ready Connections section and artwork matching
+   share one service with the same cached account metadata/likes. One window-owned
+   initial refresh attaches to that section before worker start; the section
+   schedules no duplicate launch refresh, and public schedules no personal work.
+   Credential/network operations stay off the UI thread. Export preparation/caches
+   remain demand-driven by
    compatible connected devices; ordinary desktop artwork stays available.
 5. Initial delivery uses explicit build composition: shared core plus a
    known provider package in the personal artifact, shared core alone in public.

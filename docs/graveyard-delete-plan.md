@@ -2,8 +2,9 @@
 
 The feature and separate authority are installed; [HANDOFF](HANDOFF.md) records
 the current validated delivery and preserved state. Sonny confirmed the November1
-515-entry bulk Delete; later user disposals and current receipt counts are in
-HANDOFF. No agent has disposed of real source audio or
+515-entry bulk Delete; later user disposals supersede that dated checkpoint.
+Current delivery/preservation counts are in HANDOFF; exact operation receipts
+remain in the shared recovery domain. No agent has disposed of real source audio or
 run removal SQL as an implementation test. Sonny chooses and confirms targets.
 
 ## Confirmation and source contract

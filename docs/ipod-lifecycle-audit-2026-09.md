@@ -12,7 +12,7 @@ and acceptance gates. Preserve generation-58 recovery until separately reviewed
 hardware acceptance; automated fixtures are not that acceptance.
 
 Reviewed November3 against release `d08ee91`; the current wrapper was rechecked
-November4 against whole-app build165/runtime `7ffde716…`. This document records the dated
+November5 against responsiveness build167/runtime `3fb0ff60…`. This document records the dated
 September implementation and runs, including failures before later fixes. Current
 installed provenance and gates are in [HANDOFF](HANDOFF.md); later source-level
 efficiency/correctness evidence is in [the performance audit](performance-audit.md).
@@ -22,6 +22,13 @@ Current generic CDJ USBs instead have selected-only export, no automatic sync
 status or idle/source-event scan, explicit browser reads, and no final
 completion/eject read. Successful eject retires its row/caches in memory. Those
 USB changes do not remove the separate iPod sync/finalization contract.
+The latest stock planner shares only phase-local source path observations and
+the exact final rendered parse. Its second membership phase rechecks unique
+sources after acquisition/reconciliation; disappearance or redirection refuses.
+Full semantic/database checks, original-byte no-op retention and fresh commit
+proofs remain. Generated/offline speedups do not close the physical gates below.
+Historical opt-in/skipped-test descriptions below retain their September scope;
+the current release gate requires the pinned fixtures and zero skips.
 
 ## Inventory before consolidation
 

@@ -12,14 +12,45 @@ earlier November4 update is runtime `7bbe8577…` and includes the prior Export
 selector/cleanup work recorded here. That USB/theme follow-up was delivered as build163 and retained in build165;
 [HANDOFF](HANDOFF.md) records its exact replacement runtime.
 
-## Whole-app follow-up — later November4
+## Responsiveness delivery — November5
 
-Current build165/runtime7ffde716… includes the broader
+Personal build167/runtime3fb0ff60… is installed. Sonny explicitly rejected
+first-click lazy Settings: all six tabs and their controls now prepare before the
+first window show. In five paired generated source fixtures, opening Settings
+fell 561.45→12.50ms. The paired signed snapshot-startup median rises 1158.43→1783.13ms
+to provide that readiness; startup and first-click latency are distinct measures.
+Device pages/export backends retain their separate on-demand behavior.
+
+The ready Connections section attaches to the window's sole automatic refresh
+before its worker starts. Cached account likes remain shared, Cancel stays live
+until retirement, and opening Settings later repeats neither refresh nor widget
+construction. Isolated runs use disposable state or injected services and no
+live Keychain/network.
+
+The same delivery removes discarded browser-grid copies, repeated artist-catalog
+policy reads and redundant layout-event processing. Browser draft validation,
+native/import metadata precedence, held-key release, navigation preservation and
+normal-quit save draining remain covered. Track Info still prepares its selected
+complete image before showing; generated current-sized Cocoa openings measured
+25.11ms median with every first-show image ready. Artwork-lock contention can add
+delay, so this is neither a guaranteed opening deadline nor a live-session claim.
+
+All 2,795 release cases pass, including 66 Cocoa cases. A complete offscreen
+attempt exposed an old Settings-absence assertion. Its replacement checks saved
+colors and controls before first show and retains the later persistence assertions.
+The 457-case UI replay and the final complete gate pass without omitted tests.
+[HANDOFF](HANDOFF.md) records exact installation/preservation evidence, while the
+[current performance audit](performance-audit.md#bottleneck-and-responsiveness-follow-up--november4)
+separates remaining synchronous saves and other measured costs.
+
+## Earlier whole-app follow-up — later November4
+
+The preceding build165/runtime7ffde716… included the broader
 [whole-app audit](performance-audit.md#whole-app-audit--november4-after-ipod-review).
-Settings and device surfaces are built on demand, with current saved preferences
-applied when opened. Cached likes remain available before Settings opens; the
-window retains the automatic connected-account refresh, cancellation and failure
-result for the later Connections panel.
+At that checkpoint Settings and device surfaces were built on demand, with current
+saved preferences applied when opened. The November5 delivery above supersedes
+that Settings policy. Cached likes and the window-owned automatic refresh were
+already independent of first opening the Settings panel.
 
 Repeated identical browser filters/sorts avoid resets. Inline title/artist edits
 invalidate search/sort data and update duplicate memberships; background artwork
@@ -179,7 +210,8 @@ Generated dialog renders and queue tests are retained under the November4 export
 log directory. At this earlier checkpoint, read-only mount facts identified two
 writable generic USB targets and no actual USB export was performed. The later
 build163 follow-up formatted TEST-1/TEST-2 and exercised frozen-fixture export,
-selected update and unchanged repeat; exact scope/timings are in HANDOFF. Those
+selected update and unchanged repeat; exact scope/timings are in the
+[dated USB fixture record](performance-audit.md#physical-usb-fixture-timings--november4). Those
 tests do not establish player/firmware or full-library performance acceptance.
 
 The reported native merge error was reproduced from three small catalog copies,
@@ -195,5 +227,6 @@ The earlier November4 delivery passed installation/normal reopen, with2564reconc
 offscreen/Cocoa tests,39additional focused Cocoa cases,675frozen inputs and
 160personal/156public packaged-module parity. A cadence check failed at4%battery
 and passed focused/full native reruns on AC with unchanged source; exact scope
-and evidence are in HANDOFF. The dated179-file inventory above remains distinct
+and evidence remain under `~/Library/Logs/Soundbox/export-polish-2026-11-04/`;
+HANDOFF records the superseding installation. The dated179-file inventory above remains distinct
 from review of the additional Export module and its changed backend paths.

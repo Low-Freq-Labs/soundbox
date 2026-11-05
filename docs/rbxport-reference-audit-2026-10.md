@@ -7,8 +7,9 @@ were downloaded at immutable revisions into private audit evidence; no upstream
 app/test script was run against the live library and no new dependency was added.
 Installed provenance and release validation are in [HANDOFF](HANDOFF.md).
 
-Rechecked November4 against whole-app build165/runtime `7ffde716…`; build163/
-tested source `cf2ef5b` is an earlier delivery. Algorithm and validation
+Rechecked November5 against responsiveness build167/runtime `3fb0ff60…`.
+Build165/runtime `7ffde716…` and build163/tested source `cf2ef5b` are earlier
+deliveries. Algorithm and validation
 statements below describe the October30 audit; later component scheduling,
 bounded saved-analysis reuse and tempo refinements are documented in
 [PLAYER](PLAYER.md) and [the performance audit](performance-audit.md). They do not

@@ -348,6 +348,31 @@ class LibraryRepository(unittest.TestCase):
             self.assertIn('"number": 1,', payload)
             self.assertIn('"zero": -0.0', payload)
 
+    def test_changed_scalar_skips_unrelated_nested_noop_comparison(self):
+        from soundbox import state_repository
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'library.json'
+            repo = StateRepository(path)
+            nested = {'opaque': [[1, 2, 3]]}
+            values = {'settings': {'future': nested, 'waveform_zoom': 1}}
+            repo.save(values)
+            before = path.read_bytes()
+            values['settings']['waveform_zoom'] = 2
+            compare = state_repository._same_json
+
+            def bounded(left, right):
+                if left is nested:
+                    raise AssertionError('Changed control compared unrelated nested data')
+                return compare(left, right)
+
+            with mock.patch.object(state_repository, '_same_json', side_effect=bounded):
+                repo.save(values)
+            self.assertNotEqual(path.read_bytes(), before)
+            saved = json.loads(path.read_bytes())
+            self.assertEqual(saved['settings'], values['settings'])
+            nested['opaque'][0].append('caller mutation')
+            self.assertEqual(repo._document, saved)
+
     def test_noop_hint_does_not_hide_missing_or_replaced_state(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'library.json'

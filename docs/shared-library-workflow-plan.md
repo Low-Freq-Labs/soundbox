@@ -1,9 +1,9 @@
 # Shared library, analysis and player corrections
 
-Current-status review November4,2026 against the whole-app delivery, personal
-build165/runtime `7ffde716…`, with exact provenance recorded in HANDOFF.
-Build163, source release `4a3d29a` and build160/runtime `7bbe8577…` are prior
-delivery evidence.
+Current-status review November5,2026 against the responsiveness delivery, personal
+build167/runtime `3fb0ff60…`, with exact provenance recorded in HANDOFF.
+Whole-app build165/runtime `7ffde716…`, build163, source release `4a3d29a` and
+build160/runtime `7bbe8577…` are prior delivery evidence.
 This plan began at build148 on October30. Direct shared imports, initial
 supported WAV and independently accepted narrow CBR MP3 analysis, durable prep and
 the requested player/Graveyard controls are now installed. The full shared-primary outcome still has
@@ -97,7 +97,8 @@ The full shared-primary-library outcome below remains unfinished. General native
 analysis formats/existing-analysis replacement and gain/metadata need further
 proofs/acceptance. Sonny's November1 request separately authorizes visible old-import
 registration and custom playlist migration through the existing accepted
-writers; HANDOFF records current implementation and actual-source completion.
+writers; the [cloud-library audit](cloud-library-audit.md) retains the dated
+actual-source migration proof, while HANDOFF records current delivery.
 The earlier RGB refinement and the subsequent fixed92pt/s reference palette
 passed their dated comparison/release/install checks. Existing generated
 tests or registration alone never substitute for musical-data acceptance.
@@ -446,8 +447,9 @@ candidate. Full1900-test release/Cocoa gate, signed package, isolated smoke, saf
 installation and actual library/analysis preservation passed at that October31
 checkpoint. Build153 fingerprint285163dc… was then live with zero preparation;
 it is historical and is superseded by the current HANDOFF delivery. The six-second before/after
-shows current-at-review-time above/candidate below; HANDOFF records provenance,
-private evidence and measurement limits.
+shows current-at-review-time above/candidate below. Its dated private
+implementation records retain provenance and measurement limits; HANDOFF
+records the current delivery.
 
 ### 7. Reopen the exact RGB temporal problem
 
@@ -602,8 +604,9 @@ FIFO rebase, recovery, retry and export barriers remain authoritative. The Octob
 and remove, including edits to pending new folders/playlists. It preserves the
 verified source baseline, stops on newer revisions/errors, and selects new
 playlists on admission so background completion cannot steal later navigation.
-This presentation is installed with the October31 release; exact provenance,
-validation and preservation are recorded in HANDOFF. Routine playlist save
+This presentation shipped with the October31 release; its exact validation and
+preservation remain in the dated private implementation records. HANDOFF records
+current installed provenance. Routine playlist save
 success banners are removed; waiting/errors stay truthful and neutral.
 
 Folder chevrons and home/note/star icons now use one vector painter with common
@@ -658,8 +661,8 @@ is an inference, not permission to ignore or rewrite these fields. Keep the
 strict failure and diagnostic deltas; obtain a cleanly bounded baseline or prove
 the independent transitions before claiming an exact full replay. This private
 prototype has no reusable writer/publication API, source authority, codec/metadata
-generality or initial-analysis acceptance. Evidence lives beside the implementation
-reports referenced by HANDOFF, outside the repository.
+generality or initial-analysis acceptance. Evidence remains in the dated private
+shared-native-library implementation reports, outside the repository.
 
 The resumed pass adds maintained `research/native_library` row construction,
 encrypted marked-TEMP transaction/recovery and strict frozen replay. Its17
@@ -675,7 +678,9 @@ were registered or migrated. The subsequent startup-complete native before/impor
 pair now passes the entire semantic inventory and byte-identical XML without any
 registry exclusions. The old reference mismatch remains historical evidence.
 Sonny then performed one isolated initial BPM/Grid+Key analysis on the same
-generated test file; HANDOFF holds its current capture/proof status and next steps.
+generated test file. This dated checkpoint led to the separate pilots below;
+the [native-library work record](../research/native_library/README.md) retains
+their proof/acceptance sequence. It is not a current capture request.
 
 The separately approved one-file bare source pilot subsequently passed full
 source readback and Sonny's native reopen/inspection/normal save and quit. This

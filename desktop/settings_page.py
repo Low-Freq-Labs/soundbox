@@ -478,6 +478,7 @@ class SettingsPageMixin:
             service = self.providers.connections.create(self._data_file.parent)
             self._soundcloud_section = SoundCloudSection(
                 service, connections, isolated=self._isolated,
+                auto_refresh=False,
                 startup_worker=getattr(self, '_connection_initial_worker', None),
                 startup_complete=getattr(self, '_connection_initial_complete', False),
                 startup_result=getattr(self, '_connection_initial_result', None))
@@ -886,6 +887,7 @@ class SettingsPageMixin:
 
     def _open_settings(self):
         self._ensure_settings_page()
+        self._sync_settings_controls()
         # The gear toggles: on Settings it returns to the main view (like Back).
         on_settings = self.body_stack.currentIndex() == 1
         self._sync_rekordbox_connection()

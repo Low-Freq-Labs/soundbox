@@ -1,9 +1,33 @@
 # SoundBox architecture
 
+## Responsiveness delivery — November4–5
+
+The new source prepares every Settings tab during startup, following Sonny's
+explicit rejection of first-click construction. This supersedes the former
+Settings-on-demand policy in the dated delivery below. USB/iPod pages and export
+backends remain demand-loaded. The window owns initial connected-account refresh;
+its prepared Settings section attaches to that same worker/result and does not
+start a second automatic refresh. Track Info retains complete selected artwork
+before its first visible frame. HANDOFF records installed build167, its true
+signed source base and the superseded build165 baseline.
+
+Browser-only manual-grid projection validates but does not copy beat arrays;
+playback and edit APIs retain their musical-data ownership. Analysis completion
+keeps the previous published prep queue for rollback and replaces only the
+selected job. State no-op comparisons check changed scalars before nested grids,
+with unchanged exact JSON semantics and atomic publication. Stock planning shares
+the parsed final rendered bytes, and phase-local source observations never cross
+acquisition/commit proof boundaries. USB-settings work freezes complete source
+paths without copying unrelated songs. Exact-divisor waveform range reductions
+reuse finer aligned cells with byte-identical signed extrema. Full measurements
+and remaining storage/queue/snapshot work are in the
+[current audit](performance-audit.md#bottleneck-and-responsiveness-follow-up--november4).
+
 ## Whole-app demand and lifecycle audit — November4
 
-This audit is installed in personal build 165/runtime 7ffde716…;2779 tests, both
-signed profiles/code parity and installed isolated/normal startup checks pass.
+This audit was delivered in personal build165/runtime7ffde716… before build167;
+its2779 tests, both signed profiles/code parity and installed isolated/normal
+startup checks pass.
 The matched signed snapshot-browser median is 1.20s; fresh source/device readiness
 remains separate. HANDOFF records exact provenance/state/retention.
 
@@ -11,8 +35,9 @@ The [whole-app audit](performance-audit.md#whole-app-audit--november4-after-ipod
 keeps USB/iPod page construction behind an explicit device view and export
 caches/backends behind device demand. Mount detection remains available. Empty
 stable stack slots preserve existing page indices; passive theme/layout/state
-barriers/shutdown inspect already-created pages. Settings builds once on first
-open and synchronizes the current preferences then. Background connected-account
+barriers/shutdown inspect already-created pages. At this delivered checkpoint,
+Settings built once on first open; the explicit follow-up above supersedes it.
+Background connected-account
 refresh belongs to a window TaskOwner, independent of Settings construction;
 the shared provider's cached likes remain usable and the section attaches to its
 active worker or completed safe result. Closing Settings does not destroy work.
@@ -40,7 +65,7 @@ fresh source lease guard before replacement. Required recovery, source authority
 atomic saves and database/manifest-last publication remain. HANDOFF records the
 tested and installed artifact rather than inferring it from this source review.
 
-The installed later November4 [iPod audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
+The delivered later November4 [iPod audit](performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
 adds operation-local native/manifest captures, retained stock source contracts,
 shared Rockbox ownership, source/display-aware explicit filesystem Sync and
 GUI retirement fixes. It uses offline fixtures only; HANDOFF has artifact status.
@@ -49,7 +74,7 @@ older persistent timestamp/edge-proof reuse. Source/codec/firmware boundaries re
 
 ## Installed USB audit follow-up — November4
 
-The installed build165 [USB corrections](performance-audit.md#usb-deep-audit--november4-later-testing)
+The preceding build165 [USB corrections](performance-audit.md#usb-deep-audit--november4-later-testing)
 give formatting its own retained QThread and physical-disk volume reservation.
 The ordinary device coordinator continues to serialize export operations, while
 another USB can export during confirmed native erase. Discovery and general source
@@ -283,7 +308,8 @@ still wins. Local grid edits use the saved result instead of vetoing a click bec
 the loaded waveform delivered an older fallback grid. EOF translations clip
 trailing rows beyond the captured duration only in the unregistered draft route;
 native prep v2 retains terminal rows beyond EOF. Native publication uses the
-separate accepted registration/initial-analysis/Cue/Grid domains described below. The whole-v3 caller adds a nearby-integer
+separate accepted registration/initial-analysis/Cue/Grid domains described below.
+The current whole-v4 caller adds a nearby-integer
 prior only after three-section onset and attack checks; it records raw estimates
 and preserves contrary fractional/variable evidence and legacy results.
 Broader codecs and existing-native-analysis replacement remain separate
@@ -514,8 +540,9 @@ understands rekordbox ANLZ sidecars. A future source with its own analysis
 format should add a focused adapter/decoder at that edge; it should not teach
 the library model, sync engine, or device exporters about that provider.
 
-There is intentionally no speculative provider registry or abstract base class
-yet. When a second real source is implemented, its actual discovery,
+There is intentionally no speculative source-adapter registry or abstract base
+class yet. The optional artwork/connection provider composition is separate.
+When a second real source is implemented, its actual discovery,
 configuration, refresh, and error semantics should determine that small
 interface. Until then, architecture tests keep the domain model free of
 provider imports, and the existing rekordbox modules remain concrete adapters.
@@ -1326,7 +1353,7 @@ Text/dialog/navigation handling stays with Qt. See [KEYBOARD](KEYBOARD.md).
 The personal connection factory is admitted by `connections.soundcloud` in the
 versioned provider manifest. It receives only an AppData root, initially bound
 without I/O. A window TaskOwner owns the connected account's initial refresh;
-the later Settings section attaches to that worker or its safe completed result
+the prepared Settings section attaches to that worker or its safe completed result
 and owns explicit account jobs. Both paths share one service and its serialized
 credential/token operations. Cached same-account likes load locally at service
 demand without a credential/network request. New connections
@@ -1487,8 +1514,10 @@ The backup/restore UI temporarily disables editing, closes background admission,
 drains existing direct-window writers while Qt events remain alive, saves the final
 state, then starts its worker. Result handling/reload happens after `finished` and
 join. Restoring increments the area generation so stale repositories/caches cannot
-write. Active device operations prevent entry. No analysis or derived-device cache
-is included in restore; no live AppData fault injection is used for validation.
+write. Active device operations prevent entry. Derived waveform/device cache
+directories are excluded; saved analysis records, drafts and durable intentions
+inside library.json remain part of the canonical backup/restore. No live AppData
+fault injection is used for validation.
 
 The sibling `stock_artwork/` directory is disposable derived data, not curated
 state: it can always be regenerated from the canonical baseline JPEG art cache.
@@ -1777,8 +1806,9 @@ packet beat number/tempo/time must equal the complete saved grid and endpoint;
 the headline BPM does not require every adaptive row to share one tempo. Failed
 songs retain their own operation IDs while healthy imports continue. The legacy
 uniform-grid refusal is revalidated once without an input veto or repeated loop.
-Ordinary BREATHE publication passed native acceptance; current release and
-actual-source readback evidence are recorded in HANDOFF.
+Ordinary BREATHE publication passed native acceptance; its dated actual-source
+readback is recorded in [the accepted-stage plan](analysis-playlists-next.md).
+HANDOFF records the current release and retained private evidence roots.
 
 
 Captured-import and ordinary native prep intentions use `soundbox.prep_edits` and

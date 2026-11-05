@@ -28,7 +28,8 @@ measured changes, failure tests and remaining design/hardware limits.
 
 The later [USB audit](docs/performance-audit.md#usb-deep-audit--november4-later-testing)
 corrects format confirmation, permits another USB to export during formatting,
-and restores native USB covers in Track Info. Those changes are installed in personal build165;
+and restores native USB covers in Track Info. Those changes first shipped in
+personal build165 and remain in build167;
 [HANDOFF](docs/HANDOFF.md) records validation, preservation and rollback details.
 
 The subsequent [iPod audit](docs/performance-audit.md#ipod-deep-audit--november4-after-usb-testing)
@@ -39,14 +40,23 @@ tests and remains in the current build. No iPod hardware was available, so
 firmware/physical acceptance remains separate.
 
 The [whole-app audit](docs/performance-audit.md#whole-app-audit--november4-after-ipod-review)
-adds Settings/device views on demand, coalesced background work, idle decoder
+added deferred views, coalesced background work, idle decoder
 parking and fewer duplicate artwork/state operations. It also protects colliding
 device imports and files changed during conversion recovery. Current validation,
 signed startup timing and installation status are tracked in [HANDOFF](docs/HANDOFF.md).
-The November4 personal build165/runtime7ffde716… is installed/reopened/verified;
-all2779tests pass. Matched signed3740-row startup fell from3.15s to1.20s median
-(1.24s p95), measuring snapshot-browser readiness rather than fresh-source or
-physical-device readiness. Fresh library/authorities/art indexes/white icon remain exact.
+
+The November5 responsiveness delivery is **personal build167/runtime3fb0ff60…**.
+All six Settings tabs now prepare before the first window appears, replacing
+first-click lazy construction at Sonny's request. First Settings open measured
+561.45→12.50ms in paired source fixtures. The paired signed startup proxy rises
+from 1.16s to 1.78s median to provide that readiness; this measures generated
+snapshot browsing, not fresh-source, compositor or physical-device readiness.
+The same delivery removes discarded browser-grid copies, repeated avatar-policy
+reads and redundant export/cache work. Track Info retains its complete selected
+cover on the first visible frame. All 2,795 tests pass, and fresh library,
+authorities, artwork indexes and the saved white icon remain exact through
+installation/reopen. [The current audit](docs/performance-audit.md#bottleneck-and-responsiveness-follow-up--november4)
+records the measurements and remaining bottlenecks.
 
 ### Requirements
 
@@ -352,7 +362,8 @@ to see the changes; simultaneous writing is blocked. Other libraries remain
 read-only until explicitly accepted. On top of the rekordbox mirror, SoundBox keeps its own
 plane: **import audio files directly** (drag from Finder onto a SoundBox
 playlist or Collection, or use the Import audio files keyboard action). Imported files
-are referenced in place — never copied or re-tagged — and become first-class
+are referenced in place, apart from the separately authorized recoverable
+compatibility conversions above, and become first-class
 tracks: container-derived duration (including ALAC/AAC, displayed as H:MM:SS
 for hour-plus sets), edits, art, waveforms, export. Direct imports are always
 exempt from the rekordbox cue/placeholder filter. New rekordbox tracks and

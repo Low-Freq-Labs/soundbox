@@ -1,7 +1,7 @@
 # Native playlist ordering and bounded organization
 
-November 2, 2026 source implementation. Current installed-build provenance and
-actual acceptance status belong to [HANDOFF.md](HANDOFF.md).
+November 2, 2026 source implementation. Current installed-build provenance belongs
+to [HANDOFF.md](HANDOFF.md); the native reference and acceptance sequence is below.
 
 ## Ordering
 

@@ -1,6 +1,6 @@
 # Native CDJ USB export
 
-Updated November4, 2026 for installed build165 and selected-only USB exports;
+Updated November5,2026 for installed build167 and selected-only USB exports;
 completed release/installation checks and exact provenance are in HANDOFF.
 The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
@@ -156,6 +156,15 @@ local to their device. Logical global values never clone another device's opaque
 bytes. Ordinary playlist export preserves player/mixer files byte for byte.
 rekordbox desktop global Quantize is never read or changed.
 
+USB settings admission captures the same complete desktop library/audio/analysis
+path set for source separation before its worker starts. It no longer deep-copies
+unrelated songs, cues, playlists or curation for a settings-only save. Later RAM
+library changes cannot alter those captured paths; fresh worker target/source,
+profile-byte, manifest and recovery guards still apply. Selected playlist export
+retains its separate frozen library/curation snapshot. On a generated4000-song
+fixture, settings GUI setup measured122.58→2.10ms; this excludes native settings
+preparation and physical USB publication.
+
 Native complete-file comparisons cover tempo, Mic Echo 1/2/3⁄4, Headphones B
 None/Stereo/Mono Split, Auto Cue Level Hot Cue and Talkover −∞, including reverse
 changes. Mic Echo is a numerator/denominator pair; Talkover −∞ uses two separated
@@ -200,14 +209,19 @@ identity/map/filesystem and initializes both
 native catalogs with Global My Settings. HFS+ is not offered: its hidden native
 layout remains outside the current writer boundary. Probe/erase timings are logged
 separately. Fresh native initialization excludes the renderer's workspace lock
-from the candidate file set. Current hardware timing and acceptance are recorded
-in HANDOFF; older mock-only format validation describes the prior release.
+from the candidate file set. Dated hardware timing and bounded acceptance are
+recorded in the [November4 USB fixture audit](performance-audit.md#physical-usb-fixture-timings--november4)
+and [later USB audit](performance-audit.md#usb-deep-audit--november4-later-testing).
+HANDOFF records current runtime/gates; older mock-only format validation describes
+the earlier release.
 
 The later November4 audit fixes the confirmation-dialog exception that prevented
-erase from starting. These corrections are installed in personal build165. Source was local and
+erase from starting. These corrections were installed in personal build165 and
+remain in build167. Source was local and
 unpublished at that installation checkpoint; the subsequent whole-app wrap-up
-authorizes publication without changing its signed bytes. HANDOFF records the
-signed dirty base and fingerprint. Formatting owns a separate worker
+authorizes publication without changing its signed bytes. The dated USB audit
+receipts retain that165 signed provenance; HANDOFF records current167 provenance.
+Formatting owns a separate worker
 and reserves every mounted partition on its physical disk. Once confirmation is
 accepted, another USB can open Export and use the ordinary export lane. Discovery
 waits while erase runs; format completion never clears an unrelated export's
@@ -271,7 +285,8 @@ false. See [export parity](../research/cdj_export/EXPORT_PARITY.md) for a repeat
 build/export/compare command. The original research handoff left application DTO/pagination/publication open.
 Those integration pieces are now implemented in the production contract above.
 Build163 also passed the bounded FAT32/exFAT fixture-write/update/repeat campaign
-in HANDOFF; the wider on-player/model/firmware matrix remains separate.
+in the [November4 USB timing record](performance-audit.md#physical-usb-fixture-timings--november4);
+the wider on-player/model/firmware matrix remains separate.
 
 ## Product goal
 

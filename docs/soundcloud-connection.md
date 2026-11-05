@@ -30,11 +30,12 @@ also refreshes at application launch. **Disconnect** removes SoundBox's saved
 credentials, application tokens, and disposable index locally. It sends no
 revocation or sign-out request, so it does not revoke the website's authorization.
 
-Settings is constructed on first open. Automatic connected-account refresh runs
-independently on a window-owned worker, and opening Connections attaches to that
-worker or its completed result. Cancel remains available until retirement; a
-completed initial attempt does not repeat just because Settings opens later.
-Cached likes for the same account remain available before Settings opens, while
+All Settings tabs are prepared before the main window first appears. Automatic
+connected-account refresh runs on one window-owned worker; the ready Connections
+section attaches before that worker starts and does not schedule a second launch
+refresh. Cancel remains available until retirement, and completion or failure
+updates that same section. Opening Settings later never repeats the initial
+attempt. Cached likes for the same account remain available throughout, while
 manual Refresh stays repeatable. Credential/token operations remain serialized.
 
 The earlier browser/loopback connection remains backend compatibility for an
@@ -107,8 +108,8 @@ automatic matches. Uploader-name matching does not certify an official account.
 Offline tests cover public client-credentials authentication without a browser or
 callback, profile validation and resolution redirects, token reuse/rotation,
 pagination, account changes, failed scans, local public disconnect, credential
-privacy, editing/cancelling credentials, worker retirement, lazy Settings with
-same-account cached likes, shared launch refresh/cancellation/completion,
+privacy, editing/cancelling credentials, worker retirement, ready Settings with
+same-account cached likes, exactly one shared launch refresh/cancellation/completion,
 receive-bound metadata cancellation, general-search
 fallback and mixed manual results. Legacy OAuth callback/PKCE tests remain.
 Hermetic UI renders never use live Keychain, account sessions or devices.

@@ -1,12 +1,37 @@
 # SoundBox gotchas & niche facts
 
+## Responsiveness follow-up — November4–5
+
+- Sonny rejected first-click lazy Settings. Prepare its complete tabs during
+  startup; device pages/backends remain demand-loaded. Keep window-owned account
+  refresh single-owned when the ready Settings section attaches before worker
+  start; that section must not also schedule its own launch refresh. Isolated
+  runs use disposable provider state or injected services, never live Keychain/
+  account discovery.
+- Track Info must prepare the selected complete image before showing its window.
+  Optimize row/resolve/decode work without replacing that contract with pop-in.
+- Browser BPM/key display validates manual drafts without cloning beat arrays.
+  Playback/edit consumers still resolve their independently owned musical rows.
+- Artist-catalog grouping uses one status-policy observation for the batch;
+  selected sample images still resolve against fresh policy. This presentation
+  reuse never grants artwork publication authority.
+- The app-wide event filter handles its fixed input/geometry/quit event set and
+  delegates all other events immediately. Preserve release, deactivation, resize,
+  Show and normal-quit save-drain routing.
+- Exact-multiple signed range levels may reduce a finer level; neutral extrema
+  keep the final partial cell exact. Do not reuse a non-dividing cell lattice.
+- Changed scalar settings should be compared before nested grids in the state
+  no-op hint. Complete changed-state validation, detachment and atomic publication
+  remain required; skipping those is not a GUI-save optimization.
+
 ## Whole-app demand audit — November4
 
 - `cached_property` access constructs its value. Passive resize/theme/backup/
   shutdown handlers must use `vars(window).get(...)` for device pages, never
-  `getattr` or `hasattr` on their property names. Settings is also lazy; guards
-  comparing focus to an absent widget must first reject `None`.
-- Keep automatic account refresh independent of lazy Settings. Share the same
+  `getattr` or `hasattr` on their property names. The later explicit Settings
+  policy above supersedes its former lazy construction; guards comparing focus
+  to any absent widget must first reject `None`.
+- Keep automatic account refresh single-owned. Share the same
   cached provider service, once-only initial refresh, owner-retirement callback
   and cancellation/result state; do not attach a late `finished` handler.
 - Identical filter/sort requests can skip work only while no relevant row field
@@ -53,7 +78,7 @@
 - Rockbox-only idle drift is a playlist-change hint. Explicit Sync additionally
   compares managed source stats/display/profile, without hashing retained media.
 
-## Later November4 USB audit — installed build165
+## Later November4 USB audit — first delivered in build165
 
 - Use `QDialog.DialogCode.Accepted`, never an instance's `Accepted` attribute.
   The format dialog exception happened before erase and stranded global busy
@@ -573,7 +598,7 @@ test, after unchanged source-identity and native/manual provenance guards.
   new playback phase each frame.** Print height and amplitude-weighted RGB onto
   a private song-coordinate attribute lattice with four attributes per
   physical pixel at every zoom. RGB 576/864 use logical-point motion after the
-  native Gunslinger reference; the installed8e4 build keeps other RGB stops fractional.
+  native Gunslinger reference; the historical8e4 build kept other RGB stops fractional.
   The October31 installed285163dc build snaps only128/184 to physical pixels
   after Sonny accepted the bottom BREATHE moving comparison. All1900 tests,
   signed package/smoke/install/startup and exact curation/analysis preservation
@@ -1139,8 +1164,10 @@ test, after unchanged source-identity and native/manual provenance guards.
   in Collection until you clicked away and back.)
 - **`_restore_view` re-seats ONLY on a view SWITCH** (same `_view_key` → early
   return), and `model.set_rows` is a full model reset (selection + scroll
-  gone). In-place reload with fresh rows = `_stash_view()` → reload → null
-  `_view_key` → `_restore_view(key)`, or the user gets dumped at the top.
+  gone). Use `_reload_current_view` for in-place updates: it captures current and
+  selected track IDs, column, top visible song and both scroll offsets, skips
+  identical rows, then restores the surviving seat if the model changed.
+  Clearing `_view_key` to force a view switch loses that richer refresh contract.
 - **Worker convention:** `OneShotTask` and `_OneShotArt` emit result-OR-Exception
   — done-handlers MUST isinstance-check. Never map an exception to a "nothing
   there" answer (a working art URL once flashed "No art found" with no log trace).

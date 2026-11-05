@@ -935,22 +935,39 @@ def _range_mip_sections(
     maximum_values = np.frombuffer(
         maximum, dtype="<i2", count=count).astype(np.int16, copy=False)
     sections: dict[str, bytes] = {}
+    levels = {1: (minimum_values, maximum_values)}
     for divisor in divisors:
         if divisor <= 0:
             raise ValueError("range mip divisors must be positive")
-        padded_count = ((count + divisor - 1) // divisor) * divisor
-        padded_minimum = np.full(
-            padded_count, np.iinfo(np.int16).max, dtype="<i2")
-        padded_maximum = np.full(
-            padded_count, np.iinfo(np.int16).min, dtype="<i2")
-        padded_minimum[:count] = minimum_values
-        padded_maximum[:count] = maximum_values
-        sections[f"detail_minimum_d{divisor}"] = (
-            padded_minimum.reshape(-1, divisor).min(axis=1)
-            .astype("<i2", copy=False).tobytes())
-        sections[f"detail_maximum_d{divisor}"] = (
-            padded_maximum.reshape(-1, divisor).max(axis=1)
-            .astype("<i2", copy=False).tobytes())
+        # Exact multiples share the same song-anchored cell boundaries. Reduce
+        # an already computed finer level rather than scanning the full base
+        # again. Its partial final cell uses the same neutral extrema padding.
+        parent = max(level for level in levels if divisor % level == 0)
+        factor = divisor // parent
+        low, high = levels[parent]
+        if factor != 1:
+            padding = (-len(low)) % factor
+            if padding:
+                low = np.pad(low, (0, padding), constant_values=32767)
+                high = np.pad(high, (0, padding), constant_values=-32768)
+            if factor <= 3:
+                # Short row reductions pay per-cell iterator overhead. Strided
+                # integer ufuncs retain exact extrema with one bulk pass.
+                low_cells, high_cells = low, high
+                low, high = low_cells[::factor], high_cells[::factor]
+                for offset in range(1, factor):
+                    low = np.minimum(low, low_cells[offset::factor])
+                    high = np.maximum(high, high_cells[offset::factor])
+            else:
+                low = low.reshape(-1, factor).min(axis=1)
+                high = high.reshape(-1, factor).max(axis=1)
+        low_bytes = low.astype("<i2", copy=False).tobytes()
+        high_bytes = high.astype("<i2", copy=False).tobytes()
+        sections[f"detail_minimum_d{divisor}"] = low_bytes
+        sections[f"detail_maximum_d{divisor}"] = high_bytes
+        # Reuse the required output bytes, without retaining extra array copies.
+        levels[divisor] = (np.frombuffer(low_bytes, dtype="<i2"),
+                           np.frombuffer(high_bytes, dtype="<i2"))
     return sections, count
 
 

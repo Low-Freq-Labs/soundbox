@@ -1,6 +1,7 @@
 # SoundBox exploratory ideas
 
-Reviewed November4,2026; October25 ranking findings remain dated evidence. These are concepts requiring a UX workshop with Sonny,
+Reviewed November5,2026; October25 ranking findings remain dated evidence.
+These are concepts requiring a UX workshop with Sonny,
 not active tasks or approved changes. Committed sequencing belongs in
 [ROADMAP](ROADMAP.md); current player behavior belongs in [PLAYER](PLAYER.md).
 The original July 22 proposal is preserved in Git history.
@@ -48,7 +49,7 @@ replacement or an implemented training system.
 | Smart collections | Curated playlists exist | Small automatic views such as Recently Added, Never Played or Needs Cue Points |
 | Library health | Missing-link repair, artwork status and playlist checks exist | A consolidated factual view of unresolved issues; no unexplained quality score |
 | iPod verification summary | Stock/Rockbox Verify and composite Repair remain explicit tools | A clearer report of requested checks; generic USBs retain no verification menu or eject check |
-| DJ readiness | Individual metadata and source checks exist | An explicit checklist for a chosen destination, without implying unsupported CDJ export |
+| DJ readiness | Individual metadata and source checks exist | An explicit checklist for a chosen destination, without implying unaccepted player, firmware or media-profile support |
 
 Recovery counts and database digests remain backend diagnostics, not stock-device
 dashboard rows. Embedded-art extraction is not shipped; its precedence needs a

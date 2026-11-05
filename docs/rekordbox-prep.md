@@ -33,9 +33,10 @@ registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
 are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
 separately accepted initial full-analysis authority; it never inherits the WAV
-authority. These paths remain installed in the November4 whole-app delivery,
-personal build165/runtime `7ffde716…`; earlier build163/build160 source releases
-are dated delivery evidence. Exact provenance is in [HANDOFF](HANDOFF.md).
+authority. These paths remain installed in the November5 responsiveness delivery,
+personal build167/runtime `3fb0ff60…`; whole-app build165/runtime `7ffde716…`
+and earlier build163/build160 source releases are dated delivery evidence.
+Exact provenance is in [HANDOFF](HANDOFF.md).
 Other analysis profiles, existing-analysis
 replacement, gain and broader metadata remain gated. The current shared-library
 transition is in
@@ -327,7 +328,9 @@ SoundBox deleted only the two pilot-owned identities, then Sonny reopened and
 confirmed both cue types empty and quit normally. Final capture restores the
 original djmdCue table exactly; aggregate remains '[]', CueUpdated='14'. Normal
 history/counters are preserved rather than rolled back to the original '10'.
-Exact live state and recovery evidence: [HANDOFF](HANDOFF.md).
+That dated final state and recovery evidence remain with the native cue pilot's
+private AppData references above; [HANDOFF](HANDOFF.md) records current delivery,
+not a current No Trust cue baseline.
 
 The desktop uses 1–8 to preview populated slots or create empty ones at the exact
 native playhead; Command-1–8 deletes the corresponding active-page cue. Empty
@@ -596,8 +599,9 @@ its schema and atomic publication. No source write fields or recovery formats ch
 
 The associated visual fixes remove the separator before My Tags, align Settings'
 right edge with the waveform, and make cue-column/page backgrounds transparent
-so only the buttons retain the dark fill. Installed provenance, comparison
-limits and live scrolling review are recorded in HANDOFF.
+so only the buttons retain the dark fill. This section retains the comparison
+limits, and the dated private implementation records retain the scrolling review.
+Current installed provenance is in HANDOFF.
 
 The final requested layout polish matches the logo/title gap to the left window
 inset and adds the 1 Player/2 Player/Simple/Browser dropdown above transport.

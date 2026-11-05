@@ -69,8 +69,8 @@ def setUpModule():
     # mounted player is never inspected by tests running beside the real app.
     with mock.patch.object(MainWindow, "_refresh_devices", autospec=True):
         _win = MainWindow()
-    # This shared fixture exercises Settings controls directly throughout the
-    # module; production creates them only on the first explicit Settings visit.
+    # Settings is ready before first show; this call also checks its idempotence
+    # for the shared fixture used directly throughout the module.
     _win._ensure_settings_page()
     _win._dev_timer.stop()  # no background device polling during tests
     _win.lib = _make_lib()
@@ -626,8 +626,11 @@ class SettingsPage(unittest.TestCase):
                 second = MainWindow(isolated_dir=area)
                 try:
                     self.assertEqual(second.settings['theme_accent'], '#00ff00')
-                    self.assertFalse(hasattr(second, '_theme_text_mode'))
-                    second._ensure_settings_page()
+                    self.assertTrue(second._settings_page_created)
+                    self.assertFalse(second.isVisible())
+                    self.assertEqual(second._theme_text_mode.currentData(), 'custom')
+                    self.assertEqual(second._theme_text_color.text(), '#112233')
+                    second._open_settings()
                     self.assertEqual(second._theme_text_mode.currentData(), 'custom')
                     self.assertEqual(second._theme_text_color.text(), '#112233')
                     self.assertIn('selection-color: #112233', theme.QSS)

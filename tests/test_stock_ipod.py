@@ -101,6 +101,7 @@ class StockPlaylistCapacity(unittest.TestCase):
             library = Library({}, selected, Path(area) / "synthetic-source")
             real_parse = stock_ipod.parse_itunesdb
             lookups = []
+            parsed_payloads = []
 
             class ObservedPlaylist(dict):
                 def get(self, key, default=None):
@@ -109,6 +110,10 @@ class StockPlaylistCapacity(unittest.TestCase):
                     return super().get(key, default)
 
             def parse(path):
+                if hasattr(path, "read"):
+                    parsed_payloads.append(path.getvalue())
+                else:
+                    parsed_payloads.append(Path(path).read_bytes())
                 result = real_parse(path)
                 if hasattr(path, "read") or Path(path) == database:
                     result["mhlp"] = [ObservedPlaylist(row) for row in result["mhlp"]]
@@ -121,6 +126,10 @@ class StockPlaylistCapacity(unittest.TestCase):
             self.assertEqual(plan.rendered_database, before)
             self.assertEqual(database.read_bytes(), before)
             self.assertLessEqual(len(lookups), 8 * count + 8)
+            # One captured baseline and one final patched output traversal.
+            # Semantic validation consumes the renderer's exact parsed output.
+            self.assertEqual(len(parsed_payloads), 2)
+            self.assertEqual(parsed_payloads[0], before)
 
     def test_duplicate_native_names_keep_first_identity_and_requested_order(self):
         with tempfile.TemporaryDirectory() as area:
@@ -766,6 +775,78 @@ class StockIpodSync(unittest.TestCase):
             output_by_id[int(item["trackID"])] for item in rendered["items"]]
         self.assertEqual(len(sequence), 2)
         self.assertNotEqual(sequence[0], sequence[1])
+
+    def test_final_patched_database_still_receives_semantic_validation(self):
+        database = self.ipod / "iPod_Control/iTunes/iTunesDB"
+        before = database.read_bytes()
+        operations = (
+            lambda: plan_stock_ipod_sync(
+                self.library, [self.playlist], self.ipod,
+                model_number="MA446", filesystem="msdos"),
+            lambda: plan_stock_ipod_playlist_delete(
+                self.ipod, [202], model_number="MA446", filesystem="msdos",
+                stock_art_cache=self.stock_art_cache),
+        )
+        for operation in operations:
+            with self.subTest(operation=operation), mock.patch.object(
+                    stock_ipod, "_patch_smart_rule_headers", return_value=before):
+                # A structurally readable result with the wrong songs must
+                # still fail at the caller's full semantic validation.
+                with self.assertRaisesRegex(StockIpodError, "count failed validation"):
+                    operation()
+                self.assertEqual(database.read_bytes(), before)
+
+    def test_overlapping_memberships_observe_each_source_once_per_phase(self):
+        selected = [Playlist(f"Overlap {i}", [], ["old", "new", "old"] * 20,
+                             pid=f"overlap-{i}") for i in range(8)]
+        checks = []
+        real_is_file = Path.is_file
+        def is_file(path):
+            if path in (self.existing_source, self.new_source):
+                checks.append(path)
+            return real_is_file(path)
+        with mock.patch.object(Path, "is_file", is_file):
+            plan = plan_stock_ipod_sync(
+                self.library, selected, self.ipod,
+                model_number="MA446", filesystem="msdos")
+        # Acquisition, hashes and commit guards are separate. Membership
+        # observation itself scales with two unique paths and two phases.
+        self.assertEqual(checks.count(self.existing_source), 2)
+        self.assertEqual(checks.count(self.new_source), 2)
+        staged = self.base / "overlap-iTunesDB"
+        staged.write_bytes(plan.rendered_database)
+        parsed = stock_ipod.parse_itunesdb(str(staged))
+        mapping = {int(row["trackID"]): int(row["dbid"])
+                   for row in get_ipod_tracks(parsed)}
+        by_name = {row.get("Title"): row for row in parsed["mhlp"]}
+        for playlist in selected:
+            ids = [mapping[int(item["trackID"])] for item in by_name[playlist.name]["items"]]
+            self.assertEqual(ids, [plan.source_device_dbids[str(self.library.tracks_by_id[key].path.resolve(strict=True))]
+                                   for key in playlist.keys])
+
+    def test_source_disappearance_or_redirect_between_membership_phases_is_refused(self):
+        for redirect in (False, True):
+            with self.subTest(redirect=redirect):
+                replacement = self.sources / "replacement.wav"
+                shutil.copyfile(self.new_source, replacement)
+                before = self._snapshot(self.ipod)
+                real_new_info = stock_ipod._new_track_info
+                def change_after_acquisition(*args, **kwargs):
+                    result = real_new_info(*args, **kwargs)
+                    self.new_source.unlink()
+                    if redirect:
+                        self.new_source.symlink_to(replacement)
+                    return result
+                try:
+                    with mock.patch.object(stock_ipod, "_new_track_info", side_effect=change_after_acquisition):
+                        with self.assertRaisesRegex(StockIpodError, "source identity changed"):
+                            plan_stock_ipod_sync(
+                                self.library, [self.playlist], self.ipod,
+                                model_number="MA446", filesystem="msdos")
+                    self.assertEqual(self._snapshot(self.ipod), before)
+                finally:
+                    self.new_source.unlink(missing_ok=True)
+                    shutil.copyfile(replacement, self.new_source)
 
     def test_playlist_delete_removes_only_newly_unreferenced_track_and_media(self):
         sync_plan = plan_stock_ipod_sync(

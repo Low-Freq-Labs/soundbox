@@ -10,6 +10,35 @@ from soundbox_personal import discovery as discovery
 
 
 class SourceExclusions(unittest.TestCase):
+    def test_artist_catalog_batches_status_and_refreshes_policy_for_sample_images(self):
+        import json
+        from types import SimpleNamespace
+        from desktop.app import MainWindow
+        from soundbox.library import Library, Track
+        with tempfile.TemporaryDirectory() as area:
+            cache = ArtCache(Path(area) / 'art')
+            cache.index = {
+                'first': {'status': 'ok', 'src': 'https://soundcloud.com/artist'},
+                'second': {'status': 'ok', 'src': 'https://soundcloud.com/artist'},
+                'excluded': {'status': 'ok', 'src': 'https://soundcloud.com/blocked'},
+                'cover': {'status': 'ok', 'src': 'https://soundcloud.com/artist/song'},
+            }
+            (cache.root / 'source-policy.json').write_text(
+                json.dumps({'schema': 1, 'accounts': ['blocked']}))
+            tracks = {tid: Track(tid, 'Song', 'Artist', f'file:///missing/{tid}.wav')
+                      for tid in cache.index}
+            host = SimpleNamespace(lib=Library(tracks, [], 'synthetic'),
+                                   art_cache=cache, titles={}, overrides={})
+            with patch.object(cache, 'source_exclusions', wraps=cache.source_exclusions) as policy:
+                groups = MainWindow._artist_avatar_groups(host)
+            self.assertEqual(groups, [('Artist', ['first', 'second'], None)])
+            # One status snapshot and a separate fresh check for the sample
+            # image; grouping never grants image-read or write authority.
+            self.assertEqual(policy.call_count, 2)
+            (cache.root / 'source-policy.json').write_text(
+                json.dumps({'schema': 1, 'accounts': ['artist', 'blocked']}))
+            self.assertEqual(MainWindow._artist_avatar_groups(host), [])
+
     def test_batch_status_uses_one_policy_snapshot_and_notices_replacement(self):
         import json
         with tempfile.TemporaryDirectory() as area:

@@ -8,8 +8,9 @@ Current behavior/release evidence is in [HANDOFF](HANDOFF.md), current measured
 costs in [performance-audit](performance-audit.md), and remaining work in
 [ROADMAP](ROADMAP.md).
 
-November4 reconciliation against whole-app build165/runtime `7ffde716…`:
-build163/source `cf2ef5b` is an earlier delivery. The historical
+November5 reconciliation against responsiveness build167/runtime `3fb0ff60…`:
+whole-app build165/runtime `7ffde716…` and build163/source `cf2ef5b` are earlier
+deliveries. The historical
 skip-allowed gate and absent public profile below have been replaced by mandatory
 zero-skip offscreen/Cocoa inventories and inspected public/personal artifacts.
 UI preference saves coalesce; state/artwork publication remains serialized and
@@ -19,8 +20,13 @@ fixture exports passed, without establishing full-library or player acceptance.
 The unchanged composite-iPod performance target, broader queue/controller work
 and public distribution gates remain separate. The later whole-app audit covers
 lazy startup surfaces, coalesced queue wakes, idle decoder waits, scoped pure-work
-reuse and collision/conversion recovery corrections; its evidence is recorded in
-the performance audit. It does not complete the sole-command-queue migration or
+reuse and collision/conversion recovery corrections. The responsiveness follow-up
+restores eager construction of all Settings tabs at Sonny's request; device
+surfaces/export backends remain on demand. It removes further discarded grid/
+rollback copies, repeated range reductions and scoped stock/USB work while
+preserving durable publication and fresh native guards. Its evidence and remaining
+whole-state/queue-fairness costs are recorded in the performance audit.
+It does not complete the sole-command-queue migration or
 every-line correctness proof. Historical counts, line totals
 and proposed changes below must not be treated as today's inventory/backlog.
 

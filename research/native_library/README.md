@@ -5,9 +5,9 @@ workspaces have no source discovery or publish-to-source API. Separate
 one-plan source pilots are described below. Ordinary core registration and initial
 full WAV/narrow CBR MP3 analysis now have separate accepted authorities and desktop
 integration; these research workspaces never provision or load those permissions.
-The accepted domains remain installed in whole-app build165/runtime7ffde716…; current binary/source
-provenance is in HANDOFF. Build160/source release `4a3d29a`/runtime `7bbe8577…`
-are prior delivery evidence. Existing
+The accepted domains remain installed in responsiveness build167/runtime3fb0ff60…;
+current binary/source provenance is in HANDOFF. Whole-app build165/runtime7ffde716…
+and build160/source release `4a3d29a`/runtime `7bbe8577…` are prior delivery evidence. Existing
 Tag/Cue/Grid/Playlist permissions do not authorize registration or analysis writes.
 The [shared-workflow plan](../../docs/shared-library-workflow-plan.md) defines the
 requested product behavior; [HANDOFF](../../docs/HANDOFF.md) records live status.
@@ -129,7 +129,8 @@ The October30 bare source pilot passed its separate explicit approval, exact
 source readback and Sonny's native reopen/inspection/save/quit. The row, counter,
 existing content, XML and audio survived unchanged; native startup bookkeeping
 stays visible. Its scope remains one known generated WAV; no production authority
-or analysis permission was provisioned. HANDOFF records the acceptance receipt.
+or analysis permission was provisioned. The dated acceptance receipt remains
+with that pilot's private evidence; HANDOFF records current delivery provenance.
 
 `fixture_analysis.py` independently constructs initial-analysis metadata for that
 exact audio digest: existing8B key lookup, one mixer row, target update, three
@@ -189,9 +190,10 @@ Preparation never infers source approval. Sonny separately approved the exact
 generated-track candidate and its publication passed native reopen/load/save/quit:
 target and all three files stayed exact, with only startup bookkeeping changed.
 This accepts only that known WAV; no production authority, general format/gain/
-endpoint policy or app integration follows from that pilot. See HANDOFF for the
-subsequent
-format references and separately accepted production profiles.
+endpoint policy or app integration follows from that pilot. The subsequent
+sections and [shared-workflow plan](../../docs/shared-library-workflow-plan.md)
+describe later format references and separately accepted production profiles;
+HANDOFF records current delivery.
 
 
 `media_registration.py` is a later copy-only multi-format constructor/inspector,
@@ -204,8 +206,9 @@ rollback/commit, opaque-row preservation and foreign/tampered workspace rejectio
 The frozen11-format native bare replay now matches the entire semantic inventory
 and XML exactly, without registry exclusions. The observed extensible-WAV bare
 Length0 is not an assertion that decoding failed. Native initial analysis and
-broader metadata/component authority remain separate; see HANDOFF for current
-format-reference evidence.
+broader metadata/component authority remain separate; the
+[shared-workflow plan](../../docs/shared-library-workflow-plan.md) describes the
+subsequently accepted production format boundaries.
 
 `metadata.py` is a pure reconstruction of the observed ASCII title/artist save
 protocol on analysed local rows with an empty album. It has no SQL, filesystem,
@@ -261,7 +264,8 @@ housekeeping differences remain explicit. This accepts these two transfers only;
 the two-song pilot itself has no production authority loader or automatic
 desktop publisher. The later independently accepted ordinary WAV analysis domain
 is installed; it does not grant general codec/gain/partial-component permission.
-Current evidence and installed state are in HANDOFF. Synthetic tests stay TEMP-only; no new songs enter the user
+Dated two-song evidence remains with that component pilot; current installed
+state is in HANDOFF. Synthetic tests stay TEMP-only; no new songs enter the user
 library for this work.
 
 ## MP3 initial-analysis preparation — November2
@@ -309,5 +313,5 @@ code and full native recovery remain protected. The core scanner/planner promoti
 retains exact old proposal outputs; research wrappers reexport those APIs.
 Production uses its own accepted CBR authority/store/FIFO and contains no research
 modules. The original build155 delivery passed2200tests/package/native/curation
-checks; it is historical, superseded by the build165/2779-test delivery in HANDOFF.
+checks; it is historical, superseded by the build167/2795-test delivery in HANDOFF.
 VBR/Info/gapless/mono/48kHz publication remains outside that accepted profile.

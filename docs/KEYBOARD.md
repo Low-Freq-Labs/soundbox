@@ -1,5 +1,9 @@
 # Keyboard settings
 
+All six Settings tabs, including Keyboard, are prepared before the main window's
+first show. Opening Keyboard uses those ready controls and current saved mappings;
+it does not build the editor on the first click.
+
 **Settings → Keyboard** is a searchable two-column list of action groups. Each
 action's keycaps, removal controls, Add shortcut, and per-action Reset stay together
 on the same row. Multiple bindings wrap within the row. Click a keycap to replace
@@ -119,3 +123,8 @@ November3 lookup refinement shares canonical string parsing only inside one
 current-map lookup. It retains mutable overrides, default-delete conflict rules,
 ambiguous-map refusal, press/release ownership and fresh Qt parser behavior;
 it does not persist a compiled map or change any binding/default.
+
+The November4–5 application event-filter refinement delegates unrelated layout/
+style events immediately and reads each event's type once. Shortcut overrides,
+press/release, deactivation and normal-quit save draining retain their existing
+routes; this optimization adds no shortcuts or source-write capability.

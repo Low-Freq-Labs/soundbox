@@ -74,10 +74,24 @@ class ConnectionsUI(unittest.TestCase):
         self.wait_idle()
         self.assertEqual(calls, ['initial', 'explicit'])
 
+    def test_window_managed_section_does_not_schedule_its_own_automatic_refresh(self):
+        self.service.state = dict(connected=True, configured=True, count=7)
+        with patch('desktop.connections.QStandardPaths.isTestModeEnabled', return_value=False), \
+                patch.object(SoundCloudSection, '_refresh_initial') as refresh:
+            section = SoundCloudSection(self.service, auto_refresh=False)
+            self.addCleanup(section.deleteLater)
+            self.addCleanup(section._tasks.drain)
+            _app.processEvents()
+            refresh.assert_not_called()
+        self.assertIsNone(section._startup_worker)
+        self.assertIsNone(section._worker)
+        self.assertIn('7 liked tracks', section.status.text())
+
     def test_window_refresh_remains_busy_cancelable_until_matching_owner_retires(self):
         from unittest.mock import Mock
         worker = Mock()
-        section = SoundCloudSection(self.service, isolated=True, startup_worker=worker)
+        section = SoundCloudSection(self.service, isolated=True, auto_refresh=False)
+        section.attach_startup(worker)
         self.addCleanup(section.deleteLater)
         self.addCleanup(section._tasks.drain)
         self.assertFalse(section.refresh_button.isEnabled())

@@ -1,20 +1,45 @@
 # SoundBox roadmap
 
-Updated November 4, 2026. [HANDOFF](HANDOFF.md) records the installed binary,
+Updated November 5, 2026. [HANDOFF](HANDOFF.md) records the installed binary,
 verification and preservation baseline. This roadmap describes current behavior
 and remaining work. Older release hashes, test counts and original pending gates
 are [historical checkpoint evidence](archive/roadmap-checkpoints-through-2026-11-01.md).
 
+## Delivered responsiveness batch — November4–5
+
+The completed first batch is installed November5 as personal build167/runtime
+3fb0ff60… after Sonny's explicit closed-app approval. All2795 tests, both signed
+profiles/code parity and installed isolated/normal startup checks pass. Fresh
+library/authorities/art indexes/white icon and newer saved columns remain exact.
+HANDOFF records delivery, protected rollbacks and remaining architecture work.
+
+Sonny requested a fresh bottleneck audit with three agents and explicitly
+rejected lazy Settings. Current source prepares Settings at startup and preserves
+complete selected artwork before Track Info appears. The first performance batch
+removes discarded browser grid copies, unrelated prep rollback copies, redundant
+stock native parsing, repeated range reduction and scalar-save no-op traversals;
+the [current audit](performance-audit.md#bottleneck-and-responsiveness-follow-up--november4)
+records exact workloads, new findings and limits. HANDOFF records validation,
+installed build167 and its distinct signed source base.
+
+Next implementation priorities are per-song state storage with ordered durable
+publication, bounded fairness for analysis/source queues, and immutable selected
+export snapshots with complete source-overlap guards. Preserve persist-before-
+presentation, newest-draft rollback, accepted analysis ordering and the common
+source worker/lock/journal. Profile actual Track Info phases before adding any
+cache; the full cover on the first visible frame is a user requirement. Do not
+trade these contracts for smaller synthetic benchmark numbers.
+
 ## Whole-app audit delivered — later November4
 
 The [whole-app audit](performance-audit.md#whole-app-audit--november4-after-ipod-review)
-is installed in personal build 165/runtime 7ffde716… (installed 22:50:20,
+was delivered in personal build165/runtime7ffde716… (installed 22:50:20,
 reopened 22:51:50, verified 22:55:01). All 2779 tests, both signed profiles/code parity
 and three isolated native/process/SQLCipher probes pass. All 694 frozen inputs,
 fresh library/all 10 authorities/art indexes/white icon are exact. 184 first-party
 source files have explicit full/targeted/prior-exact review depth.
 
-Device/Settings demand, queue coalescing, idle decoding and state/artwork/query
+Device demand, then-lazy Settings, queue coalescing, idle decoding and state/artwork/query
 reuse reduce repeated work. Import collision and conversion recovery fixes
 preserve newer files; source authority and atomic publication boundaries remain.
 The ordered cue-style failure is reproduced/fixed with exact ten-state rendering.
@@ -22,9 +47,9 @@ Matched signed3740-row startup is 1.20s median/1.24s p95 versus 3.15s/3.18s befo
 first row-cache miss1.45s versus 4.19s. Snapshot readiness excludes fresh source,
 compositor/persistent icon/device readiness and machine-cold launch. Current
 handoff/retention are in HANDOFF; physical iPod acceptance remains separate.
-Sonny's subsequent wrap-up request authorizes publishing the tested source and
-reconciled documentation. Publication preserves this installed runtime; current
-repository/release identity and protected rollback bases belong in HANDOFF.
+Sonny's November4 wrap-up published this tested source and documentation as
+01d146c4… without changing that installed runtime. Build167 now supersedes it;
+current repository/release identity and protected rollback bases belong in HANDOFF.
 
 ## Earlier iPod audit — November4
 
@@ -44,7 +69,7 @@ export during format, missing USB Info covers and the related catalog/receipt/
 identity/cancellation findings in the [audit](performance-audit.md#usb-deep-audit--november4-later-testing).
 The then-connected two USBs received separate FAT32/exFAT hardware-test
 authorization. Those completed, dated tests grant no later erase or replay.
-Personal build165 is installed/reopened/verified. All2639tests pass with both Qt
+At that checkpoint personal build165 was installed/reopened/verified. All2639tests pass with both Qt
 phases reconciled, both signed package profiles/code parity and isolated native/
 SQLCipher checks pass, and fresh library/authorities/art indexes/white icon remain
 exact. Failed cadence/locked-console runs remain preserved; the unchanged native
@@ -66,17 +91,18 @@ text color. Source capture queries selected cue/playlist rows only. Formatting
 has a guarded same-filesystem quick-erase path, and empty native initialization
 now excludes the renderer's local advisory lock. Both authorized test drives passed
 physical format/fixture-export/update/no-op checks; this is not new player-firmware
-or iPod acceptance. HANDOFF records exact timing, completed installation/validation
-and remaining physical acceptance boundaries.
+or iPod acceptance. The [dated physical fixture timings](performance-audit.md#physical-usb-fixture-timings--november4)
+and private receipts retain exact scope; HANDOFF records current installation/
+validation and remaining acceptance boundaries.
 
 ## Delivered personal runtime
 
-Installed personal build165 retains build163 and the earlier build155 features below and
+Installed personal build167 retains builds165/163 and the earlier build155 features below and
 includes the export, broader efficiency, correctness and UI polish passes, plus
 the November4 multi-device Export selector, selected-member cleanup, themed wait
 wheel and format-review safeguards, USB simplification, iPod audit and whole-app
-demand/lifecycle/recovery audit above.
-The current whole-app delivery passes2779offscreen/Cocoa tests, both signed package profiles and
+demand/lifecycle/recovery audit and responsiveness batch above.
+The current delivery passes2795offscreen/Cocoa tests, both signed package profiles and
 installed isolated/normal startup with exact curated-state checks.
 Exact binary/source provenance belongs in HANDOFF. It includes:
 
@@ -134,7 +160,7 @@ send input events into his app or substitute synthetic proof for native acceptan
 
 ## UI polish follow-up — November3
 
-The earlier build160 follow-up, retained in build165, prepares Info artwork before modal presentation, refreshes
+The earlier build160 follow-up, retained in build167, prepares Info artwork before modal presentation, refreshes
 the matching dialog after actual cover publication, and retains the old cover
 while its replacement decodes. It fixes popup text gutters, literal metadata,
 Retina review images, oversized footer messages and delayed navigation callbacks.
@@ -194,9 +220,11 @@ fresh. Sonny approved installation of the export efficiency pass below and manua
 closed build155. Build160 was installed and normally reopened; that earlier
 source was published under Sonny's wrap-up request without restamping/reinstalling
 its running bundle. Build163 subsequently superseded that runtime, followed by
-the current build165 whole-app delivery. Its tested USB/UI source release
-`cf2ef5bef366ce126178b0f04cf969840e203592` is published under Sonny's subsequent November4 wrap-up, without
-restamping or reinstalling the running app.
+the build165 whole-app delivery and current build167. Build163 USB/UI source
+release `cf2ef5bef366ce126178b0f04cf969840e203592` and build165 whole-app source
+release `01d146c4ee9fbdc942c0a60c90db732a52545111` were published under Sonny's
+November4 wrap-ups without restamping or reinstalling their running apps.
+HANDOFF records the latest responsiveness publication.
 
 The native database/sidecars are the shared musical authority; intentions and
 captured detector records are provenance, not a competing final musical store.
@@ -228,7 +256,7 @@ start directly. Sonny reports playback, artwork and waveforms working.
 The earlier November4 delivery added a multi-device Export selector and selected-playlist
 reference-counted media cleanup, with per-format unrelated-catalog preservation.
 That source release `4a3d29a` and its prior installed runtime `7bbe8577…`
-are separate historical identities; HANDOFF records the current build165 runtime. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
+are separate historical identities; HANDOFF records the current build167 runtime. The full CDJ-3000 control matrix, newer OneLibrary hardware and wider
 physical coverage remain open. See [the CDJ contract](cdj-usb-export.md).
 
 Stock/dual/Rockbox follow-up still requires real reconnect/power-cycle, playing
@@ -239,7 +267,7 @@ efficiency pass defers export startup/cache work until
 detection, indexes USB playlist matching and filesystem destinations, and shares
 repeated iPod availability/display work within each drift poll. Synthetic component
 benchmarks improved; these changes first passed the2531-test delivery and remain
-in the current build165 whole-app delivery. Normal curated startup/state checks pass.
+in current build167. Normal curated startup/state checks pass.
 Exact validation/provenance and installed status belong in HANDOFF.
 Selected source capture and guarded no-op merge reconstruction are now implemented.
 Repeated new-media verification and physical throughput remain measured follow-ups;

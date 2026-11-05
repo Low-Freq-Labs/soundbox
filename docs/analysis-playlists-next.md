@@ -54,6 +54,12 @@ BPM is saved next, then key, with full-SHA component checkpoints and restart
 resumption. New native DB saves follow local preparation; they never publish an
 intermediate BPM paired with an older key. This is local staging, not permission
 for partial native-component publication.
+
+Analysis priority currently applies to the whole matching queued backlog, so
+unrelated source edits can wait even between detector workers. Bounded fairness
+remains a measured follow-up in the [performance audit](performance-audit.md);
+the responsiveness changes preserve this sequencing and the shared source lane.
+
 Folder imports enter Collection before header/bookmark probing. Captured imports
 admit BPM/grid and Hot/Memory Cue drafts after detection, including already-added
 songs whose unchanged audio acquired a newer cloud metadata timestamp. The
@@ -154,7 +160,8 @@ snapshot differ by exactly the independently constructed content row plus the +1
 counter (352390→352391). `research/native_library` reproduces the complete native
 semantic inventory and byte-identical XML without ignoring globals. This remains
 a copy-only/native-reference proof, not source-writer acceptance or app integration.
-HANDOFF records the exact track/evidence and subsequent initial-analysis check.
+The dated private capture/replay roots below retain the exact track/evidence and
+subsequent initial-analysis check; HANDOFF records current delivery provenance.
 
 The BPM/Grid+Key reference is also captured, including all three registered
 DAT/EXT/2EX files. Native analysis matches SoundBox's120 BPM,8B and249ms first
