@@ -4,19 +4,23 @@ Updated November 4, 2026 for the USB, iPod and whole-app audit wrap-up.
 
 ## Current source and installed app
 
-The completed audit and documentation changes are being published on `main`.
+Source release `01d146c4ee9fbdc942c0a60c90db732a52545111` is published on `main`.
+This later handoff note changes documentation only.
 The release matches all 694 frozen source/test/build inputs and runtime fingerprint
 `7ffde716cf03f74411a9256614e52ffd60a5c351fc56145a62b613d7be3f520d`.
 Exact commit/push evidence is in the private wrap-up `publication.json`.
 
-**Personal build 165 remains installed and running at `/Applications/Soundbox.app`.
-Leave it running for Sonny's testing.** Its signed base remains
+**Personal build 165 remains installed at `/Applications/Soundbox.app`.**
+Sonny is testing it; leave his session alone. Its signed base remains
 `19a3075339f3a0ad619f1faeacb5b79d6465c9cb`, dirty=true; publication does not
 restamp, rebuild or reinstall that tested binary. Executable SHA-256:
 `22fe4b7e3b2495a98ad3bc14def3766efb461823e3bcbcfe65a21da97a837fde`.
 Installed 22:50:20, normally reopened 22:51:50 and verified 22:55:01
 (America/Chicago; PID15767 at verification). Newer user activity supersedes the
 state checkpoint below; this wrap-up uses no real-app inputs or termination.
+A read-only publication check at 2026-11-04T23:13:28.839269-06:00 found no SoundBox
+process; a later normal startup is logged at23:01:15. No agent restarted/stopped
+it during wrap-up; do not relaunch it merely for publication.
 
 ## Completed changes and validation
 

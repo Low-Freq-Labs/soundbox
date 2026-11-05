@@ -48,8 +48,8 @@ retention, limits and evidence are in HANDOFF and private
 ~/Library/Logs/Soundbox/soundbox-deep-audit-2026-11-04/.
 
 
-Sonny's later November4 “wrap up” authorizes publication of the completed USB,
-iPod, whole-app and documentation work on main. The release preserves all694
+Sonny's later November4 “wrap up” publishes the completed USB, iPod, whole-app
+and documentation source as01d146c4ee9fbdc942c0a60c90db732a52545111 on main. The release preserves all694
 frozen inputs/runtime7ffde716…; the installed build165 stays signed to its true
 19a3075/dirty=true base. No documentation-only restamp/reinstall or real-app
 control belongs to publication. The fresh repository-wide documentation review
@@ -58,6 +58,9 @@ dependencies and local links/anchors, with per-file evidence under
 ~/Library/Logs/Soundbox/soundbox-wrapup-2026-11-04/. HANDOFF is the single concise
 current note; older checkpoints stay in dated audits/private receipts. Leave the
 installed app and all five protected rollback bases in place for user testing.
+A read-only publication check at 2026-11-04T23:13:28.839269-06:00 found no actual
+SoundBox process after a later23:01:15startup; do not restart/control the app for
+publication. The22:55:01running-session proof above remains its dated checkpoint.
 
 ## iPod audit follow-up — November4,2026
 
