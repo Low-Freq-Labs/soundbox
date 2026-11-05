@@ -32,8 +32,10 @@ HANDOFF records identities, retention, measurements and remaining architecture
 work. This supersedes build165's installed status below, not its dated evidence.
 No later app control, device erase, restoration or installer replay is granted.
 
-Sonny subsequently requested full wrap-up: publish the completed source and
-reconciled documentation on main. The November5 review covers all39 current
+Sonny's subsequent full wrap-up publishes completed responsiveness source as
+`6d208885d3379b6fbf6d0544349fd0529694e586` on main, with a documentation-only
+provenance follow-up. The installed signed0075ab1/dirty=true base remains exact.
+The November5 review covers all39 current
 first-party texts in full,11 archives for historical scope/permissions/retention/
 links,25 pinned upstream references and2 notices by exact integrity, all55 local
 dependency pins, and local targets/anchors. Private per-file and publication

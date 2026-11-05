@@ -11,8 +11,10 @@ Installed00:02:43.967, reopened00:03:38.713, final installation verification
 The wrap-up performs read-only verification and publishes source/documentation;
 it grants no new real-app input, termination, source/device write or replay.
 
-Release: the completed responsiveness source and reconciled documentation on
-main; exact publication identity is recorded in the private wrap-up receipt.
+Responsiveness implementation release on main:
+`6d208885d3379b6fbf6d0544349fd0529694e586`. This documentation-only provenance
+follow-up records that release; final branch/push identity is in the private
+wrap-up `publication.json` receipt.
 The signed installed source remains `0075ab1ea2f1ed7a87b33dbf53b383231a78f8bb`,
 dirty=true. Publication does not restamp, rebuild or reinstall these tested bytes.
 Runtime fingerprint:
