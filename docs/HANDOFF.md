@@ -1,10 +1,10 @@
 # SoundBox current handoff
 
-Updated November 8, 2026. Cleanup is implemented and personal **build 169 is installed and accepted**. Sonny's wrap-up authorizes publication of the validated source on `main`; source publication is being completed. Installed signed provenance stays unchanged.
+Updated November 8, 2026. Cleanup source release `a02fa2f91a393f741b8199113f80c6874f6a5cc4` is published on `main` with a documentation-only provenance follow-up. Personal **build 169 is installed and accepted**; its true signed provenance stays unchanged.
 
 ## Current app
 
-Installed at `/Applications/Soundbox.app` on November 8 at 22:29:05; normal open at 22:29:55, read-only verification at 22:37:12 found PID 64390 running. The later publication check at 22:51 found no SoundBox process; do not restart or control the app for publication. Later user-session startup records and saved columns supersede the earlier session checkpoint.
+Installed at `/Applications/Soundbox.app` on November 8 at 22:29:05; normal open at 22:29:55, read-only verification at 22:37:12 found PID 64390 running. The final publication observation at 23:10:39 found no SoundBox process; do not restart or control the app for publication. Later user-session startup records and saved columns supersede the earlier session checkpoint.
 Signed source: `1b825c8669d083a588b8f79ab6af9c19f7bad140`, dirty=true.
 Runtime: `f96b76b62b1f5245b6f19a666e4340dfbaeb08a9590fa095954f9c1a75cd1767`.
 Executable: `e51c3fbc4743eec51c3fdddf8dd40f1e56667de4976aa88581cd522acbd6f71a`.
