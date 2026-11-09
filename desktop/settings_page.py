@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QStackedWidget, QTabBar, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
-from .choices import ComboBox as QComboBox, Menu as QMenu
+from .choices import ComboBox as QComboBox, Menu as QMenu, exec_transient_menu
 from .trees import GraveyardTree
 from .color_button import ColorButton
 
@@ -248,7 +248,6 @@ class SettingsPageMixin:
         self._grave_delete.setEnabled(False)
         self._grave.itemSelectionChanged.connect(lambda:self._grave_delete.setEnabled(bool(self._grave.selectedItems())))
         gl.addWidget(self._grave_delete,0,Qt.AlignRight)
-        self._settings_tabs.currentChanged.connect(self.graveyard_controller.schedule)
         gsub = QLabel("Tracks removed from Collection (and removed from playlists) "
                       "rest here. Double-click to load and listen. Select one or "
                       "Shift/Cmd-select several, then restore or delete from Collection and disk. Deletion asks first and moves files to Trash; "
@@ -504,10 +503,12 @@ class SettingsPageMixin:
         offset=g.visualItemRect(first).top() if first else 0
         scroll=g.verticalScrollBar().value();horizontal=g.horizontalScrollBar().value()
         by_pid = {p.pid: p.name for p in (self.lib.playlists if self.lib else [])}
+        controller=getattr(self,'graveyard_controller',None)
 
         def title_of(tid):
             t = self.lib.tracks_by_id.get(tid) if self.lib else None
-            return self.titles.get(tid) or (t.name if t else f"track {tid}")
+            info=controller.info(tid) if controller else None
+            return self.titles.get(tid) or (t.name if t else info.get('title') if info else f"track {tid}")
 
         g.setSortingEnabled(False)
         g.clear()
@@ -540,8 +541,9 @@ class SettingsPageMixin:
                 g.verticalScrollBar().setValue(g.verticalScrollBar().value()-offset)
         else:g.verticalScrollBar().setValue(scroll)
         g.horizontalScrollBar().setValue(horizontal)
-        controller=getattr(self,'graveyard_controller',None)
-        if controller:controller.schedule()
+        if controller:
+            controller.selection_changed()
+            controller.schedule()
 
     def _filter_graveyard(self):
         g=getattr(self,'_grave',None)
@@ -574,8 +576,7 @@ class SettingsPageMixin:
         if g.selectedItems():
             menu.addSeparator()
             menu.addAction('Delete from Collection and disk…',self.removal_controller.request)
-        if not menu.isEmpty():
-            menu.exec(g.mapToGlobal(pos))
+        exec_transient_menu(menu, g.mapToGlobal(pos))
 
     def _grave_load(self, item):
         data = item.data(0, _GRAVE_ROLE) if item is not None else None
@@ -863,7 +864,7 @@ class SettingsPageMixin:
         if data and data[0] == "word":
             menu = QMenu(self)
             menu.addAction("Remove word", lambda: self._remove_drop_word(data[1]))
-            menu.exec(self._rules.mapToGlobal(pos))
+            exec_transient_menu(menu, self._rules.mapToGlobal(pos))
 
     def _remove_drop_word(self, w):
         self.settings["title_words"] = [x for x in self.settings.get("title_words") or []
@@ -895,7 +896,6 @@ class SettingsPageMixin:
             self._refresh_graveyard()  # the graveyard reflects the latest deletes
             self._refresh_title_rules()
         self.body_stack.setCurrentIndex(0 if on_settings else 1)
-        self.graveyard_controller.schedule()
 
     def _close_settings(self):
         self.body_stack.setCurrentIndex(0)

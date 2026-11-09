@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from .choices import Menu as QMenu
+from .choices import Menu as QMenu, exec_transient_menu
 
 if TYPE_CHECKING:
     from soundbox.stock_ipod_info import StockIpodSnapshot
@@ -768,4 +768,4 @@ class StockIpodPages(QWidget):
         action.triggered.connect(
             lambda _checked=False, selected=item:
             self._emit_playlist_delete([selected]))
-        menu.exec(self.playlist_tree.viewport().mapToGlobal(position))
+        exec_transient_menu(menu, self.playlist_tree.viewport().mapToGlobal(position))

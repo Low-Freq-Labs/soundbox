@@ -7,6 +7,7 @@ Returns candidates/results only; core owns persistence and worker lifetimes.
 from __future__ import annotations
 
 import difflib
+import importlib
 import logging
 import re
 import unicodedata
@@ -42,6 +43,12 @@ _MAX_IMG = 6 * 1024 * 1024  # 6 MB safety cap
 # the image CDN both serve fine with this; a bare bot UA can get 403'd.
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Soundbox/1.0"}
 _EXCLUDED_ACCOUNTS: frozenset[str] = frozenset()
+
+
+def prepare_runtime() -> None:
+    """Prepare admitted search code at startup without requests or credentials."""
+    for name in ('yt_dlp', 'yt_dlp.networking.common', 'yt_dlp.extractor.soundcloud'):
+        importlib.import_module(name)
 
 
 def configure_source_exclusions(accounts) -> None:

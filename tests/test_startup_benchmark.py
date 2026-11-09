@@ -6,11 +6,31 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.benchmark_startup import prepare
+from scripts.benchmark_startup import prepare, validate_result
 from soundbox import libcache
 
 
 class StartupMetadata(unittest.TestCase):
+    def test_eager_readiness_cannot_pass_with_missing_runtime_or_device_work(self):
+        result = dict(painted=True, search_matched=True, rows=12, native=True,
+                      selected=True, settings_ready=True, artists_ready=True, artists_rows=12, collection_rows=12,
+                      desktop_runtime_missing=[], desktop_runtime_errors=[], provider_diagnostic='',
+                      device_surfaces=[], device_backends=[], stock_converter_loaded=False)
+        validate_result(result, require_desktop_ready=True)
+        for key, value in (('settings_ready', False), ('artists_rows', 11),
+                           ('desktop_runtime_missing', ['numpy']),
+                           ('desktop_runtime_errors', ['unavailable']),
+                           ('provider_diagnostic', 'provider unavailable'),
+                           ('device_backends', ['soundbox.stock_ipod'])):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                validate_result(dict(result, **{key: value}), require_desktop_ready=True)
+
+    def test_old_baseline_reports_remain_usable_without_claiming_eager_readiness(self):
+        result = dict(painted=True, search_matched=True, rows=12)
+        validate_result(result)
+        with self.assertRaises(RuntimeError):
+            validate_result(result, require_desktop_ready=True)
+
     def test_desktop_import_does_not_initialize_stock_image_conversion(self):
         code = (
             'from PySide6.QtCore import QStandardPaths; '

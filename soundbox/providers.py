@@ -140,8 +140,8 @@ def resolve(manifest: dict) -> Providers:
             return Providers(profile)
         # The import targets are fixed by core, not supplied by library settings,
         # music folders, manifest entry points or arbitrary plugin discovery.
-        # Discovery imports the extractor only when a search actually needs it.
-        # Presence checking must not initialize that heavy package on launch.
+        # Prepare admitted code before desktop interaction. This performs no
+        # searches, account refresh, credential access or provider requests.
         if importlib.util.find_spec('yt_dlp') is None:
             raise ModuleNotFoundError('yt_dlp')
         module = importlib.import_module("soundbox_personal.discovery")
@@ -149,9 +149,10 @@ def resolve(manifest: dict) -> Providers:
         if not callable(getattr(connection, "create", None)):
             raise ValueError("Provider missing connection factory")
         for method in ("fetch_best", "search_candidates", "preview_image",
-                       "fetch_thumb", "fetch_by_url", "suggest_artist"):
+                       "fetch_thumb", "fetch_by_url", "suggest_artist", "prepare_runtime"):
             if not callable(getattr(module, method, None)):
                 raise ValueError(f"Provider missing {method}")
+        module.prepare_runtime()
         return Providers(profile, cast(ArtworkProvider, module),
                          cast(ArtistProvider, module), (MODULE_ID,), ACTIONS,
                          connections=cast(ConnectionFactory, connection))

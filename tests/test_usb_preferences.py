@@ -311,8 +311,11 @@ class PreferenceUiTests(unittest.TestCase):
         self.addCleanup(dialog.close)
         tabs=dialog.findChild(QTabWidget)
         self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],['Summary','Info'])
-        self.assertFalse(dialog.controls)
+        self.assertIn('color',dialog.controls)
+        controls=dict(dialog.controls)
+        dialog.prepare_artwork();self.assertTrue(dialog._art_ready)
         tabs.setCurrentIndex(1)
+        self.assertEqual(dialog.controls,controls)
         button=next(b for b in tabs.widget(1).findChildren(QPushButton) if b.text()=='Change artwork…')
         button.click();pick.assert_called_once()
         control=dialog.controls['color'];control.setCurrentIndex(control.findData('8'))
@@ -328,7 +331,9 @@ class PreferenceUiTests(unittest.TestCase):
         dialog=TrackInfoDialog({'title':'Title'},artwork=resolve)
         self.addCleanup(dialog.close)
         self.assertFalse(started.is_set())
-        self.assertFalse(dialog.controls)
+        self.assertFalse(dialog.controls)  # Read-only dialog has no editable controls.
+        from PySide6.QtWidgets import QLineEdit
+        self.assertTrue(dialog.tabs.widget(1).findChildren(QLineEdit))
         observed=[]
         def release_after_worker_starts():
             if not started.is_set():

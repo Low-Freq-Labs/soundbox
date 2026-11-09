@@ -1,9 +1,9 @@
 # Shared library, analysis and player corrections
 
-Current-status review November5,2026 against the responsiveness delivery, personal
-build167/runtime `3fb0ff60…`, with exact provenance recorded in HANDOFF.
-Whole-app build165/runtime `7ffde716…`, build163, source release `4a3d29a` and
-build160/runtime `7bbe8577…` are prior delivery evidence.
+Current-status review November8,2026 against accepted personal build169; exact
+installed provenance and validation are recorded in HANDOFF. Responsiveness
+build167/runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
+source release `4a3d29a` and build160/runtime `7bbe8577…` are prior delivery evidence.
 This plan began at build148 on October30. Direct shared imports, initial
 supported WAV and independently accepted narrow CBR MP3 analysis, durable prep and
 the requested player/Graveyard controls are now installed. The full shared-primary outcome still has
@@ -506,7 +506,7 @@ alone do not establish native acceptance, latency or visual quality.
 | Native Collection / identities | [reader](../soundbox/rekordbox_db.py): load_live and all active supported local audio IDs, independently of playlist membership; [library](../soundbox/library.py), [libcache](../soundbox/libcache.py), imports/metadata/state_repository modules |
 | Accepted shared writer/recovery | [tag controller](../desktop/tag_controller.py), [playlist store](../soundbox/rekordbox_playlist_store.py), rekordbox_cue_store/grid_store/tags, [source primitives](../soundbox/rekordbox_write.py) |
 | Export barrier | [desktop/cdj.py](../desktop/cdj.py): _source_edits_pending and deferred stable-ID rebinding; soundbox/cdj_source.py for the source capture contract |
-| RGB | [native/SoundboxDeck.mm](../native/SoundboxDeck.mm): LOD, interval resolve, RGB coverage/color branches; [desktop/player.py](../desktop/player.py): actual zoom ladder |
+| RGB | [native/WaveformShader.h](../native/WaveformShader.h): LOD, interval resolve, RGB coverage/color branches; [native/SoundboxDeck.mm](../native/SoundboxDeck.mm): eager pipeline construction and draw ownership; [desktop/player.py](../desktop/player.py): actual zoom ladder |
 | Regression suites | tests/test_analysis.py, test_ui_source_playlists.py, test_source_playlists.py, test_prep_grid.py, test_rekordbox_grid_store.py, test_native_deck.py, test_waveform_gpu_math.py, test_cdj_desktop.py |
 
 Ordinary registration and the two accepted initial full-analysis publishers are
@@ -545,8 +545,9 @@ drawables/UI; personal build, safe install, real state/normal restart verificati
 A locked screen invalidates display timing; an actual Keychain request can hold
 a shutdown. Do not suppress failures, weaken thresholds or kill workers to pass.
 Keep logs bounded, retire reproducible build output after verified installation,
-and preserve the current handoff's required rollback bases plus acceptance/device
-fixtures. A historical checkpoint never authorizes retiring a still-protected base.
+and retain at most one temporary previous app until verified user acceptance,
+then retire it. Preserve musical originals, transaction recovery and required
+acceptance/device fixtures; they are separate from application rollbacks.
 
 Final closure requires ordinary saves using the shared native store without
 app-branded save footers or a separate publication step, the entire matrix,

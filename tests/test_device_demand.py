@@ -1,5 +1,6 @@
 """Startup and passive UI work never construct disconnected device surfaces."""
 from pathlib import Path
+import sys
 import tempfile
 from threading import Event
 import time
@@ -87,6 +88,9 @@ class DeviceDemand(unittest.TestCase):
     def test_settings_ready_before_show_first_open_uses_current_preferences_and_preserves_view(self):
         win = self.window()
         self.assertFalse(win.isVisible())
+        self.assertEqual(win._desktop_runtime_errors, ())
+        from soundbox.desktop_runtime import DESKTOP_MODULES
+        self.assertTrue(all(name in sys.modules for name in DESKTOP_MODULES))
         self.assertEqual([win._settings_tabs.tabText(i) for i in range(win._settings_tabs.count())],
                          ['General', 'Analysis', 'My Settings', 'Keyboard', 'Graveyard', 'Connections'])
         self.assertEqual(len(win._global_my_settings.controls), 44)

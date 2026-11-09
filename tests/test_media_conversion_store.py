@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 from uuid import uuid4
 
-from test_registration_pilot import source_fixture
+from tests.support.native_library import source_fixture
 from test_wave_conversion import wave
 from soundbox import media_conversion_store as store,rekordbox_cue_store as cues,rekordbox_tags as tags
 from soundbox.rekordbox_write import _connect,ConflictError,RecoveryRequired
@@ -135,6 +135,34 @@ class ExistingMediaConversion(unittest.TestCase):
         with mock.patch.object(store.hashlib,'file_digest',side_effect=replace_inode):
             with self.assertRaisesRegex(RecoveryRequired,'during conversion verification'):
                 store._current_audio(self.audio)
+
+    def _change_after_final_header_read(self, path, inspect):
+        facts=inspect(path)
+        if Path(path)==self.audio:
+            changed=bytearray(self.audio.read_bytes());changed[-2]^=1
+            self.audio.write_bytes(changed)
+        return facts
+
+    def test_header_read_cannot_acknowledge_old_hash_with_replacement_epoch(self):
+        original=self.audio.read_bytes();inspect=store.compatibility.inspect
+        with mock.patch.object(store.compatibility,'inspect',
+                side_effect=lambda path:self._change_after_final_header_read(path,inspect)):
+            with self.assertRaisesRegex(RecoveryRequired,'before conversion acknowledgement'):
+                self.convert()
+        self.assertTrue(self.writer.journal.exists())
+        folder=self.writer._folder(self.op)
+        self.assertEqual((folder/'original.wav').read_bytes(),original)
+        self.assertFalse((folder/'receipt.json').exists())
+
+    def test_receipt_replay_keeps_original_proof_when_header_read_changes_audio(self):
+        result=self.convert();receipt=self.writer._folder(self.op)/'receipt.json'
+        recorded=receipt.read_bytes();inspect=store.compatibility.inspect
+        with mock.patch.object(store.compatibility,'inspect',
+                side_effect=lambda path:self._change_after_final_header_read(path,inspect)):
+            with self.assertRaisesRegex(RecoveryRequired,'before conversion acknowledgement'):
+                self.convert()
+        self.assertNotEqual(store._sha(self.audio),result['after_sha256'])
+        self.assertEqual(receipt.read_bytes(),recorded)
 
     def test_codec_recovery_preserves_source_changed_before_target_link(self):
         self._check_codec_recovery_guard(1)

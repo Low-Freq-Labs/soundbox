@@ -512,7 +512,7 @@ class PayloadDurability(unittest.TestCase):
             replace = os.replace
             fsync = os.fsync
             with mock.patch('soundbox.sync.os.fsync', side_effect=lambda fd: (events.append('flush'), fsync(fd))[-1]), \
-                    mock.patch('soundbox.sync.os.replace', side_effect=lambda a, b: (events.append('publish'), replace(a, b))[-1]):
+                    mock.patch('soundbox.sync.os.replace', side_effect=lambda a, b, **kw: (events.append('publish'), replace(a, b, **kw))[-1]):
                 _safe_copy(src, dest)
             self.assertEqual(events, ['flush', 'publish'])
             self.assertEqual(dest.read_bytes(), src.read_bytes())

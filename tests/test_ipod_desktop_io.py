@@ -48,6 +48,7 @@ def host():
         unification_controller=SimpleNamespace(state=lambda: None),
     )
     value._deliver_device_scan_callbacks = MethodType(MainWindow._deliver_device_scan_callbacks, value)
+    value._retire_device_scan_worker = MethodType(MainWindow._retire_device_scan_worker, value)
     return value
 
 

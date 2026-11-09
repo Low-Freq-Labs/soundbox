@@ -1,5 +1,11 @@
 # UI polish review — November 3, 2026
 
+Current personal build169 is installed and accepted. It includes eager Info and
+Artists preparation plus explicit window-filter retirement, while retaining the
+selected-cover-before-show contract. The November3–5 measurements below remain
+dated evidence; [HANDOFF](HANDOFF.md) records current provenance and the measured
+startup cost of ordinary readiness.
+
 Sonny reported that the information window appeared before its cover. The source
 follow-up prepares that one cover before modal presentation. Canonical artwork
 resolution and display-sized decoding remain in an owned worker; Qt timers and
@@ -14,7 +20,7 @@ selector/cleanup work recorded here. That USB/theme follow-up was delivered as b
 
 ## Responsiveness delivery — November5
 
-Personal build167/runtime3fb0ff60… is installed. Sonny explicitly rejected
+At that checkpoint personal build167/runtime3fb0ff60… was installed. Sonny explicitly rejected
 first-click lazy Settings: all six tabs and their controls now prepare before the
 first window show. In five paired generated source fixtures, opening Settings
 fell 561.45→12.50ms. The paired signed snapshot-startup median rises 1158.43→1783.13ms
@@ -66,7 +72,7 @@ manual calls were removed. Ten private rendered states remain byte-identical;
 the corrected prefix and final complete gate pass. Cue creation, holds, keyboard
 routing and source publication retain their existing semantics. This adds no
 hardware/player acceptance. The older179-file presentation inventory below remains
-dated evidence, distinct from the current 184-file full/targeted/prior-exact review.
+dated evidence, distinct from that checkpoint's 184-file full/targeted/prior-exact review.
 
 ## USB/theme follow-up — November4
 

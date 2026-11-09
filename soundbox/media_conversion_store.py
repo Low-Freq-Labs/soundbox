@@ -78,9 +78,9 @@ def _current_audio(path):
     return digest, before
 
 
-def _require_audio_epoch(path, expected):
+def _require_audio_epoch(path, expected, *, phase='publication'):
     if identity(_audio(path)) != expected:
-        raise RecoveryRequired('Audio changed before conversion publication; evidence retained')
+        raise RecoveryRequired(f'Audio changed before conversion {phase}; evidence retained')
 
 
 def _fault(_phase):pass
@@ -217,13 +217,14 @@ class ConversionStore:
                 _regular(displaced)
                 if _sha(displaced)!=plan['before_sha256']:raise RecoveryRequired('Displaced original differs')
                 os.replace(displaced,original);sync_dir(folder)
-        self.lease._guard();_audio(target)
-        if _sha(target)!=plan['after_sha256']:raise RecoveryRequired('Converted audio changed before acknowledgement')
+        self.lease._guard();actual,verified_epoch=_current_audio(target)
+        if actual!=plan['after_sha256']:raise RecoveryRequired('Converted audio changed before acknowledgement')
         facts=compatibility.inspect(target)
         if facts['status']!='compatible':raise RecoveryRequired('Converted file failed independent format readback')
+        _require_audio_epoch(target,verified_epoch,phase='acknowledgement')
         result=dict(format=FORMAT,operation_id=plan['operation_id'],path=str(path),target=str(target),
             before_sha256=plan['before_sha256'],after_sha256=plan['after_sha256'],before_epoch=plan['before_epoch'],
-            epoch=identity(target.stat()),size=target.stat().st_size,facts=facts,measurements=plan['measurements'],
+            epoch=verified_epoch,size=verified_epoch[2],facts=facts,measurements=plan['measurements'],
             original=str(original),native=plan['native'])
         atomic_bytes(folder/'receipt.json',_json(result));_fault('receipt')
         self.journal.unlink();sync_dir(self.root);return result
@@ -254,10 +255,12 @@ class ConversionStore:
                 plan=self._load(folder,_sha(folder/'plan.json'))
                 if (result.get('operation_id')!=operation_id or result.get('format')!=FORMAT
                         or result['path']!=str(path) or result.get('target',str(path))!=str(target)
-                        or result['after_sha256']!=plan['after_sha256'] or result['before_sha256']!=plan['before_sha256']
-                        or _sha(target)!=result['after_sha256']):
+                        or result['after_sha256']!=plan['after_sha256'] or result['before_sha256']!=plan['before_sha256']):
                     raise ConflictError('Completed conversion belongs to different audio bytes')
-                result.update(epoch=identity(target.stat()),size=target.stat().st_size,facts=compatibility.inspect(target));return result
+                actual,verified_epoch=_current_audio(target)
+                if actual!=result['after_sha256']:raise ConflictError('Completed conversion belongs to different audio bytes')
+                facts=compatibility.inspect(target);_require_audio_epoch(target,verified_epoch,phase='acknowledgement')
+                result.update(epoch=verified_epoch,size=verified_epoch[2],facts=facts);return result
             _audio(path)
             # Provider header seeks can fail even after a successful stream.
             # Inspect and render the one verified local capture, never reopen

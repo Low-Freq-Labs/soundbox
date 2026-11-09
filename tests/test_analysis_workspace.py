@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 import test_fixture_analysis as fixture_data
-from test_registration_proof import fixture as database_fixture
+from tests.support.native_library import fixture as database_fixture
 from research.native_library import analysis_workspace as txn
 from research.cdj_export.playlist_transaction import _inventory
 from soundbox.rekordbox_write import _connect,_json,_quote,_state,ConflictError,RecoveryRequired

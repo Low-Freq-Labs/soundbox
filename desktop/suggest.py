@@ -223,13 +223,13 @@ class MergeDialog(QDialog):
         v.addLayout(row)
 
     def _existing_menu(self, pos):
-        from .choices import Menu as QMenu
+        from .choices import Menu as QMenu, exec_transient_menu
         it = self.done_list.itemAt(pos)
         data = it.data(0, _ROLE) if it else None
         if data and data[0] == "existing":
             menu = QMenu(self)
             menu.addAction("Unmerge", lambda: self._unmerge(it, data[1]))
-            menu.exec(self.done_list.mapToGlobal(pos))
+            exec_transient_menu(menu, self.done_list.mapToGlobal(pos))
 
     def _unmerge(self, item, src):
         self.unmerges.append(src)

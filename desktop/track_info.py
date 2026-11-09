@@ -55,7 +55,7 @@ class TrackInfoDialog(QDialog):
         self.row=dict(row);self.controls={};self.save_callback=save
         self._artwork=artwork;self._pick_art=pick_art;self._image=QImage()
         self._desktop_artwork=desktop_artwork
-        self._owner=TaskOwner(self);self._art_worker=None;self._info_built=False
+        self._owner=TaskOwner(self);self._art_worker=None
         self._art_ready=False;self._art_dirty=False
         self._covers=[]
         layout=QVBoxLayout(self);layout.setContentsMargins(16,12,16,12)
@@ -91,7 +91,7 @@ class TrackInfoDialog(QDialog):
             form.addWidget(caption,at,0,Qt.AlignTop);form.addWidget(text,at,1)
         form.setColumnStretch(1,1);sv.addWidget(details);sv.addStretch()
         self.tabs.addTab(summary,'Summary');self.tabs.addTab(QWidget(),'Info')
-        self.tabs.currentChanged.connect(self._tab_changed)
+        self._build_info_tab()
         actions=QHBoxLayout()
         note=QLabel('Edits are saved in SoundBox and used for USB export.');note.setObjectName('SettingsSub')
         note.setVisible(save is not None);actions.addWidget(note);actions.addStretch()
@@ -151,9 +151,7 @@ class TrackInfoDialog(QDialog):
             self._image=w.image;self._art_ready=True;self._paint_artwork()
         self._owner.adopt(worker,retired);worker.start()
 
-    def _tab_changed(self,index):
-        if index!=1 or self._info_built:return
-        self._info_built=True
+    def _build_info_tab(self):
         info=self.tabs.widget(1);iv=QVBoxLayout(info)
         iv.setSpacing(10)
         art=QHBoxLayout();art.addStretch();art.addWidget(self._cover(208));art.addSpacing(16)

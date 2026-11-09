@@ -1,17 +1,17 @@
 # MP3 shared-analysis follow-up
 
 Started November 2, 2026 at Sonny's request. **The accepted CBR profile remains
-installed and enabled in the November5 responsiveness delivery, personal build167/
-runtime `3fb0ff60…`.** Whole-app build165/runtime `7ffde716…`, build163,
-source release `4a3d29a` and build160 are prior delivery evidence; the responsiveness
-audit changes no MP3 authority.
+installed and enabled in accepted personal build169.** Responsiveness build167/
+runtime `3fb0ff60…`, whole-app build165/runtime `7ffde716…`, build163,
+source release `4a3d29a` and build160 are prior delivery evidence. The cleanup
+changes no MP3 authority.
 Its original production delivery was build155; the dated checkpoints below retain
 that history. It covers initial full BPM/Grid+Key/waveforms
 on bare unlocked MPEG-1/no-Info/Xing CBR, stereo44.1kHz. VBR, Info/gapless, mono
 and48kHz MP3 publication remain gated. The separate WAV v1 scope is unchanged.
 Current runtime provenance stays in [HANDOFF](HANDOFF.md).
-Leave the installed app running; historical closed-app work instructions below
-are not current permission to stop it, repeat a pilot or add generated songs.
+Historical closed-app work instructions below grant no current permission to
+control the app, repeat a pilot or add generated songs.
 
 ## Implemented preparation
 
@@ -223,7 +223,7 @@ production-delivery/installed-import-check-readback.json.
 
 The then-active follow-up measured native command latency using existing private
 DB copies while Sonny kept SoundBox closed. That work and closed-app instruction
-are historical; leave the current runtime recorded in HANDOFF running. The performance work
+are historical; current process state and app-control limits are in HANDOFF. The performance work
 did not broaden the accepted MP3 publication scope.
 
 The subsequent native-command performance package was installed in personal155

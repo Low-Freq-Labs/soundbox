@@ -72,6 +72,36 @@ class WaveConversion(unittest.TestCase):
                 self.assertLessEqual(np.max(np.abs(actual.reshape(-1)-samples)),1/8388608)
                 self.assertEqual(receipt['gain'],1)
 
+    def test_render_rejects_same_path_symlink_and_hardlink_without_source_changes(self):
+        wave(self.path)
+        original = self.path.read_bytes()
+        symlink = self.path.with_name('symlink.wav')
+        symlink.symlink_to(self.path)
+        hardlink = self.path.with_name('hardlink.wav')
+        os.link(self.path, hardlink)
+        for target in (self.path, symlink, hardlink):
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, 'separate source'):
+                conversion.render(self.path, target)
+            self.assertEqual(self.path.read_bytes(), original)
+            self.assertEqual(target.read_bytes(), original)
+
+    def test_render_rejects_destination_aliased_after_initial_validation(self):
+        wave(self.path)
+        original = self.path.read_bytes()
+        target = self.path.with_name('late-alias.wav')
+        opened = conversion.os.open
+
+        def alias_before_open(path, flags, *args):
+            if Path(path) == target and not target.exists():
+                os.link(self.path, target)
+            return opened(path, flags, *args)
+
+        with mock.patch.object(conversion.os, 'open', side_effect=alias_before_open):
+            with self.assertRaisesRegex(ValueError, 'separate source'):
+                conversion.render(self.path, target)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(target.read_bytes(), original)
+
     def test_overrange_is_untouched_unless_gain_reduction_is_explicit(self):
         wave(self.path,np.array([-1.33,1.2,-.5,.5],dtype='<f4'));before=self.path.read_bytes()
         with self.assertRaisesRegex(ValueError,'gain reduction is required'):self.convert()
@@ -168,6 +198,31 @@ class WaveConversion(unittest.TestCase):
         with mock.patch.object(conversion.hashlib,'file_digest',side_effect=replace_inode):
             with self.assertRaisesRegex(ValueError,'during verification'):
                 conversion._current_digest(self.path)
+
+    def test_changed_published_audio_keeps_original_and_unacknowledged_receipt(self):
+        wave(self.path);original=self.path.read_bytes();changed=None
+        def replace(phase):
+            nonlocal changed
+            if phase=='replaced':
+                raw=bytearray(self.path.read_bytes());raw[-2]^=1
+                changed=bytes(raw);self.path.write_bytes(changed)
+        with mock.patch.object(conversion,'_fault',side_effect=replace):
+            with self.assertRaisesRegex(ValueError,'before acknowledgement'):
+                self.convert()
+        self.assertEqual(self.path.read_bytes(),changed)
+        folder=self.recovery/self.op/conversion.result_key(self.path)
+        self.assertEqual((folder/'original.wav').read_bytes(),original)
+        self.assertNotIn('epoch',json.loads((folder/'receipt.json').read_bytes()))
+
+    def test_replayed_receipt_never_renews_epoch_after_guard_changes_audio(self):
+        wave(self.path);self.convert()
+        receipt=self.recovery/self.op/conversion.result_key(self.path)/'receipt.json'
+        recorded=receipt.read_bytes()
+        def changed():
+            raw=bytearray(self.path.read_bytes());raw[-2]^=1;self.path.write_bytes(raw)
+        with self.assertRaisesRegex(ValueError,'before acknowledgement'):
+            self.convert(guard=changed)
+        self.assertEqual(receipt.read_bytes(),recorded)
 
     def test_changed_source_or_native_guard_does_not_get_overwritten(self):
         wave(self.path);original=self.path.read_bytes()

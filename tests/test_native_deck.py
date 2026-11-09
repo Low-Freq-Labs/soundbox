@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import time
 import unittest
+
+from tests.support.native_source import native_deck_source
 from types import SimpleNamespace
 from unittest import mock
 import wave
@@ -1118,7 +1120,7 @@ class NativeDeckContract(unittest.TestCase):
         # Frozen from the pre-lookup arm64 scalar transfer for all int16 bit
         # patterns, including -32768. Compile the actual production helper;
         # no diagnostic export or duplicate implementation enters the dylib.
-        source = (Path(__file__).resolve().parents[1] / 'native/SoundboxDeck.mm').read_text()
+        source = native_deck_source()
         start = source.index('constexpr float kWaveformDisplayExponent')
         end = source.index('\nstruct WaveSample', start)
         unit = Path(self.temp.name) / 'signed-display-table.cpp'

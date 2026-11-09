@@ -11,7 +11,8 @@ import unittest
 
 from research.native_library import media_workspace as media, registration as wav, registration_workspace as base
 from soundbox.rekordbox_write import _connect,ConflictError,RecoveryRequired,WriteProofError
-from test_registration_proof import fixture,wave,inventory
+from tests.support.audio import wave
+from tests.support.native_library import fixture, inventory
 
 
 class MediaWorkspace(unittest.TestCase):

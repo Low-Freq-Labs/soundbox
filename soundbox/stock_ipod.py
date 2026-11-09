@@ -56,6 +56,7 @@ from clickwheel.ipod.sync import _existing_track_to_trackinfo  # type: ignore[im
 
 from . import manifest as device_manifest
 from . import metadata
+from .ipod_policy import pace_classic_usb as _pace_classic_usb
 from .library import Library, Playlist, Track
 from .paths import is_within
 from contextlib import ExitStack
@@ -88,13 +89,7 @@ SUPPORTED_SUFFIXES = frozenset({".mp3", ".wav"})
 SUPPORTED_MODELS = {
     "MA446": ("iPod Video", "5.5th Gen"),
 }
-_CLASSIC_USB_SETTLE_SECONDS = 0.15
 _STOCK_SOURCE_PROFILE = "ma446-mp3-pcm16-stereo-44100-v1"
-
-
-def _pace_classic_usb() -> None:
-    """Give validated classic hardware a short breath between media writes."""
-    time.sleep(_CLASSIC_USB_SETTLE_SECONDS)
 
 
 class StockIpodError(RuntimeError):

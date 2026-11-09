@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from test_registration_pilot import source_fixture
+from tests.support.native_library import source_fixture
 from test_media_probe import wave
 from research.native_library import media_pilot as pilot
 from research.cdj_export.playlist_transaction import _inventory,_sha

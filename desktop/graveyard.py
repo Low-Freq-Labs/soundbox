@@ -1,4 +1,4 @@
-"""On-demand read-only Graveyard information and storage accounting."""
+"""Source-bound read-only Graveyard metadata prepared before tab navigation."""
 from copy import deepcopy
 import json
 import os
@@ -44,30 +44,64 @@ class GraveyardController(QObject):
 
     def __init__(self,window):
         super().__init__(window);self.window=window;self.tasks=TaskOwner(self)
-        self.entries={};self.closing=False;self.again=False
+        self.entries={};self.closing=False
+        self._generation=0;self._settled_key=None;self._source_identity=None
+        self._notice=''
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(300)
         self.timer.timeout.connect(self.scan)
+        self.tasks.drained.connect(self.schedule)
+        window.tag_controller.changed.connect(self.schedule)
 
     def ids(self):
         w=self.window
         return (set(getattr(w,'hidden',set()))|{tid for bag in getattr(w,'removals',{}).values() for tid in bag})-set(w.settings.get('graveyard_disposals',{}))
 
+    def _key(self):
+        w=self.window;lib=w.lib
+        if lib is None:return None
+        ids=self.ids();source=lib.source if lib.source_kind=='rekordbox-db' else None
+        imported={tid:w.imported[tid] for tid in sorted(ids) if tid in w.imported}
+        bindings=[value for value in w.settings.get(shared_imports.BINDINGS,[])
+                  if value.get('local_id') in ids]
+        return (self._generation,str(source),lib.source_library_id,
+                source is None or bool(w.tag_controller.verified),tuple(sorted(ids)),
+                json.dumps(imported,sort_keys=True),json.dumps(bindings,sort_keys=True))
+
+    def prepare_library(self):
+        """A newly materialized source supersedes previous metadata observations."""
+        self._generation+=1
+        lib=self.window.lib
+        identity=(str(lib.source),lib.source_kind,lib.source_library_id) if lib else None
+        if identity!=self._source_identity:
+            self.entries={};self._source_identity=identity
+        self.schedule()
+
     def schedule(self,*_args):
-        w=self.window;grave=getattr(w,'_grave',None)
-        if self.closing or grave is None or not grave.isVisible():return
-        self.again=True
-        if not self.timer.isActive():self.timer.start()
+        w=self.window
+        if self.closing or w._shutting_down or w._state_maintenance:return
+        key=self._key()
+        if key is None or key==self._settled_key:return
+        if not key[3]:
+            self._notice='Loading source…';self.status(self._notice);return
+        if self.tasks.pending:return  # drained retries the newest source/selection
+        if not key[4]:
+            self.entries={};self._settled_key=key;self._notice=''
+            if getattr(w,'_grave',None) is not None:self.selection_changed()
+            return
+        if not self.timer.isActive():self.timer.start(0)
 
     def scan(self):
         w=self.window
-        if self.closing or w._shutting_down or not w.lib:return
+        if self.closing or w._shutting_down or w._state_maintenance or not w.lib:return
+        key=self._key()
+        if key==self._settled_key:return
+        if not key[3]:self._notice='Loading source…';self.status(self._notice);return
         if self.tasks.pending or w.tag_controller.owned or w._refresh_worker is not None:
-            self.timer.start();return
-        if not w._grave.isVisible():return
+            self.timer.start(300);return
         ids=self.ids();source=w.lib.source if w.lib.source_kind=='rekordbox-db' else None
         library_id=w.lib.source_library_id;imported=deepcopy(w.imported)
-        bindings=deepcopy(w.settings.get(shared_imports.BINDINGS,[]));self.again=False
-        self.status('Checking storage…')
+        bindings=deepcopy(w.settings.get(shared_imports.BINDINGS,[]))
+        self._notice='Checking storage…';self.status(self._notice)
         def work():
             remembered={};path=graveyard.archive_path(w.tag_controller.data_root,source,library_id)
             if path.exists():
@@ -81,10 +115,11 @@ class GraveyardController(QObject):
         worker=OneShotTask(work,log_label='Graveyard storage')
         def retired(job):
             if self.closing or w._shutting_down:return
-            if (not w.lib or w.lib.source_library_id!=library_id
-                    or (w.lib.source if w.lib.source_kind=='rekordbox-db' else None)!=source or self.ids()!=ids):
-                self.schedule();return
-            if isinstance(job.result,Exception):self.status('Storage unavailable — '+str(job.result));return
+            if self._key()!=key:return  # drained schedules a fresh bound observation
+            self._settled_key=key
+            if isinstance(job.result,Exception):
+                self._notice='Storage unavailable — '+str(job.result);self.status(self._notice);return
+            self._notice=''
             self.entries=job.result['entries']
             archive_error=''
             if source is not None and w._state_repository.writable and not w._state_maintenance:
@@ -101,7 +136,8 @@ class GraveyardController(QObject):
                         .relative_to(w.tag_controller.data_root),payload)
                 except (OSError,ValueError) as exc:
                     archive_error='Storage checked; could not retain historical file identities — '+str(exc)
-            items=[w._grave.topLevelItem(index) for index in range(w._grave.topLevelItemCount())]
+            grave=getattr(w,'_grave',None)
+            items=[grave.topLevelItem(index) for index in range(grave.topLevelItemCount())] if grave else []
             for item in items:
                 from .settings_page import _GRAVE_ROLE
                 data=item.data(0,_GRAVE_ROLE);entry=self.entries.get(data[1],{}) if data else {}
@@ -112,9 +148,9 @@ class GraveyardController(QObject):
                         playlist=next((p.name for p in w.lib.playlists if p.pid==data[2]),'?')
                         title+=f'   (from {playlist})'
                     item.setText(0,title);item.setToolTip(0,entry.get('canonical') or entry.get('path') or '')
-            w._filter_graveyard();self.selection_changed();self.changed.emit()
-            if archive_error:self.status(archive_error)
-            if self.again:self.schedule()
+            if grave is not None:w._filter_graveyard();self.selection_changed()
+            self.changed.emit()
+            if archive_error:self._notice=archive_error;self.status(archive_error)
         self.tasks.adopt(worker,retired);worker.start()
 
     def info(self,tid):
@@ -139,6 +175,7 @@ class GraveyardController(QObject):
         if ids:text+=f"  ·  Selected: {human(selected['size'])}"
         if total['unresolved']:text+=f"  ·  {total['unresolved']} paths unresolved"
         if total['unavailable']:text+=f"  ·  {total['unavailable']} missing or unavailable"
+        if self._notice:text+='  ·  '+self._notice
         self.status(text)
 
     def shutdown(self):

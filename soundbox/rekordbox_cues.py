@@ -1,7 +1,7 @@
 """Pure cue-row planning from native references; no database/file write API.
 
-This is deliberately not enabled in the desktop. Live transactions, recovery,
-native acceptance and keyboard integration remain separate milestone gates.
+The accepted rekordbox_cue_store composes these plans with its separate
+authority, live transaction and recovery guards; this planner grants none.
 Inputs are raw snapshot rows, not the lossy display/analysis cue dictionaries.
 """
 from __future__ import annotations

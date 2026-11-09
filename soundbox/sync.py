@@ -20,11 +20,11 @@ import re
 import shutil
 import stat as stat_mod
 import tempfile
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable, Iterator, cast
 
 from . import artencode
 from . import playlists as pl_mod
@@ -37,6 +37,7 @@ from .report import PlaylistReport, SyncReport
 from .operation_control import phase_progress, record_metric
 from .rockbox_media import RockboxMediaError
 from .source_acquisition import SourceContract, SourceAcquisitionError, acquire_source
+from .device_staging import copy_stream, open_parent, staged_output
 
 
 class NotEnoughSpace(RuntimeError):
@@ -133,52 +134,30 @@ class DeviceSession:
                 f"{candidate}")
         return candidate
 
+    @contextmanager
+    def parent_fd(self, path: Path, *, create: bool = False) -> Iterator[tuple[int, str]]:
+        target = self.guard(path)
+        relative = target.relative_to(self.target)
+        with open_parent(self.target, self.mount_identity, relative, create=create) as parent:
+            self.revalidate()
+            yield parent
+
+    def _staged_output(self, destination: Path):
+        return staged_output(destination, self.parent_fd, self.revalidate)
+
     def atomic_copy(self, source: Path, destination: Path) -> None:
-        target = self.guard(destination)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self.revalidate()
-        _safe_copy(source, target, revalidate=self.revalidate)
+        _safe_copy(source, self.guard(destination), session=self)
 
     def atomic_write(self, destination: Path, data: bytes) -> None:
-        target = self.guard(destination)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self.revalidate()
-        tmp = target.with_name(target.name + ".sbpart")
-        try:
-            with tmp.open("wb") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            self.revalidate()
-            os.replace(tmp, target)
-        except OSError:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        with self._staged_output(destination) as output:
+            output.write(data)
 
     def atomic_concat(self, sources: list[Path], destination: Path) -> None:
         """Concatenate verified local payloads into one atomic device file."""
-        target = self.guard(destination)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self.revalidate()
-        tmp = target.with_name(target.name + ".sbpart")
-        try:
-            with tmp.open("wb") as output:
-                for source in sources:
-                    with source.open("rb") as input_file:
-                        shutil.copyfileobj(input_file, output, 1024 * 1024)
-                output.flush()
-                os.fsync(output.fileno())
-            self.revalidate()
-            os.replace(tmp, target)
-        except OSError:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        with self._staged_output(destination) as output:
+            for source in sources:
+                with source.open("rb") as input_file:
+                    shutil.copyfileobj(input_file, output, 1024 * 1024)
 
     def write_verified_range(
         self,
@@ -193,26 +172,38 @@ class DeviceSession:
         target = self.guard(destination)
         if offset < 0 or size < 0 or source.stat().st_size != size:
             raise RuntimeError(f"Invalid range write for {target}")
-        self.revalidate()
-        current_size = target.stat().st_size
-        if offset > current_size:
-            raise RuntimeError(
-                f"Range write would create a hole in {target}: {offset}>{current_size}")
         with source.open("rb") as input_file:
             payload = input_file.read()
         if len(payload) != size or hashlib.sha256(payload).hexdigest() != sha256:
             raise RuntimeError(f"Range source changed before write: {source}")
-        with target.open("r+b") as handle:
-            handle.seek(offset)
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+        with self.parent_fd(target) as (parent, name):
+            fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
+            with os.fdopen(fd, 'r+b') as handle:
+                info = os.fstat(handle.fileno())
+                if (not stat_mod.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_dev != self.mount_identity[0]):
+                    raise RuntimeError(f"Range target is not a regular device file: {target}")
+                if offset > info.st_size:
+                    raise RuntimeError(
+                        f"Range write would create a hole in {target}: {offset}>{info.st_size}")
+                self.revalidate()
+                handle.seek(offset)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+                handle.seek(offset)
+                landed = handle.read(size)
+                if len(landed) != size or hashlib.sha256(landed).hexdigest() != sha256:
+                    raise RuntimeError(f"Range write failed verification: {target}@{offset}")
+                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    raise RuntimeError(f"Range target changed during write: {target}")
+            with self.parent_fd(target) as (current_parent, _):
+                current = os.fstat(current_parent)
+                original = os.fstat(parent)
+                if (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
+                    raise RuntimeError(f"Range parent changed during write: {target}")
         self.revalidate()
-        with target.open("rb") as handle:
-            handle.seek(offset)
-            landed = handle.read(size)
-        if len(landed) != size or hashlib.sha256(landed).hexdigest() != sha256:
-            raise RuntimeError(f"Range write failed verification: {target}@{offset}")
 
 
 def _fmt_size(n: int) -> str:
@@ -330,56 +321,71 @@ def _dirs_up_to(start_dir: Path, root: Path) -> list[Path]:
     return out
 
 
-def _clean_dir(d: Path) -> int:
-    """Delete '._*' sidecars + '*.sbpart' temps directly inside d (shallow). Count."""
+def _clean_dir(session: DeviceSession, directory: Path, *, recursive: bool = False) -> int:
+    """Inspect real device directories; unlink clutter by the same pinned parent."""
     removed = 0
     try:
-        entries = list(d.iterdir())
-    except OSError:
-        return 0
-    for p in entries:
-        if p.name.startswith("._") or p.name.endswith(".sbpart"):
-            try:
-                if p.is_file():
-                    p.unlink()  # WRITE: our-folder clutter only.
-                    removed += 1
-            except OSError:
-                pass
+        with session.parent_fd(directory / '.soundbox-clean') as (fd, _):
+            parent = os.fstat(fd)
+            with os.scandir(fd) as scan:
+                entries = list(scan)
+            for entry in entries:
+                if recursive and entry.is_dir(follow_symlinks=False):
+                    removed += _clean_dir(session, directory / entry.name, recursive=True)
+                elif ((entry.name.startswith('._') or entry.name.endswith('.sbpart'))
+                      and entry.is_file(follow_symlinks=False)):
+                    observed = entry.stat(follow_symlinks=False)
+                    with session.parent_fd(directory / entry.name) as (current_fd, name):
+                        current_parent = os.fstat(current_fd)
+                        current = os.stat(name, dir_fd=current_fd, follow_symlinks=False)
+                        if ((current_parent.st_dev, current_parent.st_ino)
+                                != (parent.st_dev, parent.st_ino)
+                                or (current.st_dev, current.st_ino)
+                                != (observed.st_dev, observed.st_ino)
+                                or not stat_mod.S_ISREG(current.st_mode)):
+                            continue
+                        session.revalidate()
+                        os.unlink(name, dir_fd=current_fd)
+                        removed += 1
+    except (OSError, RuntimeError, ValueError):
+        pass  # Optional clutter cleanup never follows a redirected directory.
     return removed
 
 
 def clean_applefiles(target: Path, dirs=None) -> int:
-    """Delete device clutter — macOS AppleDouble ('._*') sidecars + orphan '*.sbpart'
-    copy temps — under the target's Music/ and Playlists/ folders ONLY (never a sibling
-    like a rekordbox PIONEER/ export; never any source).
+    """Remove AppleDouble/partial files only in real Music and Playlists trees.
 
-    If `dirs` is given (the folders written this run), scan ONLY those, shallow — far
-    faster than rglob'ing the whole device every time (the FINALIZING cost). Each dir
-    is guarded to be within Music/ or Playlists/. `dirs=None` falls back to a full scan
-    (manual 'clean device')."""
+    Export finalization scans only the supplied written directories, shallowly.
+    An explicit manual clean recursively visits those two roots without following
+    directory links. Neither mode opens or unlinks another product/source tree.
+    """
+    target = Path(target)
+    if not target.is_dir():
+        return 0
+    session = DeviceSession(target, [], create=False)
+    if dirs is None:
+        return sum(_clean_dir(session, session.target / name, recursive=True)
+                   for name in ('Music', 'Playlists'))
     removed = 0
-    if dirs is not None:
-        music, plists = target / "Music", target / "Playlists"
-        for d in {Path(x) for x in dirs}:
-            if is_within(d, music) or is_within(d, plists):  # safety: our trees only
-                removed += _clean_dir(d)
-        return removed
-    for sub in ("Music", "Playlists"):
-        base = target / sub
-        if not base.is_dir():
+    for directory in {Path(value) for value in dirs}:
+        try:
+            try:
+                relative = directory.relative_to(target)
+            except ValueError:
+                relative = directory.relative_to(session.target)
+            if (not relative.parts or relative.parts[0].casefold() not in ('music', 'playlists')
+                    or '..' in relative.parts):
+                continue
+            removed += _clean_dir(session, session.target / relative)
+        except ValueError:
             continue
-        for pattern in ("._*", "*.sbpart"):
-            for p in base.rglob(pattern):
-                try:
-                    if p.is_file():
-                        p.unlink()  # WRITE: deletes our-folder clutter only.
-                        removed += 1
-                except OSError:
-                    pass
     return removed
 
 
-def erase_device_contents(target: Path, sources: list[Path]) -> int:
+def erase_device_contents(
+    target: Path, sources: list[Path], *,
+    expected_mount_identity: tuple[int, int] | None = None,
+) -> int:
     """Permanently empty one explicitly selected mounted device.
 
     This is intentionally separate from ownership-based Sync pruning. It may
@@ -392,6 +398,9 @@ def erase_device_contents(target: Path, sources: list[Path]) -> int:
     # boundaries. Its confirmation names every unknown/external tree too.
     session = DeviceSession(
         Path(target), sources, create=False, allow_external_roots=True)
+    if (expected_mount_identity is not None
+            and session.mount_identity != expected_mount_identity):
+        raise RuntimeError('Device target changed after erase confirmation')
     session.revalidate()
     entries = list(session.target.iterdir())
     ownership = manifest.manifest_path(session.target).parent
@@ -471,52 +480,63 @@ def verify_managed(target: Path, *, deep: bool = False) -> list[str]:
     return issues
 
 
-def _safe_copy(src: Path, dst: Path, *, revalidate: Callable[[], None] | None = None) -> None:
+def _safe_copy(
+    src: Path, dst: Path, *, revalidate: Callable[[], None] | None = None,
+    session: DeviceSession | None = None,
+) -> None:
     """Copy file DATA to a temp file in the destination folder, then ATOMICALLY
     rename it into place.
 
     Writing straight to the final name means a crash / yanked USB / power loss
     mid-copy leaves a TRUNCATED file at the real name — which the next sync's
     size-only check then treats as a permanent 'conflict' and never heals. Copying
-    to `<name>.sbpart` first and os.replace()-ing it in means an interruption leaves
+    to an exclusively created `.soundbox-*.sbpart` first means an interruption leaves
     only an orphan temp (swept by clean_applefiles), and the real file only ever
     appears complete. os.replace is atomic within one filesystem, including FAT.
 
-    copystat is best-effort: it raises EINVAL on macOS FAT/fskit, and the audio
-    bytes are what matter. Only ever writes under `target`.
+    Timestamp/mode preservation is best-effort on FAT/fskit. All production calls
+    use the session's pinned parent; the standalone helper pins its given parent.
     """
-    tmp = dst.with_name(dst.name + ".sbpart")
-    try:
+    if session is None:
+        dst = dst.parent.resolve(strict=True) / dst.name
+        parent_info = dst.parent.stat()
+        identity = (parent_info.st_dev, parent_info.st_ino)
+
+        @contextmanager
+        def parent_fd(path: Path, *, create: bool = False) -> Iterator[tuple[int, str]]:
+            with open_parent(dst.parent, identity, path.relative_to(dst.parent)) as parent:
+                yield parent
+
+        staging = staged_output(dst, parent_fd, revalidate or (lambda: None))
+    else:
+        staging = session._staged_output(dst)
+    with staging as output:
         size = src.stat().st_size
         phase_progress("Verifying payload", 0, size, dst.name)
         source_hash = _sha256(src)
-        space = os.statvfs(dst.parent)
+        space = os.fstatvfs(output.fileno())
         if space.f_bavail * space.f_frsize < size:
             raise OSError(f"Insufficient device space for {dst.name}")
         phase_progress("Copying to device", 0, size, dst.name)
-        shutil.copyfile(src, tmp)
-        with tmp.open("rb") as payload:
-            os.fsync(payload.fileno())
+        with src.open('rb') as source:
+            copy_stream(source, output)
+        output.flush()
         record_metric("device_bytes_written", size)
         phase_progress("Verifying device copy", size, size, dst.name)
-        if tmp.stat().st_size != size or _sha256(tmp) != source_hash:
+        output.seek(0)
+        copied_hash = hashlib.sha256()
+        for chunk in iter(lambda: output.read(1024 * 1024), b''):
+            copied_hash.update(chunk)
+        if os.fstat(output.fileno()).st_size != size or copied_hash.hexdigest() != source_hash:
             raise OSError(f"Temporary copy failed verification: {dst}")
         if revalidate is not None:
             revalidate()
         try:
-            shutil.copystat(src, tmp)
+            info = src.stat()
+            os.fchmod(output.fileno(), stat_mod.S_IMODE(info.st_mode))
+            os.utime(output.fileno(), ns=(info.st_atime_ns, info.st_mtime_ns))
         except (OSError, RuntimeError):
             pass                             # FAT can't store full metadata
-        os.replace(tmp, dst)                 # atomic; dst never pre-exists on this path
-    except (OSError, RuntimeError):
-        try:
-            # Never clean a replacement mount after losing authority.
-            if revalidate is not None:
-                revalidate()
-            tmp.unlink()                     # drop the partial temp so a re-run retries
-        except (OSError, RuntimeError):
-            pass
-        raise
 
 
 def assert_target_safe(target: Path, sources: list[Path]) -> None:

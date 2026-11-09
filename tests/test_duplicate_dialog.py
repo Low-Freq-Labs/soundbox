@@ -73,10 +73,12 @@ class DuplicateDialog(unittest.TestCase):
 
     def test_window_adapter_reads_only_six_effective_titles_and_returns_exact_dialog_choice(self):
         from desktop.app import MainWindow
-        host=SimpleNamespace(_track_label=mock.Mock(side_effect=lambda tid:'Title '+tid))
+        host=SimpleNamespace(_track_label=mock.Mock(side_effect=lambda tid:'Title '+tid),
+                             _shutting_down=False,_state_maintenance=False)
         duplicates=[str(i) for i in range(100)]
         with mock.patch('desktop.duplicate_dialog.DuplicateAddDialog') as factory:
-            box=factory.return_value;box.Accepted=QDialog.Accepted;box.exec.return_value=QDialog.Accepted
+            factory.DialogCode=QDialog.DialogCode
+            box=factory.return_value;box.exec.return_value=QDialog.Accepted
             self.assertTrue(MainWindow._confirm_duplicate_add(host,'ALL LOCAL',duplicates))
             factory.assert_called_once_with('ALL LOCAL',['Title '+str(i) for i in range(6)],100,host)
             self.assertEqual(host._track_label.call_count,6)

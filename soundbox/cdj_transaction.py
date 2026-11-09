@@ -6,12 +6,10 @@ recovery is retired after durable commit. Manifest publication is last.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 import json
 import io
 import errno
-import secrets
 import tempfile
 import os
 from pathlib import Path, PurePosixPath
@@ -22,6 +20,7 @@ import uuid
 
 from .cdj_usb import DATABASE_FILES, PROFILE_FILES, CdjReadSession, assert_no_database_journals, _identity
 from .sync import DeviceSession
+from .device_staging import staged_output
 
 MANIFEST = '.soundbox-cdj/manifest.json'
 JOURNAL = '.soundbox-cdj/pending.json'
@@ -83,30 +82,6 @@ class CdjSession(DeviceSession):
             parent = child
         return candidate
 
-    @contextmanager
-    def parent_fd(self, path, *, create=False):
-        relative = self.guard(path).relative_to(self.target)
-        fd = os.open(self.target, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
-        try:
-            info = os.fstat(fd)
-            if (info.st_dev, info.st_ino) != self.mount_identity:
-                raise ValueError('USB root changed before publication')
-            for component in relative.parts[:-1]:
-                if create:
-                    try:
-                        os.mkdir(component, dir_fd=fd)
-                    except FileExistsError:
-                        pass
-                child = os.open(component, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=fd)
-                os.close(fd)
-                fd = child
-                if os.fstat(fd).st_dev != self.mount_identity[0]:
-                    raise ValueError('CDJ publication crosses the USB boundary')
-            self.revalidate()
-            yield fd, relative.name
-        finally:
-            os.close(fd)
-
     @staticmethod
     def _flush_directory(fd):
         try:
@@ -118,28 +93,16 @@ class CdjSession(DeviceSession):
     def _publish(self, stream, destination, should_cancel=lambda:False, expected_sha256=None):
         import hashlib
         copied=hashlib.sha256() if expected_sha256 else None
-        with self.parent_fd(destination, create=True) as (fd, name):
-            temporary = '.soundbox-'+secrets.token_hex(12)+'.sbpart'
-            handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
-            try:
-                with os.fdopen(handle, 'wb') as output:
-                    while block := stream.read(1024*1024):
-                        if should_cancel():
-                            raise RuntimeError('CDJ publication cancelled')
-                        output.write(block)
-                        if copied is not None:copied.update(block)
-                    output.flush()
-                    os.fsync(output.fileno())
-                if copied is not None and copied.hexdigest()!=expected_sha256:
-                    raise ValueError('Candidate changed while copying')
-                self.revalidate()
-                os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
-                self._flush_directory(fd)
-            finally:
-                try:
-                    os.unlink(temporary, dir_fd=fd)
-                except FileNotFoundError:
-                    pass
+        with staged_output(destination, self.parent_fd, self.revalidate,
+                           after_publish=self._flush_directory, mode=0o600) as output:
+            while block := stream.read(1024*1024):
+                if should_cancel():
+                    raise RuntimeError('CDJ publication cancelled')
+                output.write(block)
+                if copied is not None:
+                    copied.update(block)
+            if copied is not None and copied.hexdigest()!=expected_sha256:
+                raise ValueError('Candidate changed while copying')
 
     def atomic_write(self, destination, data):
         self._publish(io.BytesIO(data), destination)

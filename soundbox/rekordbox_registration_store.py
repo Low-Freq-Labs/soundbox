@@ -221,6 +221,9 @@ class RegistrationStore:
         with encrypted_backup(self.database) as snapshot:
             conn=_connect(snapshot,readonly=True)
             try:
+                if (_identity(conn)!=(self.authority.library_id,'6000')
+                        or _schema(conn)!=self.authority.schema_sha256):
+                    raise ConflictError('Completed registration library/schema changed')
                 for b in bindings:
                     row=planner.encoded_row(conn,'djmdContent',b['native_id'])
                     if not row or row['UUID']!=b['native_uuid'] or row['FolderPath']!=b.get('native_path',b['canonical']) or row['rb_local_deleted']!=0:

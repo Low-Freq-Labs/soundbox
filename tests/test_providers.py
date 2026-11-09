@@ -18,12 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProviderComposition(unittest.TestCase):
-    def test_dependency_presence_is_checked_without_initializing_extractor(self):
+    def test_admitted_search_code_is_prepared_before_first_use(self):
         with mock.patch.object(providers.importlib, 'import_module',
                                wraps=providers.importlib.import_module) as imports:
             result = providers.resolve(composition('personal')['manifest'])
         self.assertIsNotNone(result.artwork)
-        self.assertNotIn(mock.call('yt_dlp'), imports.call_args_list)
+        for name in ('yt_dlp', 'yt_dlp.networking.common', 'yt_dlp.extractor.soundcloud'):
+            self.assertIn(mock.call(name), imports.call_args_list)
         with mock.patch.object(providers.importlib.util, 'find_spec', return_value=None):
             self.assertEqual(providers.resolve(composition('personal')['manifest']).actions, ())
     def test_public_never_imports_optional_packages(self):
@@ -65,8 +66,11 @@ class ProviderComposition(unittest.TestCase):
                 imports.assert_not_called()
 
     def test_personal_registers_existing_functions_without_network(self):
-        result = providers.resolve(composition("personal")["manifest"])
         from soundbox_personal import discovery
+        from soundbox_personal.connection import Keychain
+        with mock.patch('socket.socket.connect', side_effect=AssertionError('network')), \
+                mock.patch.object(Keychain, 'read', side_effect=AssertionError('credentials')):
+            result = providers.resolve(composition("personal")["manifest"])
         self.assertIs(result.artwork, discovery)
         self.assertIs(result.artists, discovery)
         self.assertEqual(result.actions, providers.ACTIONS)

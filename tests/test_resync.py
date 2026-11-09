@@ -9,8 +9,8 @@ from soundbox.library import Library, Playlist, Track
 
 class TestResync(unittest.TestCase):
     def setUp(self):
-        self.dev = Path(tempfile.mkdtemp(prefix="dev_"))
-        self.src = Path(tempfile.mkdtemp(prefix="src_"))
+        self.dev = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="dev_")))
+        self.src = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="src_")))
         for n in ("A.wav", "B.wav", "c.wav", "Shared.wav"):
             (self.src / n).write_bytes(b"RIFF" + n.encode())
 

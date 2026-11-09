@@ -1,5 +1,45 @@
 # SoundBox gotchas & niche facts
 
+## Desktop readiness cleanup — November8 source
+
+- Prepare ordinary runtime code and desktop surfaces before interaction. Keep
+  USB/iPod pages/backends on demand and selected-track decoding on selection.
+  Both Info tabs are constructed before presentation; selected artwork still
+  finishes before the first visible frame.
+- `desktop.artists_browser` owns the prepared Artists tree. Opening/expanding
+  never derives metadata or constructs children. Library replacement, visibility
+  and global display changes rebuild its projection; per-song invalidation
+  derives only those rows. Field/art changes retain existing Qt items, and
+  membership/order changes rebuild only affected groups. Preserve current ID,
+  multi-selection, column, expansion and scroll when refreshing.
+- Prepare Graveyard history/storage metadata after source materialization and
+  native verification, without waiting for the tab to show. The existing worker
+  reads metadata and stats only; no audio read/hydration. Source generation,
+  source/library identity, selected IDs and import bindings bind its result.
+  A tab visit reuses settled success/failure, never starts a duplicate read;
+  source changes discard late results and shutdown drains its TaskOwner.
+- Bind queued widget callbacks with `QTimer.singleShot(delay, widget, callback)`.
+  A context-free closure can outlive its C++ signal source after `deleteLater`;
+  the unavailable-player diagnostic has a regression for this teardown order.
+- Read-only merge/relink/row-warm consumers and queued device admission reject
+  shutdown and state restoration. Keep durable native/source acknowledgements
+  and normal Quit save-draining intact. A discovery-dependent request resumes
+  from the scan owner's already-connected retirement callback: `isRunning()`
+  becoming false is too late to attach another `finished` listener reliably.
+  Recheck captured ownership, cancellation and cached mount/volume identity
+  before resuming; a stale scan must still retire without replacing a fresh owner.
+- Remove the window's application event filter when admitted shutdown begins,
+  before child teardown and worker draining dispatch events. Deferred deletion
+  does not retire that filter. Keep the application-owned theme controller active
+  for other windows; ordinary Quit still defers accepted saves before shutdown.
+- Retire nested artwork-review dialogs after each modal, including the profile
+  confirmation image. Drain the picker before deletion, detach its selected
+  choice, and recheck the review TaskOwner before applying an approval returned
+  from a nested event loop. Closing a dialog is not deletion of parented controls.
+- The production Metal literal is included from `native/WaveformShader.h`.
+  `tests.support.native_source` reads the real composed source for contract/GPU
+  tests. Preserve exact shader bytes and eager native pipeline initialization.
+
 ## Responsiveness follow-up — November4–5
 
 - Sonny rejected first-click lazy Settings. Prepare its complete tabs during
@@ -206,6 +246,11 @@ test, after unchanged source-identity and native/manual provenance guards.
   Recovery verifies exact original/stage/output hashes. A failed local save must
   replay the receipt, not convert again or discard manual musical edits. Saved
   detections retain original SHA/epoch provenance plus the verified conversion.
+- Copy rendering rejects identical paths, symlinks and hardlinks to the source,
+  including a destination alias created after admission. Check opened inodes
+  before truncation. Conversion acknowledgement/replay pairs the output digest
+  with its verified epoch and rechecks it after header reads and source guards;
+  changed audio preserves originals/recovery instead of receiving a new epoch.
 - Fence existing waveform publications before replacement. New interactive cooks
   are transient while that import phase owns the lane. Refresh detail afterward
   without replacing the audio transport or redetecting BPM/key.
@@ -1139,9 +1184,10 @@ test, after unchanged source-identity and native/manual provenance guards.
   zero-RGB legacy rows. Negative-time fragments and true silence stay pure deck
   background.
 - **Computed-row cache:** effective title/artist is cached per track_id, warmed
-  in background (debounced, generation-guarded), invalidated on
-  override/alias/registry/title-junk change. `_row_for` returns a COPY. Title-only
-  edits call `_invalidate_rows((track_id,))`; warms fill only missing rows.
+  for the complete Artists projection when the library materializes, and
+  invalidated on override/alias/registry/title-junk change. `_row_for` returns a
+  COPY. Title-only edits call `_invalidate_rows((track_id,))`; remaining background
+  warms are debounced/generation-guarded and fill only missing rows.
   Registry/alias/title-policy changes still invalidate globally. Keep generation
   checks and retry after the old worker's `finished` boundary.
 - **A new per-track `Track` field that affects a view MUST survive two caches or
@@ -1152,8 +1198,9 @@ test, after unchanged source-identity and native/manual provenance guards.
   and is cleared in `_apply_loaded_library`; known `added_ts` returns directly,
   without resolving a media path. Historically caching known dates by path let an
   instant-paint value defeat fresh add times and conflated separate track records
-  sharing one source path. Sidebar counts use unsorted visible membership, never
-  the Collection's newest-added sorting path.
+  sharing one source path. Collection counts use unsorted visible membership;
+  Artists counts reuse its prepared grouping without repeating title/art work
+  for an unchanged sidebar refresh.
 - **Restoring a tree selection with signals BLOCKED re-renders NOTHING.** The
   two row-rebuild paths in the unified sidebar are asymmetric: `_populate_tree` re-selects a native playlist with
   signals LIVE (fires `_on_rb_select` → fresh rows), but `_refresh_custom`
@@ -1338,6 +1385,15 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   `ScrollPerItem` — don't reintroduce pixel scrolling or padding-based heights.
 
 ## Python 3.14 / build
+- Disposable waveform records share `cache_io.atomic_cache_bytes` with
+  `sync_file=False`, preserving their existing no-fsync cost. Unique exclusive
+  descriptor-owned stages preserve stale aliases; source-epoch validation stays
+  after staging and before publication. Durable state uses `state_io`.
+- Desktop construction prepares ordinary NumPy, SciPy signal/ndimage,
+  SoundFile and Zstandard code through `soundbox.desktop_runtime` before user
+  interaction. This starts no audio decode, DSP or source discovery. Keep
+  per-function engine imports usable by lightweight CLI callers; a missing
+  dependency reports a startup diagnostic without disabling library management.
 - **`aifc`, `audioop`, `sunau` REMOVED in Python 3.13+** → can't decode AIFF with
   stdlib. Use `soundfile` (libsndfile) — reads WAV/AIFF/FLAC/MP3 (NOT ALAC/.m4a).
 - **ALAC/AAC V5 analysis uses `qt_detail_peaks()` (Qt/FFmpeg analysis only;
@@ -1390,10 +1446,10 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   record until atomic publication and never escalate to full fallback cooking.
   Schedule these ahead of full cooks that may be waiting for 25 GiB. `library.json`,
   its small rotating backups, art, and existing analysis are not expendable.
-  Installer app rollbacks are temporary; retain only the exact pending-acceptance
-  bases identified in current HANDOFF. Those explicitly protected bases take
-  precedence over historical one-rollback cleanup guidance; never retire them
-  merely because a newer package passed automated checks.
+  Keep at most one previous app temporarily during installation. Retire it after
+  verified user acceptance; automated checks alone do not establish acceptance.
+  Do not accumulate app rollback bundles. Musical/conversion originals, native
+  recovery and required fixtures remain protected.
 - **Status presentation has one owner at a time.** Per-file acquisition/copy/
   verification notifications update hover details only; they never replace the
   operation label, track count, pulse or overall percentage. Reserve count width
@@ -1554,6 +1610,10 @@ scheduling as well as menus. Never clear misses/blocks on provider detach. The
 tracked `Soundbox.spec` is the only packaging composition; use `build_app.sh`
 with `personal` (default) or `public`. Packaged profile selection is immutable
 for that build; source-only `SOUNDBOX_PROFILE` cannot enable a frozen module.
+Admitted personal search code (`yt_dlp`, its request adapter and SoundCloud
+extractors) is prepared during provider resolution at startup. Warming code
+starts no searches, account refresh or credential access; public still imports
+none of those optional modules.
 
 - **Paste an ARTIST PROFILE URL into the art picker → you get the AVATAR**
   (og:image of a profile page IS the avatar; lands baseline-JPEG via `store_ok`).
@@ -2331,8 +2391,8 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   artwork” cannot flash ahead of an existing cover. Canonical resolution and
   display-sized decode stay in its TaskOwner worker; preparation dispatches Qt
   timers/results with user input excluded and a wait cursor. A contended art
-  lock can delay opening. Build Info fields on demand; do not prefetch art during
-  track load. Publication refreshes matching open dialogs after the save, with
+  lock can delay opening. Build both Summary/Info fields before modal show; do
+  not prefetch art during track load. Publication refreshes matching open dialogs after the save, with
   coalesced replacement reads and the prior cover retained until ready. Closing
   retains/drains through finished/join and prevents a pending initial show.
   See [the polish audit](ui-polish-audit.md) for coverage and remaining GUI costs.

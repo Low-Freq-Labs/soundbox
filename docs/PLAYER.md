@@ -1,5 +1,42 @@
 # SoundBox player
 
+## Cleanup delivery — November8
+
+Personal build169 is installed and accepted. Eager readiness shifts work to
+startup: matched 3,740-row signed snapshot proxies measured 3.37s median versus
+build167's 1.90s. These synthetic measurements do not establish fresh-source or
+compositor latency; [HANDOFF](HANDOFF.md) records provenance and remaining costs.
+
+Ordinary scientific runtime code is prepared during desktop construction;
+audio decoding and selected-track analysis still start for the requested track.
+Both Track Info tabs exist before the dialog appears, and its selected artwork
+retains the complete-first-frame contract. Artists prepares its full collapsed
+tree when library presentation materializes; first open/expand only reveals
+ready rows. Per-song field/art updates reuse existing items, and refresh preserves
+selection, current column, expansion and scroll. USB/iPod pages remain on demand.
+Graveyard history/storage metadata starts in its existing worker when the source
+materializes and native verification permits it, independently of tab visits.
+Opening the tab reuses the prepared snapshot or its truthful loading/error state;
+source changes discard late results. This performs no audio read or hydration.
+
+The unavailable-player diagnostic and queued terminal-track advance are bound
+to the player lifetime, so deleting it before delivery cannot emit through a
+deleted Qt object. Existing transport epoch checks still reject stale advances.
+Queued USB scroll restoration has the same page-lifetime boundary.
+Read-only merge/relink/row-warm completions reject shutdown or state restoration.
+Admitted shutdown unregisters the window's application event filter before
+draining workers or retiring children. The application-owned theme controller
+remains active for other windows; normal Quit first drains accepted saves.
+Queued device successors also reject those states before importing a backend or
+presenting a prompt; accepted durable source acknowledgements still reconcile.
+Device requests waiting for discovery resume from the scan owner's existing
+retirement path, including a scan whose finished signal was already emitted.
+Replacement ownership, cancellation and mount/volume identity invalidate a request.
+The production Metal literal now lives in `native/WaveformShader.h`, included by
+`SoundboxDeck.mm`; shader bytes, eager pipeline creation and the C ABI are unchanged.
+This cleanup ships in build169; [HANDOFF](HANDOFF.md) distinguishes its true signed
+source base from subsequent source publication. The delivery below is historical.
+
 The November4–5 responsiveness delivery reuses exact aligned range
 levels while loading/reducing cached waveforms. Every output byte and
 partial final cell stays exact; cache schema, DSP, palette, geometry, clocks,
@@ -7,10 +44,10 @@ audio transport and native rendering are unchanged. Settings is prepared during
 startup at Sonny's request, and Track Info still prepares the selected full cover
 before appearing. Validation and installation status are in [HANDOFF](HANDOFF.md).
 
-Current as of 2026-11-05, installed personal build167/runtime3fb0ff60….
-This delivery preserves the player/renderer contracts below, including the earlier
-idle-decoder and duplicate cue-style corrections. All 66 Cocoa cases pass within
-the 2,795-test release gate. Read this with `ARCHITECTURE.md` and `GOTCHAS.md` before
+At the November5 checkpoint, personal build167/runtime3fb0ff60… was installed.
+That delivery preserved the player/renderer contracts below, including the earlier
+idle-decoder and duplicate cue-style corrections. Its 66 Cocoa cases passed within
+the dated 2,795-test release gate. Read this with `ARCHITECTURE.md` and `GOTCHAS.md` before
 changing the deck; exact signed provenance and dated preservation checks remain
 in [HANDOFF](HANDOFF.md).
 
@@ -700,7 +737,8 @@ playback path.
 
 Files:
 
-- `native/SoundboxDeck.mm` — CoreAudio playback and Metal renderer.
+- `native/SoundboxDeck.mm` — CoreAudio playback and Metal renderer host.
+- `native/WaveformShader.h` — the included production Metal source literal.
 - `native/SoundboxDeck.h` — stable C ABI.
 - `desktop/native_deck.py` — small Qt-facing adapter over the native C ABI.
 - `build_native.sh` / `native/CMakeLists.txt` — arm64 macOS 14+ build.

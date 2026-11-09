@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import sys
 from pathlib import Path
 import time
@@ -45,6 +46,8 @@ def run(state: Path, report: Path) -> None:
     win.show()
 
     def exercise():
+        from soundbox.desktop_runtime import DESKTOP_MODULES
+
         count = win.model.rowCount()
         if not count:
             raise RuntimeError('Startup benchmark requires populated rows')
@@ -70,6 +73,17 @@ def run(state: Path, report: Path) -> None:
                                 'soundbox.dual_ipod', 'soundbox.cdj_export', 'soundbox.rockbox_media')
                                 if name in sys.modules],
             'settings_created': hasattr(win, '_settings_tabs'),
+            'settings_ready': (win._settings_tabs.count() == 6
+                               and len(win._global_my_settings.controls) == 44),
+            'artists_ready': getattr(win, '_artists_generation', None) is not None,
+            'artists_rows': sum(win.artists_view.topLevelItem(i).childCount()
+                                for i in range(win.artists_view.topLevelItemCount())),
+            'collection_rows': len(win._visible_collection_tracks()),
+            'desktop_runtime_missing': [name for name in DESKTOP_MODULES if name not in sys.modules],
+            'desktop_runtime_errors': list(win._desktop_runtime_errors),
+            'provider_diagnostic': win.providers.diagnostic,
+            # macOS reports ru_maxrss in bytes; this app targets macOS only.
+            'peak_rss_bytes': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         }, indent=2) + '\n')
         # Normal source refresh checkpoints these derived rows. Isolated mode
         # has no source reader, so checkpoint explicitly after stopping the clock.

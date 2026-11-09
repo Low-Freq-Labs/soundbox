@@ -1,4 +1,4 @@
-"""High-level, UI-facing API — the single surface the desktop app calls.
+"""UI-facing library presentation and filesystem-export composition helpers.
 
 Returns plain, JSON-serializable structures (dicts/lists), so the heavy modules
 stay UI-agnostic and unit-testable. All real logic lives in the other modules;

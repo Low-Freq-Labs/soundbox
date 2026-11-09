@@ -1,6 +1,9 @@
 # SoundBox device layouts
 
-Reviewed November5,2026 against installed responsiveness build167
+Reviewed November8,2026 against the completed cleanup and its preserved device
+contracts. Accepted personal build169 includes the source safeguards below;
+[HANDOFF](HANDOFF.md) records exact signed provenance and latest observed app state.
+The earlier November5 responsiveness evidence describes build167
 (runtime3fb0ff60…, signed base0075ab1/dirty=true). Build165/runtime7ffde716…
 and build163/published USB source `cf2ef5b` are earlier deliveries.
 Installed identity and remaining gates are in HANDOFF. Dated physical fixture
@@ -9,6 +12,16 @@ Older audits and hardware observations retain their
 dated scope; current installation and acceptance are in `HANDOFF.md`.
 Read this with `GOTCHAS.md` and the write contract at
 the top of `soundbox/sync.py` before changing device detection or export.
+
+Current source shares descriptor-pinned device publication: exclusive temporary
+files remain open through verification, flush/fsync and atomic replacement;
+cleanup removes only the operation's own stage. In-place artwork ranges reject
+symlinks and multiply linked targets. Optional Music/Playlists clutter cleanup
+also rejects redirected directories, and filesystem-device erase binds the mount
+identity before confirmation. Malformed disposable shadows/derivatives become
+cache misses; model detection bounds each SysInfo read. These checks preserve
+existing ownership, source separation and firmware commit order. Validation and
+installed status are recorded separately in [HANDOFF](HANDOFF.md).
 
 ## The simple model
 
@@ -60,7 +73,7 @@ membership; its idle badge remains playlist-based. Retained-media inventory is
 not a fresh integrity certificate. Existing codec, firmware, recovery and source
 boundaries remain. No iPod hardware was available. Its preceding runtime26f15fb4…
 passed2695tests; the subsequent whole-app runtime7ffde716… passed2779tests.
-Current build167 passes2795tests with exact fresh state/icon. HANDOFF has precise
+That build167 checkpoint passed2795tests with exact fresh state/icon. HANDOFF has precise
 delivery identities.
 
 The November4 responsiveness follow-up removes one redundant parse of the final
@@ -84,7 +97,7 @@ every captured partition of its physical disk; discovery waits until the native
 erase worker retires. The ordinary export lane remains serialized and retains
 fresh target/source and transactional guards. The preceding USB pass closed2639tests and both package
 profiles; the later iPod pass above retains these fixes. That audit records its
-dated state/icon preservation; HANDOFF records current build167 delivery.
+dated state/icon preservation; HANDOFF records the later current delivery.
 
 October29: the dedicated generic-USB exporter maintains classic Device Library
 and Plus together on writable FAT32/exFAT. It preserves unrelated native records

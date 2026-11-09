@@ -5,6 +5,7 @@ caller owns the shared source lane and rechecks the native catalog before the
 atomic replacement. Exact originals and receipts remain outside the music tree.
 """
 from copy import deepcopy
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -50,6 +51,16 @@ def _current_digest(path):
     if not before == opened == closed == identity(_regular(path)) or Path(path).resolve(strict=True) != path:
         raise ValueError('WAVE changed during verification')
     return value, before
+
+
+def _published_epoch(path, expected_sha256, guard):
+    digest, epoch = _current_digest(path)
+    if digest != expected_sha256:
+        raise ValueError('Converted WAVE changed before acknowledgement')
+    guard()
+    if identity(_regular(path)) != epoch:
+        raise ValueError('WAVE changed before acknowledgement')
+    return epoch
 
 
 def validate_receipt(receipt):
@@ -140,8 +151,24 @@ def _blocks(stream, info):
         yield np.frombuffer(raw, dtype='<f4').astype(np.float64)
 
 
+@contextmanager
+def _render_streams(source, target):
+    """Reject a source alias before truncating the opened destination inode."""
+    with Path(source).open('rb') as src:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT, 0o666)
+        with os.fdopen(descriptor, 'wb') as dst:
+            before, destination = os.fstat(src.fileno()), os.fstat(dst.fileno())
+            if (before.st_dev, before.st_ino) == (destination.st_dev, destination.st_ino):
+                raise ValueError('WAVE rendering requires separate source and destination files')
+            dst.truncate(0)
+            yield src, dst
+
+
 def render(source, target, *, reduce_gain=False, clip_overs=False):
     """Stream samples, preserve non-format/data chunks byte for byte and verify."""
+    source, target = Path(source), Path(target)
+    if source.resolve() == target.resolve() or (target.exists() and source.samefile(target)):
+        raise ValueError('WAVE rendering requires separate source and destination files')
     import numpy as np
     info = layout(source)
     if info is None:raise ValueError('Expected a float32 WAVE')
@@ -158,7 +185,7 @@ def render(source, target, *, reduce_gain=False, clip_overs=False):
     total = 12+sum(8+(16 if k == b'fmt ' else data_length if k == b'data' else n)
                    + ((16 if k == b'fmt ' else data_length if k == b'data' else n) & 1) for k, _, n in chunks)
     if total-8 > 0xffffffff:raise ValueError('Converted WAVE exceeds RIFF size')
-    with Path(source).open('rb') as src, Path(target).open('wb') as dst:
+    with _render_streams(source, target) as (src, dst):
         dst.write(b'RIFF'+struct.pack('<I', total-8)+b'WAVE')
         for kind, offset, length in chunks:
             if kind == b'fmt ':
@@ -226,7 +253,9 @@ def convert(path, root, operation_id, track_id, *, expected_sha256=None, reduce_
         if _sha(original) != receipt['before_sha256']:raise ValueError('Original WAVE recovery bytes changed')
         current, current_epoch = _current_digest(path)
         if current == receipt['after_sha256']:
-            receipt['epoch'] = current_epoch; guard(); return receipt
+            guard()
+            if identity(_regular(path)) != current_epoch:raise ValueError('WAVE changed before acknowledgement')
+            receipt['epoch'] = current_epoch; return receipt
         if current != receipt['before_sha256']:raise ValueError('WAVE changed during conversion recovery; original retained')
         stage = Path(receipt['stage'])
         if stage.parent != path.parent or not stage.name.startswith('.soundbox-wave-'):
@@ -236,7 +265,8 @@ def convert(path, root, operation_id, track_id, *, expected_sha256=None, reduce_
         guard()
         if identity(_regular(path)) != current_epoch:raise ValueError('WAVE changed before replacement')
         os.replace(stage,path); sync_dir(path.parent); _fault('replaced')
-        receipt['epoch'] = identity(path.stat()); atomic_bytes(receipt_path,json.dumps(receipt).encode())
+        receipt['epoch'] = _published_epoch(path,receipt['after_sha256'],guard)
+        atomic_bytes(receipt_path,json.dumps(receipt).encode())
         return receipt
     guard()
     with acquire_source(SourceContract(path,sha256=expected_sha256), directory) as snapshot:
@@ -273,7 +303,8 @@ def convert(path, root, operation_id, track_id, *, expected_sha256=None, reduce_
             if _current_digest(stage)[0] != receipt['after_sha256']:raise ValueError('Converted WAVE changed before replacement')
             if identity(_regular(path)) != receipt['before_epoch']:raise ValueError('WAVE changed before replacement')
             os.replace(stage,path); sync_dir(path.parent); _fault('replaced')
-            receipt['epoch'] = identity(path.stat()); atomic_bytes(receipt_path,json.dumps(receipt).encode())
+            receipt['epoch'] = _published_epoch(path,receipt['after_sha256'],guard)
+            atomic_bytes(receipt_path,json.dumps(receipt).encode())
             _fault('committed'); return receipt
         finally:
             if not journaled:stage.unlink(missing_ok=True)

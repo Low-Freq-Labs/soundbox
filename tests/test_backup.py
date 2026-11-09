@@ -29,7 +29,9 @@ def _make_data_dir(root: Path) -> Path:
 
 class BackupRoundtrip(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="bk_"))
+        area = tempfile.TemporaryDirectory(prefix="bk_")
+        self.addCleanup(area.cleanup)
+        self.tmp = Path(area.name)
         self.data = _make_data_dir(self.tmp)
 
     def test_export_zip_contents(self):

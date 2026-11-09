@@ -26,8 +26,12 @@ import ctypes
 from pathlib import Path
 import re
 import struct
-import threading
 from typing import Callable, Iterable
+
+from .cache_io import atomic_cache_bytes
+from .waveform_sections import (
+    encode_sections as _encode_sections, decode_sections as _decode_sections,
+)
 
 from soundbox.waveform_detail import (
     DETAIL_MODEL, DETAIL_RATE, DETAIL_DIVISORS, IMPORTED_COLOR_MODEL,
@@ -1248,7 +1252,6 @@ def update_grid_source(
     SoundBox constant-tempo grid keeps its spacing and is shifted so beat 1 is
     exactly 0:00. SoundBox-owned manual rows are never rewritten.
     """
-    tmp: Path | None = None
     try:
         record = _read_container_manifest(cache_dir, track_id, audio_path)
         if record is None:
@@ -1291,19 +1294,11 @@ def update_grid_source(
         encoded = json.dumps(
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
-        tmp = target.with_name(
-            f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_bytes(
-            _HEADER.pack(_manifest_magic(manifest), len(encoded))
-            + encoded + payload)
-        os.replace(tmp, target)
+        atomic_cache_bytes(
+            target, _HEADER.pack(_manifest_magic(manifest), len(encoded))
+            + encoded + payload, sync_file=False)
         return True
     except Exception:  # noqa: BLE001 - derived grid metadata is retryable
-        if tmp is not None:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
         return False
 
 
@@ -1311,7 +1306,6 @@ def update_imported_cues(
         cache_dir: str | Path, track_id: str, audio_path: str | Path,
         cues: list[dict]) -> bool:
     """Atomically replace imported cues while preserving every payload byte."""
-    tmp: Path | None = None
     try:
         record = _read_container_manifest(cache_dir, track_id, audio_path)
         if record is None:
@@ -1335,19 +1329,11 @@ def update_imported_cues(
         encoded = json.dumps(
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
-        tmp = target.with_name(
-            f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_bytes(
-            _HEADER.pack(_manifest_magic(manifest), len(encoded))
-            + encoded + payload)
-        os.replace(tmp, target)
+        atomic_cache_bytes(
+            target, _HEADER.pack(_manifest_magic(manifest), len(encoded))
+            + encoded + payload, sync_file=False)
         return True
     except Exception:  # noqa: BLE001 - imported metadata is always retryable
-        if tmp is not None:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
         return False
 
 
@@ -1410,44 +1396,6 @@ def is_ready(cache_dir: str | Path, track_id: str,
         return False
 
 
-def _encode_sections(sections: dict[str, bytes]) -> tuple[dict, bytes]:
-    import zstandard as zstd
-
-    compressor = zstd.ZstdCompressor(level=6, threads=0)
-    manifest_sections = {}
-    payload = bytearray()
-    for name, raw in sections.items():
-        compressed = compressor.compress(raw)
-        manifest_sections[name] = {
-            "offset": len(payload),
-            "size": len(compressed),
-            "raw_size": len(raw),
-            "sha256": hashlib.sha256(raw).hexdigest(),
-        }
-        payload.extend(compressed)
-    return manifest_sections, bytes(payload)
-
-
-def _decode_sections(raw: bytes, manifest: dict) -> dict[str, bytes] | None:
-    import zstandard as zstd
-
-    decoder = zstd.ZstdDecompressor()
-    sections = {}
-    for name, row in manifest.get("sections", {}).items():
-        try:
-            start = int(row["offset"])
-            end = start + int(row["size"])
-            unpacked = decoder.decompress(
-                raw[start:end], max_output_size=int(row["raw_size"]))
-            if (len(unpacked) != int(row["raw_size"])
-                    or hashlib.sha256(unpacked).hexdigest() != row["sha256"]):
-                return None
-            sections[name] = unpacked
-        except (KeyError, TypeError, ValueError, zstd.ZstdError):
-            return None
-    return sections
-
-
 def _fallback_signed_ranges(heights: bytes, encoding: str) -> tuple[bytes, bytes]:
     """Create a symmetric signed range for old/test inputs lacking V4 ranges."""
     import numpy as np
@@ -1466,7 +1414,6 @@ def _fallback_signed_ranges(heights: bytes, encoding: str) -> tuple[bytes, bytes
 def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
           data: dict, *, expected_epoch: list[int] | None = None) -> Path | None:
     """Atomically persist one complete, bounded-size V5 analysis record."""
-    tmp: Path | None = None
     try:
         source = Path(audio_path)
         source_stat = source.stat()
@@ -1608,20 +1555,14 @@ def store(cache_dir: str | Path, track_id: str, audio_path: str | Path,
         directory = Path(cache_dir)
         directory.mkdir(parents=True, exist_ok=True)
         target = cache_path(directory, track_id)
-        tmp = target.with_name(
-            f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_bytes(_HEADER.pack(_MAGIC, len(manifest)) + manifest + payload)
-        if expected_epoch is not None and source_epoch(source.stat()) != expected_epoch:
-            tmp.unlink()
-            return None
-        os.replace(tmp, target)
+        def require_source_epoch():
+            if expected_epoch is not None and source_epoch(source.stat()) != expected_epoch:
+                raise OSError('Audio changed before derived analysis publication')
+        atomic_cache_bytes(
+            target, _HEADER.pack(_MAGIC, len(manifest)) + manifest + payload,
+            sync_file=False, before_replace=require_source_epoch)
         return target
     except Exception:  # noqa: BLE001 - derived analysis is always rebuildable
-        if tmp is not None:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
         return None
 
 
@@ -1768,7 +1709,6 @@ def update_user_data(cache_dir: str | Path, track_id: str,
     it later.  Imported Rekordbox data therefore has a clean, tested ownership
     boundary before editing UI exists.
     """
-    tmp: Path | None = None
     try:
         record = _read_container_manifest(
             cache_dir, track_id, audio_path)
@@ -1791,19 +1731,11 @@ def update_user_data(cache_dir: str | Path, track_id: str,
         encoded = json.dumps(
             manifest, ensure_ascii=False, separators=(",", ":"),
             sort_keys=True).encode()
-        tmp = target.with_name(
-            f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_bytes(
-            _HEADER.pack(_manifest_magic(manifest), len(encoded))
-            + encoded + payload)
-        os.replace(tmp, target)
+        atomic_cache_bytes(
+            target, _HEADER.pack(_manifest_magic(manifest), len(encoded))
+            + encoded + payload, sync_file=False)
         return True
     except Exception:  # noqa: BLE001
-        if tmp is not None:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
         return False
 
 
@@ -2365,7 +2297,6 @@ def confirm_published_grid(cache_dir, track_id, audio_path, beats, detector_beat
     Only the exact captured detector or effective-draft grid may be promoted.
     Different/newer manual data stays intact; source SQL is never inferred here.
     """
-    tmp = None
     try:
         record = _read_container_manifest(cache_dir, track_id, audio_path)
         if record is None:return False
@@ -2378,11 +2309,8 @@ def confirm_published_grid(cache_dir, track_id, audio_path, beats, detector_beat
         manifest['beats']=list(beats)
         manifest['grid_import']=dict(source='rekordbox-anlz',fingerprint=grid_fingerprint(beats))
         encoded=json.dumps(manifest,ensure_ascii=False,separators=(',',':'),sort_keys=True).encode()
-        tmp=target.with_name(f'.{target.name}.{os.getpid()}.{threading.get_ident()}.tmp')
-        tmp.write_bytes(_HEADER.pack(_manifest_magic(manifest),len(encoded))+encoded+payload)
-        os.replace(tmp,target);return True
+        atomic_cache_bytes(target,_HEADER.pack(_manifest_magic(manifest),len(encoded))+encoded+payload,
+                           sync_file=False)
+        return True
     except Exception:
-        if tmp is not None:
-            try:tmp.unlink(missing_ok=True)
-            except OSError:pass
         return False

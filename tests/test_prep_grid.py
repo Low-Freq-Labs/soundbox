@@ -276,6 +276,7 @@ class GridInterface(unittest.TestCase):
         host = SimpleNamespace(lib=self.shared.lib, model=model, tag_controller=self.shared,
             _row_cache={'7': dict(bpm='90.00')}, _selected_ids=lambda: [],
             _cache_gen=8, _warm_timer=mock.Mock(), _sync_playlists_cache=None,
+            _schedule_artists_refresh=mock.Mock(), _shutting_down=False, _state_maintenance=False,
             _cache_library=mock.Mock(), _flash_status=mock.Mock(), _finish_tag_refresh=mock.Mock(),
             _finish_edit_status=mock.Mock())
         host._invalidate_rows = lambda ids: MainWindow._invalidate_rows(host, ids)

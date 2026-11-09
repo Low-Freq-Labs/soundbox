@@ -55,6 +55,23 @@ def prepare(state: Path, metadata: Path | None, count: int) -> None:
     libcache.dump(lib, state / 'libcache.json')
 
 
+def validate_result(result: dict, *, require_desktop_ready: bool = False) -> None:
+    if not all(result.get(key) for key in ('painted', 'search_matched', 'rows')):
+        raise RuntimeError('Browser readiness failed')
+    if require_desktop_ready:
+        ready = (all(result.get(key) for key in ('native', 'selected', 'settings_ready', 'artists_ready'))
+                 and result.get('collection_rows', 0) > 0
+                 and result.get('artists_rows') == result.get('collection_rows')
+                 and result.get('desktop_runtime_missing') == []
+                 and result.get('desktop_runtime_errors') == []
+                 and result.get('provider_diagnostic') == ''
+                 and result.get('device_surfaces') == []
+                 and result.get('device_backends') == []
+                 and result.get('stock_converter_loaded') is False)
+        if not ready:
+            raise RuntimeError('Desktop readiness or unattached-device isolation failed; inspect launch report')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', type=Path, required=True)
@@ -62,6 +79,8 @@ def main() -> None:
     parser.add_argument('--metadata-from', type=Path)
     parser.add_argument('--tracks', type=int, default=3740)
     parser.add_argument('--runs', type=int, default=20)
+    parser.add_argument('--require-desktop-ready', action='store_true',
+                        help='Require current eager desktop readiness and unattached-device isolation')
     args = parser.parse_args()
     if args.runs < 1 or args.tracks < 1:
         parser.error('runs and tracks must be positive')
@@ -83,8 +102,7 @@ def main() -> None:
             (args.out / f'{label}.log').write_text(run.stdout + run.stderr)
             run.check_returncode()
             result = json.loads(report.read_text())
-            if not all(result[key] for key in ('painted', 'search_matched', 'rows')):
-                raise RuntimeError('Browser readiness failed')
+            validate_result(result, require_desktop_ready=args.require_desktop_ready)
             if index:
                 results.append(result)
             else:
@@ -96,6 +114,11 @@ def main() -> None:
                'p95_ms': times[math.ceil(len(times) * .95) - 1],
                'minimum_ms': times[0], 'maximum_ms': times[-1],
                'under_1500_ms': times[math.ceil(len(times) * .95) - 1] < 1500}
+    summary['desktop_readiness_required'] = args.require_desktop_ready
+    memory = sorted(row['peak_rss_bytes'] for row in results if 'peak_rss_bytes' in row)
+    if memory:
+        summary['peak_rss_bytes_median'] = (memory[(len(memory)-1)//2] + memory[len(memory)//2]) / 2
+        summary['peak_rss_bytes_maximum'] = memory[-1]
     (args.out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(json.dumps(summary, indent=2))
 

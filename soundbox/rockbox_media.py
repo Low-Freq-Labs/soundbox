@@ -48,6 +48,7 @@ ART_PROFILE = "rockbox-paletted8-bmp-universal-v6"
 
 
 from .source_acquisition import SourceContract, acquire_source, SourceAcquisitionError
+from .cache_io import atomic_cache_bytes as _atomic_write
 
 class RockboxMediaError(RuntimeError):
     pass
@@ -59,20 +60,6 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _atomic_write(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.sbpart")
-    try:
-        with tmp.open("wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    except OSError:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 class InterruptedFileVerifier:
@@ -766,7 +753,8 @@ class RockboxMediaCache:
         try:
             row = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (
-                row.get("profile") == profile
+                isinstance(row, dict)
+                and row.get("profile") == profile
                 and row.get("source_sha256") == source_hash
                 and int(row.get("removed_images") or 0) == count
                 and row.get("title") == (title or "")
@@ -785,7 +773,7 @@ class RockboxMediaCache:
                 return PreparedRockboxMedia(
                     original, payload, True, count, payload.stat().st_size,
                     str(row["payload_sha256"]), profile)
-        except (OSError, ValueError, TypeError, RockboxMediaError):
+        except (OSError, ValueError, TypeError, OverflowError, RockboxMediaError):
             pass
 
         record_metric("transformations")
@@ -1188,7 +1176,15 @@ class RockboxArtworkCache:
         self._source_index_path = self.root / ART_PROFILE / "source-index.json"
         try:
             raw = json.loads(self._source_index_path.read_text(encoding="utf-8"))
-            self._source_index = raw if isinstance(raw, dict) else {}
+            self._source_index = {
+                key: row for key, row in (raw.items() if isinstance(raw, dict) else ())
+                if isinstance(row, dict)
+                and all(type(row.get(field)) is int
+                        for field in ("size", "mtime_ns", "ctime_ns"))
+                and isinstance(row.get("source_sha256"), str)
+                and len(row["source_sha256"]) == 64
+                and all(c in "0123456789abcdef" for c in row["source_sha256"])
+            }
         except (OSError, ValueError):
             self._source_index = {}
         self._source_index_dirty = False
@@ -1245,7 +1241,8 @@ class RockboxArtworkCache:
         try:
             row = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (
-                row.get("profile") == ART_PROFILE
+                isinstance(row, dict)
+                and row.get("profile") == ART_PROFILE
                 and int(row.get("side") or 0) == side
                 and row.get("source_sha256") == source_hash
                 and payload.is_file()
@@ -1258,7 +1255,7 @@ class RockboxArtworkCache:
                 return PreparedRockboxArtwork(
                     original, payload, payload.stat().st_size,
                     str(row["sha256"]), side)
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, OverflowError):
             pass
         encoded = artencode.to_rockbox_cover(original.read_bytes(), side)
         if encoded is None:

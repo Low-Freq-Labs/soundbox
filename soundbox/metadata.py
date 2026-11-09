@@ -1,7 +1,7 @@
 """Best-effort metadata derivation.
 
 This NEVER modifies source files or tags. It only computes a display/foldering
-value from data already in the rekordbox XML.
+value from the loaded library or imported records.
 
 Artist derivation strategy, in priority order:
   1. A named EDITOR/REMIXER in brackets — for DJ edits the artist you care about

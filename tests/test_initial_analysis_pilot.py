@@ -10,7 +10,7 @@ from unittest import mock
 
 import test_analysis_workspace as fixtures
 import test_fixture_analysis as packets
-from test_registration_proof import wave
+from tests.support.audio import wave
 from research.native_library import analysis_pilot as pilot
 from research.native_library import fixture_analysis, registration
 from research.cdj_export.playlist_transaction import _inventory, _sha

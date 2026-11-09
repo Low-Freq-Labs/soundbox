@@ -1,19 +1,54 @@
 """Shared choice presentation keeps standard Qt activation and right checks."""
 import unittest
+from unittest import mock
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QRect, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem, QWidget
+from shiboken6 import delete, isValid
 
 from desktop import theme
-from desktop.choices import ComboBox, Menu
+from desktop.choices import ComboBox, Menu, exec_transient_menu
 
 
 class Choices(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_transient_menus_release_actions_and_submenus_after_activation(self):
+        host = QWidget()
+        self.addCleanup(host.deleteLater)
+        activated = mock.Mock()
+        for _ in range(20):
+            menu = Menu(host)
+            action = menu.addMenu('Nested').addAction('Choose', activated)
+            with mock.patch.object(menu, 'exec', side_effect=lambda *_: action.trigger()):
+                exec_transient_menu(menu, host.pos())
+        self.assertEqual(activated.call_count, 20)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.assertEqual(host.findChildren(Menu), [])
+
+    def test_empty_or_failed_transient_menus_are_also_retired(self):
+        host = QWidget()
+        self.addCleanup(host.deleteLater)
+        empty, failed = Menu(host), Menu(host)
+        failed.addAction('Choose')
+        exec_transient_menu(empty, host.pos())
+        with mock.patch.object(failed, 'exec', side_effect=RuntimeError('popup failed')):
+            with self.assertRaisesRegex(RuntimeError, 'popup failed'):
+                exec_transient_menu(failed, host.pos())
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.assertFalse(isValid(empty))
+        self.assertFalse(isValid(failed))
+
+    def test_transient_action_can_destroy_its_own_parent(self):
+        host = QWidget()
+        menu = Menu(host); menu.addAction('Close')
+        with mock.patch.object(menu, 'exec', side_effect=lambda *_: delete(host)):
+            exec_transient_menu(menu)
+        self.assertFalse(isValid(menu))
 
     def test_combo_popup_checks_current_value_on_right_and_keeps_keyboard_selection(self):
         combo = ComboBox()

@@ -151,15 +151,18 @@ class FormatLifecycleTests(unittest.TestCase):
     def test_scan_deferral_binds_only_requested_usb_and_rejects_its_own_remount(self):
         for changed in ('/fixture/OTHER','/fixture/USB'):
             with self.subTest(changed=changed):
-                callbacks=[];resume=mock.Mock()
-                host=SimpleNamespace(_dev_scan_worker=SimpleNamespace(finished=SimpleNamespace(connect=callbacks.append)),
+                resume=mock.Mock();worker=SimpleNamespace(finished=mock.Mock())
+                host=SimpleNamespace(_dev_scan_worker=worker,
                     _pending_device_operation=None,_device_mount_tokens={'/fixture/USB':1,'/fixture/OTHER':2},
                     _device_profiles={'/fixture/USB':SimpleNamespace(kind='generic_usb')},
+                    _device_coordinator=SimpleNamespace(eject_pending=False),
                     _shutting_down=False,progress=mock.Mock(),cancel_btn=mock.Mock(),
                     _start_pulse=mock.Mock(),_stop_pulse=mock.Mock())
                 self.assertTrue(MainWindow._defer_device_operation_until_scan_finishes(host,resume,target='/fixture/USB'))
+                worker.finished.connect.assert_not_called()
                 host._device_mount_tokens[changed]+=10
-                callbacks[0]()
+                host._dev_scan_worker=None
+                worker._operation_resume_callbacks[0](True)
                 self.assertEqual(resume.call_count,int(changed!='/fixture/USB'))
                 self.assertIsNone(host._pending_device_operation)
                 self.assertFalse(host._exporting)

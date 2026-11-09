@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,7 +77,7 @@ def _guarded_manifest_path(device_root, *, create: bool = False) -> tuple[Path, 
     if not create and not root.exists():
         raise FileNotFoundError(root)
     session = DeviceSession(root, [], create=create)
-    return session.guard(manifest_path(root)), session
+    return session.guard(manifest_path(session.target)), session
 
 
 def has_composite_ownership(device_root) -> bool:
@@ -295,7 +294,6 @@ def composite_playlist_entries(
 
 def save(device_root, manifest: dict) -> None:
     p, session = _guarded_manifest_path(device_root, create=True)
-    p.parent.mkdir(parents=True, exist_ok=True)
     output = manifest
     if isinstance(manifest.get("files"), dict):
         output = {
@@ -307,20 +305,7 @@ def save(device_root, manifest: dict) -> None:
         }
     encoded = json.dumps(
         output, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
-    tmp = session.guard(p.with_name(f".{p.name}.{os.getpid()}.sbpart"))
-    try:
-        with tmp.open("wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        session.guard(p)
-        os.replace(tmp, p)
-    except OSError:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    session.atomic_write(p, encoded)
 
 
 def playlist_key(playlist) -> str:

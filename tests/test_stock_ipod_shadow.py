@@ -50,6 +50,46 @@ class StockIpodShadowStoreTests(unittest.TestCase):
         }), encoding="utf-8")
         self.assertIsNone(self.store.load(identity))
 
+    def test_malformed_generation_is_a_cache_miss_without_rewriting_evidence(self):
+        identity = 'stock-ipod-v1:malformed-counter'
+        shadow = self.store.committed(
+            identity_key=identity, model='MA446', serial_number='',
+            database_sha256='a' * 64, artwork_database_sha256='',
+            ithmb={}, sources={}, artwork={}, playlists={})
+        path = self.store.path_for(identity)
+        for generation in ('bad', [1], {'counter': 1}, float('inf'), float('nan')):
+            with self.subTest(generation=generation):
+                raw = json.dumps(dict(shadow.as_dict(), generation=generation)).encode()
+                path.write_bytes(raw)
+                self.assertIsNone(self.store.load(identity))
+                self.assertEqual(path.read_bytes(), raw)
+
+    def test_malformed_nested_acceleration_rows_miss_without_rewriting_evidence(self):
+        identity = 'stock-ipod-v1:malformed-rows'
+        shadow = self.store.committed(
+            identity_key=identity, model='MA446', serial_number='',
+            database_sha256='a' * 64, artwork_database_sha256='',
+            ithmb={}, sources={}, artwork={}, playlists={})
+        path = self.store.path_for(identity)
+        invalid = (
+            ('ithmb', {'F1028_1.ithmb': {'size': 'bad', 'mtime_ns': 1}}),
+            ('sources', {'/music/song.wav': {'source_size': float('inf')}}),
+            ('sources', {'/music/song.wav': {'dbid': {'id': 1}}}),
+            ('artwork', {'bad-id': {'image_id': 1}}),
+            ('artwork', {'1': {'offsets': {'1028': 'bad'}}}),
+            ('artwork', {'1': {'offsets': [1, 2]}}),
+            ('playlists', {'playlist': {'folder_path': None}}),
+            ('playlists', {'playlist': {'folder_path': ['Music', 1]}}),
+            ('playlists', {'playlist': {'tracks': None}}),
+            ('sources', {'/music/song.wav': ['invalid row']}),
+        )
+        for key, rows in invalid:
+            with self.subTest(key=key, rows=rows):
+                raw = json.dumps({**shadow.as_dict(), key: rows}).encode()
+                path.write_bytes(raw)
+                self.assertIsNone(self.store.load(identity))
+                self.assertEqual(path.read_bytes(), raw)
+
 
 if __name__ == "__main__":
     unittest.main()

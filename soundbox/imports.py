@@ -179,11 +179,20 @@ def copy_from_device(
 
 def _same_import_payload(path: Path, size: int, digest: str, *, should_cancel=lambda: False) -> bool:
     """Exact, read-only reuse of an existing Mac-side import, never size alone."""
+    return _payload_digest(path, size, should_cancel=should_cancel) == digest
+
+
+def _payload_digest(path: Path, size: int, *, should_cancel=lambda: False) -> str | None:
+    """Hash one regular file against stable before/opened/closed/after epochs.
+
+    Used for local import reuse and explicit relink ambiguity checks. This
+    observation grants no native registration or device ownership authority.
+    """
     from .operation_control import checkpoint
     try:
         before = path.lstat()
         if not stat.S_ISREG(before.st_mode) or before.st_size != size:
-            return False
+            return None
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, 'rb') as stream:
             opened = os.fstat(stream.fileno())
@@ -202,10 +211,12 @@ def _same_import_payload(path: Path, size: int, digest: str, *, should_cancel=la
         after = path.lstat()
         def epoch(value):
             return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
-        return (read == size and epoch(before) == epoch(opened) == epoch(closed) == epoch(after)
-                and stat.S_ISREG(after.st_mode) and actual.hexdigest() == digest)
+        if (read == size and epoch(before) == epoch(opened) == epoch(closed) == epoch(after)
+                and stat.S_ISREG(after.st_mode)):
+            return actual.hexdigest()
     except FileNotFoundError:
-        return False
+        pass
+    return None
 
 
 def duration_seconds(path: Path) -> int:
@@ -352,55 +363,82 @@ def search_roots(imported: dict) -> list[Path]:
 
 def _index(roots: list[Path], cap: int = 200_000):
     """One walk per root: audio files by lowercase name and by (size, ext).
-    Hidden dirs skipped; `cap` bounds pathological trees."""
+    Prune hidden directories and bound all visited entries, not only audio."""
+    from .operation_control import checkpoint
+
     by_name: dict[str, list[Path]] = {}
     by_size: dict[tuple[int, str], list[Path]] = {}
     seen = 0
     for root in roots:
-        for p in root.rglob("*"):
-            if seen >= cap:
-                return by_name, by_size
+        pending = [root]
+        while pending:
+            directory = pending.pop()
             try:
-                rel_parts = p.relative_to(root).parts
-            except ValueError:
-                continue
-            if any(part.startswith(".") for part in rel_parts):
-                continue
-            if not is_audio(p) or not p.is_file():
-                continue
-            seen += 1
-            by_name.setdefault(p.name.lower(), []).append(p)
-            try:
-                by_size.setdefault((p.stat().st_size, p.suffix.lower()), []).append(p)
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        checkpoint()
+                        if seen >= cap:
+                            return by_name, by_size
+                        seen += 1
+                        if entry.name.startswith('.'):
+                            continue
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                pending.append(Path(entry.path))
+                                continue
+                            p = Path(entry.path)
+                            if not is_audio(p) or not entry.is_file():
+                                continue
+                            by_name.setdefault(p.name.lower(), []).append(p)
+                            by_size.setdefault((entry.stat().st_size, p.suffix.lower()), []).append(p)
+                        except OSError:
+                            continue
             except OSError:
-                pass
+                continue
     return by_name, by_size
 
 
 def find_moved(lost: dict, roots: list[Path]) -> dict[str, Path]:
     """tid -> new location for files the user moved. Matching, strictest first:
     exact filename (case-insensitive), disambiguated by recorded byte size;
-    then a unique size+extension match (catches a renamed file). Same name AND
-    same size in several places = duplicate copies — take the shallowest.
-    Truly ambiguous stays missing: never guess a wrong file onto the iPod."""
+    then a unique size+extension match (catches a renamed file). Multiple
+    same-name/size candidates must have identical, stably read bytes before
+    choosing the shallowest copy. Different or unstable files stay unresolved.
+    Unique candidates require no payload read."""
     by_name, by_size = _index([Path(r) for r in roots])
     found: dict[str, Path] = {}
+    def live(candidates):
+        result = []
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    result.append((candidate, candidate.stat().st_size))
+            except OSError:
+                continue
+        return result
     for tid, rec in lost.items():
         old = Path(str(rec.get("path", "")))
         size = int(rec.get("size", 0) or 0)
-        cands = list(by_name.get(old.name.lower(), []))
+        named = live(by_name.get(old.name.lower(), []))
+        cands = [path for path, _size in named]
         if size and cands:
-            sized = [c for c in cands if c.stat().st_size == size]
+            sized = [path for path, actual_size in named if actual_size == size]
             if sized:
                 cands = sized
             elif len(cands) > 1:
                 cands = []  # several same-name files, none the right size
         if not cands and size:
-            cands = list(by_size.get((size, old.suffix.lower()), []))
+            cands = [path for path, actual_size in live(by_size.get((size, old.suffix.lower()), []))
+                     if actual_size == size]
             if len(cands) != 1:
                 cands = []  # rename rescue only when it's unambiguous
         if len(cands) == 1:
             found[tid] = cands[0]
         elif len(cands) > 1 and size:
-            found[tid] = min(cands, key=lambda p: (len(p.parts), str(p)))
+            try:
+                digests = [_payload_digest(path, size) for path in cands]
+            except OSError:
+                continue
+            if digests[0] is not None and all(value == digests[0] for value in digests):
+                found[tid] = min(cands, key=lambda p: (len(p.parts), str(p)))
     return found

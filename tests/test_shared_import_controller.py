@@ -16,8 +16,8 @@ from soundbox.library import Library, Playlist, Track
 from soundbox.rekordbox_registration_store import RegistrationAuthority, RegistrationStore
 from soundbox.rekordbox_playlist_store import PlaylistAuthority, PlaylistStore
 from soundbox.rekordbox_write import _connect, _rows, _state
-from test_registration_pilot import source_fixture
-from test_registration_proof import wave
+from tests.support.native_library import source_fixture
+from tests.support.audio import wave
 from test_playlist_transaction import fixture as playlist_fixture
 
 

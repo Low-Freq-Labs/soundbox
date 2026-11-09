@@ -3,15 +3,15 @@
 from pathlib import Path
 import unittest
 
+from tests.support.native_source import native_deck_source, waveform_shader
+
 
 class NativeWaveformShader(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        source = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        source = native_deck_source()
         cls.source = source
-        cls.shader = source.split('@R"METAL(', 1)[1].split(")METAL\"", 1)[0]
+        cls.shader = waveform_shader(source)
 
     def test_every_zoom_uses_one_waveform_fragment_path(self):
         self.assertIn("inline WaveSurface filtered_wave_surface", self.shader)
@@ -543,9 +543,7 @@ class NativeWaveformShader(unittest.TestCase):
             "vivid_wave_coverage(surface.coverage)", fragment)
 
     def test_beat_grid_has_edge_ticks_and_spacing_based_close_guides(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         self.assertIn("beats[index + 1] - beats[index]", native)
         self.assertIn("beats[index] - beats[index - 1]", native)
         self.assertIn("v[i].beatKind = downbeat ? 2u : 1u;", native)
@@ -580,9 +578,7 @@ class NativeWaveformShader(unittest.TestCase):
                 self.assertLess(density, 4)  # available attribute samples/pixel
 
     def test_scrolling_grid_lines_use_analytic_subpixel_coverage(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         helper = native.split(
             "static void addGridRect", 1
         )[1].split(
@@ -611,9 +607,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("round(", grid)
 
     def test_srgb_attachment_encodes_final_rgb_blend_and_linear_blue_grid(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         self.assertIn(
             "metalLayer_.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB",
             native,
@@ -868,9 +862,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("polarityHeight", kernel)
 
     def test_color_pyramid_is_amplitude_weighted(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         pyramid = native.split(
             "static std::vector<WaveSample> buildWavePyramid", 1
         )[1].split(
@@ -885,9 +877,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("p.overview != 0", grid)
         self.assertIn("u.durationSeconds * 1000.0", grid)
         self.assertIn("p.yPixels < 0.0", grid)
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         cues = native.split("bool setCues", 1)[1].split(
             "bool setDetailAnalysis", 1)[0]
         self.assertIn("addCueLetter(", cues)
@@ -898,9 +888,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("6.0f, -0.01f", cues)
 
     def test_session_cue_has_arrow_only_in_overview_and_detail(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         session = native.split("bool setSessionCue", 1)[1].split(
             "bool setCues", 1)[0]
         self.assertIn("0.941f", session)
@@ -913,9 +901,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("sb_deck_set_session_cue", native)
 
     def test_native_does_not_remix_the_persisted_band_master(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         spectral = native.split(
             "bool setSpectralAnalysis", 1
         )[1].split(
@@ -963,9 +949,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("filtered_envelope_coverage(", fragment)
         self.assertNotIn("texture2d<", fragment)
         self.assertNotIn(".sample(", fragment)
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         draw = native.split("void draw(CAMetalDisplayLinkUpdate", 1)[1].split(
             "private:", 1)[0]
         self.assertIn(
@@ -995,9 +979,7 @@ class NativeWaveformShader(unittest.TestCase):
         )
 
     def test_exact_drawable_trace_is_bounded_and_has_no_frame_path_io(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         draw = native.split("void draw(CAMetalDisplayLinkUpdate", 1)[1].split(
             "private:", 1)[0]
         self.assertIn(
@@ -1066,9 +1048,7 @@ class NativeWaveformShader(unittest.TestCase):
             "p.songSeconds - u.currentSeconds", grid)
 
     def test_audio_clock_corrections_change_velocity_not_position(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         clock = native.split(
             "void updateVisualClock", 1
         )[1].split(
@@ -1080,16 +1060,12 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertNotIn("visualAnchorFrame_.fetch_add", clock)
 
     def test_display_motion_uses_the_future_presentation_timestamp(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         self.assertIn(
             "predictedFrame(update.targetPresentationTimestamp)", native)
 
     def test_mouse_hold_uses_the_drawable_already_presented(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         hold = native.split("uint64_t beginPreviewHold()", 1)[1].split(
             "void beginWaveformUpdate", 1
         )[0]
@@ -1110,9 +1086,7 @@ class NativeWaveformShader(unittest.TestCase):
         self.assertIn("preferredFrameLatency = 1.0f", native)
 
     def test_staged_waveform_buffers_have_one_atomic_visible_commit(self):
-        native = (
-            Path(__file__).parents[1] / "native" / "SoundboxDeck.mm"
-        ).read_text()
+        native = native_deck_source()
         header = (
             Path(__file__).parents[1] / "native" / "SoundboxDeck.h"
         ).read_text()

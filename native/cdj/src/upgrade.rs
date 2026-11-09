@@ -29,7 +29,10 @@ pub fn upgrade(root:&Path,cues:&serde_json::Value)->Result<(),Box<dyn Error>> {
         if let Some(color)=profile.colors.iter_mut().find(|c|c.id==id) {
             // Read the native string using its offset in the original page.
             let table=pdb.table(PageType::Colors).ok_or("missing colors")?;
-            if let Some(source)=pdb.rows(table).into_iter().find(|r|bytes[r.offset+4]==row[4]){color.name=pdb.string_at(source.offset+8);}
+            for source in pdb.rows(table) {
+                let id=*bytes.get(source.offset+4).ok_or("short classic color row")?;
+                if id==row[4] {color.name=pdb.string_at(source.offset+8);break;}
+            }
         }
     }
     let path=root.join("PIONEER/rekordbox/exportLibrary.db");
@@ -69,7 +72,8 @@ pub fn upgrade(root:&Path,cues:&serde_json::Value)->Result<(),Box<dyn Error>> {
     let master=ext.table(PageType::PlaylistTree).and_then(|t|ext.rows(t).first().copied()).map_or(0,|r|ext.u4_at(r,24));
     if let Some(table)=ext.table(PageType::Albums) {
         for r in ext.rows(table) {
-            let name=ext.string_at(r.offset+usize::from(ext_bytes[r.offset+29]));
+            let string_offset=*ext_bytes.get(r.offset+29).ok_or("short classic tag row")?;
+            let name=ext.string_at(r.offset+usize::from(string_offset));
             builder.add_my_tag(i64::from(ext.u4_at(r,20)),i64::from(ext.u4_at(r,16)),&name,
                 i64::from(ext_bytes[r.offset+27]),i64::from(ext.u4_at(r,12)))?;
         }
@@ -79,4 +83,40 @@ pub fn upgrade(root:&Path,cues:&serde_json::Value)->Result<(),Box<dyn Error>> {
     }
     builder.finish(&property.device_name,&property.created_date,master)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncated_captured_tag_row_returns_an_error_without_panicking() {
+        let root = tempfile::tempdir().unwrap();
+        rbl_export::create_library(root.path(), None, &[], None).unwrap();
+        let catalogs = root.path().join("PIONEER/rekordbox");
+        std::fs::remove_file(catalogs.join("exportLibrary.db")).unwrap();
+
+        let mut file = rbl_pdb::build::FileBuilder::new(4096);
+        file.add_table(3, &[vec![0; 30]]);
+        let mut bytes = file.finish();
+        let page = {
+            let pdb = Pdb::parse(&bytes).unwrap();
+            pdb.rows(pdb.table(PageType::Albums).unwrap())[0].page_offset
+        };
+        bytes.truncate(page + 4096);
+        // The pinned reader admits a present row whose first byte is in the
+        // file, without proving that its fixed fields also fit before EOF.
+        bytes[page+4096-6..page+4096-4]
+            .copy_from_slice(&(4096_u16-41).to_le_bytes());
+        let pdb = Pdb::parse(&bytes).unwrap();
+        assert_eq!(pdb.rows(pdb.table(PageType::Albums).unwrap())[0].offset,
+                   bytes.len()-1);
+        std::fs::write(catalogs.join("exportExt.pdb"), &bytes).unwrap();
+
+        let result = std::panic::catch_unwind(|| upgrade(root.path(), &serde_json::json!({})));
+        let error = result.expect("malformed local rows must fail without a panic")
+            .expect_err("truncated tag row must be rejected");
+        assert_eq!(error.to_string(), "short classic tag row");
+        assert_eq!(std::fs::read(catalogs.join("exportExt.pdb")).unwrap(), bytes);
+    }
 }

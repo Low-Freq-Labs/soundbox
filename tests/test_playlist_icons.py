@@ -2,7 +2,6 @@
 from copy import deepcopy
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +11,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QMainWindow,QTreeWidgetItem
 
 from desktop.playlist_folders import PlaylistFoldersMixin
+from desktop.choices import Menu
 from desktop.rekordbox_playlists import NativePlaylistsMixin
 from desktop.trees import (UnifiedPlaylistTree,ARTISTS_ROLE,COLLECTION_ROLE,CUSTOM_ROLE,
     CUSTOM_FOLDER_ROLE,NATIVE_TREE_ROLE,PATH_ROLE,RB_NODE_KIND_ROLE,RB_NODE_ROLE,
@@ -103,12 +103,15 @@ class PlaylistIcons(unittest.TestCase):
         w=self.window;t=w.tree;t.setCurrentItem(w.local)
         QTest.mouseClick(t.viewport(),Qt.RightButton,pos=w.icon_point(w.playlist))
         self.assertIs(t.currentItem(),w.local)
+        regular_menu=Menu(w);regular_menu.addAction('Rename')
         with mock.patch('desktop.rekordbox_playlists.Menu.exec') as popup, \
-                mock.patch.object(w,'_native_menu',return_value=SimpleNamespace(exec=mock.Mock())) as regular:
+                mock.patch.object(w,'_native_menu',return_value=regular_menu) as regular, \
+                mock.patch.object(regular_menu,'deleteLater',wraps=regular_menu.deleteLater) as retire:
             w._native_tree_menu(w.icon_point(w.playlist))
             popup.assert_called_once();regular.assert_not_called()
             w._native_tree_menu(t.visualItemRect(w.playlist).center())
             regular.assert_called_once_with(w.playlist)
+            self.assertEqual(popup.call_count,2);retire.assert_called_once_with()
 
     def test_uuid_and_library_scope_prevent_reusing_another_playlist_preference(self):
         w=self.window;index=w.index(w.playlist)

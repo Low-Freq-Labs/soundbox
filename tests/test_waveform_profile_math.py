@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import unittest
 
+from tests.support.native_source import native_deck_source
+
 
 def profile_errors(source: str) -> dict[tuple[int, int], tuple[float, int]]:
     compiler = shutil.which("clang++")
@@ -81,7 +83,7 @@ int main() {
 
 class WaveformProfileMath(unittest.TestCase):
     def test_complete_corners_preserve_peaks_through_fractional_motion(self):
-        source = (Path(__file__).parents[1] / "native/SoundboxDeck.mm").read_text()
+        source = native_deck_source()
         for (mode, zoom), (error, missing) in profile_errors(source).items():
             with self.subTest(mode=mode, zoom=zoom):
                 self.assertLess(error, 1e-6)

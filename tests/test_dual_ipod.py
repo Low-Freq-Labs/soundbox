@@ -2508,10 +2508,10 @@ class DualIpodSyncTests(unittest.TestCase):
         )
         real_replace = os.replace
 
-        def fail_unsafe_replace(source, destination):
+        def fail_unsafe_replace(source, destination, **kwargs):
             if Path(source).resolve() == unsafe_path.resolve():
                 raise OSError("injected orphan cleanup failure")
-            return real_replace(source, destination)
+            return real_replace(source, destination, **kwargs)
 
         with mock.patch("soundbox.dual_ipod.os.replace", fail_unsafe_replace):
             with self.assertRaisesRegex(OSError, "orphan cleanup failure"):

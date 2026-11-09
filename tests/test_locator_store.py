@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from test_registration_pilot import source_fixture
-from test_registration_proof import wave
+from tests.support.native_library import source_fixture
+from tests.support.audio import wave
 from soundbox import rekordbox_locator_store as locator,rekordbox_cue_store as cues,rekordbox_tags as tags
 from soundbox.rekordbox_write import _connect,_state,ConflictError,RecoveryRequired,WriteProofError
 

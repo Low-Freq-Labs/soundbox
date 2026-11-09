@@ -3,7 +3,8 @@
 
 No default source, automatic approval, production authority provisioning, audio
 access, native UI control or device writes. Keep the reviewed plan and approval
-for explicit recovery. General source playlist/analysis integration stays gated.
+for explicit recovery. This historical pilot never grants ordinary source-write
+authority; production playlist and initial-analysis stores have separate gates.
 """
 from __future__ import annotations
 

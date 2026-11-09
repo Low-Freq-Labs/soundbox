@@ -1776,7 +1776,7 @@ class PlayerBar(QWidget):
         self.set_track_navigation(False, False)
         if self._native_error:
             QTimer.singleShot(
-                0, lambda: self.playback_error.emit(self._native_error))
+                0, self, lambda: self.playback_error.emit(self._native_error))
 
     # ---- public API ----
     @staticmethod
@@ -2728,7 +2728,7 @@ class PlayerBar(QWidget):
                         and track_id == self._track_id):
                     self.track_ended.emit(track_id)
 
-            QTimer.singleShot(0, advance)
+            QTimer.singleShot(0, self, advance)
 
     def _try_pending_autoplay(self):
         """Set a newly selected track on its first grid beat, then maybe play."""

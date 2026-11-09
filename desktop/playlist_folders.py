@@ -4,7 +4,7 @@ from uuid import uuid4
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QInputDialog, QMessageBox, QTreeWidgetItem
-from .choices import Menu as QMenu
+from .choices import Menu as QMenu, exec_transient_menu
 
 from soundbox import playlist_folders as folders
 from .trees import CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, NATIVE_TREE_ROLE
@@ -170,17 +170,17 @@ class PlaylistFoldersMixin:
         menu = QMenu(self); parent = self._local_parent()
         menu.addAction('New Playlist', lambda:self._new_local_playlist(parent))
         menu.addAction('New Folder', lambda:self._new_local_folder(parent))
-        menu.exec(QCursor.pos())
+        exec_transient_menu(menu, QCursor.pos())
 
     def _soundbox_context_menu(self, pos):
         icon=self.sb_tree.playlist_icon_item_at(pos)
         chooser=getattr(self,'_playlist_icon_menu',None)
         menu=chooser(self.sb_tree,icon) if chooser and icon is not None else None
         if menu is not None:
-            menu.exec(self.sb_tree.viewport().mapToGlobal(pos));return
+            exec_transient_menu(menu, self.sb_tree.viewport().mapToGlobal(pos));return
         item = self.sb_tree.itemAt(pos)
         menu = self._local_context_menu(item)
-        menu.exec(self.sb_tree.viewport().mapToGlobal(pos))
+        exec_transient_menu(menu, self.sb_tree.viewport().mapToGlobal(pos))
 
     def _local_context_menu(self, item):
         parent = self._local_parent(item) if item else ''

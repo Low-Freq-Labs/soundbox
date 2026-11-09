@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -21,6 +23,8 @@ from soundbox.stock_artwork import (
     validate_stock_artwork,
     StockArtworkSegment,
     _combined_sha256,
+    _u32,
+    read_stock_artwork_slots,
 )
 
 
@@ -85,6 +89,54 @@ class StockArtwork(unittest.TestCase):
         rebuilt = self.cache.prepare(self.image)
         self.assertEqual(victim.stat().st_size, 100 * 100 * 2)
         self.assertEqual(rebuilt.cache_key, prepared.cache_key)
+
+    def test_malformed_cached_metadata_is_rebuilt_from_unchanged_curated_art(self):
+        prepared = self.cache.prepare(self.image)
+        source = self.image.read_bytes()
+        payloads = {item.path: item.path.read_bytes() for item in prepared.payloads}
+        path = prepared.payloads[0].path.parent / 'manifest.json'
+        baseline = json.loads(path.read_bytes())
+        malformed = [[], dict(baseline, source_size='bad')]
+        for field, value in (('format_id', [1028]), ('size', float('inf'))):
+            changed = deepcopy(baseline)
+            changed['formats'][0][field] = value
+            malformed.append(changed)
+        for metadata in malformed:
+            with self.subTest(metadata=metadata):
+                path.write_text(json.dumps(metadata))
+                self.assertEqual(self.cache.prepare(self.image), prepared)
+                self.assertEqual(self.image.read_bytes(), source)
+                self.assertEqual({item: item.read_bytes() for item in payloads}, payloads)
+
+    def test_corrupt_artwork_dataset_counts_cannot_drive_unbounded_parser_work(self):
+        folder = self.root / 'malformed-artwork'
+        folder.mkdir()
+        raw = bytearray(148)
+        raw[:4] = b'mhfd'
+        raw[4:8] = (132).to_bytes(4, 'little')
+        raw[8:12] = len(raw).to_bytes(4, 'little')
+        raw[20:24] = (0xffffffff).to_bytes(4, 'little')
+        raw[132:136] = b'mhsd'  # Zero header/total cannot advance to another dataset.
+        path = folder / 'ArtworkDB'
+        path.write_bytes(raw)
+        calls = 0
+
+        def bounded_fields(data, offset):
+            nonlocal calls
+            calls += 1
+            if calls > 12:
+                self.fail('Malformed tiny input drove repeated dataset parsing')
+            return _u32(data, offset)
+
+        with patch('soundbox.stock_artwork._u32', side_effect=bounded_fields):
+            with self.assertRaisesRegex(StockArtworkError, 'count|size'):
+                read_stock_artwork_slots(folder)
+        self.assertEqual(path.read_bytes(), raw)
+        raw[20:24] = (1).to_bytes(4, 'little')
+        path.write_bytes(raw)
+        with self.assertRaisesRegex(StockArtworkError, 'size'):
+            read_stock_artwork_slots(folder)
+        self.assertEqual(path.read_bytes(), raw)
 
     def test_source_index_can_be_published_once_after_a_batch(self):
         self.cache.prepare(self.image, verify_cache=False, save_index=False)

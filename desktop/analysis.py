@@ -401,6 +401,9 @@ class AnalysisMixin:
 
     def _refresh_analysis_row(self, track_id):
         """Update one finished song without rebuilding the view/selection."""
+        refresh_artists = getattr(self, '_schedule_artists_refresh', None)
+        if refresh_artists is not None:
+            refresh_artists([track_id])
         model = getattr(self, 'model', None)
         track = self.lib.tracks_by_id.get(track_id)
         if model is None or track is None:

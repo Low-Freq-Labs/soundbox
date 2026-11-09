@@ -479,7 +479,7 @@ class UsbDevicePages(QWidget):
                     self.overview_scroll.verticalScrollBar().setValue(int(state.get('overview_scroll',0)))
                 finally:
                     self._restoring = restoring
-        QTimer.singleShot(0,scroll)
+        QTimer.singleShot(0,self,scroll)
 
     def _expand_playlist(self, item):
         playlist = item.data(0, Qt.UserRole)

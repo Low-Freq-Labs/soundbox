@@ -1,7 +1,8 @@
 # Shared app and optional personal modules
 
-Allocation requested October26,2026; status checked November5 against installed
-personal build167/runtime3fb0ff60… and its separately validated public package.
+Allocation requested October26,2026; status checked November8 against accepted
+personal build169 and its separately validated public package. Exact provenance
+and profile checks are recorded in [HANDOFF](HANDOFF.md).
 Both retain the same shared/optional boundary; both signed
 profiles/code parity and isolated native/SQLCipher checks pass. No new dependency
 or distribution clearance is implied.
@@ -47,15 +48,15 @@ compares titles and infers an artist from uploaders; only user-checked suggestio
 are applied. No audio is downloaded by this action. Sonny confirmed keeping this
 implementation out of the public build after learning how it works. A cleared
 metadata provider could support public suggestions later; none is implemented.
-[SoundCloud's platform terms](https://soundcloud.com/terms-of-use) restrict scraping
-information about users, and its [API terms](https://developers.soundcloud.com/docs/api/terms-of-use/)
-restrict persistent User Content storage and commercial use. Moving to that API
-alone would not clear permanent artwork caching or device export.
-[yt-dlp's source license](https://github.com/yt-dlp/yt-dlp#licensing) is the Unlicense,
-with different licenses in some bundled artifacts; it is not categorically
-undistributable, nor does its license authorize a particular service use.
-These September 28 findings support withholding the current implementation;
-they are not a completed legal or dependency clearance.
+The September28 review of [SoundCloud's platform terms](https://soundcloud.com/terms-of-use)
+and [API terms](https://developers.soundcloud.com/docs/api/terms-of-use/) identified
+restrictions on scraping, persistent User Content storage and commercial use.
+It did not establish that an API switch would clear permanent artwork caching or
+device export. That review recorded [yt-dlp's source license](https://github.com/yt-dlp/yt-dlp#licensing)
+as the Unlicense, with different licenses in some bundled artifacts; a source
+license alone does not authorize a particular service use. These dated findings
+support withholding the implementation; they are not current legal verification
+or completed dependency clearance.
 
 | Capability / current surface | Public | Personal | Current boundary / work needed |
 |---|---|---|---|
@@ -140,7 +141,9 @@ No locked buttons, empty provider panels, upgrade banners or alternate layout.
    activate a module absent from the public artifact. A null provider schedules
    no network work. Optional provider jobs use core cancellation/ownership and
    bounded resource budgets.
-   All six Settings tabs are ready before first show. Personal provider root
+   Current source prepares admitted personal search/extractor code at startup without
+   requests or credential access. All six Settings tabs are ready before first
+   show. Personal provider root
    binding performs no I/O; the ready Connections section and artwork matching
    share one service with the same cached account metadata/likes. One window-owned
    initial refresh attaches to that section before worker start; the section

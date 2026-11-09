@@ -87,10 +87,6 @@ class TestIsWithin(unittest.TestCase):
         self.assertFalse(is_within(Path("/a/b"), Path("/a/c")))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PathLengthBudget(unittest.TestCase):
     """FAT32 caps components at 255; Rockbox MAX_PATH is 260 total. Unbounded
     titles must never produce an on-device path the iPod chokes on."""
@@ -136,3 +132,7 @@ class FileLandedTime(unittest.TestCase):
             b = Path(td) / "b.wav"; b.write_bytes(b"b")
             self.assertGreater(file_landed_time(b), 0.0)
             self.assertGreaterEqual(file_landed_time(b), file_landed_time(a))
+
+
+if __name__ == "__main__":
+    unittest.main()

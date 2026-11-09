@@ -5,8 +5,9 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
-from scripts.build_composition import REQUIRED_RUNTIME_MODULES, verify_runtime_code, composition, runtime_submodule
+from scripts.build_composition import REQUIRED_RUNTIME_MODULES, verify_runtime_code, composition, runtime_submodule, source_fingerprint
 
 
 class PackagedRuntimeCode(unittest.TestCase):
@@ -22,6 +23,20 @@ class PackagedRuntimeCode(unittest.TestCase):
 
     def verify(self):
         return verify_runtime_code(SimpleNamespace(toc=self.code, extract=self.code.__getitem__), root=self.root)
+
+    def test_direct_bundle_icon_bytes_participate_in_source_fingerprint(self):
+        root = Path(__file__).resolve().parents[1]
+        icon = root / 'assets/Soundbox.icns'
+        self.assertIn('assets/Soundbox.icns', (root / 'Soundbox.spec').read_text())
+        baseline = source_fingerprint(root)
+        read = Path.read_bytes
+        def changed(path):
+            data = read(path)
+            return data + b'changed bundle icon' if path == icon else data
+        # Simulate a changed direct package input without touching the real icon.
+        with mock.patch.object(Path, 'read_bytes', changed):
+            self.assertNotEqual(source_fingerprint(root), baseline)
+        self.assertEqual(source_fingerprint(root), baseline)
 
     def test_every_required_capability_and_nested_code_match_despite_bundle_paths(self):
         self.assertEqual(self.verify(), sorted(REQUIRED_RUNTIME_MODULES))

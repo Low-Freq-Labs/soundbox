@@ -11,12 +11,14 @@ import subprocess
 import tempfile
 import unittest
 
+from tests.support.native_source import native_deck_source, waveform_shader
+
 
 def color_recovery_errors(source: str) -> list[float]:
     compiler = shutil.which("clang++")
     if not compiler:
         raise unittest.SkipTest("Clang vector extensions required")
-    shader = source.split('@R"METAL(', 1)[1].split(')METAL"', 1)[0]
+    shader = waveform_shader(source)
     fields = re.search(r"struct WaveAttribute \{.*?\};", shader, re.S)[0]
     expression = re.search(
         r"intervalEncodedColors\[i\]\s*=\s*(.*?);", shader, re.S)[1]
@@ -101,7 +103,7 @@ int main() {
 
 class WaveformColorRecovery(unittest.TestCase):
     def test_authored_colors_survive_signed_boundary_interpolation(self):
-        source = (Path(__file__).parents[1] / "native/SoundboxDeck.mm").read_text()
+        source = native_deck_source()
         constant, varying, overshoot = color_recovery_errors(source)
         self.assertLess(constant, 2e-6, "constant hue brightens at signed crossings")
         self.assertLess(varying, 2e-6, "color does not retain its interpolation weight")

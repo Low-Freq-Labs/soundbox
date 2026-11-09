@@ -1,4 +1,4 @@
-"""Unintegrated cue transaction pilot; explicit per-library authority required.
+"""Accepted cue transactions; explicit per-library and per-track authority.
 
 Use the SAME recovery root as LiveTagStore for a library. The shared lock and
 journal serialize domains; an unresolved other-domain journal blocks admission.
@@ -6,10 +6,8 @@ Nothing here writes audio, analysis, XML, playlists or device storage.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -22,10 +20,10 @@ from .rekordbox_cues import CueEdit, CueIdentities, CueSnapshot, plan_cue_edit
 from .rekordbox_tags import NATIVE_VERSION, _file_sha, _installed_version, _schema
 from .rekordbox_write import (
     ConflictError, RecoveryRequired, WriteProofError, assert_rekordbox_closed, encrypted_backup,
-    _cell, _guard_grid_recovery, _identity, _inactive_journal_proof, _json,
-    _owned_inactive_journal, _quote, _regular,
+    _cell, _identity, _inactive_journal_proof, _json, _quote, _regular,
 )
 from .state_io import atomic_bytes, sync_dir
+from .native_transaction import NativeTransactionLease
 
 _FORMAT = 'soundbox-native-cues-v1'
 _TABLES = frozenset(('djmdCue', 'djmdContent', 'contentCue', 'agentRegistry'))
@@ -67,7 +65,7 @@ class CueWriteAuthority:
     database: str
     library_id: str
     schema_sha256: str
-    # Keep the first real write restricted to a reviewed control track.
+    # Bound operation target; retain the established serialized field name.
     pilot_track_id: str
     application_version: str = NATIVE_VERSION
 
@@ -97,95 +95,16 @@ def _pk(table):
     return 'registry_id' if table == 'agentRegistry' else 'ID'
 
 
-class PilotCueStore:
-    """Pilot-only source writer. Source selection cannot manufacture authority."""
+class PilotCueStore(NativeTransactionLease):
+    """Single-track cue writer. Source selection cannot manufacture authority."""
 
-    def __init__(self, authority: CueWriteAuthority, recovery_root: Path):
-        self.authority = authority
-        self.database = Path(authority.database)
-        self.root = Path(recovery_root).absolute()
-        if (self.root != self.root.resolve()
-                or self.root.is_relative_to(self.database.parent)
-                or self.database.is_relative_to(self.root)):
-            raise WriteProofError('Cue recovery overlaps or redirects the source library')
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if self.root.stat().st_mode & 0o077:
-            raise WriteProofError('Cue recovery directory must be private')
-        self.journal = self.root / 'transaction.json'
-        self._last_counter = None
-        self._backup_proof = None
-        self._backup_sha = ''
+    authority: CueWriteAuthority
 
-    def _guard_other_recovery(self):
-        _guard_grid_recovery(self.root, self.journal)
+    def _native_version(self):
+        return _installed_version()
 
-    def _guard(self):
-        if (not self.database.is_absolute() or self.database != self.database.resolve()
-                or self.database.name != 'master.db' or self.database.is_relative_to('/Volumes')):
-            raise WriteProofError('Cue writes require the explicitly enabled local database')
-        _regular(self.database)
-        if self.database.stat().st_uid != os.getuid():
-            raise WriteProofError('Source database is not owned by the current user')
-        if self.root != self.root.resolve() or self.root.stat().st_mode & 0o077:
-            raise WriteProofError('Cue recovery directory changed')
-        self._guard_other_recovery()
-        for suffix in ('-wal', '-shm', '-journal'):
-            p = self.database.with_name(self.database.name + suffix)
-            if p.exists() or p.is_symlink():
-                _regular(p)
-        for name in ('baseline.db', 'baseline.json', 'transaction.json', 'last-result.json'):
-            p = self.root / name
-            if p.exists() or p.is_symlink():
-                _regular(p)
-        if _installed_version() != self.authority.application_version:
-            raise WriteProofError('This rekordbox version has no cue-write authority')
+    def _assert_native_closed(self):
         _closed()
-        if self.journal.exists():
-            self._record()  # validate evidence before admitting hot-journal recovery
-
-    @contextmanager
-    def _lock(self):
-        self._guard()
-        fd = os.open(self.root / 'writer.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        try:
-            _regular(self.root / 'writer.lock')
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise WriteProofError('Another rekordbox operation is finishing') from exc
-            self._guard()
-            yield
-        finally:
-            os.close(fd)
-
-    def _connect(self):
-        from pyrekordbox.db6.database import BLOB
-        from pyrekordbox.utils import deobfuscate
-        from sqlcipher3 import dbapi2 as sqlcipher
-        self._guard()
-        if (self.database.with_name('master.db-journal').exists() and not self.journal.exists()
-                and not _owned_inactive_journal(self.database, self.root, self.authority.library_id)):
-            raise RecoveryRequired('An unowned SQLite journal needs rekordbox recovery first')
-        conn = sqlcipher.connect(f'{self.database.as_uri()}?mode=rw', uri=True,
-                                 isolation_level=None, timeout=0.5)
-        try:
-            key = deobfuscate(BLOB)
-            conn.execute("PRAGMA key='" + key.replace("'", "''") + "'")
-            conn.execute('PRAGMA trusted_schema=OFF')
-            conn.execute('PRAGMA synchronous=FULL')
-            if (_identity(conn) != (self.authority.library_id, '6000')
-                    or _schema(conn) != self.authority.schema_sha256):
-                raise ConflictError('The enabled rekordbox identity/schema changed')
-            return conn
-        except BaseException:
-            conn.close()
-            raise
-
-    @staticmethod
-    def _rows(conn, table, where='', params=()):
-        cur = conn.execute(f'SELECT * FROM {_quote(table)}' + where, params)
-        names = [v[0] for v in cur.description]
-        return [dict(zip(names, row, strict=True)) for row in cur]
 
     def _snapshot(self, conn) -> CueSnapshot:
         tid = self.authority.pilot_track_id

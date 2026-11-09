@@ -478,6 +478,67 @@ class ReviewUI(unittest.TestCase):
         self.dialog.shutdown()
         self.assertEqual(self.cache.cover_snapshot("1"), self.before)
 
+    def test_repeated_nested_modals_retire_without_stale_approval(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtWidgets import QDialog
+        from shiboken6 import isValid
+        from desktop.artreview import ArtPickerDialog
+        from desktop.uploader_exclusions import UploaderExclusionsDialog
+        self.wait_idle()
+        modals = []
+        drained = []
+        picker_shutdown = ArtPickerDialog.shutdown
+
+        def drain_picker(dialog):
+            picker_shutdown(dialog)
+            drained.append(dialog)
+
+        def picker_exec(dialog):
+            modals.append(dialog)
+            dialog.choice = {'kind': 'file', 'path': '/synthetic/cover.jpg'}
+            return QDialog.Accepted
+
+        def exclusions_exec(dialog):
+            modals.append(dialog)
+            return QDialog.Rejected
+
+        def profile_exec(box):
+            modals.append(box)
+            return QMessageBox.Cancel
+
+        profile = SimpleNamespace(result=result(), error='')
+        with patch.object(ArtPickerDialog, 'exec', picker_exec), \
+                patch.object(ArtPickerDialog, 'shutdown', drain_picker), \
+                patch.object(UploaderExclusionsDialog, 'exec', exclusions_exec), \
+                patch.object(QMessageBox, 'exec', profile_exec), \
+                patch.object(self.dialog, '_start_replace') as replace, \
+                patch.object(self.dialog, '_apply_retired') as apply:
+            for _ in range(3):
+                self.dialog._choose_other()
+                self.dialog._manage_exclusions()
+                self.dialog._profile_retired(profile, '1', 'Artist', self.before)
+                QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                self.assertTrue(all(not isValid(dialog) for dialog in modals))
+            self.assertEqual(replace.call_count, 3)
+            self.assertEqual(len(drained), 3)
+            apply.assert_not_called()
+
+            def closed_profile(box):
+                modals.append(box)
+                self.dialog._tasks.stop()
+                return QMessageBox.Ok
+
+            with patch.object(QMessageBox, 'exec', closed_profile), \
+                    patch.object(QMessageBox, 'clickedButton',
+                                 lambda box: next(button for button in box.buttons()
+                                                  if button.text() == 'Use profile')):
+                self.dialog._profile_retired(profile, '1', 'Artist', self.before)
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            self.assertTrue(all(not isValid(dialog) for dialog in modals))
+            apply.assert_not_called()
+        self.assertEqual(self.cache.cover_snapshot('1'), self.before)
+
     def test_shutdown_drains_blocked_search_and_rejects_late_preview(self):
         from PySide6.QtCore import QTimer
         entered, release = Event(), Event()

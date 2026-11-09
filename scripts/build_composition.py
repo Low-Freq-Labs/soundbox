@@ -36,7 +36,7 @@ def source_fingerprint(root: Path = ROOT) -> str:
     files = []
     for directory in ("soundbox", "desktop", "soundbox_personal", "native", "profiles", "assets"):
         files.extend(p for p in (root / directory).rglob("*")
-                     if p.is_file() and p.suffix in (".py", ".c", ".cpp", ".mm", ".h", ".metal", ".json", ".svg", ".rs", ".toml", ".lock", ".sql"))
+                     if p.is_file() and p.suffix in (".py", ".c", ".cpp", ".mm", ".h", ".metal", ".json", ".svg", ".icns", ".rs", ".toml", ".lock", ".sql"))
     files.extend(root / name for name in (
         "soundbox_app.py", "Soundbox.spec", "build_app.sh", "build_native.sh", "build_cdj.sh",
         "native/CMakeLists.txt",

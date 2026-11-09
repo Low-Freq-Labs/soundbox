@@ -11,8 +11,8 @@ import unittest
 from unittest import mock
 from uuid import uuid4
 
-from test_registration_pilot import source_fixture
-from test_registration_proof import wave
+from tests.support.native_library import source_fixture
+from tests.support.audio import wave
 from soundbox import native_media as media,native_registration_plan as plan,rekordbox_registration_store as store
 from soundbox import rekordbox_cue_store as cues,rekordbox_tags as tags
 from soundbox.native_paths import capture_aliases
@@ -83,6 +83,29 @@ class RegistrationStore(unittest.TestCase):
         current=_inventory(self.writer.database)
         with self.assertRaises(ConflictError):self.writer.apply(self.request)
         self.assertEqual(_inventory(self.writer.database),current)
+
+    def test_completed_receipt_replay_rechecks_the_enabled_library_and_schema(self):
+        self.writer.apply(self.request)
+        conn=_connect(self.writer.database)
+        try:conn.execute("UPDATE djmdProperty SET DBID='another-library'")
+        finally:conn.close()
+        changed=_inventory(self.writer.database)
+        for reconcile in (self.writer.apply,self.writer.prepare_retry,self.writer.committed_bindings):
+            with self.subTest(reconcile=reconcile.__name__):
+                with self.assertRaisesRegex(ConflictError,'library/schema changed'):
+                    reconcile(self.request)
+                self.assertEqual(_inventory(self.writer.database),changed)
+        conn=_connect(self.writer.database)
+        try:
+            conn.execute("UPDATE djmdProperty SET DBID='123'")
+            conn.execute('CREATE TABLE unrelated_native_schema_change (value TEXT)')
+        finally:conn.close()
+        changed=_inventory(self.writer.database)
+        for reconcile in (self.writer.apply,self.writer.prepare_retry,self.writer.committed_bindings):
+            with self.subTest(reconcile=reconcile.__name__,scope='schema'):
+                with self.assertRaisesRegex(ConflictError,'library/schema changed'):
+                    reconcile(self.request)
+                self.assertEqual(_inventory(self.writer.database),changed)
 
     def test_alias_reuse_is_read_only_and_rechecks_the_alias_before_source_sql(self):
         alias=self.root/'legacy';alias.symlink_to(self.root,target_is_directory=True)

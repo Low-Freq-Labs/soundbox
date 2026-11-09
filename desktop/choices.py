@@ -8,10 +8,26 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (QApplication, QComboBox as BaseComboBox, QListView,
     QMenu as BaseMenu, QProxyStyle, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
     QStyleOptionMenuItem, QWidgetAction)
+from shiboken6 import isValid
 
 from . import theme
 
 _COMBO_POPUP_HINTS = (QStyle.SH_ComboBox_UseNativePopup, QStyle.SH_ComboBox_Popup)
+
+
+def exec_transient_menu(menu: BaseMenu, *args) -> None:
+    """Run signal-driven one-use actions, then retire their parented menu tree.
+
+    Persistent button menus keep normal Qt ownership. A nested action may
+    destroy its parent; never touch an already-deleted menu during cleanup.
+    """
+    try:
+        if not menu.isEmpty():
+            menu.exec(*args)
+    finally:
+        if isValid(menu):
+            menu.deleteLater()
+
 
 def _mark(painter, x, y, *, check=False):
     painter.setRenderHint(QPainter.Antialiasing)

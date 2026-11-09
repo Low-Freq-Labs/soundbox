@@ -42,7 +42,7 @@ def decode(blue: bytes, rgb: bytes, bands: bytes) -> dict:
 
 def current_height_curve(values):
     values = np.asarray(values, dtype=float)
-    companded = values ** 1.4
+    companded = values ** 1.0
     return 0.84 * (companded + (1 / 64) * (1 - companded)
                    * (1 - np.exp(-values / (4 / 65535))))
 
@@ -126,7 +126,7 @@ The second lane isolates SoundBox’s height curve, not its complete current ren
 does not apply the BLUE/RGB height curve. This preview does not establish visual parity with rekordbox.</p>
 <script>
 const data=__DATA__;
-const curve=v=>.84*(v**1.4+(1/64)*(1-v**1.4)*(1-Math.exp(-v/(4/65535))));
+const curve=v=>.84*(v**1.0+(1/64)*(1-v**1.0)*(1-Math.exp(-v/(4/65535))));
 function render(){const mode=document.querySelector('#mode').value, span=+document.querySelector('#span').value;
 const max=Math.min(data.blue.length,data.rgb.length,data.bands.length)/150;
 let center=Math.max(span/2,Math.min(max-span/2,+document.querySelector('#center').value||0));

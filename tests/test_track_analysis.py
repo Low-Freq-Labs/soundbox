@@ -131,6 +131,59 @@ class TrackAnalysisStore(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_cache_publishers_preserve_stale_aliases_and_skip_file_sync(self):
+        import threading
+
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        beats = data['beats']
+        actions = (
+            lambda cache: track_analysis.store(cache, 'safe', self.audio, data),
+            lambda cache: track_analysis.update_grid_source(cache, 'safe', self.audio, beats),
+            lambda cache: track_analysis.update_imported_cues(cache, 'safe', self.audio, []),
+            lambda cache: track_analysis.update_user_data(cache, 'safe', self.audio, cues=[]),
+            lambda cache: track_analysis.confirm_published_grid(cache, 'safe', self.audio, beats, beats),
+        )
+        original_audio = self.audio.read_bytes()
+        for index, publish in enumerate(actions):
+            with self.subTest(publisher=index):
+                cache = self.root / str(index)
+                target = track_analysis.store(cache, 'safe', self.audio, data)
+                self.assertIsNotNone(target)
+                victim = self.root / f'outside-{index}'
+                victim.write_bytes(b'original outside data')
+                stale = target.with_name(
+                    f'.{target.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+                stale.symlink_to(victim)
+                with mock.patch('soundbox.cache_io.os.fsync', side_effect=AssertionError('new sync cost')):
+                    self.assertTrue(publish(cache))
+                self.assertTrue(stale.is_symlink())
+                self.assertEqual(victim.read_bytes(), b'original outside data')
+                self.assertEqual(self.audio.read_bytes(), original_audio)
+                self.assertEqual(set(cache.iterdir()), {target, stale})
+
+    def test_source_drift_after_cache_staging_keeps_previous_record(self):
+        from soundbox.cache_io import atomic_cache_bytes
+        from soundbox.analysis import identity
+
+        data = track_analysis.analyze_soundfile(self.audio, bpm_hint=120)
+        cache = self.root / 'guarded'
+        target = track_analysis.store(cache, 'safe', self.audio, data)
+        before = target.read_bytes()
+        expected = identity(self.audio.stat())
+
+        def publish(path, payload, *, sync_file, before_replace):
+            def drift():
+                details = self.audio.stat()
+                os.utime(self.audio, ns=(details.st_atime_ns, details.st_mtime_ns + 1))
+                before_replace()
+            atomic_cache_bytes(path, payload, sync_file=sync_file, before_replace=drift)
+
+        with mock.patch.object(track_analysis, 'atomic_cache_bytes', side_effect=publish):
+            self.assertIsNone(track_analysis.store(
+                cache, 'safe', self.audio, data, expected_epoch=expected))
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(set(cache.iterdir()), {target})
+
     def _write_v4(self, cache: Path, track_id: str, data: dict) -> Path:
         source = self.audio
         sections = {

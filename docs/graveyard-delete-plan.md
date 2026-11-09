@@ -9,6 +9,10 @@ run removal SQL as an implementation test. Sonny chooses and confirms targets.
 
 ## Confirmation and source contract
 
+Current source prepares bound history and storage metadata when the library materializes
+and its source is verified. Opening Graveyard reveals that snapshot or its truthful
+loading state; preparation never reads or hydrates audio.
+
 - Graveyard selections bind logical/native IDs, native UUIDs, exact canonical
   paths, native memberships and current source/library/schema/version. Imported
   bindings must retain their UUID; duplicate/conflicting bindings stop the entry.

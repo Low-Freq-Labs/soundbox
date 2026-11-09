@@ -91,6 +91,22 @@ class InfoDialogLifetime(unittest.TestCase):
         self.assertTrue(all(not c.pixmap().isNull() for c in dialog._covers))
         self.assertLessEqual(dialog._image.width(),max(640,round(320*dialog.devicePixelRatioF())))
 
+    def test_both_tabs_and_edit_controls_exist_before_first_show(self):
+        save = mock.Mock(return_value=True)
+        dialog = TrackInfoDialog({'title': 'Original', 'comments': 'Saved note'},
+                                 save=save, parent=self.parent)
+        self.assertFalse(dialog.isVisible())
+        self.assertEqual(len(dialog._covers), 2)
+        self.assertEqual(dialog.controls['title'].text(), 'Original')
+        self.assertEqual(dialog.controls['comments'].toPlainText(), 'Saved note')
+        controls = dict(dialog.controls)
+        with mock.patch.object(dialog, '_build_info_tab', side_effect=AssertionError('late controls')):
+            dialog.tabs.setCurrentIndex(1)
+            dialog.tabs.setCurrentIndex(0)
+            dialog.tabs.setCurrentIndex(1)
+        self.assertEqual(dialog.controls, controls)
+        save.assert_not_called()
+
     def test_new_publication_during_decode_discards_old_result_and_coalesces_reload(self):
         old=self.image('old.png','red');new=self.image('new.png','blue')
         release=Event();entered=Event();calls=[];painted=[]

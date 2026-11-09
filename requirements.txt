@@ -1,4 +1,2 @@
 # Developer/full personal environment. Public builds use requirements-core.txt.
 -r requirements-personal.txt
-# Numerical waveform test oracles and developer motion comparison.
-scipy==1.18.0

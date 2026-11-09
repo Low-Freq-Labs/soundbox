@@ -55,7 +55,7 @@ class TestManifest(unittest.TestCase):
                         reader(root)
 
     def test_external_pioneer_ownership_is_discarded_without_touching_payload(self):
-        root = Path(tempfile.mkdtemp())
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         pioneer = root / "PIONEER" / "rekordbox" / "export.pdb"
         pioneer.parent.mkdir(parents=True)
         pioneer.write_bytes(b"rekordbox-owned")
@@ -81,7 +81,7 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(pioneer.read_bytes(), b"rekordbox-owned")
 
     def test_manifest_save_refuses_external_pioneer_ownership(self):
-        root = Path(tempfile.mkdtemp())
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         payload = {
             "schema": manifest.SCHEMA,
             "playlists": {},
@@ -121,7 +121,7 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(manifest.playlist_key(PL("", "MyMix", [], [])), "cust:MyMix")
 
     def test_record_and_roundtrip(self):
-        d = Path(tempfile.mkdtemp())
+        d = Path(self.enterContext(tempfile.TemporaryDirectory()))
         manifest.record_export(d, [PL("1", "Set A", ["crates"], ["t1", "t2"])])
         m = manifest.load(d)
         self.assertIn("1", m["playlists"])
@@ -132,7 +132,7 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(set(m["playlists"]), {"1", "2"})
 
     def test_diff_detects_rename_move_change_remove(self):
-        d = Path(tempfile.mkdtemp())
+        d = Path(self.enterContext(tempfile.TemporaryDirectory()))
         manifest.record_export(d, [
             PL("1", "SONNY.AIF", [], ["a", "b"]),   # will be renamed + moved
             PL("2", "Bass", ["crates"], ["x"]),      # will change tracks
@@ -155,7 +155,7 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(dr.count(), 3)  # pl 1 counted once despite rename+move
 
     def test_diff_clean_when_nothing_changed(self):
-        d = Path(tempfile.mkdtemp())
+        d = Path(self.enterContext(tempfile.TemporaryDirectory()))
         pls = [PL("1", "A", [], ["a"]), PL("2", "B", ["f"], ["b", "c"])]
         manifest.record_export(d, pls)
         dr = manifest.diff(manifest.load(d), lib_of(*pls))
@@ -177,7 +177,7 @@ class TestManifest(unittest.TestCase):
         self.assertFalse(manifest.diff(current, lib_of(playlist)).any())
 
     def test_load_composite_preserves_schema_three_ownership(self):
-        root = Path(tempfile.mkdtemp())
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         path = manifest.manifest_path(root)
         path.parent.mkdir()
         payload = {
@@ -191,7 +191,7 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(manifest.load(root)["schema"], manifest.SCHEMA)
 
     def test_composite_manifest_discards_external_pioneer_ownership(self):
-        root = Path(tempfile.mkdtemp())
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         path = manifest.manifest_path(root)
         path.parent.mkdir()
         payload = {
@@ -216,7 +216,7 @@ class TestManifest(unittest.TestCase):
             manifest.composite_library_counts(loaded).stock_visible_tracks, 1)
 
     def test_load_composite_accepts_previous_profile_for_safe_migration(self):
-        root = Path(tempfile.mkdtemp())
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         path = manifest.manifest_path(root)
         path.parent.mkdir()
         legacy_profile = next(iter(manifest.LEGACY_COMPOSITE_EXPORT_PROFILES))
@@ -262,7 +262,7 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(counts.managed_playlists, 2)
 
     def test_composite_playlist_entries_reads_only_verified_m3u_payload(self):
-        root = Path(tempfile.mkdtemp())
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         playlist = root / "Playlists/Set.m3u8"
         playlist.parent.mkdir()
         payload_bytes = (

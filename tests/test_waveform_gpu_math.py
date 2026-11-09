@@ -11,13 +11,15 @@ import subprocess
 import tempfile
 import unittest
 
+from tests.support.native_source import native_deck_source, waveform_shader
+
 import numpy as np
 
 ROOT = Path(__file__).parents[1]
 
 
 def audit_shader(source):
-    shader = source.split('@R"METAL(', 1)[1].split(')METAL"', 1)[0]
+    shader = waveform_shader(source)
     start = shader.index('        float tilePositions[kAttributeProfileCapacity];')
     block = shader[start:shader.index('        float heights[kAttributeProfileCapacity];', start)]
     expression = re.search(r'intervalEncodedColors\[i\]\s*=\s*(.*?);', shader, re.S)[1]
@@ -232,7 +234,7 @@ class WaveformGPUMath(unittest.TestCase):
         subprocess.run(['clang++', '-std=c++17', '-fobjc-arc', '-framework', 'Foundation',
                         '-framework', 'Metal', str(ROOT/'tests/native/shader_math_runner.mm'),
                         '-o', str(cls.binary)], check=True, capture_output=True, text=True)
-        cls.source = (ROOT/'native/SoundboxDeck.mm').read_text()
+        cls.source = native_deck_source()
 
     def execute(self, rows, source=None):
         rows = np.asarray(rows, dtype=np.float32)

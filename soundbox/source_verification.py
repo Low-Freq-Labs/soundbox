@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from .rockbox_media import _atomic_write
+from .cache_io import atomic_cache_bytes
 from .operation_control import checkpoint, record_metric
 from .source_read_retry import ProviderReadRetry
 
@@ -77,7 +77,7 @@ class SourceVerificationCache:
             if attempt:
                 raise RuntimeError(f"Source changed while verifying: {source}")
         try:
-            _atomic_write(path, json.dumps({
+            atomic_cache_bytes(path, json.dumps({
                 "source": str(source), "identity": _identity(stat),
                 "sha256": digest,
             }, sort_keys=True).encode("utf-8"))

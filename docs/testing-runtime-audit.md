@@ -1,5 +1,45 @@
 # Test runtime audit — November 2, 2026
 
+## Cleanup follow-up — November8
+
+The final complete gate passes 2,886 cases in 570.446s across its test phases:
+2,820 offscreen in 501.435s and 66 Cocoa in 69.011s, zero skips/expected failures
+and exact discovered inventories. All 729 publication inputs remain exact after
+EOF-only normalization; compiled code and positions are unchanged. The accepted
+app's earlier passing gate and failed/interrupted attempts remain separate
+evidence. These phase times exclude builds/provisioning and are not a controlled
+comparison with older gates.
+
+The cleanup retains three isolated offscreen workers, whole-module scheduling,
+the serial Cocoa phase and exact discovered-inventory reconciliation. Shared
+builders and native-source inspection now have explicit homes in `tests/support/`;
+no source-domain recovery suite is replaced by another domain's tests.
+
+Focused native shader/math checks pass91 cases in6.327s, encrypted registration
+proof/pilot/store checks pass44 cases in118.250s, and waveform-preview checks
+pass4 cases in0.502s, all without skips. These timings describe different focused
+processes and are not a complete release-runtime comparison. The additional
+preview parity case executes the native transfer over every encoded16-bit height;
+no existing display, cipher or recovery threshold changed. The repository-layout
+check additionally enforces short folder guides, local links and static dependency
+directions. Current complete gate and delivery evidence remain in
+[HANDOFF](HANDOFF.md); the measurements below are dated earlier checkpoints.
+
+The device cleanup additionally passes a287-case focused batch in136.629s across
+stock/dual/CDJ transactions, sync/manifests, staging/cache/profile and durability
+tests. Its final erase-confirmation and hardlink range guards then pass a74-case
+admission replay in0.664s. These overlap and must not be summed into a release
+inventory. Failed attempts, corrected TEMP fixture setup and descriptor-spy
+compatibility failures remain retained alongside the passing replays. The final
+complete gate above uses the current discovered inventory and frozen source.
+
+The later descriptor-safe clutter cleanup and managed cancellation/resync fixture
+folders pass a74-case focused replay in0.804s. Managed manifest fixtures then pass
+their17-case module in0.046s. These also overlap earlier batches; none is a new
+complete release inventory or a physical-device acceptance result.
+
+## Earlier responsiveness delivery — November4–5
+
 The November4–5 responsiveness gate passes all2795 cases in526.735s across its
 test phases (2729 offscreen457.657s +66 Cocoa69.078s), zero skips/expected failures
 and complete inventories. The interrupted inventory attempt and stale lazy-Settings

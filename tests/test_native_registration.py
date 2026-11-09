@@ -8,7 +8,8 @@ import unittest
 from soundbox import native_media as media,native_registration_plan as planner
 from soundbox.rekordbox_write import ConflictError,WriteProofError,_connect,_state
 from soundbox.native_paths import capture_aliases, AliasProof
-from test_registration_proof import fixture,wave
+from tests.support.audio import wave
+from tests.support.native_library import fixture
 
 
 class NativeRegistrationPlan(unittest.TestCase):

@@ -2,7 +2,7 @@
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QActionGroup, QColor, QPainter, QPen
 from PySide6.QtWidgets import QToolButton
-from .choices import Menu as QMenu
+from .choices import Menu as QMenu, exec_transient_menu
 
 from soundbox.beat_count import MODES
 from . import theme
@@ -72,8 +72,7 @@ class TrackMenuMixin:
 
     def _show_track_menu(self):
         menu = self._track_menu()
-        menu.exec(self.track_menu_btn.mapToGlobal(self.track_menu_btn.rect().bottomLeft()))
-        menu.deleteLater()
+        exec_transient_menu(menu, self.track_menu_btn.mapToGlobal(self.track_menu_btn.rect().bottomLeft()))
 
     def _set_beat_count_mode(self, mode, *, save=True):
         mode = mode if type(mode) is int and 0 <= mode <= 2 else 0

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from soundbox import engine
-from tests.test_sync import write_xml  # reuse the XML builder
+from tests.support.library import write_xml
 
 
 class TestEngine(unittest.TestCase):
@@ -35,10 +35,6 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["format"], "FLAC")
         self.assertEqual(rows[0]["title"], "Song")  # neat_title strips the redundant edge-artist (2026-07-02)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class VerifyExport(unittest.TestCase):
@@ -112,3 +108,7 @@ class VerifyExport(unittest.TestCase):
             # art fully OFF is the one state worth flagging: nothing shows.
             (dev / ".rockbox/config.cfg").write_text("album art: off\n")
             self.assertIn("OFF", verify_export(dev)["advisories"][0])
+
+
+if __name__ == "__main__":
+    unittest.main()

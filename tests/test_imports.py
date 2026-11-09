@@ -186,12 +186,68 @@ class FixLinks(unittest.TestCase):
         lost = {"a": self._rec(self.root / "old" / "set.m4a", 4)}
         self.assertEqual(imports.find_moved(lost, [self.root]), {"a": top})
 
+    def test_same_name_and_size_with_different_audio_stays_unresolved(self):
+        (self.root / 'one').mkdir(); (self.root / 'two').mkdir()
+        first, second = self.root / 'one/set.m4a', self.root / 'two/set.m4a'
+        first.write_bytes(b'one!'); second.write_bytes(b'two!')
+        lost = {'a': self._rec(self.root / 'gone/set.m4a', 4)}
+        self.assertEqual(imports.find_moved(lost, [self.root]), {})
+        self.assertEqual(first.read_bytes(), b'one!')
+        self.assertEqual(second.read_bytes(), b'two!')
+
+    def test_unique_relink_does_not_hash_audio(self):
+        candidate = self.root / 'set.m4a'; candidate.write_bytes(b'audio')
+        lost = {'a': self._rec(self.root / 'gone/set.m4a', 5)}
+        with mock.patch.object(imports, '_payload_digest', side_effect=AssertionError('unneeded payload read')):
+            self.assertEqual(imports.find_moved(lost, [self.root]), {'a': candidate})
+
+    def test_unstable_duplicate_proof_never_selects_a_path(self):
+        (self.root / 'one').mkdir(); (self.root / 'two').mkdir()
+        (self.root / 'one/set.m4a').write_bytes(b'same')
+        (self.root / 'two/set.m4a').write_bytes(b'same')
+        lost = {'a': self._rec(self.root / 'gone/set.m4a', 4)}
+        with mock.patch.object(imports, '_payload_digest', side_effect=['verified', None]):
+            self.assertEqual(imports.find_moved(lost, [self.root]), {})
+
+    def test_payload_proof_rejects_a_same_size_path_replacement(self):
+        candidate, replacement = self.root / 'set.m4a', self.root / 'replacement.m4a'
+        candidate.write_bytes(b'old!'); replacement.write_bytes(b'new!')
+        observe = os.fstat
+        observations = 0
+        def replaced_after_read(fd):
+            nonlocal observations
+            value = observe(fd)
+            observations += 1
+            if observations == 2:
+                os.replace(replacement, candidate)
+            return value
+        with mock.patch.object(imports.os, 'fstat', side_effect=replaced_after_read):
+            self.assertIsNone(imports._payload_digest(candidate, 4))
+        self.assertEqual(candidate.read_bytes(), b'new!')
+
     def test_hidden_dirs_and_non_audio_ignored(self):
         (self.root / ".Trash").mkdir()
         (self.root / ".Trash" / "set.m4a").write_bytes(b"xx")
         (self.root / "set.txt").write_bytes(b"xx")
         lost = {"a": self._rec(self.root / "set.m4a", 2)}
         self.assertEqual(imports.find_moved(lost, [self.root]), {})
+
+    def test_hidden_subtrees_are_never_opened(self):
+        hidden = self.root / '.hidden'; hidden.mkdir()
+        (hidden / 'set.mp3').write_bytes(b'audio')
+        scan = os.scandir
+        def guarded(path):
+            self.assertNotEqual(Path(path), hidden)
+            return scan(path)
+        with mock.patch.object(imports.os, 'scandir', side_effect=guarded):
+            self.assertEqual(imports._index([self.root]), ({}, {}))
+
+    def test_scan_budget_counts_unrelated_files(self):
+        for index in range(10):
+            (self.root / f'{index}.txt').write_text('unrelated')
+        with mock.patch.object(imports, 'is_audio', wraps=imports.is_audio) as classify:
+            self.assertEqual(imports._index([self.root], cap=3), ({}, {}))
+        self.assertEqual(classify.call_count, 3)
 
     def test_search_roots_nearest_existing_ancestor(self):
         gone = self.root / "Sets" / "x.m4a"  # Sets/ was renamed away

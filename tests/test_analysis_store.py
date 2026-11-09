@@ -11,7 +11,7 @@ from unittest import mock
 from uuid import uuid4
 
 import test_analysis_workspace as fixtures
-from test_registration_proof import wave
+from tests.support.audio import wave
 from soundbox import rekordbox_analysis_store as store, rekordbox_cue_store as cues, rekordbox_tags as tags
 from soundbox.analysis import ENGINE
 from soundbox.native_media import MediaIdentity,capture_media

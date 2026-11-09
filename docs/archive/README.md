@@ -1,11 +1,8 @@
 # Historical evidence
 
-These records preserve completed investigations and superseded experiments.
-Dates, test counts, candidate settings, temporary paths and pending statements
-apply to their original checkpoints. They do not override current guidance.
-Archived approvals and app-control, source-pilot, restore or cleanup instructions
-grant no present authority. They do not authorize replaying a completed pilot,
-restoring old library/audio bytes or retiring currently protected recovery bases.
+Dates, results, settings, paths and pending statements apply to their original checkpoints.
+Archived app-control, source-pilot, restore and cleanup approvals grant no present authority.
+They never authorize replay, restoring old state/audio or retiring protected recovery.
 Start with [HANDOFF](../HANDOFF.md), [ROADMAP](../ROADMAP.md),
 [PLAYER](../PLAYER.md) or [ARCHITECTURE](../ARCHITECTURE.md).
 
@@ -19,7 +16,9 @@ Start with [HANDOFF](../HANDOFF.md), [ROADMAP](../ROADMAP.md),
 - [Waveform regression-test investigation](waveform-test-audit-2026-10.md)
 - [Waveform reference and palette comparisons](waveform-reference-check-2026-10.md)
 - [Close-zoom and motion experiments](waveform-zoom-review-2026-10.md)
+- [Layout/retention through November 5](project-layout-through-2026-11-05.md)
+- [Roadmap through November 5](roadmap-through-2026-11-05.md)
+- [Former README through November 5](readme-through-2026-11-05.md)
+- [Runtime delivery history through November 5](runtime-deliveries-through-2026-11-05.md)
 
-Raw diagnostic evidence is outside the checkout; see [project layout](../PROJECT_LAYOUT.md)
-for its location and the original-path mapping. Open device, architecture and
-public-release investigations remain in the main docs directory.
+Raw evidence locations: [project layout](../PROJECT_LAYOUT.md). Active investigations stay in the main docs directory.

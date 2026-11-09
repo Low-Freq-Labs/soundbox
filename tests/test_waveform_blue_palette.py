@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 import unittest
 
+from tests.support.native_source import native_deck_source
+
 import numpy as np
 from scipy.optimize import linprog
 
@@ -22,7 +24,7 @@ class WaveformBluePalette(unittest.TestCase):
         compiler = shutil.which('clang++')
         if not compiler:
             raise unittest.SkipTest('Clang required for native color mapper')
-        source = (Path(__file__).parents[1]/'native/SoundboxDeck.mm').read_text()
+        source = native_deck_source()
         mapper = re.search(r'    static WaveSample blueWaveSample\(uint8_t packed\) \{.*?\n    \}',
                            source, re.S)[0]
         white = re.search(r'whiteLinear = display_srgb_to_linear\(\s*float3\((.*?)\)\)',

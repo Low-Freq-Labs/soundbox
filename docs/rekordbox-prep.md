@@ -9,10 +9,15 @@ The later November4 whole-app audit coalesces discovery/queue wakeups and remove
 redundant private Grid staging when live bytes, mode and mtime already equal the
 recorded desired state. Existing staging evidence is still validated, and fresh
 source/library/schema/apps/authority/whole-recovery checks and final independent
-readback remain. Conversion recovery separately binds its existing source digest
+readback remain.
+
+Conversion recovery binds its existing source digest
 to before/opened/closed/after epochs and rechecks that exact identity after its
 fresh lease guard before replacing/displacing audio. Conflicts retain originals,
-stages and journal/receipt evidence. These changes introduce no SQL, codec or
+stages and journal/receipt evidence. Conversion acknowledgement and receipt replay
+bind the output digest to its verified epoch and recheck after header/guard work;
+later changes cannot renew an old digest with new timestamps. Copy rendering
+rejects source aliases before truncating a destination. These checks introduce no SQL, codec or
 musical-data authority. See [audit scope and evidence](performance-audit.md#whole-app-audit--november4-after-ipod-review)
 and [current delivery](HANDOFF.md).
 
@@ -33,10 +38,13 @@ registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
 are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
 separately accepted initial full-analysis authority; it never inherits the WAV
-authority. These paths remain installed in the November5 responsiveness delivery,
-personal build167/runtime `3fb0ff60…`; whole-app build165/runtime `7ffde716…`
-and earlier build163/build160 source releases are dated delivery evidence.
+authority. These paths remain installed in accepted personal build169. The
+November5 responsiveness build167/runtime `3fb0ff60…`, whole-app build165/runtime
+`7ffde716…` and earlier build163/build160 source releases are dated delivery evidence.
 Exact provenance is in [HANDOFF](HANDOFF.md).
+Completed registration receipt replay rechecks the accepted library and schema
+before returning native ID/UUID/path bindings. Later native song metadata edits
+remain valid; a changed library/schema cannot acknowledge an older binding.
 Other analysis profiles, existing-analysis
 replacement, gain and broader metadata remain gated. The current shared-library
 transition is in
@@ -299,8 +307,11 @@ encrypted-copy replay are separate private checks.
 `rekordbox_cue_store.PilotCueStore` implements a **one-track-bound** transaction
 path. `CueLibraryAuthority`, provisioned only after native acceptance, binds an
 explicit accepted library/schema/version to each requested track. Source selection
-and cache loads never grant authority. The bound store
-shares the tag store's exact recovery root, writer lock and pending-journal path;
+and cache loads never grant authority. Shared admission, locking and encrypted
+connection mechanics live in `soundbox.native_transaction.NativeTransactionLease`;
+the cue store retains compatibility hooks and owns cue planning/publication and
+recovery. Other domains retain their independent authorities and SQL scopes.
+The bound store shares the tag store's exact recovery root, writer lock and pending-journal path;
 an unresolved other-domain operation blocks admission. Exact snapshot revisions,
 backup, four-table/column authorizer, atomic transaction and independent read-back
 guard each operation. Journals bind the physical source file before recovery opens

@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+from tests.support.audio import wave
+from tests.support.native_library import fixture, inventory
 
 from research.native_library import registration as reg, registration_workspace as txn
 from research.native_library.registration_replay import replay
@@ -20,50 +22,6 @@ from soundbox.rekordbox_write import ConflictError, RecoveryRequired, WriteProof
 _STAMP = '2026-10-30 23:00:00.123 +00:00'
 _UUID = '00000000-0000-4000-8000-000000000002'
 _DEVICE = '00000000-0000-4000-8000-000000000003'
-
-
-def wave(path, *, rate=44100, seconds=1):
-    data = b'\0' * (rate * 4 * seconds)
-    path.write_bytes(struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', 36+len(data), b'WAVE',
-        b'fmt ', 16, 1, 2, rate, rate*4, 4, 16, b'data', len(data))+data)
-
-
-def fixture(root):
-    conn = _connect(root/'master.db', create=True)
-    try:
-        defaults = reg._DEFAULTS
-        fields = [name+' '+('INTEGER' if type(defaults.get(name)) is int or name in
-                  ('Length', 'FileType', 'FileSize', 'rb_local_usn') else
-                  'REAL' if name == 'SamplerGain' else 'TEXT')+(' PRIMARY KEY' if name=='ID' else '')
-                  for name in sorted(reg._FIELDS)]
-        conn.execute('CREATE TABLE djmdContent ('+','.join(fields)+')')
-        conn.executescript(f'''
-            CREATE TABLE djmdProperty(DBID TEXT PRIMARY KEY, DBVersion TEXT, DeviceID TEXT);
-            INSERT INTO djmdProperty VALUES ('123','6000','{_DEVICE}');
-            CREATE TABLE agentRegistry(registry_id TEXT PRIMARY KEY,int_1 INTEGER,updated_at TEXT,opaque BLOB);
-            INSERT INTO agentRegistry VALUES ('localUpdateCount',40,'counter-time',X'00ff');
-            INSERT INTO agentRegistry VALUES ('notificationNextFetch',77,'notification-time',X'0011');
-            CREATE TABLE contentFile(ID TEXT PRIMARY KEY,ContentID TEXT,Hash TEXT);
-            CREATE TABLE djmdPlaylist(ID TEXT PRIMARY KEY,Name TEXT);
-            INSERT INTO djmdPlaylist VALUES ('playlist','keep');
-            CREATE TABLE djmdSongPlaylist(ID TEXT PRIMARY KEY,ContentID TEXT,PlaylistID TEXT);
-            CREATE TABLE unknown_table(ID TEXT PRIMARY KEY,opaque BLOB);
-            INSERT INTO unknown_table VALUES ('opaque',X'ff0011');
-        ''')
-        conn.execute("INSERT INTO djmdContent(ID,Title,FolderPath,UUID,rb_local_deleted) VALUES ('1','Existing','/never/open.wav','old',0)")
-        state = _state(conn)
-    finally:
-        conn.close()
-    (root/'state.json').write_text(json.dumps(state))
-    (root/'masterPlaylists6.xml').write_bytes(b'<opaque native="preserve"/>')
-
-
-def inventory(path):
-    conn = _connect(path, readonly=True)
-    try:
-        return _state(conn)
-    finally:
-        conn.close()
 
 
 class RegistrationProof(unittest.TestCase):

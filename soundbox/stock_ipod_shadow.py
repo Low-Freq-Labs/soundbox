@@ -67,6 +67,37 @@ class StockIpodShadow:
         required_maps = ("ithmb", "sources", "artwork", "playlists")
         if any(not isinstance(data.get(key), dict) for key in required_maps):
             return None
+        numeric_fields = {
+            'ithmb': ('size', 'mtime_ns'),
+            'sources': ('size', 'source_size', 'mtime_ns', 'dbid'),
+            'artwork': ('image_id', 'source_size', 'art_size', 'art_mtime_ns'),
+            'playlists': (),
+        }
+        # These maps accelerate consumers that parse native catalogs on a miss.
+        # Admit only rows those consumers can read; dropping damaged rows could
+        # otherwise make an incomplete shadow appear to be an unchanged baseline.
+        for group, fields in numeric_fields.items():
+            for key, row in data[group].items():
+                if not isinstance(row, dict):
+                    return None
+                for field in fields:
+                    if field in row:
+                        int(row[field] or 0)
+                if group == 'artwork':
+                    int(key)
+                    offsets = row.get('offsets') or {}
+                    if not isinstance(offsets, dict):
+                        return None
+                    for format_id, offset in offsets.items():
+                        int(format_id)
+                        int(offset)
+                if group == 'playlists':
+                    for field in ('folder_path', 'tracks'):
+                        if field in row and (
+                            not isinstance(row[field], list)
+                            or any(not isinstance(value, str) for value in row[field])
+                        ):
+                            return None
         identity_key = str(data.get("identity_key") or "")
         database_sha256 = str(data.get("database_sha256") or "")
         if not identity_key or len(database_sha256) != 64:
@@ -137,7 +168,12 @@ class StockIpodShadowStore:
             return None
         if not isinstance(raw, dict):
             return None
-        shadow = StockIpodShadow.from_dict(raw)
+        try:
+            shadow = StockIpodShadow.from_dict(raw)
+        except (ValueError, TypeError, OverflowError):
+            # Malformed disposable state is a miss, never device authority.
+            # Preserve the bytes and let the planner reconcile native catalogs.
+            return None
         return shadow if shadow and shadow.identity_key == identity_key else None
 
     def save(self, shadow: StockIpodShadow) -> None:

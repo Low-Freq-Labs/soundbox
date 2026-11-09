@@ -1047,14 +1047,21 @@ class StockIpodUI(unittest.TestCase):
             def __init__(self):
                 self.running = True
                 self.finished = FakeSignal()
+                self.results = []
+                self.new_paths = ()
+                self.retry_discovery = False
 
             def isRunning(self):
                 return self.running
+
+            def deleteLater(self):
+                pass
 
         old_worker = _win._dev_scan_worker
         old_pending = _win._pending_device_operation
         old_exporting = _win._exporting
         worker = FakeWorker()
+        worker.finished.connect(lambda: _win._finish_device_scan_worker(worker))
         resumed = []
         try:
             _win._dev_scan_worker = worker
@@ -1067,7 +1074,8 @@ class StockIpodUI(unittest.TestCase):
             self.assertEqual(resumed, [])
 
             worker.running = False
-            worker.finished.emit()
+            with mock.patch.object(_win, '_on_devices_scanned'):
+                worker.finished.emit()
             self.assertFalse(_win._exporting)
             self.assertEqual(resumed, ["started"])
         finally:
@@ -1976,6 +1984,7 @@ class StockIpodUI(unittest.TestCase):
         self.assertTrue(entered.wait(1))
         stub = SimpleNamespace(
             _stock_view_pending={}, _dual_sync_queue={},
+            _artists_refresh=mock.Mock(),
             _device_coordinator=DeviceOperationCoordinator(),
             _save_columns=lambda: None, _set_status_text=lambda text: None,
             tag_controller=SimpleNamespace(shutdown=lambda: None),
@@ -3249,9 +3258,14 @@ class StockIpodUI(unittest.TestCase):
                 lambda device, selected, **kwargs:
                 calls.append((device, list(selected), kwargs)))
 
+            def immediately(delay, context, callback):
+                self.assertEqual(delay, 0)
+                self.assertIs(context, _win)
+                callback()
+
             with mock.patch.object(
                     QTimer, "singleShot",
-                    side_effect=lambda _delay, callback: callback()):
+                    side_effect=immediately):
                 _win._start_next_confirmed_dual_job(dev)
 
             self.assertEqual(len(calls), 1)
@@ -4539,6 +4553,7 @@ class TaskOwnership(unittest.TestCase):
             _save_columns=lambda: None, _set_status_text=lambda text: None,
             tag_controller=SimpleNamespace(shutdown=lambda: events.append('cues drained')),
             grid_controller=SimpleNamespace(shutdown=lambda: events.append('grids drained')),
+            _artists_refresh=mock.Mock(),
             findChildren=parent.findChildren,
             player_bar=SimpleNamespace(stop=lambda: None,
                 shutdown=lambda: events.append("player closed")),
@@ -6982,16 +6997,17 @@ class ArtistsView(unittest.TestCase):
         names = [_win.artists_view.topLevelItem(i).text(0)
                  for i in range(_win.artists_view.topLevelItemCount())]
         self.assertEqual(names, ["Ann  (1)", "Mia  (1)", "Zed  (1)"])
-        # names only — no songs until you drop an artist down
-        self.assertEqual(_win.artists_view.topLevelItem(0).childCount(), 0)
+        # Songs are already ready; collapsed folders keep the same appearance.
+        self.assertEqual(_win.artists_view.topLevelItem(0).childCount(), 1)
+        self.assertFalse(_win.artists_view.topLevelItem(0).isExpanded())
 
-    def test_expand_reveals_songs_lazily(self):
+    def test_expand_reveals_prepared_songs(self):
         _win.sb_tree.setCurrentItem(_win.sb_tree.topLevelItem(1))
         _app.processEvents()
         zed = next(_win.artists_view.topLevelItem(i)
                    for i in range(_win.artists_view.topLevelItemCount())
                    if _win.artists_view.topLevelItem(i).text(0).startswith("Zed"))
-        zed.setExpanded(True)   # fires _fill_artist
+        zed.setExpanded(True)
         _app.processEvents()
         self.assertEqual(zed.childCount(), 1)
         self.assertEqual(zed.child(0).text(0), "Bravo")
@@ -9946,6 +9962,7 @@ class RepeatedBackgroundWork(unittest.TestCase):
         worker = SimpleNamespace(retry_discovery=True, results=None)
         host = SimpleNamespace(
             _dev_scan_worker=worker, _finish_worker=lambda *args: None,
+            _retire_device_scan_worker=lambda captured: MainWindow._retire_device_scan_worker(host, captured),
             _deliver_device_scan_callbacks=lambda worker: MainWindow._deliver_device_scan_callbacks(host, worker),
             _shutting_down=False, _device_coordinator=SimpleNamespace(eject_pending=False),
             _stock_view_pending={}, _stock_view_worker=None)

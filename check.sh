@@ -15,6 +15,8 @@ echo "== pyflakes =="
 ./.venv/bin/python -m pyflakes \
   soundbox soundbox_personal desktop tests scripts research soundbox_app.py
 echo "OK"
+echo "== repository layout =="
+./.venv/bin/python scripts/check_layout.py
 echo "== native deck =="
 ./build_native.sh
 echo "OK"

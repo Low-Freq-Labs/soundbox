@@ -7,16 +7,16 @@ Flow:
     custom SoundBox playlists (drag tracks from the table into them).
   • DRAG a playlist/folder onto an external device → it exports IMMEDIATELY.
     One EXPORTING bar aggregates every queued playlist, including drops made
-    mid-export. Devices track drift: any library change to an exported playlist
-    (rekordbox edits, SoundBox deletes/removals) shows "⚠ out of date" → Sync.
+    mid-export. iPods track managed-playlist drift; generic USBs export only
+    explicitly selected playlists and never compute automatic sync status.
   • Curation: inline title/artist edits (⌘R / right-click), cover-art column +
     picker, artist merge + suggestion windows, per-track delete/remove with a
     restorable Graveyard, full-library .zip backup/restore in Settings.
 
-Always tree layout (folders on device, exact names), artists derived, titles
-tidied per user rules, AppleDouble cleaned — standard, not options. Only
-external/ejectable volumes are ever shown as targets. rekordbox and source
-audio files are NEVER modified (see soundbox.sync safety contract).
+Artists are derived and titles follow saved user rules. Only external/ejectable
+volumes are shown as targets. Native desktop edits use separately accepted,
+recoverable writer domains; playback and exporters preserve source audio.
+See AGENTS.md and the domain documentation for the exact safety contracts.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QSplitter, QStackedWidget,
     QTableView, QTreeView, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
-from .choices import Menu as QMenu
+from .choices import Menu as QMenu, exec_transient_menu
 from .progress import ThemeProgressBar
 
 
@@ -140,7 +140,8 @@ from soundbox.library import Playlist
 from . import theme
 from .mount_watch import mounted_volume_snapshot
 from .artpicker import ArtPickerDialog
-from .task_owner import TaskOwner
+from .task_owner import DeferredCall, TaskOwner
+from .artists_browser import ArtistsBrowser, artist_rows
 from .tag_controller import TagEditController
 from .shared_imports import SharedImportController
 from .media_conversion import MediaConversionController
@@ -156,7 +157,7 @@ from .wordmark import Wordmark
 from .keyboard import KeyboardRouter, Keymap, event_binding
 from .usb_device_view import UsbDevicePages
 from .model import (
-    COLUMNS, TrackModel, row_display_value, row_matches as _row_matches,
+    COLUMNS, TrackModel, row_matches as _row_matches,
 )
 from .player import PlayerBar
 
@@ -168,7 +169,7 @@ from .track_info import TrackInfoMixin
 from .labels import ElidedLabel
 from .stock_device_view import CompositeDeviceData, StockIpodPages
 from .trees import (
-    ARTIST_IDS_ROLE, ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
+    ARTIST_ROLE, ARTIST_TRACK_ROLE, ARTISTS_ROLE, COLLECTION_ROLE,
     CUSTOM_ROLE, CUSTOM_FOLDER_ROLE, DEVPATH_ROLE, PATH_ROLE, RB_NODE_ROLE, RB_NODE_KIND_ROLE,
     ArtistsTree, CellEditDelegate, DeviceTree, UnifiedPlaylistTree, TrackTable, NATIVE_TREE_ROLE, PINNED_TREE_ROLE,
 )
@@ -352,6 +353,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
+        from soundbox.desktop_runtime import prepare_desktop_runtime
+        self._desktop_runtime_errors = prepare_desktop_runtime()
         from soundbox.providers import runtime_providers
         self.providers = providers if providers is not None else runtime_providers()
         self.setWindowTitle("Soundbox")
@@ -515,6 +518,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         from .playlist_unification import PlaylistUnificationController
         self.unification_controller = PlaylistUnificationController(self)
         self._build_ui()
+        self._artists_refresh = DeferredCall(self._prepare_artists, self)
         self.player_bar.analysis_cache_admitted = lambda tid: (
             not self.grid_controller.pending(tid) and not self.shared_import_controller.converting(tid)
             and not self.media_controller.converting(tid))
@@ -611,7 +615,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # Startup geometry/style restoration emits thousands of child events.
         # Input routing begins once construction is complete; the native host's
         # own geometry filter remains active throughout initialization.
-        QApplication.instance().installEventFilter(self)
+        self._application_event_filter_app = QApplication.instance()
+        self._application_event_filter_app.installEventFilter(self)
 
     # Export caches read their indexes only when a detected target needs them.
     @cached_property
@@ -873,8 +878,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         return rows
 
     def _refresh_model_art(self):
-        kinds = self.art_cache.status_kinds(r.get('id', '') for r in self.model._all_rows)
+        ids = {row.get('id', '') for row in self.model._all_rows}
+        ids.update(row['id'] for rows in self._artist_children.values() for row in rows)
+        kinds = self.art_cache.status_kinds(ids)
         self.model.refresh_art(lambda tid: kinds.get(tid, ''))
+        changed = self._artists_browser.refresh_art(kinds)
+        self._artist_children = self._artists_browser.children
+        for track_id, kind in changed.items():
+            self._artists_rows[track_id]['art'] = kind
 
     # ---------- computed-row cache (fast playlist clicks) ----------
     def _row_for(self, t) -> dict:
@@ -961,6 +972,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         else:
             self._waveform_bpms[track.track_id] = dict(binding=binding, bpm=float(bpm))
         after = self._row_for(track)
+        prepared = getattr(self, '_artists_rows', {}).get(track.track_id)
+        if prepared is not None and (prepared.get('bpm'), bool(prepared.get('bpm_estimated'))) != (
+                after.get('bpm'), after['bpm_estimated']):
+            self._schedule_artists_refresh([track.track_id])
         displayed = next((row for row in self.model._all_rows if row.get('id') == track.track_id), None)
         if displayed is not None and (displayed.get('bpm'), bool(displayed.get('bpm_estimated'))) != (
                 after.get('bpm'), after['bpm_estimated']):
@@ -985,16 +1000,18 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if track_ids is None:
             self._row_cache.clear()
         else:
+            track_ids = tuple(track_ids)
             for track_id in track_ids:
                 self._row_cache.pop(track_id, None)
         self._sync_playlists_cache = None
         self._cache_gen += 1
+        self._schedule_artists_refresh(track_ids)
         if self.lib is not None:
             self._warm_timer.start()  # debounced → one rebuild per burst
 
     def _do_warm(self) -> None:
         """Compute missing rows off-thread, single-flight and generation guarded."""
-        if getattr(self, "_state_maintenance", False):
+        if self._shutting_down or getattr(self, "_state_maintenance", False):
             return
         if self.lib is None or _running(self._warm_worker):
             return
@@ -1025,6 +1042,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._warm_timer.start()
 
     def _on_rows_warmed(self, res, gen: int) -> None:
+        if self._shutting_down or self._state_maintenance:
+            return
         if isinstance(res, Exception):
             LOG.warning("Row-cache warm failed: %s", res)
             return
@@ -1383,29 +1402,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         return self.search.text().strip().lower().split()
 
     def _filter_artists(self) -> None:
-        """Show an artist in the Artists browser when the query matches the
-        artist OR any of their tracks (same _haystack the table search uses, so
-        artist/genre/key/bpm/format all count). Expanded rows also hide their
-        non-matching tracks."""
-        terms = self._search_terms()
-        children = getattr(self, "_artist_children", {})
-        for i in range(self.artists_view.topLevelItemCount()):
-            it = self.artists_view.topLevelItem(i)
-            rows = children.get(it.data(0, ARTIST_ROLE), [])
-            has = (not terms) or any(_row_matches(r, terms) for r in rows)
-            it.setHidden(not has)
-            if it.childCount():
-                self._apply_artist_child_filter(it)
+        """Search the prepared Artists projection using the table's row policy."""
+        self._artists_browser.filter(self._search_terms())
         self._update_player_navigation()
 
     def _apply_artist_child_filter(self, item) -> None:
-        terms = self._search_terms()
-        rows = {r["id"]: r for r in
-                getattr(self, "_artist_children", {}).get(item.data(0, ARTIST_ROLE), [])}
-        for j in range(item.childCount()):
-            c = item.child(j)
-            r = rows.get(c.data(0, ARTIST_TRACK_ROLE))
-            c.setHidden(bool(terms) and r is not None and not _row_matches(r, terms))
+        self._artists_browser.filter_children(item, self._search_terms())
 
     def _selected_track(self):
         # Artists page showing? — the highlighted song there is the selection.
@@ -1647,7 +1649,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 top = self.artists_view.topLevelItem(i)
                 if top.data(0, ARTIST_ROLE) != name:
                     continue
-                top.setExpanded(True)  # lazy-fills the songs if needed
+                top.setExpanded(True)
                 for c in range(top.childCount()):
                     child = top.child(c)
                     if child.data(0, ARTIST_TRACK_ROLE) == tid:
@@ -1743,7 +1745,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         bl.addWidget(self._main_stack(), 1)
         self.body_stack.addWidget(body)
 
-        # The Settings surface is constructed when explicitly opened.
+        # Reserve its slot; all Settings controls are prepared during startup.
         self.body_stack.addWidget(QWidget())
         outer.addWidget(self.body_stack, 1)
 
@@ -2381,7 +2383,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         parent=item.data(0,RB_NODE_ROLE) if item and item.data(0,RB_NODE_KIND_ROLE)==1 else 'root'
         menu.addAction('New Playlist',lambda:self._native_new(parent or 'root'))
         menu.addAction('New Folder',lambda:self._native_new(parent or 'root',folder=True))
-        menu.exec(QCursor.pos())
+        exec_transient_menu(menu, QCursor.pos())
 
     def _main_stack(self) -> QWidget:
         self.stack = QStackedWidget()
@@ -2554,9 +2556,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.artists_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.artists_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.artists_view.customContextMenuRequested.connect(self._artists_menu)
-        self.artists_view.itemExpanded.connect(self._fill_artist)
         self.artists_view.itemDoubleClicked.connect(self._artists_double)
         self.artists_view.itemChanged.connect(self._on_artist_item_edited)
+        self._artists_browser = ArtistsBrowser(self.artists_view)
+        self._artist_children = self._artists_browser.children
         self.stack.addWidget(self.artists_view)
 
         self._apply_default_columns()
@@ -2713,6 +2716,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 self._row_cache.update({tid: row for tid, row in prepared_rows.items()
                                         if tid in self.lib.tracks_by_id})
         self._populate_tree(engine.summary(self.lib))
+        self.graveyard_controller.prepare_library()
         self.shared_import_controller.schedule()
         self.native_analysis_controller.discover()
         self.media_controller.discover()
@@ -3045,7 +3049,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if self.providers.allows("artists.suggest"):
             menu.addAction("Suggest artists for Unknowns…", self._suggest_artists)
         menu.addAction("Suggest artist merges…", self._suggest_merges)
-        menu.exec(widget.mapToGlobal(pos))
+        exec_transient_menu(menu, widget.mapToGlobal(pos))
 
     @_provider_action("artists.suggest")
     def _suggest_artists(self):
@@ -3114,6 +3118,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         w.start()
 
     def _on_merge_scan(self, res):
+        if self._shutting_down or self._state_maintenance:
+            return
         self._stop_pulse()
         self._set_status_text("Ready")
         if isinstance(res, Exception):
@@ -3126,9 +3132,15 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return
         from .suggest import MergeDialog
         dlg = MergeDialog(suggestions, dict(self.aliases), counts, self)
-        if dlg.exec() != MergeDialog.Accepted:
+        try:
+            if dlg.exec() != MergeDialog.DialogCode.Accepted:
+                return
+            accepts, unmerges = tuple(dlg.accepts), tuple(dlg.unmerges)
+        finally:
+            dlg.deleteLater()
+        if self._shutting_down or self._state_maintenance:
             return
-        self._apply_merges(dlg.accepts, dlg.unmerges)
+        self._apply_merges(accepts, unmerges)
 
     def _apply_merges(self, accepts, unmerges):
         """Apply merge-window results: unmerge first, then add aliases, then
@@ -3290,6 +3302,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             # CUSTOM_ROLE (can't be renamed/deleted/reordered), but draggable
             # onto a device as a whole-pool playlist (sbview mime).
             tracks = self._visible_collection_tracks()
+            self._prepare_artists(tracks=tracks)
             coll = QTreeWidgetItem([f"⌂  Collection  ({len(tracks)})"])
             coll.setData(0, COLLECTION_ROLE, True)
             coll.setData(0,PINNED_TREE_ROLE,True)
@@ -3298,18 +3311,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 self.sb_tree.setCurrentItem(coll)
             # Built-in "Artists": opens the BROWSER-side folder view (artist
             # names only; drop one down to see their songs). Count = distinct.
-            generation = (self._cache_gen, tuple(t.track_id for t in tracks))
-            cached_count = getattr(self, '_artist_count_cache', None)
-            if cached_count is None or cached_count[0] != generation:
-                names = set()
-                for t in tracks:
-                    cached = self._row_cache.get(t.track_id)
-                    names.add(cached['artist'] if cached and 'artist' in cached else
-                              metadata.effective_artist(
-                                  t.track_id, self.titles.get(t.track_id) or t.name, t.artist,
-                                  self.overrides, True, self.lib.artist_registry, stem=t.path.stem))
-                cached_count = self._artist_count_cache = (generation, len(names))
-            arts = QTreeWidgetItem([f"♪  Artists  ({cached_count[1]})"])
+            arts = QTreeWidgetItem([f"♪  Artists  ({len(self._artist_children)})"])
             arts.setData(0, ARTISTS_ROLE, True)
             arts.setData(0,PINNED_TREE_ROLE,True)
             state=self.unification_controller.state()
@@ -3382,7 +3384,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         Default is Skip — Enter must never sneak a duplicate in."""
         from .duplicate_dialog import DuplicateAddDialog
         box=DuplicateAddDialog(name,[self._track_label(i) for i in dupes[:6]],len(dupes),self)
-        return box.exec()==box.Accepted
+        try:
+            return (box.exec()==DuplicateAddDialog.DialogCode.Accepted
+                    and not self._shutting_down and not self._state_maintenance)
+        finally:
+            box.deleteLater()
 
     def _sb_menu(self, pos):
         self._soundbox_context_menu(pos)
@@ -3421,6 +3427,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         worker.start()
 
     def _on_import_locations_repaired(self, result):
+        if self._shutting_down or self._state_maintenance:
+            return
         if isinstance(result, Exception):
             LOG.warning("Imported-file location repair failed: %s", result)
             return
@@ -3678,6 +3686,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         w.start()
 
     def _on_links_found(self, result):
+        if self._shutting_down or self._state_maintenance:
+            return
         self._stop_pulse()
         if isinstance(result, Exception):
             QMessageBox.warning(self, "Fix Links failed", str(result))
@@ -3763,83 +3773,59 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._restore_view(f"sb:{name}")
 
     def _artist_rows(self, tracks) -> list:
-        """Track rows grouped A→Z by effective artist (titles A→Z within each);
-        Unknown Artist sinks to the bottom."""
-        rows = self._annotate_art(self._rows_for(tracks))
-        rows.sort(key=lambda r: (r["artist"] == "Unknown Artist",
-                                 r["artist"].casefold(), r["title"].casefold()))
-        return rows
+        return artist_rows(self._annotate_art(self._rows_for(tracks)))
+
+    def _schedule_artists_refresh(self, track_ids=None):
+        self._artists_generation = None
+        if track_ids is None or not hasattr(self, '_artists_dirty_ids'):
+            self._artists_dirty_ids = None
+        elif self._artists_dirty_ids is not None:
+            self._artists_dirty_ids.update(track_ids)
+        refresh = getattr(self, '_artists_refresh', None)
+        if refresh is not None and not self._shutting_down:
+            refresh.schedule()
+
+    def _prepare_artists(self, *, tracks=None):
+        """Prepare the complete hidden view when library presentation changes."""
+        if self._shutting_down or self._state_maintenance:
+            return
+        tracks = self._visible_collection_tracks() if tracks is None else tracks
+        generation = (id(self.lib), self._cache_gen, tuple(track.track_id for track in tracks))
+        if generation == getattr(self, '_artists_generation', None):
+            return
+        dirty = getattr(self, '_artists_dirty_ids', None)
+        incremental = getattr(self, '_artists_library', None) is self.lib and dirty is not None
+        previous = getattr(self, '_artists_rows', {}) if incremental else {}
+        changed = [track for track in tracks if track.track_id not in previous
+                   or dirty is None or track.track_id in dirty]
+        prepared = {row['id']: row for row in self._artist_rows(changed)} if self.lib is not None else {}
+        if (incremental and previous.keys() == {track.track_id for track in tracks}
+                and all((row['artist'], row['title']) == (previous[track_id]['artist'], previous[track_id]['title'])
+                        for track_id, row in prepared.items())):
+            self._artists_browser.update_rows(list(prepared.values()))
+            self._artists_rows = {**previous, **prepared}
+        else:
+            # Preserve chronological ties inside identical artist/title groups.
+            ordered = sorted(tracks, key=lambda track: (-self._landed_time(track), track.name.casefold()))
+            rows = artist_rows([prepared.get(track.track_id) or previous[track.track_id] for track in ordered])
+            self._artists_browser.replace(rows)
+            self._artists_rows = {row['id']: row for row in rows}
+        self._artist_children = self._artists_browser.children
+        self._artists_library = self.lib
+        self._artists_dirty_ids = set()
+        self._artists_generation = generation
+        for index in range(self.sb_tree.topLevelItemCount()):
+            item = self.sb_tree.topLevelItem(index)
+            if item.data(0, ARTISTS_ROLE):
+                item.setText(0, f'♪  Artists  ({len(self._artist_children)})')
+        self._filter_artists()
 
     def _show_artists(self, *, preserve=False):
-        """The Artists BROWSER page: artist names only, each expandable in place
-        to reveal that artist's songs (lazy-filled on first expand)."""
-        view=self.artists_view
-        token=lambda item: (('track',item.data(0,ARTIST_TRACK_ROLE))
-            if item.data(0,ARTIST_TRACK_ROLE) else ('artist',item.data(0,ARTIST_ROLE))) if item else None
-        expanded={view.topLevelItem(i).data(0,ARTIST_ROLE) for i in range(view.topLevelItemCount())
-                  if view.topLevelItem(i).isExpanded()} if preserve else set()
-        selected={token(item) for item in view.selectedItems()} if preserve else set()
-        current=token(view.currentItem()) if preserve else None
-        column=view.currentColumn();scroll=view.verticalScrollBar().value();horizontal=view.horizontalScrollBar().value()
-        rows = self._artist_rows(self._collection_tracks())
-        by_artist: dict[str, list] = {}
-        for r in rows:
-            by_artist.setdefault(r["artist"], []).append(r)
-        self.artists_view.clear()
-        self._artist_children = by_artist
-        for name in by_artist:
-            it = QTreeWidgetItem([
-                f"{name}  ({len(by_artist[name])})",
-                *([""] * (len(COLUMNS) - 1)),
-            ])
-            it.setData(0, ARTIST_ROLE, name)
-            # Stash the id list so the whole artist can be dragged to a playlist
-            # even while collapsed (children are lazy-filled only on expand).
-            it.setData(0, ARTIST_IDS_ROLE, [r["id"] for r in by_artist[name]])
-            it.setChildIndicatorPolicy(
-                QTreeWidgetItem.ShowIndicator)  # expandable before children exist
-            self.artists_view.addTopLevelItem(it)
-            if preserve and (name in expanded or any(('track',r['id']) in selected or
-                    ('track',r['id'])==current for r in by_artist[name])):
-                self._fill_artist(it);it.setExpanded(True)
-        self._filter_artists()  # apply any active search to the fresh list
+        """Reveal the ready Artists tree; every song already has its row."""
+        if not preserve:
+            self._artists_browser.reset_navigation()
         self.stack.setCurrentIndex(2)
-        if preserve:
-            items=[]
-            for i in range(view.topLevelItemCount()):
-                item=view.topLevelItem(i);items.append(item)
-                items.extend(item.child(j) for j in range(item.childCount()))
-            for item in items:
-                if token(item)==current:view.setCurrentItem(item,max(0,column),QItemSelectionModel.NoUpdate)
-                item.setSelected(token(item) in selected)
-            view.doItemsLayout()
-            view.verticalScrollBar().setValue(scroll);view.horizontalScrollBar().setValue(horizontal)
-
-    def _fill_artist(self, item):
-        """Lazy: first expand of an artist row fills in their songs."""
-        name = item.data(0, ARTIST_ROLE)
-        if not name or item.childCount():
-            return
-        self._artists_filling = True
-        try:
-            for r in getattr(self, "_artist_children", {}).get(name, []):
-                c = QTreeWidgetItem([
-                    str(row_display_value(r, key) or "")
-                    for key, _label, _hidden in COLUMNS
-                ])
-                for column, (key, _label, _hidden) in enumerate(COLUMNS):
-                    if key == "art":
-                        c.setTextAlignment(
-                            column, Qt.AlignHCenter | Qt.AlignVCenter)
-                    elif key in {"bpm", "time", "bitrate"}:
-                        c.setTextAlignment(
-                            column, Qt.AlignRight | Qt.AlignVCenter)
-                c.setData(0, ARTIST_TRACK_ROLE, r["id"])
-                c.setFlags(c.flags() | Qt.ItemIsEditable)  # title/artist editable
-                item.addChild(c)
-        finally:
-            self._artists_filling = False
-        self._apply_artist_child_filter(item)  # honor an active search on expand
+        self._update_player_navigation()
 
     def _artists_menu(self, pos):
         it = self.artists_view.itemAt(pos)
@@ -3861,12 +3847,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             for name in self.custom:
                 sub.addAction(name, lambda n=name, i=list(ids): self._on_tracks_dropped(n, i))
         self._add_track_file_actions(menu, ids, reveal=bool(tid))
-        menu.exec(self.artists_view.viewport().mapToGlobal(pos))
+        exec_transient_menu(menu, self.artists_view.viewport().mapToGlobal(pos))
 
     def _on_artist_item_edited(self, item, col):
         """Inline title/artist edits in the Artists browser — same override
         machinery as Collection (_on_cell_edited: clamp, save, registry, art
-        retry). Regrouping under a renamed artist happens on the next visit."""
+        retry). The prepared grouping refreshes after the edit callback."""
         if getattr(self, "_artists_filling", False):
             return
         tid = item.data(0, ARTIST_TRACK_ROLE)
@@ -4232,6 +4218,21 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                         self._stock_view_warming.add(path)
 
     def _finish_device_scan_worker(self, worker):
+        current = self._dev_scan_worker is worker
+        callbacks = tuple(getattr(worker, '_operation_resume_callbacks', ()))
+        worker._operation_resume_callbacks = []
+        retired = False
+        try:
+            self._retire_device_scan_worker(worker)
+            retired = True
+        finally:
+            cancellation = getattr(worker, 'cancellation', None)
+            eligible = (retired and current and self._dev_scan_worker is None
+                        and not (cancellation is not None and cancellation.is_set()))
+            for callback in callbacks:
+                callback(eligible)
+
+    def _retire_device_scan_worker(self, worker):
         if self._dev_scan_worker is not worker:
             self._finish_worker("_dev_scan_worker", worker)
             return
@@ -4307,8 +4308,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return False
         if self._pending_device_operation is not None:
             return True
-        authority = ({target:self._device_mount_tokens.get(target,0)} if target else
-                     dict(self._device_mount_tokens))
+        def identities():
+            paths = (target,) if target else tuple(self._device_mount_tokens)
+            return {path: (self._device_mount_tokens.get(path, 0),
+                           device_facts(path, cached_only=True).volume_uuid) for path in paths}
+        authority = identities()
         self._pending_device_operation = callback
         self._exporting = True
         self.progress.setVisible(False)
@@ -4316,15 +4320,15 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._start_pulse("Waiting for USB" if target and
             getattr(self._device_profiles.get(target),'kind','')=='generic_usb' else "Waiting for iPod")
 
-        def resume():
+        def resume(retired_current):
             if self._pending_device_operation is not callback:
                 return
             self._pending_device_operation = None
             self._exporting = False
             self._stop_pulse()
-            fresh = ({target:self._device_mount_tokens.get(target,0)} if target else
-                     self._device_mount_tokens)
-            if self._shutting_down or authority != fresh:
+            fresh = identities()
+            if (not retired_current or self._shutting_down
+                    or self._device_coordinator.eject_pending or authority != fresh):
                 batch=getattr(self,'_export_batch',None)
                 if batch:
                     batch['error']='Connected devices changed while waiting; choose the targets again'
@@ -4337,7 +4341,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 batch['error']=str(exc)
                 self._maybe_finish_export_target()
 
-        worker.finished.connect(resume)
+        # The scan may have emitted finished while its existing owner callback
+        # is still queued. Delivery belongs to that retirement callback, so a
+        # late UI request cannot miss the signal and strand the waiting state.
+        callbacks = getattr(worker, '_operation_resume_callbacks', None)
+        if callbacks is None:
+            callbacks = []
+            worker._operation_resume_callbacks = callbacks
+        callbacks.append(resume)
         return True
 
     def _on_devices_scanned(self, devs: list, *, mount_tokens=None):
@@ -5081,7 +5092,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     ('Eject',lambda:self._eject(dev))):
                 action=menu.addAction(title,callback)
                 action.setEnabled(not (self._device_operation_owned(dev) if title=='Export…' else busy))
-            menu.exec(self.device_tree.mapToGlobal(pos))
+            exec_transient_menu(menu, self.device_tree.mapToGlobal(pos))
             return
         menu.addAction("Browse", lambda: self._on_device_click(item, 0))
         busy = self._device_operation_owned()
@@ -5124,7 +5135,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         sync_action.setEnabled(not busy)
         eject_action = menu.addAction("Eject", lambda: self._eject(dev))
         eject_action.setEnabled(not busy)
-        menu.exec(self.device_tree.mapToGlobal(pos))
+        exec_transient_menu(menu, self.device_tree.mapToGlobal(pos))
 
     def _preview_stock_ipod(self, dev: str):
         """Show stock-iPod readiness without writing a byte to the device."""
@@ -5186,6 +5197,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _begin_stock_ipod_sync(
             self, dev: str, playlists: list[Playlist] | None, *, reconcile: bool = False):
         """Run the expensive, read-only database/media plan off the UI thread."""
+        if self._shutting_down or self._state_maintenance:
+            return
         from soundbox.stock_ipod import plan_stock_ipod_sync
         if self._device_operation_owned():
             QMessageBox.warning(
@@ -5406,6 +5419,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             audit_existing: bool = False,
     ):
         """Build the composite stock/Rockbox plan without target writes."""
+        if self._shutting_down or self._state_maintenance:
+            return
         from soundbox.dual_ipod import plan_dual_ipod_sync
         if self._device_operation_owned():
             QMessageBox.warning(
@@ -5630,7 +5645,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
                     def start_queued():
                         QTimer.singleShot(
-                            0, lambda: self._begin_dual_ipod_sync(dev, queued))
+                            0, self, lambda: self._begin_dual_ipod_sync(dev, queued))
 
                     if worker is not None:
                         worker.finished.connect(start_queued)
@@ -5930,7 +5945,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     self._dual_active_confirmed = False
                     self._dual_active_action = "sync"
                     QTimer.singleShot(
-                        0, lambda: self._start_confirmed_dual_jobs(dev, queued))
+                        0, self, lambda: self._start_confirmed_dual_jobs(dev, queued))
 
                 if worker is not None:
                     worker.finished.connect(start_queued)
@@ -6022,6 +6037,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             def start_next():
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda: self._begin_dual_ipod_sync(
                         dev, next_playlists, preconfirmed=True),
                 )
@@ -6784,7 +6800,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # playlist, or remove globally from SoundBox's Collection. Collection
         # and other derived all-track views expose only the global action.
         self._add_track_removal_actions(menu, ids)
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        exec_transient_menu(menu, self.table.viewport().mapToGlobal(pos))
 
     def _add_track_reanalysis_action(self, menu: QMenu, ids: list[str]):
         n = len(ids)
@@ -7747,7 +7763,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             act.setCheckable(True)
             act.setChecked(not self.table.isColumnHidden(i))
             act.toggled.connect(lambda on, col=i: self._set_column_hidden(col, not on))
-        menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+        exec_transient_menu(menu, self.table.horizontalHeader().mapToGlobal(pos))
 
     def _set_column_hidden(self, col: int, hidden: bool):
         self.table.setColumnHidden(col, hidden)
@@ -7940,6 +7956,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _start_confirmed_dual_jobs(
             self, dev: str, playlists: list[Playlist]) -> None:
         """Plan every already-confirmed playlist in one device generation."""
+        if self._shutting_down or self._state_maintenance:
+            return
         jobs = self._merge_device_playlists(playlists)
         if not jobs:
             return
@@ -8132,12 +8150,19 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if getattr(self, "_shutdown_waiting", False):
             return
         self._shutdown_waiting = True
+        # Shutdown dispatches events while workers drain. Stop observing the
+        # entire application before child widgets or their wrappers retire;
+        # deleteLater may otherwise leave this stopped window installed.
+        application = vars(self).pop('_application_event_filter_app', None)
+        if application is not None:
+            application.removeEventFilter(self)
         usb_pages = vars(self).get('usb_device_pages')
         if usb_pages is not None:
             usb_pages._remember_view()
         if hasattr(self,'_remember_stock_device_view'):
             self._remember_stock_device_view()
         self._shutting_down = True
+        self._artists_refresh.stop()
         self._export_batch = None
         if getattr(self,'playlist_controller',None) is not None:
             self.playlist_controller.stop()

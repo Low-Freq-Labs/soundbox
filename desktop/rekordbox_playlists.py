@@ -16,7 +16,7 @@ from soundbox.library import Playlist
 from soundbox.rekordbox_playlist_store import (PlaylistStore, load_authority, request_for, validate_request,
     command_requests, validate_collection_pins)
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed
-from .choices import Menu
+from .choices import Menu, exec_transient_menu
 from .trees import (ARTISTS_ROLE, COLLECTION_ROLE, CUSTOM_ROLE, NATIVE_TREE_ROLE,
                     PATH_ROLE, RB_NODE_ROLE, PINNED_TREE_ROLE, sidebar_choice_icon)
 
@@ -570,8 +570,8 @@ class NativePlaylistsMixin:
         item=self.tree.playlist_icon_item_at(pos)
         menu=self._playlist_icon_menu(self.tree,item) if item is not None else None
         if menu is not None:
-            menu.exec(self.tree.viewport().mapToGlobal(pos));return
-        self._native_menu(self.tree.itemAt(pos)).exec(self.tree.viewport().mapToGlobal(pos))
+            exec_transient_menu(menu, self.tree.viewport().mapToGlobal(pos));return
+        exec_transient_menu(self._native_menu(self.tree.itemAt(pos)), self.tree.viewport().mapToGlobal(pos))
 
     def _native_apply_catalog(self,catalog,request):
         lib=self.lib;old={p.pid:p for p in lib.playlists}

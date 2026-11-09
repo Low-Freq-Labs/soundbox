@@ -1,5 +1,18 @@
 # SoundBox architecture
 
+## Current source structure
+
+Folder [guides](README.md) provide short entry points; dated sections below retain their original evidence.
+`desktop.artists_browser` owns prepared artist rows and incremental tree updates, preserving navigation state.
+`soundbox.desktop_runtime` warms ordinary playback/analysis dependencies before interaction without preparing songs.
+Admitted personal search modules warm through `providers`; device pages/backends remain on demand.
+`native_transaction` supplies shared source admission/locking/connections; each writer retains its authority and recovery protocol.
+`cache_io` owns disposable cache publication, `ipod_policy` shares hardware pacing, and `waveform_sections` owns the pure byte-preserving codec.
+`device_staging` supplies shared descriptor-pinned device publication; callers retain mount/source/firmware authority and commit ordering.
+The native deck includes unchanged Metal source from `native/WaveformShader.h`; test oracles share a source loader in `tests/support`.
+`scripts/check_layout.py` checks short folder guides, links, instruction parity and static dependency directions.
+Source changes do not imply installation; [HANDOFF](HANDOFF.md) records validation and installed identity separately.
+
 ## Responsiveness delivery — November4–5
 
 The new source prepares every Settings tab during startup, following Sonny's
@@ -8,8 +21,8 @@ Settings-on-demand policy in the dated delivery below. USB/iPod pages and export
 backends remain demand-loaded. The window owns initial connected-account refresh;
 its prepared Settings section attaches to that same worker/result and does not
 start a second automatic refresh. Track Info retains complete selected artwork
-before its first visible frame. HANDOFF records installed build167, its true
-signed source base and the superseded build165 baseline.
+before its first visible frame. That delivery was build167; HANDOFF records the
+current installed build and its true signed source base.
 
 Browser-only manual-grid projection validates but does not copy beat arrays;
 playback and edit APIs retain their musical-data ownership. Analysis completion
@@ -140,13 +153,16 @@ Saved theme application precedes child-widget construction. Static QSS is
 installed once; theme_controller applies small visible accent overrides and
 refreshes hidden controls on Show, without repolishing the whole widget tree. The global input filter attaches after startup
 restoration; the native waveform host keeps its geometry filter throughout.
-Artist title-rescue regexes compile on first actual rescue, and the optional
-extractor is presence-checked at composition but imports only on first search.
+Artist title-rescue regexes compile on first actual rescue. Admitted personal
+provider search modules prepare at composition before desktop interaction;
+preparation performs no search, network request or credential access.
 Provider initialization/search exceptions remain retryable, never sticky misses.
 Stock artwork converters/writers import only on actual conversion/rendering;
-unchanged derivative-cache warming does not initialize them. The WAV compatibility
-probe imports libsndfile only for WAV inspection. Ordinary desktop construction
-therefore avoids those NumPy dependencies. Grid glyphs use the system font directly
+unchanged derivative-cache warming does not initialize them. Ordinary desktop
+construction warms NumPy, SciPy signal/image helpers, libsndfile and Zstandard
+before interaction. CLI/module imports remain lightweight; code warmup performs
+no audio reads, DSP, network requests or song-sized allocations.
+Grid glyphs use the system font directly
 rather than triggering generic-family alias discovery.
 The [shared-core / personal-module boundary](release-boundaries.md) uses
 `soundbox.providers` for typed artwork/artist interfaces and startup admission.
@@ -230,8 +246,11 @@ record through the normal codec, upload the data, and remove the temporary
 record before worker retirement; the canonical cache remains absent.
 Summary uses a large cover beside inline caption/value rows.
 
-`desktop.graveyard` reads one stable native DB/WAL snapshot on demand, then stats
-distinct canonical files. It never reads audio payloads for storage or info.
+`desktop.graveyard` prepares one stable native DB/WAL snapshot and distinct-file
+storage observations in its worker after source materialization and verification,
+independently of tab visits. Opening the tab reuses that source-bound snapshot or
+its truthful loading/error state; stale-source completions are discarded. It
+never reads audio payloads for storage or info.
 Source/library-bound historical native rows retain exact provenance outside the
 active Collection; a numeric label alone never authorizes a file path. The i
 button uses this archive for native-deleted selections. Totals deduplicate inode
@@ -640,7 +659,7 @@ centered vector icons, avoiding font bearings. The player-layout popup is sized
 to the selector field after Qt lays it out. Info opens Summary/Info for the selected row, with artwork inside Info. Supported
 metadata edits are SoundBox-local and feed USB export. USB songs and historical
 native-deleted Graveyard rows open read-only information dialogs. TrackInfoDialog constructs
-its Summary without artwork locks/decoding and lazily builds Info on selection.
+both Summary and Info before presentation; tab switching performs no control construction.
 Before modal show, ArtworkWorker resolves the canonical art path and decodes
 a display-sized QImage outside the GUI. Preparation dispatches Qt timers/results
 with user input excluded and a wait cursor, then shows a complete first frame.
@@ -1220,7 +1239,9 @@ refresh, preserving compressed waveform payloads.
   and recorded size; only a unique live result is accepted and immediately
   receives a fresh bookmark. Ambiguous/unindexed cases remain missing until
   the user chooses an explicit folder for the bounded `Fix Missing Links…`
-  scan. Stable SoundBox track IDs keep playlists, edits, art, and analysis
+  scan. It prunes hidden subtrees and bounds all visited entries. Multiple
+  same-name/size candidates require identical stable bytes before selecting a
+  duplicate; unique candidates need no payload read. Stable SoundBox track IDs keep playlists, edits, art, and analysis
   attached through every successful relocation.
 - **Storage-provider timestamp drift is content-verified.** V5 source identity
   normally remains the cheap exact size/mtime gate. If a provider move changes
@@ -1567,18 +1588,20 @@ is running, Sonny quits it normally; the agent sends no real-app input or
 termination. Freshly check absence before staging and before the swap. Copy/hash
 the current library, all accepted authorities, art indexes and custom icon facts
 into private preservation evidence. Stage the tested bundle under a new absent
-name, verify its signature and exact Contents, then move the previous app to a
-new protected rollback basename and install the stage. Restore the old bundle if
+name, verify its signature and exact Contents, then move the previous app into one
+temporary rollback directory and install the stage. Restore the old bundle if
 the stage handoff fails while the application path is absent, including a receipt
 write failure. Verify installed signature/Contents/icon and unchanged live-state
-bytes before an authorized normal relaunch and startup inspection. Preserve prior
-protected bases. Never use `rm -rf`, replay an older installer, or write/restore
+bytes before an authorized normal relaunch and startup inspection. Retain that one
+previous app only until verified user acceptance, then retire it; do not accumulate
+app rollback bundles. Musical originals and transaction recovery remain protected.
+Never use `rm -rf`, replay an older installer, or write/restore
 AppData merely to replace the app; fresh read-only preservation copies are allowed.
 
 ## Safety contract
 
-The synchronized non-negotiable rules are in `AGENTS.md` and `CLAUDE.md`; the
-authoritative per-write commentary is at the top of `soundbox/sync.py`.
+The synchronized orientation is in `AGENTS.md` and `CLAUDE.md`; detailed rules
+are in [runtime contracts](runtime-contracts.md). Per-write commentary remains at the top of `soundbox/sync.py`.
 
 `device_identity.remember_identity` enriches read-only dashboard snapshots from
 `settings.stock_ipod_identity`, keyed by volume UUID/library persistent ID.

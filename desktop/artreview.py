@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from copy import deepcopy
 import io
 from pathlib import Path
 from collections import deque
@@ -944,7 +945,10 @@ class ArtReviewDialog(QDialog):
                         observed.add(handle)
         dialog = UploaderExclusionsDialog(self.cache, self, selected_url=candidate.get("url", ""), observed=observed)
         dialog.changed.connect(self._exclusions_updated)
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def _exclusions_updated(self):
         if self._tasks.stopping:
@@ -991,11 +995,16 @@ class ArtReviewDialog(QDialog):
             return
         _, artist, title, _ = self._row
         dialog = ArtPickerDialog(artist, title, self, provider=self.provider)
-        dialog.exec()
-        dialog.shutdown()
-        if self._tasks.stopping or not dialog.choice:
+        try:
+            dialog.exec()
+        finally:
+            try:
+                dialog.shutdown()
+                choice = deepcopy(dialog.choice)
+            finally:
+                dialog.deleteLater()
+        if self._tasks.stopping or not choice:
             return
-        choice = dialog.choice
         self._start_replace(choice["cand"] if choice["kind"] == "thumb" else choice)
 
     def _use_profile(self):
@@ -1042,11 +1051,15 @@ class ArtReviewDialog(QDialog):
         box.setIconPixmap(pix)
         approve = box.addButton("Use profile", QMessageBox.AcceptRole)
         box.addButton(QMessageBox.Cancel)
-        box.exec()
+        try:
+            box.exec()
+            approved = box.clickedButton() is approve
+        finally:
+            box.deleteLater()
         if (not self._tasks.stopping and self._row and self._row[0] == tid
-                and box.clickedButton() is approve):
+                and approved):
             self._apply_retired(worker, tid, expected)
-        else:
+        elif not self._tasks.stopping:
             self.status.setText("Artist picture canceled. Your cover is unchanged.")
 
     def _apply_retired(self, worker, tid, expected):

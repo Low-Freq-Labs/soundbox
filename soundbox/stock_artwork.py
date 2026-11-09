@@ -305,33 +305,37 @@ class StockArtworkCache:
             if manifest_path.stat().st_size > 16 * 1024:
                 return None
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        if (
-            manifest.get("profile") != PROFILE
-            or manifest.get("source_sha256") != source_sha256
-            or int(manifest.get("source_size", -1)) != source_size
-        ):
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("profile") != PROFILE
+                or manifest.get("source_sha256") != source_sha256
+                or int(manifest.get("source_size", -1)) != source_size
+            ):
+                return None
+        except (OSError, ValueError, TypeError, OverflowError):
             return None
         payloads: list[StockArtworkPayload] = []
         rows = manifest.get("formats")
         if not isinstance(rows, list):
             return None
-        by_id = {int(row.get("format_id") or 0): row for row in rows if isinstance(row, dict)}
+        try:
+            by_id = {int(row.get("format_id") or 0): row for row in rows if isinstance(row, dict)}
+        except (ValueError, TypeError, OverflowError):
+            return None
         for format_id, (width, height) in FORMATS.items():
             row = by_id.get(format_id)
             if row is None:
                 return None
             path = entry / f"F{format_id}.rgb565"
-            size = int(row.get("size") or -1)
             expected_size = width * height * 2
             expected_hash = str(row.get("sha256") or "")
             try:
+                size = int(row.get("size") or -1)
                 if size != expected_size or path.stat().st_size != size:
                     return None
                 if verify_hashes and _sha256_file(path) != expected_hash:
                     return None
-            except OSError:
+            except (OSError, ValueError, TypeError, OverflowError):
                 return None
             payloads.append(StockArtworkPayload(
                 format_id, path, size, expected_hash, width, height))
@@ -546,13 +550,15 @@ def read_stock_artwork_slots(
     slots: dict[int, StockArtworkSlot] = {}
     dataset_offset = _u32(data, 4)
     child_count = _u32(data, 20)
+    if child_count > (len(data) - dataset_offset) // 16:
+        raise StockArtworkError("Existing ArtworkDB has an invalid MHSD count")
     for _ in range(child_count):
         if data[dataset_offset:dataset_offset + 4] != b"mhsd":
             raise StockArtworkError("Existing ArtworkDB has an invalid MHSD chunk")
         header_size = _u32(data, dataset_offset + 4)
         total_size = _u32(data, dataset_offset + 8)
         dataset_type = _u16(data, dataset_offset + 12)
-        if total_size < header_size or dataset_offset + total_size > len(data):
+        if header_size < 16 or total_size < header_size or dataset_offset + total_size > len(data):
             raise StockArtworkError("Existing ArtworkDB has an invalid MHSD size")
         if dataset_type == 1:
             mhli = dataset_offset + header_size

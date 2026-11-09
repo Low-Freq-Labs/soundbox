@@ -10,7 +10,8 @@ import unittest
 from unittest import mock
 from uuid import uuid4
 
-from test_registration_proof import fixture,wave
+from tests.support.audio import wave
+from tests.support.native_library import fixture
 from research.native_library import media_registration as media
 from research.cdj_export.playlist_transaction import _copy_backup
 from soundbox.rekordbox_write import _connect,_state,WriteProofError

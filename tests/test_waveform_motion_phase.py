@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import unittest
 
+from tests.support.native_source import native_deck_source
+
 import numpy as np
 
 
@@ -51,7 +53,7 @@ int main() {
 class WaveformMotionPhase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        source = (ROOT/'native/SoundboxDeck.mm').read_text()
+        source = native_deck_source()
         cls.function = 'static double waveformAttributeOffset(' + source.split(
             'static double waveformAttributeOffset(', 1)[1].split('\n}', 1)[0] + '\n}'
         cls.values = offsets(cls.function)

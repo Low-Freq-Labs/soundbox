@@ -30,7 +30,9 @@ also refreshes at application launch. **Disconnect** removes SoundBox's saved
 credentials, application tokens, and disposable index locally. It sends no
 revocation or sign-out request, so it does not revoke the website's authorization.
 
-All Settings tabs are prepared before the main window first appears. Automatic
+Current source prepares all Settings tabs and admitted personal search code before
+the main window first appears. Code preparation makes no requests or credential
+reads. Automatic
 connected-account refresh runs on one window-owned worker; the ready Connections
 section attaches before that worker starts and does not schedule a second launch
 refresh. Cancel remains available until retirement, and completion or failure

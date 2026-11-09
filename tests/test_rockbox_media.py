@@ -133,6 +133,26 @@ class InterruptedVerification(unittest.TestCase):
 
 
 class RockboxAudioDerivative(unittest.TestCase):
+    def test_malformed_derivative_metadata_repairs_only_the_disposable_audio_copy(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            source = root / 'source.mp3'
+            _tagged_mp3(source)
+            original = source.read_bytes()
+            cache = RockboxMediaCache(root / 'cache')
+            prepared = cache.prepare(source)
+            payload = prepared.payload.read_bytes()
+            path = prepared.payload.parent / 'manifest.json'
+            baseline = json.loads(path.read_bytes())
+            for row in ([], dict(baseline, removed_images=float('inf')),
+                        dict(baseline, payload_size=float('inf'))):
+                with self.subTest(row=row):
+                    path.write_text(json.dumps(row))
+                    rebuilt = cache.prepare(source)
+                    self.assertEqual(rebuilt.payload.read_bytes(), payload)
+                    self.assertEqual(rebuilt.payload_sha256, prepared.payload_sha256)
+                    self.assertEqual(source.read_bytes(), original)
+
     def test_mp3_technical_signature_ignores_tag_sized_duration_estimate(self):
         class Info:
             sample_rate = 44_100
@@ -535,6 +555,36 @@ class RockboxAudioDerivative(unittest.TestCase):
 
 
 class RockboxArtworkDerivative(unittest.TestCase):
+    def test_malformed_cover_index_and_manifest_repair_without_changing_curated_art(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            source = root / 'curated.jpg'
+            Image.new('RGB', (320, 240), (24, 90, 180)).save(source, 'JPEG')
+            source = source.resolve()
+            original = source.read_bytes()
+            cache = RockboxArtworkCache(root / 'cache')
+            prepared = cache.prepare(source)
+            payload = prepared.payload.read_bytes()
+            cache.flush_source_index()
+            index = cache._source_index_path
+            baseline = json.loads(index.read_bytes())
+            for row in ('bad', [1], dict(baseline[str(source)], size=float('inf'))):
+                with self.subTest(index_row=row):
+                    index.write_text(json.dumps({str(source): row}))
+                    repaired = RockboxArtworkCache(root / 'cache').prepare(source)
+                    self.assertEqual(repaired.payload.read_bytes(), payload)
+                    self.assertEqual(source.read_bytes(), original)
+            path = prepared.payload.parent / 'manifest.json'
+            baseline = json.loads(path.read_bytes())
+            for row in ([], dict(baseline, side=float('inf')),
+                        dict(baseline, size=float('inf'))):
+                with self.subTest(manifest=row):
+                    path.write_text(json.dumps(row))
+                    repaired = cache.prepare(source)
+                    self.assertEqual(repaired.payload.read_bytes(), payload)
+                    self.assertEqual(repaired.sha256, prepared.sha256)
+                    self.assertEqual(source.read_bytes(), original)
+
     def test_unmodified_cover_fast_path_uses_persisted_source_index(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

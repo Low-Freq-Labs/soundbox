@@ -47,7 +47,8 @@ def _read_model(root: Path) -> str:
     )
     for path in candidates:
         try:
-            raw = path.read_bytes()
+            with path.open('rb') as handle:
+                raw = handle.read(1024 * 1024 + 1)
         except OSError:
             continue
         if len(raw) > 1024 * 1024:

@@ -30,6 +30,7 @@ from . import manifest as legacy_manifest
 from . import playlists as pl_mod
 from . import rockbox_config
 from . import sync as sync_mod
+from .ipod_policy import pace_classic_usb as _pace_classic_usb
 from .library import Library, Playlist
 from .transaction_outcome import record_outcome
 from .operation_control import checkpoint, CommittedOperationError, OperationCancelled, record_metric
@@ -70,12 +71,6 @@ _PLAYLIST_ORDER_EPOCH = 946_684_800  # 2000-01-01 UTC; representable by FAT32
 _PLAYLIST_ORDER_STEP = 4             # wider than FAT's two-second granularity
 _PLAYLIST_MTIME_TOLERANCE = 2.1
 _MAX_MANAGED_PLAYLIST_BYTES = 1024 * 1024
-_CLASSIC_USB_SETTLE_SECONDS = 0.15
-
-
-def _pace_classic_usb() -> None:
-    """Give validated classic hardware a short breath between media writes."""
-    time.sleep(_CLASSIC_USB_SETTLE_SECONDS)
 
 
 class DualIpodError(RuntimeError):

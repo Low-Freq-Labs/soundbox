@@ -1,4 +1,34 @@
-# Performance audit — November 2–5, 2026
+# Performance audit — November 2–8, 2026
+
+## Cleanup readiness — November 8
+
+The cleanup prepares ordinary desktop dependencies, admitted provider code,
+Settings and Artists before interaction. Track Info constructs both tabs and
+resolves selected artwork before presentation; Graveyard starts its source-bound
+worker after materialization/verification. Device pages/backends stay on demand.
+No whole-library audio/image preload, source authority or state schema changes.
+
+Signed personal 169 and installed 167 were measured serially on the same awake/AC
+session with disposable 3,740-row metadata: 20 warm launches each, including process
+bootstrap, selection/search and synchronous Qt paint. This excludes fresh-source,
+compositor, actual audio loading and physical-device readiness.
+
+| Proxy | Installed 167 | Prepared personal 169 |
+| --- | ---: | ---: |
+| Warm median | 1,902.77ms | 3,370.01ms |
+| Warm p95 | 2,088.46ms | 3,474.54ms |
+| First prepared-row cache miss | 2,236.95ms | 4,178.77ms |
+| Peak RSS, median | not instrumented | 478.00MB |
+
+Eager readiness adds startup/RAM work; it is not a startup-speed improvement.
+Both cohorts fail the unchanged 1,500ms proxy target. The candidate passes every
+readiness assertion with all 3,740 Artists rows built, ordinary dependencies warm,
+and zero initialized device surfaces/backends/converters. A separate 20,000-row,
+five-warm-launch candidate cohort passes readiness at 4,770.69ms median / 4,803.16ms
+p95 and 691.03MB median peak RSS; its cache miss is 4,817.02ms. These are synthetic
+package measurements, not live-library or hardware acceptance.
+Exact reports, failed attempts and review receipts remain private; [HANDOFF](HANDOFF.md)
+records source/package/installed status and the separate architecture work.
 
 ## Bottleneck and responsiveness follow-up — November4
 

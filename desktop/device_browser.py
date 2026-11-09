@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QInputDialog, QMessageBox
-from .choices import Menu as QMenu
+from .choices import Menu as QMenu, exec_transient_menu
 
 from soundbox.paths import sanitize_component
 from soundbox.device_operations import DeviceCommand, DeviceSessionIdentity, Phase
@@ -77,6 +77,18 @@ class DeviceBrowserMixin:
         if self._defer_device_operation_until_scan_finishes(
                 lambda: self._erase_device(dev)):
             return
+        sources = [
+            track.path for track in (
+                getattr(getattr(self, "lib", None), "tracks_by_id", {}) or {}
+            ).values()
+        ]
+        try:
+            # Bind destructive confirmation to this mount, not a reusable name.
+            confirmed = sync_mod.DeviceSession(
+                volume, sources, create=False, allow_external_roots=True)
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.critical(self, 'Erase refused', str(exc))
+            return
         name = volume.name
         answer = QMessageBox.question(
             self, "Erase entire device?",
@@ -91,16 +103,12 @@ class DeviceBrowserMixin:
         if answer != QMessageBox.Yes:
             return
         self._release_eject_ready()
-        sources = [
-            track.path for track in (
-                getattr(getattr(self, "lib", None), "tracks_by_id", {}) or {}
-            ).values()
-        ]
         self._deleting = True
         self.progress.setVisible(False)
         self._start_pulse("ERASING")
         worker = OneShotTask(
-            lambda: sync_mod.erase_device_contents(volume, sources))
+            lambda: sync_mod.erase_device_contents(
+                volume, sources, expected_mount_identity=confirmed.mount_identity))
         self._delete_worker = worker
         worker.finished.connect(
             lambda w=worker, d=str(volume):
@@ -303,8 +311,7 @@ class DeviceBrowserMixin:
                     menu.addAction("Assign Artist…", lambda p=path: self._assign_artist(p))
                 menu.addAction("Delete", lambda p=path: self._delete_paths([p]))
 
-        if not menu.isEmpty():
-            menu.exec(self.fs_view.mapToGlobal(pos))
+        exec_transient_menu(menu, self.fs_view.mapToGlobal(pos))
 
     def _import_device_paths(self, paths: list[Path]):
         from soundbox import imports as import_mod

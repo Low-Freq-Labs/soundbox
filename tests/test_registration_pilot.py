@@ -9,24 +9,16 @@ import tempfile
 import unittest
 from unittest import mock
 
-from test_registration_proof import fixture, wave
+from tests.support.native_library import fixture, source_fixture
+from tests.support.audio import wave
 from research.native_library import registration_pilot as pilot
 from research.cdj_export.playlist_transaction import _inventory, _sha
 from soundbox import rekordbox_cue_store as cues, rekordbox_tags as tags
-from soundbox.rekordbox_write import _connect, _state, _LINK_COLUMNS, ConflictError, RecoveryRequired, WriteProofError
+from soundbox.rekordbox_write import _connect, ConflictError, RecoveryRequired, WriteProofError
 from soundbox.state_io import atomic_bytes
 
 
-def source_fixture(root):
-    root.mkdir(parents=True)
-    fixture(root)
-    conn=_connect(root/'master.db')
-    try:
-        conn.execute('CREATE TABLE djmdSongMyTag ('+','.join('"'+c+'" TEXT' for c in _LINK_COLUMNS)+')')
-        conn.execute('CREATE TABLE djmdMyTag(ID TEXT PRIMARY KEY,UUID TEXT,Attribute INTEGER,rb_local_deleted INTEGER)')
-        state=_state(conn)
-    finally:conn.close()
-    (root/'state.json').write_text(json.dumps(state))
+__all__ = ['fixture', 'source_fixture']
 
 
 class RegistrationSourcePilot(unittest.TestCase):

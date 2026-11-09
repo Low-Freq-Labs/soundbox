@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest import mock
 import wave
 
 from soundbox.device_profile import inspect_device, plan_stock_ipod_export
@@ -12,6 +13,43 @@ from soundbox import sync as sync_mod
 
 
 class DeviceProfiles(unittest.TestCase):
+    def test_model_probe_bounds_reads_before_allocating_oversized_metadata(self):
+        root = self._root()
+        device = root / 'iPod_Control' / 'Device'
+        device.mkdir(parents=True)
+        (root / 'iPod_Control' / 'iTunes').mkdir()
+        oversized = device / 'SysInfoExtended'
+        with oversized.open('wb') as output:
+            output.seek(2 * 1024 * 1024 * 1024)
+            output.write(b'\0')
+        (device / 'SysInfo').write_bytes(b'ModelNumStr: MA446LL/A\n')
+        before = oversized.stat()
+        real_open = Path.open
+        reads = []
+        testcase = self
+        class BoundedReader:
+            def __init__(self, path, args, kwargs):
+                self.handle = real_open(path, *args, **kwargs)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.handle.close()
+            def read(self, size=-1):
+                testcase.assertGreater(size, 0, 'unbounded device metadata read')
+                testcase.assertLessEqual(size, 1024 * 1024 + 1)
+                reads.append(size)
+                return self.handle.read(size)
+        def guarded_open(path, *args, **kwargs):
+            if path.parent == device:
+                return BoundedReader(path, args, kwargs)
+            return real_open(path, *args, **kwargs)
+        with mock.patch.object(Path, 'open', autospec=True, side_effect=guarded_open):
+            profile = inspect_device(root, 'msdos')
+        self.assertEqual(profile.model, 'MA446LL/A')
+        self.assertEqual(reads, [1024 * 1024 + 1, 1024 * 1024 + 1])
+        self.assertEqual((oversized.stat().st_size, oversized.stat().st_mtime_ns),
+                         (before.st_size, before.st_mtime_ns))
+
     def _root(self):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)

@@ -1,6 +1,7 @@
 # Release test gate
 
-Updated November5, 2026. `./check.sh` builds native deck/process-guard/CDJ code, runs lint/types, validates the
+Updated November8, 2026. `./check.sh` checks authored-folder guides, local links
+and static dependency directions, builds native deck/process-guard/CDJ code, runs lint/types, validates the
 required offline fixtures, then executes every discovered test exactly once.
 Ordinary/UI/GPU modules use three isolated offscreen Qt processes; module fixtures
 stay together and the complete inventory is reconciled across workers. All
@@ -20,6 +21,61 @@ The [November2 runtime audit](testing-runtime-audit.md) records the complete
 timing review, isolation checks and a controlled encrypted-subset comparison.
 Each case still runs with its existing cipher/recovery settings. Module weights
 affect scheduling only; new tests cannot be excluded by missing timing hints.
+
+## Cleanup verification — November8
+
+The final bare `./check.sh --render` passes all 2,886 discovered cases: 2,820
+offscreen in 501.435s and 66 Cocoa in 69.011s, with zero skips/expected failures
+and exact inventories. Lint/types/layout, native/CDJ builds and immutable fixtures
+pass; all 729 publication inputs remain exact after EOF-only normalization.
+Compiled code and positions are unchanged; current source matches all 170
+installed first-party modules. Both original signed-profile proofs and installed
+isolated checks remain retained. [HANDOFF](HANDOFF.md) separates publication's
+raw-source fingerprint from the unchanged signed runtime and latest app state.
+
+Shared test helpers live in `tests/support/`; moving a builder does not move its
+test cases or alter their release routing. Source/math tests read the production
+Metal literal through one shared loader. That literal now lives in
+`native/WaveformShader.h`, with exact extracted bytes and unchanged eager pipeline
+compilation, native C ABI and rendering math.
+
+Focused verification passes91 shader/source/GPU/color/profile/motion cases,
+44 encrypted registration proof/pilot/store cases and4 waveform-preview cases,
+with zero skips. Native compilation and243 pinned upstream integrity checks pass.
+The preview checks compare all65536 encoded heights with the actual compiled
+native transfer after correcting a stale diagnostic-only exponent. The new
+double-versus-float32 comparison permits one normalized float32 epsilon; existing
+native/display thresholds remain unchanged. These focused results do not replace
+the complete release gate or establish a new installed build. Current complete
+validation and installation status belong in [HANDOFF](HANDOFF.md).
+
+A synthetic local Rust regression reproduces a truncated classic tag row that
+previously panicked during Plus upgrade. The adapter now rejects missing fields
+with an error and preserves its captured catalog; pinned upstream files remain
+unchanged. The locked CDJ library, binary and fixture-adapter suites pass. This
+uses generated TEMP catalogs and grants no new USB or source-write authority.
+
+Disposable stock shadows and stock/Rockbox derivative caches also reject malformed
+metadata as cache misses. Fixture regressions preserve canonical audio/art and
+exact valid derivative bytes while repairing only disposable entries. Stock
+ArtworkDB parsing rejects impossible dataset counts and zero-length chunks before
+they can drive unbounded work. Ownership manifests, recovery receipts and source
+proofs retain their stricter admission rules.
+
+Exporter writes share descriptor-pinned staging. TEMP regressions cover old
+staging symlinks, exclusive creation, parent/root replacement, owned-stage
+replacement, cancellation, verification and flush failures. In-place artwork
+ranges reject links and verify through one held descriptor. Whole-device erase
+confirmation binds the mount identity before its dialog. These tests use only
+generated local folders; they grant no physical-device acceptance or erase replay.
+Model detection reads at most1MiB+1 per SysInfo candidate. Manifest publication
+retains byte-exact JSON/schema/filtering through the shared writer; the macOS
+descriptor fast-copy path and unsupported-filesystem fallback remain covered.
+Optional AppleDouble/partial-file cleanup uses held directory descriptors and
+rejects redirected Music/Playlists roots or replaced parents before unlinking.
+Generated regressions preserve outside originals and existing device files.
+Cancellation, resync and manifest fixtures now retire their own temporary folders
+through unittest cleanup without changing their cases or assertions.
 
 ## Responsiveness delivery — November4–5
 
@@ -303,5 +359,6 @@ passed. Keep the failed reports as failure evidence, not an accepted release.
 Separate TEST-1/TEST-2 format/export/update/repeat receipts exercise small frozen
 fixtures on FAT32/exFAT hardware. They do not certify players, broad performance,
 iPod physical behavior or public distribution. No new native-library or codec
-authority follows from this delivery. This documentation review does not rerun
-the gate, rebuild/reinstall the unchanged runtime or interact with the real app.
+authority follows from this delivery. The documentation review at that checkpoint
+did not rerun the gate, rebuild/reinstall its unchanged runtime or interact with
+the real app.

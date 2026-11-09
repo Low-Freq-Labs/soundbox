@@ -1,7 +1,9 @@
 # Native CDJ USB export
 
-Updated November5,2026 for installed build167 and selected-only USB exports;
-completed release/installation checks and exact provenance are in HANDOFF.
+The November8 cleanup is installed as accepted personal build169, including both
+Track Info tabs prepared before presentation. Dated build167 USB evidence below
+retains its original scope; [HANDOFF](HANDOFF.md) records exact signed provenance,
+latest observed app state and validation.
 The personal app prepares classic Device Library and
 Device Library Plus together. Sonny reports successful player playback, artwork
 and waveforms from his export. Exact firmware, the wider performance/control
@@ -177,7 +179,8 @@ this is not a claim that every choice has been exercised on hardware.
 The information button prepares its cover off-thread before Summary appears;
 its first visible frame contains the settled cover or missing-art state. The
 wait wheel replaces only white pixels with the selected accent and keeps black
-details intact. Edit-field construction waits until Info is selected. Artwork
+details intact. Summary and Info controls are built before presentation; switching
+tabs requires no deferred field construction. Artwork
 editing is centered inside Info; Summary centers its artwork/title group and
 anchors selectable technical details in a bordered panel. Lyricist is omitted
 from Info and Comments spans the full row. The local-edit note sits bottom left,
