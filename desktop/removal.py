@@ -2,13 +2,14 @@
 from copy import deepcopy
 import json
 import hashlib
+import time
 from pathlib import Path
 from uuid import UUID,uuid4
 
 from PySide6.QtCore import QObject,QTimer
 from PySide6.QtWidgets import QMessageBox
 
-from soundbox import shared_imports
+from soundbox import shared_imports,rekordbox_removal_plan,rekordbox_db,native_identity
 from soundbox.rekordbox_removal_store import RemovalStore,load_authority,confirmation
 from soundbox.rekordbox_write import _regular,ConflictError
 from .devices import human
@@ -26,9 +27,13 @@ def move_to_trash(path):
 
 
 class RemovalController(QObject):
-    def __init__(self,window,*,factory=None,review=None):
+    def __init__(self,window,*,factory=None,review=None,collection_enabled=False,collection_loader=None):
         super().__init__(window);self.window=window;self.tags=window.tag_controller
         self.factory=factory;self.review=review or self.confirm;self.preparing=False;self.closing=False
+        # Native-only removal remains unavailable until its paired Restore path
+        # has an independently established preservation contract.
+        self.collection_enabled=collection_enabled is True
+        self.collection_loader=collection_loader or (lambda source:rekordbox_db.load_live(source,resolve_media_paths=False))
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(400)
         self.timer.timeout.connect(self.pump);self.tags.idle.connect(self.schedule)
         self.tags.changed.connect(self.schedule)
@@ -51,6 +56,93 @@ class RemovalController(QObject):
         return RemovalStore(authority,self.tags.data_root,trash=move_to_trash)
 
     def status(self,text):self.window._flash_status(text,12)
+
+    def capture_collection(self,ids):
+        captured=rekordbox_removal_plan.collection_selection(self.window.lib,ids)
+        row_for=getattr(self.window,'_row_for',None)
+        if row_for:
+            fields={'title','artist','album','genre','bpm','key','time','format','size','location',
+                    'sampleRate','bitDepth','bitrate','rating','year','comments','playCount','dateCreated'}
+            for entry in captured['entries']:
+                row=row_for(self.window.lib.tracks_by_id[entry['id']])
+                entry['display']={key:value for key,value in row.items() if key in fields}
+        return captured
+
+    def _collection_current(self,captured):
+        try:
+            if not isinstance(captured,dict) or set(captured)!={'source','library_id','entries'}:return False
+            fresh=rekordbox_removal_plan.collection_selection(self.window.lib,[entry['id'] for entry in captured['entries']])
+            def pins(value):
+                return {**value,'entries':[{key:entry[key] for key in ('id','native_id','native','path','local_path')}
+                                          for entry in value['entries']]}
+            return pins(fresh)==pins(captured)
+        except (ValueError,KeyError,TypeError,RuntimeError):return False
+
+    def request_collection(self,captured):
+        """Queue a bound native-only review; production cutover stays disabled."""
+        if not self.collection_enabled:
+            self.status('Native Collection removal is waiting for its verified Restore path');return False
+        if not self._collection_current(captured):
+            self.status('The Collection selection changed; select the songs again');return False
+        w=self.window;ids=[entry['id'] for entry in captured['entries']]
+        reason=self.reason(ids)
+        if reason:self.status(reason);return False
+        previous=w.settings.get(REVIEW);queue=deepcopy(previous or [])
+        if not isinstance(queue,list) or len(queue)>=256 or any(not isinstance(job,dict) for job in queue):
+            self.status('The saved removal queue needs attention');return False
+        existing=next((job for job in queue if job.get('native_only') and job.get('entries')==captured['entries']
+            and (job.get('source'),job.get('library_id'))==(captured['source'],captured['library_id'])),None)
+        if existing:existing['error']=''
+        else:queue.append(dict(id=str(uuid4()),source=captured['source'],library_id=captured['library_id'],
+            ids=ids,entries=deepcopy(captured['entries']),native_only=True,error=''))
+        w.settings[REVIEW]=queue
+        if not w._save_state():
+            if previous is None:w.settings.pop(REVIEW,None)
+            else:w.settings[REVIEW]=previous
+            self.status('Collection removal was not queued because its selection could not be saved');return False
+        self.status('Preparing Collection removal review…');self.schedule();return True
+
+    @staticmethod
+    def _retain_collection_history(plan,data_root,area):
+        from soundbox import graveyard
+        from .graveyard import _retain_archive
+        path=graveyard.archive_path(data_root,plan['authority']['database'],plan['authority']['library_id'])
+        remembered={}
+        if path.exists():
+            _regular(path)
+            if path.stat().st_size>4*1024*1024:raise ValueError('Graveyard history exceeds its bound')
+            saved=json.loads(path.read_bytes())
+            if (saved.get('format'),saved.get('source'),saved.get('library_id'))!=(graveyard.RECOVERED_FORMAT,
+                    plan['authority']['database'],plan['authority']['library_id']):raise ValueError('Graveyard history belongs to another source')
+            remembered=saved['tracks']
+        for local,row in plan['history'].items():
+            prior=remembered.get(local)
+            if prior and (prior['id'],prior['uuid'])!=(row['id'],row['uuid']):
+                raise ValueError('Historical Collection identity changed; its original record is preserved')
+            remembered[local]=row
+        _retain_archive(area,path.relative_to(data_root),
+            dict(format=graveyard.RECOVERED_FORMAT,source=plan['authority']['database'],
+                 library_id=plan['authority']['library_id'],tracks=remembered))
+
+    @staticmethod
+    def _collection_readback(store,plan,job,loader,data_root,area,baseline):
+        library=loader(Path(job['source']))
+        selected=[entry['native_id'] for entry in plan['selections']]
+        # The native reader keys raw source records by native ID, before local
+        # import projection. Check only this bounded selected set in the worker.
+        if (library.source_kind!='rekordbox-db'
+                or (str(library.source),library.source_library_id)!=(job['source'],job['library_id'])
+                or (str(baseline.source),baseline.source_library_id)!=(job['source'],job['library_id'])
+                or any(library.tracks_by_id.get(native_id) is not None for native_id in selected)):
+            raise RuntimeError('Native Collection readback still contains a selected identity')
+        # Reuse only already-known lexical/canonical distinctions. Re-resolving
+        # every surviving audio path is unnecessary for a DB-only removal.
+        for local,uri,raw in native_identity.canonical_path_updates(library,baseline):
+            track=library.tracks_by_id[local]
+            track.location_uri=uri;track.source_native_path=raw
+        receipt=store.verify_removed(job['folder'],job['sha256'],job['selection_sha256'])
+        RemovalController._retain_collection_history(plan,data_root,area)
+        return {**receipt,'library':library,'absent_native_ids':selected}
 
     def reason(self,ids):
         w=self.window;ids=set(ids)
@@ -93,19 +185,24 @@ class RemovalController(QObject):
         self.schedule();return True
 
     def _prepare_review(self,job):
-        w=self.window;ids=job['ids'];lib=w.lib
+        w=self.window;ids=job['ids'];lib=w.lib;native_only=job.get('native_only',False)
         if (str(lib.source),lib.source_library_id)!=(job['source'],job['library_id']):
             self.status('Delete belongs to the original library; switch back to review it');return
-        if not set(ids)<=w.graveyard_controller.ids():
+        if native_only and not self._collection_current(dict(source=job['source'],library_id=job['library_id'],entries=job['entries'])):
+            self.status('The original Collection selection changed; its removal stays queued');return
+        if not native_only and not set(ids)<=w.graveyard_controller.ids():
             self._review_done(job['id']);self.status('The Graveyard selection changed; nothing was deleted');return
         if any(j.get('track_id') in ids for j in w.settings.get('pending_prep_edits',[])):
             self.schedule();return
         if any(any(t['id'] in ids for t in j['tracks']) for j in w.settings.get('shared_import_jobs',[])):
             self.schedule();return
-        entries={tid:deepcopy(w.graveyard_controller.entries[tid]) for tid in ids if tid in w.graveyard_controller.entries}
-        imported=deepcopy(w.imported);bindings=deepcopy(w.settings.get(shared_imports.BINDINGS,[]))
+        entries=({entry['id']:deepcopy(entry) for entry in job['entries']} if native_only else
+                 {tid:deepcopy(w.graveyard_controller.entries[tid]) for tid in ids if tid in w.graveyard_controller.entries})
+        imported={} if native_only else deepcopy(w.imported)
+        bindings=[] if native_only else deepcopy(w.settings.get(shared_imports.BINDINGS,[]))
         prior=deepcopy(w.settings.get(KEY))
-        if prior and set(prior['ids'])!=set(ids):prior=None
+        area=w._state_repository.area;data_root=self.tags.data_root;loader=self.collection_loader
+        if prior and (set(prior['ids'])!=set(ids) or prior.get('native_only',False)!=native_only):prior=None
         prepared_store=None
         def work():
             nonlocal prepared_store
@@ -133,8 +230,13 @@ class RemovalController(QObject):
             if prior:
                 try:saved=store.completed(prior['folder'],prior['sha256'],prior['selection_sha256'])
                 except ConflictError:saved=None
-                if saved:return dict(completed=saved)
-            return {**store.prepare(selected),'skipped':skipped}
+                if saved:
+                    if native_only:
+                        plan=json.loads((Path(prior['folder'])/'plan.json').read_bytes())
+                        return dict(completed=self._collection_readback(store,plan,prior,loader,data_root,area,lib))
+                    return dict(completed=saved)
+            prepared=store.prepare(selected,native_only=True) if native_only else store.prepare(selected)
+            return {**prepared,'skipped':skipped}
         def finished(worker):
             self.preparing=False
             if worker.error:
@@ -153,7 +255,9 @@ class RemovalController(QObject):
             if self.closing or w._shutting_down:return
             if not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(str(lib.source),lib.source_library_id):
                 self.status('The library changed; Delete stays queued for its original library');return
-            if not set(ids)<=w.graveyard_controller.ids():
+            if native_only and not self._collection_current(dict(source=job['source'],library_id=job['library_id'],entries=job['entries'])):
+                self.status('The original Collection selection changed; its removal stays queued');return
+            if not native_only and not set(ids)<=w.graveyard_controller.ids():
                 self._review_done(job['id']);self.status('The Graveyard selection changed; nothing was deleted');return
             self.tags.admission_paused=True
             try:accepted=self.review(result,result['skipped'])
@@ -168,6 +272,7 @@ class RemovalController(QObject):
             before=deepcopy(w.settings)
             w.settings[KEY]=dict(folder=result['folder'],sha256=result['sha256'],selection_sha256=confirmation(result['plan']),
                 source=str(lib.source),library_id=lib.source_library_id,ids=[e['id'] for e in result['plan']['selections']],error='')
+            if native_only:w.settings[KEY]['native_only']=True
             w.settings[REVIEW]=[j for j in w.settings.get(REVIEW,[]) if j['id']!=job['id']]
             if not w._save_state():
                 w.settings.clear();w.settings.update(before);self.status('Delete was not started because its confirmation could not be saved');return
@@ -201,6 +306,15 @@ class RemovalController(QObject):
         self.status(f"Removed {len(result['dismiss'])} stale Graveyard entries; no audio files were identified or deleted")
 
     def confirm(self,result,skipped):
+        if result.get('plan',{}).get('native_only'):
+            plan=result['plan'];dialog=QMessageBox(self.window);dialog.setWindowTitle('Remove from native Collection?')
+            dialog.setText(f"Remove {len(plan['selections'])} selected songs from rekordbox Collection and its playlists?")
+            dialog.setInformativeText('Every audio file, native analysis packet and artwork file stays exactly where it is. SoundBox keeps the saved musical data and historical identities.')
+            dialog.setDetailedText('\n\n'.join(selected['title']+'\n'+selected['path'] for selected in plan['selections']))
+            dialog.setStandardButtons(QMessageBox.Cancel)
+            remove=dialog.addButton('Remove from Collection',QMessageBox.DestructiveRole)
+            dialog.setDefaultButton(QMessageBox.Cancel);dialog.setEscapeButton(QMessageBox.Cancel)
+            dialog.exec();return dialog.clickedButton() is remove
         if result.get('empty') and result.get('dismiss'):
             dialog=QMessageBox(self.window);dialog.setWindowTitle('Remove stale Graveyard entries?')
             dialog.setText(f"Remove {len(result['dismiss'])} stale entries from the Graveyard?")
@@ -235,16 +349,22 @@ class RemovalController(QObject):
     def pump(self,*,retry=False):
         w=self.window;job=deepcopy(w.settings.get(KEY));reviews=w.settings.get(REVIEW,[])
         if self.closing or w._shutting_down:return
-        if self.preparing or self.tags.owned or w._refresh_worker is not None or w._device_operation_owned():
+        if self.preparing or self.tags.source_job_owned or w._refresh_worker is not None or w._device_operation_owned():
             self.schedule();return
         if w.lib is None or not self.tags.verified or w._state_maintenance:
             self.schedule();return
+        if not self.collection_enabled and (isinstance(job,dict) and job.get('native_only')
+                or any(isinstance(review,dict) and review.get('native_only') for review in reviews)):
+            self.status('Native Collection removal is waiting for its verified Restore path');return
         if reviews and (not job or job.get('error')):
             review=next((j for j in reviews if isinstance(j,dict) and not j.get('error')
                          and j.get('source')==str(w.lib.source) and j.get('library_id')==w.lib.source_library_id),None)
             if review is None:return
             try:
-                valid=(isinstance(review,dict) and set(review)=={'id','source','library_id','ids','error'}
+                fields={'id','source','library_id','ids','error'}
+                valid=(isinstance(review,dict) and set(review) in (fields,fields|{'native_only','entries'})
+                    and ('native_only' not in review or review['native_only'] is True and isinstance(review['entries'],list)
+                        and [entry['id'] for entry in review['entries']]==review['ids'])
                     and all(isinstance(review[k],str) for k in ('id','source','library_id','error'))
                     and str(UUID(review['id']))==review['id'] and UUID(review['id']).version==4
                     and isinstance(review['ids'],list) and 1<=len(review['ids'])<=10000
@@ -257,7 +377,8 @@ class RemovalController(QObject):
             return
         if not job:return
         expected={'folder','sha256','selection_sha256','source','library_id','ids','error'}
-        if (not isinstance(job,dict) or set(job)!=expected or not isinstance(job['ids'],list)
+        if (not isinstance(job,dict) or set(job) not in (expected,expected|{'native_only'})
+                or 'native_only' in job and job['native_only'] is not True or not isinstance(job['ids'],list)
                 or not 1<=len(job['ids'])<=10000 or any(not isinstance(tid,str) or not tid for tid in job['ids'])
                 or len(set(job['ids']))!=len(job['ids'])
                 or any(not isinstance(job[k],str) for k in expected-{'ids'})
@@ -274,6 +395,7 @@ class RemovalController(QObject):
         if any(j.get('track_id') in job['ids'] for j in w.settings.get('pending_prep_edits',[])):
             self.schedule();return
         lib=w.lib
+        area=w._state_repository.area;data_root=self.tags.data_root;loader=self.collection_loader
         if (str(lib.source),lib.source_library_id)!=(job['source'],job['library_id']):self.status('Deletion belongs to the original library; switch back to finish');return
         def work():
             self.tags._recover_pending(lib)
@@ -281,21 +403,67 @@ class RemovalController(QObject):
             path=Path(job['folder'])/'plan.json';_regular(path);raw=path.read_bytes();plan=json.loads(raw)
             if hashlib.sha256(raw).hexdigest()!=job['sha256'] or [s['id'] for s in plan['selections']]!=job['ids']:
                 raise RuntimeError('The confirmed deletion selection changed; evidence retained')
-            return store.apply(job['folder'],job['sha256'],job['selection_sha256'])
+            if bool(plan.get('native_only'))!=job.get('native_only',False):raise RuntimeError('The confirmed removal file policy changed')
+            result=store.apply(job['folder'],job['sha256'],job['selection_sha256'])
+            if job.get('native_only'):
+                return self._collection_readback(store,plan,job,loader,data_root,area,lib)
+            return result
         def finished(worker):
             if worker.error:
-                w.settings[KEY]={**job,'error':worker.error};w._save_state();self.schedule();w._resume_analysis_jobs();self.status('Delete needs attention — '+worker.error);return
+                if self._fail(job,worker.error):w._resume_analysis_jobs()
+                return
             self.acknowledge(job,worker.result)
         if not self.tags.run_removal_job(work,finished):self.schedule()
         else:self.status('Deleting selected songs…')
 
+    def _retains(self,job):
+        current=self.window.settings.get(KEY)
+        return (isinstance(current,dict) and isinstance(job,dict)
+                and {**current,'error':''}=={**job,'error':''})
+
+    def _fail(self,job,message):
+        retained=self._retains(job)
+        if retained:
+            self.window.settings[KEY]={**self.window.settings[KEY],'error':message}
+            self.window._save_state();self.schedule()
+        self.status('Delete needs attention — '+message)
+        return retained
+
     def acknowledge(self,job,result):
-        w=self.window;before=deepcopy(w.settings);old_hidden=set(w.hidden)
+        w=self.window
+        if not self._retains(job):
+            self.status('The original deletion finished; its receipt is preserved')
+            return
+        if not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(job['source'],job['library_id']):
+            self._fail(job,'Saved in the original library; switch back to finish Delete')
+            return
+        before=deepcopy(w.settings);old_hidden=set(w.hidden)
         path=Path(job['folder'])/'plan.json';_regular(path);raw=path.read_bytes();plan=json.loads(raw)
         if result.get('outcome')!='committed' or result.get('plan_sha256')!=job['sha256']:
             self.status('Deletion is unconfirmed; the Graveyard entries are retained');return
         if hashlib.sha256(raw).hexdigest()!=job['sha256'] or [s['id'] for s in plan['selections']]!=job['ids']:
             self.status('Deletion receipt selection changed; the Graveyard entries are retained');return
+        if plan.get('native_only'):
+            library=result.get('library')
+            selected=[entry['native_id'] for entry in plan['selections']]
+            if (not result.get('native_only') or not library or library.source_kind!='rekordbox-db'
+                    or (str(library.source),library.source_library_id)!=(job['source'],job['library_id'])
+                    or result.get('absent_native_ids')!=selected):
+                self._fail(job,'Native Collection removal readback changed; the intention is preserved');return
+            before_dates=dict(w.hidden_dates)
+            w.settings.pop(KEY,None);w.hidden.update(job['ids'])
+            for tid in job['ids']:w.hidden_dates.setdefault(tid,time.strftime('%Y-%m-%d %H:%M'))
+            for key,field in (('analysis_jobs','track_id'),('native_analysis_jobs','local_id')):
+                w.settings[key]=[entry for entry in w.settings.get(key,[]) if entry.get(field) not in job['ids']]
+            if not w._save_state():
+                w.settings.clear();w.settings.update(before);w.hidden.clear();w.hidden.update(old_hidden)
+                w.hidden_dates.clear();w.hidden_dates.update(before_dates)
+                self._fail(job,'Removed from native Collection; local acknowledgement failed. Retry to finish');return
+            if w.player_bar.current_track() in job['ids']:w.player_bar.stop()
+            if not self.closing and not w._shutting_down:
+                w._publish_created_library(library)
+                w._after_track_edit(f"Removed {len(job['ids'])} from native Collection; files kept")
+            self.schedule();return
         done=deepcopy(w.settings.get(DONE,{}))
         for selected in plan['selections']:
             done[selected['id']]=dict(operation_id=result['operation_id'],path=selected['path'],

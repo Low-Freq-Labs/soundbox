@@ -34,6 +34,8 @@ def acknowledge(settings,imported,job,receipt):
     if (receipt['path']!=job['path'] or receipt['operation_id']!=job['id']):raise ValueError('Media acknowledgement identity changed')
     path=receipt['path'];target=receipt.get('target',path);before,after=receipt['before_sha256'],receipt['after_sha256']
     ids=set(job['ids'])
+    def same_source(intent):
+        return (intent.get('source'),intent.get('library_id'))==(job['source'],job['library_id'])
     for tid in job['ids']:
         record=records.get(tid)
         if record:
@@ -64,7 +66,7 @@ def acknowledge(settings,imported,job,receipt):
     pending=updated.get(prep_edits.KEY,[]);prep_edits.validate(pending)
     pending=list(pending)
     for index,intent in enumerate(pending):
-        if intent['track_id'] not in ids:continue
+        if not same_source(intent) or intent['track_id'] not in ids:continue
         if intent['path']!=path:continue
         if (intent['prepared'] is not None
                 or intent['sha256'] and intent['sha256'] not in (before,after)):
@@ -82,12 +84,12 @@ def acknowledge(settings,imported,job,receipt):
         from . import analysis_jobs,shared_imports
         detection=list(updated.get(analysis_jobs.KEY,[]))
         for index,pending_job in enumerate(detection):
-            if pending_job['track_id'] in ids and pending_job['path']==path:
+            if same_source(pending_job) and pending_job['track_id'] in ids and pending_job['path']==path:
                 pending_job=deepcopy(pending_job);detection[index]=pending_job;pending_job['path']=target
         if analysis_jobs.KEY in settings:updated[analysis_jobs.KEY]=detection
         imports=list(updated.get(shared_imports.KEY,[]))
         for index,pending_import in enumerate(imports):
-            if any(t['id'] in ids and t['path']==path for t in pending_import['tracks']):
+            if same_source(pending_import) and any(t['id'] in ids and t['path']==path for t in pending_import['tracks']):
                 if pending_import['request'] is not None or pending_import['bindings']:
                     raise ValueError('A prepared native import cannot change its audio path')
                 pending_import=deepcopy(pending_import);imports[index]=pending_import

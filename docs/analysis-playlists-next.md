@@ -85,7 +85,9 @@ previous results. Source audio is never retagged, and detection does not invalid
 waveforms or reload audio. The [upstream audit](rbxport-reference-audit-2026-10.md)
 records exact options, limits and comparison evidence.
 
-Results persist inside backed-up `library.json` as `settings.analysis_results`.
+Results persist in canonical logical state as `settings.analysis_results`.
+Current storage uses a `library.json` manifest and referenced `.state-records/`
+payloads; portable backups materialize the complete standalone JSON.
 Publication enforces the same64MiB ceiling as the reader before replacing any
 canonical bytes; an oversized result preserves the preceding library. Each result
 binds its canonical path, full audio SHA-256, stable filesystem identity and engine
@@ -242,7 +244,7 @@ group even when TrackNo is unchanged. Bulk selection composes proven single-entr
 operations rather than assuming an unobserved bulk counter formula. First legacy
 ordinary edits can add a missing XML node at zero; later edits touch its clock.
 
-The original playlist milestone used cache9; current `libcache` schema11 retains
+The original playlist milestone used cache9; current `libcache` schema13 retains
 raw catalogs/clocks and empty folders. Collection now reads all active supported
 native audio independently of membership. Exact UUID pins remain compatible
 retention metadata after a final playlist reference disappears;

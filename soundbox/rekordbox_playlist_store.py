@@ -1,4 +1,4 @@
-"""Identity-bound regular-playlist DB/XML transactions.
+"""Identity-bound native-playlist DB/XML transactions.
 
 Only playlist/membership rows and the native local counter may change. Source
 reads use encrypted private snapshots; the writer reads exact target identities.
@@ -31,11 +31,78 @@ from .state_io import atomic_bytes, copy_state, sync_dir
 FORMAT = 'soundbox-native-playlists-v1'
 PAYLOADS = ('before.db','after.db','before.xml','after.xml')
 MAX_BATCH_COMMANDS = 64
+MAX_TREE_DELETE_COMMANDS = 256
+SMART_CREATE_PROFILE = 'rekordbox-6.8.7.0303-mytag-smart-create-v1'
+SMART_DELETE_PROFILE = 'rekordbox-6.8.7.0303-unsynced-smart-delete-v1'
+SMART_LOCAL_DELETE_PROFILE = 'rekordbox-6.8.7.0303-local-smart-delete-v2'
 
 
 def command_requests(request):
     """Validated bounded commands; batches never widen the native write scope."""
-    return request['requests'] if request.get('operation')=='batch' else [request]
+    return request['requests'] if request.get('operation') in ('batch','delete_tree') else [request]
+
+
+def tree_bindings(current, identity):
+    """Exact bounded active subtree, children before their containing folder."""
+    active = [row for row in current['nodes'] if row['rb_local_deleted'] == 0]
+    by_id = {row['ID']: row for row in active}
+    if len(by_id) != len(active) or identity not in by_id or by_id[identity]['Attribute'] != 1:
+        raise WriteProofError('Expected one exact active folder for tree deletion')
+    result = []
+    seen: set[str] = set()
+    def visit(selected):
+        if selected in seen or len(seen) >= MAX_TREE_DELETE_COMMANDS:
+            raise WriteProofError('Playlist deletion tree is cyclic or exceeds its bounded scope')
+        seen.add(selected); node = by_id[selected]
+        if node['Attribute'] not in (0,1,4):
+            raise WriteProofError('Playlist deletion tree contains unverified native node types')
+        children = planner._siblings(active, selected)
+        if children and node['Attribute'] != 1:
+            raise WriteProofError('A playlist unexpectedly contains descendant playlists')
+        for child in children:visit(child['ID'])
+        result.append(dict(id=node['ID'], uuid=node['UUID'], parent=node['ParentID'], attribute=node['Attribute']))
+    visit(identity)
+    return result
+
+
+def tree_delete_for(current, identity):
+    """Compose proven leaf operations; never infer native one-click tree clocks."""
+    bindings = tree_bindings(current, identity)
+    projected = {**current,'nodes':[dict(row) for row in current['nodes']],'members':list(current['members'])}
+    requests = []
+    for binding in bindings:
+        operation = 'delete_smart' if binding['attribute'] == 4 else 'delete'
+        requests.append(request_for(projected, operation, identity=binding['id'], parent=binding['parent']))
+        target = next(row for row in projected['nodes'] if row['ID'] == binding['id'])
+        projected['nodes'] = [row for row in projected['nodes'] if row['ID'] != target['ID']]
+        projected['members'] = [row for row in projected['members'] if row['PlaylistID'] != target['ID']]
+        for row in projected['nodes']:
+            if row['ParentID'] == target['ParentID'] and row['rb_local_deleted'] == 0 and row['Seq'] > target['Seq']:
+                row['Seq'] -= 1
+    root = bindings[-1]
+    result = dict(operation_id=uuid4().hex, operation='delete_tree', revision=current['revision'],
+                  playlist_id=root['id'], playlist_uuid=root['uuid'], descendants=bindings, requests=requests)
+    validate_request(result)
+    return result
+
+
+def renew_tree_delete_request(request, current, *, operation_id=None):
+    """Renew an unstarted causal plan or explicit retry without expanding scope."""
+    validate_request(request)
+    if request['operation'] != 'delete_tree':
+        raise WriteProofError('Tree deletion renewal requires its captured envelope')
+    fresh = tree_bindings(current, request['playlist_id'])
+    if {row['id']:_json(row) for row in fresh} != {row['id']:_json(row) for row in request['descendants']}:
+        raise ConflictError('Playlist deletion descendants changed; capture a new explicit deletion')
+    result = tree_delete_for(current,request['playlist_id'])
+    if operation_id is None:
+        result['operation_id'] = request['operation_id']
+        previous = {child['playlist_id']:child['operation_id'] for child in request['requests']}
+        for child in result['requests']:child['operation_id'] = previous[child['playlist_id']]
+    else:
+        result['operation_id'] = operation_id
+    validate_request(result)
+    return result
 
 
 def batch_for(catalog,requests):
@@ -68,6 +135,13 @@ class PlaylistAuthority:
     # Reordering has its own native reference/acceptance. Existing CRUD
     # authorities remain readable and never silently acquire this capability.
     reorder_accepted: bool = False
+    # A final native smart-list capture is not a create-protocol acceptance.
+    # Existing authority files default false and never gain this permission.
+    smart_create_accepted: bool = False
+    smart_create_profile: str = ''
+    # Smart creation never grants mutation/deletion of an existing rule.
+    smart_delete_accepted: bool = False
+    smart_delete_profile: str = ''
 
     def __post_init__(self):
         if self.accepted is not True:
@@ -75,9 +149,43 @@ class PlaylistAuthority:
         CueWriteAuthority(self.database,self.library_id,self.schema_sha256,
                           'playlist-authority',self.application_version)
         if (type(self.retain_full_backups) is not bool or type(self.reorder_accepted) is not bool
+                or type(self.smart_create_accepted) is not bool
+                or type(self.smart_create_profile) is not str or len(self.smart_create_profile) > 128
+                or '\0' in self.smart_create_profile
+                or type(self.smart_delete_accepted) is not bool
+                or type(self.smart_delete_profile) is not str or len(self.smart_delete_profile) > 128
+                or '\0' in self.smart_delete_profile
                 or not isinstance(self.pilot_playlist_ids,tuple)
                 or any(not isinstance(v,str) or not v for v in self.pilot_playlist_ids)):
             raise WriteProofError('Invalid playlist pilot bindings')
+
+
+def smart_creation_reason(authority):
+    """Admission-only message; toggling a flag cannot bless an unknown profile."""
+    if authority is None or getattr(authority, 'smart_create_accepted', False) is not True:
+        return 'Native My Tag smart-playlist creation requires separate acceptance'
+    if getattr(authority, 'smart_create_profile', '') != SMART_CREATE_PROFILE:
+        return 'Native smart-playlist creation requires its exact separately accepted profile'
+    return ''
+
+
+def smart_creation_parent_reason(current, parent='root'):
+    """Pure UI eligibility only; source authority and fresh guards stay separate."""
+    if not isinstance(current, dict) or not isinstance(current.get('nodes'), list):
+        return 'Native playlist folders are unavailable'
+    return planner.smart_parent_reason(current['nodes'], parent)
+
+
+def smart_deletion_reason(authority, *, profile=SMART_DELETE_PROFILE):
+    """Creation permission never admits this separately accepted delete profile."""
+    if authority is None or getattr(authority, 'smart_delete_accepted', False) is not True:
+        return 'Native smart-playlist deletion requires separate acceptance'
+    accepted = getattr(authority, 'smart_delete_profile', '')
+    if (profile not in (SMART_DELETE_PROFILE, SMART_LOCAL_DELETE_PROFILE)
+            or accepted not in (SMART_DELETE_PROFILE, SMART_LOCAL_DELETE_PROFILE)
+            or profile == SMART_LOCAL_DELETE_PROFILE and accepted != SMART_LOCAL_DELETE_PROFILE):
+        return 'Native smart-playlist deletion requires its exact separately accepted profile'
+    return ''
 
 
 def load_authority(path: Path, source: Path, library_id: str):
@@ -179,6 +287,38 @@ def _require_collection_pins(conn,pins):
         track=row(conn,'djmdContent',identity)
         if not track or track['UUID']!=uuid or track['rb_local_deleted']!=0:
             raise ConflictError('Captured native Collection identity changed before playlist deletion')
+
+
+def _tree_deleted_parents(request, final):
+    if request.get('operation') != 'delete_tree':return None
+    return {binding['id']: final[('djmdPlaylist',binding['id'])]
+            for binding in request['descendants'] if binding['attribute'] == 1}
+
+
+def _require_tree_references(conn, request, *, deleted):
+    if request.get('operation') != 'delete_tree':return
+    current = catalog(conn)
+    if not deleted:
+        if tree_bindings(current,request['playlist_id']) != request['descendants']:
+            raise ConflictError('Playlist deletion gained or replaced a descendant; captured scope preserved')
+        return
+    identities={binding['id'] for binding in request['descendants']}
+    if (any(row['rb_local_deleted']==0 and (row['ID'] in identities or row['ParentID'] in identities)
+            for row in current['nodes'])
+            or any(row['rb_local_deleted']==0 and row['PlaylistID'] in identities for row in current['members'])):
+        raise ConflictError('Deleted playlist tree still contains active descendants or memberships')
+
+
+def _require_creation_parents(conn, request, changes, *, after):
+    first,_final=_affected(changes)
+    for child in command_requests(request):
+        if child['operation'] != 'create' or 'parent_uuid' not in child or child['parent']=='root':continue
+        if not after and first.get(('djmdPlaylist',child['parent']),object()) is None:
+            continue  # This same exact envelope creates the containing folder first.
+        parent=row(conn,'djmdPlaylist',child['parent'])
+        if parent is None or parent['UUID'] != child['parent_uuid'] or parent['Attribute'] != 1:
+            raise ConflictError('The captured playlist folder disappeared or was replaced')
+        planner._ordinary(parent,folder=True)
 
 
 def _deleted_collection_ids(changes):
@@ -290,11 +430,26 @@ class PlaylistStore:
         try:
             conn.execute('BEGIN IMMEDIATE')
             first,final=_affected(record['changes']);self.lease._guard()
+            matched_after=_matches(conn,final);matched_before=_matches(conn,first)
+            if not (matched_after or matched_before):
+                raise RecoveryRequired('Native playlist state is outside the exact recovery pair')
+            _require_tree_references(conn,record['request'],deleted=matched_after)
+            _require_creation_parents(conn,record['request'],record['changes'],after=matched_after)
+            for command in command_requests(record['request']):
+                if command['operation'] == 'create_smart':
+                    _require_smart_references(conn, command)
+                elif command['operation'] == 'delete_smart':
+                    target = row(conn, 'djmdPlaylist', command['playlist_id'])
+                    applied = (target is not None and target.get('rb_local_deleted') == 1
+                               if command['smart_delete_profile'] == SMART_LOCAL_DELETE_PROFILE else target is None)
+                    _require_smart_deletion_references(conn, command, deleted=applied,
+                        expected_target=final[('djmdPlaylist', command['playlist_id'])],
+                        deleted_parents=_tree_deleted_parents(record['request'],final) if matched_after else None)
             if _sha(self.xml)!=current_xml:
                 raise RecoveryRequired('Playlist XML changed during recovery')
-            if _matches(conn,final) and current_xml==record['payload_sha256']['after.xml']:
+            if matched_after and current_xml==record['payload_sha256']['after.xml']:
                 outcome='committed'
-            elif _matches(conn,first):
+            elif matched_before:
                 if current_xml!=record['payload_sha256']['before.xml']:
                     atomic_bytes(self.xml,(archive/'before.xml').read_bytes())
                 outcome='rolled-back'
@@ -378,9 +533,18 @@ class PlaylistStore:
                     if _identity(conn)!=(self.authority.library_id,'6000') or _schema(conn)!=self.authority.schema_sha256:
                         raise ConflictError('Playlist transition current authority changed')
                     observed=catalog(conn)
+                    expected_final=_affected(expected_plan['changes'])[1]
+                    _require_tree_references(conn,request,deleted=True)
                     for selected in (track for command in command_requests(request) for track in command['tracks']):
                         track=row(conn,'djmdContent',selected['track_id'])
                         if not track or track['UUID']!=selected['uuid'] or track['rb_local_deleted']!=0:return None
+                    for command in command_requests(request):
+                        if command['operation'] == 'create_smart':
+                            _require_smart_references(conn, command)
+                        elif command['operation'] == 'delete_smart':
+                            expected_target = _affected(expected_plan['changes'])[1][('djmdPlaylist', command['playlist_id'])]
+                            _require_smart_deletion_references(conn, command, deleted=True,
+                                expected_target=expected_target,deleted_parents=_tree_deleted_parents(request,expected_final))
                 finally:conn.close()
             self.lease._guard()
             if (observed['revision']!=expected_revision
@@ -390,7 +554,7 @@ class PlaylistStore:
     def prepare_collection_pins(self,request):
         """Capture a delete's exact Collection retention before writer admission."""
         validate_request(request)
-        if request['operation']!='delete':raise WriteProofError('Collection retention capture requires an exact playlist deletion')
+        if request['operation'] not in ('delete','delete_tree'):raise WriteProofError('Collection retention capture requires an exact playlist deletion')
         archive=self.root/('playlist-'+request['operation_id'])
         committed=archive.exists() or archive.is_symlink()
         from .rekordbox_db import _copy_stable_snapshot
@@ -443,10 +607,14 @@ class PlaylistStore:
     def apply(self, request, *, collection_pins=None):
         """Publish one exact durable user intent; replay is operation-ID idempotent."""
         validate_request(request)
+        if request['operation'] in ('create_smart', 'delete_smart', 'delete_tree'):
+            # No source recovery, backup or publisher is admitted without this
+            # library's separate acceptance of the exact observed profile.
+            self._check_scope(request)
         replay_pins_verified=False;replay_receipt_sha=None
         if collection_pins is not None:
             validate_collection_pins(collection_pins)
-            if request['operation']!='delete':raise WriteProofError('Captured Collection retention belongs only to playlist deletion')
+            if request['operation'] not in ('delete','delete_tree'):raise WriteProofError('Captured Collection retention belongs only to playlist deletion')
             archive=self.root/('playlist-'+request['operation_id'])
             if archive.exists() or archive.is_symlink():
                 replay_receipt_sha=self._retired_collection_pins(request,collection_pins)
@@ -470,6 +638,7 @@ class PlaylistStore:
                     if collection_pins is not None and (not replay_pins_verified
                             or _sha(archive/'operation.json')!=replay_receipt_sha):
                         raise ConflictError('Playlist deletion receipt changed during Collection identity verification; retry')
+                    self._guard_smart_replay(request, changes=prior['changes'])
                     self._rotate_backups(archive)
                     return self.snapshot(collection_pins=collection_pins)
                 raise ConflictError('This playlist attempt rolled back; refresh and retry explicitly')
@@ -506,8 +675,10 @@ class PlaylistStore:
                     if (self.root/'playlist-latest.json').exists() else None),
                 payload_sha256={name:_sha(archive/name) for name in PAYLOADS})
             atomic_bytes(archive/'operation.json',_json(record));sync_dir(archive);sync_dir(self.root)
-            conn=self.lease._connect()
+            conn=None;journal_started=False
             try:
+                _fault('archive-prepared')
+                conn=self.lease._connect()
                 conn.execute('BEGIN IMMEDIATE');self.lease._guard()
                 if _sha(self.xml)!=record['payload_sha256']['before.xml']:
                     raise ConflictError('Native playlist XML changed before publication')
@@ -515,26 +686,50 @@ class PlaylistStore:
                 # plan to the live source. SQL cannot mutate unrelated domains.
                 first,final=_affected(plan['changes'])
                 if not _matches(conn,first):raise ConflictError('Native playlist selection changed before save')
+                _require_tree_references(conn,request,deleted=False)
+                _require_creation_parents(conn,request,plan['changes'],after=False)
                 if collection_pins is not None:_require_collection_pins(conn,collection_pins)
                 for selected in (track for command in command_requests(request) for track in command['tracks']):
                     track=row(conn,'djmdContent',selected['track_id'])
                     if not track or track['UUID']!=selected['uuid'] or track['rb_local_deleted']!=0:
                         raise ConflictError('Native Collection track changed before save')
-                atomic_bytes(self.journal,_json(record));_fault('journal-ready')
+                for command in command_requests(request):
+                    if command['operation'] == 'create_smart':
+                        _require_smart_references(conn, command)
+                    elif command['operation'] == 'delete_smart':
+                        _require_smart_deletion_references(conn, command, deleted=False)
+                atomic_bytes(self.journal,_json(record));journal_started=True;_fault('journal-ready')
                 conn.set_authorizer(authorizer);apply_changes(conn,plan['changes'])
                 if not _matches(conn,final):raise WriteProofError('Native playlist target readback failed')
+                _require_tree_references(conn,request,deleted=True)
+                _require_creation_parents(conn,request,plan['changes'],after=True)
                 _fault('sql-applied');self.lease._guard()
                 if record['payload_sha256']['before.xml']!=record['payload_sha256']['after.xml']:
                     atomic_bytes(self.xml,plan['xml'])
                 _fault('xml-published')
                 self.lease._guard()
                 if collection_pins is not None:_require_collection_pins(conn,collection_pins)
+                for command in command_requests(request):
+                    if command['operation'] == 'create_smart':
+                        _require_smart_references(conn, command)
+                    elif command['operation'] == 'delete_smart':
+                        _require_smart_deletion_references(conn, command, deleted=True,
+                            expected_target=final[('djmdPlaylist', command['playlist_id'])],
+                            deleted_parents=_tree_deleted_parents(request,final))
                 if _sha(self.xml)!=record['payload_sha256']['after.xml']:
                     raise ConflictError('Native playlist XML changed before commit')
                 conn.commit();_fault('sql-committed')
             except BaseException:
-                conn.rollback();raise
-            finally:conn.close()
+                if conn is not None:conn.rollback()
+                if not journal_started and not self.journal.exists() and not self.journal.is_symlink():
+                    # This process has not entered its SQL/XML publication
+                    # boundary. Record that fact; a later explicit retry may
+                    # fork the intent even if external source state changed.
+                    atomic_bytes(archive/'result.json',_json({**record,'outcome':'not-started'}))
+                    sync_dir(archive)
+                raise
+            finally:
+                if conn is not None:conn.close()
             if self._recover_locked()!='committed':raise RecoveryRequired('Native playlist save did not verify')
             self._rotate_backups(archive)
             return self.snapshot()
@@ -654,6 +849,8 @@ class PlaylistStore:
         new operation is generated for an already committed source transaction.
         """
         validate_request(request)
+        if request['operation'] in ('create_smart', 'delete_smart', 'delete_tree'):
+            self._check_scope(request)
         with xml.parsing_session(), self.lease._lock():
             self._recover_locked();self._check_scope(request)
             archive=self.root/('playlist-'+request['operation_id'])
@@ -661,11 +858,25 @@ class PlaylistStore:
                 _regular(archive/'operation.json');record=json.loads((archive/'operation.json').read_bytes())
                 if record['request']!=request:raise RecoveryRequired('Playlist retry identity changed')
                 _regular(archive/'result.json');result=json.loads((archive/'result.json').read_bytes())
-                if result=={**record,'outcome':'committed'}:return request
-                if result!={**record,'outcome':'rolled-back'}:
+                if result=={**record,'outcome':'committed'}:
+                    self._guard_smart_replay(request, changes=record['changes'])
+                    return request
+                if result not in ({**record,'outcome':'rolled-back'},{**record,'outcome':'not-started'}):
                     raise RecoveryRequired('Unknown playlist retry outcome; evidence preserved')
             current=self.snapshot()
             stamp,clock=_timestamps()
+            if request['operation'] == 'delete_tree':
+                return renew_tree_delete_request(request,current,operation_id=uuid4().hex)
+            if request['operation'] == 'delete_smart':
+                return renew_smart_delete_request(request, current, operation_id=uuid4().hex)
+            if request['operation'] == 'create_smart':
+                renewed = renew_smart_request(request, current, operation_id=uuid4().hex)
+                if renewed['parent'] != 'root':
+                    attributes, _ = xml._target(self.xml.read_bytes(), renewed['parent'])
+                    renewed['smart_clocks']['parent_xml_timestamp'] = max(
+                        renewed['smart_clocks']['parent_xml_timestamp'], int(attributes['Timestamp']) + 1)
+                validate_request(renewed)
+                return renewed
             if request['operation']=='batch':
                 children=[{**child,'operation_id':uuid4().hex,'revision':current['revision'],
                            'timestamp':stamp,'survivor_timestamp':stamp,'xml_timestamp':clock}
@@ -674,12 +885,50 @@ class PlaylistStore:
             return {**request,'operation_id':uuid4().hex,'revision':current['revision'],
                     'timestamp':stamp,'survivor_timestamp':stamp,'xml_timestamp':clock}
 
+    def _guard_smart_replay(self, request, *, changes):
+        """A receipt supplies idempotence, never fresh reference authority."""
+        commands = [command for command in command_requests(request)
+                    if command['operation'] in ('create_smart', 'delete_smart')]
+        if not commands and request.get('operation') != 'delete_tree':
+            return
+        after_targets = _affected(changes)[1]
+        from .rekordbox_db import _copy_stable_snapshot
+        self.lease._guard()
+        with tempfile.TemporaryDirectory(prefix='soundbox-smart-replay-') as area:
+            captured = Path(area).resolve() / 'current.db'
+            _copy_stable_snapshot(self.database, captured)
+            conn = _connect(captured, readonly=True)
+            try:
+                if (_identity(conn) != (self.authority.library_id, '6000')
+                        or _schema(conn) != self.authority.schema_sha256):
+                    raise ConflictError('Smart-playlist replay source authority changed')
+                for command in commands:
+                    if command['operation'] == 'create_smart':
+                        _require_smart_references(conn, command)
+                    else:
+                        _require_smart_deletion_references(conn, command, deleted=True,
+                            expected_target=after_targets[('djmdPlaylist', command['playlist_id'])],
+                            deleted_parents=_tree_deleted_parents(request,after_targets))
+                _require_tree_references(conn,request,deleted=True)
+            finally:
+                conn.close()
+        self.lease._guard()
+
     def _check_scope(self, request):
-        if request.get('operation')=='batch':
+        if request.get('operation') in ('batch','delete_tree'):
             for child in request['requests']:self._check_scope(child)
             return
         if request.get('operation')=='reorder' and not self.authority.reorder_accepted:
             raise WriteProofError('Native playlist reordering requires separate acceptance')
+        if request.get('operation') == 'create_smart':
+            reason = smart_creation_reason(self.authority)
+            if reason:
+                raise WriteProofError(reason)
+        if request.get('operation') == 'delete_smart':
+            reason = smart_deletion_reason(self.authority,
+                profile=request['smart_delete_profile'])
+            if reason:
+                raise WriteProofError(reason)
         bound=self.authority.pilot_playlist_ids
         if bound and request.get('playlist_id') not in bound:
             raise WriteProofError('This acceptance pilot binds a different playlist')
@@ -715,6 +964,25 @@ class PlaylistStore:
                 return catalog(conn)
             finally:conn.close()
 
+    def propose_smart_creation(self, request):
+        """Fresh read-only proposal; grants no capability or source publisher."""
+        validate_request(request)
+        if request['operation'] != 'create_smart':
+            raise WriteProofError('Smart creation preview requires a create-only intent')
+        from .rekordbox_db import _copy_stable_snapshot
+        with tempfile.TemporaryDirectory(prefix='soundbox-smart-create-proposal-') as area:
+            captured = Path(area).resolve() / 'master.db'
+            _copy_stable_snapshot(self.database, captured)
+            conn = _connect(captured, readonly=True)
+            try:
+                if (_identity(conn) != (self.authority.library_id, '6000')
+                        or _schema(conn) != self.authority.schema_sha256):
+                    raise ConflictError('Native smart-playlist read library/schema changed')
+                self._guard_xml()
+                return smart_creation_proposal(conn, request, self.xml.read_bytes())
+            finally:
+                conn.close()
+
 
 def _fault(_phase):
     """Synthetic fault tests only; never inject faults into Sonny's source."""
@@ -731,10 +999,12 @@ def build_plan(conn, request, before_xml):
 
 def _build_plan(conn, request, before_xml):
     validate_request(request)
-    if request['operation']!='batch':return _single_plan(conn,request,before_xml)
+    if request['operation'] not in ('batch','delete_tree'):return _single_plan(conn,request,before_xml)
     original=catalog(conn)
     if original['revision']!=request['revision']:
         raise ConflictError('Native playlist batch baseline changed; refresh and retry')
+    if request['operation'] == 'delete_tree' and tree_bindings(original, request['playlist_id']) != request['descendants']:
+        raise ConflictError('Playlist deletion descendants changed; the captured tree is preserved')
     current=deepcopy(original);counter=row(conn,'agentRegistry','localUpdateCount')
     # Reconstruct this private batch by exact row identity. Dict insertion order
     # matches append/replacement/deletion order in the catalog lists. Retain the
@@ -779,6 +1049,10 @@ def _build_plan(conn, request, before_xml):
 def _single_plan(conn, request, before_xml, *, current=None,counter=None):
     from datetime import datetime
     validate_request(request)
+    if request['operation'] == 'create_smart':
+        return _smart_creation_plan(conn, request, before_xml, current=current, counter=counter)
+    if request['operation'] == 'delete_smart':
+        return _smart_deletion_plan(conn, request, before_xml, current=current, counter=counter)
     current=catalog(conn) if current is None else current
     nodes=current['nodes'];members=current['members']
     if current['revision']!=request['revision']:
@@ -790,6 +1064,10 @@ def _single_plan(conn, request, before_xml, *, current=None,counter=None):
     changes=[];after_xml=before_xml
     target=next((r for r in nodes if r['ID']==target_id),None)
     if op=='create':
+        if 'parent_uuid' in request and request['parent']!='root':
+            parent=next((node for node in nodes if node['ID']==request['parent']),None)
+            if parent is None or parent['UUID']!=request['parent_uuid']:
+                raise ConflictError('The captured playlist folder disappeared or was replaced')
         if int(target_id) in xml.identities(before_xml):raise ConflictError('Playlist ID collides with XML history')
         first=planner.create(nodes,counter,identity=target_id,uuid=request['playlist_uuid'],
             name='Untitled Folder' if request['folder'] else 'Untitled Playlist',timestamp=request['timestamp'],
@@ -825,6 +1103,9 @@ def _single_plan(conn, request, before_xml, *, current=None,counter=None):
                     occupied|={track['id'],track['membership_uuid']}
                 else:
                     matches=[r for r in target_members if r['ContentID']==track['track_id'] and r['rb_local_deleted']==0]
+                    if 'membership_id' in track:
+                        matches=[r for r in matches if r['ID']==track['membership_id']
+                                 and r['UUID']==track['source_membership_uuid']]
                     if not matches:raise ConflictError('Selected song is no longer in this native playlist')
                     # One row per explicit selected occurrence. A duplicate
                     # track is removed in source order, never from another list.
@@ -867,10 +1148,419 @@ def _timestamps():
     return now.strftime('%Y-%m-%d %H:%M:%S.')+f'{now.microsecond//1000:03d} +00:00',int(now.timestamp()*1000)
 
 
+def _smart_parent_uuid(parent, value):
+    if parent == 'root':
+        if value != '':
+            raise WriteProofError('Root smart-playlist parent has no native UUID')
+        return
+    try:
+        if type(value) is not str or str(UUID(value)) != value:
+            raise ValueError('UUID')
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise WriteProofError('Smart-playlist parent UUID is unavailable') from exc
+
+
+def _smart_tag_binding(tag):
+    names = ('id', 'uuid', 'name', 'category', 'category_id', 'category_uuid')
+    if isinstance(tag, dict):
+        if set(tag) - set(names):
+            raise ValueError('Unknown smart-playlist My Tag binding')
+        result = {name: tag.get(name, '') for name in names}
+    else:
+        result = dict(id=tag.tag_id, uuid=tag.source_uuid, name=tag.name, category=tag.category,
+                      category_id=getattr(tag, 'category_id', ''),
+                      category_uuid=getattr(tag, 'category_uuid', ''))
+    if not result['category_id'] and not result['category']:
+        result['category_id'] = 'root'
+    return result
+
+
+def _tag_reference_uuid(value):
+    # Native built-in categories include opaque identities such as Genre's
+    # literal "1". They are read-only exact pins, never generated SQL UUIDs.
+    if type(value) is not str or not value or len(value) > 4096 or '\0' in value:
+        raise WriteProofError('Native My Tag reference UUID is unavailable')
+
+
+def _tag_reference_state(tag, local_counter):
+    """Observed active read-reference envelopes; grants no tag-definition write."""
+    fields = ('rb_data_status', 'rb_local_data_status', 'rb_local_deleted', 'rb_local_synced', 'rb_local_usn')
+    if (any(type(tag.get(field)) is not int for field in fields)
+            or tag['rb_local_data_status'] != 0 or tag['rb_local_deleted'] != 0
+            or not 0 <= tag['rb_local_usn'] <= local_counter < 2**63):
+        raise ConflictError('Unverified active My Tag reference state')
+    local = (tag['rb_data_status'] == 0 and tag['rb_local_synced'] in (0, 1) and tag.get('usn') is None)
+    historical = (tag['rb_data_status'] in (256, 257) and tag['rb_local_synced'] == 1
+                  and type(tag.get('usn')) is int and 0 <= tag['usn'] < 2**63)
+    if not (local or historical):
+        raise ConflictError('Unverified active My Tag reference state')
+    _tag_reference_uuid(tag.get('UUID'))
+
+
+def _validate_smart_tags(tags):
+    if not isinstance(tags, list) or not 1 <= len(tags) <= 64:
+        raise WriteProofError('Select one to 64 My Tags for the new playlist')
+    fields = {'id', 'uuid', 'name', 'category', 'category_id', 'category_uuid'}
+    identities, uuids = set(), set()
+    for tag in tags:
+        if (not isinstance(tag, dict) or set(tag) != fields
+                or any(type(value) is not str or len(value) > 4096 or '\0' in value for value in tag.values())
+                or not tag['name'].strip()):
+            raise WriteProofError('Invalid smart-playlist My Tag binding')
+        for name in ('id', 'category_id'):
+            value = tag[name]
+            if name == 'category_id' and value == 'root':
+                continue
+            if (not value.isascii() or not value.isdecimal()
+                    or not 0 < int(value) < 2**32 or str(int(value)) != value):
+                raise WriteProofError('Invalid smart-playlist My Tag identity')
+        _tag_reference_uuid(tag['uuid'])
+        if tag['category_id'] == 'root':
+            if tag['category_uuid'] != '':
+                raise WriteProofError('Root My Tag reference has no category UUID')
+        else:
+            _tag_reference_uuid(tag['category_uuid'])
+        if ((tag['category_id'] == 'root') != (tag['category'] == '')
+                or tag['id'] in identities or tag['uuid'] in uuids):
+            raise WriteProofError('Ambiguous smart-playlist My Tag binding')
+        identities.add(tag['id']); uuids.add(tag['uuid'])
+
+
+def _fresh_smart_tags(conn, selections, counter):
+    """Bind leaves and their categories to one fresh source observation."""
+    _validate_smart_tags(selections)
+    definitions = _rows(conn, 'djmdMyTag')
+    for selected in selections:
+        leaves = [tag for tag in definitions if tag.get('ID') == selected['id']]
+        if len(leaves) != 1:
+            raise ConflictError('Selected My Tag is missing or ambiguous')
+        leaf = leaves[0]
+        _tag_reference_state(leaf, counter['int_1'])
+        if (leaf.get('Attribute') != 0 or leaf.get('UUID') != selected['uuid']
+                or leaf.get('Name') != selected['name'] or leaf.get('ParentID') != selected['category_id']
+                or sum(tag.get('UUID') == selected['uuid'] for tag in definitions) != 1):
+            raise ConflictError('Selected My Tag changed; refresh before creating its playlist')
+        if selected['category_id'] == 'root':
+            continue
+        categories = [tag for tag in definitions if tag.get('ID') == selected['category_id']]
+        if len(categories) != 1:
+            raise ConflictError('Selected My Tag category is missing or ambiguous')
+        category = categories[0]
+        _tag_reference_state(category, counter['int_1'])
+        if (category.get('Attribute') != 1 or category.get('UUID') != selected['category_uuid']
+                or category.get('Name') != selected['category']
+                or sum(tag.get('UUID') == selected['category_uuid'] for tag in definitions) != 1):
+            raise ConflictError('Selected My Tag category changed; refresh before creating its playlist')
+    return deepcopy(selections)
+
+
+def smart_creation_proposal(conn, request, before_xml):
+    """Complete copy plan; source authority still requires its explicit profile.
+
+    Constructor/placement and the combined Name+rule save are observed native
+    windows. Their counters are not inferred individual SQL statement counts.
+    This callable remains suitable for a read-only captured reference/TEMP proof.
+    """
+    plan = _smart_creation_plan(conn, request, before_xml)
+    return dict(plan, format='soundbox-smart-playlist-create-proposal-v1',
+                request=deepcopy(request), source_write_authority=False,
+                provisional=True, complete_sql_plan=True)
+
+
+def _smart_deletion_context(conn, request, before_xml, *, current=None, counter=None):
+    """Fresh exact read-only inputs for the measured deletion primitive."""
+    validate_request(request)
+    if request['operation'] != 'delete_smart':
+        raise WriteProofError('Smart deletion preview requires a delete-only intent')
+    current = catalog(conn) if current is None else current
+    if current['revision'] != request['revision']:
+        raise ConflictError('Smart playlist baseline changed before deletion preview')
+    context = planner.smart_delete_context(current['nodes'], current['members'],
+        row(conn, 'agentRegistry', 'localUpdateCount') if counter is None else counter, identity=request['playlist_id'],
+        uuid=request['playlist_uuid'], parent=request['parent'], parent_uuid=request['parent_uuid'],
+        rule=request['smart_rule'])
+    synced = request['smart_delete_profile'] == SMART_LOCAL_DELETE_PROFILE
+    if context['target']['rb_local_synced'] != int(synced):
+        raise ConflictError('Smart deletion history differs from its captured profile')
+    attributes, _ = xml._target(before_xml, request['playlist_id'], created_smart=True)
+    expected_parent = 0 if request['parent'] == 'root' else int(request['parent'])
+    if int(attributes['ParentId'], 16) != expected_parent:
+        raise ConflictError('Smart playlist deletion DB/XML parent differs')
+    if request['parent'] != 'root':
+        parent_attributes, _ = xml._target(before_xml, request['parent'])
+        parent = context['parent']
+        parent_id = 0 if parent['ParentID'] == 'root' else int(parent['ParentID'])
+        if parent_attributes['Attribute'] != '1' or int(parent_attributes['ParentId'], 16) != parent_id:
+            raise ConflictError('Smart playlist deletion parent DB/XML identity differs')
+    return dict(context, request=deepcopy(request), xml=before_xml, catalog=current)
+
+
+def smart_deletion_proposal(conn, request, before_xml):
+    """Complete measured TEMP plan; this supplies no source capability."""
+    return dict(_smart_deletion_plan(conn, request, before_xml), request=deepcopy(request),
+                complete_sql_plan=True, source_write_authority=False)
+
+
+def _require_smart_deletion_references(conn, request, *, deleted, expected_target=None, deleted_parents=None):
+    counter = row(conn, 'agentRegistry', 'localUpdateCount')
+    if counter is None or type(counter.get('int_1')) is not int or not 0 <= counter['int_1'] < 2**63:
+        raise ConflictError('Smart deletion source counter is invalid')
+    if request['parent'] != 'root':
+        parent = row(conn, 'djmdPlaylist', request['parent'])
+        if deleted and deleted_parents is not None and request['parent'] in deleted_parents:
+            if parent != deleted_parents[request['parent']]:
+                raise ConflictError('Deleted containing folder differs from its exact tree plan')
+        else:
+            if parent is None or parent['UUID'] != request['parent_uuid']:
+                raise ConflictError('Smart deletion parent disappeared or was replaced')
+            planner._ordinary(parent, folder=True)
+            if parent['Attribute'] != 1 or parent['rb_local_usn'] > counter['int_1']:
+                raise ConflictError('Smart deletion destination is no longer a verified folder')
+    target = row(conn, 'djmdPlaylist', request['playlist_id'])
+    synced = request['smart_delete_profile'] == SMART_LOCAL_DELETE_PROFILE
+    if deleted:
+        nodes = _rows(conn, 'djmdPlaylist')
+        if synced:
+            if (expected_target is None or target != expected_target
+                    or target is None or target.get('UUID') != request['playlist_uuid']
+                    or target.get('ParentID') != request['parent'] or target.get('SmartList') != request['smart_rule']
+                    or target.get('Attribute') != 4
+                    or any(type(target.get(field)) is not int or target[field] != value for field, value in
+                           (('rb_data_status', 2), ('rb_local_data_status', 0),
+                            ('rb_local_deleted', 1), ('rb_local_synced', 1)))
+                    or target.get('usn') is not None or type(target.get('rb_local_usn')) is not int
+                    or not 0 <= target['rb_local_usn'] <= counter['int_1']):
+                raise ConflictError('Deleted smart-playlist tombstone changed; preserve its receipt')
+        elif target is not None:
+            raise ConflictError('Deleted smart-playlist identity reappeared; refresh before acknowledging')
+        if (any((node.get('UUID') == request['playlist_uuid'] and node['ID'] != request['playlist_id'])
+                or node.get('ParentID') == request['playlist_id'] for node in nodes)
+                or any(member.get('PlaylistID') == request['playlist_id']
+                       for member in _rows(conn, 'djmdSongPlaylist'))):
+            raise ConflictError('Deleted smart-playlist UUID, children or membership history reappeared')
+    else:
+        current = catalog(conn)
+        planner.smart_delete_context(current['nodes'], current['members'], counter,
+            identity=request['playlist_id'], uuid=request['playlist_uuid'], parent=request['parent'],
+            parent_uuid=request['parent_uuid'], rule=request['smart_rule'])
+        if target is None or target['rb_local_synced'] != int(synced):
+            raise ConflictError('Smart deletion history differs from its captured profile')
+
+
+def _smart_deletion_plan(conn, request, before_xml, *, current=None, counter=None):
+    # The measured open-native SQL window is pure/copy-only until the separate
+    # capability admits its completed reference profile. Never borrow CRUD.
+    preview = _smart_deletion_context(conn, request, before_xml, current=current, counter=counter)
+    observed = preview['counter']
+    if counter is not None and counter != observed:
+        raise ConflictError('Smart deletion counter differs from its fresh baseline')
+    clocks = request['smart_delete_clocks']
+    following = [row for row in preview['siblings'] if row['Seq'] > preview['target']['Seq']]
+    actual_clocks = [_smart_sql_clock(clocks.get(row['ID'])) for row in following]
+    if actual_clocks != sorted(actual_clocks):
+        raise ConflictError('Smart deletion clocks changed sibling order')
+    for sibling in following:
+        attributes, _ = xml._target(before_xml, sibling['ID'], created_smart=sibling['Attribute'] == 4)
+        parent = 0 if request['parent'] == 'root' else int(request['parent'])
+        if (int(attributes['ParentId'], 16) != parent
+                or int(attributes['Attribute']) != sibling['Attribute']):
+            raise ConflictError('Smart deletion sibling DB/XML identity differs')
+    current = preview['catalog']
+    result = planner.delete_smart(current['nodes'], current['members'], observed,
+        identity=request['playlist_id'], uuid=request['playlist_uuid'],
+        parent=request['parent'], parent_uuid=request['parent_uuid'], rule=request['smart_rule'],
+        sibling_timestamps=clocks, timestamp=request['timestamp'])
+    xml.validate_transition(before_xml, before_xml, result['changes'], smart_deleted=(request['playlist_id'],))
+    return dict(result, xml=before_xml, catalog=current)
+
+
+def _require_smart_references(conn, request):
+    counter = row(conn, 'agentRegistry', 'localUpdateCount')
+    if counter is None:
+        raise ConflictError('Native local update counter is unavailable')
+    if (counter.get('registry_id') != 'localUpdateCount' or type(counter.get('int_1')) is not int
+            or not 0 <= counter['int_1'] < 2**63):
+        raise ConflictError('Native local update counter is invalid')
+    selected = _fresh_smart_tags(conn, request['tags'], counter)
+    if request['parent'] != 'root':
+        parent = row(conn, 'djmdPlaylist', request['parent'])
+        if parent is None or parent['UUID'] != request['parent_uuid']:
+            raise ConflictError('Native smart-playlist parent changed or was replaced')
+        planner._ordinary(parent, folder=True)
+        if parent['Attribute'] != 1 or parent['rb_local_usn'] > counter['int_1']:
+            raise ConflictError('Native smart-playlist destination is no longer a folder')
+    return selected, counter
+
+
+def _smart_creation_plan(conn, request, before_xml, *, current=None, counter=None):
+    validate_request(request)
+    if request['operation'] != 'create_smart':
+        raise WriteProofError('Smart creation proposal requires its create-only intent')
+    current = catalog(conn) if current is None else current
+    if current['revision'] != request['revision']:
+        raise ConflictError('Native playlist baseline changed before smart creation preview')
+    selected, observed_counter = _require_smart_references(conn, request)
+    if counter is not None and counter != observed_counter:
+        raise ConflictError('Smart creation counter differs from its fresh source base')
+    counter = observed_counter
+    reason = smart_creation_parent_reason(current, request['parent'])
+    if reason:
+        raise WriteProofError(reason)
+    parent_xml = before_xml
+    if request['parent'] != 'root':
+        parents = [node for node in current['nodes'] if node['ID'] == request['parent']]
+        if len(parents) != 1 or parents[0]['UUID'] != request['parent_uuid']:
+            raise ConflictError('Native smart-playlist parent changed or was replaced')
+        attributes, _ = xml._target(before_xml, request['parent'])
+        xml_parent = 0 if parents[0]['ParentID'] == 'root' else int(parents[0]['ParentID'])
+        if attributes['Attribute'] != '1' or int(attributes['ParentId'], 16) != xml_parent:
+            raise ConflictError('Native smart-playlist parent DB/XML identity differs')
+        siblings = planner._siblings(current['nodes'], request['parent'])
+        for sibling in siblings:
+            attributes, _ = xml._target(before_xml, sibling['ID'], created_smart=True)
+            if int(attributes['ParentId'], 16) != int(request['parent']):
+                raise ConflictError('Native smart sibling DB/XML parent differs')
+            if sibling['rb_local_usn'] > counter['int_1']:
+                raise ConflictError('Native smart sibling clock exceeds the current source counter')
+        placed = [_smart_sql_clock(request['smart_clocks']['position_timestamp']),
+                  *[_smart_sql_clock(request['smart_clocks']['sibling_timestamps'].get(node['ID']))
+                    for node in siblings]]
+        if placed != sorted(placed):
+            raise ConflictError('Native smart placement clocks changed sibling order')
+        parent_xml = xml.touch(before_xml, request['parent'], request['smart_clocks']['parent_xml_timestamp'])
+    if int(request['playlist_id']) in xml.identities(before_xml):
+        raise ConflictError('Smart-playlist identity collides with XML history')
+    clocks = request['smart_clocks']
+    proposed = planner.create_smart(current['nodes'], counter,
+        identity=request['playlist_id'], uuid=request['playlist_uuid'], name=request['name'],
+        tag_ids=[tag['id'] for tag in selected], timestamp=request['timestamp'],
+        definition_timestamp=request['survivor_timestamp'], parent=request['parent'],
+        position_timestamp=clocks.get('position_timestamp'), sibling_timestamps=clocks.get('sibling_timestamps'))
+    constructor_xml = xml.append_smart_node(parent_xml, request['playlist_id'], request['parent'])
+    desired_xml = xml._touch(constructor_xml, request['playlist_id'], request['xml_timestamp'], created_smart=True)
+    first, final = _affected(proposed['changes'])
+    # Preserve the ordered SQL chain separately. XML sees the exact absent→final
+    # new row and narrowly scoped sibling position fields, never a generic
+    # existing intelligent-list editor.
+    xml_changes = [dict(table=table, id=identity, before=before, after=final[(table, identity)])
+                   for (table, identity), before in first.items()]
+    xml.validate_transition(before_xml, desired_xml, xml_changes,
+        touched_playlists=(request['parent'],) if request['parent'] != 'root' else (),
+        smart_created=(request['playlist_id'],))
+    return dict(proposed, xml=desired_xml, constructor_xml=constructor_xml,
+                catalog=current, tag_bindings=selected, smart_profile=SMART_CREATE_PROFILE)
+
+
+def _smart_clock_bundle(current, parent):
+    stamp, clock = _timestamps()
+    if parent == 'root':
+        return dict(timestamp=stamp, survivor_timestamp=stamp, xml_timestamp=clock, smart_clocks={})
+    reason = smart_creation_parent_reason(current, parent)
+    if reason:
+        raise WriteProofError(reason)
+    siblings = planner._siblings(current['nodes'], parent)
+    position, _ = _timestamps()
+    shifts = {node['ID']: _timestamps()[0] for node in siblings}
+    definition, final_xml = _timestamps()
+    return dict(timestamp=stamp, survivor_timestamp=definition, xml_timestamp=final_xml,
+        smart_clocks=dict(position_timestamp=position, sibling_timestamps=shifts, parent_xml_timestamp=clock))
+
+
+def _smart_delete_clock_bundle(current, identity):
+    reason = planner.smart_delete_reason(current['nodes'], identity)
+    if reason:
+        raise WriteProofError(reason)
+    target = next(row for row in current['nodes'] if row['ID'] == identity)
+    following = [row for row in planner._siblings(current['nodes'], target['ParentID'])
+                 if row['Seq'] > target['Seq']]
+    stamp, clock = _timestamps()
+    mapping = {row['ID']: _timestamps()[0] for row in following}
+    end = list(mapping.values())[-1] if mapping else stamp
+    return dict(timestamp=stamp, survivor_timestamp=end, xml_timestamp=clock, smart_delete_clocks=mapping)
+
+
+def renew_smart_delete_request(request, current, *, operation_id=None):
+    """Persist renewed clocks only after a proven causal edge or explicit retry."""
+    validate_request(request)
+    if request['operation'] != 'delete_smart':
+        raise WriteProofError('Smart deletion renewal requires a delete-only intent')
+    result = {**deepcopy(request), 'revision': current['revision'],
+              **_smart_delete_clock_bundle(current, request['playlist_id'])}
+    if operation_id is not None:
+        result['operation_id'] = operation_id
+    validate_request(result)
+    return result
+
+
+def renew_smart_request(request, current, *, operation_id=None):
+    """Capture a new durable clock/mapping bundle after a proven rebase or retry.
+
+    This helper supplies no causal/source authority. The caller must first prove
+    an unstarted causal edge or explicit retry and persist the returned intent
+    before admission. Captured target, parent UUID and tag references stay exact.
+    """
+    validate_request(request)
+    if request['operation'] != 'create_smart':
+        raise WriteProofError('Smart clock renewal requires a create-only intent')
+    result = {**deepcopy(request), 'revision': current['revision'],
+              **_smart_clock_bundle(current, request['parent'])}
+    if operation_id is not None:
+        result['operation_id'] = operation_id
+    validate_request(result)
+    return result
+
+
+def _smart_sql_clock(value):
+    from datetime import datetime
+    try:
+        if type(value) is not str:
+            raise ValueError('Clock')
+        parsed = datetime.fromisoformat(value.replace(' +00:00', '+00:00'))
+        canonical = parsed.strftime('%Y-%m-%d %H:%M:%S.') + f'{parsed.microsecond//1000:03d} +00:00'
+        if value != canonical:
+            raise ValueError('Clock')
+        return parsed
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise WriteProofError('Invalid native smart-playlist phase clock') from exc
+
+
+def _validate_smart_clocks(request):
+    clocks = request['smart_clocks']
+    if not isinstance(clocks, dict):
+        raise WriteProofError('Invalid native smart-playlist clock bundle')
+    created = _smart_sql_clock(request['timestamp'])
+    definition = _smart_sql_clock(request['survivor_timestamp'])
+    if created > definition:
+        raise WriteProofError('Native smart definition precedes its constructor')
+    if request['parent'] == 'root':
+        if clocks:
+            raise WriteProofError('Root smart creation has no folder placement clock bundle')
+        return
+    if set(clocks) != {'position_timestamp', 'sibling_timestamps', 'parent_xml_timestamp'}:
+        raise WriteProofError('Unknown native smart-folder clock bundle')
+    shifted = clocks['sibling_timestamps']
+    if (not isinstance(shifted, dict) or not 1 <= len(shifted) <= 4096
+            or type(clocks['parent_xml_timestamp']) is not int
+            or not 0 < clocks['parent_xml_timestamp'] < 2**63):
+        raise WriteProofError('Invalid native smart-folder placement clocks')
+    position = _smart_sql_clock(clocks['position_timestamp'])
+    if not created <= position <= definition:
+        raise WriteProofError('Native smart-folder position clock is outside its phase window')
+    for identity, timestamp in shifted.items():
+        if (type(identity) is not str or not identity.isascii() or not identity.isdecimal()
+                or not 0 < int(identity) < 2**32 or str(int(identity)) != identity
+                or not position <= _smart_sql_clock(timestamp) <= definition):
+            raise WriteProofError('Invalid native smart-folder sibling clock')
+
+
 def request_for(catalog, operation, *, identity=None, name='', parent='root', folder=False,
-                tracks=(), allow_duplicate=False,anchor_id=None,after=False):
+                tracks=(), allow_duplicate=False,anchor_id=None,after=False,tags=(),match='any',memberships=None):
+    if operation == 'delete_tree':
+        if tracks or tags or memberships is not None or folder or allow_duplicate or match != 'any':
+            raise WriteProofError('Tree deletion does not admit membership or creation options')
+        return tree_delete_for(catalog, identity)
     nodes=catalog['nodes'];target=next((r for r in nodes if r['ID']==identity),None)
-    if operation=='create':
+    if operation in ('create', 'create_smart'):
         occupied={r['ID'] for r in nodes};identity=str(secrets.randbelow(2**32-1)+1)
         while identity in occupied:identity=str(secrets.randbelow(2**32-1)+1)
     elif target is None:raise ValueError('Native playlist is no longer in the library')
@@ -881,16 +1571,97 @@ def request_for(catalog, operation, *, identity=None, name='', parent='root', fo
         xml_timestamp=clock,allow_duplicate=bool(allow_duplicate),
         tracks=[dict(track_id=getattr(t,'native_id',t.track_id),uuid=t.source_uuid,id=str(uuid4()),membership_uuid=str(uuid4()))
                 for t in tracks])
+    if operation=='create':
+        parents=[node for node in nodes if node['ID']==parent and node['rb_local_deleted']==0]
+        if parent!='root' and (len(parents)!=1 or parents[0]['Attribute']!=1):
+            raise WriteProofError('The selected playlist folder is no longer available')
+        request['parent_uuid']='' if parent=='root' else parents[0]['UUID']
+    if memberships is not None:
+        if operation != 'remove' or len(memberships) != len(request['tracks']):
+            raise WriteProofError('Exact membership selections belong only to playlist removal')
+        for selected, track in zip(memberships, request['tracks'], strict=True):
+            if (not isinstance(selected, dict) or selected.get('PlaylistID') != identity
+                    or selected.get('ContentID') != track['track_id']):
+                raise WriteProofError('Selected native playlist occurrence changed')
+            matches = [row for row in catalog['members'] if row['PlaylistID'] == identity
+                       and row['ContentID'] == track['track_id'] and row['rb_local_deleted'] == 0
+                       and row['ID'] == selected.get('ID') and row['UUID'] == selected.get('UUID')]
+            if len(matches) != 1:
+                raise WriteProofError('Selected native playlist occurrence disappeared or was replaced')
+            track.update(membership_id=selected.get('ID'), source_membership_uuid=selected.get('UUID'))
     if operation=='reorder':
         anchor=next((r for r in nodes if r['ID']==anchor_id),None)
         if anchor is None or target is None:raise ValueError('Native reorder anchor is no longer in the library')
         request.update(parent=target['ParentID'],anchor_id=anchor_id,anchor_uuid=anchor['UUID'],after=after)
+    if operation == 'create_smart':
+        parent_uuid = ''
+        if parent != 'root':
+            parent_row = next((node for node in nodes if node['ID'] == parent), None)
+            if parent_row is None:
+                raise ValueError('Native smart-playlist parent is unavailable')
+            parent_uuid = parent_row['UUID']
+        request.update(parent_uuid=parent_uuid,
+                       tags=[_smart_tag_binding(tag) for tag in tags], match=match,
+                       smart_profile=SMART_CREATE_PROFILE, **_smart_clock_bundle(catalog, parent))
+    elif operation == 'delete_smart':
+        if tags or match != 'any':
+            raise WriteProofError('Smart deletion does not admit condition edits')
+        if target is None or target.get('Attribute') != 4:
+            raise WriteProofError('Smart deletion requires an existing intelligent playlist')
+        parent = target['ParentID']
+        parents = [node for node in nodes if node['ID'] == parent]
+        if parent != 'root' and len(parents) != 1:
+            raise WriteProofError('Smart-playlist parent is missing or ambiguous')
+        request.update(parent=parent, parent_uuid='' if parent == 'root' else parents[0]['UUID'],
+                       smart_rule=target['SmartList'], smart_delete_profile=(SMART_LOCAL_DELETE_PROFILE
+                           if target.get('rb_local_synced') == 1 else SMART_DELETE_PROFILE),
+                       **_smart_delete_clock_bundle(catalog, identity))
+    elif tags or match != 'any':
+        raise ValueError('My Tag conditions belong only to new smart playlists')
     validate_request(request)
     return request
 
 
 
 def validate_request(request):
+    if isinstance(request,dict) and request.get('operation') == 'delete_tree':
+        fields={'operation_id','operation','revision','playlist_id','playlist_uuid','descendants','requests'}
+        if (set(request) != fields or not isinstance(request['requests'],list)
+                or not 1 <= len(request['requests']) <= MAX_TREE_DELETE_COMMANDS
+                or not isinstance(request['descendants'],list)
+                or len(request['descendants']) != len(request['requests'])):
+            raise WriteProofError('Invalid captured playlist tree deletion')
+        for field, length in (('operation_id',32),('revision',64)):
+            value=request[field]
+            if type(value) is not str or len(value)!=length or any(char not in '0123456789abcdef' for char in value):
+                raise WriteProofError('Invalid tree-deletion operation identity')
+        ids=set();operations={request['operation_id']};positions={}
+        for position,(binding,child) in enumerate(zip(request['descendants'],request['requests'],strict=True)):
+            if (not isinstance(binding,dict) or set(binding)!={'id','uuid','parent','attribute'}
+                    or type(binding['attribute']) is not int or binding['attribute'] not in (0,1,4)
+                    or not isinstance(child,dict)
+                    or child.get('operation') != ('delete_smart' if binding['attribute']==4 else 'delete')):
+                raise WriteProofError('Tree deletion exceeds its selected leaf operations')
+            validate_request(child)
+            if (child['revision'] != request['revision'] or child['playlist_id'] != binding['id']
+                    or child['playlist_uuid'] != binding['uuid'] or child['parent'] != binding['parent'] or binding['id'] in ids
+                    or child['operation_id'] in operations):
+                raise WriteProofError('Tree deletion repeats or replaces a captured native identity')
+            parent=binding['parent']
+            if (type(parent) is not str or parent!='root' and
+                    (not parent.isascii() or not parent.isdecimal() or not 0<int(parent)<2**32 or str(int(parent))!=parent)):
+                raise WriteProofError('Tree deletion has an invalid parent identity')
+            ids.add(binding['id']);operations.add(child['operation_id']);positions[binding['id']]=position
+        root=request['descendants'][-1]
+        if (root['id'] != request['playlist_id'] or root['uuid'] != request['playlist_uuid']
+                or root['attribute'] != 1 or root['parent'] in ids):
+            raise WriteProofError('Tree deletion does not end at its exact selected root folder')
+        by_id={binding['id']:binding for binding in request['descendants']}
+        for binding in request['descendants'][:-1]:
+            parent=binding['parent']
+            if parent not in ids or by_id[parent]['attribute'] != 1 or positions[parent] <= positions[binding['id']]:
+                raise WriteProofError('Tree deletion must remove selected descendants before their parents')
+        return
     if isinstance(request,dict) and request.get('operation')=='batch':
         if (set(request)!={'operation_id','operation','revision','requests'}
                 or not isinstance(request['requests'],list) or not 1<=len(request['requests'])<=MAX_BATCH_COMMANDS):
@@ -913,7 +1684,13 @@ def validate_request(request):
         return
     fields={'operation_id','operation','playlist_id','playlist_uuid','revision','name','parent','tracks',
             'timestamp','survivor_timestamp','xml_timestamp','folder','allow_duplicate'}
+    if isinstance(request,dict) and request.get('operation')=='create' and 'parent_uuid' in request:
+        fields|={'parent_uuid'}
     if isinstance(request,dict) and request.get('operation')=='reorder':fields|={'anchor_id','anchor_uuid','after'}
+    if isinstance(request,dict) and request.get('operation')=='create_smart':
+        fields|={'parent_uuid','tags','match','smart_profile','smart_clocks'}
+    if isinstance(request,dict) and request.get('operation')=='delete_smart':
+        fields|={'parent_uuid','smart_rule','smart_delete_profile','smart_delete_clocks'}
     if not isinstance(request,dict) or set(request)!=fields:
         raise WriteProofError('Unknown native playlist intent format')
     for key,length in (('operation_id',32),('revision',64)):
@@ -931,17 +1708,33 @@ def validate_request(request):
             if str(UUID(request[key]))!=request[key]:raise ValueError('UUID')
     except (ValueError,TypeError,AttributeError) as exc:
         raise WriteProofError('Invalid native playlist UUID') from exc
-    if (request['operation'] not in ('create','rename','delete','append','remove','reorder')
+    if (request['operation'] not in ('create','rename','delete','append','remove','reorder','create_smart','delete_smart')
             or type(request['folder']) is not bool or type(request['allow_duplicate']) is not bool
             or type(request['xml_timestamp']) is not int or not 0<request['xml_timestamp']<2**63
             or type(request['name']) is not str or '\0' in request['name']
             or not isinstance(request['tracks'],list) or len(request['tracks'])>16384):
         raise WriteProofError('Invalid native playlist operation')
     if (bool(request['tracks'])!=(request['operation'] in ('append','remove'))
-            or request['operation'] in ('create','rename') and not request['name'].strip()):
+            or request['operation'] in ('create','rename','create_smart') and not request['name'].strip()):
         raise WriteProofError('Native playlist operation has an invalid selection')
     if request['operation']=='reorder' and (type(request['after']) is not bool or request['anchor_id']==request['playlist_id']):
         raise WriteProofError('Invalid native reorder anchor')
+    if request['operation'] == 'create_smart':
+        if (request['folder'] or request['allow_duplicate'] or request['match'] != 'any'
+                or request['smart_profile'] != SMART_CREATE_PROFILE):
+            raise WriteProofError('Smart creation admits only new positive My Tag ANY/OR playlists')
+        _validate_smart_tags(request['tags'])
+        _smart_parent_uuid(request['parent'], request['parent_uuid'])
+    if request['operation']=='create' and 'parent_uuid' in request:
+        _smart_parent_uuid(request['parent'],request['parent_uuid'])
+    if request['operation'] == 'delete_smart':
+        if (request['folder'] or request['allow_duplicate']
+                or request['smart_delete_profile'] not in (SMART_DELETE_PROFILE, SMART_LOCAL_DELETE_PROFILE)
+                or request['smart_rule'] is not None and
+                (type(request['smart_rule']) is not str or len(request['smart_rule']) > 1024*1024
+                 or '\0' in request['smart_rule'])):
+            raise WriteProofError('Invalid or unreferenced smart-playlist deletion intent')
+        _smart_parent_uuid(request['parent'], request['parent_uuid'])
     from datetime import datetime
     for field in ('timestamp','survivor_timestamp'):
         value=request[field]
@@ -952,11 +1745,33 @@ def validate_request(request):
             if value!=canonical:raise ValueError('Timestamp')
         except (ValueError,TypeError,AttributeError) as exc:
             raise WriteProofError('Invalid native playlist intent clock') from exc
+    if request['operation'] == 'create_smart':
+        _validate_smart_clocks(request)
+    if request['operation'] == 'delete_smart':
+        mapping = request['smart_delete_clocks']
+        if not isinstance(mapping, dict) or len(mapping) > 4096:
+            raise WriteProofError('Smart deletion requires captured following-sibling clocks')
+        start = _smart_sql_clock(request['timestamp']); end = _smart_sql_clock(request['survivor_timestamp'])
+        for identity, clock in mapping.items():
+            if (type(identity) is not str or not identity.isascii() or not identity.isdecimal()
+                    or not 0 < int(identity) < 2**32 or str(int(identity)) != identity
+                    or not start <= _smart_sql_clock(clock) <= end):
+                raise WriteProofError('Invalid smart deletion sibling clock')
+    occurrences = set()
     for track in request['tracks']:
-        if (not isinstance(track,dict) or set(track)!={'track_id','uuid','id','membership_uuid'}
+        base={'track_id','uuid','id','membership_uuid'}
+        pinned=base|{'membership_id','source_membership_uuid'}
+        if (not isinstance(track,dict) or set(track) not in
+                ((base,pinned) if request['operation']=='remove' else (base,))
                 or any(type(value) is not str or not value for value in track.values())):
             raise WriteProofError('Invalid native playlist track selection')
+        if 'membership_id' in track:
+            if (len(track['membership_id']) > 4096 or '\0' in track['membership_id']
+                    or track['membership_id'] in occurrences):
+                raise WriteProofError('Repeated or invalid native playlist occurrence')
+            occurrences.add(track['membership_id'])
         try:
-            if any(str(UUID(track[key]))!=track[key] for key in ('id','membership_uuid')):raise ValueError('UUID')
+            names=('id','membership_uuid','source_membership_uuid') if 'membership_id' in track else ('id','membership_uuid')
+            if any(str(UUID(track[key]))!=track[key] for key in names):raise ValueError('UUID')
         except (ValueError,TypeError,AttributeError) as exc:
             raise WriteProofError('Invalid native membership UUID') from exc

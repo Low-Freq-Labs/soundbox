@@ -18,6 +18,7 @@ import time
 
 from soundbox import libcache
 from soundbox.library import Library, Playlist, Track
+from soundbox.state_repository import read_state
 
 
 def prepare(state: Path, metadata: Path | None, count: int) -> None:
@@ -26,7 +27,7 @@ def prepare(state: Path, metadata: Path | None, count: int) -> None:
         lib = libcache.load(metadata / 'libcache.json')
         if lib is None:
             raise ValueError('Invalid metadata snapshot')
-        data = json.loads((metadata / 'library.json').read_bytes())
+        data = read_state(metadata / 'library.json')
     else:
         tracks = {str(i): Track(str(i), f'Track {i}', f'Artist {i % 300}',
                                f'file:///missing/{i}.wav', added_ts=float(i + 1))

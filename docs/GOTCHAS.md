@@ -1,5 +1,60 @@
 # SoundBox gotchas & niche facts
 
+## Shared metadata completion — November13 source
+
+- Tag saves need complete fresh native smart/tag/cue/metadata readback, but not
+  another media/share resolution walk. Use the shared metadata-only reader;
+  injecting general `load_live` into the app's Tag controller defeats that path.
+  Exact unambiguous canonical scalar reuse grants no file/write authority, and
+  selected aliases still validate before the native save.
+- An own materialized Artist field does not turn a raw NAME-derived guess into
+  trusted TAG input. Build registry inputs from exact-owned scalar provenance;
+  newer native fields and explicit manual acceptance retain their own semantics.
+- An ACK may retire only its exact local edit token/value. Preserve conditional
+  masks when natural title/artist derivation would change the acknowledged value,
+  and retire them when a later independent native edit supersedes that value.
+- A warm browser cache cannot prove derived metadata finished publishing. The
+  first verified native read in each process checks all rows in the background;
+  later unchanged refreshes and own ACKs do no derivation. Actual global naming
+  context changes can affect unchanged raw rows and need global invalidation.
+- Source path selection, curation partition and fresh ACK reconciliation need
+  one save before Library publication. Two successful-looking saves can leave a
+  new persisted source paired with the old visible Library after the second fails.
+- Remote USN and local writer USN are independent counters. Do not compare one
+  to the other or infer an opaque native renumber sequence from a model method.
+- Multiple selected logical song IDs may share one native ID/UUID. Capture each
+  selected removal marker before native admission; a one-value alias map loses
+  earlier selections. Group duplicate occurrences once per playlist/native target
+  to retain selected-only cost. Unselected aliases and newer values must survive.
+
+## Per-song state and tag panel — November9 source
+
+- Canonical `library.json` can be a manifest referencing `.state-records/`.
+  Preserve both. `read_state` reconstructs logical data; `portable_state` under
+  the area lock produces complete standalone JSON for backups/downgrades.
+  Do not copy only a live manifest or open it with an older app. Rotating/full
+  backups remain standalone. Restore must work even when live JSON or records
+  are corrupt; preserve exact damaged evidence instead of requiring it to parse.
+- Unchanged per-song payloads avoid revalidation/copy/encoding only after exact
+  comparison with privately owned validated data and fresh record epochs.
+  Changed payloads retain validation, detachment and the common journal. Stable
+  job IDs retain record reuse when a queue head completes or order changes.
+- My Tags is a modeless tool panel, with a top-level transient owner. Its
+  outside pointer press closes the panel before the same browser event proceeds.
+  A native popup grab swallowed that first press on Cocoa. Keep checkbox clicks
+  inside open for multiple assignments; Escape, button toggle, app deactivation
+  and shutdown dismiss it. Do not replay synthetic clicks into other controls.
+- Smart-list recency uses active matching tag-assignment creation dates, including
+  pre-update history. Read offset-preserving SQL text in the existing link query:
+  pyrekordbox's datetime converter drops DST fold and can reverse fall-back order.
+  Unknown dates stay unknown; unrelated/removed tags cannot promote a track.
+- Background fairness offers one source admission after each joined/durable local
+  waveform/BPM/key phase, rotating eligible domain heads. General `owned` still
+  guards refresh/export/shutdown; `source_job_owned` is admission-only and may
+  pass deferred cue/grid holds only for that selected synchronous opportunity.
+  Keep physical ownership, prepared-prep/recovery and same-song prerequisites.
+  A turn is not a wall-time deadline or an interactive tag-intent FIFO.
+
 ## Desktop readiness cleanup — November8 source
 
 - Prepare ordinary runtime code and desktop surfaces before interaction. Keep
@@ -208,6 +263,11 @@ test, after unchanged source-identity and native/manual provenance guards.
   explicitly provisioned exact library/schema/version file, never a cached tree.
   Pending work waits while rekordbox/agent are open. Unknown recovery blocks all
   domains; source audio, Collection rows, cues and analysis are outside SQL scope.
+- An ACK must not erase a newer local membership veto. Capture the exact overlay
+  value and playlist/track identities before the job saves, outside its native
+  request. Retire only matching owners and restore map/mask owners if ACK storage
+  fails. Retry retains its original capture; legacy jobs without proof preserve
+  overlays. Smart exclusions cannot be migrated through ordinary member removal.
 - Native deletion differs by row history. Unsynced rows delete physically; the
   approved older two-entry reference keeps playlist/member tombstones and uses
   three counter groups. Single-entry removal updates every active survivor in
@@ -222,7 +282,7 @@ test, after unchanged source-identity and native/manual provenance guards.
   cancel before capture; mount/UUID and standalone intents survive deferral.
 - Preserve removed songs in Collection using exact native UUID pins bound to the
   source library. These pins are display retention, never registration or source
-  permission. Cache schema11 retains raw playlist rows/clocks, empty folders and
+  permission. Cache schema13 retains raw playlist rows/clocks, empty folders and
   distinct logical/native IDs and raw native alias paths;
   encode its catalog one row at a time, as with tracks. Intelligent memberships
   retain their computed keys when their containing folder is renamed.
@@ -406,14 +466,14 @@ test, after unchanged source-identity and native/manual provenance guards.
   active view alone. A folder can hold navigation focus while refresh/drop/track
   actions still address the last chosen playlist. Retain a persistent pressed
   index for folder drags; selectedItems alone can describe the active leaf instead.
-- **Native checkbox layout margins can overlap custom menu rows.** My Tags
-  gives its checkbox cells explicit rectangles inside the QWidgetAction, instead
-  of allowing macOS layout-item margins to compress the grid. Its two-column
-  menu matches the deck button width and fills down the left column, then down
-  the right in source order; long labels use one column and tooltips.
-  QMenu caches its first action size, so update the frame from content geometry
-  plus native menu metrics. Verify catalog/layout changes on Cocoa, not only
-  offscreen.
+- **Use a plain tool panel for the persistent My Tags grid.** A native QMenu
+  changed to Tool flags can expose internal helper widgets over the header.
+  Explicit checkbox rectangles avoid macOS layout-item margin overlap. Keep two
+  columns at the deck button width, filling down the left and then the right in
+  source order; elide long labels with full-name tooltips. Create New Tag spans
+  the header and Delete Tag is a separate footer action. Availability changes
+  update state/tooltips without relayout. Verify both catalog/layout changes
+  and outside-click delivery on Cocoa, not only offscreen.
 - **SVG CSS custom properties need a Qt adapter.** Keep the supplied SVG intact
   in assets; Wordmark resolves SOUND/BOX fills in memory and crops its viewBox
   to the outline. Preserve the former 270×55 header footprint. Include the SVG
@@ -1377,10 +1437,12 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   resolves the explicit selection freshly; never add automatic generic-USB drift
   merely to signal an exclusion. Ordinary native playlist removal uses its
   accepted source writer rather than creating a local-only veto.
-- Artist aliases: `build_registry(..., aliases)` applies them TWICE so chains
-  resolve (yeschef→YESCHEF!→YES CHEF). `suggest_merges` retains quadratic worst-case
-  pair work, with length buckets, matcher-index reuse and quick-ratio upper-bound
-  pruning; keep it off the main thread. Original asymmetric rank/tie order matters.
+- Artist aliases resolve complete chains to a stable canonical name with iterative
+  path compression; legacy cycles resolve deterministically without recursion.
+  Display derivation changes invalidate the browser-cache schema. `suggest_merges`
+  retains quadratic worst-case pair work, with length buckets, matcher-index reuse
+  and quick-ratio upper-bound pruning; keep it off the main thread. Original
+  asymmetric rank/tie order matters.
 - Row alignment: QTreeView items QSS-locked to `height:24px`; table + rb tree use
   `ScrollPerItem` — don't reintroduce pixel scrolling or padding-based heights.
 
@@ -1490,7 +1552,7 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
   Verified inactive zero-header journals remain untouched. Never manufacture a
   data mutation or manually delete a journal to clear this state.
 - **Cue edit identity must not recook audio.** Raw source revisions and native
-  IDs live outside normalized display dictionaries. Current cache schema11 retains
+  IDs live outside normalized display dictionaries. Current cache schema13 retains
   those fields (introduced in schema7); older cache paints remain read-only until
   a fresh source read. Cue saves
   publish a new target Track/Library view on the GUI thread and update markers
@@ -1528,6 +1590,29 @@ their accepted selected export/recovery contract is below and in the CDJ guide.
 - **SMART playlists (Attribute 4) have ZERO `DjmdSongPlaylist` rows** (computed) →
   for them use `get_playlist_contents()`. Attribute: 0=normal, 1=folder, 4=smart,
   -128=cloud(skip).
+- **Creation references do not widen existing playlist authority.** New tag
+  definitions require their own marked exact-library authority. Smart creation
+  requires its explicit capability and profile; older authority files keep both
+  disabled. November12 native reopen acceptance enables only the separately
+  provisioned exact library; it adds no existing-smart mutation API. The
+  November10 references show one combined intelligent-definition
+  save window (+2 for name/rule together), not separate additive name/rule saves.
+  Nonempty smart-only folder creation shifts active sibling positions while
+  preserving their rules and deleted history; only the parent XML clock and new
+  XML node change. Keep SQL/XML clocks independent and persist renewed sibling
+  clocks before causal FIFO admission. Rechain shared-parent XML clocks through
+  later folder edits after renewal. Empty/mixed folders remain outside this
+  profile. Current source acceptance and install status live in [HANDOFF](HANDOFF.md).
+- **Definition and smart deletion have different counter windows.** The native
+  local leaf deletion shifts later tags with one counter per row and then adds
+  one for deletion; removing its local associations adds no counter. Local
+  smart-list deletion shifts all following playlists using the same one new
+  counter, with independent SQL timestamps. Both preserve XML; tag deletion
+  also preserves opaque intelligent rules, even when they reference that tag.
+  Separate default-off authorities/capabilities, exact before dependencies and
+  global ID/UUID absence checks protect recovery and acknowledgement. Native
+  local references do not prove historical/synced deletion. See HANDOFF for
+  activation state; neither creation permission enables these new writers.
 - **Older removed My Tags can remain as soft-deleted `djmdSongMyTag` history.**
   `pyrekordbox 0.4.4` does not include `rb_local_deleted` in its My Tag
   smart-list predicate, so calling `get_playlist_contents()` directly
@@ -2417,7 +2502,8 @@ through publication and recovery. Full protocol: [prep plan](rekordbox-prep.md).
   before staging is removed. TaskOwner callbacks run before retirement finishes:
   do not synchronously close/drain the same dialog from that callback. Automatic
   completion defers close one event turn; manual completion shows detected values.
-- `settings.analysis_results` lives in backed-up library.json, outside disposable
+- `settings.analysis_results` lives in backed-up logical state (the library
+  manifest plus referenced per-song records), outside disposable
   waveform caches. Bind path/hash/exact filesystem identity, preserve native and
   manual grids/cues, and never route arbitrary detection through the accepted
   manual-grid writer. The two-way source publication gate remains explicit.

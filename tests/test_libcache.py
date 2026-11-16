@@ -106,11 +106,31 @@ class RoundTrip(unittest.TestCase):
             lib.source_tags=[LibraryTag('tag','Dubstep','Genre','tag-uuid')]
             lib.tracks_by_id['1'].source_uuid='track-uuid'
             lib.tracks_by_id['1'].source_tag_ids=['tag']
+            lib.tracks_by_id['1'].source_tag_times={'tag':1794251437.42}
             libcache.dump(lib,path);got=libcache.load(path)
             self.assertEqual(got.source_tags,lib.source_tags)
             self.assertEqual(got.source_library_id,'library')
             self.assertEqual(got.tracks_by_id['1'].source_uuid,'track-uuid')
             self.assertEqual(got.tracks_by_id['1'].source_tag_ids,['tag'])
+            self.assertEqual(got.tracks_by_id['1'].source_tag_times,{'tag':1794251437.42})
+
+    def test_schema11_retains_previous_fields_without_inventing_assignment_times(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'cache.json';lib=_lib()
+            track=lib.tracks_by_id['1']
+            track.source_tag_ids=['tag'];track.source_tag_times={'tag':1794251437.42}
+            track.source_native_id='42';track.source_native_path='/native/song.wav'
+            track.info={'album':'Preserved album'}
+            libcache.dump(lib,path)
+            physical=json.loads(path.read_bytes())
+            physical['schema']=11
+            physical['tracks']=[row[:-1] for row in physical['tracks']]
+            path.write_text(json.dumps(physical))
+            got=libcache.load(path).tracks_by_id['1']
+            self.assertEqual(got.source_tag_ids,['tag'])
+            self.assertEqual(got.source_tag_times,{})
+            self.assertEqual((got.source_native_id,got.source_native_path),('42','/native/song.wav'))
+            self.assertEqual(got.info,{'album':'Preserved album'})
 
     def test_dump_load_faithful(self):
         with tempfile.TemporaryDirectory() as td:
@@ -143,6 +163,28 @@ class RoundTrip(unittest.TestCase):
 
 
 class Tolerant(unittest.TestCase):
+    def test_invalid_unassigned_and_unbounded_assignment_times_fall_back(self):
+        import copy
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'cache.json';lib=_lib()
+            lib.tracks_by_id['1'].source_tag_ids=['tag','other']
+            lib.tracks_by_id['1'].source_tag_times={'tag':0.0,'other':1794251437.42}
+            libcache.dump(lib,path)
+            valid=json.loads(path.read_bytes())
+            self.assertEqual(libcache.load(path).tracks_by_id['1'].source_tag_times,
+                             lib.tracks_by_id['1'].source_tag_times)
+            index=libcache._TRACK_FIELDS.index('source_tag_times')
+            for times in (None,[],{'tag':False},{'tag':-1},{'tag':float('nan')},
+                          {'tag':float('inf')},{'tag':10**500},{'tag':253402300800},
+                          {'unassigned':1},{'':1},{'x'*4097:1}):
+                with self.subTest(times=times):
+                    bad=copy.deepcopy(valid);bad['tracks'][0][index]=times
+                    path.write_text(json.dumps(bad))
+                    self.assertIsNone(libcache.load(path))
+            path.write_text(json.dumps(valid))
+            with mock.patch.object(libcache,'_MAX_TAG_TIMES',1):
+                self.assertIsNone(libcache.load(path))
+
     def test_valid_json_with_malformed_container_or_display_rows_falls_back(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'cache.json'

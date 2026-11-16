@@ -129,6 +129,262 @@ class WaveformPriority(unittest.TestCase):
         self.assertEqual(win.model._rows[0]['key'], '8A')
         self.assertFalse(win._analysis_priority_pending())
 
+    def test_source_admission_between_each_phase_cannot_starve_remaining_analysis(self):
+        from dataclasses import replace
+        from PySide6.QtCore import QTimer
+        from desktop.app import MainWindow
+        second_path=self.root/'second.wav';second_path.write_bytes(self.audio.read_bytes())
+        second=replace(self.track,track_id='sb-second',location_uri=second_path.as_uri())
+        self.lib.tracks_by_id[second.track_id]=second
+        with mock.patch('soundbox.rekordbox_db.db_available',return_value=False), \
+                mock.patch.object(MainWindow,'_refresh_devices'):
+            win=MainWindow(isolated_dir=self.root/'fair-state')
+        self.addCleanup(lambda:(win.shutdown(),win.close(),win.deleteLater(),self.app.processEvents()))
+        win.lib=self.lib;win.tag_controller.configure(win.lib,False)
+        win.grid_controller.configure();win._view_key='sb:Collection'
+        win._waveform_rechecks_enabled=False;win._waveform_recheck_timer.stop()
+        events=[];sources=[];extra=[];original=track_analysis.analyze_soundfile
+        def build(*args):
+            self.assertFalse(win.tag_controller.busy)
+            events.append('waveform');return original(*args)
+        def detect(_lib,track,prefs,**kwargs):
+            self.assertFalse(win.tag_controller.busy)
+            component='bpm' if prefs['bpm'] else 'key';events.append(component)
+            sha=hashlib.sha256(track.path.read_bytes()).hexdigest()
+            return dict(engine=analysis.ENGINE,path=str(track.path),epoch=analysis.identity(track.path.stat()),
+                size=track.path.stat().st_size,sha256=sha,duration=4,bpm=120 if prefs['bpm'] else None,
+                beats=[[1,0,120],[2,500,120]] if prefs['bpm'] else [],
+                key='8A' if prefs['key'] else None,first_cue=None)
+        def source_work():
+            self.assertIsNone(win._analysis_worker)
+            sources.append(True);events.append('source')
+        def source_finished(_worker):
+            # Continually arriving source work cannot take a second turn before
+            # the next local phase. Use the real shared source owner/callbacks.
+            if win._analysis_priority_pending():
+                extra.append(win.tag_controller.run_playlist_job(source_work,source_finished))
+                QTimer.singleShot(0,win,source_pump)
+        def source_pump():
+            if len(sources)<6:
+                win.tag_controller.run_playlist_job(source_work,source_finished)
+        with mock.patch.object(win.playlist_controller,'pump',side_effect=source_pump), \
+                mock.patch.object(track_analysis,'analyze_soundfile',side_effect=build), \
+                mock.patch.object(analysis,'analyze',side_effect=detect):
+            win._analyze_tracks([self.track.track_id,second.track_id])
+            end=time.monotonic()+15
+            while (win.settings.get(analysis_jobs.KEY) or win.tag_controller.busy) and time.monotonic()<end:
+                QTest.qWait(5)
+        self.assertEqual(events,['waveform','source','bpm','source','key','source']*2)
+        self.assertEqual(len(sources),6)
+        self.assertTrue(extra);self.assertFalse(any(extra))
+        self.assertEqual(win.settings[analysis_jobs.KEY],[])
+
+    def test_source_turn_requires_current_source_and_shutdown_discards_it(self):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        tags=SimpleNamespace(_start_next_cue=mock.Mock(),busy=False,checking=False)
+        host=SimpleNamespace(lib=self.lib,_shutting_down=False,_state_maintenance=False,
+            _analysis_worker=None,tag_controller=tags,_analysis_priority_pending=lambda:True)
+        host._analysis_source_turn=None
+        foreign=replace(self.lib,source='other')
+        AnalysisPriorityMixin._analysis_offer_source_turn(host,foreign)
+        tags._start_next_cue.assert_not_called()
+        self.assertTrue(AnalysisPriorityMixin._analysis_source_priority(host))
+        AnalysisPriorityMixin._analysis_offer_source_turn(host,self.lib)
+        self.assertFalse(AnalysisPriorityMixin._analysis_source_priority(host))
+        host.lib=foreign
+        self.assertTrue(AnalysisPriorityMixin._analysis_source_priority(host))
+        host._analysis_worker=object();host._analysis_priority_pending=lambda:False
+        # An unrelated/absent current batch retains the established foreground
+        # Delete semantics; a stale worker alone cannot invent a global hold.
+        self.assertFalse(AnalysisPriorityMixin._analysis_source_priority(host))
+        host._analysis_worker=None;host._analysis_priority_pending=lambda:True
+        host.lib=self.lib;host._shutting_down=True
+        AnalysisPriorityMixin._analysis_offer_source_turn(host,self.lib)
+        self.assertIsNone(host._analysis_source_turn)
+
+    def test_source_idle_wakes_only_an_existing_live_analysis_owner(self):
+        from types import SimpleNamespace
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        host=SimpleNamespace(_shutting_down=False,_state_maintenance=False,
+            _analysis_queue=[('retained intention',)],_start_next_analysis=mock.Mock())
+        AnalysisPriorityMixin._analysis_lane_released(host)
+        host._start_next_analysis.assert_not_called()
+        host._analysis_owner=SimpleNamespace(stopping=True)
+        AnalysisPriorityMixin._analysis_lane_released(host)
+        host._start_next_analysis.assert_not_called()
+        host._analysis_owner.stopping=False
+        AnalysisPriorityMixin._analysis_lane_released(host)
+        host._start_next_analysis.assert_called_once()
+        host._start_next_analysis.reset_mock();host._shutting_down=True
+        AnalysisPriorityMixin._analysis_lane_released(host)
+        host._start_next_analysis.assert_not_called()
+
+    def test_cancelled_and_metadata_pending_waveforms_offer_source_without_retiring_intent(self):
+        from types import SimpleNamespace
+        import threading
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        from soundbox.native_media import METADATA_PENDING
+        for cancelled in (False,True):
+            with self.subTest(cancelled=cancelled):
+                stop=threading.Event()
+                if cancelled:stop.set()
+                worker=SimpleNamespace(stop=stop,result=RuntimeError(METADATA_PENDING),library=self.lib)
+                host=SimpleNamespace(_shutting_down=False,_analysis_owner=SimpleNamespace(stopping=False),
+                    _analysis_offer_source_turn=mock.Mock(),_schedule_next_analysis=mock.Mock(),
+                    settings={analysis_jobs.KEY:[{'durable':'intention'}]})
+                AnalysisPriorityMixin._analysis_waveform_retired(host,worker)
+                host._analysis_offer_source_turn.assert_called_once_with(self.lib)
+                host._schedule_next_analysis.assert_called_once_with(*(() if cancelled else (2000,)))
+                self.assertEqual(host.settings[analysis_jobs.KEY],[{'durable':'intention'}])
+
+    def test_failed_detector_yields_after_persisting_only_its_own_failure(self):
+        from types import SimpleNamespace
+        from desktop.analysis import AnalysisMixin,AnalysisWorker
+        jobs=analysis_jobs.admit([],self.lib,[self.track],{})
+        worker=AnalysisWorker(self.lib,[self.track],{},{});worker.job_id=jobs[0]['id']
+        worker.result=ValueError('Detection fixture failed')
+        host=SimpleNamespace(_shutting_down=False,_analysis_owner=SimpleNamespace(stopping=False),
+            settings={analysis_jobs.KEY:jobs},_save_state=mock.Mock(return_value=True),
+            _flash_status=mock.Mock(),_analysis_offer_source_turn=mock.Mock(),_schedule_next_analysis=mock.Mock())
+        AnalysisMixin._analysis_retired(host,worker)
+        saved=host.settings[analysis_jobs.KEY]
+        self.assertEqual(saved[0]['id'],jobs[0]['id'])
+        self.assertEqual(saved[0]['state'],'failed')
+        self.assertEqual(saved[0]['error'],'Detection fixture failed')
+        host._save_state.assert_called_once()
+        host._analysis_offer_source_turn.assert_called_once_with(self.lib)
+
+    def test_rotating_source_turns_do_not_starve_eligible_domains_behind_continuous_cues(self):
+        from types import MethodType,SimpleNamespace
+        from PySide6.QtWidgets import QFrame
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        from desktop.tag_controller import TagEditController
+        host=QFrame();self.addCleanup(host.deleteLater)
+        host.lib=self.lib;host._shutting_down=False;host._state_maintenance=False;host._analysis_worker=None
+        host._analysis_priority_pending=lambda:True
+        host._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,host)
+        host._analysis_source_admitted=MethodType(AnalysisPriorityMixin._analysis_source_admitted,host)
+        tags=host.tag_controller=TagEditController(self.root/'contention-state',host,store_factory=lambda _:None)
+        self.addCleanup(tags.shutdown)
+        tags.analysis_priority=host._analysis_priority_pending
+        tags.analysis_admission=host._analysis_source_priority;tags.source_admitted=host._analysis_source_admitted
+        # A sustained logical cue backlog continues to fence ordinary observers.
+        # Only the selected source opportunity may admit an unrelated task.
+        tags._cue_queue=[SimpleNamespace(page='hot')]
+        self.addCleanup(lambda:tags._cue_queue.clear())
+        seen=[]
+        def pump(kind,admit):
+            if host._analysis_source_priority() or tags.source_job_owned:return
+            admit(lambda:seen.append(kind),lambda _worker:None)
+        cue=lambda: pump('cues',lambda work,done:tags._run_source_job('cues',work,done))
+        tags._start_next_cue=cue
+        methods=(('grid_controller','grid',tags.run_grid_job,'_drain'),
+                 ('prep_controller','prep',tags.run_prep_job,'pump'),
+                 ('playlist_controller','playlists',tags.run_playlist_job,'pump'),
+                 ('tag_definition_controller','tag-definitions',lambda work,done:tags._run_source_job('tag-definitions',work,done),'pump'),
+                 ('metadata_controller','metadata',lambda work,done:tags._run_source_job('metadata',work,done),'pump'),
+                 ('shared_import_controller','registration',tags.run_registration_job,'pump'),
+                 ('native_analysis_controller','analysis',tags.run_analysis_job,'pump'),
+                 ('removal_controller','removal',tags.run_removal_job,'pump'),
+                 ('media_controller','media',tags.run_media_job,'pump'))
+        for name,kind,admit,method in methods:
+            setattr(host,name,SimpleNamespace(**{method:lambda k=kind,a=admit:pump(k,a)}))
+        expected=['cues','grid','prep','playlists','tag-definitions','metadata','registration','analysis','removal','media']*2
+        for count in range(len(expected)):
+            AnalysisPriorityMixin._analysis_offer_source_turn(host,host.lib)
+            end=time.monotonic()+3
+            while tags.busy and time.monotonic()<end:QTest.qWait(5)
+            self.assertFalse(tags.busy);self.assertTrue(tags.owned)
+            self.assertEqual(len(seen),count+1)
+        self.assertEqual(seen,expected)
+
+    def test_fair_source_turn_preserves_prepared_reservation_and_physical_ownership(self):
+        from types import MethodType
+        from PySide6.QtWidgets import QFrame
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        from desktop.tag_controller import TagEditController
+        host=QFrame();self.addCleanup(host.deleteLater)
+        host.lib=self.lib;host._shutting_down=False;host._state_maintenance=False;host._analysis_worker=None
+        host._analysis_priority_pending=lambda:True
+        host._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,host)
+        tags=host.tag_controller=TagEditController(self.root/'reserved-state',host,store_factory=lambda _:None)
+        self.addCleanup(tags.shutdown)
+        tags.analysis_priority=host._analysis_priority_pending;tags.analysis_admission=host._analysis_source_priority
+        host._analysis_source_turn=(str(self.lib.source),self.lib.source_library_id)
+        tags._analysis_fair_kind='playlists';tags.prep_priority=True
+        self.assertFalse(tags.run_playlist_job(lambda:None,lambda _worker:None))
+        tags.prep_priority=False;tags.busy=True
+        self.assertTrue(tags.source_job_owned)
+        self.assertFalse(tags.run_playlist_job(lambda:None,lambda _worker:None))
+        tags.busy=False;tags.admission_paused=True
+        self.assertTrue(tags.source_job_owned)
+        self.assertFalse(tags.run_playlist_job(lambda:None,lambda _worker:None))
+        tags.admission_paused=False
+
+    def test_offered_source_turn_cannot_start_a_real_cue_head_while_admission_is_paused(self):
+        from types import MethodType
+        from PySide6.QtWidgets import QFrame
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        from desktop.cue_session import CueIntent
+        from desktop.tag_controller import TagEditController
+        host=QFrame();self.addCleanup(host.deleteLater)
+        host.lib=self.lib;host._shutting_down=False;host._state_maintenance=False;host._analysis_worker=None
+        host._analysis_priority_pending=lambda:True
+        host._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,host)
+        tags=host.tag_controller=TagEditController(self.root/'paused-state',host,store_factory=lambda _:None)
+        self.addCleanup(tags.shutdown)
+        tags.lib=self.lib;tags.analysis_priority=host._analysis_priority_pending
+        tags.analysis_admission=host._analysis_source_priority;tags.admission_paused=True
+        intent=CueIntent(self.track.track_id,self.track.source_uuid,str(self.audio),'hot',0,'add',200,'fixture-key')
+        tags._cue_queue=[intent]
+        self.addCleanup(lambda:tags._cue_queue.clear())
+        AnalysisPriorityMixin._analysis_offer_source_turn(host,self.lib)
+        self.app.processEvents()
+        self.assertFalse(tags.busy);self.assertEqual(tags.owner.pending,0)
+        self.assertEqual(tags._cue_queue,[intent])
+        self.assertIsNone(host._analysis_source_turn)
+
+    def test_prepared_reservation_suppresses_fair_cue_and_actual_grid_dispatch(self):
+        from copy import deepcopy
+        from types import MethodType
+        from PySide6.QtWidgets import QFrame
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        from desktop.cue_session import CueIntent
+        from desktop.grid_controller import GridEditController,_Group
+        from desktop.tag_controller import TagEditController
+        host=QFrame();self.addCleanup(host.deleteLater)
+        host.lib=self.lib;host._shutting_down=False;host._state_maintenance=False;host._analysis_worker=None
+        host._analysis_priority_pending=lambda:True
+        host._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,host)
+        tags=host.tag_controller=TagEditController(self.root/'prep-reserved-state',host,store_factory=lambda _:None)
+        self.addCleanup(tags.shutdown)
+        tags.lib=self.lib;tags.analysis_priority=host._analysis_priority_pending
+        tags.analysis_admission=host._analysis_source_priority
+        cue=CueIntent(self.track.track_id,self.track.source_uuid,str(self.audio),'hot',0,'add',200,'fixture-key')
+        tags._cue_queue=[cue]
+        self.addCleanup(lambda:tags._cue_queue.clear())
+        grid=host.grid_controller=GridEditController(tags,host,store_factory=lambda _lib,_track:None)
+        group=_Group(self.track.track_id,self.track.source_uuid,str(self.audio),'nudge',1)
+        grid._queue=[group];grid._set_owned()
+        pending=deepcopy(grid._queue);tags.prep_priority=True
+        host._analysis_source_turn=(str(self.lib.source),self.lib.source_library_id)
+        host._analysis_source_cursor=6
+        with mock.patch.object(tags,'_start_next_cue',wraps=tags._start_next_cue) as cue_start, \
+                mock.patch.object(grid,'_drain',wraps=grid._drain) as grid_drain:
+            AnalysisPriorityMixin._analysis_offer_source_turn(host,self.lib)
+            self.app.processEvents()
+            cue_start.assert_not_called();grid_drain.assert_not_called()
+        # The cue entrypoint independently respects the reservation as well.
+        tags._start_next_cue()
+        self.assertFalse(tags.busy);self.assertEqual(tags.owner.pending,0)
+        self.assertEqual(tags._cue_queue,[cue]);self.assertEqual(grid._queue,pending)
+        self.assertIsNone(grid._probe_wanted);self.assertIsNone(grid._active)
+        self.assertIsNone(host._analysis_source_turn)
+        self.assertEqual(host._analysis_source_cursor,6)
+        self.assertTrue(host._analysis_source_priority())
+
     def test_prerequisite_conversion_blocks_waveform_until_durable_media_checkpoint(self):
         from types import SimpleNamespace
         from desktop.analysis_priority import AnalysisPriorityMixin

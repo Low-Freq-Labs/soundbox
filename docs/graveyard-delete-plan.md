@@ -88,6 +88,30 @@ unobserved cloud/censor/sampler/bank relationships. The later production button
 acceptance is Sonny's successful515-operation bulk Delete, distinct from these
 native-reference and synthetic proofs. Recoverability remains required.
 
+## Dormant native-only Collection removal
+
+The retained native references explicitly removed songs from Collection while
+leaving audio on disk; Bruno/VOLATIVE also preserve the native sidecars. Source
+now supports that existing DB/XML protocol without the separate disposal phases.
+`RemovalStore.prepare(..., native_only=True)` binds the policy into confirmation,
+retains the original native identity and display history, and uses the same
+authority, shared lease, journal, SQL scope and paired recovery. It never opens,
+stats, hashes or scans source audio, analysis/artwork or Trash paths. Fresh
+native-row absence/readback and durable history retention precede acknowledgement;
+failed acknowledgement replays the committed receipt without another SQL write.
+Disposable encrypted fixtures assert identical native changes/XML to disposal,
+zero asset filesystem calls, unchanged file bytes/inodes/timestamps, recovery at
+the journal/XML/SQL/commit boundaries, and callback/restart/retry behavior.
+
+This policy is **not activated in the Collection UI**. Its controller defaults to
+disabled until lossless native Restore is established. Existing registration
+rejects tombstoned paths, and registration after physical deletion creates a new
+bare identity without the original prep, tags, histories or organization. A
+before-image is recovery evidence, not permission to invent an inverse native
+protocol. Current local Collection hide and Graveyard Restore remain unchanged.
+
+## Dated disposal follow-ups
+
 November1 bulk follow-up: known missing paths bind the nearest existing canonical
 ancestor inode, so a deleted parent folder no longer vetoes the whole selection.
 Permissions, redirects, new occupants and changed ancestors still fail closed.

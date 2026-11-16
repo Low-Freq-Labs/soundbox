@@ -725,6 +725,8 @@ def run(
     True the copy stops cleanly (files already copied are kept).
     """
     target = target.expanduser().resolve()
+    guard_paths = list(getattr(lib, 'export_source_paths', ()))
+    assert_target_safe(target, guard_paths)
     if manifest.has_composite_ownership(target):
         raise RuntimeError(
             "This device uses SoundBox composite dual-library ownership; "
@@ -739,8 +741,8 @@ def run(
     session = (
         DeviceSession(
             target,
-            [path for pf in files.values()
-             for path in (pf.canonical_source, pf.source)])
+            [*guard_paths, *[path for pf in files.values()
+             for path in (pf.canonical_source, pf.source)]])
         if not dry_run else None)
     managed_files = {
         str(path): dict(row)
@@ -1249,6 +1251,7 @@ def resync(
     NOTE: this trusts the manifest — it won't re-copy a file you manually deleted off
     the device (all rekordbox-driven edits are handled). Full re-verify isn't the goal."""
     target = Path(target).expanduser()
+    assert_target_safe(target, list(getattr(lib, 'export_source_paths', ())))
     if manifest.has_composite_ownership(target):
         raise RuntimeError(
             "This device uses SoundBox composite dual-library ownership; "
@@ -1338,7 +1341,7 @@ def resync(
                 key for key in (row.get("playlists") or [])
                 if key not in removed_keys
             ]
-        sources = [track.path for track in lib.tracks_by_id.values()]
+        sources = [*getattr(lib, 'export_source_paths', ()), *[track.path for track in lib.tracks_by_id.values()]]
         session = DeviceSession(target, sources)
         rows = mm.setdefault("files", {})
         media_prune = media_prune or any(

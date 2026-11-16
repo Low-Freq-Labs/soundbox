@@ -25,6 +25,7 @@ from .rekordbox_write import (
     _inactive_journal_proof, _json, _quote, _regular,
 )
 from .state_io import atomic_bytes, sync_dir
+from . import rekordbox_prep_read as prep_read
 
 _FORMAT = 'soundbox-native-grid-v1'
 _PAYLOADS = frozenset(('operation.json', 'before.DAT', 'before.EXT', 'after.DAT',
@@ -124,6 +125,9 @@ class _GridLease(PilotCueStore):
     def _record(self):
         return self.grid._record()
 
+    def apply(self, _edit):
+        raise WriteProofError('Grid infrastructure has no cue-write authority')
+
 
 class PilotGridStore:
     def __init__(self, authority: GridWriteAuthority, recovery_root: Path):
@@ -136,26 +140,11 @@ class PilotGridStore:
         self.lease = _GridLease(authority, self.root, self)
 
     def _paths(self, track):
-        uid = self.authority.track_uuid
-        relative = f'/PIONEER/USBANLZ/{uid[:3]}/{uid[3:]}/ANLZ0000.DAT'
-        if (track.get('ID') != self.authority.pilot_track_id or track.get('UUID') != uid
-                or track.get('AnalysisDataPath') != relative):
-            raise ConflictError('Grid track/analysis identity changed')
-        dat = self.database.parent / 'share' / relative.lstrip('/')
-        return {'DAT': dat, 'EXT': dat.with_suffix('.EXT')}
+        return prep_read.analysis_paths(self.database, track, self.authority.pilot_track_id,
+                                        self.authority.track_uuid)
 
     def _file(self, path):
-        _regular(path)
-        if (path != path.resolve() or path.stat().st_uid != os.getuid()
-                or path.stat().st_dev != self.root.stat().st_dev):
-            raise WriteProofError('Analysis/recovery path redirects or crosses filesystems')
-        before = path.stat()
-        data = path.read_bytes()
-        after = path.stat()
-        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
-            raise ConflictError('Analysis changed during capture')
-        return data
+        return prep_read.analysis_bytes(path, self.root)
 
     def _snapshot(self, conn):
         rows = self.lease._rows(conn, 'djmdContent', ' WHERE ID=?',
@@ -190,6 +179,17 @@ class PilotGridStore:
                 self._recover(conn)
                 conn.execute('BEGIN')
                 return self._snapshot(conn)
+            finally:
+                conn.close()
+
+    def cue_snapshot(self):
+        """Fresh read-only cues under the grid lease, without cue-write authority."""
+        with self.lease._lock():
+            conn = self.lease._connect()
+            try:
+                self._recover(conn)
+                conn.execute('BEGIN')
+                return prep_read.cue_snapshot(self.lease._rows, conn, self.authority.pilot_track_id)
             finally:
                 conn.close()
 

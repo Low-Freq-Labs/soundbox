@@ -25,8 +25,8 @@ Approved October 26, 2026. This document separates the agreed product behavior
 from implemented My Tag/cue work and remaining prep work. Sonny asked to
 proceed slowly and review each milestone before continuing. Native tag and DB-only
 cue add/delete acceptance passed October 26. Grid source acceptance passed October 27;
-current build/install and user review status live in HANDOFF. Source intelligent-list
-creation remains a subsequent milestone.
+current build/install and user review status live in HANDOFF. The subsequently
+accepted tag-definition and intelligent-list creation milestone is recorded below.
 
 The later ordinary-playlist source work is separate from these accepted Tag/Cue/
 Grid permissions. Its paired TEMP proof and separately approved one-playlist/two-
@@ -38,7 +38,8 @@ registration and initial full BPM/Grid+Key/native waveforms on supported bare
 stereo PCM16/24 WAV44.1/48kHz have subsequently passed independent acceptance and
 are installed. Bare unlocked MPEG-1 CBR/no-Info/Xing stereo44.1kHz MP3 has its own
 separately accepted initial full-analysis authority; it never inherits the WAV
-authority. These paths remain installed in accepted personal build169. The
+authority. These paths were delivered in accepted personal build169 and remain
+in the current installed build171. The
 November5 responsiveness build167/runtime `3fb0ff60…`, whole-app build165/runtime
 `7ffde716…` and earlier build163/build160 source releases are dated delivery evidence.
 Exact provenance is in [HANDOFF](HANDOFF.md).
@@ -49,6 +50,55 @@ Other analysis profiles, existing-analysis
 replacement, gain and broader metadata remain gated. The current shared-library
 transition is in
 [shared-library-workflow-plan.md](shared-library-workflow-plan.md).
+
+## November 9 creation follow-up — delivered November 12
+
+Sonny requested native tag-definition creation and smart playlists using one or
+multiple My Tags. **ANY/OR** is the requested behavior; songs need any selected
+tag, not all of them. The full-width Create New Tag button occupies the checklist
+header. New Tag asks for name/category; New Smart Playlist asks for name/folder
+and starts directly with a My Tag checklist; Artist is never the default condition.
+One or more checked tags use the same ANY rule. Source categories include empty columns and retain
+exact IDs/UUIDs. These requests supersede the original product deferral of tag
+management, but do not bypass native protocol/library acceptance.
+
+The definition domain has a separately marked authority, shared lease/recovery
+mechanics, exact encrypted BEFORE proof and permanent operation receipts. Its
+verified profile composes the separately observed default leaf creation (+1)
+and naming (+1), preserving independent creation/update clocks. The separately
+approved source pilot and Sonny's native reopen check passed; the exact-library
+definition authority is now provisioned. Smart creation has an independent
+default-false capability and explicit profile, activated separately for this
+accepted library after that check. Its creation-only
+plan composes the observed constructor/placement window with one combined
+name/rule definition save (+2); separate name-only and rule-only reference windows
+must not be added together. Root creation and nonempty folders containing only
+local smart playlists have references; empty/mixed folders remain unavailable.
+Fresh source guards preserve exact tag/category and folder identities. Queued
+sibling clocks renew only after a proven causal result or explicit retry, and the
+whole affected XML clock chain persists before admission. Existing smart mutations
+remain outside ordinary playlist authority and the new create-only capability.
+UI intents persist before admission;
+full authoritative source readback precedes new-item publication. See [HANDOFF](HANDOFF.md)
+for exact authority, source and installed-app provenance.
+
+The pilot created only the approved unassigned Genre tag and two GENRES smart
+playlists: one Dubstep condition and Dubstep OR the new tag. Sonny confirmed the
+native result; the post-reopen comparison preserved the exact new tag, both
+playlist rows/XML and 752 members in each smart playlist. Only native registry/session
+state changed. Song/content/membership/cue/analysis tables and SoundBox curation
+remain preserved. This acceptance enables ordinary user creation through the
+guarded forms; it grants no permission to repeat source tests or modify existing
+smart definitions.
+
+The combined personal build171 is installed and normally reopened after the
+fresh 3,025-case render gate, 744-input comparison, signed package and isolated
+startup checks. CoreAudio/Metal, 3,296 native tracks/91 playlists and zero preparation/
+art-fetch work are verified. Curation, the user's newer column layout, artwork
+JSON and custom white app icon are preserved. The installed chronology correction
+uses native assignment creation dates, including pre-update history; the actual
+cache/default-order check puts STINK MODE first in the reported example. One
+build169 rollback remains pending postinstall user acceptance.
 
 ## Original October26 scope, with subsequently accepted grid behavior
 
@@ -142,6 +192,18 @@ These offline metadata conventions remain **provisional** and differ from the
 native-derived production rules below. Successful SQLite reads alone do not prove
 rekordbox acceptance. Do not reuse the offline mutation algorithm on a live DB.
 
+The current title/artist publisher has independent default-off exact-library
+authority. Its original `ascii-local-analysed-empty-album-v1` stays local-only;
+the separately admitted `ascii-active-analysed-empty-album-v2` candidate also
+preserves synced0/1 Content with no remote USN. Both retain printable ASCII,
+analysed105, empty-album and measured artist-state limits. Journal/replay and
+compact acknowledgement bind the exact profile. Generated vendor-component and
+encrypted real-row copy checks do not activate production authority. A compatible
+validated package and native source/reopen acceptance remain pending; installed171
+cannot safely consume the new source-truth records or metadata recovery route.
+The current3,418-case source gate passes; see [current handoff](HANDOFF.md) for
+proof and the separate package/runtime acceptance status.
+
 Recovery after a real process exit handles both SQLite WAL commits and hot
 rollback journals. SQLite may need a writable connection to recover spilled
 pages, which is permitted only on the guarded temporary working copy. The
@@ -182,7 +244,42 @@ tables, encryption/baseline checks and repeated-operation results. The fresh
 temporary databases are removed after the proof, leaving only the small report.
 Actual final validation is recorded in [HANDOFF](HANDOFF.md).
 
+## My Tags layout and deletion follow-up — in progress
+
+The checklist keeps two columns even when names are long; elided labels retain
+full-name tooltips. Create New Tag spans the header. Its modeless tool panel
+avoids native-menu helper widgets painting over that button, while preserving
+outside-click delivery. Delete Tag opens a separate choice/confirmation, and
+smart playlists expose Delete in their context menu. Native references and encrypted TEMP replays now cover local unsynced tags
+with local unsynced assignments, unchanged intelligent rules and retained XML,
+and local unsynced smart-list deletion in a folder or at the top level.
+Definition deletion advances once per shifted tag sibling plus once for deletion;
+smart deletion uses one shared new counter for all shifted playlist siblings.
+Each publisher requires independent exact-library acceptance; production
+activation and installation remain pending. The SONNY/ZYKO reference windows additionally cover measured synced tag/assignment
+tombstones and synced smart-list deletion under separate v2 profile markers.
+Surviving synced tag siblings, synced tags without active synced associations and
+unobserved metadata remain guarded. The accidental ZYKO deletion was separately
+repaired and accepted; no more destructive reference steps are needed.
+Remote USN is independent from the local writer clock: supported historical
+target and read-only category validators retain any valid signed nonnegative
+remote count without comparing it to localUpdateCount. Local counters, exact
+flags/UUIDs and all source guards remain. This scalar correction adds no query,
+SQL scope or profile. Offline native model tombstones and fixed Main association
+SQL do not prove the opaque renumber endpoint's iteration/clock behavior; no v3
+profile was enabled. Cue deletion's hidden active Hot Cue Bank branch also stays
+separate from generic row/model tombstone proof.
+Current progress, installed identity and compact references are in HANDOFF.
+
 ## Milestone 2 — My Tags and native acceptance
+
+November9 follow-up: the My Tags checklist dismisses on outside browser input
+without consuming that gesture. Matching smart-playlist members use native tag-assignment creation dates,
+including pre-update and rekordbox assignments; the latest assignment goes first
+in the default browser view. Verified local ranks remain a fallback for missing
+dates and ties. Native smart rules, source/export order,
+Collection order and user header sorts retain their separate contracts. See
+[player behavior](PLAYER.md) and [architecture](ARCHITECTURE.md).
 
 The strip under the waveform matches the surrounding player panel (`#1b1d24`).
 It shows the five grid controls at the left, enabled only for a ready accepted track, with a
@@ -198,10 +295,11 @@ active definitions. Categories are retained internally and shown only to
 resolve duplicate names. It acts on selected browser rows, supports mixed
 assignments and preserves surviving selected rows after refresh. Imported or
 unverified tracks disable editing. The popup matches the button width and uses
-two columns for the current tags, reading down the left before down the right.
-Longer labels fall back to one column, with truncation tooltips when needed.
-Native rows have explicit geometry so labels/checkboxes never overlap; availability
-messages wrap within the same width. A pending save shows its intended assignment
+two columns, reading down the left before down the right. Long labels elide
+with full-name tooltips. A full-width Create New Tag header and separate Delete
+Tag footer work independently of song selection. The plain modeless tool panel
+avoids native-menu helpers covering its header. Explicit row geometry avoids
+checkbox/label overlap; tooltip/status text explains unavailable actions. A pending save shows its intended assignment
 and blocks another action until verified. Opening the menu probes availability
 off the GUI thread; a running rekordbox/agent produces a close-first explanation.
 
@@ -311,6 +409,12 @@ and cache loads never grant authority. Shared admission, locking and encrypted
 connection mechanics live in `soundbox.native_transaction.NativeTransactionLease`;
 the cue store retains compatibility hooks and owns cue planning/publication and
 recovery. Other domains retain their independent authorities and SQL scopes.
+Native cue saves require only the accepted cue authority. Their fresh companion
+grid snapshot reads the selected track's UUID-bound DAT/EXT under the cue lease;
+it grants no grid-writing permission. Missing, corrupt or unreadable analysis
+does not veto a DB-only cue save: source analysis bytes and the retained private
+grid cache remain unchanged. A bare native track can therefore save cues before
+analysis is available. This does not broaden accepted cue row states or codecs.
 The bound store shares the tag store's exact recovery root, writer lock and pending-journal path;
 an unresolved other-domain operation blocks admission. Exact snapshot revisions,
 backup, four-table/column authorizer, atomic transaction and independent read-back
@@ -386,8 +490,8 @@ Q toggle; cue creation remains exact when Q is off.
 Milestone 2 and its installed branding/theme UI pass were accepted by Sonny on
 October 26. Cue editing, responsive session overlays and the Text color menu
 correction preceded milestone 4. Single-tag intelligent-playlist creation and the
-default-off Collection setting were then-next proposals. Intelligent-list creation
-remains gated; current native Collection includes all active supported local audio,
+default-off Collection setting were then-next proposals. The November 12 delivery
+above supersedes that intelligent-list creation deferral; current native Collection includes all active supported local audio,
 not only playlist references. Ask Sonny for specific native UI actions when
 reference evidence is
 required; do not drive rekordbox remotely.
@@ -468,6 +572,12 @@ retains its pilot class name but is now the accepted track/UUID-bound source API
 DB path, library identity, complete schema hash and application version. Fresh
 library reads and caches never grant permission. Desktop stores bind that
 permission to one exact native track UUID and analysis directory.
+An accepted grid save likewise requires only its own grid authority. It captures
+fresh raw cue rows and the cue aggregate read-only under the grid lease, preserving
+their identities/history without constructing a cue writer. The desktop checks
+that both snapshots describe the same exact track before publishing verified
+metadata. Shared read helpers grant neither SQL nor analysis-file write scope;
+cue edits still require their separate accepted cue authority.
 
 Tag, cue and grid transactions share one recovery root, writer lock and journal.
 Closed rekordbox/agent, stable physical DB identity, schema/version, native UUID

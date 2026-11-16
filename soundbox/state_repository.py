@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .state_io import StateChangedError, atomic_bytes, state_area
+from . import state_records
 
 
 _MAX_STATE_BYTES = 64 * 1024**2
@@ -138,13 +140,40 @@ def _same_json(left: Any, right: Any) -> bool:
     return False
 
 
-def read_state(path: Path) -> dict:
-    if path.stat().st_size > _MAX_STATE_BYTES:
-        raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
+def _read_document(path: Path) -> tuple[dict, dict, dict, bool, bytes, tuple]:
     # json.loads created this tree solely for the reader. The repository keeps
     # it privately and detaches once on return; a second complete copy here adds
     # no ownership boundary. Public validate_state still always detaches.
-    return _validate_state(json.loads(path.read_text(encoding='utf-8')))
+    raw, epoch = state_records.capture_file(path)
+    physical = json.loads(raw)
+    if isinstance(physical, dict) and state_records.MARKER in physical:
+        document, epochs, specifications = state_records.expand(path, physical)
+        after, after_epoch = state_records.capture_file(path)
+        if after != raw or after_epoch != epoch:
+            raise StateChangedError('Library changed while reading its song records')
+        return _validate_state(document), epochs, specifications, True, raw, epoch
+    return _validate_state(physical), {}, {}, False, raw, epoch
+
+
+def read_state(path: Path) -> dict:
+    """Read logical state from legacy portable JSON or its versioned record store."""
+    return _read_document(path)[0]
+
+
+def portable_state(path: Path) -> bytes:
+    """Materialize a complete standalone JSON snapshot, including per-song data.
+
+    Use under the area's lock when capturing live state. A manifest alone is
+    intentionally not a portable library and older readers reject its shape.
+    Legacy snapshots retain their exact bytes.
+    """
+    data, _, _, stored, raw, _ = _read_document(path)
+    if not stored:
+        return raw
+    payload = state_records.encode(data)
+    if len(payload) > _MAX_STATE_BYTES:
+        raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
+    return payload
 
 
 @dataclass(frozen=True)
@@ -164,6 +193,9 @@ class StateRepository:
         self.backup_error: OSError | None = None
         self._saved_payload: bytes | None = None
         self._saved_identity: tuple | None = None
+        self._record_epochs: dict[str, tuple] = {}
+        self._record_specs: dict = {}
+        self._storage_active = False
 
     def _identity(self) -> tuple | None:
         try:
@@ -177,13 +209,17 @@ class StateRepository:
             self.generation = self.area.generation
             self._saved_payload = None
             self._saved_identity = None
+            self._record_epochs = {}
+            self._record_specs = {}
+            self._storage_active = False
             self.recovery = None
             self.writable = True
             if not self.path.exists():
                 self._document = {}
                 return {}
             try:
-                data = read_state(self.path)
+                (data, self._record_epochs, self._record_specs, self._storage_active,
+                 self._saved_payload, self._saved_identity) = _read_document(self.path)
             except (OSError, ValueError):
                 damaged = self.path.with_name(f'library.corrupt-{time.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}.json')
                 # Preserve the exact damaged bytes; never rename away the only
@@ -195,17 +231,20 @@ class StateRepository:
                                     key=lambda p: p.stat().st_mtime_ns, reverse=True)
                 for candidate in candidates:
                     try:
-                        data = read_state(candidate)
+                        payload = portable_state(candidate)
+                        data = _validate_state(json.loads(payload))
                     except (OSError, ValueError):
                         continue
                     chosen = candidate
-                    self.area.publish({'library.json': candidate})
+                    self.area.publish({'library.json': payload})
                     break
                 self.recovery = Recovery(damaged, chosen)
                 # No usable backup: allow explicit restore, but forbid ordinary
                 # UI autosaves from burying a damaged library with empty state.
                 self.writable = chosen is not None
             self._document = data
+            if self.recovery is not None:
+                self._saved_identity = self._identity()
             return copy.deepcopy(data)
 
     def backup(self) -> None:
@@ -214,13 +253,22 @@ class StateRepository:
                 return
             if self.path.stat().st_size > _MAX_STATE_BYTES:
                 raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
-            current = self.path.read_bytes()
+            if self._storage_active:
+                self._assert_record_base()
+                self._record_epochs = state_records.validate_epochs(self.path, self._record_epochs)
+                directory = self.path.parent / 'backups'
+                old = sorted(directory.glob('library-*.json'))
+                if old and time.time() - old[-1].stat().st_mtime < 3600:
+                    return
+                current = portable_state(self.path)
+            else:
+                current = self.path.read_bytes()
             if len(current) > _MAX_STATE_BYTES:
                 raise InvalidState('Library JSON exceeds the 64 MiB safety limit')
             # The last published payload was fully validated. Reuse that pure
             # result only after reading and comparing every current byte; a
             # changed/corrupt file still takes the complete validation path.
-            if current != self._saved_payload:
+            if current != self._saved_payload and not self._storage_active:
                 validate_state(json.loads(current.decode('utf-8')))
             directory = self.path.parent / 'backups'
             directory.mkdir(parents=True, exist_ok=True)
@@ -240,6 +288,11 @@ class StateRepository:
             if not self.writable:
                 raise OSError('Library recovery required; restore a valid backup before saving')
             candidate = {**self._document, **changes}
+            if self._storage_active or any(candidate.get('settings', {}).get(key)
+                                           for key in state_records.NAMESPACES
+                                           if isinstance(candidate.get('settings', {}), dict)):
+                self._save_records(candidate)
+                return
             if (self._saved_payload is not None and self._saved_identity is not None
                     and _same_json(candidate, self._document)
                     and self._identity() == self._saved_identity):
@@ -270,3 +323,127 @@ class StateRepository:
             self._document = document
             self._saved_payload = payload
             self._saved_identity = self._identity()
+
+    def _assert_record_base(self) -> None:
+        if self._saved_identity is not None and self._identity() != self._saved_identity:
+            raise StateChangedError('Canonical library changed; reload before saving')
+
+    def _save_records(self, candidate: dict) -> None:
+        """Publish changed owned records and a small ordered manifest together."""
+        self._assert_record_base()
+        epochs = state_records.validate_epochs(self.path, self._record_epochs)
+        slim = dict(candidate)
+        settings = dict(candidate.get('settings', {}))
+        slim['settings'] = settings
+        previous = self._document.get('settings', {})
+        selected: dict[str, Any] = {}
+        for namespace, kind in state_records.NAMESPACES.items():
+            if namespace not in settings:
+                continue
+            values = settings[namespace]
+            if not isinstance(values, dict if kind == 'map' else list):
+                raise InvalidState(f'{namespace} must be a {kind}')
+            selected[namespace] = values
+            settings[namespace] = {} if kind == 'map' else []
+        document = validate_state(slim)
+        writes: dict[str, bytes | Path | None] = {}
+        specifications = {}
+        record_costs = {}
+        logical_bytes = len(state_records.encode(document))
+        count = 0
+        for namespace, values in selected.items():
+            kind = state_records.NAMESPACES[namespace]
+            old_values: Any = previous.get(namespace, {} if kind == 'map' else [])
+            if not isinstance(old_values, dict if kind == 'map' else list):
+                old_values = {} if kind == 'map' else []
+            old_entries = dict(self._record_specs.get(namespace, {}).get('entries', []))
+            reusable = {}
+            if kind == 'list':
+                # Completing/reordering one song must not detach every later
+                # dense job merely because its manifest position changed.
+                ids = [row.get('id') for row in old_values if isinstance(row, dict)]
+                incoming_ids = [row.get('id') for row in values if isinstance(row, dict)]
+                if (len(ids) == len(old_values) and len(incoming_ids) == len(values)
+                        and all(type(key) is str and key for key in ids + incoming_ids)
+                        and len(set(ids)) == len(ids) and len(set(incoming_ids)) == len(incoming_ids)):
+                    reusable = {row['id']: (row, old_entries.get(str(i)))
+                                for i, row in enumerate(old_values)}
+            entries = []
+            owned: Any = {} if kind == 'map' else []
+            if values:
+                logical_bytes += 4
+            items = values.items() if kind == 'map' else ((str(i), value) for i, value in enumerate(values))
+            for key, value in items:
+                count += 1
+                if count > state_records.MAX_RECORDS or type(key) is not str:
+                    raise InvalidState('Invalid or excessive canonical state records')
+                before = (old_values.get(key) if kind == 'map' else
+                          old_values[int(key)] if int(key) < len(old_values) else None)
+                digest = old_entries.get(key)
+                if (kind == 'list' and isinstance(value, dict) and type(value.get('id')) is str
+                        and value['id'] in reusable):
+                    before, digest = reusable[value['id']]
+                if digest is not None and _same_json(value, before):
+                    retained = before
+                    cost = epochs[digest][5]
+                else:
+                    if namespace == 'analysis_results':
+                        _validate_state({'settings': {'analysis_results': {key: value}}})
+                    retained = copy.deepcopy(value)
+                    payload = state_records.encode(retained)
+                    cost = len(payload) + 6 * payload.count(b'\n')
+                    digest = hashlib.sha256(payload).hexdigest()
+                    if digest not in epochs:
+                        target = state_records.record_path(self.path, digest)
+                        if target.exists() or target.is_symlink():
+                            _, epoch = state_records.capture(self.path, digest)
+                            epochs[digest] = (*epoch, cost)
+                        else:
+                            writes[f'{state_records.DIRECTORY}/{digest}.json'] = payload
+                logical_bytes += state_records.entry_cost(kind, key, cost)
+                record_costs[digest] = cost
+                if logical_bytes > _MAX_STATE_BYTES:
+                    raise InvalidState('Library state exceeds the 64 MiB safety limit; previous state was preserved')
+                entries.append([key, digest])
+                if kind == 'map':
+                    owned[key] = retained
+                else:
+                    owned.append(retained)
+            specifications[namespace] = {'kind': kind, 'entries': entries}
+            document['settings'][namespace] = owned
+        if self._storage_active and _same_json(document, self._document):
+            self._record_epochs = epochs
+            return
+        body = dict(document)
+        body['settings'] = dict(document['settings'])
+        for namespace in specifications:
+            body['settings'][namespace] = None
+        # settings=[] causes older state validators to reject this manifest,
+        # rather than silently use a partial library without the song payloads.
+        manifest = {state_records.MARKER: 1, 'settings': [], 'revision': uuid.uuid4().hex,
+                    'document': body, 'records': specifications}
+        payload = state_records.encode(manifest)
+        if len(payload) > _MAX_STATE_BYTES:
+            raise InvalidState('Library state exceeds the 64 MiB safety limit; previous state was preserved')
+        self.backup_error = None
+        try:
+            self.backup()
+        except OSError as exc:
+            self.backup_error = exc
+        self._assert_record_base()
+        epochs = state_records.validate_epochs(self.path, epochs)
+        live = state_records.references(specifications)
+        # Only previously referenced canonical files may be retired; unknown
+        # occupants and preserved corruption/recovery evidence are never swept.
+        for digest in state_records.references(self._record_specs) - live:
+            writes[f'{state_records.DIRECTORY}/{digest}.json'] = None
+        writes['library.json'] = payload
+        self.area.publish(writes)
+        self._document = document
+        self._saved_payload = payload
+        self._saved_identity = self._identity()
+        self._record_specs = specifications
+        self._record_epochs = {digest: (*state_records.identity(state_records.record_path(self.path, digest)),
+                                       record_costs[digest])
+                               for digest in live}
+        self._storage_active = True

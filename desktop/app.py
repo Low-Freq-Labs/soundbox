@@ -117,7 +117,7 @@ from .progress import ThemeProgressBar
 
 
 _WINDOW_EVENT_TYPES = frozenset((
-    QEvent.Quit, QEvent.Resize, QEvent.Show, QEvent.MouseButtonRelease,
+    QEvent.Quit, QEvent.Resize, QEvent.Show, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick,
     QEvent.KeyPress, QEvent.MouseButtonPress, QEvent.Wheel,
     QEvent.ApplicationActivate, QEvent.ApplicationDeactivate, QEvent.MouseMove,
     QEvent.ShortcutOverride, QEvent.KeyRelease,
@@ -126,8 +126,8 @@ _WINDOW_EVENT_TYPES = frozenset((
 
 from soundbox import (
     browser_cache, engine, file_locations, imports, libcache,
-    manifest as device_manifest, metadata, paths, rekordbox_db,
-    rockbox_config, track_analysis,
+    manifest as device_manifest, metadata, metadata_provenance, paths, rekordbox_db,
+    rockbox_config, smart_playlist_order, track_analysis,
 )
 from soundbox.device_profile import plan_stock_ipod_export
 
@@ -149,8 +149,11 @@ from .graveyard import GraveyardController
 from .removal import RemovalController
 from .native_analysis import NativeAnalysisController
 from .prep_controller import PrepEditController
+from .metadata_controller import MetadataController
 from soundbox import shared_imports, analysis_jobs
 from .prep_tags import MyTagsButton
+from .tag_creation import TagCreationMixin
+from .tag_creation_controller import TagDefinitionController
 from .prep_grid import BpmValue, grid_edit_buttons, quantize_button
 from .grid_controller import GridEditController
 from .wordmark import Wordmark
@@ -341,6 +344,12 @@ def _provider_action(action):
     return decorate
 
 
+def _artist_source_scope(library):
+    if library is None:
+        return None
+    return str(library.source),library.source_kind,library.source_library_id
+
+
 from .analysis import AnalysisMixin
 from .analysis_priority import AnalysisPriorityMixin
 from .playlist_folders import PlaylistFoldersMixin
@@ -349,7 +358,7 @@ from .export_dialog import ExportSelectionMixin
 from .track_menu import TrackMenuButton, TrackMenuMixin
 
 
-class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, ExportSelectionMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
+class MainWindow(TagCreationMixin, NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, AnalysisPriorityMixin, TrackInfoMixin, TrackMenuMixin, ExportSelectionMixin, CdjDeviceMixin, SettingsPageMixin, DeviceBrowserMixin, QMainWindow):
     def __init__(self, providers=None, *, isolated_dir=None):
         super().__init__()
         self._isolated = isolated_dir is not None
@@ -361,7 +370,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.resize(1240, 800)
         data_dir = (Path(isolated_dir) if isolated_dir is not None else
                     Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)))
-        self._data_file = data_dir / "library.json"  # portable SoundBox library
+        self._data_file = data_dir / "library.json"  # canonical state manifest / legacy JSON
         bind_provider = getattr(self.providers.connections, 'bind_root', None)
         if callable(bind_provider):
             bind_provider(data_dir)
@@ -495,9 +504,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._pending_device_operation = None
         self._accordion_guard = False
         self._prep_update_message = ''
-        self.tag_controller = TagEditController(data_dir,self,loader=lambda source:
-            rekordbox_db.load_live(source,retain_tracks=self.settings.get('rekordbox_collection_tracks',{})))
+        self.tag_controller = TagEditController(data_dir,self)
         self.tag_controller.analysis_priority = self._analysis_priority_pending
+        self.tag_controller.analysis_admission = self._analysis_source_priority
+        self.tag_controller.source_admitted = self._analysis_source_admitted
+        self.tag_controller.idle.connect(self._analysis_lane_released)
         self.grid_controller = GridEditController(self.tag_controller, self,
                                                   cache_dir=self._track_analysis_dir,
                                                   prepare_cache=self._prepare_grid_cache,
@@ -509,9 +520,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.settings.update(self._initial_state.get('settings') or {})
         self._apply_theme_color(self.settings.get('theme_accent'), save=False)
         self.playlist_controller = PlaylistEditController(self)
+        self.tag_definition_controller = TagDefinitionController(self)
         self.shared_import_controller = SharedImportController(self)
         self.native_analysis_controller = NativeAnalysisController(self)
         self.prep_controller = PrepEditController(self)
+        self.metadata_controller = MetadataController(self)
         self.graveyard_controller = GraveyardController(self)
         self.removal_controller = RemovalController(self)
         self.media_controller = MediaConversionController(self)
@@ -790,7 +803,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # isn't blank while the live read runs. The refresh below replaces it
         # with current data (adds/edits/deletes apply) and re-snapshots.
         cached = libcache.load(self._libcache_path)
-        if cached is not None:
+        known_primary = bool(cached is not None and cached.source_kind == 'rekordbox-db'
+            and Path(cached.source).resolve() == self._rekordbox_database_path().resolve())
+        if cached is not None and self._accept_source_curation(cached, bootstrap=known_primary):
             self.lib = cached
             self._apply_loaded_library()
             self.stack.setCurrentIndex(0)
@@ -804,11 +819,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if rekordbox_db.db_available(self._rekordbox_database_path()):
             self._refresh_rekordbox()
         elif self._last_xml and Path(self._last_xml).is_file():
-            self.open_library(self._last_xml)
+            self.open_library(self._last_xml, initial=True)
         self._sync_rekordbox_connection()
 
     def _save_state(self, *, invalidate_views=True) -> bool:
-        """Write the portable SoundBox library (overrides + custom playlists)."""
+        """Durably publish canonical SoundBox state before acknowledging edits."""
         timer = getattr(self, "_settings_save_timer", None)
         if timer is not None:
             timer.stop()
@@ -855,11 +870,31 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         user's own overrides, so every manual fix teaches the deriver."""
         if self.lib is None:
             return
-        bases = [metadata.derive_artist(t.name, t.artist)[0]
-                 for t in self.lib.tracks_by_id.values()]
-        trusted = ([t.artist for t in self.lib.tracks_by_id.values() if t.artist]
-                   + [v for v in self.overrides.values() if v.strip()])
-        self.lib.artist_registry = metadata.build_registry(bases, trusted, self.aliases)
+        scope = dict(source=str(self.lib.source),kind=self.lib.source_kind,library_id=self.lib.source_library_id)
+        by_local = {}
+        for row in self.settings.get('source_truth_artist_origins',{}).values():
+            if not isinstance(row,dict) or row.get('scope') != scope:
+                continue
+            local = row.get('local_id')
+            by_local[local] = None if local in by_local else row
+        bases, trusted = [], []
+        for track in self.lib.tracks_by_id.values():
+            origin = None if track.track_id in self.lib.source_binding_issues else by_local.get(track.track_id)
+            name, artist, fulfilled = metadata_provenance.display_registry_inputs(track,scope,origin)
+            bases.append(metadata.derive_artist(name,artist)[0])
+            if artist:
+                trusted.append(artist)
+            if fulfilled is not None and track.track_id not in self.overrides:
+                trusted.append(fulfilled)
+        trusted.extend(v for v in self.overrides.values() if v.strip())
+        previous = self.lib.artist_registry or getattr(self,'_display_registry',None)
+        registry = metadata.build_registry(bases, trusted, self.aliases)
+        self.lib.artist_registry = previous if metadata.registry_context_equal(previous,registry) else registry
+        unaliased = (metadata.build_registry(bases, trusted)
+            if self.aliases and self.lib.source_kind == 'rekordbox-db' else self.lib.artist_registry)
+        previous_unaliased = getattr(self,'_metadata_unaliased_registry',None)
+        self._metadata_unaliased_registry = (previous_unaliased
+            if metadata.registry_context_equal(previous_unaliased,unaliased) else unaliased)
         self._invalidate_rows()  # canonical spellings may have changed
 
     def _default_to_collection(self):
@@ -927,6 +962,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 result['bpm_estimated'] = True
         if self.lib and t.source_tag_ids:
             result['myTags'] = ', '.join(tag.name for tag in self.lib.source_tags if tag.tag_id in t.source_tag_ids)
+        metadata_controller=getattr(self,'metadata_controller',None)
+        if metadata_controller:
+            result.update(metadata_controller.display_fields(t))
         return result
 
     def _waveform_bpm_binding(self, track):
@@ -986,9 +1024,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 key=lambda t:(-self._landed_time(t),t.name.casefold()))]
 
     def _playlist_rows(self, display_path: str) -> list[dict]:
-        """Newest-added browser order; native/export membership order stays exact."""
+        """Latest matching tag assignment first; native/export order stays exact."""
         pl = self._native_view_playlist(display_path)
-        return self._rows_for(self.lib.resolve(pl)) if pl is not None else []
+        if pl is None:
+            return []
+        rows = self._rows_for(self.lib.resolve(pl))
+        rows = self._native_membership_rows(pl, rows)
+        return smart_playlist_order.order_rows(rows,self.lib,pl.pid,
+                                               self.settings.get(smart_playlist_order.KEY))
 
     def _invalidate_rows(self, track_ids=None) -> None:
         """Invalidate affected rows, or all rows for a global metadata policy.
@@ -1069,16 +1112,17 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _browser_seat(self):
         rows=self.model._rows;selection=self.table.selectionModel()
         index=self.table.currentIndex();top=self.table.indexAt(QPoint(0,0))
-        return dict(current=rows[index.row()].get('id') if index.isValid() else None,
+        identity=self._native_row_identity
+        return dict(current=identity(rows[index.row()]) if index.isValid() else None,
                     column=index.column() if index.isValid() else 0,
-                    selected={rows[i.row()].get('id') for i in selection.selectedRows()},
-                    top=rows[top.row()].get('id') if top.isValid() else None,
+                    selected={identity(rows[i.row()]) for i in selection.selectedRows()},
+                    top=identity(rows[top.row()]) if top.isValid() else None,
                     top_row=top.row(),scroll=self.table.verticalScrollBar().value(),
                     horizontal=self.table.horizontalScrollBar().value())
 
     def _restore_browser_seat(self,seat):
         self._selection_revision=getattr(self,'_selection_revision',0)+1
-        by_id={row.get('id'):i for i,row in enumerate(self.model._rows)}
+        by_id={self._native_row_identity(row):i for i,row in enumerate(self.model._rows)}
         selection=self.table.selectionModel();blocked=selection.blockSignals(True)
         try:
             selected=QItemSelection()
@@ -1143,6 +1187,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # constructing a page. Only input, browser geometry and quit belong here.
         if event_type not in _WINDOW_EVENT_TYPES:
             return super().eventFilter(obj, ev)
+        tags_button = getattr(self, 'my_tags', None)
+        if tags_button is not None:
+            if event_type in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
+                tags_button.dismiss_outside(ev.globalPosition().toPoint())
+            elif event_type == QEvent.ApplicationDeactivate:
+                tags_button.popup.close()
         if (obj is QApplication.instance() and event_type == QEvent.Quit
                 and self._defer_quit_for_saves()):
             ev.ignore()
@@ -1209,6 +1259,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             browsing = True
         browsing = (browsing and QApplication.activeModalWidget() is None
                     and QApplication.activePopupWidget() is None
+                    and not (tags_button is not None and tags_button.popup.isVisible())
                     and not self._shutting_down and not self._state_maintenance)
         if (browsing and (focus in (self.tree,self.sb_tree) or obj in (self.tree,self.sb_tree))
                 and ev.key() in (Qt.Key_Up,Qt.Key_Down)
@@ -1699,15 +1750,32 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.table.setFocus()
 
     def _on_cell_edited(self, field: str, track_id: str, value: str):
-        if not track_id:
-            return
+        if not track_id or field not in ('title','artist'):
+            return False
+        controller=getattr(self,'metadata_controller',None)
+        if controller is not None and self.lib and self.lib.source_kind=='rekordbox-db':
+            accepted=controller.enqueue(track_id,{field:value or ''})
+            if not accepted:
+                self._invalidate_rows((track_id,))
+                QTimer.singleShot(0,self,self._reload_current_view)
+            elif self.art_cache.status_kind(track_id)!='cover':self._art_fetch_one(track_id)
+            return accepted
         store = self.overrides if field == "artist" else self.titles
+        missing=object();previous=store.get(track_id,missing)
         v = (value or "").strip()
         if v:
             store[track_id] = v
         else:
             store.pop(track_id, None)  # blank reverts to auto/original
-        self._save_state()
+        if not self._save_state():
+            if previous is missing:store.pop(track_id,None)
+            else:store[track_id]=previous
+            self._invalidate_rows((track_id,))
+            # Inline editors update their row before delivering this signal.
+            # Restore it after the editor's callback has finished, preserving
+            # selection/filter/sort through the usual browser-seat refresh.
+            QTimer.singleShot(0,self,self._reload_current_view)
+            return False
         if field == "artist" and self.lib is not None:
             self._build_artist_registry()  # new override immediately feeds trust/canon
         else:
@@ -1717,6 +1785,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if self.lib and track_id in self.lib.tracks_by_id \
                 and self.art_cache.status_kind(track_id) != "cover":
             self._art_fetch_one(track_id)
+        return True
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -1941,12 +2010,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.info_placeholder.clicked.connect(self._open_track_info)
         row.addWidget(self.info_placeholder)
         row.addStretch(1)
-        self.my_tags = MyTagsButton()
+        self.my_tags = MyTagsButton(self)
         self.my_tags.setFixedHeight(28)
         self.my_tags.setFixedWidth(self.player_bar.cue_panel.width() - 6)
         self.search.setFixedWidth(self.my_tags.width())
         self.my_tags.popup.aboutToShow.connect(self._probe_tags)
         self.my_tags.assignment_requested.connect(self._assign_tag)
+        self.my_tags.creation_requested.connect(self._new_tag)
+        self.my_tags.deletion_requested.connect(self._delete_tag)
         row.addWidget(self.my_tags)
         row.addStretch(1)
         row.addWidget(gear)
@@ -2073,14 +2144,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._finish_edit_status()
 
     def _update_browser_bpm(self, track_id, bpm, *, estimated=False):
-        selected = set(self._selected_ids())
+        seat = self._browser_seat()
         reset = self.model.update_bpm(track_id, bpm, estimated=estimated)
-        if reset and selected:
-            selection = self.table.selectionModel()
-            for row, data in enumerate(self.model._rows):
-                if data.get('id') in selected:
-                    selection.select(self.model.index(row, 0),
-                                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        if reset:self._restore_browser_seat(seat)
 
     def _sync_tags(self):
         if not hasattr(self, "my_tags"):
@@ -2093,7 +2159,14 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             reason = "Library operation in progress"
         lib = controller.lib
         assigned = controller.selected_tags(ids)
-        self.my_tags.set_state(lib.source_tags if lib else [], assigned, reason)
+        creation_reason = self.tag_definition_controller.reason()
+        if not creation_reason and (self._refresh_worker is not None or self._device_operation_owned()):
+            creation_reason = 'Library operation in progress'
+        deletion_reason = self.tag_definition_controller.deletion_reason()
+        if not deletion_reason and (self._refresh_worker is not None or self._device_operation_owned()):
+            deletion_reason = 'Library operation in progress'
+        self.my_tags.set_state(lib.source_tags if lib else [], assigned, reason,
+                               creation_reason=creation_reason, deletion_reason=deletion_reason)
         self._sync_edit_status()
 
     def _sync_edit_status(self):
@@ -2161,7 +2234,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 or self._shutting_down or self._device_operation_owned()):
             self._sync_tags()
             return
-        self.tag_controller.request(self._selected_ids(), tag_id, present)
+        selected=list(self._selected_ids())
+        context=(str(self.lib.source),self.lib.source_library_id,
+                 smart_playlist_order.capture(self.lib,selected,tag_id,present)) if self.lib else None
+        if self.tag_controller.request(selected, tag_id, present):
+            self._tag_order_context=context
         self._sync_rekordbox_connection()
         self._sync_tags()
 
@@ -2176,17 +2253,31 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _tag_saved(self, lib):
         # The worker includes a fresh authoritative snapshot; never reconstruct
         # smart memberships by patching a stale browser cache.
-        selected = set(self._selected_ids()) if self.stack.currentIndex() == 0 else set()
+        context=getattr(self,'_tag_order_context',None)
+        self._tag_order_context=None
+        if context and (not self.lib or (str(self.lib.source),self.lib.source_library_id)!=context[:2]):
+            self._finish_tag_refresh();self._finish_edit_status()
+            self._flash_status('Tags saved in the original library; current library unchanged',15)
+            return
+        order_error=''
+        if context:
+            missing=object();previous=self.settings.get(smart_playlist_order.KEY,missing)
+            try:
+                after=smart_playlist_order.record(None if previous is missing else previous,context[2],lib)
+                if after is not (None if previous is missing else previous):
+                    self.settings[smart_playlist_order.KEY]=after
+                    if not self._save_state():
+                        if previous is missing:self.settings.pop(smart_playlist_order.KEY,None)
+                        else:self.settings[smart_playlist_order.KEY]=previous
+                        order_error='Tags saved; smart-playlist display order could not be saved'
+            except ValueError as exc:
+                order_error='Tags saved; '+str(exc)
+        seat = self._browser_seat() if self.stack.currentIndex() == 0 else None
         self._on_refresh_done(lib)
-        if selected and self.stack.currentIndex() == 0:
-            selection = self.table.selectionModel()
-            selection.clearSelection()
-            for row, data in enumerate(self.model._rows):
-                if data.get("id") in selected:
-                    selection.select(self.model.index(row, 0),
-                                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        if seat is not None and self.stack.currentIndex() == 0:self._restore_browser_seat(seat)
         self._finish_tag_refresh()
         self._finish_edit_status()
+        if order_error:self._flash_status(order_error,15)
 
     def _cue_saved(self, lib, track_id):
         self.lib = lib
@@ -2205,6 +2296,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._sync_edit_status()
 
     def _tag_failed(self, error):
+        self._tag_order_context=None
         label = (self._prep_update_message.removeprefix('Updating ').removesuffix('…')
                  or self.tag_controller.last_operation)
         self._prep_update_message = ''
@@ -2382,6 +2474,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         item=self.tree.currentItem()
         parent=item.data(0,RB_NODE_ROLE) if item and item.data(0,RB_NODE_KIND_ROLE)==1 else 'root'
         menu.addAction('New Playlist',lambda:self._native_new(parent or 'root'))
+        row = self._native_node(item.data(0,RB_NODE_ROLE)) if item else None
+        smart_parent = row['ID'] if row and row['Attribute'] == 1 else row['ParentID'] if row else 'root'
+        smart = menu.addAction('New Smart Playlist', lambda:self._new_smart_playlist(smart_parent))
+        smart_reason = self.playlist_controller.smart_reason()
+        smart.setEnabled(not smart_reason)
+        smart.setToolTip(smart_reason)
         menu.addAction('New Folder',lambda:self._native_new(parent or 'root',folder=True))
         exec_transient_menu(menu, QCursor.pos())
 
@@ -2613,8 +2711,80 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         return bar
 
     # ---------- open / load ----------
+    def _accept_source_curation(self, library, *, bootstrap=False, force_save=False, native_changed_ids=()):
+        """Commit source identity and curation together before publishing a view."""
+        controller=getattr(self,'metadata_controller',None)
+        if controller is None:
+            return self._save_state() if force_save else True
+        try:
+            token=controller.stage_source_scope(library,previous=self.lib,bootstrap=bootstrap)
+        except (ValueError,TypeError,KeyError) as exc:
+            self._flash_status('Saved curation needs reconciliation — '+str(exc),20)
+            return False
+        try:
+            refresh_token=(controller.stage_native_refresh(library,changed_ids=native_changed_ids)
+                           if native_changed_ids else None)
+        except (ValueError,TypeError,KeyError) as exc:
+            controller.rollback_source_scope(token)
+            self._flash_status('Saved curation needs reconciliation — '+str(exc),20)
+            return False
+        changed=refresh_token is not None or any(getattr(self,attr)!=value for attr,value in token.items())
+        if (force_save or changed) and not self._save_state():
+            if refresh_token is not None:controller.rollback_source_scope(refresh_token)
+            controller.rollback_source_scope(token)
+            return False
+        return True
+
+    def _source_selection_reason(self, path=None):
+        tags = getattr(self, 'tag_controller', None)
+        if (self._refresh_worker is not None or self._state_maintenance or self._shutting_down
+                or self._device_operation_owned() or getattr(tags, 'busy', False)
+                or getattr(tags, 'checking', False) or getattr(tags, 'admission_paused', False)
+                or getattr(self, '_analysis_worker', None) is not None
+                or getattr(getattr(self, '_import_tasks', None), 'pending', 0)):
+            return 'Finish the current library operation before changing sources'
+        if path is None or self.lib is None:
+            return ''  # Initial load and the chooser must allow recovery of the original source.
+        current = str(Path(self.lib.source).expanduser().resolve())
+        target = str(Path(path).expanduser().resolve())
+        if current == target:
+            return ''
+        metadata_controller=getattr(self,'metadata_controller',None)
+        if metadata_controller and getattr(metadata_controller,'planning_pending',False):
+            return 'Finish metadata preparation before leaving this library'
+        if metadata_controller and getattr(metadata_controller,'migration_pending',False):
+            migration=(self.settings.get('source_truth_alias_next') if 'source_truth_alias_next' in self.settings
+                       else self.settings.get('source_truth_migration'))
+            scope=migration.get('scope') if isinstance(migration,dict) else None
+            source=scope.get('source') if isinstance(scope,dict) else None
+            if not isinstance(source,str) or not Path(source).is_absolute():
+                return 'Saved metadata migration needs attention before changing sources'
+            if str(Path(source).resolve())==current:
+                return 'Finish the saved metadata migration before leaving this library'
+        for key in ('shared_import_jobs', 'pending_prep_edits', 'rekordbox_playlist_edits',
+                    'pending_tag_definitions', 'pending_tag_assignments', 'pending_metadata_edits'):
+            queue = self.settings.get(key, [])
+            if not queue:
+                continue
+            if not isinstance(queue, list):
+                return 'Saved library edits need attention before changing sources'
+            for job in queue:
+                source = job.get('source') if isinstance(job, dict) else None
+                if not isinstance(source, str) or not Path(source).is_absolute():
+                    return 'Saved library edits need attention before changing sources'
+                if str(Path(source).resolve()) == current:
+                    return 'Finish or discard pending edits before leaving this library'
+        deletion = self.settings.get('graveyard_delete_intent')
+        if deletion:
+            source = deletion.get('source') if isinstance(deletion, dict) else None
+            if not isinstance(source, str) or str(Path(source).resolve()) == current:
+                return 'Finish the pending library removal before changing sources'
+        return ''
+
     def _open_dialog(self):
-        if self._refresh_worker is not None or self._state_maintenance or self._device_operation_owned():
+        reason = self._source_selection_reason()
+        if reason:
+            self._flash_status(reason, 10)
             return
         start = str(Path.home() / "Desktop")
         path, _ = QFileDialog.getOpenFileName(self, "Open Rekordbox XML", start,
@@ -2622,19 +2792,28 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if path:
             self.open_library(path)
 
-    def open_library(self, path: str):
+    def open_library(self, path: str, *, initial=False):
+        reason = self._source_selection_reason(None if initial else path)
+        if reason:
+            self._flash_status(reason, 10)
+            return False
         try:
-            self.lib = engine.load_library(path)
+            library = engine.load_library(path)
         except Exception as exc:  # parser failures also retain the previous library
             LOG.exception("Load failed: %s", path)
             QMessageBox.critical(self, "Load failed", str(exc))
-            return
+            return False
+        previous_path = self._last_xml
+        self._last_xml = path
+        if not self._accept_source_curation(library, force_save=True):
+            self._last_xml = previous_path
+            self._flash_status('Library selection could not be saved; the previous library is retained', 10)
+            return False
+        self.lib = library
         LOG.info("Loaded %s: %d tracks, %d playlists",
                  Path(path).name, self.lib.track_count, len(self.lib.playlists))
-        self._last_xml = path  # remember for next launch
         self._rekordbox_source_verified = True
         self._rekordbox_connection_error = ""
-        self._save_state()
         self._apply_loaded_library()
         QTimer.singleShot(0,self,self._resume_analysis_jobs)
         self._sync_rekordbox_connection()
@@ -2647,8 +2826,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         self._schedule_stock_artwork()
         QTimer.singleShot(500, self._maybe_fill_waveforms)
+        return True
 
-    def _apply_loaded_library(self):
+    def _apply_loaded_library(self, *, already_projected=False):
         """Shared post-load wiring: fold in imported tracks, (re)build the artist
         registry, apply hide settings, repopulate the sidebar + land on
         Collection. Used by open_library, the live-refresh completion, AND the
@@ -2659,8 +2839,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # the snapshot sticks and defeats the newest-added sort.
         try:
             unavailable={}
-            self.lib=shared_imports.project(self.lib,self.settings.get(shared_imports.BINDINGS,[]),
-                                            unavailable=unavailable)
+            if not already_projected:
+                self.lib=shared_imports.project(self.lib,self.settings.get(shared_imports.BINDINGS,[]),
+                                                unavailable=unavailable)
             if unavailable:
                 LOG.info('Native Collection no longer contains %d bound imported track(s); other songs remain usable',
                          len(unavailable))
@@ -2691,12 +2872,20 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._sync_prep_bpm()
         # Presentation reuse is independent of source authority. Cue/tag edit
         # identities are refreshed above even when every browser input matches.
-        display_inputs = (
-            frozenset(tuple(getattr(t, f) for f in (
+        # Retain scalar native comparison inputs during the existing browser
+        # inventory pass. Refresh workers reuse this owned map without cloning
+        # the Library, cue/reference graphs or saved beat arrays.
+        native_metadata = {}
+        def display_input(t):
+            identity = t.native_id
+            pin = (t.source_uuid, t.source_native_path or str(t.path), t.name, t.artist)
+            native_metadata[identity] = None if identity in native_metadata else pin
+            return tuple(getattr(t, f) for f in (
                 'track_id', 'name', 'artist', 'location_uri', 'bpm', 'key',
                 'total_time', 'date_added', 'added_ts', 'genre', 'kind',
                 'size', 'bitrate', 'rating', 'year', 'imported')) + (json.dumps(t.info,sort_keys=True),)
-                for t in self.lib.tracks_by_id.values()),
+        display_inputs = (
+            frozenset(display_input(t) for t in self.lib.tracks_by_id.values()),
             tuple(sorted(self.overrides.items())), tuple(sorted(self.titles.items())),
             tuple(sorted(self.aliases.items())), tuple(self._title_junk()),
         )
@@ -2708,6 +2897,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._apply_settings_to_lib(invalidate_rows=not reuse)
         self._display_inputs = display_inputs
         self._display_registry = self.lib.artist_registry
+        self._metadata_native_index = native_metadata
         self._browser_cache_key = browser_cache.fingerprint(display_inputs)
         if not reuse:
             prepared_rows = browser_cache.load(
@@ -2717,6 +2907,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                                         if tid in self.lib.tracks_by_id})
         self._populate_tree(engine.summary(self.lib))
         self.graveyard_controller.prepare_library()
+        self.tag_definition_controller.schedule()
+        self.metadata_controller.schedule()
         self.shared_import_controller.schedule()
         self.native_analysis_controller.discover()
         self.media_controller.discover()
@@ -2792,6 +2984,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         presentation=self._native_presentation() if presentation is None else presentation
         if presentation is not None and presentation is not self.lib:
             summary=engine.summary(presentation)
+        from .trees import NATIVE_BINDING_ROLE
+        native_library=presentation or self.lib
+        native_rows={row['ID']:row for row in (getattr(native_library,'source_playlist_catalog',None) or {}).get('nodes',[])}
         cur = self.tree.currentItem()
         identity_role=Qt.UserRole+82
         current_id=cur.data(0,identity_role) if cur else None
@@ -2831,6 +3026,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     item.setText(0,f"♪  {node['name']}  ({node['count']})" if node['type']=='playlist' else node['name'])
                     item.setData(0,PATH_ROLE,node.get('path') if node['type']=='playlist' else None)
                     item.setData(0,CUSTOM_ROLE,aliases.get(identity))
+                    native=native_rows.get(node.get('pid'))
+                    item.setData(0,NATIVE_BINDING_ROLE,
+                        dict(source=str(native_library.source),library_id=native_library.source_library_id,
+                             id=native['ID'],uuid=native['UUID'],alias=aliases.get(identity))
+                        if native_library and native_library.source_kind=='rekordbox-db' and native else None)
                     item.setData(0,PINNED_TREE_ROLE,False)
                     owner=item.parent() or (root if item.treeWidget() is self.tree else None)
                     if owner is not parent or parent.indexOfChild(item)!=number:
@@ -2919,7 +3119,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                           busy=busy, custom=bool(self.settings.get("rekordbox_db_path")))
 
     def _choose_rekordbox_database(self):
-        if self._refresh_worker is not None or self.tag_controller.owned or self._state_maintenance or self._device_operation_owned():
+        if self._source_selection_reason():
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose rekordbox database", str(self._rekordbox_database_path().parent),
@@ -2928,7 +3128,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             self._start_rekordbox_refresh(Path(path), selection=True)
 
     def _use_default_rekordbox_database(self):
-        if self._refresh_worker is not None or self.tag_controller.owned or self._state_maintenance or self._device_operation_owned():
+        if self._source_selection_reason():
             return
         self._start_rekordbox_refresh(rekordbox_db.REKORDBOX_DB, selection=True)
 
@@ -2946,11 +3146,20 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._start_rekordbox_refresh(self._rekordbox_database_path())
 
     def _start_rekordbox_refresh(self, path: Path, *, selection=False):
+        if selection and (reason := self._source_selection_reason(path)):
+            self._flash_status(reason, 10)
+            return
         if self._shutting_down or self._state_maintenance or self._refresh_worker is not None or self.tag_controller.owned:
             return
         if not self._device_operation_owned():
             self._start_pulse("Loading")
         w = RefreshWorker(path)
+        # A warm browser snapshot is not a completed publication checkpoint.
+        # Each process's first verified source read re-derives all rows in its
+        # worker, so a crash before a sparse plan saved cannot strand curation.
+        if self.lib is not None and self._rekordbox_source_verified:
+            w.metadata_baseline = ((str(self.lib.source), self.lib.source_kind, self.lib.source_library_id),
+                                   getattr(self, '_metadata_native_index', {}))
         w.retained_tracks = {k:dict(v) for k,v in self.settings.get('rekordbox_collection_tracks',{}).items()
                              if isinstance(v,dict)}
         w.preflight = self.tag_controller.recover_before_read
@@ -2971,18 +3180,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             return
         if not self._shutting_down:
             if result is not None:
-                if selection is not None:
-                    previous = dict(self.settings)
-                    if Path(selection) == rekordbox_db.REKORDBOX_DB:
-                        self.settings.pop("rekordbox_db_path", None)
-                    else:
-                        self.settings["rekordbox_db_path"] = selection
-                    if not self._save_state():
-                        self.settings = previous
-                        result = None
-                        error = "Database selection could not be saved; the previous library is retained."
-                if result is not None:
-                    self._on_refresh_done(result)
+                accepted = self._on_refresh_done(result, metadata_changed_ids=getattr(w,'metadata_changed_ids',()),
+                                                 selection_path=selection)
+                if not accepted and selection is not None:
+                    error = 'Database selection could not be saved; the previous library is retained.'
             if error:
                 self._on_refresh_fail(error)
             self._sync_rekordbox_connection()
@@ -2991,24 +3192,65 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if pending and not self._shutting_down:
             QTimer.singleShot(0, self._refresh_rekordbox)
 
-    def _on_refresh_done(self, lib):
+    def _on_refresh_done(self, lib, *, metadata_changed_ids=(), selection_path=None):
+        try:
+            lib = shared_imports.project(lib,self.settings.get(shared_imports.BINDINGS,[]),unavailable={})
+            aliases = {binding['native_id']: binding['local_id']
+                for binding in self.settings.get(shared_imports.BINDINGS,[])
+                if (binding['source'],binding['library_id']) == (str(lib.source),lib.source_library_id)}
+            changed_ids = tuple(aliases.get(identity,identity) if aliases.get(identity,identity) in lib.tracks_by_id
+                                else identity for identity in metadata_changed_ids)
+        except (ValueError,TypeError,KeyError,RuntimeError) as exc:
+            self._rekordbox_connection_error = 'Native identity needs reconciliation: '+str(exc)
+            self._rekordbox_source_verified = False
+            self.tag_controller.configure(self.lib,False)
+            self._sync_rekordbox_connection()
+            return False
+        previous_settings = self.settings
+        if selection_path is not None:
+            self.settings = dict(previous_settings)
+            if Path(selection_path) == rekordbox_db.REKORDBOX_DB:
+                self.settings.pop('rekordbox_db_path',None)
+            else:
+                self.settings['rekordbox_db_path'] = selection_path
+        if not self._accept_source_curation(lib,native_changed_ids=changed_ids,
+                                            force_save=selection_path is not None):
+            self.settings = previous_settings
+            self._rekordbox_source_verified=False
+            self.tag_controller.configure(self.lib,False)
+            self._sync_rekordbox_connection()
+            return False
         if not self._device_operation_owned():
             self._stop_pulse()
+        previous_registry = self.lib.artist_registry if self.lib else None
+        previous_unaliased = getattr(self,'_metadata_unaliased_registry',None)
         self.lib = lib
         self._rekordbox_source_verified = True
         self._rekordbox_connection_error = ""
-        self._apply_loaded_library()
+        self._apply_loaded_library(already_projected=True)
+        controller = getattr(self,'metadata_controller',None)
+        if controller is not None and changed_ids:
+            # A changed canonical/trusted name can affect other raw rows (for
+            # example a newly trusted name in a reversed title). Expand only
+            # when global lookup semantics changed, never on unchanged refresh
+            # or a scalar edit whose registry context is still identical.
+            if (not metadata.registry_context_equal(previous_registry,self.lib.artist_registry)
+                    or not metadata.registry_context_equal(previous_unaliased,self._metadata_unaliased_registry)):
+                changed_ids = tuple(self.lib.tracks_by_id)
+            controller.publish_derived(self.lib,changed_ids=changed_ids,
+                context=(self.lib.artist_registry,self._metadata_unaliased_registry),verified=True)
         QTimer.singleShot(0,self,self._resume_analysis_jobs)
         self._refresh_devices()
         LOG.info("Loaded %d tracks / %d playlists from rekordbox",
                  lib.track_count, len(lib.playlists))
         self._sync_rekordbox_connection()
-        controller=getattr(self,'playlist_controller',None)
-        imports_controller=getattr(self,'shared_import_controller',None)
-        analysis_controller=getattr(self,'native_analysis_controller',None)
-        if ((controller and (controller.pending or controller.queue_error())) or
-                (imports_controller and (imports_controller.pending or imports_controller.queue_error())) or
-                (analysis_controller and analysis_controller.pending)):
+        controllers=(getattr(self,name,None) for name in (
+            'playlist_controller','shared_import_controller','native_analysis_controller',
+            'metadata_controller','tag_definition_controller','prep_controller','tag_controller'))
+        if (self.tag_controller.update_status_text or any(controller and
+                (getattr(controller,'pending',[]) or getattr(controller,'planning_pending',False)
+                 or getattr(controller,'queue_error',lambda:'')())
+                for controller in controllers)):
             self._sync_edit_status()
         elif not self._rekordbox_source_verified:
             self._flash_status(self._rekordbox_connection_error,20)
@@ -3021,6 +3263,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             QTimer.singleShot(3000, self._maybe_autostart_art_fill)  # NEW tracks only
         self._schedule_stock_artwork()
         QTimer.singleShot(500, self._maybe_fill_waveforms)
+        return True
 
     def _on_refresh_fail(self, err):
         self._rekordbox_connection_error = err
@@ -3059,6 +3302,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if self.lib is None:
             return
         from .suggest import SuggestDialog
+        from soundbox import alias_intents
         reg = self.lib.artist_registry
         items = []
         for t in self.lib.tracks_by_id.values():
@@ -3072,6 +3316,10 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if not items:
             self._flash_status("No Unknowns ✓", 6)
             return
+        try:pins=alias_intents.artist_pins(self.lib,[tid for tid,_title in items])
+        except (ValueError,KeyError,TypeError) as exc:
+            self._flash_status('Refresh song identities before artist edits — '+str(exc),12)
+            return
         dlg = SuggestDialog(items, self, provider=self.providers.artists)
         try:
             dlg.exec()
@@ -3079,16 +3327,27 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             dlg.shutdown()
             accepts = tuple(dlg.accepts)
             dlg.deleteLater()
-        if self._shutting_down or not accepts:
+        if self._shutting_down or self._state_maintenance or not accepts:
             return
-        for tid, artist in accepts:
-            self.overrides[tid] = artist
-        self._save_state()
-        self._build_artist_registry()
+        try:
+            ids=[tid for tid,_artist in accepts]
+            expected={'scope':pins['scope'],'tracks':{tid:pins['tracks'][tid] for tid in ids}}
+            if alias_intents.artist_pins(self.lib,ids)!=expected:raise ValueError('Song or library changed')
+        except (ValueError,KeyError,TypeError):
+            self._flash_status('Song or library changed; reopen artist edits',12)
+            return
+        controller=getattr(self,'metadata_controller',None)
+        native=bool(controller is not None and self.lib and self.lib.source_kind=='rekordbox-db')
+        if native:
+            if not controller.change_artists(accepts,pins):return
+        else:
+            previous=self.overrides;self.overrides={**previous,**dict(accepts)}
+            if not self._save_state():self.overrides=previous;return
+            self._build_artist_registry()
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
-        self._flash_status(f"Accepted {len(accepts)} ✓", 8)
+        self._flash_status(f'Artist updates pending ({len(accepts)})' if native else f'Accepted {len(accepts)} ✓',8)
 
     def _suggest_merges(self):
         """Scan the library for likely duplicate artist spellings (local, fuzzy)
@@ -3100,6 +3359,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if getattr(self, "_scan_worker", None) is not None:
             return
         tracks = list(self.lib.tracks_by_id.values())
+        source_scope = _artist_source_scope(self.lib)
         overrides = dict(self.overrides)
         reg = self.lib.artist_registry
 
@@ -3112,23 +3372,32 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
 
         w = OneShotTask(scan)
         self._scan_worker = w
-        w.done.connect(self._on_merge_scan)
-        w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
         self._start_pulse("Scanning")
+        status_generation = getattr(self,'_status_generation',None)
+        w.done.connect(lambda result, scope=source_scope, worker=w, generation=status_generation:
+                       self._on_merge_scan(result,source_scope=scope,worker=worker,status_generation=generation))
+        w.finished.connect(lambda ww=w: self._finish_worker("_scan_worker", ww))
         w.start()
 
-    def _on_merge_scan(self, res):
+    def _on_merge_scan(self, res, *, source_scope=None, worker=None, status_generation=None):
         if self._shutting_down or self._state_maintenance:
             return
-        self._stop_pulse()
-        self._set_status_text("Ready")
+        current_scope=_artist_source_scope(getattr(self,'lib',None))
+        owns_status=(status_generation is None or
+            status_generation==getattr(self,'_status_generation',None) and getattr(self,'_pulse_word',None)=='Scanning')
+        if (source_scope is not None and source_scope!=current_scope
+                or worker is not None and getattr(self,'_scan_worker',None) is not worker):
+            if worker is not None and getattr(self,'_scan_worker',None) is worker and owns_status:
+                self._set_status_text("Ready")
+            return
+        if owns_status:self._set_status_text("Ready")
         if isinstance(res, Exception):
             QMessageBox.warning(self, "Scan failed", str(res))
             return
         counts, suggestions = res
         suggestions = [x for x in suggestions if x[0] not in self.aliases]
         if not suggestions and not self.aliases:
-            self._flash_status("No duplicates ✓", 6)
+            if owns_status:self._flash_status("No duplicates ✓", 6)
             return
         from .suggest import MergeDialog
         dlg = MergeDialog(suggestions, dict(self.aliases), counts, self)
@@ -3140,6 +3409,9 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             dlg.deleteLater()
         if self._shutting_down or self._state_maintenance:
             return
+        if _artist_source_scope(getattr(self,'lib',None))!=current_scope:
+            self._flash_status('Library changed; reopen artist merges',8)
+            return
         self._apply_merges(accepts, unmerges)
 
     def _apply_merges(self, accepts, unmerges):
@@ -3147,16 +3419,21 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         rebuild the registry + views. No-op if nothing changed."""
         if not accepts and not unmerges:
             return
-        for src in unmerges:
-            self.aliases.pop(src, None)
-        for variant, target in accepts:
-            self.aliases[variant] = target
-        self._save_state()
-        self._build_artist_registry()
+        controller=getattr(self,'metadata_controller',None)
+        native=bool(controller is not None and self.lib and self.lib.source_kind=='rekordbox-db')
+        if native:
+            if not controller.change_aliases(accepts,unmerges):return
+        else:
+            previous=self.aliases;updated=dict(previous)
+            for src in unmerges:updated.pop(src,None)
+            for variant,target in accepts:updated[variant]=target
+            self.aliases=updated
+            if not self._save_state():self.aliases=previous;return
+            self._build_artist_registry()
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
-        self._flash_status(f"Merged {len(accepts)} ✓", 8)
+        self._flash_status('Artist updates pending' if native else f'Merged {len(accepts)} ✓',8)
 
     @_art_ui_action
     @_provider_action("artwork.search")
@@ -5195,9 +5472,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         return model
 
     def _begin_stock_ipod_sync(
-            self, dev: str, playlists: list[Playlist] | None, *, reconcile: bool = False):
+            self, dev: str, playlists: list[Playlist] | None, *, reconcile: bool = False, _source_ready=False):
         """Run the expensive, read-only database/media plan off the UI thread."""
         if self._shutting_down or self._state_maintenance:
+            return
+        from .export_wait import defer_source_sync
+        if defer_source_sync(self,'stock',dev,playlists,_ready=_source_ready,reconcile=reconcile):
             return
         from soundbox.stock_ipod import plan_stock_ipod_sync
         if self._device_operation_owned():
@@ -5208,26 +5488,36 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 lambda: self._begin_stock_ipod_sync(
                     dev, playlists, reconcile=reconcile)):
             return
+        from .export_wait import sync_source_identity
+        source_identity=sync_source_identity(self,dev,playlists)
         profile = self._device_profiles.get(dev)
         model = self._stock_write_model(dev, profile)
         if not model:
             return
+        if source_identity!=sync_source_identity(self,dev,playlists):
+            self._flash_status('Library, playlist or connected iPod changed; choose the target again',15)
+            return
+        from .cdj import _source_edits_pending
+        if _source_edits_pending(self):
+            defer_source_sync(self,'stock',dev,playlists,reconcile=reconcile)
+            return
         self._release_eject_ready()
         from .workers import OneShotTask
-        library = self.lib
+        from soundbox.export_snapshot import capture_export
+        captured = capture_export(self.lib, playlists or (), extra=self._sync_playlists(),
+                                  titles=self.titles, artists=self.overrides, complete=True)
         facts = device_facts(dev, cached_only=True)
         self._validate_export_target(dev,facts)
         identity_key = self._stock_device_key(dev, profile)
-        extra_playlists = tuple(self._sync_playlists())
-        artist_overrides = dict(self.overrides)
-        title_overrides = dict(self.titles)
         # First construction stays on the GUI owner, shared with the artwork
         # warmer; cached_property does not serialize concurrent first access.
         stock_art_cache = self.stock_art_cache
         def plan():
+            inputs = captured.materialize()
+            library, extra_playlists = inputs.library, inputs.extra
             facts = device_facts(dev)
             shadow = self.stock_ipod_shadow_store.load(identity_key) if reconcile else None
-            selected = playlists
+            selected = None if playlists is None else list(inputs.playlists)
             if selected is None:
                 if shadow is None:
                     raise ValueError(
@@ -5243,8 +5533,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 model_number=model,
                 filesystem=device_fs(dev),
                 derive_artists=True,
-                artist_overrides=artist_overrides,
-                title_overrides=title_overrides,
+                artist_overrides=inputs.artists,
+                title_overrides=inputs.titles,
                 art_cache=self.art_cache,
                 stock_art_cache=stock_art_cache,
                 identity_key=identity_key,
@@ -5417,9 +5707,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
             expected_playlist_rows: dict[str, dict] | None = None,
             expected_manifest: dict | None = None,
             audit_existing: bool = False,
+            _source_ready=False,
     ):
         """Build the composite stock/Rockbox plan without target writes."""
         if self._shutting_down or self._state_maintenance:
+            return
+        from .export_wait import defer_source_sync
+        if defer_source_sync(self,'dual',dev,playlists,_ready=_source_ready,reconcile=reconcile,
+                respect_selected_order=respect_selected_order,preconfirmed=preconfirmed,confirmed=confirmed,
+                action=action,expected_playlist_rows=expected_playlist_rows,expected_manifest=expected_manifest,
+                audit_existing=audit_existing):
             return
         from soundbox.dual_ipod import plan_dual_ipod_sync
         if self._device_operation_owned():
@@ -5440,9 +5737,21 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     audit_existing=audit_existing,
                 )):
             return
+        from .export_wait import sync_source_identity
+        source_identity=sync_source_identity(self,dev,playlists)
         profile = self._device_profiles.get(dev)
         model = self._stock_write_model(dev, profile)
         if not model:
+            return
+        if source_identity!=sync_source_identity(self,dev,playlists):
+            self._flash_status('Library, playlist or connected iPod changed; choose the target again',15)
+            return
+        from .cdj import _source_edits_pending
+        if _source_edits_pending(self):
+            defer_source_sync(self,'dual',dev,playlists,reconcile=reconcile,
+                    respect_selected_order=respect_selected_order,preconfirmed=preconfirmed,confirmed=confirmed,
+                    action=action,expected_playlist_rows=expected_playlist_rows,expected_manifest=expected_manifest,
+                    audit_existing=audit_existing)
             return
         facts = device_facts(dev, cached_only=True)
         self._validate_export_target(dev,facts)
@@ -5456,31 +5765,32 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._dual_active_track_total = sum(
             len(self.lib.resolve(playlist)) for playlist in (playlists or ()))
         from .workers import ProgressTask
-        library = self.lib
+        from soundbox.export_snapshot import capture_export
+        captured = capture_export(self.lib, playlists or (), extra=self._sync_playlists(),
+                                  titles=self.titles, artists=self.overrides, complete=True)
         identity_key = self._stock_device_key(dev, profile)
         adoptable_playlist_keys = {f"cust:{name}" for name in self.custom}
         state=self.unification_controller.state()
         if state and state['customs_done']:
             adoptable_playlist_keys-={'cust:'+key[7:] for key in state['nodes'] if key.startswith('custom:')}
         stock_art_cache = self.stock_art_cache
-        extra_playlists = tuple(self._sync_playlists())
-        artist_overrides = dict(self.overrides)
-        title_overrides = dict(self.titles)
         expected_manifest = deepcopy(expected_manifest)
+        expected_playlist_rows = deepcopy(expected_playlist_rows)
 
         def plan(callback):
+            inputs = captured.materialize()
             facts = device_facts(dev)
             return plan_dual_ipod_sync(
-                library,
-                playlists,
+                inputs.library,
+                None if playlists is None else list(inputs.playlists),
                 dev,
                 model_number=model,
                 filesystem=device_fs(dev),
                 rockbox_media_cache=self.rockbox_media_cache,
                 rockbox_art_cache=self.rockbox_art_cache,
                 derive_artists=True,
-                artist_overrides=artist_overrides,
-                title_overrides=title_overrides,
+                artist_overrides=inputs.artists,
+                title_overrides=inputs.titles,
                 art_cache=self.art_cache,
                 stock_art_cache=stock_art_cache,
                 stock_shadow_store=self.stock_ipod_shadow_store,
@@ -5490,7 +5800,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 respect_selected_order=respect_selected_order,
                 on_progress=callback,
                 expected_playlist_rows=expected_playlist_rows,
-                extra_playlists=extra_playlists,
+                extra_playlists=inputs.extra,
                 expected_manifest=expected_manifest,
                 adoptable_playlist_keys=adoptable_playlist_keys,
                 audit_existing=audit_existing,
@@ -6756,9 +7066,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         tid = self.model._rows[idx.row()].get("id")
         if not tid:
             return
-        ids = self._selected_ids()
-        if tid not in ids:
-            ids = [tid]  # right-clicked outside the selection → act on that row
+        selection = self.table.selectionModel()
+        selected = selection.selectedRows() if selection else []
+        selected_rows = ([self.model._rows[index.row()] for index in selected]
+                         if any(index.row() == idx.row() for index in selected)
+                         else [self.model._rows[idx.row()]])
+        ids = [row['id'] for row in selected_rows if row.get('id')]
         key = COLUMNS[idx.column()][0]
         menu = QMenu(self)
         if key in ("title", "artist"):
@@ -6799,7 +7112,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         # Playlist views expose both scopes: remove only from the current
         # playlist, or remove globally from SoundBox's Collection. Collection
         # and other derived all-track views expose only the global action.
-        self._add_track_removal_actions(menu, ids)
+        self._add_track_removal_actions(menu, ids, selected_rows=selected_rows)
         exec_transient_menu(menu, self.table.viewport().mapToGlobal(pos))
 
     def _add_track_reanalysis_action(self, menu: QMenu, ids: list[str]):
@@ -6819,11 +7132,11 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 lambda: self._open_in_finder(selected),
             )
 
-    def _add_track_removal_actions(self, menu: QMenu, ids: list[str]):
+    def _add_track_removal_actions(self, menu: QMenu, ids: list[str], *, selected_rows=None):
         """Add the scope-explicit reversible removal actions for this view.
 
-        rekordbox playlists receive a SoundBox-side veto only; custom playlists
-        are edited directly. Collection removal hides the track from every
+        Native ordinary playlists capture exact source occurrences; custom
+        playlists are edited directly. Collection removal hides the track from every
         SoundBox view/export but never writes rekordbox or touches source audio.
         """
         n = len(ids)
@@ -6831,9 +7144,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         rb_path = key[3:] if key.startswith('rb:') else None
         cust_name = key[3:] if key.startswith('sb:') and key[3:] in self.custom else None
         if rb_path:
-            menu.addAction("Remove from Playlist" if n == 1
-                           else f"Remove {n} tracks from Playlist",
-                           lambda: self._remove_from_rb_playlist(rb_path, ids))
+            from soundbox.rekordbox_write import WriteProofError
+            try:
+                captured = self._native_capture_remove(rb_path, ids, selected_rows)
+                error = ''
+            except (ValueError, KeyError, WriteProofError) as exc:
+                captured = None;error = str(exc)
+            action = menu.addAction("Remove from Playlist" if n == 1 else f"Remove {n} tracks from Playlist")
+            action.setEnabled(captured is not None)
+            if captured is not None:action.triggered.connect(lambda: self._native_submit_remove(captured))
+            else:action.setToolTip(error)
         elif cust_name:
             menu.addAction("Remove from Playlist" if n == 1
                            else f"Remove {n} tracks from Playlist",
@@ -6866,9 +7186,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._flash_status(msg, 6)
 
     def _merge_artist(self, src: str):
-        """Alias one artist spelling into another ("unownn" → "UNOWN") — the
-        variant can then never appear as its own artist. SoundBox-side only;
-        stored in library.json, removable in Settings."""
+        """Merge one spelling with durable native intentions when source-backed."""
+        source_scope=_artist_source_scope(self.lib)
         reg = self.lib.artist_registry if self.lib else None
         choices = [a for a in (reg.names() if reg else []) if a != src]
         target, ok = QInputDialog.getItem(
@@ -6876,23 +7195,36 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         target = (target or "").strip()
         if not ok or not target or target.lower() == src.lower():
             return
-        self.aliases[src] = target
-        self._save_state()
-        self._build_artist_registry()
+        if _artist_source_scope(self.lib)!=source_scope:
+            self._flash_status('Library changed; reopen Merge artist',8)
+            return
+        controller=getattr(self,'metadata_controller',None)
+        native=bool(controller is not None and self.lib and self.lib.source_kind=='rekordbox-db')
+        if native:
+            if not controller.change_alias(src,target):return
+        else:
+            previous=self.aliases;self.aliases={**previous,src:target}
+            if not self._save_state():self.aliases=previous;return
+            self._build_artist_registry()
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
         self._refresh_devices()  # renamed artist folders can drift nothing; keep badges fresh
-        self._flash_status("Merged ✓", 6)
+        self._flash_status('Artist merge pending' if native else 'Merged ✓',6)
 
     def _remove_alias(self, src: str):
-        self.aliases.pop(src, None)
-        self._save_state()
-        self._build_artist_registry()
+        controller=getattr(self,'metadata_controller',None)
+        native=bool(controller is not None and self.lib and self.lib.source_kind=='rekordbox-db')
+        if native:
+            if not controller.change_alias(src,None):return
+        else:
+            previous=self.aliases;self.aliases=dict(previous);self.aliases.pop(src,None)
+            if not self._save_state():self.aliases=previous;return
+            self._build_artist_registry()
         if self.lib is not None:
             self._populate_tree(engine.summary(self.lib))
             self._reload_current_view()
-        self._flash_status("Unmerged ✓", 6)
+        self._flash_status('Artist update pending' if native else 'Unmerged ✓',6)
 
     def _table_edit_at(self, idx):
         self.table.setCurrentIndex(idx)
@@ -7863,10 +8195,27 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
     def _resolve_jobs(self, items: list[tuple[str, str]]) -> list[Playlist]:
         pls: list[Playlist] = []
         for kind, val in items:
-            if kind == "rb":
-                pl = next((p for p in self.lib.playlists if p.display_path == val), None)
-                if pl:
-                    pls.append(pl)
+            if kind == 'rbid':
+                from .trees import native_playlist_binding
+                try:
+                    binding=native_playlist_binding(json.loads(val))
+                    node=next((row for row in self.lib.source_playlist_catalog.get('nodes',[]) if row['ID']==binding['id']),None)
+                    if ((binding['source'],binding['library_id'])!=(str(self.lib.source),self.lib.source_library_id)
+                            or node is None or node['UUID']!=binding['uuid'] or node['rb_local_deleted']!=0):
+                        raise ValueError('Native playlist source identity changed')
+                    if binding['alias']:
+                        pl=next((p for p in self._custom_playlists() if p.pid==binding['id']
+                                 and p.export_key=='cust:'+binding['alias']),None)
+                    else:pl=next((p for p in self.lib.playlists if p.pid==binding['id']),None)
+                    if pl is None:raise ValueError('Native playlist disappeared')
+                except (ValueError,TypeError,KeyError,UnicodeError):
+                    self._flash_status('The selected playlist changed; select it again before exporting',15);return []
+                pls.append(pl)
+            elif kind == "rb":
+                matches=[p for p in self.lib.playlists if p.display_path == val]
+                if len(matches)!=1:
+                    self._flash_status('The playlist name is ambiguous or changed; select its exact row again',15);return []
+                pls.append(matches[0])
             elif kind == "cust":
                 state=self.unification_controller.state()
                 if state and state['customs_done']:
@@ -8015,7 +8364,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                 "target. No files were changed.")
             return
         if self._exporting and self.export_worker is not None:
-            self.export_worker.add(dev, pls, mount_token=self._device_mount_tokens.get(dev, 0))  # aggregate into the running export
+            self.export_worker.add(dev, pls, mount_token=self._device_mount_tokens.get(dev, 0),
+                                   library=self.lib, titles=self.titles, overrides=self.overrides)
             return
         if self._defer_device_operation_until_scan_finishes(
                 lambda: self._on_device_drop(dev, items)):
@@ -8086,6 +8436,12 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self.status_label.setToolTip(detail)
 
     def _cancel_export(self):
+        from .export_wait import cancel_source_syncs
+        cancelled_wait=cancel_source_syncs(self)
+        if cancelled_wait and not self._device_operation_owned():
+            self._stop_pulse();self.cancel_btn.setVisible(False)
+            self._flash_status('iPod request cancelled — nothing written')
+            return
         batch=getattr(self,'_export_batch',None)
         if batch:
             batch['cancelled']=True
@@ -8150,6 +8506,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if getattr(self, "_shutdown_waiting", False):
             return
         self._shutdown_waiting = True
+        if hasattr(self, 'my_tags'):
+            self.my_tags.popup.close()
         # Shutdown dispatches events while workers drain. Stop observing the
         # entire application before child widgets or their wrappers retire;
         # deleteLater may otherwise leave this stopped window installed.
@@ -8166,12 +8524,16 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         self._export_batch = None
         if getattr(self,'playlist_controller',None) is not None:
             self.playlist_controller.stop()
+        if getattr(self,'tag_definition_controller',None) is not None:
+            self.tag_definition_controller.stop()
         if getattr(self,'shared_import_controller',None) is not None:
             self.shared_import_controller.stop()
         if getattr(self,'native_analysis_controller',None) is not None:
             self.native_analysis_controller.stop()
         if getattr(self,'prep_controller',None) is not None:
             self.prep_controller.stop()
+        if getattr(self,'metadata_controller',None) is not None:
+            self.metadata_controller.stop()
         if getattr(self,'graveyard_controller',None) is not None:
             self.graveyard_controller.shutdown()
         if getattr(self,'removal_controller',None) is not None:
@@ -8181,6 +8543,8 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if getattr(self,'media_controller',None) is not None:
             self.media_controller.stop()
         self._cdj_waiting = None
+        from .export_wait import cancel_source_syncs
+        cancel_source_syncs(self)
         keyboard = getattr(self, "_keyboard_router", None)
         if keyboard is not None:
             keyboard.release_all()
@@ -8265,8 +8629,38 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
         if getattr(self, '_shutting_down', False):
             return ''
         settings = getattr(self, 'settings', {})
+        metadata_controller=getattr(self,'metadata_controller',None)
+        unadmitted_metadata=bool(metadata_controller and getattr(metadata_controller,
+            'can_quit_with_unadmitted_metadata',lambda:False)())
+        planning = bool(metadata_controller and getattr(metadata_controller,'planning_pending',False))
+        if metadata_controller and not unadmitted_metadata and (planning or getattr(metadata_controller,'migration_pending',False)):
+            migration=(settings.get('source_truth_alias_next') if 'source_truth_alias_next' in settings
+                       else settings.get('source_truth_migration'))
+            error=getattr(metadata_controller,'queue_error',lambda:'')()
+            metadata_queue=settings.get('pending_metadata_edits',[])
+            metadata_error=(next((job.get('error') for job in metadata_queue
+                if isinstance(job,dict) and job.get('error')),'') if isinstance(metadata_queue,list)
+                else 'Saved metadata queue needs attention')
+            error=error or metadata_error or (migration.get('error') if isinstance(migration,dict)
+                                             else '' if planning else 'Saved metadata needs attention')
+            if not error and planning:
+                return 'Finishing metadata saves — SoundBox remains open'
+            if not error and isinstance(migration,dict):
+                order=migration.get('order')
+                if isinstance(order,list):
+                    if migration.get('unresolved') and migration.get('cursor',0)==len(order):
+                        error='Saved metadata has unresolved song identities; intentions are preserved'
+                elif migration.get('format')=='soundbox-source-alias-v1':
+                    if migration.get('state') not in ('building','ready'):
+                        error='Saved artist updates need attention; intentions are preserved'
+                elif migration.get('format')!='soundbox-source-truth-building-v1':
+                    error='Saved metadata needs attention; intentions are preserved'
+            return ('Save needs attention — '+str(error) if error else
+                    'Finishing metadata saves — SoundBox remains open')
         for key in ('shared_import_jobs', 'analysis_jobs', 'native_analysis_jobs',
-                    'pending_prep_edits', 'rekordbox_playlist_edits'):
+                    'pending_prep_edits', 'rekordbox_playlist_edits', 'pending_tag_definitions',
+                    'pending_tag_assignments', 'pending_metadata_edits'):
+            if key=='pending_metadata_edits' and unadmitted_metadata:continue
             queue = settings.get(key, [])
             if queue:
                 if not isinstance(queue, list):
@@ -8295,7 +8689,7 @@ class MainWindow(NativePlaylistsMixin, PlaylistFoldersMixin, AnalysisMixin, Anal
                     and not (grid_probe and getattr(tags, '_busy_kind', '') == 'grid')
                     and getattr(tags, '_busy_kind', '') in (
                         'tags', 'cues', 'grid', 'prep', 'playlists', 'analysis',
-                        'registration', 'registration-cancel', 'removal', 'media'))):
+                        'registration', 'registration-cancel', 'removal', 'media', 'tag-definitions', 'metadata'))):
             return 'Finishing saves — SoundBox remains open'
         return ''
 

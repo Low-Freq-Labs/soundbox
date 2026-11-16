@@ -6,7 +6,7 @@ Nothing here writes audio, analysis, XML, playlists or device storage.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 import os
@@ -16,7 +16,8 @@ import shutil
 import sqlite3
 from uuid import uuid4
 
-from .rekordbox_cues import CueEdit, CueIdentities, CueSnapshot, plan_cue_edit
+from .rekordbox_cues import (CueEdit, CueIdentities, CueSnapshot, plan_cue_edit,
+                              _public_cue, _check_sync, _CUE_COLUMNS)
 from .rekordbox_tags import NATIVE_VERSION, _file_sha, _installed_version, _schema
 from .rekordbox_write import (
     ConflictError, RecoveryRequired, WriteProofError, assert_rekordbox_closed, encrypted_backup,
@@ -24,6 +25,7 @@ from .rekordbox_write import (
 )
 from .state_io import atomic_bytes, sync_dir
 from .native_transaction import NativeTransactionLease
+from . import rekordbox_prep_read as prep_read
 
 _FORMAT = 'soundbox-native-cues-v1'
 _TABLES = frozenset(('djmdCue', 'djmdContent', 'contentCue', 'agentRegistry'))
@@ -107,16 +109,7 @@ class PilotCueStore(NativeTransactionLease):
         _closed()
 
     def _snapshot(self, conn) -> CueSnapshot:
-        tid = self.authority.pilot_track_id
-        tracks = self._rows(conn, 'djmdContent', ' WHERE ID=?', (tid,))
-        if len(tracks) != 1 or tracks[0]['rb_local_deleted']:
-            raise ConflictError('The pilot track is missing or deleted')
-        aggregates = self._rows(conn, 'contentCue', ' WHERE ContentID=?', (tid,))
-        if len(aggregates) > 1:
-            raise WriteProofError('Multiple cue aggregates for the pilot track')
-        rows = self._rows(conn, 'djmdCue', ' WHERE ContentID=?', (tid,))
-        # Deleted/history rows are not silently discarded from a write baseline.
-        return CueSnapshot(tracks[0], tuple(rows), aggregates[0] if aggregates else None)
+        return prep_read.cue_snapshot(self._rows, conn, self.authority.pilot_track_id)
 
     def snapshot(self) -> CueSnapshot:
         with self._lock():
@@ -125,6 +118,23 @@ class PilotCueStore(NativeTransactionLease):
                 self._recover(conn)
                 conn.execute('BEGIN')
                 return self._snapshot(conn)
+            finally:
+                conn.close()
+
+    def grid_snapshot(self):
+        """Fresh read-only grid for cue presentation; grants no grid-write API."""
+        with self._lock():
+            conn = self._connect()
+            try:
+                self._recover(conn)
+                conn.execute('BEGIN')
+                track = self._snapshot(conn).track
+                try:
+                    return prep_read.grid_snapshot(self.database, self.root, track)
+                except (OSError, ValueError, WriteProofError):
+                    # Native cues are DB-only. Missing/unreadable ANLZ must not
+                    # veto an independently authorized cue save or erase cache.
+                    return None
             finally:
                 conn.close()
 
@@ -175,6 +185,64 @@ class PilotCueStore(NativeTransactionLease):
             self._last_counter = counter
             self._backup_proof, self._backup_sha = self._baseline_identity(), sha
 
+    @staticmethod
+    def _validate_delta(record, edit, delta):
+        """Reject records describing mutations the admitted writer cannot make."""
+        track, aggregate, cue, registry = (delta[t] for t in
+            ('djmdContent', 'contentCue', 'djmdCue', 'agentRegistry'))
+        before, after = track['before'], track['after']
+        counter = registry['before']
+        stamp = after['updated_at']
+        old_count = before['CueUpdated']
+        if old_count is not None and (type(old_count) is not str or not 1 <= len(old_count) <= 19
+                or not old_count.isascii() or not old_count.isdecimal() or int(old_count) >= 2**63 - 1):
+            raise RecoveryRequired('Cue recovery has an unproved content counter')
+        if (type(counter['int_1']) is not int or not 0 <= counter['int_1'] < 2**63 - 2
+                or _json(registry['after']) != _json({**counter, 'int_1': counter['int_1'] + 2})
+                or type(stamp) is not str
+                or _json(after) != _json({**before,
+                    'CueUpdated': str(int(before['CueUpdated'] or '0') + 1),
+                    'rb_local_usn': counter['int_1'] + 1, 'updated_at': stamp})):
+            raise RecoveryRequired('Cue recovery changes unrelated content fields')
+        parsed = datetime.strptime(stamp, '%Y-%m-%d %H:%M:%S.%f %z')
+        old_items = json.loads(aggregate['before']['Cues']) if aggregate['before'] else []
+        if not isinstance(old_items, list) or any(not isinstance(item, dict) for item in old_items):
+            raise RecoveryRequired('Cue recovery aggregate is malformed')
+        row = cue['after'] if edit.operation == 'add' else cue['before']
+        if edit.operation == 'add':
+            if cue['before'] is not None or cue['after'] is None:
+                raise RecoveryRequired('Cue recovery action does not match request')
+            empty = CueSnapshot(before, (), None)
+            planned = plan_cue_edit(empty, counter, replace(edit, revision=empty.revision), now=parsed,
+                identities=CueIdentities(row['ID'], row['UUID'], aggregate['after']['UUID']))
+            if _json(row) != _json(_encode_row(planned[0].after)):
+                raise RecoveryRequired('Cue recovery inserted row differs from native plan')
+            items = [*old_items, _public_cue({k: row[k] for k in _CUE_COLUMNS})]
+            if aggregate['before'] is None:
+                expected = _encode_row(planned[2].after)
+            else:
+                expected = {**aggregate['before'], 'Cues': json.dumps(items, ensure_ascii=False,
+                    separators=(',', ':'), allow_nan=False),
+                    'rb_local_usn': counter['int_1'] + 2, 'updated_at': stamp}
+        elif edit.operation == 'delete':
+            if (cue['after'] is not None or row is None or edit.position_ms is not None
+                    or (row['ID'], row['UUID']) != (edit.cue_id, edit.cue_uuid)
+                    or edit.page not in ('hot', 'memory') or type(edit.slot) is not int
+                    or not 0 <= edit.slot < 8
+                    or row['Kind'] != (0 if edit.page == 'memory' else edit.slot + (1 if edit.slot < 3 else 2))):
+                raise RecoveryRequired('Cue recovery deletion differs from request')
+            _check_sync(row)
+            items = [item for item in old_items if item.get('ID') != row['ID']]
+            if len(items) != len(old_items) - 1 or aggregate['before'] is None:
+                raise RecoveryRequired('Cue recovery deletion has no aggregate member')
+            expected = {**aggregate['before'], 'Cues': json.dumps(items, ensure_ascii=False,
+                separators=(',', ':'), allow_nan=False),
+                'rb_local_usn': counter['int_1'] + 2, 'updated_at': stamp}
+        else:
+            raise RecoveryRequired('Cue recovery action is unsupported')
+        if _json(aggregate['after']) != _json(expected):
+            raise RecoveryRequired('Cue recovery changes unrelated aggregate fields')
+
     def _record(self):
         try:
             record = json.loads(self.journal.read_bytes())
@@ -211,9 +279,10 @@ class PilotCueStore(NativeTransactionLease):
                            or any(c not in '0123456789abcdef' for c in record[k])
                            for k in ('before_revision', 'after_revision', 'baseline_sha256'))):
                 raise RecoveryRequired('Cue recovery target/delta mismatch; evidence preserved')
+            self._validate_delta(record, edit, delta)
             self._verify_backup(record['baseline_sha256'])
             return record
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, WriteProofError) as exc:
             raise RecoveryRequired('Cue recovery record is damaged or belongs to another operation') from exc
 
     def _matches(self, conn, record, side):

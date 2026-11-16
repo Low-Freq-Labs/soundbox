@@ -3,10 +3,12 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from pathlib import Path
+from dataclasses import replace
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication
@@ -14,7 +16,7 @@ from PySide6.QtWidgets import QApplication
 from desktop.prep_tags import MyTagsButton
 from desktop.prep_grid import BpmValue
 from desktop.tag_controller import TagEditController
-from soundbox.library import Library, LibraryTag, Track
+from soundbox.library import Library, LibraryTag, Playlist, Track
 
 
 def _library():
@@ -70,7 +72,7 @@ class TagInterface(unittest.TestCase):
             self.assertLess(button.checkboxes["a"].geometry().bottom(), button.checkboxes["b"].y())
             button.set_state(tags, [set()], 'Close rekordbox and its background agent before editing tags')
             self.assertEqual(button.popup.width(), short)
-            self.assertEqual(button.summary.height(), button.summary.fontMetrics().height())
+            self.assertFalse(button.summary.isVisible())
             self.assertIn('Close rekordbox',button.summary.toolTip())
         finally:
             button.popup.close()
@@ -123,7 +125,7 @@ class TagInterface(unittest.TestCase):
         button.set_state(tags,[{'tag'}]);button.popup.popup(QPoint(100,100));self.app.processEvents()
         geometry=button.popup.geometry();summary=button.summary.geometry();box=button.checkboxes['tag']
         try:
-            with mock.patch.object(button._content_action,'changed') as changed:
+            with mock.patch.object(button.content,'updateGeometry') as changed:
                 for reason in ('Updating playlist…','','Confirming cue/grid saves…',''):
                     button.set_state(tags,[{'tag'}],reason)
                     self.app.processEvents()
@@ -131,7 +133,7 @@ class TagInterface(unittest.TestCase):
                     self.assertEqual(button.summary.geometry(),summary)
                     self.assertIs(button.checkboxes['tag'],box)
                     self.assertTrue(button.popup.isVisible())
-                changed.emit.assert_not_called()
+                changed.assert_not_called()
         finally:button.popup.close();button.deleteLater()
 
     def test_membership_tooltips_refresh_without_relayout_or_losing_elided_full_label(self):
@@ -144,15 +146,48 @@ class TagInterface(unittest.TestCase):
         boxes = dict(button.checkboxes)
         self.assertIn('Assigned to 1 of 2', boxes['short'].toolTip())
         self.assertIn('Assigned to 1 of 2', boxes['long'].toolTip())
-        with mock.patch.object(button._content_action, 'changed') as changed:
+        with mock.patch.object(button.content, 'updateGeometry') as changed:
             button.set_state(tags, [{'short', 'long'}, {'short', 'long'}])
-            changed.emit.assert_not_called()
+            changed.assert_not_called()
         self.assertIs(button.checkboxes['short'], boxes['short'])
         self.assertEqual(boxes['short'].toolTip(), '')
         self.assertEqual(boxes['long'].toolTip(), tags[1].name)
         button.set_state(tags, [{'long'}, set(), set()])
         self.assertIn('Assigned to 1 of 3', boxes['long'].toolTip())
         self.assertEqual(boxes['short'].toolTip(), '')
+
+    def test_long_new_names_keep_two_columns_and_header_has_no_overlapping_children(self):
+        from desktop import theme
+        button = MyTagsButton()
+        self.addCleanup(button.deleteLater)
+        button.setFixedWidth(191)
+        button.popup.setStyleSheet(theme.QSS)
+        tags = [LibraryTag(str(i), name) for i, name in enumerate(
+            ['Dubstep', 'Riddim', 'Deep Dub', 'DnB', 'Techno', 'House', 'Trap',
+             'Brostep', 'Tearout', 'SONNY', 'ZYKO', 'SoundBox Test Tag',
+             'SoundBox Verify Tag', 'SoundBox Acceptance Tag'])]
+        button.set_state(tags, [], creation_reason='', deletion_reason='')
+        button.popup.popup(QPoint(100, 100))
+        self.app.processEvents()
+        try:
+            boxes = list(button.checkboxes.values())
+            self.assertEqual(len({box.x() for box in boxes}), 2)
+            self.assertEqual(boxes[0].y(), boxes[7].y())
+            self.assertEqual(boxes[6].y(), boxes[13].y())
+            self.assertLess(button.popup.height(), 300)
+            self.assertIn(tags[13].name, boxes[13].toolTip())
+            for x in (4, 30, button.create_tag.width() // 2):
+                position = button.create_tag.mapTo(button.popup, QPoint(x, 8))
+                self.assertIs(button.popup.childAt(position), button.create_tag)
+            self.assertFalse(button.summary.isVisible())
+            self.assertTrue(button.delete_tag.isEnabled())
+            self.assertTrue(all(not box.isEnabled() for box in boxes))
+            requested = []
+            button.deletion_requested.connect(lambda: requested.append(button.popup.isVisible()))
+            button.delete_tag.click()
+            self.assertEqual(requested, [False])
+        finally:
+            button.popup.close()
 
     def test_request_captures_selected_ids_and_uuid_before_a_selection_change(self):
         with tempfile.TemporaryDirectory() as td:
@@ -216,6 +251,48 @@ class TagInterface(unittest.TestCase):
             self.assertEqual(saved,[]);self.assertEqual(failed,['disk full'])
             self.assertEqual(controller.selected_tags(['2']),[set()])
             controller.shutdown()
+
+    def test_default_tag_readback_skips_media_walk_and_keeps_fresh_smart_membership_and_cues(self):
+        with tempfile.TemporaryDirectory() as td:
+            previous=_library()
+            for track in previous.tracks_by_id.values():
+                track.source_native_path=str(track.path)
+                track.location_uri=f'file:///canonical/{track.track_id}.wav'
+            fresh_tracks={tid:replace(track,location_uri='file://'+track.source_native_path,
+                source_native_path='',name='Fresh '+track.name) for tid,track in previous.tracks_by_id.items()}
+            cues=[{'position':1234}]
+            fresh_tracks['2']=replace(fresh_tracks['2'],source_tag_ids=['tag'],source_tag_times={'tag':42},source_cues=cues)
+            smart=Playlist('Smart','',['2'],pid='smart')
+            fresh=replace(previous,tracks_by_id=fresh_tracks,playlists=[smart])
+            class Store:
+                def apply(self,request):
+                    self.request=request
+            store=Store();saved=[];failed=[]
+            def read(_source,*,resolve_media_paths=True):
+                if resolve_media_paths:raise AssertionError('Unrelated media path resolution during tag save')
+                return fresh
+            with mock.patch('soundbox.rekordbox_db.load_live',side_effect=read) as load:
+                controller=TagEditController(Path(td),store_factory=lambda _:store)
+                controller.configure(previous,True)
+                controller.saved.connect(lambda library:controller.configure(library,True))
+                controller.saved.connect(saved.append);controller.failed.connect(failed.append)
+                try:
+                    with mock.patch('desktop.tag_controller.validate_track_path') as selected_guard:
+                        self.assertTrue(controller.request(['2'],'tag',True))
+                        self.wait_for(lambda:controller.owner.pending==0)
+                    load.assert_called_once_with(Path(previous.source),resolve_media_paths=False)
+                    selected_guard.assert_called_once_with(previous.tracks_by_id['2'])
+                    self.assertEqual(failed,[]);self.assertEqual(saved,[fresh]);self.assertIs(controller.lib,fresh)
+                    self.assertIs(fresh.playlists[0],smart);self.assertEqual(smart.keys,['2'])
+                    self.assertIs(fresh.tracks_by_id['2'].source_cues,cues)
+                    self.assertEqual(fresh.tracks_by_id['2'].source_tag_times,{'tag':42})
+                    for tid,track in fresh.tracks_by_id.items():
+                        self.assertEqual(track.location_uri,f'file:///canonical/{tid}.wav')
+                        self.assertEqual(track.source_native_path,previous.tracks_by_id[tid].source_native_path)
+                        self.assertTrue(track.name.startswith('Fresh '))
+                    self.assertEqual(previous.tracks_by_id['2'].source_tag_ids,[])
+                    self.assertEqual(store.request.tracks[0].source_uuid,'u2')
+                finally:controller.shutdown();controller.deleteLater()
 
     def test_readiness_probe_blocks_editing_when_rekordbox_is_open_and_can_recheck(self):
         with tempfile.TemporaryDirectory() as td:

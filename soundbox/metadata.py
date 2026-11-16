@@ -25,6 +25,9 @@ get mistaken for an editor name.
 """
 
 from __future__ import annotations
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 
 import re
 from collections import Counter
@@ -108,6 +111,43 @@ class ArtistRegistry:
         return self._canon.get(_fold(m.group(1))) or m.group(1)
 
 
+@dataclass(frozen=True,slots=True)
+class FrozenArtistRegistry:
+    """Worker-built immutable lookup context, shared by dirty scalar batches."""
+    canon: Mapping[str,str]
+    trusted: frozenset[str]
+    rescue: re.Pattern[str] | None
+
+    def canonical(self,name):return self.canon.get(_fold(name)) or clean_artist(name)
+    def is_trusted(self,name):return _fold(name) in self.trusted
+    def rescue_from_title(self,title):
+        found=self.rescue.search(title) if title and self.rescue else None
+        return (self.canon.get(_fold(found.group(1))) or found.group(1)) if found else None
+
+
+def freeze_registry(registry):
+    """Call once in the existing refresh worker, never on a head/timer tick."""
+    if registry is None:return FrozenArtistRegistry(MappingProxyType({}),frozenset(),None)
+    if isinstance(registry,FrozenArtistRegistry):return registry
+    regex=(re.compile(r"(?<![^\W_])("+'|'.join(re.escape(name) for name in registry._rescue_names)+r")(?![^\W_])",
+                      re.IGNORECASE) if registry._rescue_names else None)
+    return FrozenArtistRegistry(MappingProxyType(dict(registry._canon)),frozenset(registry._trusted),regex)
+
+
+def registry_context_equal(first, second):
+    """Compare global lookup policy without deriving rows or compiling regexes."""
+    if first is second:
+        return True
+    if isinstance(first, ArtistRegistry) and isinstance(second, ArtistRegistry):
+        return (first._canon == second._canon and first._trusted == second._trusted
+                and first._rescue_names == second._rescue_names)
+    if isinstance(first, FrozenArtistRegistry) and isinstance(second, FrozenArtistRegistry):
+        return (first.canon == second.canon and first.trusted == second.trusted
+                and (first.rescue.pattern if first.rescue else None)
+                    == (second.rescue.pattern if second.rescue else None))
+    return False
+
+
 def build_registry(base_artists, trusted_names=(), aliases=None) -> ArtistRegistry:
     """Fold all real (non-Unknown) artist strings into canonical spellings. The
     winning spelling per artist is the most common one seen (tiebreak: longer,
@@ -136,20 +176,49 @@ def build_registry(base_artists, trusted_names=(), aliases=None) -> ArtistRegist
     canon: dict[str, str] = {}
     for fold, ctr in groups.items():
         canon[fold] = sorted(ctr.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))[0][0]
-    # User MERGES ("unownn" → "UNOWN"): the alias fold maps straight to the
-    # target's canonical spelling, so the variant can never appear as its own
-    # artist anywhere (display, folders, art). Trusted status carries over.
-    # Applied twice so CHAINS resolve fully (yeschef → YESCHEF! → YES CHEF):
-    # pass 1 may map an alias to a name that is itself aliased; pass 2 lands it.
-    for _ in range(2):
-        for alias, target in (aliases or {}).items():
-            af, tf = _fold(alias), _fold(target)
-            if not af or af == tf:
-                continue
-            canon[af] = canon.get(tf) or clean_artist(target)
-            if tf in trusted_folds:
-                trusted_folds.add(af)
+    _resolve_aliases(canon,trusted_folds,aliases or {})
     return ArtistRegistry(canon, trusted_folds)
+
+
+def _resolve_aliases(canon, trusted, aliases):
+    """Resolve a functional graph iteratively, including legacy cycles.
+
+    Normal terminals retain the existing majority/case winner. A legacy cycle
+    uses its smallest folded name and that name's existing spelling winner.
+    Conflicting folded keys choose a stable target instead of JSON key order.
+    Every result is a fixed point, including after native artist readback.
+    """
+    choices:dict[str,list[tuple[str,str,str]]]={}
+    spellings:dict[str,Counter]={}
+    for alias,target in aliases.items():
+        source=clean_artist(alias);destination=clean_artist(target)
+        af,tf=_fold(source),_fold(destination)
+        if not af or not tf or af==tf:continue
+        choices.setdefault(af,[]).append((tf,destination,source))
+        spellings.setdefault(af,Counter())[source]+=1
+        spellings.setdefault(tf,Counter())[destination]+=1
+    edges={source:min(candidates)[0] for source,candidates in choices.items()}
+    resolved:dict[str,tuple[str,bool]]={}
+    def label(node):
+        if node in canon:return canon[node]
+        return min(spellings[node],key=lambda name:(-spellings[node][name],-len(name),name))
+    for start in sorted(edges):
+        if start in resolved:continue
+        path:list[str]=[];positions:dict[str,int]={};node=start
+        while node in edges and node not in resolved and node not in positions:
+            positions[node]=len(path);path.append(node);node=edges[node]
+        if node in resolved:
+            destination,inherited=resolved[node]
+        elif node in positions:
+            cycle=path[positions[node]:]
+            destination=label(min(cycle));inherited=any(value in trusted for value in cycle)
+        else:
+            destination=label(node);inherited=node in trusted
+        for source in reversed(path):
+            inherited=inherited or source in trusted
+            resolved[source]=(destination,inherited);canon[source]=destination
+            if inherited:trusted.add(source)
+
 
 def suggest_merges(artist_counts: dict, min_ratio: float = 0.85) -> list:
     """Likely duplicate artist SPELLINGS across the library ("unownn" vs
@@ -578,7 +647,7 @@ def effective_title(track_id: str, name: str, artist: str,
 
 def effective_artist(track_id: str, name: str, artist_tag: str,
                      overrides: dict | None = None, derive: bool = True,
-                     registry: ArtistRegistry | None = None,
+                     registry: ArtistRegistry | FrozenArtistRegistry | None = None,
                      stem: str = "") -> str:
     """The artist to actually use: a manual override wins, else auto-derivation
     (or the raw tag if derive is off). With a registry: every result — INCLUDING

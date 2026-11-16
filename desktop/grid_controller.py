@@ -156,6 +156,10 @@ class GridEditController(QObject):
         if reason:
             return reason
         if self.is_local(tid):
+            track = self._track(tid)
+            if (track and track.source_analysis_path and self._requires_authority
+                    and not getattr(self._authority, 'manual_bpm_accepted', False)):
+                return 'Manual BPM editing awaits native acceptance for this library'
             rows = self.view(tid)[0]
             return '' if len({r[2] for r in rows}) == 1 else 'Manual BPM requires a constant-tempo grid'
         if self._requires_authority and not getattr(self._authority, 'manual_bpm_accepted', False):

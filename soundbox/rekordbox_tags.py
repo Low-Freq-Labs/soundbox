@@ -23,7 +23,7 @@ from uuid import uuid4
 from .rekordbox_write import (
     ConflictError, RecoveryRequired, WriteProofError, assert_rekordbox_closed, encrypted_backup,
     _LINK_COLUMNS, _digest, _guard_grid_recovery, _identity, _json,
-    _owned_inactive_journal, _quote, _regular,
+    _owned_inactive_journal, _inactive_journal_proof, _quote, _regular,
 )
 from .state_io import atomic_bytes, sync_dir
 
@@ -69,6 +69,26 @@ class TagWriteRequest:
     tag_uuid: str
     present: bool
     tag_name: str = ""
+    operation_id: str = ""
+
+
+def _operation_id(value):
+    return (type(value) is str and len(value) == 32
+            and all(character in '0123456789abcdef' for character in value))
+
+
+def _record_json(path):
+    _regular(path)
+    def epoch(info):
+        return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+    before = epoch(path.stat());limit = 16 * 1024**2
+    if before[2] > limit:raise RecoveryRequired('Tag recovery exceeds its supported bound')
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+        if epoch(os.fstat(stream.fileno())) != before:raise RecoveryRequired('Tag recovery changed before capture')
+        raw = stream.read(limit + 1)
+        if len(raw) > limit or epoch(os.fstat(stream.fileno())) != before or epoch(path.stat()) != before:
+            raise RecoveryRequired('Tag recovery changed during capture')
+    return json.loads(raw)
 
 
 def _assert_closed() -> None:
@@ -140,9 +160,63 @@ class LiveTagStore:
         except (OSError, ValueError, KeyError) as exc:
             raise RecoveryRequired('Tag backup is missing or damaged; evidence preserved') from exc
 
-    def _record(self) -> dict:
+    def _validate_delta(self, record, request):
+        changes = record['changes']
+        registry = [d for d in changes if d['table'] == 'agentRegistry']
+        links = [d for d in changes if d['table'] == 'djmdSongMyTag']
+        targets = {t.track_id: t for t in request.tracks}
+        if (type(request.present) is not bool or len(targets) != len(request.tracks)
+                or any(type(t.expected_present) is not bool for t in request.tracks)
+                or len(registry) != 1 or not links or len({d['key'] for d in links}) != len(links)):
+            raise RecoveryRequired('Tag recovery action/count mismatch')
+        counter = registry[0]
+        before = counter['before']
+        if (counter['key'] != 'localUpdateCount' or before['registry_id'] != 'localUpdateCount'
+                or type(before['int_1']) is not int or not 0 <= before['int_1'] < 2**63 - len(links)
+                or _json(counter['after']) != _json({**before, 'int_1': before['int_1'] + len(links)})):
+            raise RecoveryRequired('Tag recovery counter differs from native plan')
+        seen = set()
+        for index, delta in enumerate(links, 1):
+            old, row = delta['before'], delta['after']
+            identity = row if row is not None else old
+            if (not isinstance(identity, dict) or set(identity) != set(_LINK_COLUMNS)
+                    or identity['ID'] != delta['key'] or identity['MyTagID'] != request.tag_id
+                    or identity['ContentID'] not in targets or identity['ContentID'] in seen
+                    or targets[identity['ContentID']].expected_present == request.present):
+                raise RecoveryRequired('Tag recovery membership differs from request')
+            seen.add(identity['ContentID'])
+            next_count = before['int_1'] + index
+            if request.present:
+                if old is not None or row is None or not row['UUID']:
+                    raise RecoveryRequired('Tag recovery insertion differs from request')
+                expected = dict.fromkeys(_LINK_COLUMNS)
+                expected.update(ID=row['ID'], UUID=row['UUID'], MyTagID=request.tag_id,
+                    ContentID=row['ContentID'], rb_data_status=0, rb_local_data_status=0,
+                    rb_local_deleted=0, rb_local_synced=0, usn=None, rb_local_usn=next_count,
+                    created_at=row['created_at'], updated_at=row['created_at'])
+                if _json(row) != _json(expected):
+                    raise RecoveryRequired('Tag recovery insertion differs from native plan')
+            else:
+                if (old is None or set(old) != set(_LINK_COLUMNS) or old['TrackNo'] is not None
+                        or old['rb_data_status'] != 0 or old['rb_local_data_status'] != 0
+                        or old['rb_local_deleted'] or old['rb_local_synced'] not in (0, 1)
+                        or old['usn'] is not None):
+                    raise RecoveryRequired('Tag recovery removal has unproved native metadata')
+                if old['rb_local_synced']:
+                    if not self.authority.synced_removal or row is None or _json(row) != _json({**old,
+                            'rb_data_status': 2, 'rb_local_deleted': 1, 'rb_local_usn': next_count,
+                            'updated_at': row['updated_at']}):
+                        raise RecoveryRequired('Tag recovery tombstone differs from native plan')
+                elif row is not None:
+                    raise RecoveryRequired('Tag recovery removal must delete local assignment')
+        if ([d['after']['ContentID'] if d['after'] is not None else d['before']['ContentID'] for d in links]
+                != [t.track_id for t in request.tracks if t.expected_present != request.present]):
+            raise RecoveryRequired('Tag recovery omitted or reordered a requested membership change')
+
+    def _record(self, path=None, *, pending=True, data=None) -> dict:
         try:
-            record = json.loads(self.journal.read_bytes())
+            selected = self.journal if path is None else path
+            record = _record_json(selected) if data is None else data
             info = self.database.stat()
             if (not isinstance(record, dict)
                     or record.get('format') != _FORMAT or record.get('source') != str(self.database)
@@ -160,7 +234,11 @@ class LiveTagStore:
                     or not restored.tag_id or not restored.tag_uuid or not restored.tag_name
                     or any(not t.track_id or not t.source_uuid for t in targets)):
                 raise RecoveryRequired('Tag recovery request mismatch; evidence preserved')
-            self._verify_backup(record['baseline_sha256'])
+            if (type(restored.operation_id) is not str or restored.operation_id and (not _operation_id(restored.operation_id)
+                    or record.get('operation_id') != restored.operation_id)):
+                raise RecoveryRequired('Tag recovery operation identity changed')
+            self._validate_delta(record, restored)
+            if pending:self._verify_backup(record['baseline_sha256'])
             return record
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise RecoveryRequired('Tag recovery record is damaged; evidence preserved') from exc
@@ -287,10 +365,12 @@ class LiveTagStore:
 
     def _changes(self, conn, request: TagWriteRequest) -> list[dict]:
         if (request.library_id != self.authority.library_id or type(request.present) is not bool
+                or not isinstance(request.operation_id, str)
+                or request.operation_id and not _operation_id(request.operation_id)
                 or type(request.tag_id) is not str or not request.tag_id
                 or type(request.tag_uuid) is not str or not request.tag_uuid
                 or type(request.tag_name) is not str or not request.tag_name
-                or not request.tracks or any(type(t.track_id) is not str or not t.track_id
+                or not request.tracks or len(request.tracks) > 16_384 or any(type(t.track_id) is not str or not t.track_id
                     or type(t.source_uuid) is not str or not t.source_uuid
                     or type(t.expected_present) is not bool for t in request.tracks)
                 or len({t.track_id for t in request.tracks}) != len(request.tracks)):
@@ -409,10 +489,57 @@ class LiveTagStore:
             outcome = 'rolled-back'
         else:
             raise RecoveryRequired('Tag recovery found unexpected rows; evidence preserved')
-        atomic_bytes(self.root / 'last-result.json', _json({**record, 'outcome': outcome}))
+        receipt={**record,'outcome':outcome,'inactive_sqlite_journal':_inactive_journal_proof(self.database)}
+        atomic_bytes(self.root / 'last-result.json', _json(receipt))
+        if outcome == 'committed' and request.get('operation_id'):
+            # One desktop assignment can be outstanding. Keep its own bounded
+            # receipt while cue/grid/playlist work rotates the common receipt.
+            atomic_bytes(self.root / 'tag-assignment-completed.json', _json(receipt))
         self.journal.unlink()
         sync_dir(self.root)
         return outcome
+
+    def _replay(self, conn, request) -> int | None:
+        if not request.operation_id:
+            return None
+        path = self.root / 'tag-assignment-completed.json'
+        if not path.exists() and not path.is_symlink():
+            return None
+        metadata = _record_json(path)
+        if (not isinstance(metadata, dict) or metadata.get('format') != _FORMAT
+                or metadata.get('source') != str(self.database) or metadata.get('library_id') != self.authority.library_id
+                or not _operation_id(metadata.get('operation_id'))):
+            raise RecoveryRequired('Unrecognized completed My Tag assignment; preserve its evidence')
+        if metadata['operation_id'] != request.operation_id:
+            return None
+        record = self._record(path, pending=False, data=metadata)
+        if record.get('outcome') != 'committed' or _json(record['request']) != _json(asdict(request)):
+            raise RecoveryRequired('The completed tag assignment differs from its saved intention')
+        authority = self.authority
+        if authority.pilot_track_id and (request.tag_id != authority.pilot_tag_id
+                or any(target.track_id != authority.pilot_track_id for target in request.tracks)):
+            raise WriteProofError('This authority is limited to the reviewed pilot track and tag')
+        tag = self._row(conn, 'djmdMyTag', 'ID', request.tag_id)
+        if (not tag or tag['UUID'] != request.tag_uuid or tag['Name'] != request.tag_name
+                or tag['Attribute'] != 0 or tag['rb_local_deleted']):
+            raise RecoveryRequired('The completed tag definition changed')
+        for target in request.tracks:
+            track = self._row(conn, 'djmdContent', 'ID', target.track_id)
+            rows = conn.execute('SELECT ID FROM djmdSongMyTag WHERE MyTagID=? AND ContentID=? '
+                                'AND coalesce(rb_local_deleted,0)=0', (request.tag_id, target.track_id)).fetchall()
+            if (not track or track['UUID'] != target.source_uuid or track['rb_local_deleted']
+                    or len(rows) > 1 or bool(rows) != request.present):
+                raise RecoveryRequired('The completed tag assignment changed; preserve its intention')
+        for change in record['changes']:
+            if change['table'] == 'agentRegistry':
+                current = self._row(conn, 'agentRegistry', 'registry_id', 'localUpdateCount')
+                if (not current or type(current['int_1']) is not int
+                        or current['int_1'] < change['after']['int_1']):
+                    raise RecoveryRequired('The completed tag counter changed')
+            elif self._row(conn, 'djmdSongMyTag', 'ID', change['key']) != change['after']:
+                raise RecoveryRequired('The completed tag row changed; preserve its receipt')
+        self._guard()
+        return len(record['changes']) - 1
 
     def apply(self, request: TagWriteRequest) -> int:
         """Commit one atomic selected-track operation; return changed-track count."""
@@ -422,6 +549,10 @@ class LiveTagStore:
                 self._recover(conn)
                 conn.execute('BEGIN IMMEDIATE')
                 self._guard()
+                replay = self._replay(conn, request)
+                if replay is not None:
+                    conn.rollback()
+                    return replay
                 if (_identity(conn)[0] != self.authority.library_id
                         or _schema(conn) != self.authority.schema_sha256):
                     raise ConflictError('The source identity/schema changed before the transaction')
@@ -433,12 +564,14 @@ class LiveTagStore:
                 counter = changes[-1]['before']['int_1']
                 self._backup(counter)
                 record = {'format': _FORMAT, 'source': str(self.database),
-                          'library_id': request.library_id, 'operation_id': str(uuid4()),
+                          'library_id': request.library_id, 'operation_id': request.operation_id or str(uuid4()),
                           'source_file_id': list(file_id),
                           'baseline_sha256': self._baseline_sha,
                           'request': asdict(request),
                           'changes': changes}
-                atomic_bytes(self.journal, _json(record))
+                payload=_json(record)
+                if len(payload)>16*1024**2:raise WriteProofError('Tag transaction exceeds its supported record bound')
+                atomic_bytes(self.journal, payload)
                 _fault('journal-ready')
                 self._guard()
                 conn.set_authorizer(self._authorizer)

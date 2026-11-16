@@ -1,8 +1,9 @@
 """Pure local playlist plans; native captures define counters and row lifetimes.
 
-No SQL/publication. Cloud USNs, unknown statuses and intelligent playlists remain
-outside this protocol. Historical/deleted rows survive unchanged unless selected
-active local rows become native deletion markers.
+No SQL/publication. Ordinary mutations exclude intelligent playlists; their
+create/delete primitives have separate measured profiles below. Cloud USNs and
+unknown statuses remain excluded. Historical/deleted rows survive unchanged
+unless selected active local rows become native deletion markers.
 """
 from copy import deepcopy
 from uuid import UUID
@@ -34,6 +35,256 @@ def _name(name):
     if not isinstance(name,str) or not name.strip() or '\0' in name:
         raise ValueError('A nonempty playlist name is required')
     return name
+
+
+def smart_tag_rule(identity, tag_ids, *, match='any'):
+    """Native-shaped positive My Tag OR rule, without SQL or write authority.
+
+    The final rule shape has a frozen native reference. Formatting grants no
+    source authority; create/delete protocols require their own capabilities.
+    """
+    def uint32(value):
+        if (type(value) is not str or not value.isascii() or not value.isdecimal()
+                or not 0 < int(value) < 2**32 or str(int(value)) != value):
+            raise ValueError('Expected canonical native smart-playlist identity')
+        return int(value)
+    number = uint32(identity)
+    signed_identity = number if number < 2**31 else number - 2**32
+    if match != 'any':
+        raise ValueError('Only ANY/OR My Tag matching has a native creation reference')
+    if isinstance(tag_ids, (str, bytes)):
+        raise ValueError('Select explicit My Tag identities')
+    values = tuple(tag_ids)
+    if not 1 <= len(values) <= 64:
+        raise ValueError('Select one to 64 distinct My Tags')
+    numbers = [uint32(value) for value in values]
+    if len(set(numbers)) != len(numbers):
+        raise ValueError('Select one to 64 distinct My Tags')
+    conditions = []
+    for number in numbers:
+        # Existing native smart-list reads normalize signed 32-bit tag IDs back
+        # to their canonical uint32 identity. Names never enter the rule XML.
+        signed = number if number < 2**31 else number - 2**32
+        conditions.append('<CONDITION PropertyName="myTag" Operator="8" ValueUnit="" '
+                          f'ValueLeft="{signed}" ValueRight=""/>')
+    # One positive condition has identical ALL/ANY semantics. Preserve the
+    # observed native single-condition wire value; multiple tags use OR.
+    logical = 1 if len(values) == 1 else 2
+    return (f'<NODE Id="{signed_identity}" LogicalOperator="{logical}" AutomaticUpdate="0">'
+            + ''.join(conditions) + '</NODE>')
+
+
+def smart_parent_reason(playlists, parent='root'):
+    """Pure placement support diagnostic, separate from source permission."""
+    if not isinstance(playlists, (list, tuple)) or any(not isinstance(row, dict) for row in playlists):
+        return 'Native smart-playlist placement metadata is unavailable'
+    if parent == 'root':
+        return ''
+    parents = [row for row in playlists if row.get('ID') == parent]
+    if len(parents) != 1:
+        return 'The smart-playlist folder is unavailable or ambiguous'
+    try:
+        _ordinary(parents[0], folder=True)
+        if parents[0].get('Attribute') != 1:
+            raise ValueError('Folder')
+        siblings = _siblings(playlists, parent)
+        if not siblings:
+            return 'Smart creation in an empty folder needs its native placement reference'
+        if len(siblings) > 4096:
+            return 'Smart creation would exceed the bounded folder placement scope'
+        for sibling in siblings:
+            local(sibling)
+            if sibling.get('Attribute') != 4:
+                return 'Smart creation in a mixed folder needs its native placement reference'
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return 'This smart-playlist folder has unverified native placement metadata'
+    return ''
+
+
+def smart_delete_context(playlists, members, counter, *, identity, uuid, parent, parent_uuid, rule):
+    """Capture exact read-only deletion inputs; no native effects are inferred.
+
+    Creation proof does not establish deletion counters, row lifetime, sibling
+    clocks or XML retention. The opaque rule is pinned without evaluating it.
+    """
+    matches = [row for row in playlists if row.get('ID') == identity]
+    if len(matches) != 1:
+        raise ValueError('Smart playlist disappeared or is ambiguous')
+    target = matches[0]
+    local(target)
+    if (target.get('Attribute') != 4 or target.get('UUID') != uuid
+            or target.get('ParentID') != parent or target.get('SmartList') != rule
+            or rule is not None and (type(rule) is not str or '\0' in rule)):
+        raise ValueError('Smart playlist changed before deletion')
+    if sum(row.get('UUID') == uuid for row in playlists) != 1:
+        raise ValueError('Smart playlist UUID is ambiguous')
+    _counter(counter)
+    if target['rb_local_usn'] > counter['int_1']:
+        raise ValueError('Smart playlist clock exceeds its source counter')
+    if any(row.get('PlaylistID') == identity for row in members):
+        raise ValueError('Smart playlist has unverified stored membership history')
+    if any(row.get('ParentID') == identity for row in playlists):
+        raise ValueError('Smart playlist unexpectedly contains child playlists')
+    folder = None
+    if parent == 'root':
+        if parent_uuid != '':
+            raise ValueError('Root smart playlist has no parent UUID')
+    else:
+        parents = [row for row in playlists if row.get('ID') == parent]
+        if len(parents) != 1 or parents[0].get('UUID') != parent_uuid:
+            raise ValueError('Smart playlist parent changed before deletion')
+        folder = parents[0]
+        _ordinary(folder, folder=True)
+        if folder.get('Attribute') != 1 or folder['rb_local_usn'] > counter['int_1']:
+            raise ValueError('Smart playlist parent is not a verified local folder')
+    siblings = _siblings(playlists, parent)
+    return dict(target=deepcopy(target), parent=deepcopy(folder), siblings=deepcopy(siblings),
+                counter=deepcopy(counter), source_write_authority=False)
+
+
+def smart_delete_reason(playlists, identity):
+    """Bound the observed active local target and following-sibling envelope."""
+    targets = [row for row in playlists if row.get('ID') == identity]
+    if len(targets) != 1:
+        return 'Smart playlist is missing or ambiguous'
+    target = targets[0]
+    try:
+        local(target)
+        if (target.get('Attribute') != 4 or type(target.get('SmartList')) is not str or not target['SmartList']):
+            return 'This smart playlist needs a separate native deletion reference'
+        siblings = _siblings(playlists, target['ParentID'])
+        following = [row for row in siblings if row['Seq'] > target['Seq']]
+        if len(following) > 4096:
+            return 'Smart deletion exceeds its bounded sibling scope'
+        for sibling in following:
+            local(sibling)
+            if sibling.get('Attribute') not in (0, 1, 4):
+                return 'Deleting beside this playlist type needs a native reference'
+    except (ValueError, TypeError, KeyError):
+        return 'Smart playlist deletion metadata is unverified'
+    return ''
+
+
+def delete_smart(playlists, members, counter, *, identity, uuid, parent, parent_uuid, rule,
+                 sibling_timestamps, timestamp=None):
+    """Observed local hard-delete or synced tombstone, then sibling compaction.
+
+    Unsynced targets and survivors share C+1. Synced targets retain their native
+    tombstone at C+1; survivors/global counter use C+2. XML remains unchanged.
+    """
+    context = smart_delete_context(playlists, members, counter, identity=identity, uuid=uuid,
+                                  parent=parent, parent_uuid=parent_uuid, rule=rule)
+    reason = smart_delete_reason(playlists, identity)
+    if reason:
+        raise ValueError(reason)
+    target = context['target']
+    following = [row for row in context['siblings'] if row['Seq'] > target['Seq']]
+    if (not isinstance(sibling_timestamps, dict)
+            or set(sibling_timestamps) != {row['ID'] for row in following}
+            or any(type(clock) is not str for clock in sibling_timestamps.values())):
+        raise ValueError('Smart deletion needs exact following-sibling clocks')
+    current = _counter(counter)
+    synced = target['rb_local_synced'] == 1
+    if synced and type(timestamp) is not str:
+        raise ValueError('Synced smart deletion needs its captured tombstone clock')
+    changes = [dict(table='djmdPlaylist', id=identity, before=target,
+                    after=_deleted(target, current, timestamp) if synced else None)]
+    if synced:
+        current = _counter(current)
+    for sibling in following:
+        if sibling['rb_local_usn'] > counter['int_1']:
+            raise ValueError('Smart sibling clock exceeds its source counter')
+        changes.append(dict(table='djmdPlaylist', id=sibling['ID'], before=sibling,
+            after={**sibling, 'Seq': sibling['Seq'] - 1, 'rb_local_usn': current['int_1'],
+                   'updated_at': sibling_timestamps[sibling['ID']]}))
+    changes.append(dict(table='agentRegistry', id='localUpdateCount',
+                        before=deepcopy(counter), after=current))
+    return dict(changes=changes, counter=current, source_write_authority=False,
+                window=('synced-smart-tombstone-and-sibling-shift+2' if synced
+                        else 'unsynced-smart-delete-and-sibling-shift+1'))
+
+
+def _window_counter(counter, count):
+    current = deepcopy(counter)
+    for _ in range(count):
+        current = _counter(current)
+    return current
+
+
+def create_smart_constructor(playlists, counter, *, identity, uuid, timestamp,
+                             parent='root', position_timestamp=None, sibling_timestamps=None):
+    """Observed constructor/placement window, not inferred individual SQL steps.
+
+    Root: +1, appended, NULL rule and identical creation/update clock. Observed
+    nonempty smart-only folder: front row's final clock is C+2, followed by
+    existing siblings at C+3..C+N+2. No unobserved intermediate Seq/C+1 row is
+    manufactured. Referenced rules/UUIDs/native flags remain exact.
+    """
+    reason = smart_parent_reason(playlists, parent)
+    if reason:
+        raise ValueError(reason)
+    first = create(playlists, counter, identity=identity, uuid=uuid,
+                   name='Untitled Intelligent List', timestamp=timestamp, parent=parent)
+    new = {**first['playlist'], 'Attribute': 4, 'SmartList': None}
+    if parent == 'root':
+        if position_timestamp is not None or sibling_timestamps:
+            raise ValueError('Root smart creation does not reposition existing siblings')
+        first['changes'][0]['after'] = new
+        return {**first, 'playlist': new, 'window': 'root-constructor+1'}
+    siblings = _siblings(playlists, parent)
+    if (not isinstance(sibling_timestamps, dict)
+            or set(sibling_timestamps) != {row['ID'] for row in siblings}
+            or type(position_timestamp) is not str):
+        raise ValueError('Exact smart-folder placement clocks are required')
+    current = _window_counter(counter, 2)
+    new = {**new, 'Seq': 1, 'updated_at': position_timestamp, 'rb_local_usn': current['int_1']}
+    changes = [dict(table='djmdPlaylist', id=identity, before=None, after=new)]
+    for sibling in siblings:
+        current = _counter(current)
+        after = {**sibling, 'Seq': sibling['Seq'] + 1,
+                 'updated_at': sibling_timestamps[sibling['ID']], 'rb_local_usn': current['int_1']}
+        changes.append(dict(table='djmdPlaylist', id=sibling['ID'], before=deepcopy(sibling), after=after))
+    changes.append(dict(table='agentRegistry', id='localUpdateCount', before=deepcopy(counter), after=current))
+    return dict(changes=changes, playlist=new, counter=current, source_write_authority=False,
+                window='folder-front-placement+N+2')
+
+
+def create_smart(playlists, counter, *, identity, uuid, name, tag_ids, timestamp,
+                 definition_timestamp, parent='root', position_timestamp=None, sibling_timestamps=None):
+    """Compose constructor/placement and one observed combined definition window.
+
+    The native definition-save window advances +2 whether only its Name or only
+    its rule differs. It is one measured window, never a claim of two particular
+    internal SQL setters; creation publishes the final Name and My Tag rule as
+    one transaction. Existing intelligent lists have no mutation opcode.
+    """
+    first = create_smart_constructor(playlists, counter, identity=identity, uuid=uuid,
+        timestamp=timestamp, parent=parent, position_timestamp=position_timestamp,
+        sibling_timestamps=sibling_timestamps)
+    definition = smart_definition_window(first['playlist'], first['counter'], name=name,
+        rule=smart_tag_rule(identity, tag_ids), timestamp=definition_timestamp)
+    return dict(changes=[*first['changes'], *definition['changes']], playlist=definition['playlist'],
+                counter=definition['counter'], source_write_authority=False,
+                windows=[first['window'], 'combined-name-rule-definition+2'])
+
+
+def smart_definition_window(playlist, counter, *, name, rule, timestamp):
+    """Pure observed +2 window; source exposes this only inside new creation.
+
+    This also permits an exact TEMP reference replay of name-only/rule-only
+    native observations. It creates no opcode for modifying an existing smart
+    list and cannot grant source authority.
+    """
+    local(playlist)
+    if (playlist.get('Attribute') != 4 or not isinstance(rule, str) or not rule or '\0' in rule
+            or playlist['rb_local_usn'] > counter['int_1']):
+        raise ValueError('Unverified intelligent-definition window')
+    current = _window_counter(counter, 2)
+    after = {**playlist, 'Name': _name(name), 'SmartList': rule,
+             'updated_at': timestamp, 'rb_local_usn': current['int_1']}
+    return dict(changes=[dict(table='djmdPlaylist', id=playlist['ID'], before=deepcopy(playlist), after=after),
+                        dict(table='agentRegistry', id='localUpdateCount', before=deepcopy(counter), after=current)],
+                playlist=after, counter=current, source_write_authority=False)
 
 
 def _ordinary(row, *, folder=False):

@@ -1,4 +1,140 @@
-# Performance audit — November 2–8, 2026
+# Performance audit — November 2–16, 2026
+
+## Tag save readback — November16 source
+
+Sonny reports similar long delays adding and removing one temporary House
+assignment. Both writes and cleanup verify exactly; no other song/tag data or
+schema/XML changed. The add's native row timestamp to committed-receipt mtime
+was0.783s. This interval excludes gesture admission, complete library reload and
+GUI publication; installed171 has no detailed command trace for that action.
+Its log shows a3296-song reload, not enough to attribute total gesture latency.
+
+Source tag readback now uses the same database-only reader as metadata saves.
+It retains complete fresh tags, intelligent memberships, cues and metadata while
+avoiding unrelated audio/share path resolution. Existing canonical scalars reuse
+only exact unambiguous source/native ID/UUID/raw-path matches; fresh fields and
+musical arrays are not copied from the old Library. Selected alias validation,
+native authority/recovery/backup/SQL and fresh DB capture remain unchanged.
+The app's general reader injection no longer overrides this default. A new
+regression reproduces the old resolving call and verifies the fresh smart/cue/tag
+result and selected guard; existing identity-conflict tests protect scalar reuse.
+The complete render gate passes3,414cases with zero skips/expected failures and
+all780 frozen inputs exact. No installed or end-to-end speedup is claimed.
+
+## Shared-library completion constraints — November13
+
+Correctness fixes must preserve the smaller-save, fair-worker and selected-export
+work below. The current completion work remains uninstalled; [handoff](HANDOFF.md)
+records the exact source gate and remaining native-profile gaps.
+
+Playlist-removal overlay capture groups selected logical aliases by native
+ID/UUID and processes each playlist/native target once. Generated32/128/512/2048
+alias captures each performed one direct native-key lookup, with acknowledgement
+using one direct lookup per selected alias and full-library iteration refused.
+The2048-alias capture took3.54ms in one observation during the full gate; this
+is a helper measurement, not GUI/storage/native-save latency. No native SQL,
+audio work or additional library inventory pass was added. Compact evidence is
+`ordinary-overlay-alias-gate/selected-cost.json` under the private audit root.
+
+Metadata refresh retains only native ID/UUID/raw path/title/artist scalars during
+the existing browser inventory pass. Its existing read worker compares these
+inputs; cue/tag/BPM-only changes do not schedule metadata derivation. Unchanged
+refreshes and own acknowledgements start no derivation pass. Dirty batches reuse
+the prepared artist registries and freeze them in their worker. Only a changed
+global canonical/trusted-name context expands derivation to other rows, because
+their effective names can change without a raw-row change. An explicit global
+cleanup-policy or artist-merge gesture also needs a global plan.
+
+Refresh reconciliation clones each changed override map at most once per batch;
+it must not copy an entire map for each song. Source selection, scope changes
+and refresh reconciliation commit together before publication. Existing title
+rule/drop-word controls persist one policy/native-intention generation, then
+refresh presentation; unchanged gestures perform no save or view rebuild.
+
+Metadata acknowledgement and the dormant native-only Collection-removal route
+use an explicit database-only read mode. They avoid unrelated audio/share path
+resolution. A pure helper reuses already-known canonical path scalars only for
+the exact same source/native ID/UUID/raw path, with no ambiguity or binding issue.
+It copies no Library or musical arrays. Tests deny media filesystem operations
+and exercise real generated encrypted native catalogs. Removal admission stays
+off until lossless native Restore is established. Fresh DB/catalog, identity,
+authority, writer, lock and recovery checks remain intact.
+
+Generated RAM fixtures with4,000 scalar map entries measured the final100-dirty-
+row batch at4.568ms median versus12.976ms for repeated map copying (about2.84×).
+The final batch also validates exact affected origins and adopts raw provenance;
+it copies two maps total versus200, preparing title rules once. No-op
+reconciliation measured0.291µs and starts no scan, derivation, copy or source job.
+One-title ACK helper measured23.209µs, including ownership and fulfilled-title
+retirement; one-artist ACK helper measured4.250µs, retaining the manual map bound
+to its exact ACK until independent native change. Each updates one origin, with
+no artist derivation, registry build or new source job. The previous0.167µs ACK
+helper only updated a scalar and performed less work; no ACK speedup is claimed.
+
+These helper timings exclude the outer origins-map update, GUI publication,
+storage saves, source worker/database and audio. They are not startup,
+frame-latency or live-source timing claims. Compact evidence:
+`native-fixture/metadata-refresh-performance.json` under the private November12
+audit root listed in HANDOFF; the receipt binds final source/test hashes.
+
+## Per-song saves, background fairness and export capture — November9
+
+These are local source changes; [HANDOFF](HANDOFF.md) records their actual gate,
+package and installed status. Earlier whole-state/global-priority/snapshot
+findings below are dated baselines superseded within this bounded scope.
+
+`StateRepository` moves dense saved analysis, prep edits and native-analysis jobs
+into individually hashed canonical records, preserving queue order in the small
+manifest. Changed records alone validate, detach, encode and publish under the
+shared transaction; exact mutable-input comparison and fresh record epochs still
+run. The64MiB logical-state ceiling, newest drafts, corruption recovery and restore
+fence remain. Portable/rotating backups materialize full standalone JSON. Initial
+migration and hourly/full backups still perform whole-state work; no O(1) save
+or duration-independent storage claim follows.
+
+| Generated workload | Previous median | Record-store median | Published bytes before → after |
+| --- | ---: | ---: | ---: |
+| Scalar save,500songs×500beats |331.13ms|171.86ms|19,642,036 → 88,508|
+| One-song edit,same state |350.40ms|170.85ms|19,642,036 → 112,604|
+| No-op,same state |134.12ms|142.93ms|0 → 0|
+| Retire queue head,256jobs×500rows |148.89ms|92.57ms|Changed manifest/records only|
+
+Five alternating paired warm samples exclude initial setup and rotating backup.
+No-op adds fresh per-record observations; incoming deep equality still visits
+all mutable records. Stable job identities preserve payload reuse after head
+removal/reorder. Failure tests cover changed/retired records plus manifest and
+commit boundaries, corrupt-live-state restore, source-independent backup exports
+and stale writers. These are generated disposable-state measurements, not live
+interaction/compositor or source-write latency.
+
+The analysis/source scheduler offers bounded source turns between completed local
+waveform/BPM/key phases while retaining each song's prerequisites and the one
+source writer. Its bound is admission/phase based, not elapsed time: active DSP,
+native ownership, recovery, authority and reserved prerequisite work still defer
+ineligible jobs. Interactive Tags retain their honest active-phase busy state;
+this change introduces no new durable tag-intent queue.
+
+Explicit CDJ/Rockbox exports capture selected records into immutable bytes before
+dispatch, retaining every source/audio/analysis path separately. Stock/dual/resync
+need the complete lightweight identity/display and playlist inventory to resolve
+managed device membership, but omit unused cue/reference/catalog graphs. Worker
+objects are private. Separate drops retain separate captured generations; one
+drop's selected playlists share one plan. Complete overlap guards survive through
+planning and publication, including cleanup-only and no-copy work.
+
+Seven alternating generated captures (4,000songs,100playlists,20,000memberships,
+32cues+32references per song; select one200-member playlist) measured whole-Library
+copy295.30ms versus selected capture25.25ms median. Traced allocation peak fell
+77,929,872 → 3,154,289bytes while retaining all8,001source/analysis paths. This
+measures capture only, excluding worker materialization, native DB reads, actual
+copy/commit, device throughput and startup readiness. Concurrent development
+work may share CPU; all wall/CPU samples remain retained. The unchanged1,500ms
+startup target has no fresh passing result from these component improvements.
+
+Private measurements/reviews are under
+`~/Library/Logs/Soundbox/performance-improvements-2026-11-09/`. No fixture opens a
+live source, device or AppData. Sonny accepted the current visuals and deferred
+further public splitting; these changes preserve eager ordinary controls.
 
 ## Cleanup readiness — November 8
 

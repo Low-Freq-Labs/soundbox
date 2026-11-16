@@ -135,6 +135,8 @@ class PlaylistBatchFIFO(unittest.TestCase):
             catalog['revision']=revision(catalog['nodes'],catalog['members'])
             return deepcopy(catalog)
         fixture.backend.apply=apply
+        fixture.backend.committed_transition=lambda request: (
+            (request['revision'],catalog['revision']) if calls and calls[-1]==request else None)
         preview=deepcopy(catalog)
         create=request_for(preview,'create',name='Batched')
         preview['nodes'].append(dict(ID=create['playlist_id'],UUID=create['playlist_uuid']))

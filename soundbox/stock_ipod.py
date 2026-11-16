@@ -233,6 +233,7 @@ class StockIpodSyncPlan:
         default=None, repr=False, compare=False)
     interrupted_file_verifier: InterruptedFileVerifier | None = field(
         default=None, repr=False, compare=False)
+    source_guard_paths: tuple[Path, ...] = ()
 
     @property
     def bytes_to_copy(self) -> int:
@@ -1058,7 +1059,8 @@ def plan_stock_ipod_sync(
 ) -> StockIpodSyncPlan:
     """Render and validate a complete stock-iPod sync without target writes."""
     root = Path(target).expanduser().resolve(strict=True)
-    planning_session = DeviceSession(root, [], create=False)
+    guard_paths = tuple(getattr(library, 'export_source_paths', ()))
+    planning_session = DeviceSession(root, list(guard_paths), create=False)
     if str(filesystem or "").lower() not in {"msdos", "fat32", "fat"}:
         raise StockIpodError(
             f"Stock iPod writes require an explicitly confirmed FAT32 volume; "
@@ -2052,6 +2054,7 @@ def plan_stock_ipod_sync(
     planning_session.revalidate()
     plan = StockIpodSyncPlan(
         target=root,
+        source_guard_paths=guard_paths,
         target_mount_identity=planning_session.mount_identity,
         model_number=model,
         database_relative_path=database.relative_to(root),
@@ -2110,7 +2113,7 @@ def commit_stock_ipod_sync(
     on_track_committed: Callable[[Path], None] | None = None,
 ) -> StockIpodCommitResult:
     """Commit a validated plan with DB-last ordering and exact-file rollback."""
-    sources = [item.source for item in plan.copies + plan.rewrites]
+    sources = [*plan.source_guard_paths, *[item.source for item in plan.copies + plan.rewrites]]
     session = DeviceSession(plan.target, sources, create=False)
     if session.mount_identity != plan.target_mount_identity:
         raise StockIpodError(

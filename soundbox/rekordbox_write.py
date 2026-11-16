@@ -126,7 +126,9 @@ def _owned_inactive_journal(database: Path, recovery_root: Path, library_id: str
         info = database.stat()
         return (record.get('format') in ('soundbox-native-cues-v1', 'soundbox-native-grid-v1', 'soundbox-native-playlists-v1',
                                        'soundbox-native-registration-v1','soundbox-native-removal-v1',
-                                       'soundbox-native-media-locator-v1')
+                                       'soundbox-native-media-locator-v1', 'soundbox-native-tag-definitions-v1',
+                                       'soundbox-native-tag-definition-delete-v1', 'soundbox-native-tag-repair-v1',
+                                       'soundbox-native-metadata-v1', 'soundbox-native-mytag-v1')
                 and record.get('source') == str(database) and record.get('library_id') == library_id
                 and record.get('source_file_id') == [info.st_dev, info.st_ino]
                 and record.get('outcome') in ('committed', 'rolled-back')

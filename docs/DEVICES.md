@@ -1,5 +1,17 @@
 # SoundBox device layouts
 
+November9 source captures immutable export inputs before worker admission.
+Explicit CDJ/Rockbox drops include selected musical records; stock/dual/resync
+retain the complete lightweight identity/display and playlist inventory needed
+for managed-device reconciliation. Every snapshot separately retains all source,
+audio and analysis paths, including hidden/unselected songs, through planning and
+commit overlap checks. Workers materialize private objects from captured bytes;
+later GUI edits cannot change queued intent. Separate drops keep their separate
+captured generations; playlists within one drop still share a plan. Source-edit
+barriers, native readback, device identity and firmware recovery order remain.
+This source change does not establish a new installed or physical acceptance;
+see [HANDOFF](HANDOFF.md).
+
 Reviewed November8,2026 against the completed cleanup and its preserved device
 contracts. Accepted personal build169 includes the source safeguards below;
 [HANDOFF](HANDOFF.md) records exact signed provenance and latest observed app state.
@@ -169,7 +181,11 @@ existing directory cannot strand detection behind probe backoff. These are hints
 never external-device/write authority. A busy lane retains the request and retries
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
-retain 3–30-second backoff, bypassed by mount changes. Connected iPod/Rockbox drift stays on its
+retain 3–30-second backoff, bypassed by mount changes. An OS-identified iPod can
+mount before its firmware folders appear: its provisional generic-USB profile
+rechecks through that backoff until the existing layout identifies it. This adds
+no profile probes or idle retries to ordinary generic USBs and grants no write
+capability. Connected iPod/Rockbox drift stays on its
 three-second poll. Known generic-USB-only connections have no recurring mounted-path
 scan or source-event scan. Mount changes, retryable discovery and deliberate browser
 requests may refresh connection/storage facts; they do not compute sync state.

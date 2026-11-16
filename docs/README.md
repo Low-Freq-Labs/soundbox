@@ -9,6 +9,7 @@
 - [Roadmap](ROADMAP.md): committed sequence; [Ideas](IDEAS.md): uncommitted UX proposals.
 - [Project layout](PROJECT_LAYOUT.md): fixtures, generated output and protected retention.
 - [Performance evidence](performance-audit.md): dated measurements and remaining costs.
+- [Shared-library audit](shared-library-audit-2026-11.md): current feature coverage, curation preservation and native gaps.
 - [Archive](archive/README.md): historical evidence, never new action authority.
 
 Keep folder READMEs within 25 lines; link to a focused reference rather than copying it.

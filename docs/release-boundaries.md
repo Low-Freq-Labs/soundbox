@@ -1,5 +1,9 @@
 # Shared app and optional personal modules
 
+Sonny deferred further public splitting/release work on November9,2026 until the
+personal app is finished. Preserve the implemented profiles and provider boundary;
+this is no new distribution or dependency/service clearance.
+
 Allocation requested October26,2026; status checked November8 against accepted
 personal build169 and its separately validated public package. Exact provenance
 and profile checks are recorded in [HANDOFF](HANDOFF.md).
@@ -62,7 +66,7 @@ or completed dependency clearance.
 |---|---|---|---|
 | App layout, theme, search, tables, sidebar, saved columns/window | Keep | Same | Shared shell |
 | Read-only live rekordbox and XML refresh | Keep | Same | Core Connections card; validated database-location selection; shared snapshot/XML adapters; validate supported versions |
-| My Tag / Hot–Memory cue / beat-grid source edits | Explicit authority gate; no general-library compatibility claim | Accepted exact-library domains | Shared core APIs; native acceptance binds library/schema/version, closed rekordbox/agent and recovery; manual BPM retains its independent capability; smart-list creation remains disabled |
+| My Tag / Hot–Memory cue / beat-grid source edits | Explicit authority gate; no general-library compatibility claim | Accepted exact-library domains | Shared core APIs; native acceptance binds library/schema/version, closed rekordbox/agent and recovery; manual BPM retains its independent capability. Tag-definition and ANY/OR smart-list creation have separate accepted capabilities in installed171; broader intelligent-list edits remain guarded |
 | Ordinary native playlist/folder CRUD, membership and sibling reorder | Same explicit authority boundaries | Accepted exact-library domains | Shared worker/recovery; reorder has an independent default-false capability; no intelligent/cloud mutations |
 | Bare native registration and initial full BPM/Grid+Key/waveform publication | Same explicit authority boundaries | Accepted registration plus independent WAV/narrow CBR profiles | No existing-analysis replacement, gain, broader metadata or unaccepted codecs; source selection never provisions authority |
 | Collection, artists, custom playlists, ordering, drag/drop | Keep | Same | Shared library/curation controller |

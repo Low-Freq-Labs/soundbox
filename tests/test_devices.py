@@ -111,6 +111,43 @@ if __name__ == "__main__":
 
 
 class IdleDiscoveryRetries(unittest.TestCase):
+    def test_ipod_layout_created_after_mount_replaces_temporary_usb_profile_without_remount(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            volume=Path(td);child=volume/'IPOD';child.mkdir()
+            original=Path.stat
+            remote=SimpleNamespace(st_mode=child.stat().st_mode,st_dev=volume.stat().st_dev+1)
+            with mock.patch.object(Path,'stat',lambda p,**kw:remote if p==child else original(p,**kw)), \
+                    mock.patch.object(devices,'Path',return_value=volume), \
+                    mock.patch.multiple(devices,_EXTERNAL_CACHE={},_FS_CACHE={str(child):'hfs'},
+                        _PROFILE_CACHE={},_INFO_CACHE={str(child):{'MediaType':'iPod'}},_IPOD_FACTS_CACHE={}), \
+                    mock.patch.object(devices,'_DISCOVERY_RETRY',False), \
+                    mock.patch.object(devices,'_is_external',return_value=True):
+                before=devices.device_profile(child);self.assertEqual(before.kind,'generic_usb')
+                self.assertEqual(len(devices.list_devices()),1)
+                self.assertTrue(devices.discovery_needs_retry())
+                (child/'iPod_Control/iTunes').mkdir(parents=True)
+                self.assertEqual(len(devices.list_devices()),1)
+                after=devices.device_profile(child)
+                self.assertEqual(after.kind,'stock_ipod');self.assertTrue(after.stock_preview)
+                self.assertFalse(after.stock_write);self.assertEqual(after.filesystem,'hfs')
+                self.assertFalse(devices.discovery_needs_retry())
+
+    def test_ordinary_generic_usb_does_not_gain_profile_probes_or_periodic_retry(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            volume=Path(td);child=volume/'USB';child.mkdir();original=Path.stat
+            remote=SimpleNamespace(st_mode=child.stat().st_mode,st_dev=volume.stat().st_dev+1)
+            with mock.patch.object(Path,'stat',lambda p,**kw:remote if p==child else original(p,**kw)), \
+                    mock.patch.object(devices,'Path',return_value=volume), \
+                    mock.patch.multiple(devices,_EXTERNAL_CACHE={},_FS_CACHE={},_PROFILE_CACHE={},
+                        _INFO_CACHE={str(child):{'MediaType':'Generic'}},_IPOD_FACTS_CACHE={}), \
+                    mock.patch.object(devices,'_DISCOVERY_RETRY',False), \
+                    mock.patch.object(devices,'_is_external',return_value=True), \
+                    mock.patch.object(devices,'inspect_device') as inspect:
+                self.assertEqual(len(devices.list_devices()),1)
+                self.assertFalse(devices.discovery_needs_retry());inspect.assert_not_called()
+
     def test_failed_probe_retries_but_definitive_internal_scan_can_sleep(self):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as td:

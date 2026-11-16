@@ -19,6 +19,20 @@ from soundbox.rekordbox_grid import GridEdit, read_grid
 from soundbox.rekordbox_write import WriteProofError, assert_rekordbox_closed, _regular, _digest
 
 
+def _headline_bpm(track, fallback):
+    try:value=float(track.bpm)
+    except (TypeError,ValueError):return fallback
+    return value if math.isfinite(value) and value>0 else fallback
+
+
+class _ReadOnlySnapshot:
+    """Expose only the selected save domain's fresh companion read."""
+    def __init__(self, store, method):
+        self.store=store;self.method=method
+
+    def snapshot(self):return getattr(self.store,self.method)()
+
+
 class PrepEditController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -65,6 +79,23 @@ class PrepEditController(QObject):
         if error:return error
         issue=getattr(self.window.lib,'source_binding_issues',{}).get(tid) if self.window.lib else None
         if issue:return str(issue)
+        if track and self.window.lib.source_kind=='rekordbox-db' and not track.imported:
+            if not self.tags.verified:return 'Refresh the rekordbox library before saving prep edits'
+            file_type=track.info.get('nativeFileType')
+            if 'nativeFileType' in track.info and (type(file_type) is not int or file_type not in (1,11,12)):
+                return 'Native cue/grid saving for this file type is not supported yet'
+            if not track.source_uuid or not track.source_cue_revision or track.source_cues is None:
+                return 'Refresh native cue identities before editing this track'
+            if grid:
+                flags=track.info.get('nativeAnalysisFlags')
+                if 'nativeAnalysisFlags' in track.info and (type(flags) is not int or flags < 0):
+                    return 'Refresh native analysis metadata before editing its grid'
+                if type(flags) is int and flags & 0x80:return 'Analysis Lock is on in rekordbox'
+                controller=self.window.grid_controller
+                if controller._requires_authority and controller._authority is None:
+                    return 'Grid editing is not enabled for this rekordbox library'
+            elif self.tags._requires_cue_authority and self.tags._cue_authority is None:
+                return 'Cue editing is not enabled for this rekordbox library'
         if grid and not self.grid_view(tid):return 'Load a track with a beat grid before editing it'
         return ''
 
@@ -72,12 +103,17 @@ class PrepEditController(QObject):
         w=self.window; track=w.lib.tracks_by_id.get(tid) if w.lib else None
         job=self.job(tid)
         if job and not self._job_matches(job,w.lib,track):return None
-        if job and job['grid']:return job['grid'], job['grid'][0][2]
+        if job and job['grid']:
+            bpm=job['grid'][0][2]
+            if (track and track.source_analysis_path and job['version']==2
+                    and not any(op['kind']=='grid' and op['operation'] in ('bpm','double','halve') for op in job['operations'])):
+                bpm=_headline_bpm(track,bpm)
+            return job['grid'],bpm
         record=w._analysis_result(track) if track else None
         if track and track.source_analysis_path:
             pb=getattr(w,'player_bar',None)
             if pb and pb.current_track()==tid and pb._analysis_parts.get('beats'):
-                rows=pb._analysis_parts['beats'];return rows,rows[0][2]
+                rows=pb._analysis_parts['beats'];return rows,_headline_bpm(track,rows[0][2])
             return None
         effective=local_grid.effective_result(record)
         if effective and effective.get('beats'):return effective['beats'],effective['bpm']
@@ -92,11 +128,17 @@ class PrepEditController(QObject):
         if job:
             if self._job_matches(job,self.window.lib,track):return deepcopy(job['cues'])
             return deepcopy(track.source_cues or []) if track else []
-        if track and track.source_analysis_path:return deepcopy(track.source_cues or [])
+        if track and (track.source_analysis_path or self._native_cues(track)):
+            return deepcopy(track.source_cues or [])
         record=self.window._analysis_result(track) if track else None
         return local_cues.cues(record) if record else []
 
-    def _new(self, track):
+    def _native_cues(self, track):
+        lib = self.window.lib
+        return bool(track and lib and lib.source_kind == 'rekordbox-db' and not track.imported
+                    and track.source_uuid and track.source_cue_revision and track.source_cues is not None)
+
+    def _new(self, track, *, kind=None):
         w=self.window; record=w._analysis_result(track) if not track.source_analysis_path else None; pb=w.player_bar
         epoch=analysis.identity(track.path.stat())
         identity_pending=False
@@ -110,8 +152,10 @@ class PrepEditController(QObject):
             # the pending intention grants no source publication permission.
             identity_pending=True;epoch=list(record['epoch'])
         view=self.grid_view(track.track_id)
-        job=dict(version=2 if track.source_analysis_path else 1,id=str(uuid4()),track_id=track.track_id,path=str(track.path),epoch=epoch,
-            native_ready=bool(track.source_analysis_path),
+        ready = bool(track.source_analysis_path or kind == 'cue' and not identity_pending
+                     and PrepEditController._native_cues(self,track))
+        job=dict(version=2 if ready else 1,id=str(uuid4()),track_id=track.track_id,path=str(track.path),epoch=epoch,
+            native_ready=ready,
             sha256=record['sha256'] if record else '',duration=record['duration'] if record else pb._dur/1000,
             source=str(w.lib.source) if w.lib.source_kind=='rekordbox-db' else '',
             library_id=w.lib.source_library_id if w.lib.source_kind=='rekordbox-db' else '',
@@ -152,7 +196,7 @@ class PrepEditController(QObject):
             track=w.lib.tracks_by_id[tid]; old=self.job(tid)
             if old and not self._job_matches(old,w.lib,track):
                 raise ValueError('Prep edits belong to a different source; intentions preserved')
-            job=old or self._new(track)
+            job=old or self._new(track,kind=kind)
             after=edits.operation(job,kind,operation,value,**cue)
             if after==job:return True
             record=w._analysis_result(track); updated=self._record(record,after)
@@ -206,7 +250,7 @@ class PrepEditController(QObject):
             else:w._update_browser_bpm(tid,f'{view[1]:.2f}')
         if pb.current_track()==tid:
             pb.detected_analysis=w._analysis_result(track)
-            if result and not self.job(tid):
+            if result and result.get('beats') and not self.job(tid):
                 provenance=pb._analysis_parts.get('provenance',{})
                 pb._analysis_parts['provenance']={k:v for k,v in provenance.items() if k!='user_data'}
                 pb._analysis_parts['provenance']['grid']='rekordbox'
@@ -235,8 +279,11 @@ class PrepEditController(QObject):
         self.window._flash_status('Couldn’t save prep edits: '+str(error),15)
         if refresh:self.refresh(tid)
 
-    def _stores(self, lib, track):
+    def _stores(self, lib, track, *, need_grid=True, kind='cue'):
         validate_track_path(track)
+        if kind=='grid':
+            grid=self.window.grid_controller._store_for(lib,track)
+            return grid,_ReadOnlySnapshot(grid,'cue_snapshot')
         factory=self.tags._cue_store_factory;authority=None
         if self.tags._requires_cue_authority:
             authority=load_cue_authority(self.tags.data_root/'rekordbox-cue-authority.json',
@@ -266,7 +313,7 @@ class PrepEditController(QObject):
                 raise WriteProofError('Cached cue authority changed')
         # Reusing a handle only retains its existing counter-bound backup proof.
         # Every snapshot/apply still executes the complete fresh store guards.
-        return self.window.grid_controller._store_for(lib,track),cue
+        return (_ReadOnlySnapshot(cue,'grid_snapshot') if need_grid else None),cue
 
     @staticmethod
     def _identity(snapshot, track):
@@ -274,7 +321,13 @@ class PrepEditController(QObject):
             raise WriteProofError('Prep source identity changed')
 
     def _read(self, grid, cues, track):
-        g,c=grid.snapshot(),cues.snapshot();self._identity(g,track);self._identity(c,track)
+        c=cues.snapshot();self._identity(c,track)
+        if grid is None:
+            return None,c,dict(row=c.track,cue_fields=rekordbox_db.cue_snapshot_fields(c))
+        g=grid.snapshot()
+        if g is None:
+            return None,c,dict(row=c.track,cue_fields=rekordbox_db.cue_snapshot_fields(c))
+        self._identity(g,track)
         if g.track!=c.track:raise WriteProofError('Prep source changed during readback')
         return g,c,dict(row=g.track,beats=[[b.number,b.time_ms,b.tempo/100] for b in read_grid(g.dat)],
                         cue_fields=rekordbox_db.cue_snapshot_fields(c))
@@ -340,6 +393,8 @@ class PrepEditController(QObject):
                 previous=self.pending;queue=[dict(j) if j['track_id']==tid else j for j in previous]
                 renewed=next(j for j in queue if j['track_id']==tid)
                 renewed['epoch']=proof['epoch'];renewed.pop('identity_pending')
+                if self._native_cues(latest) and all(op['kind']=='cue' for op in renewed['operations']):
+                    renewed.update(version=2,native_ready=True)
                 w.settings[edits.KEY]=queue
                 try:
                     if not w._save_state():raise OSError('Audio proof could not be saved; prep intentions preserved')
@@ -374,7 +429,8 @@ class PrepEditController(QObject):
         remaining=self._native_owner_not_before-time.monotonic()
         if remaining>0:
             self.timer.start(max(1,math.ceil(remaining*1000)));return
-        if (self.tags.busy or self.tags.checking or self.tags.grid_waiting and not self.tags.prep_priority
+        if (self.tags.busy or self.tags.checking
+                or self.tags.grid_waiting and not self.tags.prep_priority and not self.tags._fair_source_turn('prep')
                 or w._refresh_worker is not None or w._state_maintenance or w._device_operation_owned()):
             self.timer.start(2000);return
         lib=w.lib;track=lib.tracks_by_id.get(tid) if lib else None
@@ -387,16 +443,26 @@ class PrepEditController(QObject):
             self._fail(tid,'Prep edits belong to a different source; intentions preserved');return
         if job.get('identity_pending'):
             self._check_identity(job,lib,track);return
-        if track.imported or not track.source_analysis_path:
-            self.timer.start(2000);return
         op=job['operations'][0]
+        bare_cue = bool(op['kind']=='cue' and job['version']==2 and self._native_cues(track)
+                        and not track.source_analysis_path)
+        publisher=getattr(w,'native_analysis_controller',None)
+        if (bare_cue and job['prepared'] is None and publisher is not None
+                and any(not pending.get('error') and pending.get('local_id')==tid
+                        and (pending.get('source'),pending.get('library_id'))==(str(lib.source),lib.source_library_id)
+                        for pending in publisher.pending)):
+            # The accepted initial-analysis profile requires zero cues. Do not
+            # disqualify its already captured save by publishing this cue first.
+            self.timer.start(2000);return
+        if track.imported or not track.source_analysis_path and not bare_cue:
+            self.timer.start(2000);return
         def work():
             try:assert_rekordbox_closed()
             except WriteProofError as exc:
                 if str(exc)=='Close rekordbox and its background agent before editing':return dict(waiting=True)
                 raise
             self.tags._recover_pending(lib)
-            grid,cue_store=self._stores(lib,track);g,c,result=self._read(grid,cue_store,track)
+            grid,cue_store=self._stores(lib,track,need_grid=not bare_cue,kind=op['kind']);g,c,result=self._read(grid,cue_store,track)
             before=job['prepared']
             if job['version']==1 and (before is None or op['kind']=='grid'):
                 committed=False
@@ -432,7 +498,7 @@ class PrepEditController(QObject):
             _g,_c,result=self._read(grid,cue_store,track)
             values=result['beats'] if op['kind']=='grid' else edits.cues(result['cue_fields']['source_cues'])
             if edits.digest(values)!=op['after']:raise WriteProofError('Saved prep readback differs from the intended component')
-            if op['kind']=='grid' or track_analysis.grid_needs_sync(w._track_analysis_dir,tid,track.path,result['beats']):
+            if result.get('beats') and (op['kind']=='grid' or track_analysis.grid_needs_sync(w._track_analysis_dir,tid,track.path,result['beats'])):
                 w._prepare_grid_cache(tid)
                 track_analysis.update_grid_source(w._track_analysis_dir,tid,track.path,result['beats'])
             return result

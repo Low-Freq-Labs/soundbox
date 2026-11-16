@@ -51,7 +51,11 @@ class SharedImportController(QObject):
                 or self.pending[0]['membership'] is None):return False
         try:local=self._local_analysis(self.pending[0])
         except ValueError:return False
-        return not (local or getattr(self.window,'_analysis_priority_pending',lambda:False)())
+        return not (local or self._analysis_priority())
+
+    def _analysis_priority(self):
+        w=self.window
+        return getattr(w,'_analysis_source_priority',getattr(w,'_analysis_priority_pending',lambda:False))()
 
     def _local_analysis(self, job):
         pending=self.window.settings.get(analysis_jobs.KEY,[])
@@ -97,7 +101,11 @@ class SharedImportController(QObject):
         try:head_analysis=self._local_analysis(job)
         except ValueError as exc:
             self.status('Import waiting for analysis — '+str(exc));return
-        analysis_priority=bool(head_analysis or getattr(w,'_analysis_priority_pending',lambda:False)())
+        # A fair turn never relaxes an already prepared cue/grid reservation.
+        # Compatibility prerequisites and committed-receipt reconciliation keep
+        # their old bypass; no new registration/membership SQL may pass it.
+        prepared_reservation=bool(self.tags.prep_priority)
+        analysis_priority=bool(head_analysis or self._analysis_priority() or prepared_reservation)
         # A later drop may need compatibility preparation before its waveform,
         # while the first drop is already waiting for that local work. Only
         # this file-only prerequisite may bypass the queue; source SQL stays FIFO.
@@ -120,7 +128,7 @@ class SharedImportController(QObject):
         if job['error']:self.status('Import needs attention — '+job['error']);return
         if time.monotonic()<self.not_before:self.timer.start();return
         source_owned=(getattr(w,'_analysis_source_busy',lambda:self.tags.owned)()
-                      if analysis_priority else self.tags.owned)
+                      if analysis_priority else self.tags.source_job_owned)
         if (source_owned or w._refresh_worker is not None or w._state_maintenance
                 or getattr(w,'_analysis_worker',None) is not None
                 or getattr(getattr(w,'_import_tasks',None),'pending',0)
@@ -135,7 +143,8 @@ class SharedImportController(QObject):
         except ValueError as exc:
             self.status('Import waiting for analysis — '+str(exc));return
         analysis_priority=bool(analysis_priority or local_analysis)
-        analysis_waiting=('Import waiting for analysis — retry the failed song'
+        analysis_waiting=('Import waiting for cue/grid saves' if prepared_reservation else
+                         'Import waiting for analysis — retry the failed song'
                           if any(pending['state']=='failed' for pending in local_analysis)
                           else 'Import waiting for analysis')
         if analysis_priority and job['request'] is None and job.get('media_ready',False):
@@ -396,7 +405,9 @@ class SharedImportController(QObject):
                     w._resume_analysis_jobs()
             if 'library' in value and not self.closing and not w._shutting_down:
                 with phase('import_acknowledgement_refresh'):
-                    w._on_refresh_done(value['library'])
+                    bindings=value.get('bindings',job.get('bindings',[]))
+                    w._on_refresh_done(value['library'],metadata_changed_ids=tuple(
+                        binding['native_id'] for binding in bindings))
                 if (not self.tags.verified or any(t['id'] in getattr(w.lib,'source_binding_issues',{})
                                                 for t in job['tracks'])):
                     self.fail('Native identity needs reconciliation; import receipts preserved',job['id']);return

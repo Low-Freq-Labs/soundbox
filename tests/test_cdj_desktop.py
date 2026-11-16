@@ -26,6 +26,7 @@ class CdjDropIntent(unittest.TestCase):
         class UncopyableTrack:
             path = Path('/synthetic/music/song.wav')
             source_analysis_path = '/synthetic/analysis/ANLZ0000.DAT'
+            source_native_path = '/synthetic/native/alias.wav'
             def __deepcopy__(self, _memo):
                 raise AssertionError('Settings copied unrelated song/cue data')
         track = UncopyableTrack()
@@ -38,10 +39,11 @@ class CdjDropIntent(unittest.TestCase):
             library.source='/new/library/master.db'
             track.path=Path('/new/music/song.wav')
             track.source_analysis_path='/new/analysis/ANLZ0000.DAT'
+            track.source_native_path='/new/native/alias.wav'
             started[0].operation(lambda:False, lambda *_:None)
         self.assertEqual(settings.call_args.kwargs['sources'], [
             Path('/synthetic/library/master.db'), Path('/synthetic/music/song.wav'),
-            Path('/synthetic/analysis/ANLZ0000.DAT')])
+            Path('/synthetic/analysis/ANLZ0000.DAT'), Path('/synthetic/native/alias.wav')])
 
     def test_settings_still_refuses_a_target_overlapping_source_analysis(self):
         from pathlib import Path
@@ -60,6 +62,35 @@ class CdjDropIntent(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'overlaps source library'):
                     started[0].operation(lambda:False,lambda *_:None)
             self.assertEqual(list(Path(target).iterdir()),[])
+
+    def test_playlist_export_freezes_selected_data_before_worker_dispatch(self):
+        from pathlib import Path
+        from soundbox.library import Library, Playlist, Track
+        track = Track('17', 'Before', 'Artist', 'file:///synthetic/song.wav', source_uuid='uuid')
+        other = Track('other', 'Unselected', 'Artist', 'file:///unselected/song.wav')
+        playlist = Playlist('Selected', ['Folder'], ['17', '17'], 'selected')
+        library = Library({'17': track, 'other': other}, [playlist], '/synthetic/master.db',
+                          source_kind='rekordbox-db', source_library_id='42')
+        host, started = self.settings_host(library, '/not-a-device')
+        host.titles = {'17': 'Saved title'}; host.overrides = {'17': 'Saved artist'}
+        host.settings = {'cdj_my_settings': {'PLAYER': {'fixture': 1}}}; host.art_cache = object()
+        with mock.patch('desktop.cdj.device_facts', return_value=SimpleNamespace(
+                volume_uuid='synthetic-volume', writable=True)), \
+                mock.patch('soundbox.cdj_export.plan_export') as export:
+            CdjDeviceMixin._begin_cdj_export(host, '/not-a-device', [playlist])
+            track.name = 'Later'; playlist.keys.clear(); host.titles['17'] = 'Later'
+            library.source_library_id = 'different-library'
+            host.settings['cdj_my_settings']['PLAYER']['fixture'] = 2
+            started[0].operation(lambda: False, lambda *_: None)
+        frozen, selected = export.call_args.args[:2]
+        self.assertIsNot(frozen, library)
+        self.assertEqual(set(frozen.tracks_by_id), {'17'})
+        self.assertEqual(frozen.tracks_by_id['17'].name, 'Before')
+        self.assertEqual(frozen.source_library_id, '42')
+        self.assertEqual(selected[0].keys, ['17', '17'])
+        self.assertEqual(export.call_args.kwargs['titles'], {'17': 'Saved title'})
+        self.assertEqual(export.call_args.kwargs['global_profile'], {'PLAYER': {'fixture': 1}})
+        self.assertIn(Path('/unselected/song.wav'), frozen.export_source_paths)
 
     def test_format_source_separation_includes_external_analysis_locations(self):
         from pathlib import Path
@@ -159,7 +190,8 @@ class CdjDropIntent(unittest.TestCase):
 
     def test_pending_native_playlist_save_drains_before_export_and_rebinds_membership(self):
         from soundbox.library import Playlist
-        old=Playlist('Before',[],['one','two'],'1000');new=Playlist('After',[],['one'],'1000')
+        old=Playlist('Before',[],['one','two'],'1000',export_key='cust:Original Set')
+        new=Playlist('After',[],['one'],'1000')
         pending=[];controller=SimpleNamespace(pending=[object()],queue_error=lambda:'')
         lib=SimpleNamespace(source='/synthetic/master.db',source_library_id='synthetic',playlists=[old])
         host=SimpleNamespace(_shutting_down=False,lib=lib,_begin_cdj_export=mock.Mock(),
@@ -170,8 +202,29 @@ class CdjDropIntent(unittest.TestCase):
             CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',[old],from_drop=True,drop_target=(7,'fixture'))
         host._begin_cdj_export.assert_not_called()
         controller.pending=[];lib.playlists=[new];pending[0]()
-        host._begin_cdj_export.assert_called_once_with('/not-a-device',[new],settings=None,
+        expected=Playlist('After',[],['one'],'1000',export_key='cust:Original Set')
+        host._begin_cdj_export.assert_called_once_with('/not-a-device',[expected],settings=None,
             from_drop=True,drop_target=(7,'fixture'),standalone=())
+        self.assertEqual(new.export_key,'')
+
+    def test_durable_metadata_and_failed_tag_assignments_fence_export_without_an_active_worker(self):
+        for name in ('metadata_controller','tag_controller'):
+            with self.subTest(domain=name):
+                callbacks=[]
+                owner=SimpleNamespace(owned=False,pending=[dict(error='Save needs attention')],queue_error=lambda:'')
+                host=SimpleNamespace(_shutting_down=False,lib=object(),_begin_cdj_export=mock.Mock(),
+                    _defer_device_operation_until_scan_finishes=lambda _,**_options:False,
+                    _device_operation_owned=lambda *_:False,tag_controller=SimpleNamespace(owned=False),
+                    _start_pulse=mock.Mock(),_stop_pulse=mock.Mock(),_flash_status=mock.Mock(),cancel_btn=mock.Mock())
+                setattr(host,name,owner)
+                with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:callbacks.append(callback)):
+                    CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',from_drop=True,drop_target=(7,'fixture'))
+                    self.assertEqual(callbacks,[])
+                    host._begin_cdj_export.assert_not_called()
+                    host._start_pulse.assert_not_called()
+                    self.assertIsNone(host._cdj_waiting)
+                    self.assertEqual(owner.pending,[dict(error='Save needs attention')])
+                    self.assertIn('Save needs attention',host._flash_status.call_args.args[0])
 
     def test_playlist_deleted_or_source_switched_while_waiting_cannot_export_old_rows(self):
         from soundbox.library import Playlist
@@ -191,6 +244,37 @@ class CdjDropIntent(unittest.TestCase):
                 else:lib.playlists=[]
                 pending[0]();host._begin_cdj_export.assert_not_called()
                 self.assertIsNone(host._cdj_waiting);host._flash_status.assert_called_once()
+
+    def test_same_numeric_playlist_replacement_during_source_wait_cannot_retarget_export(self):
+        from soundbox.library import Playlist
+        old=Playlist('Set',[],['one'],'1000');callbacks=[]
+        controller=SimpleNamespace(pending=[object()],queue_error=lambda:'')
+        node=dict(ID='1000',UUID='original-playlist',rb_local_deleted=0)
+        lib=SimpleNamespace(source='/synthetic/master.db',source_kind='rekordbox-db',source_library_id='synthetic',
+            playlists=[old],source_playlist_catalog={'nodes':[node]})
+        host=SimpleNamespace(_shutting_down=False,lib=lib,_begin_cdj_export=mock.Mock(),
+            _defer_device_operation_until_scan_finishes=lambda _,**_options:False,_device_operation_owned=lambda *_:False,
+            tag_controller=SimpleNamespace(owned=False),playlist_controller=controller,
+            _start_pulse=mock.Mock(),_stop_pulse=mock.Mock(),_flash_status=mock.Mock(),cancel_btn=mock.Mock())
+        with mock.patch('desktop.cdj.QTimer.singleShot',side_effect=lambda _ms,callback:callbacks.append(callback)):
+            CdjDeviceMixin._begin_cdj_export(host,'/not-a-device',[old],from_drop=True,drop_target=(7,'fixture'))
+        controller.pending=[];node['UUID']='replacement-playlist'
+        lib.playlists=[Playlist('Set',[],['wrong-song'],'1000')]
+        callbacks[0]()
+        host._begin_cdj_export.assert_not_called();self.assertIsNone(host._cdj_waiting)
+        host._flash_status.assert_called_once()
+
+    def test_local_analysis_fences_capture_before_native_publication_is_discovered(self):
+        from desktop.cdj import _source_edits_pending
+        host=SimpleNamespace(tag_controller=SimpleNamespace(owned=False),settings={'analysis_jobs':[{'id':'accepted'}]},
+            native_analysis_controller=SimpleNamespace(pending=[]),_analysis_worker=None)
+        self.assertTrue(_source_edits_pending(host))
+        host.settings['analysis_jobs']=[];host._analysis_worker=object()
+        self.assertTrue(_source_edits_pending(host))
+        host._analysis_worker=None;host._analysis_owner=SimpleNamespace(pending=1)
+        self.assertTrue(_source_edits_pending(host))
+        host._analysis_owner.pending=0
+        self.assertFalse(_source_edits_pending(host))
 
     def test_settings_and_update_actions_publish_without_a_second_review(self):
         host,started=self.host()

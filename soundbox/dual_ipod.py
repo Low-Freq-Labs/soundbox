@@ -301,6 +301,7 @@ class DualIpodSyncPlan:
         default=None, repr=False, compare=False)
     interrupted_verifier: InterruptedFileVerifier | None = field(
         default=None, repr=False, compare=False)
+    source_guard_paths: tuple[Path, ...] = ()
 
     @property
     def rockbox_bytes_to_copy(self) -> int:
@@ -1615,7 +1616,8 @@ def plan_dual_ipod_sync(
 
     source_verifier = SourceVerificationCache(rockbox_media_cache.root)
     root = Path(target).expanduser().resolve(strict=True)
-    planning_session = sync_mod.DeviceSession(root, [], create=False)
+    guard_paths = tuple(getattr(library, 'export_source_paths', ()))
+    planning_session = sync_mod.DeviceSession(root, list(guard_paths), create=False)
     if not (root / ".rockbox").is_dir() or not (root / "iPod_Control").is_dir():
         raise DualIpodError("Composite sync requires both .rockbox and iPod_Control")
     existing_manifest, existing_payload, manifest_hash_before = (
@@ -2376,6 +2378,7 @@ def plan_dual_ipod_sync(
     planning_session.revalidate()
     return DualIpodSyncPlan(
         target=root,
+        source_guard_paths=guard_paths,
         target_mount_identity=planning_session.mount_identity,
         stock=stock_plan,
         media_copies=tuple(media_copies),
@@ -2495,8 +2498,8 @@ def commit_dual_ipod_sync(
     """Commit one incremental composite generation with exact rollback."""
     total_tracks = plan.progress_total
     progress_done = 0
-    sources = [item.source for item in (
-        plan.media_copies + plan.artwork_copies + plan.file_rewrites)]
+    sources = [*plan.source_guard_paths, *[item.source for item in (
+        plan.media_copies + plan.artwork_copies + plan.file_rewrites)]]
     session = sync_mod.DeviceSession(plan.target, sources, create=False)
     if session.mount_identity != plan.target_mount_identity:
         raise DualIpodError(

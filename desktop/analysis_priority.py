@@ -84,6 +84,79 @@ class AnalysisPriorityMixin:
                    is not None and analysis_jobs.matches(job, self.lib, track)
                    for job in self.settings.get(analysis_jobs.KEY, []) if isinstance(job, dict))
 
+    def _analysis_source_priority(self):
+        """One source admission may run between captured analysis phases.
+
+        A turn is scoped to the current source, never persisted or an authority.
+        Same-song import/publication dependencies remain with their controllers.
+        """
+        scope = (str(self.lib.source), self.lib.source_library_id) if self.lib else None
+        opportunity = (not self._shutting_down and not self._state_maintenance
+                       and scope is not None and getattr(self, '_analysis_source_turn', None) == scope)
+        return bool(self._analysis_priority_pending()
+                    and (getattr(self, '_analysis_worker', None) is not None or not opportunity))
+
+    def _analysis_source_admitted(self):
+        # Consume only after the source owner accepts a real task. Refusals,
+        # native-owner backoff and unavailable dependencies leave the turn open.
+        self._analysis_source_turn = None
+
+    def _analysis_lane_released(self):
+        owner = getattr(self, '_analysis_owner', None)
+        if (owner is not None and not owner.stopping
+                and not self._shutting_down and not self._state_maintenance
+                and getattr(self, '_analysis_queue', None)):
+            # The source worker has joined before idle delivery. Resume the
+            # waiting local phase before a completion's queued source successor
+            # can take another turn; its own prerequisite may still defer it.
+            self._start_next_analysis()
+
+    def _analysis_offer_source_turn(self, library):
+        self._analysis_source_turn = None
+        if (self._shutting_down or self._state_maintenance or self.lib is None
+                or (str(library.source), library.source_library_id)
+                    != (str(self.lib.source), self.lib.source_library_id)):
+            return
+        tags = self.tag_controller
+        if (tags.busy or tags.checking or getattr(tags, 'admission_paused', False)
+                or getattr(tags, 'prep_priority', False)):
+            return
+        self._analysis_source_turn = (str(self.lib.source), self.lib.source_library_id)
+        # Offer every existing head its normal admission checks before the next
+        # DSP phase. A dependent/failed head cannot strand an unrelated queue,
+        # and no accepted source FIFO is reordered to manufacture a runnable job.
+        domains = (('tags', tags, '_pump_tag_intent'),
+                   ('cues', tags, '_start_next_cue'),
+                   ('grid', getattr(self, 'grid_controller', None), '_drain'),
+                   ('prep', getattr(self, 'prep_controller', None), 'pump'),
+                   ('playlists', getattr(self, 'playlist_controller', None), 'pump'),
+                   ('tag-definitions', getattr(self, 'tag_definition_controller', None), 'pump'),
+                   ('metadata', getattr(self, 'metadata_controller', None), 'pump'),
+                   ('registration', getattr(self, 'shared_import_controller', None), 'pump'),
+                   ('analysis', getattr(self, 'native_analysis_controller', None), 'pump'),
+                   ('removal', getattr(self, 'removal_controller', None), 'pump'),
+                   ('media', getattr(self, 'media_controller', None), 'pump'))
+        scope = self._analysis_source_turn
+        cursor = (getattr(self, '_analysis_source_cursor', 0)
+                  if getattr(self, '_analysis_source_cursor_scope', None) == scope else 0)
+        for offset in range(len(domains)):
+            index = (cursor + offset) % len(domains)
+            kind, controller, method = domains[index]
+            pump = getattr(controller, method, None)
+            tags._analysis_fair_kind = kind
+            try:
+                if pump is not None:
+                    pump()
+            finally:
+                tags._analysis_fair_kind = ''
+            if tags.busy or tags.checking:
+                self._analysis_source_cursor_scope = scope
+                self._analysis_source_cursor = (index + 1) % len(domains)
+                break
+
+    def _analysis_local_admitted(self):
+        self._analysis_source_turn = None
+
     def _analysis_source_busy(self):
         # Deferred cue/grid intentions must not deadlock their own local-analysis
         # prerequisite. Actual source work and identity probes still finish first.
@@ -108,6 +181,7 @@ class AnalysisPriorityMixin:
             return False
         worker = AnalysisWaveformWorker(self.lib, deepcopy(track), job,
                                         self._track_analysis_dir, self._prepare_grid_cache)
+        self._analysis_local_admitted()
         self._analysis_worker = worker
         worker.set_playback_active(self.player_bar.is_playing())
         worker.bpm_ready.connect(lambda value, ww=worker: self._on_waveform_bpm_ready(ww, value))
@@ -120,9 +194,11 @@ class AnalysisPriorityMixin:
         if self._shutting_down or self._analysis_owner.stopping:
             return
         if worker.stop.is_set():
+            self._analysis_offer_source_turn(worker.library)
             self._schedule_next_analysis()
             return
         if isinstance(worker.result, Exception) and str(worker.result) == METADATA_PENDING:
+            self._analysis_offer_source_turn(worker.library)
             self._schedule_next_analysis(2000)
             return
         pending = self.settings.get(analysis_jobs.KEY, [])
@@ -148,4 +224,5 @@ class AnalysisPriorityMixin:
             self._flash_status(f'Couldn’t prepare waveform: {exc}', 15)
             # Remove this failed head from the RAM queue; other songs keep moving.
             self._analysis_queue = [entry for entry in self._analysis_queue if entry[3] != worker.job_id]
+        self._analysis_offer_source_turn(worker.library)
         self._schedule_next_analysis()

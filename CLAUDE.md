@@ -16,9 +16,12 @@ Native macOS library/prep/player app bridging rekordbox to USB, stock iPod and R
 - Keep the engine Qt-free, production independent of research/tests, and personal code behind provider admission.
 - Reuse cohesive internal modules; keep authority-specific source SQL, recovery and exporter rules separate.
 - Native source edits require their own accepted exact-library authority, fresh guards and shared writer/lock/journal.
+- Supported library/prep edits must persist in the shared rekordbox DB. SoundBox's current effective titles, artists and organization are authoritative migration inputs; preserve them before any native refresh or write. Local-only success is unfinished work.
 - Playback/export preserves source audio; only separately accepted conversion and user-confirmed removal may change originals.
 - Generic USBs export selected playlists explicitly; no automatic sync status or idle catalog comparisons.
 - Preserve curated AppData, current user edits, original conversions, recovery, immutable fixtures and pending-acceptance rollbacks.
+- Keep diagnostic captures bounded: compact receipts by default; retain only needed current full proof/recovery payloads and retire completed duplicates.
+- Canonical `library.json` and referenced `.state-records/` are inseparable; materialize portable snapshots through the state repository.
 - No automated input/termination of real apps, live-source tests, device erase/replay, restoration or permanent deletion without current explicit scope.
 - Work autonomously on reversible local changes. Inspect and preserve the dirty worktree.
 - Do not commit/push unless asked; “wrap up” authorizes validated completion/publication under the detailed contracts.

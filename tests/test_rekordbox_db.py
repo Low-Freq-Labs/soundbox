@@ -276,6 +276,19 @@ class TrackMapping(unittest.TestCase):
         out = _read_tracks(FakeDB(tracks=[self._track(rb_local_deleted=1)]))
         self.assertEqual(out, {})
 
+    def test_native_prep_display_gates_retain_raw_file_type_and_analysis_flags(self):
+        from soundbox import libcache
+        from soundbox.library import Library
+        values=_read_tracks(FakeDB(tracks=[self._track(FileType=11,Analysed=233)]))
+        track=values['265095720']
+        self.assertEqual(track.info['nativeFileType'],11)
+        self.assertEqual(track.info['nativeAnalysisFlags'],233)
+        with tempfile.TemporaryDirectory() as area:
+            path=Path(area)/'cache.json'
+            libcache.dump(Library(values,[],'/synthetic/master.db'),path)
+            restored=libcache.load(path).tracks_by_id[track.track_id]
+            self.assertEqual(restored.info,track.info)
+
     def test_live_db_authoritative_empty_cues(self):
         out = _read_tracks(FakeDB(tracks=[self._track()]))
         self.assertEqual(out["265095720"].source_cues, [])
@@ -288,6 +301,25 @@ class TrackMapping(unittest.TestCase):
 
 
 class SelectedDatabase(unittest.TestCase):
+    def test_existing_native_tag_dates_reach_tracks_without_an_additional_link_read(self):
+        from datetime import datetime, timezone
+        from soundbox import rekordbox_db
+        stamp=datetime(2026,11,9,19,10,37,420000,tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as area:
+            source=Path(area)/'master.db';source.write_bytes(b'private synthetic source')
+            native=TrackMapping()._track(FolderPath=str(Path(area)/'missing-song.wav'))
+            tag=Row(ID='leaf',Attribute=0,Name='Dubstep',ParentID='',Seq=1)
+            links=[Row(ContentID=str(native.ID),MyTagID='leaf',created_at=stamp)]
+            db=FakeDB(tracks=[native],tags=[tag]);db.close=lambda:None
+            db.get_my_tag_songs=mock.Mock(return_value=links)
+            with mock.patch('pyrekordbox.Rekordbox6Database',return_value=db), \
+                    mock.patch.object(rekordbox_db,'_playlist_catalog',return_value={}), \
+                    mock.patch.object(rekordbox_db,'_populate_cue_edit_state'):
+                library=rekordbox_db.load_live(source)
+            self.assertEqual(library.tracks_by_id[str(native.ID)].source_tag_times,{'leaf':stamp.timestamp()})
+            self.assertEqual(library.tracks_by_id[str(native.ID)].source_tag_ids,['leaf'])
+            db.get_my_tag_songs.assert_called_once()
+
     def test_explicit_database_snapshots_only_selected_source_and_never_modifies_it(self):
         from soundbox import rekordbox_db
         with tempfile.TemporaryDirectory() as area:

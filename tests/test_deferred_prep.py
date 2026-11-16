@@ -67,6 +67,8 @@ class DurablePrep(unittest.TestCase):
         class Store:
             def __init__(self,delegate,kind):self.delegate=delegate;self.kind=kind
             def snapshot(self):return self.delegate.snapshot()
+            def cue_snapshot(self):return self.delegate.cue_snapshot()
+            def grid_snapshot(self):return self.delegate.grid_snapshot()
             def apply(self,request):
                 # No source mutation starts before the exact request is durable.
                 durable=json.loads((root/'state.json').read_bytes())
@@ -411,7 +413,7 @@ class DurablePrep(unittest.TestCase):
         self.window.player_bar._dur=original[-1][1]
         job=self.controller._new(track);job['version']=1
         job=prep_edits.operation(job,'grid','shift',1)
-        grid,_cue=self.controller._stores(self.window.lib,track)
+        grid,_cue=self.controller._stores(self.window.lib,track,kind='grid')
         from soundbox.rekordbox_grid import GridEdit
         request=GridEdit(track.native_id,track.source_uuid,grid.snapshot().revision,'shift',1)
         job['prepared']=dict(operation_id=job['operations'][0]['id'],kind='grid',request=json.loads(json.dumps(asdict(request))))
@@ -455,6 +457,23 @@ class DurablePrep(unittest.TestCase):
         self.controller.timer.stop();self.controller.pump()
         self.assertEqual(self.writes,[]);self.assertEqual(self.controller.pending[0]['cues'][0]['position_ms'],777)
         self.assertFalse(self.controller.pending[0]['error'])
+
+    def test_variable_native_grid_clipping_preserves_display_and_saved_headline_bpm(self):
+        rows=(Beat(1,9000,39),Beat(2,16000,706),Beat(3,16000,1081),Beat(4,16000,1456))
+        self.native.dat=replace_grid(self.native.dat,rows)
+        self.native.ext=grid_fixture.GridPlanningTests.metadata_snapshot(rows).ext
+        self.native.file=grid_fixture.content_file(self.native.state.track,self.native.dat)
+        self.window.player_bar._analysis_parts['beats']=[[b.number,b.time_ms,b.tempo/100] for b in rows]
+        self.window._update_browser_bpm.reset_mock()
+        self.assertTrue(self.controller.request_grid(self.tid,'shift',-40))
+        self.assertEqual(self.controller.grid_view(self.tid)[1],90)
+        self.wait(lambda:not self.controller.pending and not self.native.shared.busy)
+        self.assertEqual(read_grid(self.native.dat)[0].tempo,16000)
+        self.assertEqual(self.native.state.track['BPM'],9000)
+        self.assertEqual(self.window.lib.tracks_by_id[self.tid].bpm,'90.00')
+        self.assertEqual(self.controller.grid_view(self.tid)[1],90)
+        self.assertTrue(self.window._update_browser_bpm.called)
+        self.assertTrue(all(call.args[1]=='90.00' for call in self.window._update_browser_bpm.call_args_list))
 
     def bare_track(self):
         track=self.window.lib.tracks_by_id[self.tid]
@@ -517,10 +536,15 @@ class DurablePrep(unittest.TestCase):
         self.window.settings=json.loads((self.native.shared.data_root/'state.json').read_bytes())
         self.controller=PrepEditController(self.window);self.window.prep_controller=self.controller
         self.native.shared.busy=False;self.controller.pump()
-        self.wait(lambda:not self.native.shared.busy and not self.controller.pending[0].get('identity_pending'))
-        job=self.controller.pending[0]
+        self.wait(lambda:not self.native.shared.busy and not self.controller.pending)
+        renewed=[state[prep_edits.KEY][0] for state in self.persisted if state.get(prep_edits.KEY)
+                 and not state[prep_edits.KEY][0].get('identity_pending')]
+        self.assertTrue(renewed)
+        job=renewed[0]
         self.assertEqual(job['id'],identity);self.assertEqual(job['cues'][0]['position_ms'],1234)
-        self.assertFalse(job['error']);self.assertEqual(self.writes,[])
+        self.assertFalse(job['error']);self.assertEqual(job['version'],2)
+        self.assertEqual([kind for kind,_ in self.writes],['cue'])
+        self.assertEqual(self.native.state.cues[0]['InMsec'],1234)
 
     def test_late_audio_proof_cannot_publish_into_another_library_same_track_id(self):
         from soundbox.source_acquisition import acquire_source
@@ -566,11 +590,15 @@ class DurablePrep(unittest.TestCase):
             self.native.shared.busy=False;self.controller.timer.stop();self.controller.pump()
             self.wait(entered.is_set)
             self.window.lib.tracks_by_id[self.tid]=replace(native,source_native_id='registered-native-id')
+            # Registration changes both the DTO binding and its native row.
+            # A cue-only source save no longer waits for an unrelated DAT.
+            self.native.state=replace(self.native.state,track={**self.native.state.track,'ID':'registered-native-id'})
             self.gate.set()
-            self.wait(lambda:not self.native.shared.busy and not self.controller.pending[0].get('identity_pending'))
-        self.assertFalse(self.controller.pending[0]['error'])
-        self.assertEqual(self.controller.pending[0]['cues'][0]['position_ms'],777)
-        self.assertEqual(self.writes,[])
+            self.wait(lambda:not self.native.shared.busy and not self.controller.pending)
+        self.assertEqual([kind for kind,_ in self.writes],['cue'])
+        self.assertEqual(self.writes[0][1].track_id,'registered-native-id')
+        self.assertEqual(self.native.state.cues[0]['ContentID'],'registered-native-id')
+        self.assertEqual(self.native.state.cues[0]['InMsec'],777)
 
     def test_existing_prep_job_cannot_append_into_another_source_or_path(self):
         track=self.bare_track();self.native.shared.busy=True

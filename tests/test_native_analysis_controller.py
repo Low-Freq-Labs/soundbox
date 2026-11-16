@@ -358,6 +358,26 @@ class NativeAnalysisQueue(unittest.TestCase):
         self.controller.pump();self.wait(lambda:not self.controller.pending and not self.window.tag_controller.owned)
         self.assertEqual(len(self.calls),1)
 
+    def test_source_turn_publishes_ready_song_while_other_song_keeps_detection_dependency(self):
+        from types import MethodType
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        w=self.window;tags=w.tag_controller
+        tags.busy=True;self.add_second();self.controller.discover()
+        track=w.lib.tracks_by_id['sb-one']
+        detection=native.analysis_jobs.admit([],w.lib,[track],native.analysis.DEFAULTS)
+        w.settings[native.analysis_jobs.KEY]=detection
+        w._analysis_priority_pending=lambda:True
+        w._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,w)
+        w._analysis_source_admitted=MethodType(AnalysisPriorityMixin._analysis_source_admitted,w)
+        tags.analysis_priority=w._analysis_priority_pending
+        tags.analysis_admission=w._analysis_source_priority;tags.source_admitted=w._analysis_source_admitted
+        tags.busy=False
+        AnalysisPriorityMixin._analysis_offer_source_turn(w,w.lib)
+        self.wait(lambda:'sb-two' in w.settings.get(DONE,{}) and not tags.owned)
+        self.assertEqual([j['local_id'] for j in self.calls],['sb-two'])
+        self.assertEqual(self.controller.pending[0]['local_id'],'sb-one')
+        self.assertEqual(w.settings[native.analysis_jobs.KEY],detection)
+
     def test_committed_initial_analysis_acknowledges_while_newer_key_job_is_failed(self):
         path,folder,plan=self.ctime_job()
         track=self.window.lib.tracks_by_id['sb-one']

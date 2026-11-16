@@ -5,6 +5,7 @@ No source-audio disposal occurs during preparation. GUI confirmation binds the
 whole plan hash; each file goes through the OS Trash with an interruption tag.
 """
 from dataclasses import dataclass,asdict
+from collections import Counter
 import base64
 import hashlib
 import json
@@ -32,7 +33,9 @@ FORMAT='soundbox-native-removal-v1'
 AUTHORITY_FORMAT='soundbox-removal-authority-v1'
 TAG='com.lowfreqlabs.soundbox.removal'
 def confirmation(plan):
-    return _digest(dict(selections=plan['selections'],audio=[{k:a[k] for k in ('path','size','sha256')} for a in plan['audio']]))
+    values: dict[str,Any]=dict(selections=plan['selections'],audio=[{k:a[k] for k in ('path','size','sha256')} for a in plan['audio']])
+    if plan.get('native_only'):values['native_only']=True
+    return _digest(values)
 
 
 COLUMNS=frozenset(('rb_local_deleted','rb_data_status','rb_local_usn','updated_at','TrackNo'))
@@ -179,6 +182,10 @@ class RemovalStore:
         s=self.database.stat();self.file_id=(s.st_dev,s.st_ino);self.lease=_Lease(self)
         self._plan_cache: Any=None
         self.trash=trash;self.trash_root=Path(trash_root) if trash_root else Path.home()/'.Trash'
+
+    def _guard_trash(self):
+        # Native-only removal never accesses Trash, source audio or sidecars.
+        # Validate this separate file-disposal boundary only when it is used.
         if self.trash_root!=self.trash_root.resolve():raise WriteProofError('Trash redirects')
         if self.trash_root.exists():
             s=self.trash_root.lstat()
@@ -203,6 +210,25 @@ class RemovalStore:
         if (plan.get('format')!=FORMAT or plan.get('authority')!=asdict(self.authority)
                 or plan.get('operation_id')!=folder.name or plan.get('source_file_id')!=list(self.file_id)):
             raise RecoveryRequired('Removal plan does not match its explicit authority/source')
+        if type(plan.get('native_only',False)) is not bool:
+            raise RecoveryRequired('Unknown removal file policy')
+        if plan.get('native_only'):
+            targets={target['id']:target for target in plan['targets']}
+            history=plan.get('history')
+            if (not targets or len(targets)!=len(plan['selections'])
+                    or not isinstance(history,dict) or set(history)!={selected['id'] for selected in plan['selections']}
+                    or any(plan.get(key) for key in ('audio','resources','missing','missing_proofs','retained'))
+                    or any(not selected.get('native_active') or not selected.get('keep_file')
+                        or selected.get('missing') or selected['native_id'] not in targets
+                        or (selected.get('uuid'),selected['path'])!=(targets[selected['native_id']]['uuid'],
+                            targets[selected['native_id']]['path']) for selected in plan['selections'])):
+                raise RecoveryRequired('Native-only removal contains file disposal or mismatched targets')
+            for selected in plan['selections']:
+                row=history[selected['id']]
+                if (not isinstance(row,dict) or (row.get('id'),row.get('uuid'),row.get('path'),row.get('source'),row.get('library_id'))
+                        !=(selected['native_id'],selected['uuid'],selected['path'],str(self.database),self.authority.library_id)
+                        or not isinstance(row.get('display'),dict) or type(row['display'].get('title')) is not str):
+                    raise RecoveryRequired('Native-only removal history differs from its exact selection')
         for name in ('before.db','after.db','before.xml','after.xml'):
             p=folder/name;_regular(p)
             if _sha(p)!=plan['payloads'][name]:raise RecoveryRequired('Native removal recovery bytes changed')
@@ -220,13 +246,17 @@ class RemovalStore:
             return plan
         if {t['id'] for t in plan['targets']}!={s['native_id'] for s in plan['selections'] if s['native_active']}:
             raise RecoveryRequired('Native removal targets differ from the reviewed selection')
-        if ({a['path'] for a in plan['audio']}|set(plan.get('missing',[]))|{r['path'] for r in plan.get('retained',[])})!={s['path'] for s in plan['selections']}:
+        if not plan.get('native_only') and ({a['path'] for a in plan['audio']}|set(plan.get('missing',[]))|{r['path'] for r in plan.get('retained',[])})!={s['path'] for s in plan['selections']}:
             raise RecoveryRequired('Audio disposal targets differ from the reviewed selection')
         with tempfile.TemporaryDirectory(prefix='soundbox-removal-validation-') as temp:
             local=Path(temp).resolve()/'master.db';shutil.copyfile(folder/'before.db',local);conn=_connect(local,readonly=True)
             try:
                 tables=self._catalog(conn)
                 native_rows={r['ID']:r for r in tables['djmdContent']}
+                if plan.get('native_only'):
+                    uuids=Counter(row['UUID'] for row in tables['djmdContent'])
+                    if any(uuids[target['uuid']]!=1 for target in plan['targets']):
+                        raise RecoveryRequired('Native-only removal UUID is ambiguous')
                 selected_ids={t['id'] for t in plan['targets']}
                 for retained in plan.get('retained',[]):
                     if not retained['references']:raise RecoveryRequired('Shared-file retention has no Collection reference')
@@ -239,7 +269,7 @@ class RemovalStore:
                     raise RecoveryRequired('Removal plan does not reproduce its captured native contract')
                 selected={t['id']:t['uuid'] for t in plan['targets']}
                 permitted=set()
-                for row in tables['contentFile']:
+                for row in (() if plan.get('native_only') else tables['contentFile']):
                     if row['ContentID'] not in selected or row['rb_local_deleted']:continue
                     owner=selected[row['ContentID']];virtual=row['Path']
                     roots=(f'/PIONEER/USBANLZ/{owner[:3]}/{owner[3:]}/',f'/PIONEER/Artwork/{owner[:3]}/{owner[3:]}/')
@@ -265,27 +295,39 @@ class RemovalStore:
         if self._plan_cache[2]!=record['plan_sha256']:raise RecoveryRequired('Confirmed removal plan changed')
         return record,plan,folder
 
-    def prepare(self,entries):
+    def prepare(self,entries,*,native_only=False):
         """Capture only; originals remain untouched until exact GUI confirmation."""
+        if type(native_only) is not bool:raise WriteProofError('Unknown removal file policy')
         if not isinstance(entries,list) or not 1<=len(entries)<=10000:raise WriteProofError('Select tracks to delete')
         with self.lease._lock():
             self._recover_locked();self._resume_retirement();self.lease._guard()
+            if not native_only:self._guard_trash()
             database_epoch=identity(self.database.stat());wal_epoch=self._wal_epoch();before_xml=self.xml.read_bytes()
             op=str(uuid4());folder=self.data_root/'native-removal-plans'/op;folder.mkdir(parents=True,mode=0o700)
             with self._snapshot() as snapshot:
                 conn=_connect(snapshot,readonly=True)
                 try:
                     tables=self._catalog(conn);all_content=tables['djmdContent'];by_id={r['ID']:r for r in all_content}
+                    native_uuids=Counter(row['UUID'] for row in all_content) if native_only else {}
                     targets=[];audio=[];selections=[];seen_paths=set();selected_native=set();missing=[];missing_proofs={}
                     for entry in entries:
                         tid=entry['id'];native_id=entry['native_id'];row=by_id.get(native_id)
                         known=entry.get('native',{})
                         if not entry.get('path'):raise WriteProofError('This Graveyard entry has no verified file path')
                         if row and row['UUID']!=known.get('uuid'):raise ConflictError('Graveyard native identity changed')
+                        if native_only and (not row or row['rb_local_deleted']
+                                or native_uuids[row['UUID']]!=1 or row['FolderPath']!=entry['path']
+                                or not Path(entry['path']).is_absolute()):
+                            raise ConflictError('The selected active Collection identity or native path changed')
                         if row and not row['rb_local_deleted']:
                             if row['rb_local_synced']==0 and not self.authority.unsynced_accepted:
                                 raise WriteProofError('Newer native-record removal awaits acceptance')
                             targets.append(dict(id=native_id,uuid=row['UUID'],path=row['FolderPath']));selected_native.add(native_id)
+                        if native_only:
+                            assert row is not None
+                            selections.append(dict(id=tid,native_id=native_id,uuid=known['uuid'],path=row['FolderPath'],
+                                title=entry['display']['title'],native_active=True,missing=False,keep_file=True))
+                            continue
                         raw=Path(row['FolderPath'] if row else entry['path'])
                         if not raw.is_absolute():raise WriteProofError('An absolute audio path is required')
                         canonical=raw.resolve(strict=False)
@@ -311,7 +353,7 @@ class RemovalStore:
                                         tag=str(uuid4()),original_tag=self._get_tag(canonical)))
                             seen_paths.add(canonical)
                     retained_by_path: dict[str,dict]={}
-                    for row in all_content:
+                    for row in (() if native_only else all_content):
                         if row['rb_local_deleted'] or row['ID'] in selected_native:continue
                         if not row.get('FolderPath'):continue
                         try:path=Path(row['FolderPath']).resolve(strict=True)
@@ -323,11 +365,12 @@ class RemovalStore:
                             retained_by_path.setdefault(str(path),dict(path=str(path),references=[]))['references'].append(
                                 dict(id=row['ID'],uuid=row['UUID'],title=row['Title'],row=row))
                     audio=[a for a in audio if a['path'] not in retained_by_path]
-                    for selected in selections:selected['keep_file']=selected['path'] in retained_by_path
+                    if not native_only:
+                        for selected in selections:selected['keep_file']=selected['path'] in retained_by_path
                     built=planner.build(tables,targets,before_xml,compact=True)
                     changes=built['changes']
                     resources: list[dict]=[];share=self.database.parent/'share'
-                    for row in tables['contentFile']:
+                    for row in (() if native_only else tables['contentFile']):
                         if row['ContentID'] not in selected_native or row['rb_local_deleted']:continue
                         owner=by_id[row['ContentID']]['UUID'];virtual=row['Path'];leaf=Path(virtual).name
                         roots=(f'/PIONEER/USBANLZ/{owner[:3]}/{owner[3:]}/',f'/PIONEER/Artwork/{owner[:3]}/{owner[3:]}/')
@@ -360,6 +403,12 @@ class RemovalStore:
                         playlist_labels=[next((r['Name'] for r in tables['djmdPlaylist'] if r['ID']==pid),pid) for pid in built['playlists']],
                         database_epoch=database_epoch,wal_epoch=wal_epoch,
                         payloads={name:_sha(folder/name) for name in ('before.db','after.db','before.xml','after.xml')})
+                    if native_only:
+                        plan['native_only']=True
+                        plan['history']={entry['id']:dict(id=entry['native_id'],uuid=entry['native']['uuid'],
+                            path=entry['path'],source=str(self.database),library_id=self.authority.library_id,
+                            display=entry['display'],proof=dict(kind='native-only-removal-plan',operation_id=op))
+                            for entry in entries}
                     atomic_bytes(folder/'plan.json',_json(plan));self.lease._guard()
                     if (identity(self.database.stat())!=database_epoch or self._wal_epoch()!=wal_epoch or self.xml.read_bytes()!=before_xml):
                         raise ConflictError('Native library changed while preparing the deletion review')
@@ -451,6 +500,7 @@ class RemovalStore:
     def _recover_locked(self):
         if not self.journal.exists():return None
         record,plan,folder=self._record();progress=self._progress(folder,plan)
+        if not plan.get('native_only'):self._guard_trash()
         # Only this already-validated owned journal admits SQLite's own hot
         # rollback. A read-copy cannot recover spilled uncommitted source pages.
         conn=self.lease._connect()
@@ -500,6 +550,7 @@ class RemovalStore:
             selection_sha256=confirmation(plan),outcome='committed' if committed else 'rolled-back',
             trash={path:str(location) for path,location in locations.items() if location is not None},
             inactive_sqlite_journal=_inactive_journal_proof(self.database))
+        if plan.get('native_only'):result['native_only']=True
         atomic_bytes(folder/'result.json',_json(result));atomic_bytes(self.root/'removal-completed.json',_json(result))
         atomic_bytes(self.root/'last-result.json',_json(result))
         self.journal.unlink();sync_dir(self.root)
@@ -525,7 +576,9 @@ class RemovalStore:
                 if saved['plan_sha256']!=confirmed_sha256:raise RecoveryRequired('Removal result belongs to another confirmation')
                 if saved['outcome']=='committed':return saved
                 raise ConflictError('The previous disposal rolled back; prepare and confirm a fresh selection')
-            if self.trash is None:raise WriteProofError('A recoverable OS Trash adapter is required')
+            if not plan.get('native_only'):
+                self._guard_trash()
+                if self.trash is None:raise WriteProofError('A recoverable OS Trash adapter is required')
             if identity(self.database.stat())!=plan['database_epoch'] or self._wal_epoch()!=plan['wal_epoch']:
                 raise ConflictError('Library changed after deletion review; prepare a fresh review')
             if self.xml.read_bytes()!=(folder/'before.xml').read_bytes():raise ConflictError('Playlist XML changed after deletion review')
@@ -610,6 +663,32 @@ class RemovalStore:
                 or result.get('selection_sha256')!=selection_sha256):raise RecoveryRequired('Removal receipt differs from its confirmation')
         if result.get('outcome')!='committed':raise ConflictError('The previous disposal rolled back; prepare and confirm a fresh selection')
         return result
+
+    def verify_removed(self,folder,plan_sha256,selection_sha256):
+        """Fresh active-row absence, without inspecting any original/media asset."""
+        folder=Path(folder)
+        with self.lease._lock():
+            self._recover_locked();self.lease._guard()
+            result=self.completed(folder,plan_sha256,selection_sha256)
+            if result is None:raise RecoveryRequired('Collection removal has no committed receipt')
+            _regular(folder/'plan.json');plan=json.loads((folder/'plan.json').read_bytes())
+            if not plan.get('native_only'):raise WriteProofError('Native-only readback requires its exact file policy')
+            with self._snapshot() as snapshot:
+                conn=_connect(snapshot,readonly=True)
+                try:
+                    if (_identity(conn)!=(self.authority.library_id,'6000')
+                            or _schema(conn)!=self.authority.schema_sha256):
+                        raise WriteProofError('Native removal library/schema changed')
+                    for target in plan['targets']:
+                        row=_row(conn,'djmdContent',target['id'])
+                        if row is not None and (row['UUID']!=target['uuid'] or row['rb_local_deleted']!=1):
+                            raise ConflictError('The removed Collection identity was restored or replaced')
+                        if conn.execute('SELECT count(*) FROM djmdContent WHERE UUID=? AND rb_local_deleted=0',
+                                (target['uuid'],)).fetchone()!=(0,):
+                            raise ConflictError('The selected native UUID is still active in Collection')
+                finally:conn.close()
+            self.lease._guard()
+            return result
 
     def discard_unstarted(self,folder,plan_sha256):
         """Retire only exact generated review copies; never original files/data."""

@@ -13,6 +13,8 @@ import os
 import subprocess
 import threading
 import time
+import weakref
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +23,7 @@ from PySide6.QtCore import QThread, Signal
 
 from soundbox import engine, metadata, rekordbox_db
 from soundbox.library import Playlist
+from soundbox.export_snapshot import ExportSnapshot, capture_export
 from soundbox.providers import ArtworkProvider, provider_operation
 from soundbox.operation_control import checkpoint, operation_scope
 if TYPE_CHECKING:
@@ -49,28 +52,37 @@ class ExportWorker(QThread):
     def __init__(self, lib, overrides=None, titles=None, art_cache=None,
                  rockbox_media_cache=None, rockbox_art_cache=None):
         super().__init__()
-        self.lib = lib
-        self.overrides = overrides or {}
-        self.titles = titles or {}
+        # Only add(), on the GUI producer, reads this weak fallback. Each queued
+        # admission owns immutable bytes; run() never reads the live library.
+        self._capture_library = weakref.ref(lib)
+        self.overrides = dict(overrides or {})
+        self.titles = dict(titles or {})
         self.art_cache = art_cache
         self.rockbox_media_cache = rockbox_media_cache
         self.rockbox_art_cache = rockbox_art_cache
         self._lock = threading.Lock()
-        self._jobs: list[tuple[str, Playlist, int]] = []
-        self._index = 0
+        self._jobs: deque[tuple[str, ExportSnapshot, int, int]] = deque()
         self._total = 0
         self._base_done = 0
         self._stop = False
         self._reports: list[tuple[str, object]] = []
         self.result: list[tuple[str, object]] | None = None
 
-    def add(self, device: str, playlists: list[Playlist], *, mount_token: int = 0):
+    def add(self, device: str, playlists: list[Playlist], *, mount_token: int = 0,
+            library=None, titles=None, overrides=None):
+        lib = library if library is not None else self._capture_library()
+        if lib is None:
+            raise RuntimeError('Export source library is no longer available')
+        captured = capture_export(lib, playlists,
+            titles=self.titles if titles is None else titles,
+            artists=self.overrides if overrides is None else overrides)
+        estimate = sum(max(1, len(lib.resolve(playlist))) for playlist in playlists)
         with self._lock:
             if self._stop:
                 return
-            for pl in playlists:
-                self._jobs.append((device, pl, mount_token))
-                self._total += max(1, len(self.lib.resolve(pl)))
+            if playlists:
+                self._jobs.append((device, captured, mount_token, estimate))
+                self._total += estimate
         # No emit here: the next per-file progress tick updates the bar at the
         # real current position with the new total, so adding a playlist mid-export
         # smoothly lowers the % instead of jarringly snapping the bar to 0%.
@@ -78,7 +90,7 @@ class ExportWorker(QThread):
     def cancel(self):
         with self._lock:
             self._stop = True
-            del self._jobs[self._index:]
+            self._jobs.clear()
 
     def run(self):
         with operation_scope(None, self.phase_progress.emit):
@@ -88,21 +100,13 @@ class ExportWorker(QThread):
         try:
             while True:
                 with self._lock:
-                    if self._stop or self._index >= len(self._jobs):
+                    if self._stop or not self._jobs:
                         break
-                    device, pl, mount_token = self._jobs[self._index]
-                    self._index += 1
-                    playlists = [pl]
-                    # One target gets one combined file/membership plan. Keep
-                    # cross-device FIFO order; later arrivals form a new batch.
-                    while (self._index < len(self._jobs)
-                           and self._jobs[self._index][0] == device
-                           and self._jobs[self._index][2] == mount_token):
-                        playlists.append(self._jobs[self._index][1])
-                        self._index += 1
+                    device, captured, mount_token, est = self._jobs.popleft()
                     base = self._base_done
-                est = sum(max(1, len(self.lib.resolve(p))) for p in playlists)
-                name = pl.name if len(playlists) == 1 else f"{len(playlists)} playlists"
+                inputs = captured.materialize()
+                playlists = list(inputs.playlists)
+                name = playlists[0].name if len(playlists) == 1 else f"{len(playlists)} playlists"
 
                 def cb(d, t, label, _base=base, _name=name, _est=est):
                     with self._lock:
@@ -117,9 +121,9 @@ class ExportWorker(QThread):
                         raise RuntimeError("Queued export target was remounted; confirmation expired")
                     # clean=False: scrub AppleDouble once at end, not per playlist.
                     rep = engine.export_playlists(
-                        self.lib, playlists, device, dry_run=False, derive_artists=True,
+                        inputs.library, playlists, device, dry_run=False, derive_artists=True,
                         on_progress=cb, should_cancel=lambda: self._stop, clean=False,
-                        artist_overrides=self.overrides, title_overrides=self.titles,
+                        artist_overrides=inputs.artists, title_overrides=inputs.titles,
                         art_cache=self.art_cache,
                         rockbox_media_cache=self.rockbox_media_cache,
                         rockbox_art_cache=self.rockbox_art_cache)
@@ -168,14 +172,12 @@ class ResyncWorker(QThread):
     def __init__(self, lib, device, overrides=None, titles=None, art_cache=None,
                  rockbox_media_cache=None, rockbox_art_cache=None, extra=None):
         super().__init__()
-        self.lib = lib
+        self._snapshot = capture_export(lib, extra=extra or (), titles=titles,
+                                        artists=overrides, complete=True)
         self.device = device
-        self.overrides = overrides or {}
-        self.titles = titles or {}
         self.art_cache = art_cache
         self.rockbox_media_cache = rockbox_media_cache
         self.rockbox_art_cache = rockbox_art_cache
-        self.extra = extra or []  # custom SoundBox playlists (not in lib.playlists)
         self._stop = False
         self.result = None
 
@@ -190,18 +192,19 @@ class ResyncWorker(QThread):
         def cb(d, t, label):
             self.progress.emit(d, t, label)
         try:
+            inputs = self._snapshot.materialize()
             command = getattr(self, "device_command", None)
             if command is not None and command.target.mount_token:
                 if Path(self.device).stat().st_dev != command.target.mount_token:
                     raise RuntimeError("Sync target was remounted; confirmation expired")
             rep = engine.resync_device(
-                self.lib, self.device, on_progress=cb,
+                inputs.library, self.device, on_progress=cb,
                 should_cancel=lambda: self._stop,
-                artist_overrides=self.overrides, title_overrides=self.titles,
+                artist_overrides=inputs.artists, title_overrides=inputs.titles,
                 art_cache=self.art_cache,
                 rockbox_media_cache=self.rockbox_media_cache,
                 rockbox_art_cache=self.rockbox_art_cache,
-                extra=self.extra)
+                extra=list(inputs.extra))
             self.result = rep
             self.done.emit(self.device, rep)
         except Exception as exc:  # noqa: BLE001 - surface, never crash the app
@@ -226,6 +229,8 @@ class RefreshWorker(QThread):
         self.preflight = None
         self.selection_path = None
         self.retained_tracks = {}
+        self.metadata_baseline = None
+        self.metadata_changed_ids = ()
         self.result = None
         self.error = ""
 
@@ -235,6 +240,15 @@ class RefreshWorker(QThread):
                 self.preflight(self.database_path or rekordbox_db.REKORDBOX_DB)
             lib = (rekordbox_db.load_live(self.database_path,retain_tracks=self.retained_tracks)
                    if self.retained_tracks else rekordbox_db.load_live(self.database_path))
+            if self.metadata_baseline is not None:
+                scope, previous = self.metadata_baseline
+                same_source = scope == (str(lib.source), lib.source_kind, lib.source_library_id)
+                self.metadata_changed_ids = tuple(
+                    track.native_id for track in lib.tracks_by_id.values()
+                    if not same_source or previous.get(track.native_id) != (
+                        track.source_uuid, track.source_native_path or str(track.path), track.name, track.artist))
+            else:
+                self.metadata_changed_ids = tuple(track.native_id for track in lib.tracks_by_id.values())
         except Exception as exc:  # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
             self.failed.emit(self.error)

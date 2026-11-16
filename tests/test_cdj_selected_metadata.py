@@ -48,13 +48,16 @@ class SelectedMetadata(unittest.TestCase):
                      SimpleNamespace(ID='second',Attribute=0,Seq=2,Name='Second',ParentID='category',UUID='',rb_local_deleted=0)]
         wanted=set(identities)-{'0','1'}
         expected_files={file.ID for file in self.db.get_content_file() if str(file.ContentID) in wanted}
-        expected_tags,all_members=_read_tags(self.db,definitions=definitions)
+        all_times={}
+        expected_tags,all_members=_read_tags(self.db,definitions=definitions,assignment_times=all_times)
         self.session.expunge_all();self.sql.clear()
         actual={file.ID for file in _selected_content_files(self.db,wanted)}
-        actual_tags,members=_read_tags(self.db,track_ids=wanted,definitions=definitions)
+        selected_times={}
+        actual_tags,members=_read_tags(self.db,track_ids=wanted,definitions=definitions,assignment_times=selected_times)
         self.assertEqual(actual,expected_files)
         self.assertEqual(actual_tags,expected_tags)
         self.assertEqual(members,{tid:tags for tid,tags in all_members.items() if tid in wanted})
+        self.assertEqual(selected_times,{tid:times for tid,times in all_times.items() if tid in wanted})
         self.assertNotIn('1',members);self.assertEqual(members['0001'],['leaf','leaf'])
         selects=[parameters for sql,parameters in self.sql if sql.lstrip().startswith('SELECT')]
         self.assertEqual(len(selects),6)

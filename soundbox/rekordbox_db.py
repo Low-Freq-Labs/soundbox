@@ -15,11 +15,14 @@ from __future__ import annotations
 import shutil
 import tempfile
 import logging
+import math
+import re
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
 
-from .library import Library, LibraryTag, Playlist, Track
+from .library import Library, LibraryTag, Playlist, TagCategory, Track
 from .rekordbox_analysis import resolve_dat_path
 
 REKORDBOX_DB = Path.home() / "Library" / "Pioneer" / "rekordbox" / "master.db"
@@ -50,7 +53,8 @@ def _camelot(scale: str) -> str:
     return _CAMELOT.get((scale or "").strip(), scale or "")
 
 
-def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = None) -> Library:
+def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = None,
+              resolve_media_paths: bool = True) -> Library:
     """Snapshot the live rekordbox DB and parse it (read-only). Raises on failure."""
     source = Path(path or REKORDBOX_DB).expanduser()
     if not source.is_file():
@@ -67,7 +71,10 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
 
         db = Rekordbox6Database(path=str(copy))
         try:
-            tags, memberships = _read_tags(db)
+            tag_times: dict[str, dict[str, float]] = {}
+            tag_categories: list[TagCategory] = []
+            tags, memberships = _read_tags(db, assignment_times=tag_times,
+                                           category_catalog=tag_categories)
             identities = list(db.get_property())
             library_id = str(identities[0].DBID) if len(identities) == 1 else ""
             active_ids, audio_ids = _track_id_sets(db)
@@ -79,7 +86,8 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
             # Collection is shared independently of playlist membership. Native
             # FileType 19 rows are placeholders, even when they contain paths.
             tracks_by_id = _read_tracks(
-                db, source, memberships, track_ids=audio_ids, full_audio=True)
+                db, source, memberships, track_ids=audio_ids, full_audio=True,
+                tag_times=tag_times, resolve_media_paths=resolve_media_paths)
             try:
                 _populate_cue_edit_state(db, tracks_by_id)
             except Exception as exc:  # optional write identity must not disable browsing
@@ -90,7 +98,7 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
             # Resolve local path aliases in this reader worker, preserving raw
             # SQL paths separately. Admission can then reuse the same file ID
             # without filesystem walks on the GUI thread.
-            for track in tracks_by_id.values():
+            for track in tracks_by_id.values() if resolve_media_paths else ():
                 try:canonical=track.path.resolve(strict=True)
                 except (OSError,RuntimeError):continue
                 if canonical!=track.path:
@@ -109,11 +117,28 @@ def load_live(path: str | Path | None = None, *, retain_tracks: dict | None = No
             source=source,
             source_kind="rekordbox-db",
             source_tags=tags,
+            source_tag_categories=tag_categories,
             source_library_id=library_id,
             source_playlist_catalog=catalog,
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def load_metadata_readback(previous: Library) -> Library:
+    """Fresh DB metadata without resolving every song's media again.
+
+    Preserve prepared canonical path scalars only for an unambiguous unchanged
+    source/native ID/UUID/raw path. All fresh musical data stays authoritative;
+    consumers still validate files and selected aliases at their use boundary.
+    """
+    from .native_identity import canonical_path_updates
+
+    library = load_live(Path(previous.source), resolve_media_paths=False)
+    for local, uri, raw_path in canonical_path_updates(library, previous):
+        track = library.tracks_by_id[local]
+        track.location_uri, track.source_native_path = uri, raw_path
+    return library
 
 
 def _snapshot_identity(path: Path) -> tuple[int, int, int, int, int] | None:
@@ -242,23 +267,60 @@ def _deleted(row) -> bool:
     return bool(getattr(row, "rb_local_deleted", 0))
 
 
-def _read_tags(db, *, track_ids: set[str] | None = None, definitions=None) -> tuple[list[LibraryTag], dict[str, list[str]]]:
+def _tag_assignment_time(value) -> float | None:
+    try:
+        if isinstance(value, str):
+            # Read the offset-preserving SQL text. pyrekordbox's normal DateTime
+            # converter drops timezone/fold, reversing some fall-back dates.
+            if len(value) > 256:
+                return None
+            match = re.fullmatch(r'(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)\s*'
+                                 r'(Z|[+-]\d{2}:\d{2})(?:\s+\([^)]{1,128}\))?', value.strip())
+            if match is None:
+                return None
+            value = datetime.fromisoformat(match[1] + ('+00:00' if match[2] == 'Z' else match[2]))
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+            return None
+        timestamp = value.timestamp()
+        if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                or not 0 <= timestamp < 253402300800):
+            return None
+    except (AttributeError, TypeError, ValueError, OSError, OverflowError):
+        return None
+    return float(timestamp)
+
+
+def _read_tags(db, *, track_ids: set[str] | None = None, definitions=None,
+               assignment_times: dict[str, dict[str, float]] | None = None,
+               category_catalog: list[TagCategory] | None = None) -> tuple[list[LibraryTag], dict[str, list[str]]]:
     """Flatten existing active My Tags; retain stable IDs and source order."""
+    if assignment_times is not None:
+        assignment_times.clear()
     definitions = [row for row in (db.get_my_tag() if definitions is None else definitions) if not _deleted(row)]
     categories = {str(row.ID): row for row in definitions if row.Attribute == 1}
+    if category_catalog is not None:
+        category_catalog[:] = [TagCategory(str(row.ID), row.Name or '', str(getattr(row, 'UUID', '') or ''))
+                              for row in sorted(categories.values(), key=lambda row: (_integer(getattr(row, 'Seq', 0)), str(row.ID)))]
     leaves = [row for row in definitions if row.Attribute == 0]
     leaves.sort(key=lambda row: (
         _integer(getattr(categories.get(str(row.ParentID)), "Seq", 0)),
         _integer(row.Seq), str(row.ID)))
     tags = [LibraryTag(str(row.ID), row.Name or "",
                        getattr(categories.get(str(row.ParentID)), "Name", "") or "",
-                       str(getattr(row, "UUID", "") or ""))
+                       str(getattr(row, "UUID", "") or ""),
+                       str(row.ParentID or ''),
+                       str(getattr(categories.get(str(row.ParentID)), 'UUID', '') or ''))
             for row in leaves]
     active = {tag.tag_id for tag in tags}
     if track_ids is not None and not track_ids:return tags, {}
     memberships: dict[str, set[str]] = {}
     by_tag: dict[str, list[str]] = {}
     links = db.get_my_tag_songs()
+    if assignment_times is not None and hasattr(links, 'with_entities'):
+        from sqlalchemy import String, cast
+        from pyrekordbox.db6.tables import DjmdSongMyTag
+        links = links.with_entities(DjmdSongMyTag.ContentID, DjmdSongMyTag.MyTagID,
+            DjmdSongMyTag.rb_local_deleted, cast(DjmdSongMyTag.created_at, String).label('created_at_raw'))
     def selected_links():
         if track_ids is not None and hasattr(links,'filter'):
             from pyrekordbox.db6.tables import DjmdSongMyTag
@@ -270,6 +332,11 @@ def _read_tags(db, *, track_ids: set[str] | None = None, definitions=None) -> tu
         if track_ids is not None and str(link.ContentID) not in track_ids:continue
         if not _deleted(link) and str(link.MyTagID) in active:
             tid, tag_id = str(link.ContentID), str(link.MyTagID)
+            if assignment_times is not None:
+                timestamp = _tag_assignment_time(getattr(link, 'created_at_raw', getattr(link, 'created_at', None)))
+                if timestamp is not None:
+                    times = assignment_times.setdefault(tid, {})
+                    times[tag_id] = max(times.get(tag_id, timestamp), timestamp)
             assigned = memberships.setdefault(tid, set())
             if tag_id not in assigned:
                 assigned.add(tag_id)
@@ -357,10 +424,13 @@ def _content_rows(db, track_ids, *, full_audio=False):
 def _read_tracks(db, source: Path | None = None,
                  tag_memberships: dict[str, list[str]] | None = None, *,
                  track_ids: set[str] | None = None,
-                 full_audio: bool = False) -> dict[str, Track]:
+                 full_audio: bool = False,
+                 tag_times: dict[str, dict[str, float]] | None = None,
+                 resolve_media_paths: bool = True) -> dict[str, Track]:
     cues_by_track = _read_cues(db)
     out: dict[str, Track] = {}
-    share = ((source or REKORDBOX_DB).expanduser().parent / 'share').resolve()
+    share = (source or REKORDBOX_DB).expanduser().parent / 'share'
+    if resolve_media_paths:share=share.resolve()
     content_rows = (_content_rows(db, track_ids, full_audio=True)
                     if full_audio else _content_rows(db, track_ids))
     for c in content_rows:
@@ -380,6 +450,8 @@ def _read_tracks(db, source: Path | None = None,
             added_ts = c.created_at.timestamp() if c.created_at else 0.0
         except (AttributeError, ValueError, OSError):
             added_ts = 0.0
+        assigned_tags = list(tag_memberships.get(str(c.ID), ())) if tag_memberships is not None else None
+        assigned_ids = set(assigned_tags or ())
         out[str(c.ID)] = Track(
             track_id=str(c.ID),
             name=c.Title or "",
@@ -396,6 +468,8 @@ def _read_tracks(db, source: Path | None = None,
             rating=str(c.Rating or ""),
             year=str(c.ReleaseYear or ""),
             info=dict(album=c.Album.Name if getattr(c,'Album',None) else '',
+                nativeFileType=(getattr(c,'FileType',None) if type(getattr(c,'FileType',None)) is int else None),
+                nativeAnalysisFlags=(getattr(c,'Analysed',None) if type(getattr(c,'Analysed',None)) is int else None),
                 label=c.Label.Name if getattr(c,'Label',None) else '',
                 comments=str(getattr(c,'Commnt','') or ''),
                 releaseDate=str(getattr(c,'ReleaseDate','') or ''),
@@ -408,15 +482,24 @@ def _read_tracks(db, source: Path | None = None,
                 publishInfo='On' if str(getattr(c,'DeliveryControl','')).lower()=='on' else 'Off',
                 message=str(getattr(c,'DeliveryComment','') or ''),
                 lyricist=str(getattr(c,'Lyricist','') or '')),
-            source_analysis_path=str(resolve_dat_path(
-                source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "",
-                resolved_share=share) or ""),
+            source_analysis_path=str((resolve_dat_path(
+                source or REKORDBOX_DB, getattr(c, "AnalysisDataPath", "") or "",resolved_share=share)
+                if resolve_media_paths else _lexical_analysis_path(share,getattr(c,"AnalysisDataPath","") or "")) or ""),
             source_cues=cues_by_track.get(str(c.ID), []),
             source_uuid=str(getattr(c, "UUID", "") or ""),
-            source_tag_ids=(list(tag_memberships.get(str(c.ID), []))
-                            if tag_memberships is not None else None),
+            source_tag_ids=assigned_tags,
+            source_tag_times=({tag: timestamp for tag, timestamp in tag_times.get(str(c.ID), {}).items()
+                               if tag in assigned_ids}
+                              if tag_times is not None else {}),
         )
     return out
+
+
+def _lexical_analysis_path(share: Path, value: str) -> Path | None:
+    """Retain a DB path without touching media; use-time readers guard it fresh."""
+    raw=value.strip().strip('\\/')
+    if not raw or '..' in Path(raw).parts:return None
+    return share/raw
 
 
 def _integer(value, default: int = 0) -> int:

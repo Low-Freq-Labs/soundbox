@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from soundbox import imports, libcache
+from soundbox.state_repository import read_state
 from soundbox.track_analysis import (
     LEGACY_SCHEMA,
     cache_path,
@@ -26,7 +27,7 @@ def audit(data_dir: Path, *, full: bool = False) -> dict:
     """Audit reachable sources plus orphan V4/V5 records without writing."""
     library_path = data_dir / "library.json"
     snapshot_path = data_dir / "libcache.json"
-    state = json.loads(library_path.read_text(encoding="utf-8"))
+    state = read_state(library_path)
     library = libcache.load(snapshot_path)
     if library is None:
         raise RuntimeError(f"No valid library snapshot at {snapshot_path}")

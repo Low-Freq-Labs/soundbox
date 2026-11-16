@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication,QAbstractItemView
 from soundbox.library import Library,Track
 from soundbox import graveyard
 from soundbox import analysis
+from soundbox.state_repository import read_state
 from desktop.removal import KEY,DONE,REVIEW
 
 
@@ -74,7 +75,7 @@ class GraveyardUI(unittest.TestCase):
             sha256='a'*64,duration=4,bpm=120,key='8A',beats=[[1,0,120],[2,500,120],[3,1000,120]],first_cue=None)
         saved={analysis.result_key(self.path):record};w.settings['analysis_results']=deepcopy(saved)
         def check(*_):
-            state=json.loads(w._data_file.read_bytes());self.assertEqual(state['settings'][KEY]['sha256'],self.sha)
+            state=read_state(w._data_file);self.assertEqual(state['settings'][KEY]['sha256'],self.sha)
             return self.store.apply.return_value
         self.store.apply.side_effect=check;w.removal_controller.request()
         self.wait(lambda:'chosen' in w.settings.get(DONE,{}))
@@ -167,6 +168,51 @@ class GraveyardUI(unittest.TestCase):
         with mock.patch.object(w,'_save_state',return_value=False):w.removal_controller.acknowledge(job,self.store.apply.return_value)
         self.assertEqual(w.settings[KEY],job);self.assertNotIn(DONE,w.settings)
         w.removal_controller.acknowledge(job,self.store.apply.return_value);self.assertIn('chosen',w.settings[DONE]);self.assertNotIn(KEY,w.settings)
+
+    def test_late_committed_receipt_cannot_retire_a_replacement_delete(self):
+        w=self.w
+        job=dict(folder=str(self.folder),sha256=self.sha,selection_sha256='a'*64,
+                 source=str(w.lib.source),library_id='123',ids=['chosen'],error='')
+        replacement={**job,'folder':str(self.root/'different-plan'),'ids':['untouched']}
+        w.settings[KEY]=deepcopy(replacement)
+        hidden=set(w.hidden)
+        with mock.patch.object(w,'_save_state') as save:
+            w.removal_controller.acknowledge(job,self.store.apply.return_value)
+        self.assertEqual(w.settings[KEY],replacement)
+        self.assertEqual(w.hidden,hidden);self.assertNotIn(DONE,w.settings)
+        save.assert_not_called();w._after_track_edit.assert_not_called()
+
+    def test_original_library_commit_is_retained_without_publishing_into_switched_source(self):
+        from dataclasses import replace
+        w=self.w
+        job=dict(folder=str(self.folder),sha256=self.sha,selection_sha256='a'*64,
+                 source=str(w.lib.source),library_id='123',ids=['chosen'],error='')
+        w.settings[KEY]=deepcopy(job)
+        switched=replace(w.lib,source=self.root/'other/master.db',source_library_id='other')
+        w.lib=switched;w.hidden=set()
+        w.removal_controller.acknowledge(job,self.store.apply.return_value)
+        self.assertIs(w.lib,switched);self.assertEqual(w.hidden,set())
+        self.assertNotIn(DONE,w.settings);self.assertTrue(w.settings[KEY]['error'])
+        self.assertEqual(w.settings[KEY]['folder'],job['folder'])
+        self.assertEqual(w.graveyard_controller.entries,self.entries)
+        w._after_track_edit.assert_not_called()
+
+    def test_source_worker_failure_cannot_replace_a_newer_confirmed_delete(self):
+        from types import SimpleNamespace
+        w=self.w
+        job=dict(folder=str(self.folder),sha256=self.sha,selection_sha256='a'*64,
+                 source=str(w.lib.source),library_id='123',ids=['chosen'],error='')
+        w.settings[KEY]=deepcopy(job);callbacks=[]
+        def capture(_work,finished):callbacks.append(finished);return True
+        with mock.patch.object(w.tag_controller,'run_removal_job',side_effect=capture):
+            w.removal_controller.pump()
+        self.assertEqual(len(callbacks),1)
+        replacement={**job,'folder':str(self.root/'different-plan'),'ids':['untouched']}
+        w.settings[KEY]=deepcopy(replacement)
+        with mock.patch.object(w,'_save_state') as save, mock.patch.object(w,'_resume_analysis_jobs') as resume:
+            callbacks[0](SimpleNamespace(error='late original worker failure'))
+        self.assertEqual(w.settings[KEY],replacement)
+        save.assert_not_called();resume.assert_not_called()
 
     def test_global_search_matches_graveyard_metadata_and_clears_invisible_selection(self):
         w=self.w;w.overrides['chosen']='Custom Artist';self.entries['chosen']['display']['bpm']='140.00'

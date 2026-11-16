@@ -45,13 +45,17 @@ their order; selected content-file, cue and tag membership queries share that
 snapshot. Playlist membership queries are bounded to the explicit selections,
 with unrelated smart-list evaluation skipped. Structural/ancestor and active-ID
 checks remain; an optimization never substitutes cached browser membership.
-Accepted source
-Tag/Cue/Grid and durable native-playlist edits drain before capture; a second
+Accepted source tag/cue/grid, native-playlist, registration, local/native analysis,
+tag-definition and metadata intentions drain before capture; frozen SourceTruth
+work and unresolved save attention also retain the barrier. A second
 capture detects concurrent changes. Native playlist selections rebind by stable
 ID after that drain, so a rename/membership save is reflected and a deleted
 selection or switched source stops before USB writes. Pending playlist intents
 are not their own worker ownership; the waiting request leaves the source lane
-free to finish them. Browser
+free to finish them. Direct stock/dual iPod commands use the same source-save
+barrier before capturing their immutable inputs; waiting native playlist choices
+rebind by source/ID/UUID while preserving their device export keys. Source or
+target changes refuse the command before device writes. Browser
 cache and player overlays grant no export authority. SoundBox title/artist/info
 overrides and a locked artwork snapshot apply without editing source audio or
 adding a desktop database write domain. Imported/XML tracks or missing required
@@ -183,10 +187,15 @@ details intact. Summary and Info controls are built before presentation; switchi
 tabs requires no deferred field construction. Artwork
 editing is centered inside Info; Summary centers its artwork/title group and
 anchors selectable technical details in a bordered panel. Lyricist is omitted
-from Info and Comments spans the full row. The local-edit note sits bottom left,
-opposite Close. Global My Settings and Keyboard scroll at the right window edge.
+from Info and Comments spans the full row. Global My Settings and Keyboard scroll
+at the right window edge.
 Album Artist, Track Number, Disc Number, Original Artist, Composer, Remixer and
-Mix Name are omitted. Supported desktop-song edits are SoundBox-local metadata used for export;
+Mix Name are omitted. In tested source, native Title/Artist edits use durable
+source intentions and verified native readback under a separate default-off
+metadata authority. Broader native Track Info and artwork persistence remain
+unfinished; unsupported native field saves refuse. Retained local overlays still
+feed migration/display/export, and legacy/XML sources retain local edits. These
+changes are source-validated, not a claim of installed or broader native support.
 BPM remains tied to the beatgrid controls. USB-song Track Info is read-only and
 offers no desktop source-edit authority. Its cover comes from the selected
 native USB artwork reference, captured through pinned no-follow descriptors with

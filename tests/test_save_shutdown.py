@@ -135,3 +135,21 @@ class SaveBeforeQuit(unittest.TestCase):
             self.window.settings = settings
             self.assertTrue(self.window._defer_quit_for_saves())
             self.window.shutdown.assert_not_called()
+
+    def test_idle_unadmitted_metadata_proof_allows_normal_quit_preserves_intentions_and_other_save_gates(self):
+        self.window.settings={'pending_metadata_edits':[{'request':None,'error':''}],
+            'source_truth_migration':{'order':['frozen-pair'],'cursor':0,'unresolved':[]}}
+        self.window.metadata_controller=SimpleNamespace(planning_pending=True,migration_pending=True,
+            queue_error=lambda:'',can_quit_with_unadmitted_metadata=lambda:True)
+        before=deepcopy(self.window.settings)
+        self.assertFalse(self.window._defer_quit_for_saves())
+        self.assertFalse(self.window.eventFilter(self.app,QEvent(QEvent.Quit)))
+        self.window.settings['pending_prep_edits']=[{'error':''}]
+        self.assertTrue(self.window._defer_quit_for_saves())
+        self.window.settings.pop('pending_prep_edits')
+        self.window.tag_controller.busy=True;self.window.tag_controller._busy_kind='metadata'
+        self.assertTrue(self.window._defer_quit_for_saves())
+        self.window.tag_controller.busy=False
+        event=QCloseEvent();self.window.closeEvent(event)
+        self.assertTrue(event.isAccepted());self.window.shutdown.assert_called_once_with()
+        self.assertEqual(self.window.settings,before)

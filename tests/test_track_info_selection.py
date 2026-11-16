@@ -1,5 +1,6 @@
 """Info-button targeting with distinct browser, deck and Graveyard selections."""
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -86,3 +87,31 @@ class TrackInfoSelection(unittest.TestCase):
         h._grave.setCurrentItem(h._grave.topLevelItem(0));self.click_info()
         self.assertEqual(self.dialog.call_args.args[0]['title'],'Recovered')
         self.assertIsNone(self.dialog.call_args.kwargs.get('save'));self.assertIsNone(self.dialog.call_args.kwargs.get('pick_art'))
+
+    def test_open_dialog_rejects_source_or_song_replacement_before_saving(self):
+        h=self.host;h.body.setCurrentIndex(0)
+        original=h.lib;track=original.tracks_by_id['browser']
+        changes={'title':'Intended title'}
+        for changed in (replace(original,source=Path('/different/library.xml')),
+                        replace(original,source_library_id='different'),
+                        replace(original,source_kind='rekordbox-db'),
+                        replace(original,tracks_by_id={**original.tracks_by_id,
+                            'browser':replace(track,source_uuid='replacement')}),
+                        replace(original,tracks_by_id={**original.tracks_by_id,
+                            'browser':replace(track,source_native_id='replacement')}),
+                        replace(original,tracks_by_id={**original.tracks_by_id,
+                            'browser':replace(track,location_uri='file:///replacement.wav')}),
+                        replace(original,tracks_by_id={**original.tracks_by_id,
+                            'browser':replace(track,source_native_path='/native/replacement.wav')})):
+            with self.subTest(source=changed.source,track=changed.tracks_by_id['browser']):
+                h.lib=original;self.click_info()
+                save=self.dialog.call_args.kwargs['save'];h.lib=changed
+                self.assertFalse(save(changes));h._save_track_info.assert_not_called()
+        h.lib=original
+
+    def test_open_dialog_accepts_fresh_library_with_exact_same_song_identity(self):
+        h=self.host;h.body.setCurrentIndex(0);self.click_info()
+        save=self.dialog.call_args.kwargs['save']
+        h.lib=replace(h.lib,tracks_by_id={tid:replace(track) for tid,track in h.lib.tracks_by_id.items()})
+        save({'title':'Intended title'})
+        h._save_track_info.assert_called_once_with('browser',{'title':'Intended title'})

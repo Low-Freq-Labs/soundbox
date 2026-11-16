@@ -206,7 +206,7 @@ class NativeAnalysisController(QObject):
         try:validate(self.pending)
         except (ValueError,WriteProofError) as exc:self.fail(str(exc));return
         self._detection_reconciled.intersection_update(j['id'] for j in self.pending)
-        priority=getattr(w,'_analysis_priority_pending',lambda:False)()
+        priority=getattr(w,'_analysis_source_priority',getattr(w,'_analysis_priority_pending',lambda:False))()
         ready=[];blocked=[]
         detection=self._detection_index()
         for job in self.pending:
@@ -222,7 +222,7 @@ class NativeAnalysisController(QObject):
                 if ready and priority:self.timer.start()
                 return
             self.status('Analysis needs attention — '+self.pending[0]['error']);return
-        if (self.tags.owned or w._refresh_worker is not None or w._state_maintenance
+        if (self.tags.source_job_owned or w._refresh_worker is not None or w._state_maintenance
                 or w._device_operation_owned()):
             self.timer.start();return
         reconcile_only=selected in blocked

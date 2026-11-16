@@ -6,6 +6,7 @@ Matching exact paths is intentionally separate from byte-identical-file deduplic
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,43 @@ from urllib.parse import quote
 
 from .rekordbox_write import WriteProofError
 from .native_registration_plan import _native_id, _uuid
+from .paths import decode_location
+
+
+def canonical_path_updates(incoming, previous):
+    """Pure scalar reuse for a fresh DB-only reader, never file/SQL authority.
+
+    Return only changed ``(incoming local ID, URI, raw native path)`` tuples.
+    A worker may apply them to its newly owned tracks. Neither Library nor its
+    musical arrays are copied; unrelated fresh native fields remain authoritative.
+    """
+    if (incoming is None or previous is None or incoming.source_kind!='rekordbox-db'
+            or previous.source_kind!='rekordbox-db' or not incoming.source_library_id
+            or not Path(str(incoming.source)).is_absolute()
+            or (str(incoming.source),incoming.source_library_id)!=
+               (str(previous.source),previous.source_library_id)):
+        return ()
+    old_ids: Counter[str]=Counter();old_uuids: Counter[str]=Counter()
+    new_ids: Counter[str]=Counter();new_uuids: Counter[str]=Counter()
+    for _local,track in previous.tracks_by_id.items():
+        old_ids[track.native_id]+=1;old_uuids[track.source_uuid]+=1
+    for _local,track in incoming.tracks_by_id.items():
+        new_ids[track.native_id]+=1;new_uuids[track.source_uuid]+=1
+    prior_by_id={track.native_id:track for local,track in previous.tracks_by_id.items()
+                 if local not in previous.source_binding_issues and not track.imported
+                 and track.source_uuid and old_ids[track.native_id]==1 and old_uuids[track.source_uuid]==1}
+    updates=[]
+    for local,track in incoming.tracks_by_id.items():
+        if (local in incoming.source_binding_issues or track.imported or not track.source_uuid
+                or new_ids[track.native_id]!=1 or new_uuids[track.source_uuid]!=1):continue
+        prior=prior_by_id.get(track.native_id)
+        if prior is None or prior.source_uuid!=track.source_uuid:continue
+        raw=track.source_native_path or str(decode_location(track.location_uri))
+        prior_raw=prior.source_native_path or str(decode_location(prior.location_uri))
+        if raw!=prior_raw or not Path(raw).is_absolute() or not decode_location(prior.location_uri).is_absolute():continue
+        if (track.location_uri,track.source_native_path)!=(prior.location_uri,prior.source_native_path):
+            updates.append((local,prior.location_uri,prior.source_native_path))
+    return tuple(updates)
 
 
 @dataclass(frozen=True)

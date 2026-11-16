@@ -22,6 +22,15 @@ class LibraryTag:
     name: str
     category: str = ""
     source_uuid: str = ""
+    category_id: str = ""
+    category_uuid: str = ""
+
+
+@dataclass(frozen=True)
+class TagCategory:
+    category_id: str
+    name: str
+    source_uuid: str
 
 
 @dataclass
@@ -57,6 +66,9 @@ class Track:
     source_uuid: str = ""
     # None is an unavailable authoritative tag source; [] is no assignments.
     source_tag_ids: list[str] | None = None
+    # Read-only native assignment times keyed by active tag ID. Missing times
+    # remain unknown; these display facts never authorize a source edit.
+    source_tag_times: dict[str, float] = field(default_factory=dict)
     # Edit identity is separate from display cues and waveform fingerprints.
     # Missing revision (old cache/XML/import) never authorizes a cue write.
     source_cue_revision: str = ""
@@ -214,6 +226,8 @@ class Library:
     # Read-only identity failures apply to individual bindings, not the source.
     # Recomputed from the native snapshot; never confers write authority.
     source_binding_issues: dict[str, str] = field(default_factory=dict)
+    # Read-only creation choices include categories that have no tags yet.
+    source_tag_categories: list[TagCategory] = field(default_factory=list)
 
     @property
     def track_count(self) -> int:

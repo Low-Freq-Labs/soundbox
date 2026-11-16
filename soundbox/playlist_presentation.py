@@ -6,7 +6,8 @@ catalog to a writer, or export it before the existing source FIFO has drained.
 from dataclasses import replace
 
 from .library import Playlist
-from .rekordbox_playlist_store import command_requests
+from .rekordbox_playlist_store import command_requests,tree_bindings
+from .rekordbox_write import WriteProofError
 
 
 def copy_catalog(catalog):
@@ -25,8 +26,16 @@ def project(library, jobs):
     catalog=copy_catalog(library.source_playlist_catalog)
     nodes=catalog['nodes'];members=catalog['members'];base=catalog['revision']
     native_tracks={t.native_id:t for t in library.tracks_by_id.values()}
-    commands=({**job,'request':command} for job in jobs for command in command_requests(job['request']))
-    for job in commands:
+    def commands():
+        for job in jobs:
+            if (job['error'] or job['source']!=str(library.source) or job['library_id']!=library.source_library_id
+                    or job['request']['revision']!=base):return
+            if job['request']['operation']=='delete_tree':
+                try:
+                    if tree_bindings(catalog,job['request']['playlist_id'])!=job['request']['descendants']:return
+                except (ValueError,KeyError,WriteProofError):return
+            for command in command_requests(job['request']):yield {**job,'request':command}
+    for job in commands():
         if (job['error'] or job['source']!=str(library.source) or job['library_id']!=library.source_library_id):break
         request=job['request']
         # A newer native snapshot may already include an interrupted commit.
@@ -55,6 +64,19 @@ def project(library, jobs):
             position=next(i for i,r in enumerate(reordered) if r['ID']==anchor['ID'])+int(request['after'])
             reordered.insert(position,target)
             for position,row in enumerate(reordered,1):row['Seq']=position
+        elif operation=='delete_smart':
+            parent = next((row for row in nodes if row['ID'] == request['parent']), None)
+            if (target['Attribute'] != 4 or target.get('SmartList') != request['smart_rule']
+                    or target['ParentID'] != request['parent']
+                    or request['parent'] != 'root' and
+                    (parent is None or parent['UUID'] != request['parent_uuid'] or parent['Attribute'] != 1)):
+                break
+            # A durable smart deletion removes only this computed list. Never
+            # recurse, materialize memberships or alter the verified Library.
+            nodes.remove(target)
+            for row in nodes:
+                if (row['ParentID'] == target['ParentID'] and row['rb_local_deleted'] == 0
+                        and row['Seq'] > target['Seq']):row['Seq'] -= 1
         elif operation=='delete':
             deleted={identity}
             while True:
@@ -63,6 +85,9 @@ def project(library, jobs):
                 deleted|=descendants
             nodes[:]=[r for r in nodes if r['ID'] not in deleted]
             members[:]=[r for r in members if r['PlaylistID'] not in deleted]
+            for row in nodes:
+                if (row['ParentID'] == target['ParentID'] and row['rb_local_deleted'] == 0
+                        and row['Seq'] > target['Seq']):row['Seq'] -= 1
         elif operation in ('append','remove'):
             if target['Attribute']!=0:break
             rows=sorted((r for r in members if r['PlaylistID']==identity and r['rb_local_deleted']==0),key=lambda r:r['TrackNo'])
@@ -77,8 +102,13 @@ def project(library, jobs):
                     rows.append(dict(ID=track['id'],UUID=track['membership_uuid'],PlaylistID=identity,
                                      ContentID=track['track_id'],TrackNo=len(rows)+1,rb_local_deleted=0))
                 else:
-                    match=next((r for r in rows if r['ContentID']==track['track_id']),None)
-                    if match:rows.remove(match)
+                    match=next((r for r in rows if r['ContentID']==track['track_id']
+                                and ('membership_id' not in track or
+                                     (r['ID']==track['membership_id'] and r['UUID']==track['source_membership_uuid']))),None)
+                    if match is None:
+                        valid=False;break
+                    rows.remove(match)
+            if not valid:break
             members[:]=[r for r in members if r['PlaylistID']!=identity or r['rb_local_deleted']!=0]
             for number,row in enumerate(rows,1):row['TrackNo']=number
             members.extend(rows)

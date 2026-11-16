@@ -34,12 +34,12 @@ Root build/check scripts recreate their own outputs. Cleanup must identify exact
 - `soundbox-ipod-ref/`, `soundbox-waveform-ref/`, `soundbox-cdj-ref/` are ignored private fixtures/research/recovery, not build trash.
 - The CDJ root also holds the isolated Rust toolchain and required offline integration capture. Preserve them.
 - [Tracked fixture manifests](../tests/fixtures/README.md) pin required inputs. Missing files fail preflight; never silently regenerate or replace them.
-- Live AppData holds crown-jewel `library.json`, curated artwork/defaults, authorities, original conversions and native recovery. Never wipe or restore it for code cleanup.
+- Live AppData holds crown-jewel `library.json` and its referenced `.state-records/`, curated artwork/defaults, authorities, original conversions and native recovery. Never wipe or restore it for code cleanup. A manifest alone is not a complete backup; portable exports materialize all records.
 - USB `.soundbox-cdj/transactions/` and Mac `cdj-recovery/` are transaction evidence, separate from application rollbacks.
 - App rollback is one temporary previous bundle during installation, retired after accepted verification. HANDOFF records current retention; musical recovery has its separate rules.
 - Newer user edits supersede every dated count/hash. Old receipts and completed installers are evidence, never replay permission.
 
-Full acceptance archives/unresolved recovery retain their exact required payloads. Ordinary completed native transactions use only their already accepted receipt-backed retention rules; this document grants no new retirement.
+Unresolved recovery and pending acceptance retain their required payloads. Sonny's November10 cleanup explicitly retires completed diagnostic duplicates and historical pilot DB snapshots outside current runtime recovery; compact proof receipts remain. Current writer recovery, pending captures, required offline fixtures and original music/conversions stay protected. Ordinary completed native transactions continue their accepted receipt-backed retirement rules.
 
 ## Evidence and navigation
 

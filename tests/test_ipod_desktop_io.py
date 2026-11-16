@@ -1,6 +1,7 @@
 """iPod presentation never probes a volume before its owned worker runs."""
 from dataclasses import dataclass
 from types import MethodType, SimpleNamespace
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from desktop.app import MainWindow
 from desktop import devices
 from desktop.track_info import TrackInfoMixin
+from soundbox.library import Library, Playlist, Track
 
 
 @dataclass(frozen=True)
@@ -24,17 +26,18 @@ class Snapshot:
 
 def host():
     value = SimpleNamespace(
-        lib=object(), overrides={}, titles={}, custom={},
+        lib=Library({}, [], Path('/fixture/master.db')), overrides={}, titles={}, custom={},
         _state_maintenance=False, _shutting_down=False,
         _stock_view_callbacks={}, _stock_view_pending={},
         _stock_view_worker=None, _dev_scan_worker=None,
         _stock_view_warming=set(), _stock_view_cache={},
         _device_coordinator=SimpleNamespace(eject_pending=False, busy=False),
-        _device_profiles={}, _dual_batch_total_tracks=0,
+        _device_profiles={}, _device_mount_tokens={}, _dual_batch_total_tracks=0,
+        tag_controller=SimpleNamespace(owned=False,pending=[]),
         _stored_stock_model=lambda *args: "MA446",
         _stock_write_model=lambda *args: "MA446",
         _stock_device_key=lambda *args: "identity",
-        _sync_playlists=lambda: ["custom"],
+        _sync_playlists=lambda: [Playlist('custom', [], [], 'custom')],
         _device_operation_owned=lambda: False,
         _defer_device_operation_until_scan_finishes=lambda *args: False,
         _release_eject_ready=mock.Mock(), _validate_export_target=mock.Mock(),
@@ -98,7 +101,11 @@ class IpodDesktopIOTests(unittest.TestCase):
             self.assertEqual(worker.result, "plan")
             self.assertEqual(plan.call_args.args[1], ["selected"])
             self.assertEqual(plan.call_args.kwargs["managed_playlist_keys_before"], ("cust:one",))
-            select.assert_called_once_with({"playlists": shadow.playlists}, owner.lib, ("custom",))
+            select.assert_called_once()
+            self.assertEqual(select.call_args.args[0], {"playlists": shadow.playlists})
+            self.assertIsNot(select.call_args.args[1], owner.lib)
+            self.assertEqual(select.call_args.args[1].source, str(owner.lib.source))
+            self.assertEqual(select.call_args.args[2], tuple(owner._sync_playlists()))
             worker.deleteLater()
 
     def test_dual_sync_resolves_manifest_only_inside_plan_worker(self):
@@ -115,7 +122,7 @@ class IpodDesktopIOTests(unittest.TestCase):
             worker.run()
             self.assertEqual(worker.result, "plan")
             self.assertIsNone(plan.call_args.args[1])
-            self.assertEqual(plan.call_args.kwargs["extra_playlists"], ("custom",))
+            self.assertEqual(plan.call_args.kwargs["extra_playlists"], tuple(owner._sync_playlists()))
             read.assert_not_called()  # The backend owns the single native capture.
             worker.deleteLater()
 
@@ -147,6 +154,38 @@ class IpodDesktopIOTests(unittest.TestCase):
             self.assertEqual(worker.result, "plan")
             self.assertEqual(plan.call_args.kwargs["expected_manifest"], {"generation": 1})
             worker.deleteLater()
+
+    def test_stock_and_dual_planning_use_captured_inventory_after_library_replacement(self):
+        for mode in ('stock', 'dual'):
+            with self.subTest(mode=mode):
+                owner = host()
+                selected = Playlist('Selected', [], ['one', 'one'], 'selected')
+                retained = Track('retained', 'Retained', 'Artist', 'file:///source/retained.wav')
+                track = Track('one', 'Before', 'Artist', 'file:///source/one.wav')
+                original = owner.lib = Library({'one': track, 'retained': retained},
+                    [selected], '/source/master.db', source_library_id='before')
+                owner.titles = {'one': 'Saved'}
+                target = f'/fixture/{mode}'
+                with mock.patch('desktop.app.device_facts', return_value=devices.DeviceFacts()), \
+                        mock.patch(f'soundbox.{"stock_ipod" if mode == "stock" else "dual_ipod"}.plan_{mode}_ipod_sync',
+                                   return_value='plan') as plan:
+                    if mode == 'stock':
+                        MainWindow._begin_stock_ipod_sync(owner, target, [selected])
+                        worker = owner._stock_plan_worker
+                    else:
+                        MainWindow._begin_dual_ipod_sync(owner, target, [selected])
+                        worker = owner._dual_plan_worker
+                    selected.keys.clear(); track.name = 'Later'; owner.titles['one'] = 'Later'
+                    original.tracks_by_id.clear()
+                    owner.lib = Library({}, [], '/other/master.db', source_library_id='after')
+                    worker.run()
+                    frozen, selection = plan.call_args.args[:2]
+                    self.assertEqual(set(frozen.tracks_by_id), {'one', 'retained'})
+                    self.assertEqual(frozen.tracks_by_id['one'].name, 'Before')
+                    self.assertEqual(frozen.source_library_id, 'before')
+                    self.assertEqual(selection[0].keys, ['one', 'one'])
+                    self.assertEqual(plan.call_args.kwargs['title_overrides'], {'one': 'Saved'})
+                    worker.deleteLater()
 
     def test_scan_completion_publishes_rows_and_retires_before_finalization(self):
         owner = host()

@@ -62,7 +62,9 @@ class SharedImports(unittest.TestCase):
         w._save_state=save;w._native_pending_changed=mock.Mock();w._native_reconcile_source=mock.Mock()
         w.tag_controller=TagEditController(self.root/'state',w,store_factory=lambda _:None)
         w.tag_controller._recover_pending=mock.Mock();w.tag_controller.configure(w.lib,True)
-        def loaded(lib):
+        self.metadata_refreshes=[]
+        def loaded(lib,*,metadata_changed_ids=()):
+            self.metadata_refreshes.append(tuple(metadata_changed_ids))
             w.lib=jobs.project(lib,w.settings.get(jobs.BINDINGS,[]))
             imports.inject(w.lib,w.imported,repair_missing=False);w.tag_controller.configure(w.lib,True)
         w._on_refresh_done=loaded
@@ -113,6 +115,8 @@ class SharedImports(unittest.TestCase):
         self.assertEqual(self.window.lib.playlists[0].keys,['sb-one','sb-two'])
         self.assertEqual(len(self.load(self.database).tracks_by_id),3)
         self.assertEqual([b['local_id'] for b in self.window.settings[jobs.BINDINGS]],['sb-one','sb-two'])
+        self.assertEqual(set(self.metadata_refreshes[-1]),
+                         {binding['native_id'] for binding in self.window.settings[jobs.BINDINGS]})
         self.assertTrue(any(s[jobs.KEY] and s[jobs.KEY][0]['request'] and not s[jobs.KEY][0]['bindings'] for s in self.saves))
         self.assertTrue(any(s[jobs.KEY] and s[jobs.KEY][0]['membership'] for s in self.saves))
         self.assertTrue(all(not s[jobs.KEY] or not s[jobs.KEY][0]['preferences']['automatic'] for s in self.saves))
@@ -174,6 +178,51 @@ class SharedImports(unittest.TestCase):
         try:row=next(r for r in _rows(conn,'djmdContent') if r['ID']!='1')
         finally:conn.close()
         self.assertEqual((row['BPM'],row['KeyID'],row['Analysed']),(0,'0',0))
+
+    def test_same_song_import_dependency_leaves_source_turn_for_an_unrelated_edit(self):
+        from types import MethodType
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        from soundbox import analysis_jobs
+        track=self.admit(('still-detecting',),native=False)[0]
+        self.controller.pending[0]['media_ready']=True
+        w=self.window;tags=w.tag_controller;w._analysis_worker=None
+        w.settings[analysis_jobs.KEY]=analysis_jobs.admit([],w.lib,[track],{})
+        w._analysis_priority_pending=lambda:True
+        w._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,w)
+        w._analysis_source_admitted=MethodType(AnalysisPriorityMixin._analysis_source_admitted,w)
+        tags.analysis_priority=w._analysis_priority_pending
+        tags.analysis_admission=w._analysis_source_priority;tags.source_admitted=w._analysis_source_admitted
+        before=self.database.read_bytes()
+        AnalysisPriorityMixin._analysis_offer_source_turn(w,w.lib)
+        self.assertIsNone(self.controller.pending[0]['request'])
+        self.assertFalse(w._analysis_source_priority())
+        seen=[]
+        self.assertTrue(tags.run_playlist_job(lambda:seen.append('unrelated'),lambda _worker:None))
+        self.wait(lambda:not tags.owned)
+        self.assertEqual(seen,['unrelated']);self.assertTrue(w._analysis_source_priority())
+        self.assertIsNone(self.controller.pending[0]['request'])
+        self.assertEqual(self.database.read_bytes(),before)
+
+    def test_fair_turn_cannot_admit_new_registration_ahead_of_prepared_prep(self):
+        from types import MethodType
+        from desktop.analysis_priority import AnalysisPriorityMixin
+        self.admit(('unrelated-prepared-reservation',),native=False)
+        self.controller.pending[0]['media_ready']=True
+        w=self.window;tags=w.tag_controller;w._analysis_worker=None
+        w._analysis_priority_pending=lambda:True
+        w._analysis_source_priority=MethodType(AnalysisPriorityMixin._analysis_source_priority,w)
+        tags.analysis_priority=w._analysis_priority_pending;tags.analysis_admission=w._analysis_source_priority
+        tags.source_admitted=MethodType(AnalysisPriorityMixin._analysis_source_admitted,w)
+        tags.prep_priority=True;before=self.database.read_bytes()
+        with mock.patch.object(self.registration,'prepare',side_effect=AssertionError('Prepared prep owns source priority')), \
+                mock.patch.object(self.registration,'apply',side_effect=AssertionError('No new source writes')):
+            AnalysisPriorityMixin._analysis_offer_source_turn(w,w.lib)
+            self.app.processEvents()
+        self.assertFalse(tags.busy)
+        self.assertIsNone(self.controller.pending[0]['request'])
+        self.assertEqual(self.database.read_bytes(),before)
+        self.assertTrue(w._analysis_source_priority())
+        self.assertIsNone(w._analysis_source_turn)
 
     def test_conversion_readiness_is_durable_before_analysis_and_registration_prepare(self):
         self.admit(('priority',),native=False)

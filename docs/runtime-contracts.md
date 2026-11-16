@@ -29,6 +29,48 @@ repository can answer the question.
 
 ## Sacred safety contract (NON-NEGOTIABLE)
 
+- November12 shared-library completion requirement: every currently offered
+  musical/library edit with a native counterpart must persist in the shared
+  rekordbox DB and survive leaving SoundBox. Current effective SoundBox titles,
+  artists/aliases, organization and saved prep are authoritative migration input.
+  Freeze both intended title and artist before changing either native field;
+  native identity/revision checks must not overwrite that curation. Local-only
+  drafts, unsupported-profile guards and synthetic tests do not complete an
+  offered feature. Preserve newer edits, unresolved identities and restored
+  Sonny/Zyko independently. This requirement does not remove independent native
+  acceptance or authorize real-app/source experiments; implementation and proof
+  gaps remain open in the [current audit](shared-library-audit-2026-11.md).
+
+- Existing artist merges/unmerges and title/artist resets retain paired native
+  intentions before presentation. Freeze automatic origins before native updates;
+  clearing an override must not mistake the last acknowledged native value for
+  the original automatic value. Single/bulk alias edits publish one durable next
+  generation, preserving admitted operation identities and newer explicit edits.
+  Source/library/local/native IDs, UUID and path pin dialogs, builders and work.
+  Only a unique same-row relocation with matching last acknowledged title AND
+  artist may move an origin; it cannot retarget queued writes. Alias targets and
+  origins are canonical per-record state and belong in portable snapshots.
+  Generated title protection requires the exact current binding; unresolved or
+  replaced identities cannot mutate a local title map. Completion checks both
+  saved fields. A changed counterpart retains its operation and attention;
+  explicit Retry durably records consent before composing a new existing-field
+  correction with the original acknowledgement. This grants no broader SQL scope.
+  Raw scalar recipes and per-field edit/ACK ownership preserve cleanup/reset
+  inputs without making own inferred names trusted native tags. Retire only
+  fulfilled exact-own masks; newer local gestures and unrelated fields survive.
+  Later independent native values supersede old fulfilled bases. Existing title
+  policy changes save one frozen successor generation before display. Fresh
+  refresh reconciliation joins source selection/curation in one save; dirty
+  derivation runs on the existing worker with prepared registry context. Only a
+  real global trust/canonical/policy change expands the affected row set. Each
+  process's first verified source read checks all rows even after a warm browser
+  cache, because a presentation cache is no publication checkpoint. Own ACKs
+  and unchanged later refreshes start no derivation pass. Batch map clones are
+  bounded to one per changed map; keep ordinary save/fairness/export gains.
+  These source fixes grant no broader metadata profile or authority acceptance.
+  No online functionality, sign-in or account/profile-copy route belongs to this
+  supported-feature audit; verification remains offline.
+
 - Rekordbox and SoundBox are equal USB exporters. Users may switch between them
   at any time. Another rekordbox export is normal, never an ownership conflict,
   a reason to clear a library, or a reason to demand a verification workflow.
@@ -59,6 +101,10 @@ repository can answer the question.
   SoundBox’s Q setting optionally snaps newly captured cue points against the
   current RAM grid; existing cue triggers stay exact. Never read or change
   rekordbox’s global Quantize preference.
+  Each cue/grid save needs only its own independently accepted write authority.
+  Its fresh companion snapshot is read-only under the same recovery/lease guard;
+  a missing/corrupt analysis packet cannot veto DB-only cues or overwrite their
+  unrelated private grid cache. Read access grants no companion write API.
   Cue session overlays are immediately usable while a FIFO saves in background;
   only verified target metadata reaches Library/cache, without reloading audio or
   the whole library. Normal shutdown drains accepted cue intents before stopping
@@ -66,11 +112,18 @@ repository can answer the question.
   presentation and retains them on failure/restart; source reconciliation and
   exact receipt proofs precede retry. Legacy RAM-only overlays are not durable. Transport state edges must not
   scan library artwork or trigger device discovery. Grid native references and
-  actual-source downbeat/BPM acceptance passed October 27. Intelligent-playlist creation remains disabled pending its own proof.
+  actual-source downbeat/BPM acceptance passed October 27. New My Tag definitions
+  and tag-based intelligent-playlist creation passed separate November12 native
+  acceptance under the independently bound domains below.
   Sonny normally operates the rekordbox UI for reference/acceptance actions.
   His October31 no-controls instruction supersedes the earlier generated-fixture
   input grant: do not automate inputs into either real app. Private fixtures and
-  read-only evidence remain allowed; no new source publisher is authorized. See `docs/rekordbox-prep.md`.
+  read-only evidence remain allowed; historical grants never broaden later
+  source authority. Sonny subsequently approved the current disposable isolated
+  native test session only; its real-database/music/profile access must remain
+  blocked. That scoped exception grants no real-profile input, live-source
+  experiments or authority activation. Exact scope/status is in HANDOFF.
+  See `docs/rekordbox-prep.md`.
 - Ordinary desktop playlist/folder create, rename and delete plus registered-track
   append/remove passed native acceptance October30 through
   `soundbox.rekordbox_playlist_store`. Its separate explicit authority binds the
@@ -89,7 +142,16 @@ repository can answer the question.
   identity/revision/clock, while committed receipts replay idempotently. Normal
   UI Quit/close remains open while captured import/analysis/source saves remain,
   with input and source pumps live; the next Quit proceeds once complete.
-  Explicit teardown still retains any unstarted durable intents.
+  Explicit teardown still retains any unstarted durable intents. Normal Quit may
+  also retain validated, idle metadata intentions when the exact verified source
+  has no metadata authority, every native request is still uncaptured, and no
+  worker/receipt retirement remains. Unstarted read-only derivation can be
+  reconstructed on the next verified source read from preserved curation and
+  frozen intentions. No edit is acknowledged or removed;
+  captured/active metadata and other source domains keep their drain gates.
+  Export waits report terminal saved/admission errors and stop polling; they
+  preserve every source intention and another device owner's progress. Accepted
+  progressing edits still finish and rebind before export capture.
   CDJ capture waits for these edits and rebinds native selections by stable ID;
   deleted selections or changed sources cancel before export. Exact UUID pins
   retain affected tracks in SoundBox Collection without registering new files.
@@ -110,8 +172,61 @@ repository can answer the question.
   these envelopes. Reorder has an independent default-false capability and native
   reference proof; its source-to-native reopen pilot passed November2 and the
   exact-library general capability is provisioned.
-  Intelligent/cloud mutations remain separate gates; new-track registration uses
+  Existing intelligent/cloud mutations remain separate gates; new-track registration uses
   its separate accepted domain below.
+- Native My Tag definition creation uses `rekordbox_tag_definitions` with its own
+  marked exact-library/schema/version authority and registered constructor/name
+  profile. It creates an unassigned leaf in an exact active category; it grants
+  no definition rename/delete or song-assignment API. Tag-based smart creation
+  uses the existing playlist writer only with its separate explicit capability
+  and exact profile. November12 source creation and native reopen preserved the
+  complete target rows/XML and all musical tables; both test playlists evaluated
+  to752tracks and the new tag stayed unassigned. Production authorities are
+  provisioned only for that accepted6.8.7.0303 library. Older files default off.
+  The form starts with My Tag and ANY for one or multiple conditions. Root and
+  nonempty local smart-only folders are supported; empty/mixed folders remain
+  guarded. Creation-scoped sibling shifts change only Seq/local counter/update
+  clock, preserving existing rules/names/UUIDs and relative order. SQL and XML
+  clocks are independent. Persist intents/renewed clock chains before admission,
+  verify full fresh computed membership before acknowledgement, and share the
+  closed-native-app worker/root/lock/journal. Existing intelligent/cloud editing
+  remains outside this capability; another library/schema/version needs its own
+  acceptance. Ordinary native recovery keeps its bounded latest full pair and
+  permanent compact receipts under the November10 retention rule.
+- Tag-definition deletion has an independently marked authority and measured
+  `native-local-leaf-delete-v1` profile. Current implementation covers unsynced
+  local definitions and unsynced local assignments: following local tag siblings
+  compact in source order, each advancing its local counter, then the deletion
+  advances the counter once. Assigned local links hard-delete without another
+  increment. Intelligent rules and XML stay byte-identical, including rules
+  referencing the removed tag; confirmation describes their changed matching.
+  Historical/synced definitions, links and shifted tag siblings remain guarded.
+  Smart-list deletion has its own default-false capability/profile on the shared
+  playlist authority. The measured unsynced local target hard-deletes; following
+  local siblings compact with one shared new counter and independent captured
+  SQL clocks. The parent and retained XML stay exact. Exact UUID/rule/parent,
+  source revision, recovery and receipt checks precede acknowledgement/retry.
+  Both publishers share the existing worker/root/lock/journal; native references
+  and TEMP replays do not provision the production authorities. Source pilot,
+  native reopen acceptance and guarded package delivery remain pending in HANDOFF.
+  Separate combined v2 markers additionally cover observed local synced smart
+  tombstones and synced tag targets/association history. The earlier local-only
+  markers remain strict. Synced smart deletion advances once for the target and
+  once per following sibling, retaining exact tombstones/rules/XML and separate
+  clocks. Synced tag deletion owns the first counter step, then shifts later
+  local siblings and uses one final shared step for active synced assignments;
+  pre-existing deleted history remains exact. Surviving synced tag siblings,
+  synced tags without active synced assignments and unobserved metadata remain
+  guarded. The compound two-tag oracle labels its overwritten intermediate clock
+  as unobserved; its final whole-pool match is not isolated first-window proof.
+- Sonny's November12 accidental ZYKO deletion has a one-off, explicitly scoped
+  recovery record. Its exact pre-error ID/UUID/assignment rows were restored
+  with compact tag order through the shared lock/journal and verified encrypted
+  baseline after TEMP proof/review. SONNY's intended deletion and all unrelated
+  source/curation data were preserved; the current counter was not rewound.
+  The marked receipt only recognizes its exact inactive SQLite journal. This
+  adds no general source restore API; retain unknown/pending repair evidence and
+  use the exact private resumable tool listed in HANDOFF.
 - Ordinary explicit file imports and imported-track playlist drops use the
   separately accepted `soundbox.rekordbox_registration_store` authority, bound to
   the exact native library/schema/rekordbox6.8.7.0303. Sonny approved its two-WAV
@@ -182,8 +297,9 @@ repository can answer the question.
   captured intents. Live backups retain verified encrypted DB/WAL/integrity/hash
   capture; full semantic inventories remain offline proof work. Closed-app checks
   stay fresh at every guard boundary. No audio reload, waveform recook or transport wait. Derived V5
-  grid updates stay in SoundBox AppData. Source intelligent playlists remain
-  a separate gate. See `docs/rekordbox-prep.md` for exact protocol and limits.
+  grid updates stay in SoundBox AppData. Intelligent creation has its separate
+  accepted domain above; existing intelligent edits remain outside grid authority.
+  See `docs/rekordbox-prep.md` for exact protocol and limits.
   Historical No Trust primary-PQTZ restores were explicitly granted only for its
   verified native-test baseline with closed rekordbox and native-saved 90 BPM;
   preserve those receipts and native counters/history. That grant does not
@@ -396,7 +512,11 @@ repository can answer the question.
   catalogs without rollback over the new export. Local receipts remain required.
   No stock/Rockbox markers or hidden `.PIONEER` layouts are admitted. Unknown
   source/schema/cue states and redirects fail closed. Browser cache and player
-  overlays confer no authority. Source tag/cue/grid intents drain before capture.
+  overlays confer no authority. Source tag/cue/grid, native-playlist, registration,
+  local/native analysis, tag-definition and metadata intentions drain before
+  capture. Frozen source-truth work and unresolved save attention retain the
+  barrier. Direct stock/dual iPod commands share that save barrier and rebind
+  waiting native playlist selections by source/ID/UUID before device writes.
   USB-song playback validates actual device audio/analysis in the read lane and
   uses a separate track ID without desktop source-edit authority.
   Overview/Playlists/Category/Sort/Column/Color/My Settings share the USB header.
@@ -471,7 +591,18 @@ repository can answer the question.
   bytes; retain at most one source and working derivative. Disposable receipts
   and source proofs never confer device ownership. Preserve generation-58
   recovery until separately reviewed hardware acceptance succeeds.
-- `library.json` is crown-jewel user state. Never wipe AppData or trigger a
+- `library.json` and its referenced `.state-records/` are crown-jewel user state.
+  The versioned manifest is not a standalone portable snapshot. Use `read_state`
+  for logical reads and `portable_state` under the shared area lock for complete
+  backups; preserve exact physical manifest/records too before migration or
+  installation. Legacy full JSON remains readable; successful heavy-record saves
+  migrate through the existing journal. Ordered changed-record publication,
+  exact incoming comparisons, fresh record epochs, the64MiB logical ceiling and
+  newest-draft/restore fencing remain required. Rotating/full backup exports are
+  complete standalone JSON; older apps require that portable form, never a bare
+  manifest. Corrupt-live-state restore retains damaged evidence and only retires
+  verified old record references after successful publication.
+  Never wipe AppData or trigger a
   full cache rebuild casually. Back it up before installation or risky state
   work and verify curated data afterward.
 - Full per-write export contract lives at the top of `soundbox/sync.py`.
@@ -507,7 +638,10 @@ existing directory cannot strand detection behind probe backoff. These are hints
 never external-device/write authority. A busy lane retains the request and retries
 on worker retirement. The three-second local `/Volumes` timestamp fallback remains;
 unchanged mount/timestamp state starts no idle discovery worker. Failed probes
-retain 3–30-second backoff, bypassed by mount changes. Connected stock/Rockbox drift stays on its
+retain 3–30-second backoff, bypassed by mount changes. Only an OS-identified iPod
+with a provisional generic-USB profile rechecks classification while its firmware
+folders are appearing. Ordinary generic USBs gain no idle profile probes/retries;
+this never grants filesystem/model/database write capabilities. Connected stock/Rockbox drift stays on its
 three-second poll; generic USBs have no idle source/catalog comparison. Ordinary unmounted folders retain the 30-second attachment grace.
 Verified external mounts appear disabled as `NAME · Checking…` during physical
 identification. Generic USB rows publish name/free space without sync status or
@@ -582,6 +716,15 @@ backfill. New playlists/folders use the existing accepted native writer. Legacy 
 sources retain local folder handling. Folder clicks expand/collapse without changing
 the active track view. Up/Down after playlist selection browse its songs; native
 and export membership order stays exact while browser rows default newest first.
+New verified My Tag assignments promote matching smart-playlist browser members
+by locally persisted recency, bound to exact source/library, track/native UUID,
+playlist UUID and rule hash. This is display-only, never native rule/membership or
+export ordering authority. User header sorts override the default; removals,
+no-ops and failed writes promote nothing. Preserve newest selection on readback.
+Ordinary membership ACK may retire a local removal overlay only when its exact
+value and playlist/track identities were durably captured with that job. Preserve
+newer values and legacy jobs without proof; failed saves restore prior owners.
+This proof never broadens native SQL or represents smart-playlist exclusions.
 
 ## Documentation map
 
@@ -727,6 +870,20 @@ manual-grid PCM endpoint proof uses the shared source worker. See `docs/PLAYER.m
 
 ## Development
 
+Background local waveform/BPM/key phases keep per-song dependency order. After a
+joined phase and durable acknowledgement, one eligible source task gets a turn
+before local work resumes. Source domains rotate across their existing heads,
+without reordering each FIFO or bypassing same-song/native receipt prerequisites.
+Only the selected synchronous opportunity may pass deferred cue/grid logical
+holds; physical ownership, prepared-prep/recovery reservations, closed-native-app
+guards and exact authorities remain. This bounds eligible admissions by phase,
+not wall time. Interactive Tags report busy during active DSP; once admitted,
+their single-flight assignment intentions persist before presentation and remain
+until exact native acknowledgement. Metadata uses the same fair source lane
+with its own durable intentions and independent authority. Refresh/export/shutdown
+keep full ownership. These audit changes are source-validated; HANDOFF records
+the installed app separately.
+
 Prepared browser rows live only in disposable `browsercache.json`, bound to
 complete display inputs and a versioned checksum. They never supply native edit
 or device-export authority. Bump `soundbox.browser_cache.SCHEMA` whenever display
@@ -758,7 +915,9 @@ reconstruction; every mode/zoom integrates every lattice corner. November2 now
 supersedes the historical zoom-dependent RGB color/occupancy corrections: evaluate
 the supplied92pt/s palette on the song clock at every zoom. Geometry, footprints
 and motion remain independent; do not reinstate per-zoom palette gains. Current release/install state and
-fresh frozen phase comparisons are in HANDOFF; visual acceptance remains open.
+fresh frozen phase comparisons are in HANDOFF. Sonny accepted the current visuals
+on November9,2026 and will reopen visual work if needed; do not resume tuning
+without that request. Device/firmware and source-format acceptance stays separate.
 Mini RGB brightness matching retains the main RGB faint-only shoulder and
 encoded-space blend; BLUE retains its existing resolve, and the October30 3BAND
 overview retains independent layers with the seven native palette colors. Preserve the new references,
@@ -812,7 +971,9 @@ temporary app after accepted verification. This does not retire musical original
 curation, transaction recovery or required offline fixtures.
 
 1. Run `./check.sh` bare, then `./build_app.sh`.
-2. Back up and hash SoundBox `library.json`; record cache counts when relevant.
+2. Back up and hash complete SoundBox state: preserve exact `library.json` plus
+   referenced `.state-records/` and materialize portable JSON under the area lock.
+   A manifest alone is insufficient. Record cache counts when relevant.
 3. Quit SoundBox gracefully and verify its process exited.
 4. Move the old `/Applications/Soundbox.app` to a temporary rollback directory;
    install with `ditto`. **Never use `rm -rf` for app installation.**
@@ -834,7 +995,22 @@ material are not application rollbacks and remain protected.
 Moving/replacing the `.app` bundle must never touch
 `~/Library/Application Support/LowFreqLabs/Soundbox/`.
 
-## Diagnostic retention — October31 cleanup request
+## Diagnostic retention — November10 cleanup supersedes older full-archive retention
+
+Sonny explicitly requested removing accumulated agent-created backups again on
+November10. Completed diagnostic DB copies and old archival pilot snapshots may
+be retired after their proof receipts are preserved; they are not permanent full
+library archives. This supersedes older instructions to retain every completed
+native acceptance payload. Keep current runtime recovery, unresolved/pending
+acceptance, required offline fixtures, original music/conversions and the one
+pending app rollback. Never alter current source data or restore old state during
+cleanup. Ordinary writers retain their bounded, receipt-backed recovery rules.
+Read-only status/reference captures keep compact row/XML/hash receipts by default;
+full DB retention must have a concrete current proof/recovery need. Retire that
+extra payload when the need ends. See HANDOFF for the completed cleanup and exact
+private retirement manifests.
+
+The October31 request below remains historical context:
 
 Sonny explicitly requested cleanup of excessive backup/diagnostic storage and
 extra apps/packaging. Completed redundant playlist diagnostic DB checkpoints and

@@ -560,6 +560,37 @@ class ArtistAliases(unittest.TestCase):
         self.assertIn("UNOWN", self.reg.names())
         self.assertNotIn("unownn", self.reg.names())
 
+    def test_long_chains_reach_the_same_terminal_before_and_after_native_readback(self):
+        aliases={f'Artist {i:04d}':f'Artist {i+1:04d}' for i in range(1500)}
+        for items in (list(aliases.items()),list(reversed(aliases.items()))):
+            reg=build_registry(['Artist 0000'],trusted_names=['Artist 1500'],aliases=dict(items))
+            self.assertEqual(reg.canonical('Artist 0000'),'Artist 1500')
+            self.assertTrue(reg.is_trusted('Artist 0000'))
+            reread=build_registry([reg.canonical('Artist 0000')],aliases=dict(items))
+            self.assertEqual(reread.canonical(reg.canonical('Artist 0000')),'Artist 1500')
+
+    def test_legacy_cycles_have_a_stable_spelling_and_upstream_fixed_point(self):
+        aliases={'Alpha':'Beta','Beta':'Gamma','Gamma':'Alpha','Outside':'Beta'}
+        for items in (list(aliases.items()),list(reversed(aliases.items()))):
+            reg=build_registry(['Alpha','ALPHA','ALPHA','Gamma'],trusted_names=['Beta'],aliases=dict(items))
+            for name in aliases:
+                self.assertEqual(reg.canonical(name),'ALPHA');self.assertTrue(reg.is_trusted(name))
+            reread=build_registry(['ALPHA'],aliases=dict(items))
+            self.assertEqual(reread.canonical('ALPHA'),'ALPHA')
+
+    def test_folded_conflicts_and_unseen_terminal_spelling_do_not_depend_on_json_order(self):
+        aliases={'Alias':'Zeta','ALIAS':'Beta','Other':'BETA'}
+        for items in (list(aliases.items()),list(reversed(aliases.items()))):
+            reg=build_registry(['Alias'],aliases=dict(items))
+            self.assertEqual(reg.canonical('Alias'),reg.canonical('Other'))
+            self.assertEqual(reg.canonical('Alias'),'BETA')
+            self.assertEqual(reg.canonical(reg.canonical('Alias')),'BETA')
+
+    def test_trust_is_inherited_through_an_intermediate_without_trusting_its_terminal(self):
+        reg=build_registry(['Alpha','Beta','Gamma'],trusted_names=['Beta'],aliases={'Alpha':'Beta','Beta':'Gamma'})
+        self.assertTrue(reg.is_trusted('Alpha'));self.assertTrue(reg.is_trusted('Beta'))
+        self.assertFalse(reg.is_trusted('Gamma'));self.assertEqual(reg.canonical('Alpha'),'Gamma')
+
 
 class SuggestMerges(unittest.TestCase):
     @staticmethod

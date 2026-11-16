@@ -7,6 +7,8 @@ display_path), cust (custom playlist name), trk (comma-joined track ids).
 from __future__ import annotations
 
 import math
+import json
+from uuid import UUID
 
 from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap
@@ -27,6 +29,9 @@ ARTIST_TRACK_ROLE = Qt.UserRole + 9  # a track row inside the Artists browser (i
 ARTIST_IDS_ROLE = Qt.UserRole + 10   # an artist row's full track-id list (for drag)
 RB_NODE_ROLE = Qt.UserRole + 21  # stable native playlist/folder ID
 RB_NODE_KIND_ROLE = Qt.UserRole + 22
+NATIVE_BINDING_ROLE = Qt.UserRole + 83
+NATIVE_PLAYLIST_MIME = 'application/x-soundbox-native-playlists-v1'
+_NATIVE_LOCAL_MIME = 'application/x-soundbox-native-drag-local-selection-v1'
 CUSTOM_FOLDER_ROLE = Qt.UserRole + 11  # local folder UUID, independent of playlist names
 
 
@@ -60,6 +65,26 @@ def _descendant_rb_paths(item: QTreeWidgetItem) -> list[str]:
     for i in range(item.childCount()):
         out += _descendant_rb_paths(item.child(i))
     return out
+
+
+def native_playlist_binding(value):
+    if (not isinstance(value,dict) or set(value)!={'source','library_id','id','uuid','alias'}
+            or any(type(value[key]) is not str or not value[key] or len(value[key])>8192 or '\0' in value[key]
+                   for key in ('source','library_id','id','uuid'))
+            or value['alias'] is not None and (type(value['alias']) is not str or not value['alias'] or len(value['alias'])>8192 or '\0' in value['alias'])):
+        raise ValueError('Invalid native playlist drag identity')
+    identity=value['id']
+    if (not identity.isascii() or not identity.isdecimal() or not 0<int(identity)<2**32
+            or str(int(identity))!=identity or str(UUID(value['uuid']))!=value['uuid']):
+        raise ValueError('Invalid native playlist drag identity')
+    return dict(value)
+
+
+def _descendant_native_bindings(item):
+    if item.data(0,PATH_ROLE):
+        value=item.data(0,NATIVE_BINDING_ROLE)
+        return [native_playlist_binding(value) if value is not None else None]
+    return [binding for index in range(item.childCount()) for binding in _descendant_native_bindings(item.child(index))]
 
 
 # ---- drag/drop mime: each line is "<kind>\t<value>"; kinds: rb, cust, trk ----
@@ -718,14 +743,36 @@ class UnifiedPlaylistTree(SoundBoxTree):
     def mimeData(self,items):
         local=[item for item in items if not item.data(0,NATIVE_TREE_ROLE)]
         md=SoundBoxTree.mimeData(self,local)
-        lines=md.text().splitlines()
+        local_text=md.text()
+        lines=local_text.splitlines()
         for item in items:
             if item in local:continue
             if item.data(0,CUSTOM_ROLE):lines.append('cust\t'+item.data(0,CUSTOM_ROLE))
             else:lines.extend('rb\t'+path for path in _descendant_rb_paths(item))
+        bindings=[]
+        try:
+            for item in items:
+                if item.data(0,NATIVE_TREE_ROLE):bindings.extend(_descendant_native_bindings(item))
+        except (ValueError,TypeError):
+            md.setData(NATIVE_PLAYLIST_MIME,b'')  # Reject a partially malformed native selection at the target.
+        else:
+            if any(binding is not None for binding in bindings):
+                if any(binding is None for binding in bindings):
+                    md.setData(NATIVE_PLAYLIST_MIME,b'')
+                    bindings=[]
+            else:bindings=[]
+            if bindings:
+                unique={json.dumps(value,sort_keys=True):value for value in bindings}
+                md.setData(NATIVE_PLAYLIST_MIME,json.dumps(list(unique.values()),ensure_ascii=False).encode())
         if len(items)==1 and items[0].data(0,NATIVE_TREE_ROLE) and not items[0].data(0,PINNED_TREE_ROLE):
             identity=items[0].data(0,RB_NODE_ROLE)
-            if identity:md.setData(self._native_mime,str(identity).encode('ascii'))
+            binding=items[0].data(0,NATIVE_BINDING_ROLE)
+            if identity:
+                md.setData(self._native_mime,json.dumps(binding).encode() if binding is not None else str(identity).encode('ascii'))
+        if md.hasFormat(NATIVE_PLAYLIST_MIME):
+            # Legacy native alias text can contain newlines. Only the separate
+            # local selection may supplement a typed native export selection.
+            md.setData(_NATIVE_LOCAL_MIME,json.dumps(local_text).encode())
         md.setText('\n'.join(dict.fromkeys(lines)));return md
 
     def startDrag(self,actions):
@@ -765,8 +812,21 @@ class UnifiedPlaylistTree(SoundBoxTree):
 
     def _native_drag(self,event):
         if event.source() is not self or not event.mimeData().hasFormat(self._native_mime):return None
-        try:identity=bytes(event.mimeData().data(self._native_mime)).decode('ascii')
-        except UnicodeError:return None
+        try:
+            raw=bytes(event.mimeData().data(self._native_mime))
+            if len(raw)>64*1024:raise ValueError('Unbounded native drag')
+            text=raw.decode('utf-8')
+            captured=native_playlist_binding(json.loads(text)) if text.startswith('{') else None
+            identity=captured['id'] if captured else text
+            current=next((item for item in self.findItems('',Qt.MatchContains|Qt.MatchRecursive)
+                          if item.data(0,RB_NODE_ROLE)==identity),None)
+            binding=current.data(0,NATIVE_BINDING_ROLE) if current is not None else None
+            if captured:
+                binding=native_playlist_binding(binding)
+                if any(captured[key]!=binding[key] for key in ('source','library_id','id','uuid')):
+                    return identity,None
+            elif binding is not None:return identity,None
+        except (UnicodeError,ValueError,TypeError):return '',None
         return identity,self._native_drop_destination(event.position().toPoint(),identity)
 
     def dragMoveEvent(self,event):
@@ -854,9 +914,28 @@ class DeviceTree(NoTypeAhead, QTreeWidget):
         dev = item.data(0, DEVPATH_ROLE) if item else None
         self._set_hover(None)
         items = []
-        for line in e.mimeData().text().split("\n"):
+        typed=e.mimeData().hasFormat(NATIVE_PLAYLIST_MIME)
+        if typed:
+            try:
+                raw=bytes(e.mimeData().data(NATIVE_PLAYLIST_MIME))
+                if len(raw)>4*1024**2:raise ValueError('Unbounded playlist drag')
+                values=json.loads(raw)
+                if not isinstance(values,list) or not 1<=len(values)<=4096:raise ValueError('Invalid playlist drag')
+                for value in values:
+                    binding=native_playlist_binding(value)
+                    items.append(('rbid',json.dumps(binding,ensure_ascii=False)))
+            except (ValueError,TypeError,UnicodeError):e.ignore();return
+        text=e.mimeData().text()
+        if typed:
+            try:
+                raw=bytes(e.mimeData().data(_NATIVE_LOCAL_MIME))
+                if len(raw)>4*1024**2:raise ValueError('Unbounded local selection')
+                text=json.loads(raw) if raw else ''
+                if not isinstance(text,str):raise ValueError('Invalid local selection')
+            except (ValueError,TypeError,UnicodeError):e.ignore();return
+        for line in text.split("\n"):
             kind, _, val = line.partition("\t")
-            if kind in ("rb", "cust", "sbview") and val:
+            if kind in (("cust","sbview") if typed else ("rb", "cust", "sbview")) and val:
                 items.append((kind, val))
         if dev and items:
             self.dropped.emit(dev, items)

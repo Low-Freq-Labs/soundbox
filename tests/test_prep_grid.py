@@ -48,6 +48,7 @@ class GridInterface(unittest.TestCase):
         outer = self
 
         class GridStore:
+            def cue_snapshot(self):return deepcopy(outer.state)
             def snapshot(self):
                 if outer.probe_gate is not None:
                     entered, release = outer.probe_gate
@@ -74,6 +75,7 @@ class GridInterface(unittest.TestCase):
                         outer.file = candidate.changes[2].after
 
         class CueStore:
+            def grid_snapshot(self):return GridSnapshot(deepcopy(outer.state.track),outer.dat,outer.ext,deepcopy(outer.file))
             def snapshot(self):
                 return deepcopy(outer.state)
             def apply(self, request):
@@ -272,6 +274,8 @@ class GridInterface(unittest.TestCase):
         from types import SimpleNamespace
         from desktop.app import MainWindow
         from desktop.model import TrackModel, COLUMNS
+        from desktop.rekordbox_playlists import NativePlaylistsMixin
+        from PySide6.QtWidgets import QTableView
         model = TrackModel([dict(id='7', bpm='90.00'), dict(id='other', bpm='140.00')])
         host = SimpleNamespace(lib=self.shared.lib, model=model, tag_controller=self.shared,
             _row_cache={'7': dict(bpm='90.00')}, _selected_ids=lambda: [],
@@ -280,6 +284,10 @@ class GridInterface(unittest.TestCase):
             _cache_library=mock.Mock(), _flash_status=mock.Mock(), _finish_tag_refresh=mock.Mock(),
             _finish_edit_status=mock.Mock())
         host._invalidate_rows = lambda ids: MainWindow._invalidate_rows(host, ids)
+        host.table=QTableView();host.table.setModel(model);self.addCleanup(host.table.deleteLater)
+        host._native_row_identity=NativePlaylistsMixin._native_row_identity
+        host._browser_seat=lambda:MainWindow._browser_seat(host)
+        host._restore_browser_seat=lambda seat:MainWindow._restore_browser_seat(host,seat)
         host._update_browser_bpm = lambda tid, bpm: MainWindow._update_browser_bpm(host, tid, bpm)
         confirmed, painted = [], []
         column = next(i for i, row in enumerate(COLUMNS) if row[0] == 'bpm')

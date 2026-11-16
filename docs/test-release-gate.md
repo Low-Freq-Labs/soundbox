@@ -22,6 +22,70 @@ timing review, isolation checks and a controlled encrypted-subset comparison.
 Each case still runs with its existing cipher/recovery settings. Module weights
 affect scheduling only; new tests cannot be excluded by missing timing hints.
 
+## Offline shared-library source gate — November13
+
+The final bare `./check.sh --render` passes3325 discovered cases:3259 offscreen
+in537.626s and66 Cocoa in69.070s, with exact inventories and zero skips or
+expected failures. All772 frozen source/build/test inputs remain exact. Lint,
+layout/links/parity,123 engine files under mypy, native/CDJ builds,12 Rust tests,
+243 pinned vendor files and required offline fixtures pass. The main12-song,
+zero-device render and separate two-column My Tags render were inspected.
+
+Independent review corrected stale-identity title protection and complete-pair
+acknowledgement/retry before this result. An intervening full offscreen attempt
+ran all3259 selected cases with three real-prep fixture failures: its inherited
+fixed-count QTest polling starved/budgeted the two actual SQLCipher worker phases.
+Measured completion and exact readback succeeded. Only that test-local helper
+changed: join both workers, deliver genuine callbacks, verify preparation on disk,
+and retain all data/permission assertions. Production behavior and native timing
+thresholds were unchanged. The corrected helper has independent review.
+
+Compact receipts: `~/Library/Logs/Soundbox/tag-smart-deletion-2026-11-12/` under
+`offline-followup-gate/` and `prep-domain-completion-review.json`. This validates
+current source, not native rekordbox business-profile acceptance or installation.
+The [feature audit](shared-library-audit-2026-11.md) retains older-record, metadata,
+artwork, analysis and ongoing-parity gaps; [HANDOFF](HANDOFF.md) records build171
+separately. No live-source writes, authority activation or runtime handoff occurred.
+
+## Historical tag chronology correction — November9
+
+The fresh bare `./check.sh --render` passes2,955cases:2,889offscreen in490.884s
+and66Cocoa in69.590s, zero skips/expected failures and exact inventories. All736
+frozen source/test/build inputs remain exact; lint/types/native builds/fixtures
+and inspected12-song/zero-device render pass. This adds13cases to the original
+performance delivery: existing-history ordering without local ranks, matching
+positive/signed tag rules, date validation/fallback, source/cache/native identity
+preservation and one-query raw-offset date capture across DST fall-back. Peer
+review corrected timezone loss and fallback tag-UUID reuse. Native rules/source
+writers/audio and immutable reference fixtures are unchanged.
+Evidence: `~/Library/Logs/Soundbox/smart-tag-order-2026-11-09/`.
+Package/install identity is separate; see [HANDOFF](HANDOFF.md).
+
+## Performance and tagging source gate — November9
+
+The final bare `./check.sh --render` passes2,942discovered cases:2,876offscreen
+in489.680s and66Cocoa in69.700s, zero skips/expected failures, with exact worker
+inventories. Lint/types117engine modules, layout, native/CDJ builds and immutable
+fixtures pass. All736source/test/build inputs remain exact; the12-song/zero-device
+render was inspected. [HANDOFF](HANDOFF.md) separates this source result from
+the package and installed app.
+
+Coverage adds per-song migration/portable backup, stable-ID queue reuse,
+corruption and process-loss recovery, exact size budgets and stale record-store
+owners; rotating background source turns with prepared/pause/bootstrap and
+same-song guards; immutable selected export capture with complete overlap paths;
+and My Tags dismissal/shortcut scope plus exact-identity smart-list recency.
+Five Cocoa-window popup cases also pass independently. A private native-pointer
+diagnostic verifies actual opening-button release, tagging and one-double-click
+loading; reinstating the old popup grab fails the first-click regression.
+
+The first full offscreen attempt is retained with three Graveyard failures.
+Corrections preserve existing explicit Delete semantics, guard analysis-owner
+bootstrap and adapt the persisted-before-apply oracle to the complete logical
+state reader. Every original assertion remains; no case/fixture/threshold was
+omitted or weakened. A fresh full gate follows those fixes. Evidence is under
+`~/Library/Logs/Soundbox/performance-improvements-2026-11-09/`.
+
 ## Cleanup verification — November8
 
 The final bare `./check.sh --render` passes all 2,886 discovered cases: 2,820

@@ -87,13 +87,13 @@ def identities(payload):
     return frozenset(_parse(payload)[0])
 
 
-def _target(payload, playlist_id):
+def _target(payload, playlist_id, *, created_smart=False):
     rows, _ = _parse(payload)
     try:
         attributes, span = rows[_id(playlist_id)]
     except KeyError as exc:
         raise ValueError('Expected XML playlist disappeared') from exc
-    if (attributes.get('Attribute') not in ('0','1')
+    if (attributes.get('Attribute') not in (('4',) if created_smart else ('0','1'))
             or any(attributes.get(k)!=v for k,v in (('Lib_Type','0'),('CheckType','0')))):
         raise ValueError('Only local regular playlist/folder XML is accepted')
     try:
@@ -106,7 +106,7 @@ def _target(payload, playlist_id):
     return attributes, span
 
 
-def append_node(payload, playlist_id, parent='root', attribute=0):
+def _append_node(payload, playlist_id, parent, attribute, *, smart=False):
     rows, closing = _parse(payload)
     identity = _id(playlist_id)
     if identity in rows:
@@ -115,13 +115,31 @@ def append_node(payload, playlist_id, parent='root', attribute=0):
     if closing.start() and not payload[:closing.start()].endswith(newline):
         raise ValueError('Unverified XML append location')
     parent_id=0 if parent=='root' else _id(parent)
-    if attribute not in (0,1):raise ValueError('Unverified XML node type')
+    if attribute not in ((4,) if smart else (0,1)):raise ValueError('Unverified XML node type')
     node = (f'    <NODE Id="{identity:X}" ParentId="{parent_id:X}" Attribute="{attribute}" Timestamp="0" '
             'Lib_Type="0" CheckType="0"/>').encode()+newline
     result = payload[:closing.start()]+node+payload[closing.start():]
-    _target(result, playlist_id)
+    _target(result, playlist_id, created_smart=smart)
     if identities(result) != identities(payload) | {identity}:
         raise ValueError('XML append changed unrelated identities')
+    return result
+
+
+def append_node(payload, playlist_id, parent='root', attribute=0):
+    return _append_node(payload, playlist_id, parent, attribute)
+
+
+def append_smart_node(payload, playlist_id, parent='root', *, timestamp=0):
+    """Append one absent local Attribute4 identity; never edit an existing list.
+
+    This byte-only helper proves the referenced XML shape, not source-write or
+    native counter acceptance. Ordinary target/touch helpers remain type0/1.
+    """
+    if type(timestamp) is not int or not 0 <= timestamp < 2**63:
+        raise ValueError('Unverified smart XML clock')
+    result = _append_node(payload, playlist_id, parent, 4, smart=True)
+    if timestamp:
+        result = _touch(result, playlist_id, timestamp, created_smart=True)
     return result
 
 
@@ -129,8 +147,8 @@ def append_root(payload, playlist_id):
     return append_node(payload,playlist_id)
 
 
-def touch(payload, playlist_id, timestamp):
-    attributes, (start, end) = _target(payload, playlist_id)
+def _touch(payload, playlist_id, timestamp, *, created_smart=False):
+    attributes, (start, end) = _target(payload, playlist_id, created_smart=created_smart)
     if type(timestamp) is not int or not int(attributes['Timestamp']) < timestamp < 2**63:
         raise ValueError('Expected a newer independent XML clock value')
     token = payload[start:end]
@@ -138,8 +156,12 @@ def touch(payload, playlist_id, timestamp):
     if count != 1:
         raise ValueError('Unverified XML timestamp token')
     result = payload[:start]+replacement+payload[end:]
-    _target(result, playlist_id)
+    _target(result, playlist_id, created_smart=created_smart)
     return result
+
+
+def touch(payload, playlist_id, timestamp):
+    return _touch(payload, playlist_id, timestamp)
 
 
 def retain_deleted(payload, playlist_id):
@@ -147,10 +169,23 @@ def retain_deleted(payload, playlist_id):
     return payload
 
 
-def validate_transition(before, after, changes, *, missing_targets=(),touched_playlists=()):
+def validate_transition(before, after, changes, *, missing_targets=(),touched_playlists=(),
+                        smart_created=(),smart_deleted=()):
     """Prove the complete lexical XML delta is confined to planned root IDs."""
     final, _ = _parse(after)
     original, _ = _parse(before)
+    smart_created = tuple(smart_created)
+    if (len(set(smart_created)) != len(smart_created)
+            or any(_id(identity) in original for identity in smart_created)):
+        raise ValueError('Smart XML creation requires a distinct absent identity')
+    smart_ids = set(smart_created)
+    smart_deleted = tuple(smart_deleted)
+    if (len(set(smart_deleted)) != len(smart_deleted) or set(smart_deleted) & smart_ids):
+        raise ValueError('Smart XML deletion requires distinct existing identities')
+    for identity in smart_deleted:_target(before, identity, created_smart=True)
+    smart_delete_ids = set(smart_deleted)
+    deleted_smart_rows = set()
+    smart_after: dict[str, dict] = {}
     created = [];targets: dict[str, None] = {};deleted = set()
     for identity in touched_playlists:_target(before,identity);targets[identity]=None
     for change in changes:
@@ -161,11 +196,34 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
         if change['table'] == 'djmdPlaylist':
             if old is not None and new is not None:
                 fields={k for k in old.keys()|new.keys() if old.get(k)!=new.get(k)}
-                if fields<={'Seq','updated_at','rb_local_usn'}:
+                if fields<={'Seq','updated_at','rb_local_usn'} and change['id'] not in smart_ids:
                     continue  # Native sibling renumbering leaves its XML untouched.
             identity = change['id']
-            if any(r.get('ID') != identity or r.get('Attribute') not in (0,1) for r in rows):
+            smart = identity in smart_ids
+            smart_delete = identity in smart_delete_ids
+            if smart_delete:
+                if old is None or old.get('Attribute') != 4 or identity in deleted_smart_rows:
+                    raise ValueError('Smart XML deletion requires one exact existing target')
+                if old.get('rb_local_synced') == 0:
+                    if new is not None:
+                        raise ValueError('Unsynced smart XML deletion requires a hard-delete row')
+                elif old.get('rb_local_synced') == 1:
+                    fields = {key for key in old.keys() | (new or {}).keys() if old.get(key) != (new or {}).get(key)}
+                    if (new is None or not fields <= {'rb_data_status', 'rb_local_deleted', 'rb_local_usn', 'updated_at'}
+                            or new.get('rb_data_status') != 2 or new.get('rb_local_deleted') != 1):
+                        raise ValueError('Synced smart XML deletion requires its retained native tombstone')
+                else:
+                    raise ValueError('Unverified smart XML deletion history')
+                deleted_smart_rows.add(identity)
+            if (smart and (new is None or new.get('Attribute') != 4
+                          or old != smart_after.get(identity))
+                    or any(r.get('ID') != identity or r.get('Attribute') not in
+                           ((4,) if smart or smart_delete else (0,1)) for r in rows)):
                 raise ValueError('Unverified XML playlist operation')
+            if smart:
+                if old is None and identity in smart_after:
+                    raise ValueError('Repeated smart XML creation identity')
+                smart_after[identity] = new
             if old is None:created.append((identity,new['ParentID'],new['Attribute']))
             if new is None or new.get('rb_local_deleted')==1:deleted.add(identity)
         else:
@@ -175,8 +233,14 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
         _id(identity);targets[identity] = None
     if {r[0] for r in created} & deleted:
         raise ValueError('Unproven create/delete batch')
+    if {identity for identity, _parent, attribute in created if attribute == 4} != smart_ids:
+        raise ValueError('Smart XML creation differs from its exact new identities')
+    if deleted_smart_rows != smart_delete_ids:
+        raise ValueError('Smart XML deletion differs from its exact selected identities')
     candidate = before
-    for identity,parent,attribute in created:candidate = append_node(candidate,identity,parent,attribute)
+    for identity,parent,attribute in created:
+        candidate = (append_smart_node(candidate,identity,parent) if attribute == 4 else
+                     append_node(candidate,identity,parent,attribute))
     for identity in targets:
         if _id(identity) not in original and identity in missing_targets:
             if _id(identity) not in final:continue
@@ -184,10 +248,13 @@ def validate_transition(before, after, changes, *, missing_targets=(),touched_pl
             parent,attribute=missing_targets[identity]
             candidate=append_node(candidate,identity,parent,attribute)
         if identity in deleted:
-            retain_deleted(candidate, identity);continue
-        attributes, _ = _target(candidate, identity)
+            if identity in smart_delete_ids:_target(candidate, identity, created_smart=True)
+            else:retain_deleted(candidate, identity)
+            continue
+        attributes, _ = _target(candidate, identity, created_smart=identity in smart_ids)
         try:timestamp = int(final[_id(identity)][0]['Timestamp'])
         except (KeyError, ValueError) as exc:raise ValueError('Missing XML target clock') from exc
-        if timestamp != int(attributes['Timestamp']):candidate = touch(candidate, identity, timestamp)
+        if timestamp != int(attributes['Timestamp']):
+            candidate = _touch(candidate, identity, timestamp, created_smart=identity in smart_ids)
     if candidate != after:
         raise ValueError('XML transition changed unplanned bytes')

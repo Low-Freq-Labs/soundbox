@@ -242,6 +242,34 @@ class PilotCueTransactions(unittest.TestCase):
             self.store.snapshot()
         self.assertTrue(self.store.journal.exists())
 
+    def test_recovery_rejects_impossible_field_and_action_deltas_before_sqlite(self):
+        def fault(phase):
+            if phase == 'before-commit':
+                raise OSError('injected')
+        with mock.patch.object(store_module, '_fault', fault), self.assertRaises(OSError):
+            self.store.apply(self.request())
+        original = self.store.journal.read_bytes()
+        source_before = self.source.read_bytes()
+        for damage in ('content-field', 'aggregate-identity', 'cue-position', 'action'):
+            with self.subTest(damage=damage):
+                record = json.loads(original)
+                delta = {d['table']: d for d in record['changes']}
+                if damage == 'content-field':
+                    delta['djmdContent']['after']['Title'] = 'unrelated rename'
+                elif damage == 'aggregate-identity':
+                    delta['contentCue']['after']['UUID'] = 'replacement'
+                elif damage == 'cue-position':
+                    delta['djmdCue']['after']['InMsec'] += 1
+                else:
+                    record['request']['operation'] = 'delete'
+                self.store.journal.write_text(json.dumps(record))
+                with mock.patch.object(self.store, '_connect') as connection:
+                    with self.assertRaises(offline.RecoveryRequired):
+                        self.store.snapshot()
+                    connection.assert_not_called()
+                self.assertEqual(self.source.read_bytes(), source_before)
+                self.assertTrue(self.store.journal.exists())
+
     def test_replaced_source_file_is_blocked_before_sqlite_recovery_opens_it(self):
         edit = self.request()
         def fault(phase):

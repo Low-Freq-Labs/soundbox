@@ -85,6 +85,30 @@ class ConversionAcknowledgement(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'cannot be rebound'):media.acknowledge(settings,imported,job,receipt)
         self.assertEqual((settings,imported),before)
 
+    def test_relocation_does_not_rebind_another_librarys_same_id_and_audio_path(self):
+        from uuid import uuid4
+        settings,imported,job,receipt=fixture();target='/synthetic/song-converted.wav'
+        track=Track('song','Song','',Path(job['path']).as_uri(),imported=True)
+        lib=Library({'song':track},[],job['source'],source_library_id=job['library_id'])
+        settings[analysis_jobs.KEY]=analysis_jobs.admit([],lib,[track],{})
+        settings[shared_imports.KEY]=shared_imports.admit([],lib,[track],dict(kind='collection'),{})
+        foreign={}
+        for key in (prep_edits.KEY,analysis_jobs.KEY,shared_imports.KEY):
+            other=deepcopy(settings[key][0]);other.update(id=str(uuid4()),source='/other/master.db',library_id='456')
+            if key==prep_edits.KEY:settings[key]=[other]
+            else:settings[key].append(other)
+            foreign[key]=other
+        receipt.update(target=target,original='/recovery/original.wav',facts=dict(duration=8,sample_rate=44100))
+        before=deepcopy((settings,imported))
+        updated,_records=media.acknowledge(settings,imported,job,receipt)
+        self.assertEqual((settings,imported),before)
+        for key,other in foreign.items():
+            index=0 if key==prep_edits.KEY else 1
+            self.assertIs(updated[key][index],other,key)
+            self.assertEqual(updated[key][index],before[0][key][index],key)
+        self.assertEqual(updated[analysis_jobs.KEY][0]['path'],target)
+        self.assertEqual(updated[shared_imports.KEY][0]['tracks'][0]['path'],target)
+
     def test_unchanged_media_does_not_rebuild_or_add_namespaces(self):
         settings,imported,job,_receipt=fixture()
         updated,records=media.acknowledge(settings,imported,job,dict(unchanged=True))

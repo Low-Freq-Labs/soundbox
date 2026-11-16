@@ -186,6 +186,34 @@ class NativeTagTransactions(unittest.TestCase):
         self.assertEqual(self.state(), before)
         self.assertTrue(self.store.journal.exists())
 
+    def test_recovery_rejects_impossible_assignment_deltas_before_sqlite(self):
+        def fault(phase):
+            if phase == 'before-commit':
+                raise OSError('injected')
+        with mock.patch.object(tags, '_fault', fault), self.assertRaises(OSError):
+            self.store.apply(self.request)
+        original = self.store.journal.read_bytes()
+        source_before = self.source.read_bytes()
+        for damage in ('link-field', 'link-counter', 'registry-counter', 'action'):
+            with self.subTest(damage=damage):
+                record = json.loads(original)
+                delta = {d['table']: d for d in record['changes']}
+                if damage == 'link-field':
+                    delta['djmdSongMyTag']['after']['TrackNo'] = 4
+                elif damage == 'link-counter':
+                    delta['djmdSongMyTag']['after']['rb_local_usn'] += 1
+                elif damage == 'registry-counter':
+                    delta['agentRegistry']['after']['int_1'] += 1
+                else:
+                    record['request']['present'] = False
+                self.store.journal.write_text(json.dumps(record))
+                with mock.patch.object(self.store, '_connect') as connection:
+                    with self.assertRaises(offline.RecoveryRequired):
+                        self.store.check_ready()
+                    connection.assert_not_called()
+                self.assertEqual(self.source.read_bytes(), source_before)
+                self.assertTrue(self.store.journal.exists())
+
     def test_recovery_refuses_replaced_database_file_before_sql_connection(self):
         def fault(phase):
             if phase == 'before-commit':

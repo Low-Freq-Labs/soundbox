@@ -1,0 +1,1206 @@
+"""Durable source metadata intentions on the one shared native writer lane."""
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import time
+from uuid import uuid4
+
+from PySide6.QtCore import QObject,QTimer
+
+from soundbox import alias_intents,engine,metadata,metadata_provenance as provenance,source_truth
+from soundbox import rekordbox_metadata_store as native
+from soundbox.rekordbox_write import WriteProofError,assert_rekordbox_closed
+from .task_owner import TaskOwner
+from .workers import OneShotTask
+
+KEY='pending_metadata_edits'
+ACKS='metadata_receipt_acks'
+_JOB={'id','source','library_id','local_id','native_id','track_uuid','path','field','value','request','retry','error'}
+_BUILDING='soundbox-source-truth-building-v1'
+
+
+def _intent_value(value,field):
+    if type(value) is not str or '\0' in value or len(value)>4096 or field=='title' and not value:
+        raise ValueError('Invalid metadata intention value')
+
+
+def _matches_track(job,track):
+    if not job['track_uuid']:return job['path']==str(track.path)
+    return (job['native_id'],job['track_uuid'],job['path'])==(track.native_id,track.source_uuid,
+        track.source_native_path or str(track.path))
+
+
+class MetadataController(QObject):
+    def __init__(self,window,*,store_factory=None,loader=None):
+        super().__init__(window);self.window=window;self.tags=window.tag_controller
+        self.factory=store_factory;self.loader=loader
+        self.closing=False;self.not_before=0.0
+        self.tasks=TaskOwner(self);self._truth_index=None
+        self._truth_validation=None
+        self._alias_validation=None;self._validated_origins=None
+        self._derived_dirty={};self._derived_context=None;self._derived_epoch=0;self._derived_frozen=None
+        self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.pump)
+        self.tags.idle.connect(self.schedule);self.tags.changed.connect(self.schedule)
+
+    @property
+    def retirement_pending(self):
+        return bool(self._retirement_error() or self.window.settings.get(ACKS))
+
+    def _retirement_error(self):
+        ledger=self.window.settings.get(ACKS,[])
+        try:
+            if not isinstance(ledger,list) or len(ledger)>256:raise ValueError('Retirement ledger')
+            seen=set()
+            for row in ledger:
+                if not isinstance(row,dict) or set(row)!={'entry','error'} or type(row['error']) is not str:
+                    raise ValueError('Retirement record')
+                native.validate_retirement(row['entry']);identity=(row['entry']['source'],row['entry']['request']['operation_id'])
+                if identity in seen:raise ValueError('Duplicate retirement')
+                seen.add(identity)
+        except (ValueError,TypeError,KeyError,WriteProofError):return 'Saved metadata receipt retirements need attention'
+        return ''
+
+    def _resume_receipt_retirement(self):
+        w=self.window;ledger=w.settings.get(ACKS,[])
+        if (self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
+                or self.tasks.pending or self._retirement_error() or not ledger or ledger[0]['error']):return
+        captured=deepcopy(ledger[0]);entry=captured['entry']
+        worker=OneShotTask(lambda:native.retire_acknowledged_receipt(self.tags.data_root,entry),
+                           log_label='Acknowledged metadata receipt retirement')
+        def completed(task):
+            current=w.settings.get(ACKS,[])
+            if not current or current[0]!=captured or getattr(w,'_state_publication',False):return
+            if isinstance(task.result,Exception):
+                w.settings[ACKS]=[{**captured,'error':str(task.result)},*current[1:]]
+                w._save_state();self.status('Metadata receipt retirement needs attention');return
+            w.settings[ACKS]=current[1:]
+            if not w._save_state():
+                w.settings[ACKS]=[{**captured,'error':'Compacted receipt acknowledgement could not be saved'},*current[1:]]
+                self.status('Metadata receipt retirement needs storage attention');return
+            self.schedule()
+        self.tasks.adopt(worker,completed);worker.start()
+
+    def stage_source_scope(self,incoming,*,previous=None,bootstrap=False):
+        """Stage RAM only; caller saves source selection and curation together.
+
+        Return the exact owner token to rollback_source_scope if that ONE save
+        fails. No source/library publication occurs here.
+        """
+        w=self.window
+        fields={'title_overrides':'titles','artist_overrides':'overrides','artist_aliases':'aliases',
+                'custom':'custom','playlist_removals':'removals','playlist_additions':'playlist_additions'}
+        document={key:getattr(w,attr) for key,attr in fields.items()}
+        document['hidden_tracks']={key:w.hidden_dates.get(key,'') for key in w.hidden}
+        document['settings']=w.settings
+        staged=source_truth.stage_scope(document,incoming,previous=previous,bootstrap=bootstrap)
+        token={attr:getattr(w,attr) for attr in (*fields.values(),'hidden','hidden_dates','settings')}
+        for key,attr in fields.items():setattr(w,attr,staged[key])
+        w.hidden_dates=staged['hidden_tracks'];w.hidden=set(w.hidden_dates);w.settings=staged['settings']
+        return token
+
+    def rollback_source_scope(self,token):
+        for attr,value in token.items():setattr(self.window,attr,value)
+
+    def stage_native_refresh(self,incoming,*,changed_ids,verified=True):
+        """Stage sparse ACK reconciliation; caller saves before publication.
+
+        The refresh owner supplies its existing changed-row inventory. An empty
+        inventory does not walk the library or provenance. Cached reads cannot
+        retire local edits. The returned owner token supports exact rollback.
+        """
+        w=self.window
+        if not verified or not changed_ids:return None
+        if (incoming is None or incoming.source_kind!='rekordbox-db' or w.lib is None
+                or source_truth.scope(incoming)!=source_truth.scope(w.lib)):return None
+        scope=source_truth.scope(incoming);existing=w.settings.get(alias_intents.ORIGINS,{})
+        origins=existing;titles=w.titles;artists=w.overrides
+        copies={};pending={};junk=None;junk_ready=False
+        for job in self.pending:
+            if (job['source'],job['library_id'])==(scope['source'],scope['library_id']):
+                pending.setdefault(job['local_id'],[]).append(job)
+        def copy_map(field,values):
+            if field not in copies:copies[field]=provenance.copy_values(values)
+            return copies[field]
+        for local in changed_ids:
+            track=incoming.tracks_by_id.get(local)
+            if not track or not track.source_uuid or local in incoming.source_binding_issues:continue
+            identity=alias_intents.key(scope,dict(local_id=local,native_id=track.native_id,
+                uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+            origin=existing.get(identity)
+            if origin is None:continue
+            alias_intents.validate_origins({identity:origin})
+            if not junk_ready:junk=w._title_junk();junk_ready=True
+            owned=[(job['field'],job['value']) for job in pending.get(local,[]) if _matches_track(job,track)]
+            revised,titles,artists=provenance.reconcile(origin,title=track.name,artist=track.artist,
+                titles=titles,artists=artists,owned=owned,junk=junk,copy_map=copy_map)
+            if revised is not origin:
+                if origins is existing:origins=dict(existing)
+                origins[identity]=revised
+        if origins is existing and titles is w.titles and artists is w.overrides:return None
+        token=dict(settings=w.settings,titles=w.titles,overrides=w.overrides)
+        w.settings={**w.settings,alias_intents.ORIGINS:origins};w.titles=titles;w.overrides=artists
+        return token
+
+    def publish_derived(self,incoming,*,changed_ids,context,verified=True):
+        """Coalesce native dirty IDs; derive scalars on the existing worker lane.
+
+        ``context`` is a pair of worker-built FrozenArtistRegistry instances:
+        current aliases, then unaliased. No-op refresh/own ACK passes no IDs.
+        """
+        if (not verified or not changed_ids or self.closing or self.window._shutting_down
+                or incoming is not self.window.lib or incoming.source_kind!='rekordbox-db'):return False
+        if (not isinstance(context,tuple) or len(context)!=2
+                or any(not isinstance(item,(metadata.FrozenArtistRegistry,metadata.ArtistRegistry)) for item in context)):
+            raise ValueError('Refresh metadata requires immutable worker registry context')
+        scope=source_truth.scope(incoming)
+        if self._derived_context is not None and self._derived_context[0]!=scope:self._derived_dirty={}
+        self._derived_context=(scope,context);self._derived_epoch+=1
+        for local in changed_ids:self._derived_dirty[local]=self._derived_epoch
+        self.status('Metadata updates pending');self.schedule();return True
+
+    @property
+    def planning_pending(self):return bool(self._derived_dirty)
+
+    def _resume_derived(self):
+        w=self.window
+        if (not self._derived_dirty or self._derived_context is None or self.tasks.pending or self.closing
+                or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
+                or not self.tags.verified or not w.lib or self.queue_error()):return False
+        scope,context=self._derived_context
+        if source_truth.scope(w.lib)!=scope:return False
+        if w.settings.get(alias_intents.NEXT) is not None:return False
+        main=w.settings.get(source_truth.MIGRATION)
+        if main and (main.get('format')==_BUILDING or main.get('active') is not None
+                     or main['cursor']<len(main['order']) or main.get('error')):return False
+        selected={};inputs=[];original_inputs={};origins=w.settings.get(alias_intents.ORIGINS,{})
+        missing=[]
+        for local,epoch in self._derived_dirty.items():
+            track=w.lib.tracks_by_id.get(local)
+            if track is None:missing.append(local);continue
+            # Registration owns these drafts; its verified native read will
+            # supply the UUID and a dirty row. A global trust change must not
+            # manufacture a second unresolved import intention meanwhile.
+            if track.imported and not track.source_uuid:missing.append(local);continue
+            if any(job['local_id']==local for job in self.pending):continue
+            row=dict(scope=scope,local_id=local,native_id=track.native_id,uuid=track.source_uuid,
+                path=track.source_native_path or str(track.path),name=track.name,artist=track.artist,
+                stem=track.path.stem,native_file_type=track.info.get('nativeFileType'),
+                native_analysis_flags=track.info.get('nativeAnalysisFlags'),
+                issue=('Native identity is unavailable' if not track.source_uuid else
+                       'Native binding needs reconciliation' if local in w.lib.source_binding_issues else ''))
+            identity=alias_intents.key(scope,row);selected[local]=epoch
+            inputs.append((row,deepcopy(origins.get(identity)),w.titles.get(local),w.overrides.get(local),
+                {field:value for field,value in w.settings.get('track_info',{}).get(local,{}).items()
+                 if field in ('title','artist')}))
+            original_inputs[local]=inputs[-1]
+        for local in missing:self._derived_dirty.pop(local)
+        if not inputs:
+            if not self.planning_pending and getattr(self.tags,'metadata_update_status','')=='Metadata updates pending':
+                self.status('')
+            return False
+        junk=w._title_junk();identity=uuid4().hex;cached_context=self._derived_frozen
+        context_owner=self._derived_context
+        policy=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())))
+        def build():
+            frozen=(cached_context[1] if cached_context is not None and
+                all(a is b for a,b in zip(cached_context[0],context)) else
+                tuple(metadata.freeze_registry(registry) for registry in context))
+            result=[]
+            for row,origin,title,artist,info in inputs:
+                desired=provenance.derive(row,origin=origin,title_override=title,artist_override=artist,
+                    info=info,context=frozen,junk=junk)
+                result.append((row,desired))
+            return result,source_truth._sha(inputs),frozen
+        def completed(task):
+            if (self.closing or w._shutting_down or not w.lib or source_truth.scope(w.lib)!=scope
+                    or getattr(w,'_state_publication',False)):return
+            if isinstance(task.result,Exception):self.status(str(task.result));self.timer.start(2000);return
+            if w.settings.get(alias_intents.NEXT) is not None:self.schedule();return
+            if (self._derived_context is not context_owner or
+                    policy!=(tuple(w.settings.get('title_rules_off',())),tuple(w.settings.get('title_words',())))):
+                self.schedule();return
+            current_main=w.settings.get(source_truth.MIGRATION)
+            if current_main is not main:self.schedule();return
+            targets={};current_origins=w.settings.get(alias_intents.ORIGINS,{})
+            revised=current_origins;accepted=[]
+            results,input_sha,frozen=task.result;self._derived_frozen=(context,frozen)
+            for row,(title,artist,shown,origin) in results:
+                local=row['local_id'];track=w.lib.tracks_by_id.get(local);key=alias_intents.key(scope,row)
+                if (self._derived_dirty.get(local)!=selected[local] or track is None
+                        or (track.native_id,track.source_uuid,track.source_native_path or str(track.path),track.name,track.artist)
+                        !=(row['native_id'],row['uuid'],row['path'],row['name'],row['artist'])
+                        or bool(row['issue'])!=bool(not track.source_uuid or local in w.lib.source_binding_issues)
+                        or w.settings.get(alias_intents.ORIGINS,{}).get(key)!=origins.get(key)
+                        or w.titles.get(local)!=original_inputs[local][2]
+                        or w.overrides.get(local)!=original_inputs[local][3]
+                        or {field:value for field,value in w.settings.get('track_info',{}).get(local,{}).items()
+                            if field in ('title','artist')}!=original_inputs[local][4]):continue
+                accepted.append(local)
+                if origin!=current_origins.get(key):
+                    if revised is current_origins:revised=dict(current_origins)
+                    revised[key]=origin
+                fields=[field for field,value in (('title',title),('artist',artist)) if row['name' if field=='title' else 'artist']!=value]
+                if not fields and not row['issue']:continue
+                targets[key]=dict(format='soundbox-source-truth-v1',migration_id=identity,scope=scope,
+                    **{field:row[field] for field in ('local_id','native_id','uuid','path','native_file_type','native_analysis_flags')},
+                    title=title,artist=artist,display_artist=shown,fields=fields,info={},error=row['issue'],
+                    curation={field:provenance.snapshot(origin,field,w.titles if field=='title' else w.overrides,
+                              original_inputs[local][4].get(field))
+                              for field in ('title','artist')})
+            if not accepted:self.schedule();return
+            order=[key for key,row in targets.items() if not row['error']]
+            unresolved=[key for key,row in targets.items() if row['error']]
+            if main:
+                for key in main['unresolved']:
+                    targets[key]={**w.settings[source_truth.TARGETS][key],'migration_id':identity};unresolved.append(key)
+            plan=dict(format='soundbox-source-truth-v1',id=identity,scope=scope,inputs_sha256=input_sha,
+                order=order,unresolved=unresolved,cursor=0,active=None,counts={})
+            before=w.settings
+            if targets or revised is not current_origins:w.settings={**before,alias_intents.ORIGINS:revised}
+            if targets:
+                w.settings.update({alias_intents.NEXT:dict(format=alias_intents.FORMAT,id=identity,scope=scope,
+                    state='ready',inputs_sha256=plan['inputs_sha256'],edits={},error='',plan=plan),alias_intents.TARGETS:targets})
+            if w.settings is not before and not w._save_state():
+                w.settings=before;self.status('Derived metadata needs storage attention');self.timer.start(2000);return
+            for local in accepted:
+                if self._derived_dirty.get(local)==selected[local]:self._derived_dirty.pop(local)
+            if not targets and not self.planning_pending and getattr(self.tags,'metadata_update_status','')=='Metadata updates pending':
+                self.status('')
+            self.schedule()
+        worker=OneShotTask(build,log_label='Changed native metadata derivation')
+        self.tasks.adopt(worker,completed);worker.start();return True
+
+    @property
+    def migration_pending(self):
+        if self.planning_pending:return True
+        if self.window.settings.get(alias_intents.NEXT) is not None:return True
+        descriptor=self.window.settings.get(source_truth.MIGRATION)
+        if descriptor is None:return False
+        if self._migration_error():return True
+        return (descriptor.get('format')==_BUILDING or descriptor.get('active') is not None
+                or descriptor['cursor']<len(descriptor['order']) or bool(descriptor['unresolved']))
+
+    def _migration_error(self):
+        try:
+            origins=self.window.settings.get(alias_intents.ORIGINS,{})
+            next_plan=self.window.settings.get(alias_intents.NEXT)
+            targets=self.window.settings.get(alias_intents.TARGETS)
+            identity=(id(origins),id(next_plan),id(targets))
+            if origins is not self._validated_origins:
+                alias_intents.validate_origins(origins);self._validated_origins=origins
+            if self._alias_validation!=identity:
+                if next_plan is not None:alias_intents.validate_next(next_plan,targets)
+                self._alias_validation=identity
+        except (ValueError,KeyError,TypeError,AttributeError):return 'Saved artist alias intentions need attention; all values are preserved'
+        descriptor=self.window.settings.get(source_truth.MIGRATION)
+        if descriptor is None:return ''
+        targets=self.window.settings.get(source_truth.TARGETS)
+        try:
+            if not isinstance(descriptor,dict) or not isinstance(targets,dict):raise ValueError('Shape')
+            if descriptor.get('format')==_BUILDING:
+                if (not isinstance(descriptor.get('input_key'),str) or not isinstance(descriptor.get('scope'),dict)
+                        or not isinstance(descriptor.get('edits'),dict) or not isinstance(descriptor.get('error'),str)
+                        or not isinstance(targets.get(descriptor['input_key']),dict)):raise ValueError('Frozen inputs')
+                source_truth._validate_scope(descriptor['scope'])
+                record=targets[descriptor['input_key']]
+                if record.get('format')!=_BUILDING or not isinstance(record.get('payload'),dict):raise ValueError('Frozen payload')
+                for local,edit in descriptor['edits'].items():
+                    if (type(local) is not str or not isinstance(edit,dict)
+                            or any(type(edit.get(field)) is not str for field in ('uuid','path','title','artist','display_artist'))
+                            or not isinstance(edit.get('fields'),list) or set(edit['fields'])-{'title','artist'}):
+                        raise ValueError('Frozen later edit')
+                for field,length in (('id',32),('inputs_sha256',64)):
+                    value=descriptor.get(field)
+                    if type(value) is not str or len(value)!=length or any(c not in '0123456789abcdef' for c in value):
+                        raise ValueError('Frozen input identity')
+            else:
+                order=descriptor.get('order');cursor=descriptor.get('cursor')
+                if not isinstance(order,list) or type(cursor) is not int or not 0<=cursor<=len(order):raise ValueError('Progress')
+                active=descriptor.get('active')
+                if active is not None and (not isinstance(active,dict) or cursor>=len(order)
+                        or active.get('target')!=order[cursor] or not isinstance(active.get('operations'),dict)):
+                    raise ValueError('Active pair')
+                key=(id(descriptor),id(targets))
+                if self._truth_validation!=key:
+                    source_truth.validate(descriptor,targets);self._truth_validation=key
+        except (ValueError,KeyError,TypeError,AttributeError):return 'Saved SoundBox source truth needs attention; all intentions are preserved'
+        return ''
+
+    def begin_source_truth(self):
+        """Durably freeze effective inputs before any migration source writes."""
+        w=self.window;lib=w.lib
+        if (self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)
+                or self.tasks.pending or self.migration_pending
+                or not lib or lib.source_kind!='rekordbox-db' or not self.tags.verified):return False
+        try:raw=source_truth.capture(lib,titles=w.titles,artists=w.overrides,aliases=w.aliases,settings=w.settings)
+        except (ValueError,TypeError) as exc:w._flash_status(str(exc),12);return False
+        identity=uuid4().hex;key='inputs:'+identity
+        descriptor=dict(format=_BUILDING,id=identity,scope=source_truth.scope(lib),input_key=key,
+                        inputs_sha256=hashlib.sha256(raw).hexdigest(),edits={},error='')
+        before_descriptor=w.settings.get(source_truth.MIGRATION);before_targets=w.settings.get(source_truth.TARGETS)
+        w.settings[source_truth.MIGRATION]=descriptor
+        w.settings[source_truth.TARGETS]={key:dict(format=_BUILDING,payload=json.loads(raw))}
+        if not w._save_state():
+            for name,value in ((source_truth.MIGRATION,before_descriptor),(source_truth.TARGETS,before_targets)):
+                if value is None:w.settings.pop(name,None)
+                else:w.settings[name]=value
+            return False
+        self.status('Preparing frozen SoundBox metadata');self._resume_source_truth_build();return True
+
+    def _resume_source_truth_build(self):
+        w=self.window;descriptor=w.settings.get(source_truth.MIGRATION)
+        if (self.closing or w._state_maintenance or getattr(w,'_state_publication',False) or self.tasks.pending
+                or not descriptor or descriptor.get('format')!=_BUILDING or descriptor.get('error')):return
+        try:
+            if not w.lib or source_truth.scope(w.lib)!=descriptor['scope']:return
+            record=w.settings[source_truth.TARGETS][descriptor['input_key']]
+            raw=source_truth._encode(record['payload'])
+            if record['format']!=_BUILDING or hashlib.sha256(raw).hexdigest()!=descriptor['inputs_sha256']:
+                raise ValueError('Frozen metadata inputs changed')
+        except (ValueError,TypeError,KeyError) as exc:
+            w.settings[source_truth.MIGRATION]={**descriptor,'error':str(exc)};w._save_state();self.status(str(exc));return
+        captured_id=descriptor['id'];captured_sha=descriptor['inputs_sha256'];captured_scope=deepcopy(descriptor['scope'])
+        captured_origins=deepcopy(w.settings.get(alias_intents.ORIGINS,{}))
+        def build():
+            data=json.loads(raw);descriptor,targets=source_truth.build(raw,migration_id=captured_id)
+            origins=alias_intents.origins(data,captured_origins,{})
+            for identity,row in targets.items():
+                if identity in origins:
+                    row['curation']={field:provenance.snapshot(origins[identity],field,
+                        data['titles' if field=='title' else 'artists'],data['info'].get(row['local_id'],{}).get(field))
+                        for field in ('title','artist')}
+            return descriptor,targets,origins
+        worker=OneShotTask(build,log_label='Frozen native metadata plan')
+        def completed(task):
+            current=w.settings.get(source_truth.MIGRATION)
+            if (self.closing or w._shutting_down or getattr(w,'_state_publication',False)
+                    or not isinstance(current,dict) or current.get('format')!=_BUILDING
+                    or current.get('id')!=captured_id or current.get('inputs_sha256')!=captured_sha
+                    or current.get('scope')!=captured_scope):return
+            if self._migration_error():self.status(self._migration_error());return
+            if isinstance(task.result,Exception):
+                w.settings[source_truth.MIGRATION]={**current,'error':str(task.result)};w._save_state();self.status(str(task.result));return
+            descriptor,targets,origins=task.result
+            for row in targets.values():
+                edits=current.get('edits',{}).get(row['local_id'])
+                if edits and (edits['uuid'],edits['path'])==(row['uuid'],row['path']):
+                    row.update(title=edits['title'],artist=edits['artist'],display_artist=edits['display_artist'])
+                    row['fields']=list(dict.fromkeys([*row['fields'],*edits['fields']]))
+            previous_targets=w.settings[source_truth.TARGETS]
+            previous_origins=w.settings.get(alias_intents.ORIGINS)
+            w.settings[source_truth.MIGRATION]=descriptor;w.settings[source_truth.TARGETS]=targets
+            w.settings[alias_intents.ORIGINS]=alias_intents.merge_origins(origins,captured_origins,
+                w.settings.get(alias_intents.ORIGINS,{}))
+            if not w._save_state():
+                w.settings[source_truth.MIGRATION]={**current,'error':'Frozen metadata plan could not be saved'}
+                w.settings[source_truth.TARGETS]=previous_targets
+                if previous_origins is None:w.settings.pop(alias_intents.ORIGINS,None)
+                else:w.settings[alias_intents.ORIGINS]=previous_origins
+                self.status('Frozen metadata plan needs storage attention');return
+            unresolved=len(descriptor['unresolved'])
+            self.status('Frozen SoundBox metadata pending' if descriptor['order'] else
+                f'No available native changes; {unresolved} unresolved saved entries preserved' if unresolved else
+                'Native metadata already matches SoundBox')
+            self.schedule()
+        self.tasks.adopt(worker,completed);worker.start()
+
+    def display_fields(self,track):
+        """Show a frozen pair until both fields acknowledge, then newer edits."""
+        w=self.window;result={};descriptor=w.settings.get(source_truth.MIGRATION)
+        targets=w.settings.get(source_truth.TARGETS,{})
+        if self.queue_error() or self._migration_error():return result
+        if (descriptor and descriptor.get('format')!=_BUILDING and w.lib
+                and descriptor.get('scope')==source_truth.scope(w.lib)):
+            key=(id(targets),descriptor.get('id'))
+            if self._truth_index is None or self._truth_index[0]!=key:
+                self._truth_index=(key,{targets[value]['local_id']:(index,targets[value])
+                    for index,value in enumerate(descriptor.get('order',[])) if value in targets
+                    and isinstance(targets[value],dict) and isinstance(targets[value].get('local_id'),str)})
+            value=self._truth_index[1].get(track.track_id)
+            if value and value[0]>=descriptor.get('cursor',0):
+                row=value[1]
+                if (all(type(row.get(field)) is str for field in ('native_id','uuid','path','title','display_artist'))
+                        and (row['native_id'],row['uuid'],row['path'])==(track.native_id,track.source_uuid,track.source_native_path or str(track.path))):
+                    result=dict(title=row['title'],artist=row['display_artist'])
+        if w.lib:
+            for job in self.pending:
+                if ((job['source'],job['library_id'],job['local_id'])==(str(w.lib.source),w.lib.source_library_id,track.track_id)
+                        and _matches_track(job,track)):
+                    result[job['field']]=job['value'] or (metadata.UNKNOWN_ARTIST if job['field']=='artist' else '')
+        next_plan=w.settings.get(alias_intents.NEXT)
+        if next_plan and next_plan['state']=='ready' and w.lib and next_plan['scope']==source_truth.scope(w.lib):
+            identity=alias_intents.key(next_plan['scope'],dict(local_id=track.track_id,native_id=track.native_id,
+                uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+            row=w.settings[alias_intents.TARGETS].get(identity)
+            if row:result=dict(title=row['title'],artist=row['display_artist'])
+        elif next_plan and next_plan['state']=='building' and w.lib and next_plan['scope']==source_truth.scope(w.lib):
+            identity=alias_intents.key(next_plan['scope'],dict(local_id=track.track_id,native_id=track.native_id,
+                uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+            raw=w.settings[alias_intents.TARGETS]['inputs:'+next_plan['id']]['raw']
+            row=next_plan['edits'].get(identity) or raw['visible'].get(identity)
+            if row:result['title']=row['title']
+        return result
+
+    def change_alias(self,source,target):
+        """Save an alias gesture and its complete frozen successor together."""
+        return self.change_aliases([] if target is None else [(source,target)],[source] if target is None else [])
+
+    def change_title_policy(self,changes):
+        """Persist one existing cleanup-policy gesture with its native plan."""
+        w=self.window;reason=self.reason()
+        if reason:w._flash_status(reason,12);return False
+        if (not isinstance(changes,dict) or not changes or set(changes)-{'title_rules_off','title_words'}
+                or any(not isinstance(value,list) or any(type(item) is not str or len(item)>4096 or '\0' in item
+                    for item in value) for value in changes.values())):
+            w._flash_status('Invalid title cleanup policy',12);return False
+        changes=dict(changes)
+        if 'title_rules_off' in changes:changes['title_rules_off']=metadata.normalize_title_rules_off(changes['title_rules_off'])
+        if all(w.settings.get(field,[])==value for field,value in changes.items()):return True
+        return self._stage_generation(w.aliases,w.overrides,policy_changes=changes)
+
+    def change_aliases(self,accepts,unmerges):
+        """One durable batch: unmerge first, then apply accepted mappings."""
+        w=self.window;reason=self.reason()
+        if reason:w._flash_status(reason,12);return False
+        def valid(value):return type(value) is str and bool(value.strip()) and '\0' not in value and len(value)<=4096
+        if (not isinstance(accepts,(list,tuple)) or not isinstance(unmerges,(list,tuple))
+                or len(accepts)+len(unmerges)>source_truth._MAX_TRACKS
+                or any(not valid(source) for source in unmerges)
+                or any(not isinstance(pair,(list,tuple)) or len(pair)!=2 or not all(valid(value) for value in pair)
+                       for pair in accepts)):
+            w._flash_status('Invalid artist alias',12);return False
+        aliases=dict(w.aliases)
+        for source in unmerges:aliases.pop(source,None)
+        for source,target in accepts:aliases[source]=target.strip()
+        if aliases==w.aliases:return True
+        return self._stage_generation(aliases,w.overrides)
+
+    def change_artists(self,accepts,expected_pins):
+        """Atomically retain accepted existing suggestions, never run a provider."""
+        w=self.window;reason=self.reason()
+        if reason:w._flash_status(reason,12);return False
+        try:
+            if (not isinstance(accepts,(list,tuple)) or len(accepts)>source_truth._MAX_TRACKS
+                    or any(not isinstance(pair,(list,tuple)) or len(pair)!=2
+                        or any(type(value) is not str or not value.strip() or '\0' in value or len(value)>4096 for value in pair)
+                        for pair in accepts)):
+                raise ValueError('Invalid accepted artist changes')
+            identities=[pair[0] for pair in accepts]
+            if len(set(identities))!=len(identities):raise ValueError('Ambiguous accepted artist changes')
+            if (not isinstance(expected_pins,dict) or set(expected_pins)!={'scope','tracks'}
+                    or not isinstance(expected_pins['tracks'],dict)
+                    or set(identities)-set(expected_pins['tracks'])):
+                raise ValueError('Artist selection was not captured before the dialog')
+            fresh=alias_intents.artist_pins(w.lib,identities)
+            if (fresh['scope']!=expected_pins['scope'] or any(
+                    fresh['tracks'][identity]!=expected_pins['tracks'][identity] for identity in identities)):
+                raise ValueError('The artist selection changed; reopen suggestions')
+        except (ValueError,KeyError,TypeError) as exc:w._flash_status(str(exc),12);return False
+        artists=dict(w.overrides)
+        for identity,value in accepts:artists[identity]=value.strip()
+        info=w.settings.get('track_info',{})
+        has_artist_overlay=any('artist' in info.get(identity,{}) for identity in identities)
+        if artists==w.overrides and not has_artist_overlay:return True
+        updated_info=deepcopy(info) if has_artist_overlay else None
+        if updated_info is not None:
+            for identity in identities:
+                row=updated_info.get(identity)
+                if row is None:continue
+                row.pop('artist',None)
+                if not row:updated_info.pop(identity)
+        return self._stage_generation(w.aliases,artists,info=updated_info,changed_artists=identities)
+
+    def _stage_generation(self,aliases,artists,*,info=None,changed_artists=None,policy_changes=None):
+        """One successor owns a global artist policy change and its preimage."""
+        w=self.window
+        scope=source_truth.scope(w.lib);visible={};owned={};owned_titles={};previous={}
+        for track in w.lib.tracks_by_id.values():
+            identity=alias_intents.key(scope,dict(local_id=track.track_id,native_id=track.native_id,
+                uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+            fields=self.display_fields(track)
+            row=w._row_for(track) if hasattr(w,'_row_for') else engine.track_row(track,w.overrides,w.titles,
+                registry=w.lib.artist_registry,junk=w._title_junk())
+            row.update({field:value for field,value in w.settings.get('track_info',{}).get(track.track_id,{}).items()
+                        if field in ('title','artist')})
+            visible[identity]=dict(title=fields.get('title',row['title']),artist=fields.get('artist',row['artist']))
+            owned[identity]=[job['value'] for job in self.pending if job['field']=='artist'
+                and (job['source'],job['library_id'],job['local_id'])==(scope['source'],scope['library_id'],track.track_id)
+                and _matches_track(job,track)]
+            owned_titles[identity]=[job['value'] for job in self.pending if job['field']=='title'
+                and (job['source'],job['library_id'],job['local_id'])==(scope['source'],scope['library_id'],track.track_id)
+                and _matches_track(job,track)]
+        present=set(visible)
+        for name in (source_truth.MIGRATION,alias_intents.NEXT):
+            prior=w.settings.get(name)
+            if not prior or prior['scope']!=scope:continue
+            targets=w.settings.get(source_truth.TARGETS if name==source_truth.MIGRATION else alias_intents.TARGETS,{})
+            if prior.get('format')==_BUILDING:
+                payload=alias_intents.missing_inputs(targets[prior['input_key']]['payload'],present)
+                if payload:previous['source-inputs:'+prior['id']]=dict(source_raw=payload)
+            elif name==alias_intents.NEXT and prior['state']=='building':
+                raw=targets['inputs:'+prior['id']]['raw']
+                previous.update(deepcopy(raw['previous']))
+                payload=alias_intents.missing_inputs(raw['payload'],present)
+                if payload:
+                    identities={alias_intents.key(scope,track) for track in payload['tracks']}
+                    filtered={**raw,'payload':payload,'previous':{},
+                        **{key:{identity:row for identity,row in raw[key].items() if identity in identities}
+                           for key in ('origins','visible','owned','owned_titles')}}
+                    previous['alias-inputs:'+prior['id']]=dict(alias_raw=filtered)
+            else:
+                plan=prior if name==source_truth.MIGRATION else prior['plan']
+                cursor=plan['cursor']
+                if plan.get('active') and not plan['active']['operations'] and not plan.get('error'):cursor+=1
+                unfinished=set(plan['unresolved'])|set(plan['order'][cursor:])
+                previous.update({identity:deepcopy(row) for identity,row in targets.items()
+                                 if identity in unfinished and identity not in present})
+        settings=w.settings if info is None else {**w.settings,'track_info':info}
+        if policy_changes is not None:settings={**settings,**policy_changes}
+        if changed_artists:
+            origins=dict(settings.get(alias_intents.ORIGINS,{}))
+            for track in w.lib.tracks_by_id.values():
+                if track.track_id not in changed_artists:continue
+                identity=alias_intents.key(scope,dict(local_id=track.track_id,native_id=track.native_id,
+                    uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+                origin=origins.get(identity)
+                if origin is None:
+                    fields=visible[identity]
+                    automatic=metadata.effective_artist(track.track_id,track.name,track.artist,
+                        registry=w.lib.artist_registry,stem=track.path.stem)
+                    origin=dict(scope=scope,local_id=track.track_id,native_id=track.native_id,uuid=track.source_uuid,
+                        path=track.source_native_path or str(track.path),automatic=automatic,native_artist=track.artist,
+                        automatic_title=fields['title'],native_title=track.name,title_shield='')
+                    origin=provenance.seed(origin,title=track.name,artist=track.artist,display_artist=fields['artist'])
+                origins[identity]=provenance.edit(origin,('artist',))
+            settings={**settings,alias_intents.ORIGINS:origins}
+        try:raw=alias_intents.capture(w.lib,titles=w.titles,artists=artists,aliases=aliases,
+            settings=settings,visible=visible,owned=owned,owned_titles=owned_titles,previous=previous,
+            origin_artists=w.overrides,changed_artists=changed_artists,policy=policy_changes is not None)
+        except (ValueError,KeyError,TypeError) as exc:w._flash_status(str(exc),12);return False
+        identity=uuid4().hex;before_settings=w.settings;before_aliases=w.aliases;before_artists=w.overrides
+        w.settings={**w.settings,alias_intents.NEXT:dict(format=alias_intents.FORMAT,id=identity,scope=scope,
+            state='building',inputs_sha256=hashlib.sha256(raw).hexdigest(),edits={},error=''),
+            alias_intents.TARGETS:{'inputs:'+identity:dict(raw=json.loads(raw))},
+            alias_intents.ORIGINS:json.loads(raw)['origins']}
+        if info is not None:w.settings['track_info']=info
+        if policy_changes is not None:w.settings.update(policy_changes)
+        w.aliases=aliases;w.overrides=artists
+        if not w._save_state():
+            w.settings=before_settings;w.aliases=before_aliases;w.overrides=before_artists;return False
+        w._build_artist_registry();self.status('Artist updates pending');self.schedule();return True
+
+    def _resume_alias_build(self):
+        w=self.window;next_plan=w.settings.get(alias_intents.NEXT)
+        if (not next_plan or next_plan['state']!='building' or next_plan['error'] or self.tasks.pending
+                or self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False)):return
+        if not w.lib or source_truth.scope(w.lib)!=next_plan['scope']:return
+        captured=deepcopy(next_plan);raw=source_truth._encode(w.settings[alias_intents.TARGETS]['inputs:'+captured['id']]['raw'])
+        worker=OneShotTask(lambda:alias_intents.build(raw,migration_id=captured['id']),log_label='Frozen native artist alias plan')
+        def completed(task):
+            current=w.settings.get(alias_intents.NEXT)
+            if not current or current['id']!=captured['id']:
+                self.schedule();return
+            if self.closing or w._shutting_down or getattr(w,'_state_publication',False):return
+            if not w.lib or source_truth.scope(w.lib)!=captured['scope']:return
+            if self._migration_error():self.status(self._migration_error());return
+            if isinstance(task.result,Exception):
+                w.settings[alias_intents.NEXT]={**current,'error':str(task.result)};w._save_state();self.status(str(task.result));return
+            descriptor,targets,origins=task.result
+            alias_intents.apply_edits(descriptor,targets,current['edits'])
+            before=w.settings
+            captured_origins=json.loads(raw)['origins']
+            merged_origins=alias_intents.merge_origins(origins,captured_origins,before.get(alias_intents.ORIGINS,{}))
+            explicit_titles={row['local_id'] for row in current['edits'].values() if 'title' in row['fields']}
+            titles,merged_origins=alias_intents.protect_titles(targets,w.titles,merged_origins,
+                current_bindings=alias_intents.title_bindings(w.lib),junk=w._title_junk(),explicit_titles=explicit_titles)
+            before_titles=w.titles
+            w.settings={**before,alias_intents.NEXT:{**current,'state':'ready','plan':descriptor},
+                        alias_intents.TARGETS:targets,alias_intents.ORIGINS:merged_origins}
+            w.titles=titles
+            if not w._save_state():
+                w.settings={**before,alias_intents.NEXT:{**current,'error':'Artist alias plan could not be saved'}}
+                w.titles=before_titles
+                self.status('Artist alias plan needs storage attention');return
+            w._invalidate_rows()
+            reload=getattr(w,'_reload_current_view',None)
+            if reload:reload()
+            self.schedule()
+        self.tasks.adopt(worker,completed);worker.start()
+
+    def _promote_alias(self):
+        w=self.window;next_plan=w.settings.get(alias_intents.NEXT)
+        if not next_plan or next_plan['state']!='ready' or self.pending:return False
+        if not w.lib or source_truth.scope(w.lib)!=next_plan['scope']:return False
+        current=w.settings.get(source_truth.MIGRATION)
+        if current and current.get('active') and current['active']['operations']:return False
+        descriptor,targets=alias_intents.prune(next_plan['plan'],w.settings[alias_intents.TARGETS])
+        before=w.settings
+        w.settings={**before,source_truth.MIGRATION:descriptor,source_truth.TARGETS:targets}
+        w.settings.pop(alias_intents.NEXT,None);w.settings.pop(alias_intents.TARGETS,None)
+        if not w._save_state():w.settings=before;self.status('Artist alias promotion needs storage attention');return False
+        self.schedule();return True
+
+    def _source_truth_step(self):
+        w=self.window;descriptor=w.settings.get(source_truth.MIGRATION)
+        if w._state_maintenance or getattr(w,'_state_publication',False):return False
+        if descriptor is None:return False
+        if self._migration_error():self.status(self._migration_error());return True
+        if descriptor.get('format')==_BUILDING:self._resume_source_truth_build();return True
+        if not self.migration_pending:return False
+        if descriptor.get('error'):self.status(descriptor['error']);return True
+        targets=w.settings.get(source_truth.TARGETS,{})
+        try:
+            source_truth.validate(descriptor,targets)
+            if not w.lib or source_truth.scope(w.lib)!=descriptor['scope']:return True
+            if descriptor['active'] is not None:
+                if descriptor['active']['operations']:
+                    raise ValueError('Frozen metadata pair acknowledgements are incomplete; intentions are preserved')
+                if not self.tags.verified:return True
+                target=targets[descriptor['active']['target']]
+                matches=[track for track in w.lib.tracks_by_id.values() if (track.native_id,track.source_uuid,
+                    track.source_native_path or str(track.path))==(target['native_id'],target['uuid'],target['path'])]
+                if len(matches)!=1 or (matches[0].name,matches[0].artist)!=(target['title'],target['artist']):
+                    raise ValueError('The title or artist differs from SoundBox. Retry to save the preserved values.')
+                previous=descriptor;descriptor={**descriptor,'cursor':descriptor['cursor']+1,'active':None}
+                w.settings[source_truth.MIGRATION]=descriptor
+                if not w._save_state():w.settings[source_truth.MIGRATION]=previous;self.status('Source metadata progress could not be saved');return True
+                if descriptor['cursor']==len(descriptor['order']):
+                    unresolved=len(descriptor.get('unresolved',[]))
+                    self.status(f'Available native metadata saved; {unresolved} unresolved saved entries preserved'
+                                if unresolved else 'Frozen SoundBox metadata saved')
+                    if self._derived_dirty:self.schedule()
+                    return True
+            if descriptor['cursor']==len(descriptor['order']):
+                self.status(f"{len(descriptor['unresolved'])} unresolved saved entries preserved; native identities need attention")
+                return True
+            target_key=descriptor['order'][descriptor['cursor']];target=targets[target_key]
+            if target['info']:raise ValueError('Frozen Track Info fields need their separate native save profile')
+            queue=[];operations={}
+            for field in target['fields']:
+                _intent_value(target[field],field);identity=uuid4().hex;operations[field]=identity
+                queue.append(dict(id=identity,source=descriptor['scope']['source'],library_id=descriptor['scope']['library_id'],
+                    local_id=target['local_id'],native_id=target['native_id'],track_uuid=target['uuid'],path=target['path'],
+                    field=field,value=target[field],request=None,retry=False,error=''))
+                if target.get('curation',{}).get(field) is not None:
+                    queue[-1]['curation']=target['curation'][field]
+            if not queue:raise ValueError('Frozen metadata target has no supported changes')
+            previous_descriptor=w.settings[source_truth.MIGRATION];previous_queue=w.settings.get(KEY)
+            w.settings[source_truth.MIGRATION]={**descriptor,'active':dict(target=target_key,operations=operations)}
+            w.settings[KEY]=queue
+            if not w._save_state():
+                w.settings[source_truth.MIGRATION]=previous_descriptor
+                if previous_queue is None:w.settings.pop(KEY,None)
+                else:w.settings[KEY]=previous_queue
+                self.status('Frozen metadata pair could not be queued');return True
+            self.schedule();return True
+        except (ValueError,KeyError,TypeError) as exc:
+            w.settings[source_truth.MIGRATION]={**descriptor,'error':str(exc)};w._save_state();self.status(str(exc));return True
+
+    @property
+    def pending(self):
+        value=self.window.settings.get(KEY,[])
+        return value if isinstance(value,list) else []
+
+    def queue_error(self):
+        if self._retirement_error():return self._retirement_error()
+        try:
+            queue=self.window.settings.get(KEY,[])
+            if not isinstance(queue,list) or len(queue)>256:raise ValueError('Queue')
+            seen=set()
+            for job in queue:
+                if (not isinstance(job,dict) or not _JOB<=set(job) or set(job)-_JOB-{'companion_conflict','curation'}
+                        or not native._operation(job['id']) or job['id'] in seen
+                        or any(type(job[k]) is not str for k in _JOB-{'request','retry'})
+                        or not Path(job['source']).is_absolute() or not job['library_id'] or not job['local_id']
+                        or not Path(job['path']).is_absolute() or type(job['retry']) is not bool
+                        or bool(job['native_id'])!=bool(job['track_uuid'])):raise ValueError('Identity')
+                if job['native_id']:native._native_id(job['native_id'])
+                if job['field'] not in ('title','artist'):raise ValueError('Field')
+                _intent_value(job['value'],job['field'])
+                if 'curation' in job:provenance.validate_snapshot(job['curation'])
+                if 'companion_conflict' in job:
+                    proof=job['companion_conflict']
+                    if (not isinstance(proof,dict) or set(proof)!={'field','value','accepted'}
+                            or proof['field'] not in {'title','artist'}-{job['field']}
+                            or type(proof['accepted']) is not bool):raise ValueError('Companion proof')
+                    _intent_value(proof['value'],proof['field'])
+                if job['request'] is not None:
+                    request=native.validate_request(job['request'])
+                    if any(request[k]!=job[j] for k,j in (('operation_id','id'),('library_id','library_id'),
+                        ('track_id','native_id'),('track_uuid','track_uuid'),('path','path'),('field','field'),('value','value'))):
+                        raise ValueError('Captured request differs from intention')
+                seen.add(job['id'])
+        except (ValueError,KeyError,TypeError,WriteProofError):return 'Saved metadata edits need attention; intentions are preserved'
+        return self._migration_error()
+
+    def can_quit_with_unadmitted_metadata(self):
+        """Preserve disabled intentions on disk without claiming publication.
+
+        A native request or active worker still uses the ordinary drain gate.
+        Unstarted read-only derivation is reconstructed on the next verified
+        source read; durable curation and frozen publication intentions remain.
+        This exception is only for a verified source without metadata authority.
+        """
+        if self.queue_error():return False
+        if (self.factory or self.tasks.pending or self.tags.busy
+                or self.window.settings.get(ACKS)
+                or any(job.get('request') is not None for job in self.pending)):
+            return False
+        return self.reason()=='Native metadata editing requires separate acceptance for this library'
+
+    def reason(self):
+        w=self.window;lib=w.lib
+        if self.queue_error():return self.queue_error()
+        if self.closing or w._shutting_down or w._state_maintenance or getattr(w,'_state_publication',False):
+            return 'Library operation in progress'
+        if not lib or lib.source_kind!='rekordbox-db' or not self.tags.verified:return 'Refresh the native library before editing metadata'
+        scope=source_truth.scope(lib)
+        if any((job['source'],job['library_id'])!=(scope['source'],scope['library_id']) for job in self.pending):
+            return 'Switch to the original library to finish its metadata saves'
+        for key in (source_truth.MIGRATION,alias_intents.NEXT):
+            plan=w.settings.get(key)
+            if plan and plan['scope']!=scope and (key==alias_intents.NEXT or plan.get('format')==_BUILDING
+                    or plan.get('active') or plan.get('unresolved') or plan.get('cursor',0)<len(plan.get('order',[]))):
+                return 'Switch to the original library to finish its metadata saves'
+        if not self.factory and native.load_authority(self.tags.data_root/'rekordbox-metadata-authority.json',
+                lib.source,lib.source_library_id) is None:return 'Native metadata editing requires separate acceptance for this library'
+        return ''
+
+    def _store(self,lib):
+        return self.factory(lib) if self.factory else native.SourceMetadataStore(native.load_authority(
+            self.tags.data_root/'rekordbox-metadata-authority.json',lib.source,lib.source_library_id),self.tags.data_root)
+
+    def _readback(self,previous):
+        if self.loader is not None:return self.loader(Path(previous.source))
+        from soundbox import rekordbox_db
+        return rekordbox_db.load_metadata_readback(previous)
+
+    def enqueue(self,track_id,changes):
+        """Persist intended effective values and local curation atomically."""
+        w=self.window;reason=self.reason()
+        if reason:w._flash_status(reason,12);return False
+        if (not isinstance(changes,dict) or not changes or set(changes)-{'title','artist'}):
+            w._flash_status('Those metadata fields need their separate native save profile',12);return False
+        track=w.lib.tracks_by_id.get(track_id)
+        if track is None or track_id in getattr(w.lib,'source_binding_issues',{}):
+            w._flash_status('Refresh the song identity before editing metadata',12);return False
+        previous=engine.track_row(track,w.overrides,w.titles,registry=w.lib.artist_registry,junk=w._title_junk())
+        previous.update({field:value for field,value in w.settings.get('track_info',{}).get(track_id,{}).items()
+                         if field in ('title','artist')})
+        previous.update(self.display_fields(track))
+        scope=source_truth.scope(w.lib)
+        origin_identity=alias_intents.key(scope,dict(local_id=track_id,native_id=track.native_id,
+            uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+        existing_origins=w.settings.get(alias_intents.ORIGINS,{})
+        relocated_origins=(existing_origins if origin_identity in existing_origins else
+                           alias_intents.library_origins(w.lib,existing_origins))
+        prior_origin=relocated_origins.get(origin_identity)
+        owned=[job['value'] for job in self.pending if job['field']=='artist' and job['local_id']==track_id
+               and (job['source'],job['library_id'])==(scope['source'],scope['library_id']) and _matches_track(job,track)]
+        if prior_origin and track.artist in [prior_origin['native_artist'],*owned]:automatic=prior_origin['automatic']
+        else:
+            bases=[metadata.derive_artist(t.name,t.artist)[0] for t in w.lib.tracks_by_id.values()]
+            trusted=[t.artist for t in w.lib.tracks_by_id.values() if t.artist]+list(w.overrides.values())
+            automatic=metadata.effective_artist(track_id,w.titles.get(track_id) or track.name,track.artist,
+                registry=metadata.build_registry(bases,trusted),stem=track.path.stem)
+        owned_titles=[job['value'] for job in self.pending if job['field']=='title' and job['local_id']==track_id
+               and (job['source'],job['library_id'])==(scope['source'],scope['library_id']) and _matches_track(job,track)]
+        automatic_title=(prior_origin['automatic_title'] if prior_origin and track.name in
+            [prior_origin['native_title'],*owned_titles] else metadata.effective_title(track_id,track.name,previous['artist'],junk=w._title_junk()))
+        if prior_origin and 'provenance' in prior_origin and track.name in [prior_origin['native_title'],*owned_titles]:
+            automatic_title=metadata.tidy_title(prior_origin['provenance']['title_base'],w._title_junk())
+        origin=dict(scope=scope,local_id=track_id,native_id=track.native_id,uuid=track.source_uuid,
+                    path=track.source_native_path or str(track.path),automatic=automatic,native_artist=track.artist,
+                    automatic_title=automatic_title,native_title=track.name,
+                    title_shield=prior_origin.get('title_shield','') if prior_origin else '')
+        if prior_origin and 'provenance' in prior_origin:origin['provenance']=prior_origin['provenance']
+        elif prior_origin is None:
+            origin=provenance.seed(origin,title=track.name,artist=track.artist,display_artist=previous['artist'])
+        origin=provenance.edit(origin,changes)
+        titles,artists=dict(w.titles),dict(w.overrides)
+        for field,value in changes.items():
+            if type(value) is not str:w._flash_status('Metadata must be text',12);return False
+            values=artists if field=='artist' else titles
+            if value.strip():values[track_id]=value.strip()
+            else:values.pop(track_id,None)
+        registry=w.lib.artist_registry
+        if 'artist' in changes:
+            bases=[metadata.derive_artist(t.name,t.artist)[0] for t in w.lib.tracks_by_id.values()]
+            trusted=[t.artist for t in w.lib.tracks_by_id.values() if t.artist]+[v for v in artists.values() if v.strip()]
+            registry=metadata.build_registry(bases,trusted,w.aliases)
+        effective=engine.track_row(track,artists,titles,registry=registry,junk=w._title_junk())
+        if 'artist' in changes and not changes['artist'].strip():
+            effective['artist']=registry.canonical(origin['automatic']) if registry else origin['automatic']
+            effective['title']=metadata.effective_title(track_id,track.name,effective['artist'],titles,w._title_junk())
+        if 'title' in changes and not changes['title'].strip():effective['title']=origin['automatic_title']
+        info=dict(w.settings.get('track_info',{}).get(track_id,{}))
+        for field in ('title','artist'):
+            if field not in changes and field in info:effective[field]=info[field]
+        retained=self.display_fields(track)
+        for field in ('title','artist'):
+            if field not in changes and field in retained:effective[field]=retained[field]
+        if 'artist' not in changes:effective['artist']=previous['artist']
+        if 'title' not in changes:effective['title']=previous['title']
+        display_artist=effective['artist']
+        if effective['artist']==metadata.UNKNOWN_ARTIST:effective['artist']=''
+        try:
+            for field in ('title','artist'):_intent_value(effective[field],field)
+        except ValueError as exc:w._flash_status(str(exc),12);return False
+        shield_row={**origin,'title':effective['title'],'artist':effective['artist'],'display_artist':display_artist}
+        titles,protected_origins=alias_intents.protect_titles({origin_identity:shield_row},titles,{origin_identity:origin},
+            current_bindings=alias_intents.title_bindings(w.lib,allow_drafts=True),junk=w._title_junk(),
+            explicit_titles={track_id} if 'title' in changes and changes['title'].strip() else ())
+        origin=protected_origins[origin_identity]
+        wanted=[]
+        for field,original in (('title',track.name),('artist',track.artist)):
+            queued=[job for job in self.pending if (job['source'],job['library_id'],job['local_id'],job['field'])==
+                    (str(w.lib.source),w.lib.source_library_id,track_id,field) and _matches_track(job,track)]
+            if (queued[-1]['value'] if queued else original)!=effective[field] or field in changes and not queued:
+                wanted.append(field)
+        if len(self.pending)+len(wanted)>256:w._flash_status('Wait for pending metadata saves to finish',12);return False
+        before_settings=w.settings;before_titles=w.titles;before_artists=w.overrides
+        w.settings=dict(before_settings)
+        queue=list(self.pending)
+        for field in wanted:
+            queue.append(dict(id=uuid4().hex,source=str(w.lib.source),library_id=w.lib.source_library_id,
+                local_id=track_id,native_id=track.native_id if track.source_uuid else '',track_uuid=track.source_uuid,
+                path=getattr(track,'source_native_path','') or str(track.path),field=field,value=effective[field],
+                request=None,retry=False,error=''))
+            captured=provenance.snapshot(origin,field,titles if field=='title' else artists,
+                info.get(field) if field not in changes else None)
+            if captured is not None:queue[-1]['curation']=captured
+        w.settings[KEY]=queue;w.titles=titles;w.overrides=artists
+        w.settings[alias_intents.ORIGINS]={**relocated_origins,origin_identity:origin}
+        if set(info)&set(changes):
+            extras=dict(w.settings.get('track_info',{}));row=dict(info)
+            for field in changes:row.pop(field,None)
+            if row:extras[track_id]=row
+            else:extras.pop(track_id,None)
+            w.settings['track_info']=extras
+        descriptor=w.settings.get(source_truth.MIGRATION)
+        if descriptor and descriptor.get('scope')==source_truth.scope(w.lib):
+            fields=list(dict.fromkeys([*changes,*wanted]))
+            if descriptor.get('format')==_BUILDING:
+                edits=dict(descriptor.get('edits',{}));edits[track_id]=dict(uuid=track.source_uuid,
+                    path=track.source_native_path or str(track.path),title=effective['title'],artist=effective['artist'],
+                    display_artist=display_artist,fields=fields)
+                w.settings[source_truth.MIGRATION]={**descriptor,'edits':edits}
+            else:
+                targets=dict(w.settings.get(source_truth.TARGETS,{}))
+                for key,row in targets.items():
+                    if (row['local_id'],row['uuid'],row['path'])==(track_id,track.source_uuid,track.source_native_path or str(track.path)):
+                        targets[key]={**row,'title':effective['title'],'artist':effective['artist'],'display_artist':display_artist,
+                                      'fields':list(dict.fromkeys([*row['fields'],*fields]))}
+                w.settings[source_truth.TARGETS]=targets
+        next_plan=w.settings.get(alias_intents.NEXT)
+        if next_plan and next_plan['scope']==source_truth.scope(w.lib):
+            identity=alias_intents.key(next_plan['scope'],dict(local_id=track_id,native_id=track.native_id,
+                uuid=track.source_uuid,path=track.source_native_path or str(track.path)))
+            edit=dict(scope=next_plan['scope'],local_id=track_id,native_id=track.native_id,uuid=track.source_uuid,
+                path=track.source_native_path or str(track.path),title=effective['title'],artist=effective['artist'],
+                display_artist=display_artist,fields=list(changes))
+            if next_plan['state']=='building':
+                previous_edit=next_plan['edits'].get(identity,{})
+                edit['fields']=list(dict.fromkeys([*previous_edit.get('fields',[]),*edit['fields']]))
+                w.settings[alias_intents.NEXT]={**next_plan,'edits':{**next_plan['edits'],identity:edit}}
+            else:
+                targets=deepcopy(w.settings[alias_intents.TARGETS])
+                alias_intents.apply_edits(next_plan['plan'],targets,{identity:edit})
+                w.settings[alias_intents.TARGETS]=targets
+        if not w._save_state():
+            w.titles=before_titles;w.overrides=before_artists;w.settings=before_settings
+            return False
+        if 'artist' in changes:w._build_artist_registry()
+        else:w._invalidate_rows((track_id,))
+        reload=getattr(w,'_reload_current_view',None)
+        if reload:QTimer.singleShot(0,w,reload)
+        self.status('Metadata saves pending' if queue else '');self.schedule();return True
+
+    def status(self,message):
+        if getattr(self.tags,'metadata_update_status','')!=message:
+            self.tags.metadata_update_status=message;self.tags.changed.emit()
+
+    def schedule(self):
+        if not self.closing and (self.pending or self.migration_pending or self.window.settings.get(ACKS)) and not self.timer.isActive():
+            self.timer.start(max(0,int((self.not_before-time.monotonic())*1000)))
+
+    def _retains(self,job):
+        return next((i for i,current in enumerate(self.pending) if isinstance(current,dict)
+                     and {**current,'error':''}=={**job,'error':''}),None)
+
+    def fail(self,job,message,*,companion=None):
+        self.timer.stop();index=self._retains(job)
+        if index is not None:
+            queue=list(self.pending);queue[index]={**queue[index],'error':str(message)}
+            if companion is not None:queue[index]['companion_conflict']=companion
+            self.window.settings[KEY]=queue;self.window._save_state()
+            self.status('Metadata save needs attention — '+str(message))
+        self.window._flash_status(str(message),12)
+
+    def _expected_companion(self,job):
+        w=self.window;field='artist' if job['field']=='title' else 'title'
+        scope=dict(source=job['source'],kind='rekordbox-db',library_id=job['library_id'])
+        identity=alias_intents.key(scope,dict(local_id=job['local_id'],native_id=job['native_id'],
+            uuid=job['track_uuid'],path=job['path']))
+        for name,records in ((alias_intents.NEXT,alias_intents.TARGETS),(source_truth.MIGRATION,source_truth.TARGETS)):
+            plan=w.settings.get(name)
+            if plan and plan.get('scope')==scope and plan.get('state')!='building' and plan.get('format')!=_BUILDING:
+                if name==source_truth.MIGRATION and identity not in plan['order'][plan['cursor']:]:continue
+                row=w.settings.get(records,{}).get(identity)
+                if row and not row['error']:return field,row[field]
+        origin=w.settings.get(alias_intents.ORIGINS,{}).get(identity)
+        if origin is None:
+            proof=job.get('companion_conflict')
+            return (field,proof['value']) if proof else None
+        if field=='title':return field,w.titles.get(job['local_id'],origin['native_title'])
+        value=w.overrides.get(job['local_id'])
+        if value is None:return field,origin['native_artist']
+        registry=w.lib.artist_registry if w.lib else None
+        value=registry.canonical(value) if registry else value
+        return field,'' if value==metadata.UNKNOWN_ARTIST else value
+
+    def _future_companion(self,job,field,track):
+        if any(row['field']==field and (row['source'],row['library_id'],row['local_id'])==
+               (job['source'],job['library_id'],job['local_id']) and _matches_track(row,track) for row in self.pending[1:]):
+            return True
+        next_plan=self.window.settings.get(alias_intents.NEXT)
+        if next_plan and next_plan['state']=='ready':
+            for row in self.window.settings[alias_intents.TARGETS].values():
+                if (row['scope']['source'],row['scope']['library_id'],row['local_id'],row['native_id'],row['uuid'],row['path'])==(
+                        job['source'],job['library_id'],job['local_id'],job['native_id'],job['track_uuid'],job['path']):
+                    return not row['error'] and field in row['fields']
+        return False
+
+    def pump(self):
+        w=self.window
+        if self.closing or w._shutting_down:return
+        if w._state_maintenance or getattr(w,'_state_publication',False):
+            if self.pending or self.migration_pending or w.settings.get(ACKS):self.timer.start(2000)
+            return
+        if self._retirement_error():self.status(self._retirement_error());return
+        if w.settings.get(ACKS):
+            self._resume_receipt_retirement();return
+        descriptor=w.settings.get(source_truth.MIGRATION)
+        if self._migration_error():self.status(self._migration_error());return
+        next_plan=w.settings.get(alias_intents.NEXT)
+        if next_plan and next_plan['error']:
+            self.status(next_plan['error']);return
+        if next_plan and next_plan['state']=='building':self._resume_alias_build();return
+        if next_plan and not self.pending:
+            self._promote_alias();return
+        if descriptor and descriptor.get('format')==_BUILDING:self._resume_source_truth_build();return
+        if not self.pending:
+            if self._resume_derived():return
+            self._source_truth_step();return
+        if self.queue_error():self.status(self.queue_error());return
+        if self.pending[0]['error']:return
+        if (self.tags.source_job_owned or self.tags.prep_priority or w._refresh_worker is not None
+                or w._state_maintenance or w._device_operation_owned()):self.timer.start(2000);return
+        imports=getattr(w,'shared_import_controller',None)
+        if imports and imports.source_priority:self.timer.start(2000);return
+        reason=self.reason()
+        if reason:self.status(reason);return
+        if time.monotonic()<self.not_before:self.schedule();return
+        job=deepcopy(self.pending[0]);lib=w.lib
+        if (str(lib.source),lib.source_library_id)!=(job['source'],job['library_id']):
+            self.status('Switch to the original library to finish its metadata saves');return
+        if job['request'] is None and any((pending.get('source'),pending.get('library_id'))==(job['source'],job['library_id'])
+                and pending.get(field)==job['local_id'] and not pending.get('error') and pending.get('state')!='failed'
+                for key,field in (('analysis_jobs','track_id'),('native_analysis_jobs','local_id'))
+                for pending in w.settings.get(key,[])):
+            publisher=getattr(w,'native_analysis_controller',None)
+            if publisher:publisher.schedule()
+            self.timer.start(2000);return
+        if not job['track_uuid']:
+            track=lib.tracks_by_id.get(job['local_id'])
+            if track is not None and (str(track.path)!=job['path']
+                    or job['local_id'] in getattr(lib,'source_binding_issues',{})):
+                self.fail(job,'The imported song identity changed; its original metadata intention is preserved');return
+            if not track or not track.source_uuid:
+                if imports:imports.schedule()
+                self.timer.start(2000);return
+            before_settings=w.settings;w.settings=dict(before_settings)
+            before=w.settings[KEY];queue=list(before)
+            queue[0]={**queue[0],'native_id':track.native_id,'track_uuid':track.source_uuid,
+                      'path':getattr(track,'source_native_path','') or str(track.path)}
+            w.settings[KEY]=queue
+            origins=w.settings.get(alias_intents.ORIGINS,{})
+            matches=[row for row in origins.values() if row['scope']==source_truth.scope(lib)
+                     and row['local_id']==job['local_id'] and not row['uuid'] and row['path']==job['path']]
+            if len(matches)==1:
+                row={**matches[0],'native_id':track.native_id,'uuid':track.source_uuid,
+                     'path':track.source_native_path or str(track.path),'native_artist':track.artist,'native_title':track.name}
+                w.settings[alias_intents.ORIGINS]={**origins,alias_intents.key(row['scope'],row):row}
+            if not w._save_state():w.settings=before_settings;self.fail(job,'The registered metadata binding could not be saved');return
+            self.schedule();return
+        def work():
+            try:assert_rekordbox_closed()
+            except WriteProofError as exc:
+                if str(exc)=='Close rekordbox and its background agent before editing':return dict(waiting=True)
+                raise
+            self.tags._recover_pending(lib);store=self._store(lib)
+            if job['request'] is None:
+                return dict(request=store.capture_request(job['native_id'],job['track_uuid'],job['path'],
+                    job['field'],job['value'],operation_id=job['id']))
+            if job['retry']:return dict(request=store.retry_request(job['request']))
+            store.apply(job['request'])
+            retirement=getattr(store,'retirement_entry',None)
+            library=self._readback(lib);selected=None;match_count=0
+            for local,track in library.tracks_by_id.items():
+                path=track.source_native_path or str(track.path)
+                if (track.native_id,track.source_uuid,path)==(job['native_id'],job['track_uuid'],job['path']):
+                    match_count+=1
+                    if selected is None:selected=(local,track.native_id,track.source_uuid,path,track.name,track.artist)
+            return dict(library=library,selected=selected,match_count=match_count,
+                        retirement=retirement(job['request']) if retirement else None)
+        def completed(worker):
+            if worker.error:self.fail(job,worker.error);return
+            if worker.result.get('waiting'):
+                self.not_before=time.monotonic()+2;self.status('Metadata pending — quit rekordbox to save');self.schedule();return
+            if self._retains(job)!=0:return
+            if self.queue_error():self.fail(job,self.queue_error());return
+            if not w.lib or (str(w.lib.source),w.lib.source_library_id)!=(job['source'],job['library_id']):
+                self.fail(job,'Saved in the original library; switch back to finish metadata');return
+            before=w.settings[KEY];queue=list(before)
+            if 'request' in worker.result:
+                queue[0]={**queue[0],'request':worker.result['request'],'retry':False}
+                w.settings[KEY]=queue
+                if not w._save_state():w.settings[KEY]=before;self.fail(job,'The exact metadata request could not be saved');return
+                self.schedule();return
+            library=worker.result['library']
+            selected=worker.result.get('selected');matches=[]
+            if isinstance(selected,tuple) and len(selected)==6 and worker.result.get('match_count')==1:
+                track=library.tracks_by_id.get(selected[0])
+                if track is not None and (track.native_id,track.source_uuid,track.source_native_path or str(track.path),
+                        track.name,track.artist)==selected[1:]:matches=[track]
+            if ((str(library.source),library.source_library_id)!=(job['source'],job['library_id'])
+                    or library.source_kind!='rekordbox-db' or len(matches)!=1
+                    or getattr(matches[0],'name' if job['field']=='title' else 'artist')!=job['value']):
+                self.fail(job,'Native metadata readback could not be verified; its intention is preserved');return
+            companion=self._expected_companion(job)
+            future=(companion is not None and self._future_companion(job,companion[0],matches[0]))
+            consent=job.get('companion_conflict',{}).get('accepted',False)
+            if companion and getattr(matches[0],'name' if companion[0]=='title' else 'artist')!=companion[1] and not future and not consent:
+                self.fail(job,'The saved '+companion[0]+' differs from rekordbox. Retry to save the preserved SoundBox title and artist.',
+                    companion=dict(field=companion[0],value=companion[1],accepted=False));return
+            repair=None
+            if (consent and companion and not future and
+                    getattr(matches[0],'name' if companion[0]=='title' else 'artist')!=companion[1]):
+                repair={**job,'id':uuid4().hex,'field':companion[0],'value':companion[1],
+                        'request':None,'retry':False,'error':''}
+                repair.pop('curation',None)
+                repair['companion_conflict']=dict(field=job['field'],value=job['value'],accepted=False)
+                reference=dict(scope=source_truth.scope(library),local_id=job['local_id'],native_id=job['native_id'],
+                               uuid=job['track_uuid'],path=job['path'])
+                repair_origin=w.settings.get(alias_intents.ORIGINS,{}).get(alias_intents.key(reference['scope'],reference))
+                if repair_origin:
+                    captured=provenance.snapshot(repair_origin,repair['field'],w.titles if repair['field']=='title' else w.overrides,
+                        w.settings.get('track_info',{}).get(job['local_id'],{}).get(repair['field']))
+                    if captured is not None:repair['curation']=captured
+            prior_descriptor=w.settings.get(source_truth.MIGRATION)
+            prior_acks=w.settings.get(ACKS)
+            prior_origins=w.settings.get(alias_intents.ORIGINS)
+            prior_origin_validation=self._validated_origins;prior_alias_validation=self._alias_validation
+            next_owner=w.settings.get(alias_intents.NEXT);targets_owner=w.settings.get(alias_intents.TARGETS)
+            prior_titles=w.titles;prior_artists=w.overrides
+            prior_info=w.settings.get('track_info')
+            retirement=worker.result.get('retirement')
+            if retirement is not None:
+                try:native.validate_retirement(retirement)
+                except WriteProofError as exc:self.fail(job,str(exc));return
+                if len(w.settings.get(ACKS,[]))>=256:self.fail(job,'Metadata receipt retirement queue is full');return
+                w.settings[ACKS]=[*w.settings.get(ACKS,[]),dict(entry=retirement,error='')]
+            if prior_origins:
+                identity=alias_intents.key(source_truth.scope(library),dict(local_id=job['local_id'],
+                    native_id=job['native_id'],uuid=job['track_uuid'],path=job['path']))
+                if identity in prior_origins:
+                    origin=provenance.acknowledge({**prior_origins[identity],
+                        'native_artist' if job['field']=='artist' else 'native_title':job['value']},job)
+                    info,retired_overlay=provenance.retire_overlay(origin,job,w.settings.get('track_info',{}))
+                    if retired_overlay:w.settings['track_info']=info
+                    remaining=([repair] if repair else [])+queue[1:]
+                    owned=[(row['field'],row['value']) for row in remaining
+                        if row['local_id']==job['local_id'] and (row['source'],row['library_id'])==
+                        (job['source'],job['library_id']) and _matches_track(row,matches[0])]
+                    origin,w.titles,w.overrides=provenance.reconcile(origin,title=matches[0].name,
+                        artist=matches[0].artist,titles=w.titles,artists=w.overrides,owned=owned,junk=w._title_junk(),
+                        fields=(job['field'],),retired_overlay=retired_overlay)
+                    alias_intents.validate_origins({identity:origin})
+                    w.settings[alias_intents.ORIGINS]={**prior_origins,
+                        identity:origin}
+            if prior_descriptor and prior_descriptor.get('format')!=_BUILDING and prior_descriptor.get('active'):
+                active=prior_descriptor['active'];operations=active['operations']
+                if operations.get(job['field'])==job['id']:
+                    operations={field:identity for field,identity in operations.items() if identity!=job['id']}
+                    if repair and active['target']==alias_intents.key(prior_descriptor['scope'],dict(local_id=job['local_id'],
+                            native_id=job['native_id'],uuid=job['track_uuid'],path=job['path'])):
+                        operations[repair['field']]=repair['id']
+                    w.settings[source_truth.MIGRATION]={**prior_descriptor,'active':{**active,'operations':operations}}
+            w.settings[KEY]=([repair] if repair else [])+queue[1:]
+            if not w._save_state():
+                w.settings[KEY]=before
+                if prior_descriptor is not None:w.settings[source_truth.MIGRATION]=prior_descriptor
+                if prior_acks is None:w.settings.pop(ACKS,None)
+                else:w.settings[ACKS]=prior_acks
+                if prior_origins is None:w.settings.pop(alias_intents.ORIGINS,None)
+                else:w.settings[alias_intents.ORIGINS]=prior_origins
+                w.titles=prior_titles;w.overrides=prior_artists
+                if prior_info is None:w.settings.pop('track_info',None)
+                else:w.settings['track_info']=prior_info
+                self.fail(job,'Metadata saved in rekordbox; local acknowledgement failed. Retry after fixing storage.');return
+            acknowledged_origins=w.settings.get(alias_intents.ORIGINS)
+            if (prior_origins is prior_origin_validation and acknowledged_origins is not prior_origins
+                    and prior_alias_validation==(id(prior_origins),id(next_owner),id(targets_owner))
+                    and w.settings.get(alias_intents.NEXT) is next_owner
+                    and w.settings.get(alias_intents.TARGETS) is targets_owner):
+                self._validated_origins=acknowledged_origins
+                self._alias_validation=(id(acknowledged_origins),id(next_owner),id(targets_owner))
+            self.not_before=0;self.status('Metadata saves pending' if self.pending else '')
+            if not self.closing and not w._shutting_down:w._publish_created_library(library)
+            self.schedule()
+        if not self.tags._run_source_job('metadata',work,completed):self.timer.start(2000)
+
+    def retry(self):
+        if (self.closing or self.tags.busy or getattr(self.tags,'checking',False)
+                or getattr(getattr(self.tags,'owner',None),'pending',0) or self.queue_error()):return False
+        if self.window.settings.get(ACKS):
+            before=self.window.settings[ACKS]
+            self.window.settings[ACKS]=[{**before[0],'error':''},*before[1:]]
+            if not self.window._save_state():self.window.settings[ACKS]=before;return False
+            self.schedule();return True
+        next_plan=self.window.settings.get(alias_intents.NEXT)
+        if next_plan and next_plan['error']:
+            self.window.settings[alias_intents.NEXT]={**next_plan,'error':''}
+            if not self.window._save_state():self.window.settings[alias_intents.NEXT]=next_plan;return False
+            self.schedule();return True
+        if not self.pending:
+            if next_plan:
+                self.schedule();return True
+            descriptor=self.window.settings.get(source_truth.MIGRATION)
+            if not descriptor:return False
+            targets=self.window.settings.get(source_truth.TARGETS)
+            updated={**descriptor,'error':''}
+            if descriptor.get('active') and not descriptor['active']['operations']:
+                identity=descriptor['active']['target'];updated['active']=None
+                self.window.settings[source_truth.TARGETS]={**targets,identity:{**targets[identity],'fields':['title','artist']}}
+            self.window.settings[source_truth.MIGRATION]=updated
+            if not self.window._save_state():
+                self.window.settings[source_truth.MIGRATION]=descriptor
+                if targets is not None:self.window.settings[source_truth.TARGETS]=targets
+                return False
+            self.schedule();return True
+        before=self.window.settings[KEY];queue=list(before);queue[0]={**queue[0],'error':'','retry':True}
+        if 'companion_conflict' in queue[0]:
+            job=queue[0];scope=dict(source=job['source'],kind='rekordbox-db',library_id=job['library_id'])
+            identity=alias_intents.key(scope,dict(local_id=job['local_id'],native_id=job['native_id'],uuid=job['track_uuid'],path=job['path']))
+            if identity not in alias_intents.title_bindings(self.window.lib):
+                self.window._flash_status('The song identity changed; its original metadata pair is preserved',12);return False
+            companion=self._expected_companion(job)
+            if companion is None:return False
+            queue[0]['companion_conflict']=dict(field=companion[0],value=companion[1],accepted=True)
+        self.window.settings[KEY]=queue
+        if not self.window._save_state():self.window.settings[KEY]=before;return False
+        self.not_before=0;self.schedule();return True
+
+    def stop(self):self.closing=True;self.timer.stop();self.tasks.drain()

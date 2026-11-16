@@ -107,6 +107,23 @@ class InfoDialogLifetime(unittest.TestCase):
         self.assertEqual(dialog.controls, controls)
         save.assert_not_called()
 
+    def test_save_dispatches_only_changed_fields_for_title_artist_and_each_existing_info_editor(self):
+        from PySide6.QtWidgets import QComboBox,QPlainTextEdit
+        row=dict(title='Before title',artist='Before artist',album='Before album',year='2020',
+            releaseDate='2020-01-01',comments='Before note',playCount='4',rating='2',label='Before label',
+            color='1',hotCueAutoLoad='Off',genre='Before genre')
+        edits=dict(title='After title',artist='After artist',album='After album',year='2021',
+            releaseDate='2021-01-02',comments='After note',playCount='5',rating='3',label='After label',
+            color='2',hotCueAutoLoad='On',genre='After genre')
+        for field,value in edits.items():
+            with self.subTest(field=field):
+                save=mock.Mock(return_value=True);dialog=TrackInfoDialog(row,save=save,parent=self.parent)
+                control=dialog.controls[field]
+                if isinstance(control,QComboBox):control.setCurrentIndex(control.findData(value))
+                elif isinstance(control,QPlainTextEdit):control.setPlainText(value)
+                else:control.setText(value)
+                dialog._save();save.assert_called_once_with({field:value})
+
     def test_new_publication_during_decode_discards_old_result_and_coalesces_reload(self):
         old=self.image('old.png','red');new=self.image('new.png','blue')
         release=Event();entered=Event();calls=[];painted=[]

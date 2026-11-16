@@ -9,6 +9,11 @@ from .task_owner import TaskOwner
 from . import theme
 
 
+def _edit_identity(library,track):
+    return (str(library.source),library.source_kind,library.source_library_id,track.track_id,
+            track.native_id,track.source_uuid,str(track.path),str(track.native_path))
+
+
 def _themed_wait_cursor():
     cursor=QCursor(Qt.WaitCursor)
     # Use the pinned Cocoa plugin's own wheel so its silhouette and black
@@ -298,14 +303,27 @@ class TrackInfoMixin:
         if track is None:
             self._flash_status('Select a track to view its information');return
         tid=track.track_id
+        identity=_edit_identity(self.lib,track)
+        def current():
+            selected=self.lib.tracks_by_id.get(tid) if self.lib else None
+            if selected is None or _edit_identity(self.lib,selected)!=identity:
+                self._flash_status('The song identity changed; reopen Track information before editing');return False
+            return True
+        def save(changes):
+            return self._save_track_info(tid,changes) if current() else False
+        def pick_art():
+            return self._art_pick(tid) if current() else None
         dialog=TrackInfoDialog(self._row_for(track),artwork=lambda:self.art_cache.image_path(tid),
-            pick_art=lambda:self._art_pick(tid),save=lambda changes:self._save_track_info(tid,changes),parent=self)
+            pick_art=pick_art,save=save,parent=self)
         _exec_info(dialog)
 
     def _save_track_info(self,tid,changes):
         from copy import deepcopy
         from soundbox.track_info import validate
         from soundbox.paths import TITLE_MAX,ARTIST_MAX
+        controller=getattr(self,'metadata_controller',None)
+        if controller is not None and self.lib and self.lib.source_kind=='rekordbox-db':
+            return controller.enqueue(tid,changes)
         extra=validate({k:v for k,v in changes.items() if k not in ('title','artist')})
         for key,limit in (('title',TITLE_MAX),('artist',ARTIST_MAX)):
             if key in changes and (not changes[key].strip() or len(changes[key])>limit):

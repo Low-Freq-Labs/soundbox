@@ -217,9 +217,14 @@ no automatic global propagation. usb_format revalidates the reviewed physical US
 before FAT32/exFAT MBR formatting, reusing a correctly typed full-capacity sole
 first partition only for same-filesystem quick erase. Other layouts or filesystem
 changes repartition; post-format physical/map/filesystem checks remain.
-Track.info and SoundBox-local settings.track_info
-overrides feed display/export; browsercache schema3 and libcache schema11 preserve
-these fields without analysis/art rebuilds. The ordinary desktop playlist API
+Track.info and retained settings.track_info overlays feed display/export;
+browsercache schema4 and libcache schema13 preserve these fields without
+analysis/art rebuilds. In tested source, native Title/Artist edits use
+`desktop.metadata_controller` and an independently admitted native store;
+unsupported native Track Info fields refuse rather than report a local-only save.
+Legacy/XML overlays remain supported migration/display inputs. The narrow
+metadata profile is default-off and does not complete broader Track Info or
+artwork persistence; see HANDOFF and the shared-library audit. The ordinary desktop playlist API
 shares the accepted Tag/Cue/Grid lane and has separate explicit authority. The
 historical standalone pilot under research has only its exact-plan approval,
 shared recovery root/lock/journal and no general authority or app loader; see HANDOFF.
@@ -271,6 +276,15 @@ resumably while row/XML/native-resource receipts stay. Unknown state blocks othe
 domains. No broad orphan sweep, permanent unlink or title-based identity lookup.
 See `graveyard-delete-plan.md` for native reference and installed-state boundaries.
 
+The same store also has a dormant native-only preparation policy. Selected scalar
+source/library/ID/UUID/raw-path pins enter the existing durable review queue;
+global native identity checks and DB/XML work run on the shared source worker.
+Its SQL/XML plan is identical to accepted Collection removal, but it never opens,
+stats, hashes, scans, tags or disposes of audio, analysis, artwork or Trash paths.
+Committed readback and retained source-bound Graveyard history precede local
+acknowledgement. Production admission remains disabled: no lossless native Restore
+composition is accepted yet, and current local Collection hide/Restore stays intact.
+
 `desktop.analysis` owns the Analysis tab and cancellable TaskOwner jobs.
 Manual and automatic analysis use the same background queue, without a dialog
 or progress bar. Each song retires/joins and saves independently before the next
@@ -291,8 +305,18 @@ SHA/epoch and BPM/key phase progress save durably. BPM-only processing uses a
 SoundBox projection of the pinned tempo/downbeat math, with exact parity tests;
 key runs next over the same SHA-pinned bytes. The original preferences remain
 captured, manual drafts survive, and native publication cannot consume intermediate
-BPM paired with an older key. Source writes yield to runnable local preparation;
-failed songs retain their intentions while other local jobs continue. Captured
+BPM paired with an older key. Joined, durably acknowledged local phases offer
+one eligible source admission before the next local phase. Offers rotate among
+tag-assignment, cue, grid, prep, playlist, tag-definition, metadata, registration,
+native-analysis, removal and media heads;
+each retains its FIFO, per-song prerequisites and fresh source guards. General
+ownership still protects refresh/export/shutdown. Only the synchronously selected
+source opportunity may pass deferred cue/grid logical holds, while physical work,
+prepared-prep/recovery reservations and foreground prerequisites remain guarded.
+There is no elapsed-time deadline. Interactive Tags remain busy during active
+DSP; an admitted single-flight assignment persists before presentation and
+remains until exact native readback and durable acknowledgement. Failed songs
+retain their intentions while other local jobs continue. Captured
 cue gestures remain immediately usable and durable while source work waits.
 Normal Quit keeps the window and source pumps usable while captured saves finish;
 teardown then drains accepted cue jobs before stopping their owner.
@@ -656,8 +680,17 @@ is removed. Its circle-i is a 44×28 bordered prep button
 immediately before My Tags, using the same BG inner fill as Settings and the other
 controls, with a matching three-point corner radius. Info and Settings use
 centered vector icons, avoiding font bearings. The player-layout popup is sized
-to the selector field after Qt lays it out. Info opens Summary/Info for the selected row, with artwork inside Info. Supported
-metadata edits are SoundBox-local and feed USB export. USB songs and historical
+to the selector field after Qt lays it out. Info opens Summary/Info for the selected row, with artwork inside Info.
+Tested source routes native Title/Artist changes through durable intentions and
+exact source readback; its separate metadata authority remains default-off pending
+broader native proof. Other native Track Info fields refuse unsupported saves.
+Save dispatch includes only changed controls, so an unchanged unsupported field
+does not block a Title-only edit. Save and artwork actions retain the exact
+source/library, logical/native IDs, UUID and native/local paths captured before
+artwork preparation or the modal event loop; a replacement requires reopening.
+Existing local overlays remain preserved migration/display/export input, and
+legacy/XML sources retain local editing. Native artwork persistence is unfinished.
+USB songs and historical
 native-deleted Graveyard rows open read-only information dialogs. TrackInfoDialog constructs
 both Summary and Info before presentation; tab switching performs no control construction.
 Before modal show, ArtworkWorker resolves the canonical art path and decodes
@@ -1157,8 +1190,39 @@ refresh, preserving compressed waveform payloads.
   `desktop.tag_controller` owns saves/readiness probes through TaskOwner retirement
   and join; refresh, source selection, backup/restore and shutdown serialize with
   that owner. A successful save reloads the source snapshot and smart memberships.
-  `LibraryTag`, source UUIDs/memberships and library identity travel through
-  instant-paint cache schema11 (older4–10 remain readable). A cached source cannot grant write authority.
+  `smart_playlist_order` orders default smart-list rows by active matching
+  native tag-assignment creation dates, including pre-update history. The reader
+  captures dates in the existing membership pass; missing/invalid dates stay
+  unknown. Only positive rule tags contribute. Verified local display ranks
+  remain a fallback for unknown dates/ties, bound to source/library, tag,
+  track/native UUID, playlist UUID and exact rule hash. Newer source dates take
+  precedence. Removal/no-op/failure creates no local promotion. Header sorts
+  override the default; native rules/memberships and exports keep their order.
+  `LibraryTag`, source UUIDs/memberships, per-tag dates and library identity
+  travel through instant-paint cache schema13 (older4–12 remain readable).
+  Export snapshots omit this display-only date graph. Cached data cannot grant
+  write authority.
+- **Tag and smart deletion retain independent native admission.** Local tag
+  deletion shares definition transaction mechanics but has a separately marked
+  authority, receipt namespace and exact assignment/rule dependencies. Its FIFO
+  persists before admission and verifies definition/assignment absence before
+  acknowledgement. Intelligent rules remain opaque and unchanged. Local smart
+  deletion uses a distinct opcode and default-off playlist capability/profile;
+  it captures exact target/rule/parent and following-sibling clocks, retains
+  native XML and projects only the selected computed-list removal. Native
+  unobserved historical shapes and production activation remain separate gates.
+- **Tag definitions and new smart playlists have independent admission.**
+  `rekordbox_tag_definitions` owns unassigned leaf creation through its marked
+  authority; `desktop.tag_creation_controller` persists its own FIFO on the shared
+  source owner. `desktop.tag_creation` supplies the full-width My Tags header
+  button and creation forms, defaulting smart conditions to My Tag/ANY. Smart
+  creation requires the playlist authority's explicit capability and profile,
+  exact tag/category/parent pins and full source readback before presentation.
+  The accepted root/nonempty smart-only placement windows preserve existing
+  rules and relative order; empty/mixed folders and existing smart rename/rule/reorder changes
+  remain guarded. Deletion has its separate capability above. SQL/XML phase clocks and renewed shared-parent clocks persist
+  before admission. The November12 pilot/native reopen and installed package
+  complete this scope; no cache or prior ordinary-playlist authority enables it.
 - **Cue planning is pure; the accepted writer binds one track.** `rekordbox_cues` produces exact
   four-table deltas from raw snapshots, separate from normalized display cues.
   Full revisions and explicit cue IDs/UUIDs guard stale chronological deletion;
@@ -1259,7 +1323,9 @@ refresh, preserving compressed waveform payloads.
   scrambled Fxx names, and native CDJ placement preserves/reconciles its own
   catalog-bound audio paths. Effective title/artist live in the appropriate
   metadata/database fields. Export never renames source files.
-- **Browser default order = newest-ADDED first in Collection and every playlist**, one timeline across both planes:
+- **Browser default order = newest-ADDED first**, with recent matching My Tag
+  assignments promoted in smart playlists. Collection/ordinary playlists retain
+  one timeline across both planes:
   `Track.added_ts` = rekordbox `created_at` for mirror tracks, SoundBox import
   time for imported audio (falls back to file birthtime when unknown). See the
   GOTCHAS caching note: `added_ts` must survive `libcache`; known dates do not
@@ -1482,10 +1548,29 @@ This is not complete reseller detection or proof of account authenticity.
 
 ## Persistence
 
-Library curation lives in one portable `library.json` (overrides,
-playlists, imported records, hides/removals, settings) at
-`~/Library/Application Support/LowFreqLabs/Soundbox/`, keyed by stable track
-IDs so a newer rekordbox library preserves all work. Atomic ordinary JSON saves, rotating
+Library curation lives in `library.json` plus its referenced `.state-records/`
+payloads (overrides, playlists, imported records, hides/removals, settings) at
+`~/Library/Application Support/LowFreqLabs/Soundbox/`, keyed by stable logical
+track IDs. Tested source binds native curation to source path/library and native
+ID/UUID pins through `settings.source_curation`; playlist pins also retain type
+and smart-rule identity. Source selection stages curation and selection in one
+save, rolls back exact RAM owners on failure, and preserves separate source
+partitions. Reused logical/native IDs cannot silently adopt another song's work.
+`state_records` stores `analysis_results`, `pending_prep_edits`,
+`native_analysis_jobs`, `source_truth_targets`, `source_truth_alias_targets` and
+`source_truth_artist_origins` as individually
+hashed records; the small versioned manifest preserves exact map/queue order.
+Legacy full JSON remains readable and migrates on a successful save with heavy
+records. The shared state journal publishes changed records, manifest and verified
+old-record retirement together before acknowledgement. Unchanged records retain
+their private validated ownership; mutable incoming data still receives exact
+comparison and changed records receive validation, detachment and encoding.
+Fresh manifest/record identities fence stale writers and external edits. The
+64MiB logical-state ceiling remains; unknown evidence is never swept.
+Use `read_state` for logical reads and `portable_state` under the area lock for a
+complete standalone JSON snapshot. A canonical manifest alone is insufficient
+for copying or downgrading; older readers reject its sentinel. Rotating history
+and full exports materialize complete standalone JSON. Atomic saves, rotating
 backups, corruption auto-recovery, one-click full `.zip` backup/restore
 (library + history + art cache, including managed default photos). Track-specific
 art stays in `art/index.json`; the independent `art/defaults/` pool holds
@@ -1498,6 +1583,108 @@ settings payload also stores the last
 closed window geometry, table columns, and Playlists/Devices splitter
 heights plus waveform zoom and beat-jump mode; startup restores
 the outer geometry before applying inner pane sizes.
+
+The source-validated metadata migration freezes effective Title AND Artist from
+one immutable SoundBox snapshot before either native field can change. Cleanup,
+derivation, aliases, manual overrides and legacy visible Track Info overlays all
+contribute; native identity/path checks supply concurrency guards, not replacement
+curation. A durable build descriptor and sharded inputs precede worker planning.
+`settings.source_truth_migration` tracks bounded pair expansion into
+`pending_metadata_edits`; unchanged frozen target records are reused across ACKs.
+Both intended fields stay visible until their exact operations acknowledge, and
+later edits update the retained intended pair. Missing identities remain frozen
+and need attention; they cannot be resurrected or discarded by starting a new
+migration. No live migration has been activated; the measured native metadata
+profile remains limited to ASCII, local analysed rows with an empty album.
+
+The source-only `alias_intents` follow-up shares one successor-generation path
+for single/bulk alias merge and unmerge and accepted existing artist suggestions.
+It performs no provider request. One save retains the changed curation, immutable
+paired inputs and source-bound origins before worker planning. Active requests,
+operation IDs and receipts remain unchanged; an unstarted successor coalesces
+later gestures. Only one row pair enters the bounded native FIFO at a time, so
+a batch is not limited to256 accepted songs. Missing predecessors retain their
+full frozen derivation context; only unfinished or unresolved intentions carry
+forward. Completed old-path rows do not become new unresolved work.
+
+Origins retain the unaliased automatic artist and title plus each field's last
+acknowledged native value. Planning distinguishes pre-change trust from desired
+artist overrides, preserves raw NAME derivation for newly trusted cross-track
+rescues, and removes only accepted rows' conflicting legacy artist overlays.
+Both unedited display counterparts freeze before a gesture; later explicit
+fields supersede only those fields. Blank resets use the retained automatic
+values after native publication and restart. Redundant title overrides can hold
+the identical desired native title against another cleanup pass; their
+`title_shield` origin marker distinguishes generated protection from a manual
+title choice. New per-origin scalar provenance also captures raw title/artist,
+the title base before cleanup, local edit tokens and exact ACK ownership. It
+retains fulfilled manual bases for reset/unmerge while retiring only fulfilled
+title masks; naturally different rendering may retain the same native-valued
+title mask. Manual artist maps remain bound to their exact own ACK against later
+editor-credit/rescue/global-context changes. Exact older Track Info title/artist
+overlays retire in that same ACK save, preserving other fields/newer inputs.
+A later independent native value supersedes old ownership, so a return to
+an old spelling cannot reactivate it. Raw NAME guesses remain untrusted even
+after their inferred artist was materialized into the native Artist field.
+
+Existing title cleanup controls stage their policy and frozen successor together
+before presentation. Fresh native refresh stages sparse ACK reconciliation in
+the same save as source selection/curation, then publishes the Library. The
+existing read worker compares detached scalar native inputs retained during the
+browser's existing inventory pass. Dirty-row derivation reuses the prepared
+display/unaliased registries, freezing their lookup data in its TaskOwner.
+Only a changed global canonical/trusted-name context expands the dirty set;
+cue/tag/BPM-only changes and unchanged later refreshes do no metadata work.
+New registration readback supplies its exact binding IDs. Every process's first
+verified native read checks all rows even with a warm cache, covering a crash
+before a derived plan became durable. A browser cache grants no publication
+checkpoint. Frozen paired targets save before source admission, and planning
+participates in source switching, quit and export barriers. Existing failed
+saves retain attention instead of being hidden behind a finishing message.
+Initial SoundBox curation remains the authoritative migration input; broader
+native profiles and guarded delivery remain separate unfinished work.
+
+Generated title protection requires the exact current source/local/native
+ID/UUID/path binding with no ambiguity or binding issue. Retained unresolved
+targets and late builder results cannot change a replacement song's title map.
+Direct imported-song edits may protect their unique provisional binding before
+registration; the existing verified registration transfers provenance without
+rebinding an already captured request.
+
+Origin relocation moves one record, never a queued request: exact source,
+library, logical/native ID and UUID must be unique, with no binding issue and
+both current native fields equal their last acknowledged values. Ambiguity or
+independent field changes do not adopt old provenance. Artist-acceptance dialogs
+also pin native and local paths before presentation. Pending work for another
+source rejects new metadata gestures while permitting return to its source.
+Maintenance/publication holds rearm without admission; shutdown stops wakeups.
+
+Alias graph resolution reaches a stable terminal without a depth cap. Legacy
+cycles use a deterministic representative, and folded-key conflicts no longer
+depend on JSON key order. Browser-cache schema4 retires pre-change derived rows.
+The November13 offline comparison reproduced all3449 frozen current/retained
+Title/Artist pairs byte for byte. Focused fixture and peer validation remain
+separate from the full gate and runtime handoff; HANDOFF records their status.
+
+Metadata shares the one native source worker/lock/journal, with its own exact
+authority and recovery format. Verified native readback, queue removal and pair
+progress save atomically with the bounded `metadata_receipt_acks` retirement
+ledger. A separate TaskOwner then compacts only acknowledged full semantic
+receipts into permanent exact-operation markers, using their recorded proof and
+marker hashes; it never opens the source DB. Pending/error proofs stay intact.
+Restart drains retained retirement work before more metadata admission. Restored
+older pending operation IDs reconcile markers against fresh target/artist
+identity, value and counter guards and never replay SQL. Restore/shutdown drain
+the metadata TaskOwner before state publication or teardown. These are tested
+source contracts, not installed or broad native-field acceptance.
+Completion verifies both frozen fields, including a companion that initially
+needed no write. A changed companion retains the original request and operation
+ID with attention. Explicit Retry reserves a fresh existing-field repair; the
+idempotent original ACK and helper insertion save atomically without exceeding
+the256-job FIFO. A later explicit same-bound companion takes precedence.
+An acknowledged generation cannot advance its cursor over a mismatched pair;
+Retry captures new field operations while preserving old receipts. Snapshot-only
+startup cannot advance that final check before native source verification.
 `state_repository` owns schema validation, recovery, rotating history and saves,
 retaining unknown extension namespaces. Invalid shapes enter recovery just like
 invalid JSON; without a usable backup, normal saves remain disabled. Save failures
@@ -1505,8 +1692,9 @@ return false at the UI adapter and retain a visible window-title warning.
 An identical candidate first compares exact JSON types, map order and values
 against the validated saved document, plus its current filesystem identity under
 that same lock. A hit skips validation copies, encoding, backup/publication and
-fsync; changed candidates still validate and encode, with a serialized-byte
-fallback for initial reuse. Missing/replaced state or restored generations cannot
+fsync; changed candidates validate and encode their small inline state and
+changed per-song records. Equality still visits mutable incoming records, and
+fresh record epoch checks add no-op overhead. Missing/replaced state or restored generations cannot
 reuse this shortcut. Zoom/jump/display/autoplay
 preferences debounce for 400 ms; curation, backup/restore and shutdown save
 immediately and cancel any pending preference timer.
@@ -1537,7 +1725,11 @@ state, then starts its worker. Result handling/reload happens after `finished` a
 join. Restoring increments the area generation so stale repositories/caches cannot
 write. Active device operations prevent entry. Derived waveform/device cache
 directories are excluded; saved analysis records, drafts and durable intentions
-inside library.json remain part of the canonical backup/restore. No live AppData
+inside the logical state remain part of the canonical backup/restore. Restore
+accepts portable JSON or a complete record-store directory, archives damaged live
+physical state when it cannot materialize, and preserves unverifiable records.
+Only verified formerly referenced records retire with a successful restore.
+No live AppData
 fault injection is used for validation.
 
 The sibling `stock_artwork/` directory is disposable derived data, not curated
@@ -1723,7 +1915,7 @@ source failure/discard restores the newest catalog presentation. Persisted creat
 rename and membership intents also project immediate feedback, including nested
 pending creations. Collection UUID pins retain affected native songs
 without granting registration or analysis authority. Raw playlist catalogs/clocks
-and empty folders travel in cache11; older snapshots paint read-only until verified.
+and empty folders travel in cache13; older snapshots paint read-only until verified.
 Bounded transaction envelopes compose at most64 accepted create/append/remove
 commands and16384 memberships through the same writer/lock/journal/paired backup.
 Exact child identities and clocks persist before admission. Pure row/counter
@@ -1735,7 +1927,9 @@ Catalog arrays encode bounded rows. CDJ capture also waits for durable playlist
 intents, rebinds native selections by PID, and rejects deleted selections or source
 changes before export. The ordinary backup-retirement pointer binds exact
 committed receipts and resumes deletion of only older completed DB payloads;
-full acceptance archives remain protected. Scope: [prep guide](analysis-playlists-next.md).
+pending acceptance/recovery retains required full payloads. Completed diagnostic
+duplicates retire under the November10 retention rule; permanent compact proofs
+remain. Scope: [prep guide](analysis-playlists-next.md).
 
 Live Tag/Cue/Grid backups use `rekordbox_write.encrypted_backup`: a stable raw
 DB/WAL copy, one encrypted checkpointed copy with SQLite integrity/identity
@@ -1920,6 +2114,13 @@ Native playlist completion uses separate proof strengths: exact reconstructed
 committed catalog edge plus current equality for causal FIFO rebasing; historical
 retained pair plus fresh ContentID/UUIDs for Collection retention. Worker-side
 folder-delete preflight persists exact descendant pins before writer admission.
+Ordinary membership removal also saves a separate local-overlay proof outside
+the native request. ACK retires only its captured value for matching playlist
+and track identities; later overlays survive. Failed storage restores the prior
+map/mask owners, and retry/restart retain that proof. Legacy jobs without it
+preserve local overlays. Capture and ACK use selected keys, without another
+source query or GUI library scan. Smart-list exclusions need their own native
+representation and cannot enter the ordinary-member route by inference.
 Captured UUID intentions survive receipt-backed retirement; legacy absent UUID
 proof remains guarded. The existing source lane/authority/lock/journal and SQL
 scope remain unchanged. Receipt reconstruction executes mutation SQL only on

@@ -638,6 +638,9 @@ class SettingsPageMixin:
             self._flash_status("Wait for the current operation before backup/restore", 8)
             return False
         self._state_maintenance = True
+        if restoring:
+            from .export_wait import cancel_source_syncs
+            cancel_source_syncs(self)
         # Complete pending USB view preferences before the final save. Their
         # idle notification must not cross a backup/restore publication barrier.
         usb_pages = vars(self).get('usb_device_pages')
@@ -669,8 +672,11 @@ class SettingsPageMixin:
                 else:
                     worker.requestInterruption()
         self._start_pulse("Finishing background work")
+        # A frozen metadata builder owns detached inputs until joined delivery.
+        # Let its accepted result land before the final save/restore boundary.
         tag_busy = lambda: bool(getattr(getattr(self, "tag_controller", None), "owned",
-                                       getattr(getattr(self, "tag_controller", None), "busy", False)))
+                                       getattr(getattr(self, "tag_controller", None), "busy", False))
+                               or getattr(getattr(getattr(self,'metadata_controller',None),'tasks',None),'pending',0))
         if any(_running(w) for w in workers) or tag_busy():
             loop = QEventLoop()
             timer = QTimer()
@@ -821,13 +827,35 @@ class SettingsPageMixin:
         if kind == "rule":
             off = set(self.settings.get("title_rules_off") or [])
             (off.discard if checked else off.add)(val)
-            self.settings["title_rules_off"] = sorted(off)
+            changes = {"title_rules_off": sorted(off)}
         else:  # unchecking a custom word removes it
-            if not checked:
-                words = [w for w in self.settings.get("title_words") or [] if w != val]
-                self.settings["title_words"] = words
-                self._refresh_title_rules()
-        self._apply_and_refresh()
+            if checked:
+                return
+            changes = {"title_words": [w for w in self.settings.get("title_words") or [] if w != val]}
+        self._commit_title_policy(changes)
+
+    def _commit_title_policy(self, changes):
+        """Save a cleanup gesture and its source intention once, before display."""
+        if all(self.settings.get(key, []) == value for key, value in changes.items()):
+            return True
+        controller = getattr(self, 'metadata_controller', None)
+        native = bool(controller is not None and self.lib and self.lib.source_kind == 'rekordbox-db')
+        if native:
+            accepted = controller.change_title_policy(changes)
+        else:
+            previous = self.settings
+            self.settings = {**previous, **changes}
+            accepted = self._save_state()
+            if not accepted:
+                self.settings = previous
+        self._refresh_title_rules()
+        if not accepted:
+            return False
+        self._apply_settings_to_lib()
+        if self.lib is not None:
+            self._populate_tree(engine.summary(self.lib))
+            self._reload_current_view()
+        return True
 
     def _add_drop_word(self):
         """Plain words get safe end/bracket semantics and an exact plain tag
@@ -838,11 +866,9 @@ class SettingsPageMixin:
         if not w:
             return
         if metadata.is_default_title_drop(w):
-            self.settings["title_rules_off"] = [
-                rid for rid in self.settings.get("title_rules_off", []) if rid != "drop"]
-            self._word_edit.clear()
-            self._refresh_title_rules()
-            self._apply_and_refresh()
+            if self._commit_title_policy({"title_rules_off": [
+                    rid for rid in self.settings.get("title_rules_off", []) if rid != "drop"]}):
+                self._word_edit.clear()
             return
         if not metadata.valid_pattern(w):
             from PySide6.QtWidgets import QMessageBox
@@ -853,10 +879,8 @@ class SettingsPageMixin:
             return
         words = self.settings.get("title_words") or []
         if w not in words:
-            self.settings["title_words"] = words + [w]
-            self._word_edit.clear()
-            self._refresh_title_rules()
-            self._apply_and_refresh()
+            if self._commit_title_policy({"title_words": words + [w]}):
+                self._word_edit.clear()
 
     def _rules_menu(self, pos):
         it = self._rules.itemAt(pos)
@@ -867,10 +891,8 @@ class SettingsPageMixin:
             exec_transient_menu(menu, self._rules.mapToGlobal(pos))
 
     def _remove_drop_word(self, w):
-        self.settings["title_words"] = [x for x in self.settings.get("title_words") or []
-                                        if x != w]
-        self._refresh_title_rules()
-        self._apply_and_refresh()
+        self._commit_title_policy({"title_words": [x for x in self.settings.get("title_words") or []
+                                                   if x != w]})
 
     def _ensure_settings_page(self):
         if getattr(self, '_settings_page_created', False):

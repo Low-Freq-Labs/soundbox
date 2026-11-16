@@ -271,6 +271,11 @@ QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER};
                         border-radius: 3px; background: {BG}; }}
 QCheckBox::indicator:checked {{ background: {PURPLE_LIGHT}; border: 1px solid {PURPLE_LIGHT}; }}
 QCheckBox::indicator:indeterminate {{ background: {PURPLE_DARK}; border: 1px solid {PURPLE}; }}
+QListWidget#SmartTagChoices {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 3px; }}
+QListWidget#SmartTagChoices::item {{ min-height: 24px; padding: 0 4px; }}
+QListWidget#SmartTagChoices::indicator {{ width: 14px; height: 14px; border: 1px solid {BORDER};
+    border-radius: 3px; background: {BG}; }}
+QListWidget#SmartTagChoices::indicator:checked {{ background: {PURPLE_LIGHT}; border-color: {PURPLE_LIGHT}; }}
 
 /* sidebar tree */
 QTreeView {{ background: {PANEL}; alternate-background-color: {ROW_ALT}; border: none; }}
@@ -334,8 +339,15 @@ QToolButton#MyTagsButton {{ background: {BG}; border: 1px solid {BORDER};
 QToolButton#MyTagsButton::menu-indicator {{ image: none; width: 0; height: 0; }}
 QToolButton#MyTagsButton:hover {{ border-color: {PURPLE_LIGHT}; color: {TEXT_HI}; }}
 QToolButton#MyTagsButton:disabled {{ color: {TEXT_DIM}; }}
-#MyTagsMenu QWidget {{ background: {PANEL}; }}
+#MyTagsContent {{ background: {PANEL}; }}
+QPushButton#MyTagsDelete {{ background: transparent; border: none; color: {TEXT_DIM}; padding: 0; }}
+QPushButton#MyTagsDelete:hover {{ color: {TEXT_HI}; }}
+QCheckBox#MyTagCheck {{ background: transparent; }}
 #MyTagsSummary {{ color: {TEXT_DIM}; font-size: 11px; }}
+QPushButton#MyTagsCreate {{ background: {BG}; border: 1px solid {BORDER};
+    border-radius: 3px; padding: 0 6px; color: {TEXT}; }}
+QPushButton#MyTagsCreate:hover {{ border-color: {PURPLE_LIGHT}; color: {TEXT_HI}; }}
+QPushButton#MyTagsCreate:disabled {{ color: {TEXT_DIM}; }}
 QCheckBox#MyTagCheck {{ spacing: 8px; padding: 0; margin: 0; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}

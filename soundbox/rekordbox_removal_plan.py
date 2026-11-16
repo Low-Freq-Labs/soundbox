@@ -5,6 +5,7 @@ playlist/history gap closure and XML clocks; never purges unrelated metadata.
 """
 from copy import deepcopy
 from datetime import datetime,timezone
+from pathlib import Path
 import time
 
 from . import rekordbox_playlist_xml as xml
@@ -16,6 +17,28 @@ TABLES=('djmdContent','contentFile','contentCue','djmdCue','djmdSongPlaylist',
         'djmdSongHistory','djmdSongMyTag','djmdMixerParam','agentRegistry')
 UNSUPPORTED=('djmdActiveCensor','contentActiveCensor','djmdSongHotCueBanklist',
              'djmdSongRelatedTracks','djmdSongSampler')
+
+
+def collection_selection(library,ids):
+    """Detach active-source identity pins; never inspect the audio filesystem."""
+    if (library is None or library.source_kind!='rekordbox-db' or not library.source_library_id
+            or not Path(str(library.source)).is_absolute() or not isinstance(ids,(list,tuple))
+            or not 1<=len(ids)<=10000 or any(type(tid) is not str or not tid for tid in ids)
+            or len(set(ids))!=len(ids)):
+        raise WriteProofError('Select exact active Collection songs from the verified native library')
+    entries=[];native_ids=set();uuids=set()
+    for tid in ids:
+        track=library.tracks_by_id.get(tid)
+        if (track is None or track.track_id!=tid or tid in library.source_binding_issues
+                or not track.source_uuid or track.native_id in native_ids or track.source_uuid in uuids):
+            raise WriteProofError('Refresh the exact Collection identities before removal')
+        _native_id(track.native_id);_uuid(track.source_uuid)
+        native_ids.add(track.native_id);uuids.add(track.source_uuid)
+        path=track.source_native_path or str(track.path)
+        if not Path(path).is_absolute():raise WriteProofError('An exact absolute native path is required')
+        entries.append(dict(id=tid,native_id=track.native_id,native=dict(uuid=track.source_uuid),
+            path=path,local_path=str(track.path),display=dict(title=track.name,artist=track.artist)))
+    return dict(source=str(library.source),library_id=library.source_library_id,entries=entries)
 
 
 def _active(row):

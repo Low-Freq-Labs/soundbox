@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from copy import deepcopy
+from dataclasses import replace
 import threading
 
 from PySide6.QtCore import QThread, QTimer, Signal
@@ -17,10 +18,51 @@ def _source_edits_pending(host):
     analysis=getattr(host,'native_analysis_controller',None)
     prep=getattr(host,'prep_controller',None)
     media=getattr(host,'media_controller',None)
+    definitions=getattr(host,'tag_definition_controller',None)
+    metadata=getattr(host,'metadata_controller',None)
     return bool(host.tag_controller.owned or controller and
                 (controller.pending or controller.queue_error()) or imports and
                 (imports.pending or imports.queue_error()) or analysis and analysis.pending or prep and prep.pending
-                or media and (media.scan_again or media.tasks.pending or any(not j['error'] for j in media.pending)))
+                or media and (media.scan_again or media.tasks.pending or any(not j['error'] for j in media.pending))
+                or definitions and (definitions.pending or definitions.queue_error())
+                or metadata and (metadata.pending or metadata.queue_error() or getattr(metadata,'migration_pending',False))
+                or getattr(host.tag_controller,'pending',[])
+                or getattr(host.tag_controller,'queue_error',lambda:'')()
+                or getattr(host,'settings',{}).get('analysis_jobs')
+                or getattr(host,'_analysis_worker',None) is not None
+                or getattr(getattr(host,'_analysis_owner',None),'pending',0))
+
+
+def _source_edits_error(host):
+    """A saved refusal needs attention; polling cannot finish that generation."""
+    for name in ('metadata_controller','playlist_controller','shared_import_controller',
+                 'tag_definition_controller','prep_controller','tag_controller','native_analysis_controller'):
+        controller=getattr(host,name,None)
+        if controller is None:continue
+        error=getattr(controller,'queue_error',lambda:'')()
+        if isinstance(error,str) and error:return error
+        pending=getattr(controller,'pending',None)
+        if isinstance(pending,list):
+            error=next((job.get('error') for job in pending if isinstance(job,dict) and job.get('error')),'')
+            if isinstance(error,str) and error:return error
+    metadata=getattr(host,'metadata_controller',None)
+    if metadata and (metadata.pending or getattr(metadata,'migration_pending',False)):
+        reason=getattr(metadata,'reason',lambda:'')()
+        if reason=='Native metadata editing requires separate acceptance for this library':
+            return 'Title and artist updates cannot be saved to this library yet'
+        if isinstance(reason,str) and reason.startswith('Switch to the original library'):
+            return reason
+    return ''
+
+
+def _fail_source_export(host,error,*,waiting_attr=None,dev=None):
+    if waiting_attr:setattr(host,waiting_attr,None)
+    # A source wait owns no device. Another command may now own the progress UI.
+    if not host._device_operation_owned():
+        host._stop_pulse();host.cancel_btn.setVisible(False)
+    host._flash_status('Export blocked — '+error,20)
+    if dev is not None and getattr(host,'_export_batch',None):
+        host._export_target_result(dev,RuntimeError(error));host._maybe_finish_export_target()
 
 
 class CdjWorker(QThread):
@@ -56,11 +98,23 @@ class CdjDeviceMixin:
         if self._device_operation_owned(dev):
             QMessageBox.information(self, 'Device busy', 'Wait for the current device operation.')
             return
+        error=_source_edits_error(self)
+        if error:
+            _fail_source_export(self,error,waiting_attr='_cdj_waiting',dev=dev)
+            return
         # Accepted source edits drain before freezing a generation; a timer keeps
         # Qt delivery and the native player alive while that FIFO finishes.
         if _source_edits_pending(self):
             native_ids={p.pid for p in getattr(self.lib,'playlists',())}
             selected_native={getattr(p,'pid',None) for p in playlists} & native_ids
+            native_nodes={row['ID']:row for row in getattr(self.lib,'source_playlist_catalog',{}).get('nodes',[])}
+            selected_uuids={identity:native_nodes[identity]['UUID'] for identity in selected_native
+                            if identity in native_nodes and native_nodes[identity].get('UUID')}
+            if (getattr(self.lib,'source_kind','')=='rekordbox-db' and
+                    (set(selected_uuids)!=selected_native or any(native_nodes[identity].get('rb_local_deleted')!=0
+                                                               for identity in selected_native))):
+                self._flash_status('Refresh the selected playlist identities before exporting',15)
+                return
             source_binding=(str(self.lib.source),self.lib.source_library_id) if hasattr(self.lib,'source') else None
             request = (dev, tuple(playlists), settings, from_drop, drop_target)
             self._cdj_waiting = request
@@ -69,14 +123,21 @@ class CdjDeviceMixin:
             def ready():
                 if self._shutting_down or self._cdj_waiting is not request:
                     return
+                error=_source_edits_error(self)
+                if error:
+                    _fail_source_export(self,error,waiting_attr='_cdj_waiting',dev=dev)
+                    return
                 if _source_edits_pending(self):
                     QTimer.singleShot(100, ready)
                     return
                 self._cdj_waiting = None
                 selected=playlists
                 fresh={p.pid:p for p in getattr(self.lib,'playlists',())}
+                fresh_nodes={row['ID']:row for row in getattr(self.lib,'source_playlist_catalog',{}).get('nodes',[])}
                 if (source_binding is not None and source_binding!=(str(self.lib.source),self.lib.source_library_id)
-                        or selected_native-fresh.keys()):
+                        or selected_native-fresh.keys() or any(identity not in fresh_nodes
+                            or fresh_nodes[identity].get('UUID')!=uuid or fresh_nodes[identity].get('rb_local_deleted')!=0
+                            for identity,uuid in selected_uuids.items())):
                     self._stop_pulse();self.cancel_btn.setVisible(False)
                     self._flash_status('Library or selected playlist changed; choose the playlist again',15)
                     if getattr(self,'_export_batch',None):
@@ -84,7 +145,8 @@ class CdjDeviceMixin:
                         self._maybe_finish_export_target()
                     return
                 if selected_native:
-                    selected=[fresh[p.pid] if p.pid in selected_native else p for p in playlists]
+                    selected=[replace(fresh[p.pid],export_key=p.export_key) if p.pid in selected_native else p
+                              for p in playlists]
                 self._begin_cdj_export(dev, selected, settings=settings, from_drop=from_drop,drop_target=drop_target,standalone=standalone)
                 if getattr(self,'_export_batch',None):self._maybe_finish_export_target()
             QTimer.singleShot(100, ready)
@@ -105,25 +167,27 @@ class CdjDeviceMixin:
         self._cdj_plan = None
         recovery = self._data_file.parent/'cdj-recovery'
         if settings is None:
-            # Freeze curation and selection before the worker sees them.
-            library, titles, artists = deepcopy(self.lib), dict(self.titles), dict(self.overrides)
-            playlists = deepcopy(tuple(playlists))
-            standalone = deepcopy(tuple(standalone))
+            from soundbox.export_snapshot import capture_export
+            captured = capture_export(self.lib, playlists, standalone=standalone,
+                                      titles=self.titles, artists=self.overrides,
+                                      complete=not playlists and not standalone)
             # Additive publication touches only this explicit selection.
             all_playlists = ()
             global_profile = deepcopy(self.settings.get('cdj_my_settings',{}))
-            operation = lambda cancel, progress: cdj_export.plan_export(
-                library, playlists, dev, token=token, volume_uuid=facts.volume_uuid,
-                all_playlists=all_playlists, titles=titles, artists=artists, art_cache=self.art_cache,
-                should_cancel=cancel, on_progress=progress, recovery_root=recovery, additive=True,
-                global_profile=global_profile,standalone=standalone)
+            def operation(cancel, progress):
+                inputs = captured.materialize()
+                return cdj_export.plan_export(
+                    inputs.library, inputs.playlists, dev, token=token, volume_uuid=facts.volume_uuid,
+                    all_playlists=all_playlists, titles=inputs.titles, artists=inputs.artists, art_cache=self.art_cache,
+                    should_cancel=cancel, on_progress=progress, recovery_root=recovery, additive=True,
+                    global_profile=global_profile, standalone=inputs.standalone)
         else:
+            from soundbox.export_snapshot import source_paths
             changes = dict(settings)
             # Settings need source separation, not detached song/cue/catalog
             # data. Capture those paths now; later library edits cannot alter
             # the worker's original overlap boundary.
-            sources = [Path(self.lib.source), *[t.path for t in self.lib.tracks_by_id.values()],
-                       *[Path(t.source_analysis_path) for t in self.lib.tracks_by_id.values() if t.source_analysis_path]]
+            sources = list(source_paths(self.lib))
             operation = lambda cancel, _progress: cdj_export.plan_settings(
                 dev, changes, token=token, volume_uuid=facts.volume_uuid,
                 sources=sources,

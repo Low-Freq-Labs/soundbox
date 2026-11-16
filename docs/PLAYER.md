@@ -1,5 +1,9 @@
 # SoundBox player
 
+Sonny accepted the current visuals on November9,2026 and will reopen visual work
+if needed. No further waveform appearance tuning is queued. This acceptance does
+not close the separate device/firmware or native source-format gates below.
+
 ## Cleanup delivery — November8
 
 Personal build169 is installed and accepted. Eager readiness shifts work to
@@ -266,6 +270,23 @@ for two seconds, then returns to `Ready` (or ongoing preparation). Queued edits
 retain progress until the last verified save; failures show the operation and
 error instead. Focus-return saved-grid checks are silent and never report a save.
 
+My Tags remains open for multiple checkbox changes. Clicking back into a song
+browser dismisses that modeless panel and delivers the same pointer gesture;
+one double click loads the song. Escape, button toggle, app deactivation and
+shutdown dismiss it too. The panel keeps transport shortcuts scoped to its own
+controls until it closes.
+
+Smart playlists show the latest matching My Tag assignment first by default.
+The native snapshot supplies active assignment creation dates, including tags
+assigned before this update or in rekordbox. Only positive tags used by that
+playlist's rule contribute; unrelated or removed tags cannot promote a song.
+Unknown dates retain the existing default order, with verified local display
+ranks as a fallback; equal source dates use those ranks and then stable default
+order. Local ranks bind exact source/library/track/playlist identities and rule
+hash, and cannot override newer source dates. User header sorts override this
+default; Collection, regular playlists, native rules and export order remain
+unchanged. These read-only dates grant no source-write authority.
+
 The transport layout field has matching rounded corners and an inset chevron;
 its themed Qt popup retains keyboard/navigation behavior and a right check gutter.
 The field text has an 11-pixel left inset.
@@ -294,7 +315,14 @@ even while registration, initial native analysis, playlist/export work or refres
 is busy. State saves before immediate RAM feedback; actual save/binding errors
 block that song and keep its intentions for retry. Initial analysis publishes
 only its captured grid IDs; newer clicks remain queued. Cues publish separately
-through the accepted cue API, after native analysis is present. Exact prepared
+through the accepted cue API. Tested source also supports DB-only cues on a
+verified registered bare track without a DAT; an already queued initial-analysis
+intent goes first because its accepted profile requires zero existing cues.
+Cue and Grid saves require only their own accepted write authority. Fresh
+companion reads share recovery guards but grant no second writer; missing/corrupt
+ANLZ cannot block DB-only cues or replace their unrelated private grid cache.
+Cue-first followed by later analysis still needs a preserving analysis protocol.
+Exact prepared
 requests persist before source writes, and committed receipts prevent duplicate
 replay after a failed local acknowledgement. Native writes still wait for closed
 rekordbox/agent and existing accepted profile/identity/Analysis Lock guards.
@@ -470,7 +498,7 @@ Cue panel:
   closes admission and drains the owners. RAM presentation
   alone is not proof of native success; durable intentions survive restart.
 - `source_cue_revision` and `source_cue_refs` retain raw edit identities outside
-  display cues/waveform fingerprints. Snapshot cache schema11 reads older4–10
+  display cues/waveform fingerprints. Snapshot cache schema13 reads older4–12
   caches; cached data cannot grant write permission. No whole-library recook is
   required for these fields. Source audio and ANLZ/XML remain untouched.
 - Whole-track and scrolling memory arrows are slightly wider than hot-cue

@@ -18,11 +18,12 @@ import stat
 from collections.abc import Iterator
 from pathlib import Path
 
-from .library import Library, LibraryTag, Playlist, Track
+from .library import Library, LibraryTag, Playlist, TagCategory, Track
 
-SCHEMA = 11
-_READABLE_SCHEMAS = {4, 5, 6, 7, 8, 9, 10, SCHEMA}
+SCHEMA = 13
+_READABLE_SCHEMAS = {4, 5, 6, 7, 8, 9, 10, 11, 12, SCHEMA}
 _MAX_CACHE_BYTES = 256 * 1024**2
+_MAX_TAG_TIMES = 16_384
 
 # The Track fields worth persisting (everything the browser/export needs).
 # `path`/`duration_str`/`file_type` are computed properties, not stored.
@@ -34,6 +35,7 @@ _TRACK_FIELDS = (
     "imported", "source_analysis_path", "source_cues", "source_uuid", "source_tag_ids",
     "source_cue_revision", "source_cue_refs",
     "info", "source_native_id", "source_native_path",
+    "source_tag_times",
 )
 _PLAYLIST_FIELDS = ("name", "folder_path", "keys", "pid")
 _TEXT_FIELDS = frozenset((
@@ -62,6 +64,14 @@ def _track_values(row, fields):
             return None
     tags = values.get('source_tag_ids')
     if tags is not None and (not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags)):
+        return None
+    times = values.get('source_tag_times', {})
+    if not isinstance(times, dict) or len(times) > _MAX_TAG_TIMES:
+        return None
+    assigned = set(tags or ())
+    if any(not isinstance(tag, str) or not 0 < len(tag) <= 4096 or tag not in assigned
+           or type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+           or not 0 <= timestamp < 253402300800 for tag, timestamp in times.items()):
         return None
     if 'source_cue_refs' in values and values['source_cue_refs'] is None:
         return None
@@ -97,8 +107,10 @@ def dump(lib: Library, path: str | Path) -> None:
         "source_kind": lib.source_kind,
         "source_library_id": lib.source_library_id,
         "source_playlist_catalog": lib.source_playlist_catalog,
-        "source_tags": [[tag.tag_id, tag.name, tag.category, tag.source_uuid]
+        "source_tags": [[tag.tag_id, tag.name, tag.category, tag.source_uuid, tag.category_id, tag.category_uuid]
                         for tag in lib.source_tags],
+        "source_tag_categories": [[category.category_id, category.name, category.source_uuid]
+                                  for category in lib.source_tag_categories],
         "tracks": ([getattr(t, f) for f in _TRACK_FIELDS]
                    for t in lib.tracks_by_id.values()),
         "playlists": ([getattr(p, f) for f in _PLAYLIST_FIELDS]
@@ -176,7 +188,8 @@ def load(path: str | Path) -> Library | None:
                     or any(not isinstance(row,dict) or not {'ID','PlaylistID','ContentID','TrackNo','rb_local_deleted'}<=row.keys() for row in catalog['members'])
                     or revision(catalog['nodes'],catalog['members'])!=catalog['revision']):return None
         tracks = {}
-        fields = _TRACK_FIELDS[:20] if schema < 7 else _TRACK_FIELDS[:22] if schema == 7 else _TRACK_FIELDS
+        fields = (_TRACK_FIELDS[:20] if schema < 7 else _TRACK_FIELDS[:22] if schema == 7
+                  else _TRACK_FIELDS[:-1] if schema < 12 else _TRACK_FIELDS)
         for row in data["tracks"]:
             values = _track_values(row, fields)
             if values is None:
@@ -193,8 +206,15 @@ def load(path: str | Path) -> Library | None:
             playlists.append(Playlist(**values))
         tags = data.get('source_tags', [])
         if (not isinstance(tags, list) or any(not isinstance(row, list)
-                or not 2 <= len(row) <= 4 or any(not isinstance(value, str) for value in row)
+                or not 2 <= len(row) <= 6 or any(not isinstance(value, str) for value in row)
                 for row in tags)):
+            return None
+        categories = data.get('source_tag_categories', []) if schema >= 13 else []
+        if (not isinstance(categories, list) or len(categories) > 1024
+                or any(not isinstance(row, list) or len(row) != 3
+                       or any(not isinstance(value, str) or len(value) > 4096 for value in row)
+                       for row in categories)
+                or len({row[0] for row in categories}) != len(categories)):
             return None
         if not tracks:
             return None
@@ -205,7 +225,8 @@ def load(path: str | Path) -> Library | None:
             source_kind=data.get("source_kind", "cache"),
             source_library_id=data.get("source_library_id", ""),
             source_playlist_catalog=data.get("source_playlist_catalog", {}),
-            source_tags=[LibraryTag(*row) for row in tags],
+            source_tags=[LibraryTag(*(row if schema >= 13 else row[:4])) for row in tags],
+            source_tag_categories=[TagCategory(*row) for row in categories],
         )
     except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
         return None

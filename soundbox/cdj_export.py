@@ -74,10 +74,8 @@ def plan_export(library, playlists, target, *, token, volume_uuid, all_playlists
                 on_progress=lambda *_:None, recovery_root=None, additive=False, global_profile=None,
                 standalone=()):
     # Source containment is checked before any local preparation or device write.
-    selected_sources = [Path(library.source), *[track.path for track in library.tracks_by_id.values()],
-                        *[Path(t.source_analysis_path) for t in library.tracks_by_id.values() if t.source_analysis_path]]
-    selected_sources.extend(track.path for track in standalone)
-    selected_sources.extend(Path(track.source_analysis_path) for track in standalone if track.source_analysis_path)
+    from .export_snapshot import source_paths
+    selected_sources = list(source_paths(library, standalone))
     session = CdjSession(target, selected_sources, token=token, volume_uuid=volume_uuid)
     from .cdj_transaction import recover
     recover(session,recovery_root,retain_new=True)

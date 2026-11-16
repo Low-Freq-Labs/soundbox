@@ -1,5 +1,6 @@
 """Native dispatch, worker phases and GUI acknowledgement stay distinct."""
 from pathlib import Path
+from copy import deepcopy
 import tempfile
 import threading
 import unittest
@@ -87,19 +88,23 @@ class NativeCommandTiming(unittest.TestCase):
 
     def test_tag_phases_keep_full_authoritative_refresh_and_time_synchronous_gui_publication(self):
         with tempfile.TemporaryDirectory() as area:
-            events=[];library=_library()
+            events=[];library=_library();fresh=deepcopy(library)
             class Store:
-                def apply(self,_request):events.append('apply')
-            def loader(_source):events.append('refresh');return library
+                def apply(self,request):
+                    events.append('apply')
+                    fresh.tracks_by_id[request.tracks[0].track_id].source_tag_ids=[request.tag_id]
+            def loader(_source):events.append('refresh');return fresh
             controller=TagEditController(Path(area),store_factory=lambda _:Store(),loader=loader)
             controller.configure(library,True)
             controller._recover_pending=lambda _lib:events.append('recover')
-            controller.saved.connect(lambda result:events.append('gui' if result is library else 'wrong'))
+            controller.saved.connect(lambda result:events.append('gui' if result is fresh else 'wrong'))
             try:
                 with self.assertLogs(timing.log,level='INFO') as logs:
                     self.assertTrue(controller.request(['2'],'tag',True))
                     self.wait(lambda:controller.owner.pending==0)
                 self.assertEqual(events,['recover','apply','refresh','gui'])
+                self.assertEqual(library.tracks_by_id['2'].source_tag_ids,[])
+                self.assertEqual(fresh.tracks_by_id['2'].source_tag_ids,['tag'])
                 messages='\n'.join(logs.output)
                 for phase in ('recovery','selected_paths','store','apply_tags','refresh_library','publish_library'):
                     self.assertIn('phase='+phase+' ',messages)

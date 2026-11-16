@@ -296,6 +296,7 @@ class AnalysisMixin:
             # canonical result key, retaining alias support without GUI I/O.
             worker = AnalysisWorker(self.lib, [deepcopy(current)], analysis_jobs.component_preferences(job),
                                     dict(self.settings.get('analysis_results', {})),automatic=job.get('automatic',False))
+            getattr(self, '_analysis_local_admitted', lambda: None)()
             self._analysis_worker = worker
             worker.job_id=identity
             worker.expected_sha256=job.get('component_sha256') or job.get('waveform_sha256')
@@ -320,6 +321,7 @@ class AnalysisMixin:
         if self._shutting_down or self._analysis_owner.stopping:
             return
         if worker.stop.is_set():
+            getattr(self, '_analysis_offer_source_turn', lambda _library: None)(worker.library)
             self._schedule_next_analysis()
             return
         track = worker.tracks[0]
@@ -397,6 +399,7 @@ class AnalysisMixin:
             except ValueError:
                 pass  # Preserve unknown evidence; never rewrite a corrupt queue.
             self._flash_status(f'Couldn’t analyze {track.name}: {exc}', 15)
+        getattr(self, '_analysis_offer_source_turn', lambda _library: None)(worker.library)
         self._schedule_next_analysis()
 
     def _refresh_analysis_row(self, track_id):
@@ -408,14 +411,9 @@ class AnalysisMixin:
         track = self.lib.tracks_by_id.get(track_id)
         if model is None or track is None:
             return
-        from PySide6.QtCore import QItemSelectionModel
         row = self._row_for(track)
-        selected = set(self._selected_ids())
+        seat = self._browser_seat()
         reset = model.update_analysis(track_id, bpm=row['bpm'], key=row['key'],
                                       bpm_estimated=bool(row.get('bpm_estimated')))
         if reset:
-            selection = self.table.selectionModel()
-            for index, value in enumerate(model._rows):
-                if value.get('id') in selected:
-                    selection.select(model.index(index, 0),
-                                     QItemSelectionModel.Select | QItemSelectionModel.Rows)
+            self._restore_browser_seat(seat)

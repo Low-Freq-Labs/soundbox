@@ -26,7 +26,9 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from .state_io import atomic_bytes, copy_state, plain_tree, state_area
-from .state_repository import read_state
+from .state_repository import portable_state, read_state
+from .state_records import DIRECTORY as _RECORD_DIRECTORY, MARKER as _RECORD_MARKER
+from .state_records import capture_file as _capture_state_file
 
 _ITEMS = ("library.json", "backups", "art")
 
@@ -52,6 +54,14 @@ library.json (and art/ if wanted) into
 _MAX_FILES = 100_000
 _MAX_BYTES = 8 * 1024**3
 _MAX_FILE_BYTES = 512 * 1024**2
+
+
+def _copy_library(source: Path, target: Path) -> None:
+    raw, _ = _capture_state_file(source)
+    if _RECORD_MARKER in json.loads(raw):
+        atomic_bytes(target, portable_state(source))
+    else:
+        copy_state(source, target)
 
 
 def _validate_bundle(root: Path) -> None:
@@ -119,7 +129,10 @@ def export_backup(data_dir, dest_zip) -> int:
             for item in _ITEMS:
                 source = data_dir / item
                 if source.exists():
-                    copy_state(source, snapshot / item)
+                    if item == 'library.json':
+                        _copy_library(source, snapshot / item)
+                    else:
+                        copy_state(source, snapshot / item)
         dest_zip.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(prefix=f".{dest_zip.name}-", dir=dest_zip.parent)
         os.close(fd)
@@ -211,20 +224,46 @@ def restore_backup(data_dir, src) -> dict:
                     copy_state(old, staged / item)
                 source = root / item
                 if source.exists():
-                    copy_state(source, staged / item)
+                    if item == 'library.json':
+                        _copy_library(source, staged / item)
+                    else:
+                        copy_state(source, staged / item)
             _validate_bundle(staged)
             current = data_dir / "library.json"
+            # A validated selected backup must be able to repair malformed live
+            # JSON or missing/corrupt per-song records. Preserve exact physical
+            # evidence instead of requiring that broken state to materialize.
+            live_specifications: dict = {}
             if current.exists():
-                atomic_bytes(staged / "backups" /
-                             f"pre-restore-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.json",
-                             current.read_bytes())
+                checkpoint = f"pre-restore-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+                try:
+                    portable = portable_state(current)
+                    from .state_repository import _read_document
+                    _, _, live_specifications, _, _, _ = _read_document(current)
+                except (OSError, ValueError):
+                    damaged = staged / 'backups' / f'{checkpoint}-damaged'
+                    atomic_bytes(damaged / 'library.json', current.read_bytes())
+                    records = data_dir / _RECORD_DIRECTORY
+                    if records.exists():
+                        copy_state(records, damaged / _RECORD_DIRECTORY)
+                else:
+                    atomic_bytes(staged / 'backups' / f'{checkpoint}.json', portable)
             data = read_state(staged / "library.json")
             restored = {"overrides": len(data.get("artist_overrides", {}))
                         + len(data.get("title_overrides", {})),
                         "custom_playlists": len(data.get("custom", {})),
                         "history": len(list((root / "backups").glob("*.json"))),
                         "art_files": len(plain_tree(root / "art")) if (root / "art").exists() else 0}
-            area.publish({item: staged / item for item in _ITEMS if (staged / item).exists()})
+            changes: dict[str, bytes | Path | None] = {
+                item: staged / item for item in _ITEMS if (staged / item).exists()}
+            # The restored standalone JSON supersedes the previous manifest.
+            # Retire only its verified referenced files, preserving unrelated or
+            # damaged historical payloads rather than sweeping the directory.
+            from .state_records import references, capture
+            for digest in references(live_specifications):
+                capture(current, digest)
+                changes[f'{_RECORD_DIRECTORY}/{digest}.json'] = None
+            area.publish(changes)
             area.generation += 1
             area.art_revision += 1
             return restored

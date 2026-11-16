@@ -38,7 +38,8 @@ class PlaylistBatches(unittest.TestCase):
             parent=parent or commands[0]['playlist_id']
             command=store.request_for(planning,'create',name=name,parent=parent,folder=folder)
             commands.append(command)
-            planning['nodes'].append(dict(ID=command['playlist_id'],UUID=command['playlist_uuid']))
+            planning['nodes'].append(dict(ID=command['playlist_id'],UUID=command['playlist_uuid'],
+                Attribute=int(folder),ParentID=parent,rb_local_deleted=0))
             if not folder:
                 tracks=[SimpleNamespace(track_id='track',source_uuid='uuid'),
                         SimpleNamespace(track_id='track-two',source_uuid='uuid-two')]

@@ -41,7 +41,7 @@ def _make_lib() -> Library:
     }
     pls = [Playlist("SET ONE", ["CRATES"], keys=["3", "1"]),
            Playlist("SET TWO", [], keys=["2"])]
-    return Library(tracks_by_id=tracks, playlists=pls, source="synthetic")
+    return Library(tracks_by_id=tracks, playlists=pls, source="/synthetic/library.xml")
 
 
 def setUpModule():
@@ -3726,21 +3726,62 @@ class TrackRemovalMenu(unittest.TestCase):
         _app.processEvents()
 
     def test_rekordbox_playlist_offers_both_scopes_and_routes_them(self):
+        from copy import deepcopy
+        from PySide6.QtWidgets import QMenu
+        from soundbox.rekordbox_playlist_plan import revision
         item = _win._find_tree_item("CRATES / SET ONE")
         _win.tree.setCurrentItem(item)
         _app.processEvents()
+        original_library = _win.lib
+        library = _make_lib()
+        library.source = '/synthetic/master.db'
+        library.source_kind = 'rekordbox-db'
+        library.source_library_id = 'menu-fixture'
+        playlist = library.playlists[0]
+        playlist.pid = '1000'
+        playlist.keys = ['1']
+        library.tracks_by_id['1'].source_uuid = '00000000-0000-4000-8000-000000000001'
+        node = dict(ID='1000', UUID='00000000-0000-4000-8000-000000001000',
+                    Name='SET ONE', ParentID='root', Seq=1, Attribute=0, SmartList=None,
+                    rb_local_deleted=0, rb_local_synced=0, rb_data_status=0,
+                    rb_local_data_status=0, usn=None, rb_local_usn=1)
+        member = dict(ID='00000000-0000-4000-8000-000000002001',
+                      UUID='00000000-0000-4000-8000-000000003001', PlaylistID='1000',
+                      ContentID='1', TrackNo=1, rb_local_deleted=0, rb_local_synced=0,
+                      rb_data_status=0, rb_local_data_status=0, usn=None, rb_local_usn=2)
+        library.source_playlist_catalog = dict(nodes=[node], members=[member],
+                                               revision=revision([node], [member]))
+        before = deepcopy(library.source_playlist_catalog)
+        removals = deepcopy(_win.removals)
         with (
-            mock.patch.object(_win, "_remove_from_rb_playlist") as playlist_remove,
-            mock.patch.object(_win, "_delete_tracks") as collection_remove,
+            mock.patch.object(_win, '_native_presentation', return_value=library),
+            mock.patch.object(_win, '_native_view_playlist', return_value=playlist),
+            mock.patch.object(_win, '_native_request', return_value=True) as playlist_remove,
+            mock.patch.object(_win, '_delete_tracks') as collection_remove,
         ):
-            menu = self._menu(["1"])
-            actions = menu.actions()
-            self.assertEqual([a.text() for a in actions], [
-                "Remove from Playlist", "Remove from Collection"])
-            actions[0].trigger()
-            actions[1].trigger()
-            playlist_remove.assert_called_once_with("CRATES / SET ONE", ["1"])
-            collection_remove.assert_called_once_with(["1"])
+            selected_rows = _win._native_membership_rows(playlist, [dict(id='1')])
+            self.assertEqual(selected_rows[0]['_native_membership']['ID'], member['ID'])
+            menu = QMenu(_win)
+            try:
+                _win._add_track_removal_actions(menu, ['1'], selected_rows=selected_rows)
+                actions = menu.actions()
+                self.assertEqual([a.text() for a in actions], [
+                    'Remove from Playlist', 'Remove from Collection'])
+                self.assertTrue(all(action.isEnabled() for action in actions))
+                actions[0].trigger()
+                actions[1].trigger()
+                playlist_remove.assert_called_once()
+                args, kwargs = playlist_remove.call_args
+                self.assertEqual(args, ('remove',))
+                self.assertEqual(kwargs['identity'], '1000')
+                self.assertEqual(kwargs['tracks'], [library.tracks_by_id['1']])
+                self.assertEqual(kwargs['memberships'], [selected_rows[0]['_native_membership']])
+                collection_remove.assert_called_once_with(['1'])
+            finally:
+                menu.deleteLater()
+        self.assertIs(_win.lib, original_library)
+        self.assertEqual(library.source_playlist_catalog, before)
+        self.assertEqual(_win.removals, removals)
 
     def test_soundbox_playlist_offers_both_scopes(self):
         from desktop.trees import CUSTOM_ROLE
@@ -9139,6 +9180,20 @@ class LibraryInstantPaint(unittest.TestCase):
 class RekordboxRefreshOrdering(unittest.TestCase):
     """Refresh clicks and results cannot silently land out of order."""
 
+    def setUp(self):
+        # Source selection has its own curation partition. Other UI cases share
+        # this window; their edits must not become this test's source identity.
+        names=('lib','titles','overrides','aliases','custom','removals','playlist_additions',
+               'hidden','hidden_dates','settings','_rekordbox_source_verified','_rekordbox_connection_error')
+        before={name:getattr(_win,name) for name in names}
+        def restore():
+            for name,value in before.items():setattr(_win,name,value)
+            _win.tag_controller.configure(_win.lib,_win._rekordbox_source_verified)
+            _win._sync_rekordbox_connection()
+        self.addCleanup(restore)
+        _win.lib=_make_lib();_win.titles={};_win.overrides={};_win.aliases={};_win.custom={}
+        _win.removals={};_win.playlist_additions={};_win.hidden=set();_win.hidden_dates={};_win.settings={}
+
     def test_invalid_xml_retains_previous_library_and_remembered_source(self):
         previous, previous_xml = _win.lib, _win._last_xml
         with mock.patch("desktop.app.engine.load_library", side_effect=ValueError("Invalid XML")), \
@@ -9154,13 +9209,22 @@ class RekordboxRefreshOrdering(unittest.TestCase):
         original = _win.lib
         settings = dict(_win.settings)
         replacement = _make_lib()
-        def publish(library):
+        replacement.source=str(path)
+        publish_library = _win._on_refresh_done
+        def publish(library, **options):
             self.assertIsNone(_win._refresh_worker)
-            self.assertEqual(_win.settings["rekordbox_db_path"], str(path))
+            save.assert_not_called()
+            self.assertEqual(_win.settings, settings)
             self.assertIs(library, replacement)
+            return publish_library(library, **options)
         try:
             with mock.patch.object(RefreshWorker, "start"), \
                     mock.patch.object(_win, "_save_state", return_value=True) as save, \
+                    mock.patch.object(_win, "_apply_loaded_library") as apply, \
+                    mock.patch.object(_win, "_cache_library"), \
+                    mock.patch.object(_win, "_refresh_devices"), \
+                    mock.patch.object(_win, "_schedule_stock_artwork"), \
+                    mock.patch("desktop.app.QTimer.singleShot"), \
                     mock.patch.object(_win, "_on_refresh_done", side_effect=publish) as done:
                 _win._start_rekordbox_refresh(path, selection=True)
                 worker = _win._refresh_worker
@@ -9171,7 +9235,10 @@ class RekordboxRefreshOrdering(unittest.TestCase):
                 self.assertIs(_win.lib, original)
                 worker.finished.emit()
                 save.assert_called_once()
-                done.assert_called_once_with(replacement)
+                done.assert_called_once_with(replacement, metadata_changed_ids=(), selection_path=str(path))
+                apply.assert_called_once_with(already_projected=True)
+                self.assertIs(_win.lib, replacement)
+                self.assertEqual(_win.settings['rekordbox_db_path'], str(path))
         finally:
             _win.settings = settings
             _win._sync_rekordbox_connection()
@@ -9180,18 +9247,28 @@ class RekordboxRefreshOrdering(unittest.TestCase):
         from desktop.workers import RefreshWorker
         original = _win.lib
         settings = dict(_win.settings)
+        publish_library = _win._on_refresh_done
         for failed_read in (True, False):
             try:
                 with self.subTest(failed_read=failed_read), mock.patch.object(RefreshWorker, "start"), \
-                        mock.patch.object(_win, "_save_state", return_value=False), \
-                        mock.patch.object(_win, "_on_refresh_done") as done, \
+                        mock.patch.object(_win, "_save_state", return_value=False) as save, \
+                        mock.patch.object(_win, "_apply_loaded_library") as apply, \
+                        mock.patch.object(_win, "_on_refresh_done", wraps=publish_library) as done, \
                         mock.patch.object(_win, "_on_refresh_fail") as failure:
                     _win._start_rekordbox_refresh(Path("/synthetic/new/master.db"), selection=True)
                     worker = _win._refresh_worker
                     worker.result = None if failed_read else _make_lib()
+                    if worker.result is not None:worker.result.source='/synthetic/new/master.db'
                     worker.error = "Cannot read selected database" if failed_read else ""
                     worker.finished.emit()
-                    done.assert_not_called()
+                    if failed_read:
+                        done.assert_not_called()
+                        save.assert_not_called()
+                    else:
+                        done.assert_called_once_with(worker.result, metadata_changed_ids=(),
+                                                    selection_path='/synthetic/new/master.db')
+                        save.assert_called_once()
+                    apply.assert_not_called()
                     failure.assert_called_once()
                     self.assertEqual(_win.settings, settings)
                     self.assertIs(_win.lib, original)
@@ -9804,6 +9881,34 @@ class StateMaintenance(unittest.TestCase):
         self.assertFalse(host._state_publication)
         self.assertFalse(host._state_maintenance)
         self.assertEqual(events[-1], ('enabled', True))
+
+    def test_nested_metadata_builder_joins_and_publishes_before_restore_barrier(self):
+        import threading
+        from types import SimpleNamespace
+        from PySide6.QtCore import QTimer
+        from desktop.task_owner import TaskOwner
+        from desktop.workers import OneShotTask
+        from desktop.settings_page import SettingsPageMixin
+        host,events=self._host();owner=TaskOwner()
+        host.metadata_controller=SimpleNamespace(tasks=owner)
+        started,release=threading.Event(),threading.Event()
+        def build():
+            started.set();release.wait(3);return 'frozen metadata'
+        worker=OneShotTask(build)
+        def published(task):
+            self.assertFalse(host._state_publication)
+            self.assertTrue(task.isFinished())
+            events.append(('metadata',task.result))
+        owner.adopt(worker,published);worker.start()
+        self.assertTrue(started.wait(1))
+        QTimer.singleShot(20,release.set)
+        try:
+            self.assertTrue(SettingsPageMixin._begin_state_maintenance(host,restoring=True))
+            self.assertEqual(owner.pending,0)
+            self.assertLess([e[0] for e in events].index('metadata'),[e[0] for e in events].index('save'))
+            self.assertTrue(host._state_publication)
+        finally:
+            release.set();owner.drain();host._end_state_maintenance();owner.deleteLater()
 
     def test_maintenance_waits_for_an_accepted_tag_save_before_final_state_save(self):
         from types import SimpleNamespace

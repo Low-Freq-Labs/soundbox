@@ -337,6 +337,15 @@ def list_devices() -> list[tuple[str, str, int | None]]:
             if not _is_external(d):
                 retry |= str(d) not in _EXTERNAL_CACHE
                 continue
+            key=str(d)
+            # A restoring iPod can mount before Apple creates iPod_Control.
+            # Recheck only that provisional profile through discovery backoff;
+            # ordinary USBs keep their no-idle-profile-probe behavior.
+            if str(_INFO_CACHE.get(key,{}).get('MediaType','')).casefold()=='ipod':
+                profile=_PROFILE_CACHE.get(key)
+                if profile is None or profile.kind=='generic_usb':
+                    _PROFILE_CACHE.pop(key,None)
+                    retry |= device_profile(key).kind=='generic_usb'
             try:
                 st = os.statvfs(d)
                 free = st.f_bavail * st.f_frsize
